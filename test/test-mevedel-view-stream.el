@@ -2337,9 +2337,9 @@
     (mevedel-view-stream-test--insert-data data-buf "*** Hello world\n" nil)
     (mevedel-view-stream-test--insert-data data-buf "Hi!\n" 'response)
     (with-current-buffer data-buf
-      (setq-local mevedel--compaction-in-flight t)
+      (setq-local mevedel-compact-run-in-flight t)
       (mevedel-view-stream-render-response (point-min) (point-max))
-      (should-not mevedel--compaction-in-flight)))
+      (should-not mevedel-compact-run-in-flight)))
 
   :doc "final response renders durable worked footer and hides side channel"
   (mevedel-view-stream-test--with-buffers

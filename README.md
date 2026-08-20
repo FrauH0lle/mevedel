@@ -1098,13 +1098,13 @@ summary prompt, and segment-rotation contract.
 | Custom Variable                   | Variable Description                                      |
 |-----------------------------------|-----------------------------------------------------------|
 | `mevedel-compact-auto`            | Whether persisted sessions auto-compact before requests.  |
-| `mevedel-compact-token-threshold` | Absolute token count or fraction of usable context.       |
-| `mevedel-compact-tail-turns`      | Target recent complete turns to preserve verbatim.        |
-| `mevedel-compact-tail-budget`     | Fraction of usable context reserved for preserved tail.   |
-| `mevedel-compact-tail-tool-output-max` | Per-tool-result character cap in the preserved tail. |
-| `mevedel-compact-body-tool-output-max` | Per-tool-result character cap in compaction input.   |
-| `mevedel-compact-file-reference-reminder-limit` | Maximum compacted file refs cited in reminders. |
-| `mevedel-compact-warn-on-completion` | Show a one-shot accuracy warning after compaction.    |
+| `mevedel-compact-estimation-token-threshold` | Fraction of usable context that triggers compaction.       |
+| `mevedel-compact-evidence-tail-turns`      | Target recent complete turns to preserve verbatim.        |
+| `mevedel-compact-evidence-tail-budget`     | Fraction of usable context reserved for preserved tail.   |
+| `mevedel-compact-evidence-tail-tool-output-max` | Per-tool-result character cap in the preserved tail. |
+| `mevedel-compact-evidence-body-tool-output-max` | Per-tool-result character cap in compaction input.   |
+| `mevedel-compact-target-file-reference-reminder-limit` | Maximum compacted file refs cited in reminders. |
+| `mevedel-compact-run-warn-on-completion` | Show a one-shot accuracy warning after compaction.    |
 
 ## Project Instructions and Memory
 

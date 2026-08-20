@@ -469,7 +469,7 @@
                        (push (copy-tree
                               (mevedel-session-plan-metadata session))
                              persisted)))
-                    ((symbol-function 'mevedel--compact-main-target)
+                    ((symbol-function 'mevedel-compact-target-main-target)
                      (lambda ()
                        (list :apply
                              (lambda (_target summary &rest _)
@@ -478,9 +478,9 @@
                                  (error "Rotation failed"))
                                (setq anchored-summary summary)
                                t))))
-                    ((symbol-function 'mevedel--compact-previous-summary)
+                    ((symbol-function 'mevedel-compact-evidence-previous-summary)
                      (lambda () anchored-summary))
-                    ((symbol-function 'mevedel--compact-run)
+                    ((symbol-function 'mevedel-compact-run-start)
                      (lambda (&rest args)
                        (cl-incf compact-runs)
                        (should (plist-get args :aggressive))
@@ -867,14 +867,14 @@
             (setq-local mevedel--session target-session))
           (cl-letf
               (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
-               ((symbol-function 'mevedel--compact-main-target)
+               ((symbol-function 'mevedel-compact-target-main-target)
                 (lambda ()
                   (list :apply (lambda (&rest _) (ert-fail "Source mutated"))
                         :begin-context-epoch t :eligible-p t
                         :warn-on-completion t)))
-               ((symbol-function 'mevedel--compact-find-boundary)
+               ((symbol-function 'mevedel-compact-evidence-find-boundary)
                 (lambda () (point-max)))
-               ((symbol-function 'mevedel--compact-evidence-selection)
+               ((symbol-function 'mevedel-compact-evidence-select)
                 (lambda (&rest _) (list :content source-text)))
                ((symbol-function 'mevedel-context-summary-generate)
                 (lambda (source purpose callback &rest args)
@@ -952,7 +952,7 @@
                              (with-current-buffer source-buffer
                                (buffer-string))))
               (with-current-buffer target-buffer
-                (should (equal summary (mevedel--compact-previous-summary)))
+                (should (equal summary (mevedel-compact-evidence-previous-summary)))
                 (should (= 1 (how-many "^#\\+begin_summary"
                                        (point-min) (point-max)))))
               (let ((path-position

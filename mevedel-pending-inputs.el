@@ -48,6 +48,9 @@
 (declare-function mevedel-cockpit-surface-selected
                   "mevedel-cockpit" (&optional no-error))
 
+;; `mevedel-compact-run'
+(defvar mevedel-compact-run-in-flight)
+
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-copy-text
                   "mevedel-mention-bindings" (text))
@@ -121,7 +124,6 @@
 (declare-function mevedel-session-set-pending-inputs
                   "mevedel-structs" (session category entries))
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
-(defvar mevedel--compaction-in-flight)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -518,6 +520,7 @@ longer accepts the prepared input."
 (defun mevedel-view-send-follow-up ()
   "Queue the composer as a follow-up, or send normally while idle."
   (interactive)
+  (require 'mevedel-compact-run)
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
@@ -540,7 +543,7 @@ longer accepts the prepared input."
                 (mevedel-view--occupied-root-workflow-p session)
                 mevedel-view--prompt-hook-pending
                 mevedel-view--pending-skill-submission
-                (buffer-local-value 'mevedel--compaction-in-flight
+                (buffer-local-value 'mevedel-compact-run-in-flight
                                     mevedel--data-buffer))))
       (mevedel-session-artifacts-assert-new-mutation-authority session)
       (if (not occupied)

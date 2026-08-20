@@ -194,7 +194,11 @@ Chat / view
   mevedel-session-fork.el     Fork/Worktree projection, publication, and rename
   mevedel-session-control-fs.el   pinned target-side session control filesystem
   mevedel-session-control-transfer.el  control-transfer state, drains, descriptors
-  mevedel-compact.el          conversation compaction (split-on-compact)
+  mevedel-compact-estimation.el compaction token accounting and admission
+  mevedel-compact-evidence.el transcript evidence and tool-safe truncation
+  mevedel-compact-target.el   root/agent archive and application transactions
+  mevedel-compact-run.el      async compaction retry/cancel/settlement
+  mevedel-compact.el          public compaction command and gptel gate
 
 Prompt / presets / agents
   mevedel-system.el           system prompt assembly

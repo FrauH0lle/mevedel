@@ -76,10 +76,15 @@
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-auto-eligible-p "mevedel-compact" ())
-(declare-function mevedel--compact-threshold-tokens "mevedel-compact" ())
-(declare-function mevedel--compact-usable-tokens "mevedel-compact" ())
-(declare-function mevedel--estimate-tokens "mevedel-compact" ())
 (defvar mevedel-compact-auto)
+
+;; `mevedel-compact-estimation'
+(declare-function mevedel-compact-estimation-estimate-tokens
+                  "mevedel-compact-estimation" ())
+(declare-function mevedel-compact-estimation-threshold-tokens
+                  "mevedel-compact-estimation" (&optional usable-tokens))
+(declare-function mevedel-compact-estimation-usable-tokens
+                  "mevedel-compact-estimation" ())
 
 ;; `mevedel-file-state'
 (declare-function mevedel-file-cache-consume-external-changes
@@ -420,14 +425,15 @@ strings in the order the reminders appear."
   "Return context-pressure state for the current chat buffer.
 The returned plist contains `:tokens', `:threshold', `:usable',
 and `:ratio', or nil if compaction helpers are unavailable."
+  (require 'mevedel-compact-estimation)
   (when-let* ((buf (mevedel-reminders--current-buffer))
-              ((fboundp 'mevedel--estimate-tokens))
-              ((fboundp 'mevedel--compact-threshold-tokens))
-              ((fboundp 'mevedel--compact-usable-tokens)))
+              ((fboundp 'mevedel-compact-estimation-estimate-tokens))
+              ((fboundp 'mevedel-compact-estimation-threshold-tokens))
+              ((fboundp 'mevedel-compact-estimation-usable-tokens)))
     (with-current-buffer buf
-      (let* ((tokens (mevedel--estimate-tokens))
-             (threshold (mevedel--compact-threshold-tokens))
-             (usable (mevedel--compact-usable-tokens))
+      (let* ((tokens (mevedel-compact-estimation-estimate-tokens))
+             (threshold (mevedel-compact-estimation-threshold-tokens))
+             (usable (mevedel-compact-estimation-usable-tokens))
              (ratio (and (numberp usable)
                          (> usable 0)
                          (/ (float tokens) usable))))

@@ -47,8 +47,10 @@
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-handle-wait "mevedel-compact" (fsm))
-(declare-function mevedel--compact-record-token-baseline
-                  "mevedel-compact" (fsm))
+
+;; `mevedel-compact-estimation'
+(declare-function mevedel-compact-estimation-record-token-baseline
+                  "mevedel-compact-estimation" (fsm))
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-capture-request "mevedel-goal" (fsm))
@@ -366,6 +368,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
 (defun mevedel--define-presets ()
   "Define gptel presets for mevedel actions."
   (require 'gptel)
+  (require 'mevedel-compact-estimation)
   (require 'mevedel-tool-registry)
 
   ;; Read-only preset for discussion/analysis
@@ -652,8 +655,8 @@ alist with mevedel-specific handlers added:
     (if tpre-entry
         (setcdr tpre-entry
                 (append (cdr tpre-entry)
-                        (list #'mevedel--compact-record-token-baseline)))
-      (push (list 'TPRE #'mevedel--compact-record-token-baseline) handlers)))
+                        (list #'mevedel-compact-estimation-record-token-baseline)))
+      (push (list 'TPRE #'mevedel-compact-estimation-record-token-baseline) handlers)))
   ;; Failure terminals retain StopFailure and skip queued follow-up
   ;; submission.  Provider errors persist their failure disclosure;
   ;; user aborts retain the outer abort command's save.

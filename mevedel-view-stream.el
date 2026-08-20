@@ -17,8 +17,8 @@
 ;; `gptel'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
-;; `mevedel-compact'
-(defvar mevedel--compaction-in-flight)
+;; `mevedel-compact-run'
+(defvar mevedel-compact-run-in-flight)
 
 ;; `mevedel-execution-transcript'
 (declare-function mevedel-execution-transcript-handle-event
@@ -1014,7 +1014,7 @@ When NO-PROGRESS is non-nil, record no active progress state."
          :end end
          :state (mevedel-view--debug-state data-buf start end))
         (with-current-buffer data-buf
-          (setq-local mevedel--compaction-in-flight nil))
+          (setq-local mevedel-compact-run-in-flight nil))
         (mevedel-view--stop-request-progress)
         (mevedel-view--debug-log
          'render-response-after-spinner

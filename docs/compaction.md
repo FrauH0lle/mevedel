@@ -1,12 +1,14 @@
 # Conversation Compaction
 
 Compaction reduces model-visible history while keeping the persisted
-conversation recoverable. The implementation lives in
-`mevedel-compact.el`; persisted segment rotation is handled by
+conversation recoverable. `mevedel-compact.el` is the public command and
+gptel gate. Token admission lives in `mevedel-compact-estimation.el`,
+transcript projection and tool-safe truncation in
+`mevedel-compact-evidence.el`, target application in
+`mevedel-compact-target.el`, and asynchronous settlement in
+`mevedel-compact-run.el`. Persisted segment rotation is handled by
 `mevedel-session-artifacts.el`. Model generation is delegated to the
-stateless `mevedel-context-summary.el` generator after
-`mevedel-transcript.el` projects the consumer-selected ranges into neutral
-evidence.
+stateless `mevedel-context-summary.el` generator.
 
 ## Compaction flow
 
@@ -73,7 +75,7 @@ rerunning `UserPromptSubmit`. Failed or blocked compaction runs neither event.
 Retained-agent compaction runs `PostCompact` but no start hook.
 
 The first-compaction accuracy notice is controlled by
-`mevedel-compact-warn-on-completion`, enabled by default. It is emitted
+`mevedel-compact-run-warn-on-completion`, enabled by default. It is emitted
 as a plain `message`, not a `display-warning`.
 
 ## Trigger predicate
@@ -97,7 +99,7 @@ usable = context-window - reserve
 The reserve cap keeps small-context models from collapsing the default
 fractional threshold to a near-zero value.
 
-`mevedel-compact-token-threshold` is a float strictly between `0.0` and
+`mevedel-compact-estimation-token-threshold` is a float strictly between `0.0` and
 `1.0`, default `0.80`.  Integer thresholds and invalid ratios are rejected.
 This is a breaking configuration change.
 
@@ -122,8 +124,8 @@ the historic chars/4 scan when no API baseline is available, ignoring
 regions marked `gptel 'ignore` and excluding file-local variables.
 
 After ordinary non-summary requests, API-reported token usage from
-gptel is recorded as `mevedel--known-token-baseline`. Future estimates
-start from that measured baseline and add chars/4 only for text added
+gptel is recorded by the estimation owner as a buffer-local baseline.
+Future estimates start from that measured baseline and add chars/4 only for text added
 after the recorded marker. Context-summary requests are explicitly excluded
 from this baseline so generation never pollutes chat usage
 estimates.
@@ -145,7 +147,7 @@ usage to trigger compaction.
 Realized request estimates are media-aware. Inline image payloads in
 OpenAI data URLs, Anthropic base64 image blocks, and Bedrock image byte
 blocks are not counted as raw base64 text. They are replaced with the
-local `mevedel-compact-image-token-estimate` heuristic. This estimate
+local `mevedel-compact-estimation-image-token-estimate` heuristic. This estimate
 only decides whether to compact before a continuation request; the next
 provider-reported usage baseline remains authoritative.
 
@@ -357,8 +359,8 @@ Compaction summarizes only the old body and preserves a recent tail
 verbatim. The tail starts at the newest complete turn boundary that fits
 both constraints:
 
-- target turn count: `mevedel-compact-tail-turns`, default 2.
-- budget: `mevedel-compact-tail-budget` of usable context, default
+- target turn count: `mevedel-compact-evidence-tail-turns`, default 2.
+- budget: `mevedel-compact-evidence-tail-budget` of usable context, default
   0.25.
 
 Response boundaries and preserved-tail turn starts are derived from
@@ -382,8 +384,8 @@ structurally safe under character caps: persisted `#+begin_tool` /
 `#+end_tool` markers stay balanced, large string arguments are shortened as
 readable Lisp data, and visible result bodies are truncated by character caps:
 
-- `mevedel-compact-tail-tool-output-max`
-- `mevedel-compact-body-tool-output-max`
+- `mevedel-compact-evidence-tail-tool-output-max`
+- `mevedel-compact-evidence-body-tool-output-max`
 
 The current unsent prompt is kept outside the summarized body. For
 auto-compaction it is reattached after the new summary and preserved
@@ -458,13 +460,14 @@ model-facing workload shares it:
 - `mevedel-model-context-limit` (default `nil`, fallback for missing model metadata)
 - `mevedel-model-reserve-tokens` (default `20000`)
 
-The rest are in `mevedel-compact.el`:
+Compaction-specific settings follow their owners:
 
-- `mevedel-compact-auto` (default `t`)
-- `mevedel-compact-token-threshold` (default `0.80`)
-- `mevedel-compact-image-token-estimate` (default `1844`)
-- `mevedel-compact-tail-turns` (default `2`)
-- `mevedel-compact-tail-budget` (default `0.25`)
-- `mevedel-compact-tail-tool-output-max` (default `4000`)
-- `mevedel-compact-body-tool-output-max` (default `8000`)
-- `mevedel-compact-warn-on-completion` (default `t`)
+- facade: `mevedel-compact-auto` (default `t`)
+- estimation: `mevedel-compact-estimation-token-threshold` (default `0.80`)
+- estimation: `mevedel-compact-estimation-image-token-estimate` (default `1844`)
+- evidence: `mevedel-compact-evidence-tail-turns` (default `2`)
+- evidence: `mevedel-compact-evidence-tail-budget` (default `0.25`)
+- evidence: `mevedel-compact-evidence-tail-tool-output-max` (default `4000`)
+- evidence: `mevedel-compact-evidence-body-tool-output-max` (default `8000`)
+- target: `mevedel-compact-target-file-reference-reminder-limit` (default `20`)
+- run: `mevedel-compact-run-warn-on-completion` (default `t`)

@@ -22,14 +22,22 @@
 (declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 
-;; `mevedel-compact'
-(declare-function mevedel--compact-evidence-selection
-                  "mevedel-compact" (target limit aggressive))
-(declare-function mevedel--compact-find-boundary "mevedel-compact" nil)
-(declare-function mevedel--compact-main-target "mevedel-compact" nil)
-(declare-function mevedel--compact-previous-summary "mevedel-compact" nil)
-(declare-function mevedel--compact-run "mevedel-compact" (&rest args))
-(defvar mevedel--compaction-cancel)
+;; `mevedel-compact-evidence'
+(declare-function mevedel-compact-evidence-find-boundary
+                  "mevedel-compact-evidence" ())
+(declare-function mevedel-compact-evidence-previous-summary
+                  "mevedel-compact-evidence" ())
+(declare-function mevedel-compact-evidence-select
+                  "mevedel-compact-evidence" (target limit aggressive))
+
+;; `mevedel-compact-run'
+(declare-function mevedel-compact-run-start
+                  "mevedel-compact-run" (&rest keys))
+(defvar mevedel-compact-run-cancel)
+
+;; `mevedel-compact-target'
+(declare-function mevedel-compact-target-main-target
+                  "mevedel-compact-target" ())
 
 ;; `mevedel-context-summary'
 (declare-function mevedel-context-summary-generate
@@ -448,7 +456,7 @@ needs no session."
         (mevedel-permission-mode-transition mode)
         (when-let* (((eq (plist-get selection :context) 'summary))
                     (summary (plist-get record :summary)))
-          (let ((current (mevedel--compact-previous-summary)))
+          (let ((current (mevedel-compact-evidence-previous-summary)))
             (cond
              ((equal current summary))
              (current (error "Prepared Worktree summary does not match target"))
@@ -507,12 +515,12 @@ FOCUS carries the authoritative plan; SOURCE-TRANSFORM filters the
 projected evidence.  CHAT-BUFFER is left unchanged."
   (unless (plist-get target :eligible-p)
     (user-error "Current buffer is not the active persisted segment"))
-  (let* ((limit (or (mevedel--compact-find-boundary)
+  (let* ((limit (or (mevedel-compact-evidence-find-boundary)
                     (user-error "Not enough conversation content to summarize")))
          (source
           (funcall source-transform
                    (plist-get
-                    (mevedel--compact-evidence-selection target limit t)
+                    (mevedel-compact-evidence-select target limit t)
                     :content)))
          settled)
     (when (string-blank-p source)
@@ -523,7 +531,7 @@ projected evidence.  CHAT-BUFFER is left unchanged."
             source 'handoff
             (lambda (result)
               (setq settled t)
-              (setq-local mevedel--compaction-cancel nil)
+              (setq-local mevedel-compact-run-cancel nil)
               (pcase (plist-get result :outcome)
                 ('success
                  (mevedel-plan-handoff--advance-record
@@ -544,7 +552,7 @@ projected evidence.  CHAT-BUFFER is left unchanged."
             :session session
             :focus focus)))
       (unless settled
-        (setq-local mevedel--compaction-cancel cancel)))))
+        (setq-local mevedel-compact-run-cancel cancel)))))
 
 (defun mevedel-plan-handoff--portable-paths (summary session)
   "Return SUMMARY with SESSION's working directory prefix removed."
@@ -572,7 +580,7 @@ authoritative plan; SOURCE-TRANSFORM filters the projected evidence."
                 (mevedel-plan-handoff--advance-record
                  session record 'prepare-summary summary)
                 (signal (car apply-error) (cdr apply-error)))))))
-    (mevedel--compact-run
+    (mevedel-compact-run-start
      :aggressive t
      :focus focus
      :prepared-summary (plist-get record :summary)
@@ -597,12 +605,15 @@ authoritative plan; SOURCE-TRANSFORM filters the projected evidence."
 Worktree keeps CHAT-BUFFER intact and makes one attempt; Here compacts
 CHAT-BUFFER under the ordinary compaction retry policy."
   (require 'mevedel-compact)
+  (require 'mevedel-compact-evidence)
+  (require 'mevedel-compact-run)
+  (require 'mevedel-compact-target)
   (with-current-buffer chat-buffer
     (let* ((selection (plist-get record :selection))
            (plan
             (mevedel-plan-handoff--accepted-body
              session (plist-get record :accepted)))
-           (target (mevedel--compact-main-target))
+           (target (mevedel-compact-target-main-target))
            (previous-summary (plist-get target :previous-summary))
            (focus (mevedel-plan-handoff--summary-focus plan selection))
            (source-transform
@@ -816,7 +827,7 @@ the durable retry was retained"
                (not (equal
                      (plist-get record :summary)
                      (with-current-buffer chat-buffer
-                       (mevedel--compact-previous-summary)))))
+                       (mevedel-compact-evidence-previous-summary)))))
       (error "Prepared plan summary does not match the current segment"))
     (let* ((target-buffer
             (if (eq location 'worktree)

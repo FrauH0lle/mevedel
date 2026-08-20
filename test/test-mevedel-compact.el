@@ -1,4 +1,4 @@
-;;; test-mevedel-compact.el --- Tests for mevedel-compact.el -*- lexical-binding: t -*-
+;;; test-mevedel-compact.el -- Tests for mevedel-compact.el -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
@@ -11,6 +11,10 @@
 (require 'mevedel-agent-exec)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-compact)
+(require 'mevedel-compact-estimation)
+(require 'mevedel-compact-evidence)
+(require 'mevedel-compact-run)
+(require 'mevedel-compact-target)
 (require 'mevedel-execution-transcript)
 (require 'mevedel-models)
 (require 'mevedel-hooks)
@@ -29,107 +33,18 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+(require 'mevedel-compact-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-compact-test-support"))
 
-(defvar gptel-model)
-(defvar gptel-max-tokens)
-(defvar gptel-backend)
-(defvar gptel-reasoning-effort)
 (defvar gptel--request-params)
+(defvar gptel-backend)
+(defvar gptel-max-tokens)
+(defvar gptel-model)
+(defvar gptel-reasoning-effort)
 
-(defconst test-mevedel-compact--valid-summary
-  "## Scope\n- test\n## Constraints & Preferences\n- none\n## Work & Evidence\n- test\n## Key Decisions\n- none\n## Open Questions & Risks\n- none\n## Critical Context\n- none\n## Relevant Files\n- none\n## Skills Invoked\n- none\n## Next Steps\n- test"
-  "Valid continuation summary used by compaction tests.")
-
-(defun test-mevedel-compact--failing-hook (_event)
-  "Signal the hook failure used by fail-closed compaction tests."
-  (error "Hook failed"))
-
-(cl-defmacro test-mevedel-compact--with-persisted-buffer
-    ((buffer session) &rest body)
-  "Run BODY in persisted BUFFER owned by SESSION."
-  (declare (indent 1) (debug ((symbolp symbolp) body)))
-  `(let* ((tempdir (make-temp-file "mevedel-compact-test-" t))
-          (workspace
-           (mevedel-workspace-get-or-create
-            'project "compact-test" tempdir "compact-test"))
-          (,session (mevedel-session-create "main" workspace))
-          (,buffer (generate-new-buffer " *mevedel-compact-test*")))
-     (unwind-protect
-         (with-current-buffer ,buffer
-           (org-mode)
-           (setq-local mevedel--session ,session)
-           (mevedel-session-artifacts-ensure-files ,session ,buffer)
-           ,@body)
-       ;; Release through the session: a bare directory has no authority
-       ;; profile of its own.
-       (mevedel-session-persistence-lock-release
-        (or (mevedel-session-save-path ,session) tempdir) ,session)
-       (when (buffer-live-p ,buffer)
-         (with-current-buffer ,buffer
-           (set-buffer-modified-p nil))
-         (kill-buffer ,buffer))
-       (mevedel-workspace-clear-registry)
-       (delete-directory tempdir t))))
-
-(cl-defmacro test-mevedel-compact--with-persisted-agent
-    ((buffer invocation session canonical-path parent-buffer) &rest body)
-  "Run BODY in persisted agent BUFFER with INVOCATION and SESSION."
-  (declare
-   (indent 1)
-   (debug ((symbolp symbolp symbolp symbolp symbolp) body)))
-  `(let* ((tempdir (make-temp-file "mevedel-compact-agent-test-" t))
-          (workspace
-           (mevedel-workspace-get-or-create
-            'project "compact-agent-test" tempdir "compact-agent-test"))
-          (,session (mevedel-session-create "main" workspace))
-          (,parent-buffer
-           (generate-new-buffer " *mevedel-compact-parent*"))
-          (agent (mevedel-agent--create :name "explorer"))
-          (,invocation (mevedel-agent-invocation-create agent))
-          (,buffer (generate-new-buffer " *mevedel-compact-agent*"))
-          (,canonical-path nil))
-     (unwind-protect
-         (progn
-           (with-current-buffer ,parent-buffer
-             (org-mode)
-             (setq-local mevedel--session ,session)
-             (mevedel-session-artifacts-ensure-files
-              ,session parent-buffer))
-           (let ((relative-path "agents/explorer-test.chat.org"))
-             (setq ,canonical-path
-                   (expand-file-name relative-path
-                                     (mevedel-session-save-path ,session)))
-             (make-directory (file-name-directory ,canonical-path) t)
-             (setf (mevedel-agent-invocation-agent-id ,invocation)
-                   "explorer--test")
-             (setf (mevedel-agent-invocation-path ,invocation)
-                   "/root/explorer")
-             (setf (mevedel-agent-invocation-buffer ,invocation) ,buffer)
-             (setf (mevedel-agent-invocation-parent-data-buffer ,invocation)
-                   ,parent-buffer)
-             (setf (mevedel-agent-invocation-parent-session ,invocation)
-                   ,session)
-             (setf
-              (mevedel-agent-invocation-transcript-relative-path ,invocation)
-              relative-path)
-             (setf (mevedel-agent-invocation-transcript-status ,invocation)
-                   'running)
-             (with-current-buffer ,buffer
-               (org-mode)
-               (setq-local mevedel--agent-invocation ,invocation)
-               (set-visited-file-name ,canonical-path t t)
-               ,@body)))
-       ;; Release through the session: a bare directory has no authority
-       ;; profile of its own.
-       (mevedel-session-persistence-lock-release
-        (or (mevedel-session-save-path ,session) tempdir) ,session)
-       (dolist (candidate (list ,buffer ,parent-buffer))
-         (when (buffer-live-p candidate)
-           (with-current-buffer candidate
-             (set-buffer-modified-p nil))
-           (kill-buffer candidate)))
-       (mevedel-workspace-clear-registry)
-       (delete-directory tempdir t))))
 
 (mevedel-deftest mevedel-compact ()
   ,test
@@ -144,451 +59,27 @@
                         mevedel-view--historical-segment-buffer historical)
             (should-error (mevedel-compact) :type 'user-error))
         (when (buffer-live-p historical)
-          (kill-buffer historical))))))
+          (kill-buffer historical)))))
 
-(defun test-mevedel-compact--insert-agent-task
-    (invocation description prompt)
-  "Insert INVOCATION's persisted task heading, DESCRIPTION, and PROMPT."
-  (let ((text
-         (format "* Agent Task: %s\n:PROPERTIES:\n:%s: %s\n:END:\n\n%s\n"
-                 description
-                 mevedel-agent-task-path-property
-                 (mevedel-agent-invocation-require-path invocation)
-                 prompt)))
-    (insert text)
-    text))
-
-(mevedel-deftest mevedel--compact-previous-summary ()
-  ,test
-  (test)
-  :doc "strips the persisted handoff prefix before reusing a summary"
-  (with-temp-buffer
-    (insert "#+begin_summary\n"
-            mevedel-session-artifacts--summary-handoff-prefix
-            "## Goal\n- Continue\n"
-            (mevedel--format-hook-audit-record
-             '(:type compact-context
-               :event "PreCompact"
-               :context "private audit"))
-            "#+end_summary\n")
-    (should (equal "## Goal\n- Continue"
-                   (mevedel--compact-previous-summary)))))
-
-(mevedel-deftest mevedel--file-local-variables-start ()
-  ,test
-  (test)
-  :doc "returns nil when no file-local variables"
-  (with-temp-buffer
-    (insert "Hello world\n")
-    (should (null (mevedel--file-local-variables-start))))
-
-  :doc "detects elisp-style file-local variables"
-  (with-temp-buffer
-    (insert "Content here\n\n")
-    (let ((start (point)))
-      (insert ";; Local Variables:\n")
-      (insert ";; gptel-model: \"test\"\n")
-      (insert ";; End:\n")
-      (should (= (mevedel--file-local-variables-start) start))))
-
-  :doc "detects markdown-style file-local variables"
-  (with-temp-buffer
-    (insert "# Markdown content\n\n")
-    (let ((start (point)))
-      (insert "<!-- Local Variables: -->\n")
-      (insert "<!-- gptel-model: \"test\" -->\n")
-      (insert "<!-- End: -->\n")
-      (should (= (mevedel--file-local-variables-start) start))))
-
-  :doc "finds first Local Variables block when multiple exist"
-  (with-temp-buffer
-    (insert "Content here\n\n")
-    (let ((first-start (point)))
-      (insert ";; Local Variables:\n")
-      (insert ";; gptel-model: \"test\"\n")
-      (insert ";; End:\n\n")
-      (insert ";; Local Variables:\n")
-      (insert ";; gptel-model: \"test2\"\n")
-      (insert ";; End:\n")
-      (should (= (mevedel--file-local-variables-start) first-start)))))
-
-(mevedel-deftest mevedel--estimate-tokens ()
-  ,test
-  (test)
-  :doc "counts tokens without file-local variables"
-  (with-temp-buffer
-    (insert "Hello world")  ; 11 chars / 4 = 2 tokens
-    (should (= (mevedel--estimate-tokens) 2)))
-
-  :doc "excludes elisp-style file-local variables from count"
-  (with-temp-buffer
-    (insert "Hello world\n\n")  ; 13 chars / 4 = 3 tokens
-    (insert ";; Local Variables:\n")
-    (insert ";; gptel-model: \"claude-sonnet-4\"\n")
-    (insert ";; End:\n")
-    (should (= (mevedel--estimate-tokens) 3)))
-
-  :doc "excludes markdown-style file-local variables from count"
-  (with-temp-buffer
-    (insert "# Title\n\nContent\n\n")  ; 18 chars / 4 = 4 tokens
-    (insert "<!-- Local Variables: -->\n")
-    (insert "<!-- gptel-model: \"test\" -->\n")
-    (insert "<!-- End: -->\n")
-    (should (= (mevedel--estimate-tokens) 4)))
-
-  :doc "respects gptel ignore property"
-  (with-temp-buffer
-    (insert "Hello ")
-    (let ((start (point)))
-      (insert "ignored ")
-      (put-text-property start (point) 'gptel 'ignore))
-    (insert "world")
-    (should (= (mevedel--estimate-tokens) 2)))  ; "Hello world" = 11 chars / 4 = 2 tokens
-
-  :doc "combines gptel ignore property and file-local variables exclusion"
-  (with-temp-buffer
-    (insert "Hello ")
-    (let ((start (point)))
-      (insert "ignored ")
-      (put-text-property start (point) 'gptel 'ignore))
-    (insert "world\n\n")
-    (insert ";; Local Variables:\n")
-    (insert ";; gptel-model: \"test\"\n")
-    (insert ";; End:\n")
-    (should (= (mevedel--estimate-tokens) 3)))  ; "Hello world\n\n" = 13 chars / 4 = 3 tokens
-
-  :doc "excludes all file-local variables when multiple blocks exist"
-  (with-temp-buffer
-    (insert "Hello world\n\n")  ; 13 chars / 4 = 3 tokens
-    (insert ";; Local Variables:\n")
-    (insert ";; gptel-model: \"test\"\n")
-    (insert ";; End:\n\n")
-    (insert ";; Local Variables:\n")
-    (insert ";; gptel-model: \"test2\"\n")
-    (insert ";; End:\n")
-    (should (= (mevedel--estimate-tokens) 3))))
-
-(mevedel-deftest mevedel--compact-estimate-data-tokens ()
-  ,test
-  (test)
-  :doc "keeps chars/4 behavior for plain realized data"
-  (should (= (mevedel--compact-estimate-data-tokens
-              (list :messages
-                    (vector (list :role "user"
-                                  :content "abcdefgh"))))
-             3))
-
-  :doc "counts OpenAI Responses input_image data URLs as image tokens"
-  (let* ((mevedel-compact-image-token-estimate 123)
-         (prefix "data:image/png;base64,")
-         (url (concat prefix (make-string 4000 ?A)))
-         (data (list :type "input_image" :image_url url))
-         (expected (+ mevedel-compact-image-token-estimate
-                      (/ (+ (length "input_image") (length prefix)) 4))))
-    (should (= (mevedel--compact-estimate-data-tokens data)
-               expected)))
-
-  :doc "counts OpenAI chat image_url data URLs as image tokens"
-  (let* ((mevedel-compact-image-token-estimate 123)
-         (prefix "data:image/jpeg;base64,")
-         (url (concat prefix (make-string 4000 ?A)))
-         (data (list :type "image_url"
-                     :image_url (list :url url)))
-         (expected (+ mevedel-compact-image-token-estimate
-                      (/ (+ (length "image_url") (length prefix)) 4))))
-    (should (= (mevedel--compact-estimate-data-tokens data)
-               expected)))
-
-  :doc "counts Anthropic base64 image blocks as image tokens"
-  (let* ((mevedel-compact-image-token-estimate 123)
-         (data (list :type "image"
-                     :source (list :type "base64"
-                                   :media_type "image/png"
-                                   :data (make-string 4000 ?A))))
-         (expected (+ mevedel-compact-image-token-estimate
-                      (/ (+ (length "image")
-                            (length "base64")
-                            (length "image/png"))
-                         4))))
-    (should (= (mevedel--compact-estimate-data-tokens data)
-               expected)))
-
-  :doc "counts Bedrock image bytes blocks as image tokens"
-  (let* ((mevedel-compact-image-token-estimate 123)
-         (data (list :image (list :format "png"
-                                  :source (list :bytes
-                                                (make-string 4000 ?A)))))
-         (expected (+ mevedel-compact-image-token-estimate
-                      (/ (length "png") 4))))
-    (should (= (mevedel--compact-estimate-data-tokens data)
-               expected)))
-
-  :doc "adds image estimates for multiple images"
-  (let* ((mevedel-compact-image-token-estimate 123)
-         (prefix "data:image/png;base64,")
-         (url (concat prefix (make-string 4000 ?A)))
-         (data (list :content
-                     (vector "abcd"
-                             (list :type "input_image" :image_url url)
-                             (list :type "input_image" :image_url url))))
-         (expected (+ (* 2 mevedel-compact-image-token-estimate)
-                      (/ (+ (length "abcd")
-                            (* 2 (+ (length "input_image")
-                                    (length prefix))))
-                         4))))
-    (should (= (mevedel--compact-estimate-data-tokens data)
-               expected)))
-
-  :doc "leaves non-image data URLs as text"
-  (let* ((url (concat "data:text/plain;base64,"
-                      (make-string 400 ?A)))
-         (data (list :url url)))
-    (should (= (mevedel--compact-estimate-data-tokens data)
-               (/ (length url) 4))))
-
-  :doc "leaves quoted image data URLs as text"
-  (let* ((url (concat "data:image/png;base64,"
-                      (make-string 400 ?A)))
-         (data (list :content url)))
-    (should (= (mevedel--compact-estimate-data-tokens data)
-               (/ (length url) 4))))
-
-  :doc "leaves unrelated base64 strings as text"
-  (let ((payload (make-string 400 ?A)))
-    (should (= (mevedel--compact-estimate-data-tokens
-                (list :data payload))
-               (/ (length payload) 4))))
-
-  :doc "falls back to text counting for malformed image blocks"
-  (let ((data (list :type "image"
-                    :source (list :type "base64"
-                                  :media_type "image/png"))))
-    (should (= (mevedel--compact-estimate-data-tokens data)
-               (/ (+ (length "image")
-                     (length "base64")
-                     (length "image/png"))
-                  4))))
-
-  :doc "falls back to text counting for malformed Bedrock image blocks"
-  (let* ((payload (make-string 400 ?A))
-         (data (list :image (list :source (list :bytes payload)))))
-    (should (= (mevedel--compact-estimate-data-tokens data)
-               (/ (length payload) 4)))))
-
-(mevedel-deftest mevedel--compact-token-usage-input ()
-  ,test
-  (test)
-  :doc "sums valid prompt token fields"
-  (should (= 10 (mevedel--compact-token-usage-input
-                 '(:input 1 :cached 2 :cache-read 3 :cache_read 4))))
-  :doc "treats absent optional fields as zero"
-  (should (= 4 (mevedel--compact-token-usage-input '(:input 4))))
-  :doc "rejects absent, malformed, and negative usage"
-  (dolist (tokens '(nil (:output 4) (:input "4") (:input -1)
-                         (:input . 4)))
-    (should-not (mevedel--compact-token-usage-input tokens))))
-
-(mevedel-deftest mevedel--compact-token-usage-count ()
-  ,test
-  (test)
-  :doc "adds valid output usage to prompt usage"
-  (should (= 12 (mevedel--compact-token-usage-count
-                 '(:input 4 :cached 3 :output 5))))
-  :doc "treats an absent output field as zero"
-  (should (= 4 (mevedel--compact-token-usage-count '(:input 4))))
-  :doc "rejects absent, malformed, and negative usage"
-  (dolist (tokens '(nil (:output 5) (:input "4") (:input -1)
-                         (:input 4 :output "5") (:input 4 :output -1)
-                         (:input . 4)))
-    (should-not (mevedel--compact-token-usage-count tokens))))
-
-(mevedel-deftest mevedel--compact-record-token-baseline ()
-  ,test
-  (test)
-  :doc "records gptel-reported tokens as estimate baseline"
-  (with-temp-buffer
-    (insert "abcd")
-    (let* ((gptel-model nil)
-           (chat-buffer (current-buffer))
-           (fsm (gptel-make-fsm
-                 :info (list :buffer chat-buffer
-                             :model 'provider-model
-                             :tokens '(:input 10
-                                       :cached 5
-                                       :output 7)
-                             :tokens-full '(:input 10
-                                            :cached 5
-                                            :output 7)))))
-      (mevedel--compact-record-token-baseline fsm)
-      (should (= (plist-get mevedel--known-token-baseline :tokens) 22))
-      (should (eq (plist-get mevedel--known-token-baseline :source)
-                  'provider-context))
-      (should (eq (plist-get mevedel--known-token-baseline :model)
-                  'provider-model))
-      (should (= (plist-get mevedel--known-token-baseline
-                            :provider-context-tokens)
-                 22))
-      (should (= (plist-get mevedel--known-token-baseline
-                            :cumulative-usage-tokens)
-                 22))
-      (should (= (plist-get mevedel--known-token-baseline :input-tokens) 15))
-      (should (= (plist-get mevedel--known-token-baseline :output-tokens) 7))
-      (goto-char (point-max))
-      (insert "abcdefgh")
-      (should (= (mevedel--estimate-tokens) 24))))
-
-  :doc "prefers latest request tokens over cumulative tokens-full"
-  (with-temp-buffer
-    (let* ((chat-buffer (current-buffer))
-           (fsm (gptel-make-fsm
-                 :info (list :buffer chat-buffer
-                             :tokens '(:input 10 :output 5)
-                             :tokens-full '(:input 1000 :output 500)))))
-      (mevedel--compact-record-token-baseline fsm)
-      (should (= (plist-get mevedel--known-token-baseline :tokens) 15))
-      (should (= (plist-get mevedel--known-token-baseline
-                            :cumulative-usage-tokens)
-                 1500))
-      (should (= (plist-get mevedel--known-token-baseline :input-tokens) 10))
-      (should (= (plist-get mevedel--known-token-baseline :output-tokens) 5))))
-
-  :doc "missing provider context:
-falls back to the fresh visible prompt and never cumulative tool-loop usage"
-  (with-temp-buffer
-    (insert (make-string 400 ?x))
-    (let* ((gptel-model nil)
-           (mevedel-model-context-limit 258000)
-           (chat-buffer (current-buffer))
-           (fsm (gptel-make-fsm
-                 :info (list :buffer chat-buffer
-                             :tokens-full '(:input 9396000 :output 0)))))
-      (mevedel--compact-record-token-baseline fsm)
-      (should (= (plist-get mevedel--known-token-baseline :tokens) 100))
-      (should (eq (plist-get mevedel--known-token-baseline :source)
-                  'fresh-estimate))
-      (should-not (plist-get mevedel--known-token-baseline
-                             :provider-context-tokens))
-      (should (eq (plist-get mevedel--known-token-baseline
-                             :provider-context-status)
-                  'missing))
-      (should (= (plist-get mevedel--known-token-baseline
-                            :cumulative-usage-tokens)
-                 9396000))
-      (should (= (plist-get mevedel--known-token-baseline
-                            :fresh-visible-prompt-estimate)
-                 100))
-      (should (< (mevedel--estimate-tokens)
-                 (mevedel--compact-threshold-tokens)))))
-
-  :doc "invalid provider context:
-zero and over-window provider values use a fresh visible-prompt estimate"
-  (dolist (provider-count '(0 300000))
+  :doc "loads facade-owned compaction gates without the umbrella"
+  (let ((root (file-name-directory (locate-library "mevedel-compact")))
+        (emacs (expand-file-name invocation-name invocation-directory)))
     (with-temp-buffer
-      (insert (make-string 400 ?x))
-      (let* ((gptel-model nil)
-             (mevedel-model-context-limit 258000)
-             (chat-buffer (current-buffer))
-             (fsm (gptel-make-fsm
-                   :info (list :buffer chat-buffer
-                               :tokens `(:input ,provider-count :output 0)
-                               :tokens-full '(:input 9000000 :output 0)))))
-        (mevedel--compact-record-token-baseline fsm)
-        (should (= (plist-get mevedel--known-token-baseline :tokens) 100))
-        (should (eq (plist-get mevedel--known-token-baseline :source)
-                    'fresh-estimate))
-        (should (eq (plist-get mevedel--known-token-baseline
-                               :provider-context-status)
-                    (if (zerop provider-count) 'zero 'over-window))))))
+      (should
+       (= 0
+          (call-process
+           emacs nil t nil "--batch" "-Q" "-L" root
+           "--eval"
+           (prin1-to-string
+            '(progn
+               (require 'mevedel-compact)
+               (let ((mevedel-compact-auto nil))
+                 (mevedel--compact-auto-eligible-p))
+               (unless (and (featurep 'mevedel-compact-run)
+                            (featurep 'mevedel-compact-target))
+                 (error "Facade did not load compaction owners")))))))
+      (should (string-empty-p (string-trim (buffer-string)))))))
 
-  :doc "partial provider context:
-missing or zero prompt-side usage cannot become the active baseline"
-  (dolist (case '(((:output 500) missing)
-                  ((:input 0 :output 500) zero)
-                  ((:input "bad" :output 500) missing)))
-    (with-temp-buffer
-      (insert (make-string 400 ?x))
-      (let* ((gptel-model nil)
-             (mevedel-model-context-limit 258000)
-             (chat-buffer (current-buffer))
-             (fsm (gptel-make-fsm
-                   :info (list :buffer chat-buffer :tokens (car case)))))
-        (mevedel--compact-record-token-baseline fsm)
-        (should (= 100 (plist-get mevedel--known-token-baseline :tokens)))
-        (should (eq 'fresh-estimate
-                    (plist-get mevedel--known-token-baseline :source)))
-        (should (eq (cadr case)
-                    (plist-get mevedel--known-token-baseline
-                               :provider-context-status))))))
-
-  :doc "ignores compaction request token usage"
-  (with-temp-buffer
-    (insert "abcd")
-    (let* ((chat-buffer (current-buffer))
-           (fsm (gptel-make-fsm
-                 :info (list :buffer chat-buffer
-                             :context '(:mevedel-context-summary t)
-                             :tokens-full '(:input 10 :output 7)))))
-      (mevedel--compact-record-token-baseline fsm)
-      (should (null mevedel--known-token-baseline)))))
-
-(mevedel-deftest mevedel--compact-model-visible-chars
-  (:doc "counts only model-visible characters outside file-local variables")
-  (with-temp-buffer
-    (insert "abcdWXYZ")
-    (put-text-property 5 9 'gptel 'ignore)
-    (should (= 4 (mevedel--compact-model-visible-chars)))))
-
-(mevedel-deftest mevedel--compact-current-request-id
-  (:doc "returns only a live mevedel request identifier")
-  (with-temp-buffer
-    (let ((mevedel--current-request
-           (mevedel-request--create :id "request-test" :origin "/root")))
-      (should (equal "request-test" (mevedel--compact-current-request-id))))))
-
-(mevedel-deftest mevedel--compact-telemetry-inputs
-  (:doc "captures provider counts, thresholds, marker, and visible size")
-  (with-temp-buffer
-    (insert "abcdefgh")
-    (put-text-property 5 9 'gptel 'ignore)
-    (let* ((target-model (make-symbol "model"))
-           (mevedel--known-token-baseline
-            (list :source 'provider-context
-                  :provider-context-usage '(:input 18 :output 3)
-                  :cumulative-usage '(:input 20 :output 5)
-                  :provider-context-tokens 21
-                  :cumulative-usage-tokens 25
-                  :provider-context-status 'valid
-                  :fresh-visible-prompt-estimate 2
-                  :model 'provider-model
-                  :model-context-window 900
-                  :position (copy-marker 5))))
-      (put target-model :context-window 1)
-      (cl-letf (((symbol-function 'mevedel--compact-workload-policy)
-                 (lambda () '(:kind summary)))
-                ((symbol-function 'mevedel--compact-policy-threshold-tokens)
-                 (lambda (policy)
-                   (if (eq (plist-get policy :kind) 'summary) 80 90)))
-                ((symbol-function 'mevedel--compact-estimate-buffer-tokens)
-                 (lambda (_) 2)))
-        (let ((facts (mevedel--compact-telemetry-inputs
-                      25 (list :model target-model :kind 'target))))
-          (should (= 21 (plist-get facts :provider-context-tokens)))
-          (should (= 25 (plist-get facts :cumulative-usage-tokens)))
-          (should (equal '(:input 18 :output 3)
-                         (plist-get facts :provider-context-usage)))
-          (should (equal '(:input 20 :output 5)
-                         (plist-get facts :cumulative-usage)))
-          (should (eq 'valid (plist-get facts :provider-context-status)))
-          (should (eq 'provider-model
-                      (plist-get facts :provider-context-model)))
-          (should (= 900 (plist-get facts :provider-context-window)))
-          (should (eq 'provider-context (plist-get facts :chosen-source)))
-          (should (eq target-model (plist-get facts :target-model)))
-          (should (= 2 (plist-get facts :fresh-visible-prompt-estimate)))
-          (should (= 80 (plist-get facts :threshold)))
-          (should (= 1000 (plist-get facts :model-context-window)))
-          (should (= 8 (plist-get facts :buffer-chars-total)))
-          (should (= 4 (plist-get facts :buffer-chars-model-visible))))))))
 
 (mevedel-deftest mevedel--compact-provider-wait
   (:doc "records provider dispatch before forwarding the FSM wait")
@@ -613,45 +104,6 @@ missing or zero prompt-side usage cannot become the active baseline"
                          (plist-get (cdr captured) :request-id))))
       (kill-buffer buffer))))
 
-(mevedel-deftest mevedel--compact-queue-file-reference-reminder
-  (:after-each (mevedel-workspace-clear-registry))
-  ,test
-  (test)
-
-  :doc "queues touched file references whose turns fall outside the preserved tail"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
-         (session (mevedel-session-create "main" ws)))
-    (let ((mevedel-compact-tail-turns 2))
-      (setf (mevedel-session-turn-count session) 10)
-      (puthash "/tmp/p/old.el"
-               (mevedel-file-interaction--create
-                :path "/tmp/p/old.el" :read-turn 4)
-               (mevedel-session-touched-files session))
-      (puthash "/tmp/p/boundary.el"
-               (mevedel-file-interaction--create
-                :path "/tmp/p/boundary.el" :read-turn 8)
-               (mevedel-session-touched-files session))
-      (puthash "/tmp/p/recent.el"
-               (mevedel-file-interaction--create
-                :path "/tmp/p/recent.el" :read-turn 9)
-               (mevedel-session-touched-files session))
-      (mevedel--compact-queue-file-reference-reminder session 2)
-      (let ((body (car (mevedel-session-pending-reminders session))))
-        (should (string-match-p "/tmp/p/old.el" body))
-        (should-not (string-match-p "/tmp/p/boundary.el" body))
-        (should-not (string-match-p "/tmp/p/recent.el" body)))))
-
-  :doc "aggressive compaction queues even recent touched file references"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/q/" "/tmp/q/" "q"))
-         (session (mevedel-session-create "main" ws)))
-    (setf (mevedel-session-turn-count session) 10)
-    (puthash "/tmp/q/recent.el"
-             (mevedel-file-interaction--create
-              :path "/tmp/q/recent.el" :read-turn 9)
-             (mevedel-session-touched-files session))
-    (mevedel--compact-queue-file-reference-reminder session 0)
-    (let ((body (car (mevedel-session-pending-reminders session))))
-      (should (string-match-p "/tmp/q/recent.el" body)))))
 
 (mevedel-deftest mevedel--compact-transform-auto ()
   ,test
@@ -665,7 +117,7 @@ missing or zero prompt-side usage cannot become the active baseline"
         (progn
           (with-current-buffer source-buf
             (org-mode)
-            (setq-local mevedel--compaction-in-flight nil)
+            (setq-local mevedel-compact-run-in-flight nil)
             (setq-local mevedel--view-buffer nil)
             (insert "Old prompt\n")
             (insert (propertize "Old response\n" 'gptel 'response))
@@ -678,12 +130,12 @@ missing or zero prompt-side usage cannot become the active baseline"
           (cl-letf (((symbol-function 'mevedel--compact-should-compact-p)
                        (lambda (&optional _token-estimate)
                          '(:summary-policy nil :target-pressure nil)))
-                      ((symbol-function 'mevedel--compact-run)
+                      ((symbol-function 'mevedel-compact-run-start)
                        (lambda (&rest args)
                          (with-current-buffer prompt-buf
                            (goto-char (point-min))
                            (insert "Late prefix\n")
-                           (when-let* ((start (mevedel--compact-find-boundary)))
+                           (when-let* ((start (mevedel-compact-evidence-find-boundary)))
                              (goto-char start)
                              (insert "Late context\n\n"))
                            (goto-char (point-max))
@@ -692,10 +144,10 @@ missing or zero prompt-side usage cannot become the active baseline"
                                  (concat "Concurrent gptel context\n\n"
                                          gptel-system-prompt)))
                          (with-current-buffer source-buf
-                           (setq-local mevedel--compact-current-request-reminder
+                           (setq-local mevedel-compact-target-current-request-reminder
                                        "Re-read /tmp/old.el")
                            (setq-local
-                            mevedel--compact-current-request-hook-context
+                            mevedel-compact-target-current-request-hook-context
                             "<hook-context>\n<hook-event name=\"SessionStart\">\ncompact context\n</hook-event>\n</hook-context>")
                            (let ((inhibit-read-only t))
                              (erase-buffer)
@@ -746,8 +198,8 @@ missing or zero prompt-side usage cannot become the active baseline"
                 (should (eq 'high
                             (alist-get 'gptel-reasoning-effort locals))))))
           (with-current-buffer source-buf
-            (should-not mevedel--compact-current-request-reminder)
-            (should-not mevedel--compact-current-request-hook-context)))
+            (should-not mevedel-compact-target-current-request-reminder)
+            (should-not mevedel-compact-target-current-request-hook-context)))
       (when (buffer-live-p source-buf)
         (kill-buffer source-buf))
       (when (buffer-live-p prompt-buf)
@@ -779,11 +231,8 @@ missing or zero prompt-side usage cannot become the active baseline"
       (when (buffer-live-p source-buf)
         (kill-buffer source-buf))
       (when (buffer-live-p prompt-buf)
-        (kill-buffer prompt-buf)))))
+        (kill-buffer prompt-buf))))
 
-(mevedel-deftest mevedel--compact-transform-auto-threshold ()
-  ,test
-  (test)
   :doc "auto threshold uses source-buffer API baseline"
   (let ((source-buf (generate-new-buffer " *mevedel-compact-source*"))
         (prompt-buf (generate-new-buffer " *mevedel-compact-prompt*"))
@@ -793,11 +242,11 @@ missing or zero prompt-side usage cannot become the active baseline"
         (progn
           (with-current-buffer source-buf
             (org-mode)
-            (setq-local mevedel--compaction-in-flight nil)
+            (setq-local mevedel-compact-run-in-flight nil)
             (insert "Old prompt\n")
             (insert (propertize "Old response\n" 'gptel 'response))
             (insert "Small pending\n")
-            (setq-local mevedel--known-token-baseline
+            (setq-local mevedel-compact-estimation--known-token-baseline
                         (list :tokens 100
                               :position (copy-marker (point-max)))))
           (with-current-buffer prompt-buf
@@ -807,12 +256,12 @@ missing or zero prompt-side usage cannot become the active baseline"
                       :info (list :buffer source-buf))))
             (cl-letf (((symbol-function 'mevedel--compact-auto-eligible-p)
                        (lambda () t))
-                      ((symbol-function 'mevedel--compact-run)
+                      ((symbol-function 'mevedel-compact-run-start)
                        (lambda (&rest args)
                          (setq ran t)
                          (funcall (plist-get args :callback) :skip))))
               (with-current-buffer prompt-buf
-                (let ((mevedel-compact-token-threshold 0.5)
+                (let ((mevedel-compact-estimation-token-threshold 0.5)
                       (mevedel-model-context-limit 200)
                       (gptel-backend nil)
                       (gptel-model nil)
@@ -837,7 +286,7 @@ missing or zero prompt-side usage cannot become the active baseline"
         (progn
           (with-current-buffer source-buf
             (org-mode)
-            (setq-local mevedel--compaction-in-flight nil)
+            (setq-local mevedel-compact-run-in-flight nil)
             (insert "Old prompt\n")
             (insert (propertize "Old response\n" 'gptel 'response))
             (insert "Small pending\n"))
@@ -849,12 +298,12 @@ missing or zero prompt-side usage cannot become the active baseline"
                       :info (list :buffer source-buf))))
             (cl-letf (((symbol-function 'mevedel--compact-auto-eligible-p)
                        (lambda () t))
-                      ((symbol-function 'mevedel--compact-run)
+                      ((symbol-function 'mevedel-compact-run-start)
                        (lambda (&rest args)
                          (setq ran t)
                          (funcall (plist-get args :callback) :skip))))
               (with-current-buffer prompt-buf
-                (let ((mevedel-compact-token-threshold 0.5)
+                (let ((mevedel-compact-estimation-token-threshold 0.5)
                       (mevedel-model-context-limit 200)
                       (gptel-backend nil)
                       (gptel-model nil)
@@ -880,11 +329,11 @@ missing or zero prompt-side usage cannot become the active baseline"
           (put 'mevedel-summary-model :context-window 0.2)
           (with-current-buffer source-buf
             (org-mode)
-            (setq-local mevedel--compaction-in-flight nil)
+            (setq-local mevedel-compact-run-in-flight nil)
             (insert "Old prompt\n")
             (insert (propertize "Old response\n" 'gptel 'response))
             (insert "Pending\n")
-            (setq-local mevedel--known-token-baseline
+            (setq-local mevedel-compact-estimation--known-token-baseline
                         (list :tokens 200
                               :position (copy-marker (point-max)))))
           (with-current-buffer prompt-buf
@@ -896,7 +345,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                       ((symbol-function 'mevedel-model-resolve-workload)
                        (lambda (&rest _)
                          '(:backend nil :model mevedel-summary-model)))
-                      ((symbol-function 'mevedel--compact-run)
+                      ((symbol-function 'mevedel-compact-run-start)
                        (lambda (&rest args)
                          (setq captured-args args
                                captured-policy
@@ -904,7 +353,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                                 (gptel-fsm-info fsm)
                                 :mevedel-compaction-target-policy)))))
               (with-current-buffer prompt-buf
-                (let ((mevedel-compact-token-threshold 0.8)
+                (let ((mevedel-compact-estimation-token-threshold 0.8)
                       (mevedel-model-reserve-tokens 0)
                       (gptel-backend nil)
                       (gptel-model 'mevedel-target-model)
@@ -940,7 +389,7 @@ missing or zero prompt-side usage cannot become the active baseline"
         (progn
           (with-current-buffer chat-buf
             (org-mode)
-            (setq-local mevedel--compact-current-request-reminder
+            (setq-local mevedel-compact-target-current-request-reminder
                         "Re-read /tmp/old.el")
             (insert "Prompt\n")
             (let ((response-start (point)))
@@ -973,7 +422,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                        "<system-reminder>\nRe-read /tmp/old.el"
                        captured))
               (with-current-buffer chat-buf
-                (should-not mevedel--compact-current-request-reminder)))))
+                (should-not mevedel-compact-target-current-request-reminder)))))
       (when (buffer-live-p chat-buf)
         (kill-buffer chat-buf)))))
 
@@ -991,7 +440,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                            :mevedel-compaction-target-policy policy)))
          captured)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel--compact-estimate-data-tokens)
+        (cl-letf (((symbol-function 'mevedel-compact-estimation-estimate-data-tokens)
                    (lambda (data)
                      (should (eq data 'realized))
                      42))
@@ -1112,7 +561,7 @@ missing or zero prompt-side usage cannot become the active baseline"
            captured)
       (cl-letf (((symbol-function 'mevedel--compact-main-wait-decision)
                  (lambda (_fsm) (error "Recomputed admission")))
-                ((symbol-function 'mevedel--compact-main-target)
+                ((symbol-function 'mevedel-compact-target-main-target)
                  (lambda () 'target))
                 ((symbol-function 'mevedel--compact-handle-target-wait)
                  (lambda (actual-fsm target admission
@@ -1143,9 +592,9 @@ missing or zero prompt-side usage cannot become the active baseline"
                      (lambda (_fsm) (cl-incf sent)))
                     ((symbol-function 'mevedel--compact-auto-eligible-p)
                      (lambda () t))
-                    ((symbol-function 'mevedel--compact-run)
+                    ((symbol-function 'mevedel-compact-run-start)
                      (lambda (&rest _args) (setq ran t))))
-            (let ((mevedel-compact-token-threshold 0.5)
+            (let ((mevedel-compact-estimation-token-threshold 0.5)
                   (gptel-model nil)
                   (mevedel-model-context-limit 200))
               (mevedel--compact-handle-wait fsm)))
@@ -1205,11 +654,11 @@ missing or zero prompt-side usage cannot become the active baseline"
             (insert "Tool result\n"))
           (cl-letf (((symbol-function 'gptel--handle-wait)
                      (lambda (_fsm) (cl-incf sent)))
-                    ((symbol-function 'mevedel--compact-run)
+                    ((symbol-function 'mevedel-compact-run-start)
                      (lambda (&rest _args) (setq ran t))))
-            (let ((mevedel-compact-token-threshold 0.5)
+            (let ((mevedel-compact-estimation-token-threshold 0.5)
                   (mevedel-model-context-limit 200)
-                  (mevedel-compact-image-token-estimate 10))
+                  (mevedel-compact-estimation-image-token-estimate 10))
               (mevedel--compact-handle-wait fsm)))
           (should (= sent 1))
           (should-not ran))
@@ -1242,11 +691,11 @@ missing or zero prompt-side usage cannot become the active baseline"
                      (lambda (_fsm) (cl-incf sent)))
                     ((symbol-function 'mevedel--compact-auto-eligible-p)
                      (lambda () t))
-                    ((symbol-function 'mevedel--compact-run)
+                    ((symbol-function 'mevedel-compact-run-start)
                      (lambda (&rest args)
                        (setq ran t)
                        (funcall (plist-get args :callback) :skip))))
-            (let ((mevedel-compact-token-threshold 0.5)
+            (let ((mevedel-compact-estimation-token-threshold 0.5)
                   (mevedel-model-context-limit 200)
                   (mevedel-model-reserve-tokens 0))
               (mevedel--compact-handle-wait fsm)))
@@ -1275,11 +724,11 @@ missing or zero prompt-side usage cannot become the active baseline"
                      (lambda (_fsm) (cl-incf sent)))
                     ((symbol-function 'mevedel--compact-auto-eligible-p)
                      (lambda () t))
-                    ((symbol-function 'mevedel--compact-run)
+                    ((symbol-function 'mevedel-compact-run-start)
                      (lambda (&rest args)
                        (setq ran t)
                        (funcall (plist-get args :callback) :skip))))
-            (let ((mevedel-compact-token-threshold 0.5)
+            (let ((mevedel-compact-estimation-token-threshold 0.5)
                   (gptel-model nil)
                   (mevedel-model-context-limit 200))
               (mevedel--compact-handle-wait fsm)))
@@ -1310,7 +759,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                     ((symbol-function 'mevedel--compact-should-compact-p)
                      (lambda (&optional _tokens)
                        '(:summary-policy nil :target-pressure nil)))
-                    ((symbol-function 'mevedel--compact-run)
+                    ((symbol-function 'mevedel-compact-run-start)
                      (lambda (&rest args)
                        (setq callback (plist-get args :callback))))
                     ((symbol-function
@@ -1347,7 +796,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                     ((symbol-function 'mevedel--compact-should-compact-p)
                      (lambda (&optional _tokens)
                        '(:summary-policy nil :target-pressure nil)))
-                    ((symbol-function 'mevedel--compact-run)
+                    ((symbol-function 'mevedel-compact-run-start)
                      (lambda (&rest args)
                        (funcall (plist-get args :callback) "boom")))
                     ((symbol-function 'display-warning)
@@ -1403,616 +852,6 @@ missing or zero prompt-side usage cannot become the active baseline"
           (should (= sent 1)))
       (kill-buffer chat-buf))))
 
-(mevedel-deftest mevedel--compact-agent-task-heading ()
-  ,test
-  (test)
-  :doc "finds the first initial-task marker for the exact agent path"
-  (with-temp-buffer
-    (org-mode)
-    (let ((other
-           (mevedel-agent-invocation--create :path "/root/other"))
-          (invocation
-           (mevedel-agent-invocation--create :path "/root/inspect")))
-      (test-mevedel-compact--insert-agent-task
-       other "other" "Other task.")
-      (insert "* Agent Task: unmarked\n\nUnmarked task.\n")
-      (let ((initial-heading (point)))
-        (test-mevedel-compact--insert-agent-task
-         invocation "inspect" "Initial task.")
-        (test-mevedel-compact--insert-agent-task
-         invocation "follow-up" "Later task.")
-        (should (= initial-heading
-                   (mevedel--compact-agent-task-heading invocation))))))
-
-  :doc "returns nil when no task marker matches the agent path"
-  (with-temp-buffer
-    (org-mode)
-    (let ((other
-           (mevedel-agent-invocation--create :path "/root/other"))
-          (invocation
-           (mevedel-agent-invocation--create :path "/root/missing")))
-      (test-mevedel-compact--insert-agent-task
-       other "other" "Other task.")
-      (insert "* Agent Task: unmarked\n\nUnmarked task.\n")
-      (should-not (mevedel--compact-agent-task-heading invocation)))))
-
-(mevedel-deftest mevedel--compact-agent-summary-bounds ()
-  ,test
-  (test)
-  :doc "finds the anchored summary body in an agent transcript"
-  (with-temp-buffer
-    (org-mode)
-    (let ((invocation
-           (mevedel-agent-invocation--create :path "/root/inspect")))
-      (setq-local mevedel--agent-invocation invocation)
-      (test-mevedel-compact--insert-agent-task
-       invocation "inspect" "Keep this task.")
-      (insert "#+begin_summary\n## Goal\n- Continue\n#+end_summary\n"
-              "Recent tail.\n")
-      (let ((bounds (mevedel--compact-agent-summary-bounds invocation)))
-      (should (equal "#+begin_summary\n## Goal\n- Continue\n#+end_summary"
-                     (buffer-substring-no-properties
-                      (plist-get bounds :begin) (plist-get bounds :end))))
-      (should (equal "## Goal\n- Continue\n"
-                     (buffer-substring-no-properties
-                      (plist-get bounds :body-begin)
-                        (plist-get bounds :body-end)))))))
-
-  :doc "uses the path marker to ignore inherited task headings and summaries"
-  (with-temp-buffer
-    (org-mode)
-    (let ((parent
-           (mevedel-agent-invocation--create :path "/root/parent"))
-          (child
-           (mevedel-agent-invocation--create :path "/root/parent/child")))
-      (test-mevedel-compact--insert-agent-task
-       parent "parent" "Parent task.")
-      (insert "#+begin_summary\nParent summary.\n#+end_summary\n")
-      (setq-local mevedel--agent-invocation child)
-      (test-mevedel-compact--insert-agent-task
-       child "child" "Child task.")
-      (insert "#+begin_summary\nAgent summary.\n#+end_summary\n")
-      (let ((bounds (mevedel--compact-agent-summary-bounds child)))
-        (should (equal "Agent summary.\n"
-                       (buffer-substring-no-properties
-                        (plist-get bounds :body-begin)
-                        (plist-get bounds :body-end))))))))
-
-(mevedel-deftest mevedel--compact-agent-target ()
-  ,test
-  (test)
-  :doc "builds a complete adapter only for the live canonical transcript"
-  (test-mevedel-compact--with-persisted-agent
-      (agent-buffer invocation session canonical-path parent-buffer)
-    (test-mevedel-compact--insert-agent-task
-     invocation "inspect" "Keep this task.")
-    (let ((start (point)))
-      (insert "Agent response.\n")
-      (put-text-property start (point) 'gptel 'response))
-    (basic-save-buffer)
-    (let ((target (mevedel--compact-agent-target invocation)))
-      (should (eq agent-buffer (plist-get target :buffer)))
-      (should (eq invocation (plist-get target :invocation)))
-      (should (eq session (plist-get target :session)))
-      (should (eq session (plist-get target :prompt-session)))
-      (should (equal "/root/explorer"
-                     (plist-get target :skill-agent-path)))
-      (should (string-suffix-p
-               "/tool-results" (plist-get target :tool-results-dir)))
-      (should (equal canonical-path (plist-get target :transcript-path)))
-      (dolist (operation '(:apply :start :complete :resume :fail))
-        (should (functionp (plist-get target operation)))))
-    (setf (mevedel-agent-invocation-transcript-relative-path invocation)
-          "/ssh:foreign:/tmp/agent.chat.org")
-    (should-not (mevedel--compact-agent-target invocation))
-    (setf (mevedel-agent-invocation-transcript-relative-path invocation)
-          "agents/other.chat.org")
-    (should-not (mevedel--compact-agent-target invocation)))
-
-  :doc "anchors the marked child task after inherited nested-agent context"
-  (test-mevedel-compact--with-persisted-agent
-      (agent-buffer invocation session canonical-path parent-buffer)
-    (let ((parent
-           (mevedel-agent-invocation--create :path "/root/parent")))
-      (test-mevedel-compact--insert-agent-task
-       parent "parent" "Inherited prompt."))
-    (let ((start (point)))
-      (insert "Inherited response.\n")
-      (put-text-property start (point) 'gptel 'response))
-    (test-mevedel-compact--insert-agent-task
-     invocation "inspect" "Keep this task.")
-    (let ((start (point)))
-      (insert "Agent response.\n")
-      (put-text-property start (point) 'gptel 'response))
-    (basic-save-buffer)
-    (let ((target (mevedel--compact-agent-target invocation)))
-      (should target)
-      (should (string-match-p "Inherited prompt"
-                              (buffer-substring-no-properties
-                               (caar (plist-get
-                                      target :history-prefix-regions))
-                               (cdar (plist-get
-                                      target :history-prefix-regions)))))
-      (should-not (string-match-p "Inherited prompt"
-                                  (plist-get target :anchor-text)))
-      (should (string-match-p "Keep this task"
-                              (plist-get target :anchor-text)))))
-
-  :doc "accepts a tool-only agent turn after the marked task"
-  (test-mevedel-compact--with-persisted-agent
-      (agent-buffer invocation session canonical-path parent-buffer)
-    (test-mevedel-compact--insert-agent-task
-     invocation "inspect" "Keep this task.")
-    (let ((tool-start (point)))
-      (insert "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\nresult\n")
-      (put-text-property tool-start (point) 'gptel '(tool . "call-1"))
-      (basic-save-buffer)
-      (let ((target (mevedel--compact-agent-target invocation)))
-        (should target)
-        (should (= tool-start (plist-get target :body-start)))
-        (should (string-match-p "Keep this task"
-                                (plist-get target :anchor-text))))))
-
-  :doc "uses publication membership for a remote canonical transcript"
-  (test-mevedel-compact--with-persisted-agent
-      (agent-buffer invocation session canonical-path parent-buffer)
-    (test-mevedel-compact--insert-agent-task
-     invocation "inspect" "Keep this task.")
-    (let ((start (point)))
-      (insert "Agent response.\n")
-      (put-text-property start (point) 'gptel 'response))
-    (basic-save-buffer)
-    (delete-file canonical-path)
-    (let ((save-path (mevedel-session-save-path session))
-          seen)
-      (cl-letf (((symbol-function 'file-remote-p)
-                 (lambda (path &rest _)
-                   (and (equal path save-path) "/mock:")))
-                ((symbol-function
-                  'mevedel-session-artifacts-artifact-present-p)
-                 (lambda (seen-session logical)
-                   (setq seen (list seen-session logical))
-                   t)))
-        (should (mevedel--compact-agent-target invocation))
-        (should
-         (equal (list session "agents/explorer-test.chat.org") seen)))
-      (make-directory (file-name-directory canonical-path) t)
-      (write-region "poisoned cache" nil canonical-path nil 'silent)
-      (cl-letf (((symbol-function 'file-remote-p)
-                 (lambda (path &rest _)
-                   (and (equal path save-path) "/mock:")))
-                ((symbol-function
-                  'mevedel-session-artifacts-artifact-present-p)
-                 (lambda (&rest _) nil)))
-        (should-not (mevedel--compact-agent-target invocation))))))
-
-(mevedel-deftest mevedel--compact-agent-archive-path ()
-  ,test
-  (test)
-  :doc "selects the first unused numbered sibling archive"
-  (let* ((tempdir (make-temp-file "mevedel-compact-archive-test-" t))
-         (canonical (expand-file-name "agent.chat.org" tempdir))
-         (first (expand-file-name "agent.compact-0001.chat.org" tempdir))
-         (session
-          (mevedel-session--create
-           :name "main" :save-path (file-name-as-directory tempdir))))
-    (unwind-protect
-        (progn
-          (write-region "canonical" nil canonical nil 'silent)
-          (should (equal first
-                         (mevedel--compact-agent-archive-path
-                          session canonical)))
-          (write-region "archive" nil first nil 'silent)
-          (should
-           (equal (expand-file-name "agent.compact-0002.chat.org" tempdir)
-                  (mevedel--compact-agent-archive-path
-                   session canonical)))
-          (let ((save-path (mevedel-session-save-path session)))
-            (cl-letf (((symbol-function 'file-remote-p)
-                       (lambda (path &rest _)
-                         (and (equal path save-path) "/mock:")))
-                      ((symbol-function
-                        'mevedel-session-artifacts-artifact-present-p)
-                       (lambda (&rest _) nil)))
-              (should
-               (equal first
-                      (mevedel--compact-agent-archive-path
-                       session canonical))))
-            (delete-file first)
-            (let (seen-logicals)
-              (cl-letf (((symbol-function 'file-remote-p)
-                         (lambda (path &rest _)
-                           (and (equal path save-path) "/mock:")))
-                        ((symbol-function
-                          'mevedel-session-artifacts-artifact-present-p)
-                         (lambda (_seen-session logical)
-                           (push logical seen-logicals)
-                           (equal logical
-                                  "agent.compact-0001.chat.org"))))
-                (should
-                 (equal (expand-file-name
-                         "agent.compact-0002.chat.org" tempdir)
-                        (mevedel--compact-agent-archive-path
-                         session canonical)))
-                (should
-                 (equal '("agent.compact-0001.chat.org"
-                          "agent.compact-0002.chat.org")
-                        (nreverse seen-logicals)))))))
-      (delete-directory tempdir t))))
-
-(mevedel-deftest mevedel--compact-archived-tool-use-ids ()
-  ,test
-  (test)
-  :doc "collects each concrete tool row removed by the compacted prefix"
-  (with-temp-buffer
-    (insert (propertize "first" 'gptel '(tool . "call-1")))
-    (insert " plain ")
-    (insert (propertize "again" 'gptel '(tool . "call-1")))
-    (insert (propertize "second" 'gptel '(tool . "call-2")))
-    (insert
-     (mevedel--format-hook-audit-record
-      '(:type execution-archive :tool-use-id "call-archived"
-        :render-data (:execution-id "exec-archived" :state running
-                      :live-execution-p t))))
-    (should
-     (equal '("call-1" "call-2" "call-archived")
-            (mevedel--compact-archived-tool-use-ids
-             (point-min) (point-max))))))
-
-(mevedel-deftest mevedel--compact-current-tool-batch-start ()
-  ,test
-  (test)
-  :doc "includes reasoning and prose before the active continuation tools"
-  (with-temp-buffer
-    (let ((body-start (point)))
-      (insert (propertize "old tool\n" 'gptel '(tool . "call-old")))
-      (let ((batch-start (point)))
-        (insert "#+begin_reasoning\nthinking\n#+end_reasoning\n")
-        (insert (propertize "assistant preface\n" 'gptel 'response))
-        (insert (propertize "current tool one\n"
-                            'gptel '(tool . "call-current-1")))
-        (insert (propertize "current tool two\n"
-                            'gptel '(tool . "call-current-2")))
-        (should
-         (= batch-start
-            (mevedel--compact-current-tool-batch-start
-             (list :tool-use
-                   '((:id "call-current-1") (:id "call-current-2")))
-             body-start)))))))
-
-(mevedel-deftest mevedel--compact-agent-apply (:quiet t)
-  ,test
-  (test)
-  :doc "archives the full canonical transcript before rewriting it"
-  (test-mevedel-compact--with-persisted-agent
-      (agent-buffer invocation session canonical-path parent-buffer)
-    (test-mevedel-compact--insert-agent-task
-     invocation "inspect" "Keep this task.")
-    (let ((start (point)))
-      (insert "Old response.\n")
-      (put-text-property start (point) 'gptel 'response))
-    (basic-save-buffer)
-    (setf (mevedel-session-workspace-instruction-hashes session)
-          '((("/root" "/workspace/root/AGENTS.md") . "root")
-            (("/root/explorer" "/workspace/nested/AGENTS.md") . "agent")))
-    (let* ((record
-            (mevedel-agent-record--create
-             :id (mevedel-agent-invocation-agent-id invocation)
-             :path "/root/explorer"
-             :parent-path "/root"
-             :activity 'running
-             :conversation-buffer agent-buffer
-             :conversation-location
-             (mevedel-agent-invocation-transcript-relative-path invocation)
-             :invocation invocation))
-           (_ (setf (mevedel-session-agent-registry session)
-                    (list (cons "/root/explorer" record))))
-           (original (buffer-string))
-           (original-publish
-            (symbol-function 'mevedel-session-artifacts-publish-text))
-           published
-           (target (mevedel--compact-agent-target invocation))
-           (archive
-            (cl-letf (((symbol-function
-                        'mevedel-session-artifacts-publish-text)
-                       (lambda (seen-session path content &optional coding)
-                         (setq published
-                               (list seen-session path content coding))
-                         (funcall original-publish
-                                  seen-session path content coding))))
-              (mevedel--compact-agent-apply
-               target "## Goal\n- Continue" "Recent tail.\n"
-               "Pending result.\n" nil))))
-      (should (equal (list session archive
-                           (substring-no-properties original) 'utf-8-unix)
-                     published))
-      (should (file-exists-p archive))
-      (should (equal original
-                     (with-temp-buffer
-                       (insert-file-contents archive)
-                       (buffer-string))))
-      (should (string-match-p "Keep this task" (buffer-string)))
-      (should (string-match-p "Continue" (buffer-string)))
-      (should (string-match-p "Recent tail" (buffer-string)))
-      (should (string-match-p "Pending result" (buffer-string)))
-      (should (eq record
-                  (cdr (assoc "/root/explorer"
-                              (mevedel-session-agent-registry session)))))
-      (should (eq agent-buffer
-                  (mevedel-agent-record-conversation-buffer record)))
-      (should (equal (buffer-string)
-                     (with-temp-buffer
-                       (insert-file-contents canonical-path)
-                       (buffer-string))))
-      (should
-       (equal (mevedel-session-workspace-instruction-hashes session)
-              '((("/root" "/workspace/root/AGENTS.md") . "root"))))))
-
-  :doc "leaves live and canonical transcripts unchanged on archive failure"
-  (progn
-    (skip-unless (not (eq system-type 'windows-nt)))
-    (test-mevedel-compact--with-persisted-agent
-        (agent-buffer invocation session canonical-path parent-buffer)
-      (test-mevedel-compact--insert-agent-task
-       invocation "inspect" "Keep this task.")
-      (let ((start (point)))
-        (insert "Old response.\n")
-        (put-text-property start (point) 'gptel 'response))
-      (basic-save-buffer)
-      (let* ((target (mevedel--compact-agent-target invocation))
-             (directory (file-name-directory canonical-path))
-             (original-live (buffer-string))
-             (original-canonical
-              (with-temp-buffer
-                (insert-file-contents canonical-path)
-                (buffer-string))))
-        (unwind-protect
-            (progn
-              (set-file-modes directory #o500)
-              (skip-unless (not (file-writable-p directory)))
-              (should-error
-               (mevedel--compact-agent-apply
-                target "## Goal\n- Continue" nil nil nil)
-               :type 'file-error))
-          (set-file-modes directory #o700))
-        (should (equal original-live (buffer-string)))
-        (should (equal original-canonical
-                       (with-temp-buffer
-                         (insert-file-contents canonical-path)
-                         (buffer-string))))
-        (should-not
-         (directory-files directory nil
-                          "\\.compact-[0-9]+\\.chat\\.org\\'")))))
-
-  :doc "retains the full archive when canonical application later fails"
-  (test-mevedel-compact--with-persisted-agent
-      (agent-buffer invocation session canonical-path parent-buffer)
-    (test-mevedel-compact--insert-agent-task
-     invocation "inspect" "Keep this task.")
-    (let ((start (point)))
-      (insert "Old response.\n")
-      (put-text-property start (point) 'gptel 'response))
-    (basic-save-buffer)
-    (let* ((original (buffer-string))
-           (target (mevedel--compact-agent-target invocation)))
-      (add-hook
-       'before-change-functions
-       (lambda (&rest _)
-         (error "Stop compacted transcript application"))
-       nil t)
-      (should-error
-       (mevedel--compact-agent-apply
-        target "## Goal\n- Continue" nil nil nil)
-       :type 'error)
-      (let ((archives
-             (directory-files
-              (file-name-directory canonical-path) t
-              "\\.compact-[0-9]+\\.chat\\.org\\'")))
-        (should (= 1 (length archives)))
-        (should (equal original
-                       (with-temp-buffer
-                         (insert-file-contents (car archives))
-                         (buffer-string))))))))
-
-(mevedel-deftest mevedel--compact-main-apply ()
-  ,test
-  (test)
-  :doc "delegates rewriting and routes reminders by compaction mode"
-  (let ((session 'session)
-        applied queued)
-    (cl-letf (((symbol-function 'mevedel--compact-apply)
-               (lambda (&rest args) (setq applied args)))
-              ((symbol-function
-                'mevedel--compact-file-reference-reminder-body)
-               (lambda (_session _turns) "remember files"))
-              ((symbol-function 'mevedel-session-enqueue-pending-reminder)
-               (lambda (_session reminder) (push reminder queued))))
-      (let ((mevedel--compact-current-request-reminder nil))
-        (mevedel--compact-main-apply
-         (list :session session) "summary" "tail" "pending" nil t 2)
-        (should (equal '("summary" "tail" "pending" nil nil) applied))
-        (should (equal "remember files"
-                       mevedel--compact-current-request-reminder))
-        (should-not queued)
-        (setq mevedel--compact-current-request-reminder nil)
-        (mevedel--compact-main-apply
-         (list :session session) "summary" "tail" nil nil nil 2)
-        (should (equal '("remember files") queued))
-        (should-not mevedel--compact-current-request-reminder)))))
-
-(mevedel-deftest mevedel--compact-main-start ()
-  ,test
-  (test)
-  :doc "shows main-session compaction progress in the view"
-  (let ((view-buffer (generate-new-buffer " *mevedel-compact-view*"))
-        spinner)
-    (unwind-protect
-        (let ((mevedel--view-buffer view-buffer))
-          (cl-letf (((symbol-function 'mevedel-view--update-spinner)
-                     (lambda (text) (setq spinner text))))
-            (mevedel--compact-main-start nil))
-          (should (equal "Compacting..." spinner)))
-      (kill-buffer view-buffer))))
-
-(mevedel-deftest mevedel--compact-agent-start ()
-  ,test
-  (test)
-  :doc "records and displays agent compaction progress"
-  (let ((invocation (mevedel-agent-invocation-create
-                     (mevedel-agent--create :name "explorer")))
-        activity status)
-    (cl-letf (((symbol-function 'mevedel-agent-conversation-record-activity)
-               (lambda (_invocation value) (setq activity value)))
-              ((symbol-function 'gptel--update-status)
-               (lambda (value &optional _face) (setq status value))))
-      (mevedel--compact-agent-start (list :invocation invocation)))
-    (should (equal '(:type status :summary "Compacting...") activity))
-    (should (equal " Compacting..." status))))
-
-(mevedel-deftest mevedel--compact-begin-root-context-epoch ()
-  ,test
-  (test)
-  :doc "manual compaction leaves compact-start context for the next input"
-  (let* ((workspace (mevedel-workspace--create
-                     :type 'file :id "compact-epoch" :root "/tmp"
-                     :name "compact-epoch"))
-         (session (mevedel-session-create "main" workspace))
-         (buffer (generate-new-buffer " *mevedel-compact-epoch*"))
-         source)
-    (unwind-protect
-        (progn
-          (with-current-buffer buffer
-            (insert "Transcript\n"))
-          (cl-letf (((symbol-function 'mevedel--run-session-start-hooks)
-                     (lambda (value)
-                       (setq source value)
-                       (mevedel-hooks-record-session-context
-                        session '(:additional-context ("fresh context"))
-                        'SessionStart))))
-            (mevedel--compact-begin-root-context-epoch
-             (list :buffer buffer :session session
-                   :begin-context-epoch t)
-             nil))
-          (should (equal "compact" source))
-          (should (mevedel-session-hook-context-pending session))
-          (with-current-buffer buffer
-            (should-not mevedel--compact-current-request-hook-context)
-            (should-not (string-match-p "fresh context" (buffer-string)))))
-      (kill-buffer buffer)))
-
-  :doc "automatic compaction consumes compact-start context into its request"
-  (let* ((workspace (mevedel-workspace--create
-                     :type 'file :id "compact-auto-epoch" :root "/tmp"
-                     :name "compact-auto-epoch"))
-         (session (mevedel-session-create "main" workspace))
-         (buffer (generate-new-buffer " *mevedel-compact-auto-epoch*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer buffer
-            (insert "Pending prompt\n"))
-          (cl-letf (((symbol-function 'mevedel--run-session-start-hooks)
-                     (lambda (_source)
-                       (mevedel-hooks-record-session-context
-                        session '(:additional-context ("fresh context"))
-                        'SessionStart))))
-            (mevedel--compact-begin-root-context-epoch
-             (list :buffer buffer :session session
-                   :begin-context-epoch t)
-             t))
-          (should-not (mevedel-session-hook-context-pending session))
-          (with-current-buffer buffer
-            (should (string-match-p
-                     "fresh context"
-                     mevedel--compact-current-request-hook-context))
-            (should (string-match-p "fresh context" (buffer-string)))))
-      (kill-buffer buffer)))
-
-  :doc "retained-agent compaction does not begin a root context epoch"
-  (let ((buffer (generate-new-buffer " *mevedel-agent-compact-epoch*"))
-        called)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel--run-session-start-hooks)
-                   (lambda (_source) (setq called t))))
-          (mevedel--compact-begin-root-context-epoch
-           (list :buffer buffer :session 'session :invocation 'agent) t)
-          (should-not called))
-      (kill-buffer buffer))))
-
-(mevedel-deftest mevedel--compact-main-complete ()
-  ,test
-  (test)
-  :doc "rerenders the main view and stops manual request progress"
-  (let ((view-buffer (generate-new-buffer " *mevedel-compact-view*"))
-        (renders 0) (stops 0))
-    (unwind-protect
-        (let ((mevedel--view-buffer view-buffer))
-          (cl-letf (((symbol-function 'mevedel-view--full-rerender)
-                     (lambda () (cl-incf renders)))
-                    ((symbol-function 'mevedel-view--stop-request-progress)
-                     (lambda () (cl-incf stops))))
-            (mevedel--compact-main-complete nil nil)
-            (mevedel--compact-main-complete nil t))
-          (should (= 2 renders))
-          (should (= 1 stops)))
-      (kill-buffer view-buffer)))
-
-  :doc "real compaction redraw preserves a multiline leading-> draft and point"
-  (mevedel-view-test--with-buffers
-    (let ((draft "> quoted\nsecond line")
-          (point-offset 4))
-      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
-      (mevedel-view-test--insert-data data-buf "Response.\n" 'response)
-      (with-current-buffer view-buf
-        (mevedel-view-test--insert-composer-draft draft point-offset))
-      (with-current-buffer data-buf
-        (mevedel--compact-main-complete nil t))
-      (with-current-buffer view-buf
-        (should (string= draft (mevedel-view--input-text)))
-        (should (= (point)
-                   (+ (mevedel-view--input-start) point-offset)))))))
-
-(mevedel-deftest mevedel--compact-agent-complete ()
-  ,test
-  (test)
-  :doc "restores ordinary agent continuation status"
-  (let ((invocation (mevedel-agent-invocation-create
-                     (mevedel-agent--create :name "explorer")))
-        activity status)
-    (cl-letf (((symbol-function 'mevedel-agent-conversation-record-activity)
-               (lambda (_invocation value) (setq activity value)))
-              ((symbol-function 'gptel--update-status)
-               (lambda (value &optional _face) (setq status value))))
-      (mevedel--compact-agent-complete (list :invocation invocation) t))
-    (should (equal '(:type status :summary "waiting") activity))
-    (should (equal " Calling Agent..." status))))
-
-(mevedel-deftest mevedel--compact-main-target ()
-  ,test
-  (test)
-  :doc "builds the complete adapter for the active persisted segment"
-  (test-mevedel-compact--with-persisted-buffer (buffer session)
-    (insert "Prompt.\n")
-    (let ((start (point)))
-      (insert "Response.\n")
-      (put-text-property start (point) 'gptel 'response))
-    (let ((target (mevedel--compact-main-target)))
-      (should (eq buffer (plist-get target :buffer)))
-      (should (eq session (plist-get target :session)))
-      (should (plist-get target :eligible-p))
-      (dolist (operation '(:apply :start :complete :resume :fail))
-        (should (functionp (plist-get target operation)))))))
-
-(mevedel-deftest mevedel--compact-target-call ()
-  ,test
-  (test)
-  :doc "passes the target and arguments to its selected operation"
-  (let* ((target (list :apply (lambda (self one two)
-                                (list self one two))))
-         (result (mevedel--compact-target-call target :apply 1 2)))
-    (should (eq target (car result)))
-    (should (equal '(1 2) (cdr result)))
-    (should-error (mevedel--compact-target-call target :fail)
-                  :type 'error)))
 
 (mevedel-deftest mevedel--compact-main-resume-status ()
   ,test
@@ -2122,7 +961,7 @@ missing or zero prompt-side usage cannot become the active baseline"
   :doc "settles no-boundary continuations according to target pressure"
   (dolist (pressure '(nil t))
     (let ((fsm (gptel-make-fsm :info nil)) (waits 0) failure)
-      (cl-letf (((symbol-function 'mevedel--compact-find-boundary)
+      (cl-letf (((symbol-function 'mevedel-compact-evidence-find-boundary)
                  (lambda () nil))
                 ((symbol-function 'gptel--handle-wait)
                  (lambda (_fsm) (cl-incf waits))))
@@ -2139,9 +978,9 @@ missing or zero prompt-side usage cannot become the active baseline"
   :doc "resumes success and routes run or rebuild failures once"
   (dolist (outcome '(success run-error rebuild-error))
     (let ((fsm (gptel-make-fsm :info nil)) resumed failure)
-      (cl-letf (((symbol-function 'mevedel--compact-find-boundary)
+      (cl-letf (((symbol-function 'mevedel-compact-evidence-find-boundary)
                  (lambda () 10))
-                ((symbol-function 'mevedel--compact-run)
+                ((symbol-function 'mevedel-compact-run-start)
                  (lambda (&rest args)
                    (funcall (plist-get args :callback)
                             (and (eq outcome 'run-error) "run failed")))))
@@ -2211,11 +1050,11 @@ missing or zero prompt-side usage cannot become the active baseline"
                        :max-tokens 0 :request-params nil)))))
         (put 'mevedel-agent-target-model :context-window 0.4)
         (put 'mevedel-agent-summary-model :context-window 2)
-        (let ((mevedel-compact-token-threshold 0.5)
+        (let ((mevedel-compact-estimation-token-threshold 0.5)
               (mevedel-model-reserve-tokens 0)
-              (mevedel-compact-tail-turns 1)
-              (mevedel-compact-tail-budget 1.0)
-              (mevedel-compact-warn-on-completion t)
+              (mevedel-compact-evidence-tail-turns 1)
+              (mevedel-compact-evidence-tail-budget 1.0)
+              (mevedel-compact-run-warn-on-completion t)
               (gptel-backend nil)
               (gptel-model 'mevedel-agent-target-model)
               (gptel-max-tokens 0)
@@ -2306,7 +1145,7 @@ missing or zero prompt-side usage cannot become the active baseline"
           (should-not
            (cl-some (lambda (entry) (string-match-p "long threads" entry))
                     messages))
-          (should-not mevedel--compact-current-request-reminder)))))
+          (should-not mevedel-compact-target-current-request-reminder)))))
 
   :doc "preserves reasoning and prose before the current persisted tool batch"
   (test-mevedel-compact--with-persisted-agent
@@ -2336,10 +1175,10 @@ missing or zero prompt-side usage cannot become the active baseline"
              pending-start waits)
         (let ((mevedel-compact-auto t)
               (mevedel--compact-auto-disabled nil)
-              (mevedel--compaction-in-flight nil))
-          (cl-letf (((symbol-function 'mevedel--compact-admission)
+              (mevedel-compact-run-in-flight nil))
+          (cl-letf (((symbol-function 'mevedel-compact-estimation-admission)
                      (lambda (&rest _) '(:target-pressure t)))
-                    ((symbol-function 'mevedel--compact-run)
+                    ((symbol-function 'mevedel-compact-run-start)
                      (lambda (&rest args)
                        (setq pending-start
                              (plist-get args :pending-start))))
@@ -2387,10 +1226,10 @@ missing or zero prompt-side usage cannot become the active baseline"
                       :max-tokens 0 :request-params nil)))))
         (put 'mevedel-agent-target-model :context-window 0.4)
         (put 'mevedel-agent-summary-model :context-window 2)
-        (let ((mevedel-compact-token-threshold 0.5)
+        (let ((mevedel-compact-estimation-token-threshold 0.5)
               (mevedel-model-reserve-tokens 0)
-              (mevedel-compact-tail-turns 1)
-              (mevedel-compact-tail-budget 1.0)
+              (mevedel-compact-evidence-tail-turns 1)
+              (mevedel-compact-evidence-tail-budget 1.0)
               (gptel-backend nil)
               (gptel-model 'mevedel-agent-target-model)
               (gptel-max-tokens 0)
@@ -2498,7 +1337,7 @@ missing or zero prompt-side usage cannot become the active baseline"
     (unwind-protect
         (cl-letf (((symbol-function 'gptel--handle-wait)
                    (lambda (_fsm) (cl-incf waits)))
-                  ((symbol-function 'mevedel--compact-run)
+                  ((symbol-function 'mevedel-compact-run-start)
                    (lambda (&rest _) (setq compacted t))))
           (mevedel--compact-handle-agent-wait fsm)
           (should (= 1 waits))
@@ -2543,7 +1382,7 @@ missing or zero prompt-side usage cannot become the active baseline"
           (put 'mevedel-large-agent-model :context-window 2)
           (put 'mevedel-small-agent-model :context-window 0.4)
           (put 'mevedel-agent-summary-model :context-window 0.4)
-          (let ((mevedel-compact-token-threshold 0.5)
+          (let ((mevedel-compact-estimation-token-threshold 0.5)
                 (mevedel-model-reserve-tokens 0))
             (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                        (lambda (&rest _)
@@ -2620,10 +1459,10 @@ missing or zero prompt-side usage cannot become the active baseline"
       (put 'mevedel-large-agent-model :context-window 20)
       (put 'mevedel-small-agent-model :context-window 0.4)
       (put 'mevedel-agent-summary-model :context-window 0.4)
-      (let ((mevedel-compact-token-threshold 0.5)
+      (let ((mevedel-compact-estimation-token-threshold 0.5)
             (mevedel-model-reserve-tokens 0)
-            (mevedel-compact-tail-turns 10)
-            (mevedel-compact-tail-budget 1.0))
+            (mevedel-compact-evidence-tail-turns 10)
+            (mevedel-compact-evidence-tail-budget 1.0))
         (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                    (lambda (&rest _)
                      '(:backend nil :model mevedel-agent-summary-model)))
@@ -2657,1823 +1496,6 @@ missing or zero prompt-side usage cannot become the active baseline"
                 (insert-file-contents canonical-path)
                 (buffer-string)))))))
 
-(mevedel-deftest mevedel--compact-run-finish ()
-  ,test
-  (test)
-  :doc "settles once and clears the in-flight marker"
-  (with-temp-buffer
-    (setq-local mevedel--compaction-in-flight t)
-    (let* (results
-           (state
-            (mevedel--compact-run-state-create
-             :callback (lambda (err) (push err results))
-             :chat-buffer (current-buffer))))
-      (mevedel--compact-run-finish state nil)
-      (mevedel--compact-run-finish state "late")
-      (should (equal results '(nil)))
-      (should-not mevedel--compaction-in-flight))))
-
-(mevedel-deftest mevedel--compact-run-fail ()
-  ,test
-  (test)
-  :doc "records one terminal failure and settles the run"
-  (with-temp-buffer
-    (setq-local mevedel--compaction-in-flight t)
-    (let* ((mevedel--compact-failure-count 0)
-           result
-           (state
-            (mevedel--compact-run-state-create
-             :attempt 3
-             :auto t
-             :callback (lambda (err) (setq result err))
-             :chat-buffer (current-buffer))))
-      (cl-letf (((symbol-function 'display-warning) #'ignore))
-        (mevedel--compact-run-fail state "failed" t))
-      (should (equal result "failed"))
-      (should (= mevedel--compact-failure-count 1))
-      (should-not mevedel--compaction-in-flight))))
-
-(mevedel-deftest mevedel--compact-run-finish-success ()
-  ,test
-  (test)
-  :doc "runs PostCompact and target completion before settling"
-  (let (completed result)
-    (let ((state
-           (mevedel--compact-run-state-create
-            :aggressive t
-            :callback (lambda (err) (setq result err))
-            :chat-buffer (current-buffer)
-            :target
-            (list :complete (lambda (&rest _) (setq completed t)))
-            :tokens-before 200
-            :trigger "manual")))
-      (cl-letf (((symbol-function 'mevedel--estimate-tokens)
-                 (lambda () 100))
-                ((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event _payload callback &rest _)
-                   (funcall callback nil)))
-                ((symbol-function 'message) #'ignore))
-        (let ((mevedel-compact-warn-on-completion nil))
-          (mevedel--compact-run-finish-success state "summary")))
-      (should completed)
-      (should-not result))))
-
-(mevedel-deftest mevedel--compact-run-apply-summary ()
-  ,test
-  (test)
-  :doc "normalizes and applies the summary before successful settlement"
-  (let (applied result)
-    (let ((state
-           (mevedel--compact-run-state-create
-            :aggressive t
-            :callback (lambda (err) (setq result err))
-            :chat-buffer (current-buffer)
-            :summary-ready (lambda (summary) (concat summary " ready"))
-            :target
-            (list :apply
-                  (lambda (_target summary &rest _)
-                    (setq applied summary))
-                  :complete #'ignore)
-            :tokens-before 200
-            :trigger "manual")))
-      (cl-letf (((symbol-function 'mevedel--estimate-tokens)
-                 (lambda () 100))
-                ((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event _payload callback &rest _)
-                   (funcall callback nil)))
-                ((symbol-function 'message) #'ignore))
-        (let ((mevedel-compact-warn-on-completion nil))
-          (mevedel--compact-run-apply-summary state "summary" nil)))
-      (should (equal applied "summary ready"))
-      (should-not result))))
-
-(mevedel-deftest mevedel--compact-run-send-request ()
-  ,test
-  (test)
-  :doc "applies a prepared summary without sending a model request"
-  (let (applied)
-    (let ((state
-           (mevedel--compact-run-state-create
-            :chat-buffer (current-buffer)
-            :policy nil
-            :prepared-summary "prepared")))
-      (cl-letf (((symbol-function 'gptel-get-preset)
-                 (lambda (&rest _) '(:description "test")))
-                ((symbol-function 'gptel-request)
-                 (lambda (&rest _)
-                   (ert-fail "Prepared summary sent a request")))
-                ((symbol-function 'mevedel--compact-run-apply-summary)
-                 (lambda (_state summary _audits)
-                   (setq applied summary))))
-        (mevedel--compact-run-send-request state "system" nil))
-      (should (equal applied "prepared"))))
-
-  :doc "passes handoff focus and transformed evidence without previous authority"
-  (let* ((target '(:previous-summary "retained"))
-         (state
-          (mevedel--compact-run-state-create
-           :chat-buffer (current-buffer)
-           :focus "exact task"
-           :old-content "evidence"
-           :policy 'policy
-           :purpose 'handoff
-           :source-transform (lambda (source) (concat "filtered " source))
-           :target target))
-         captured)
-    (cl-letf (((symbol-function 'mevedel-context-summary-generate)
-               (lambda (source purpose _callback &rest args)
-                 (setq captured (list source purpose args))
-                 #'ignore)))
-      (mevedel--compact-run-send-request state nil nil))
-    (should (equal "filtered evidence" (car captured)))
-    (should (eq 'handoff (cadr captured)))
-    (should (equal "exact task" (plist-get (caddr captured) :focus)))
-    (should-not (plist-get (caddr captured) :previous-summary))))
-
-(mevedel-deftest mevedel--compact-run-begin-attempt ()
-  ,test
-  (test)
-  :doc "admits the first attempt and starts the target once"
-  (let (started sent-context)
-    (let ((state
-           (mevedel--compact-run-state-create
-            :old-content "body"
-            :policy nil
-            :target
-            (list :origin "/root"
-                  :start (lambda (_target) (setq started t)))
-            :tokens-before 100
-            :trigger "manual")))
-      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event _payload callback &rest _)
-                   (funcall callback nil)))
-                ((symbol-function 'mevedel--compact-run-send-request)
-                 (lambda (_state context _audits)
-                   (setq sent-context context)))
-                ((symbol-function 'message) #'ignore))
-        (mevedel--compact-run-begin-attempt state))
-      (should started)
-      (should-not sent-context)
-      (should (= (mevedel--compact-run-state-attempt state) 1)))))
-
-(mevedel-deftest mevedel--compact-evidence-selection
-  (:doc "projects the same aggressive source selection for external consumers")
-  ,test
-  (test)
-  (with-temp-buffer
-    (insert "Inherited context.\n")
-    (let ((prefix-end (point)))
-      (insert "Stable anchor.\n")
-      (let ((body-start (point)))
-        (insert "Current body.\n")
-        (let ((selection
-               (mevedel--compact-evidence-selection
-                (list :body-start body-start
-                      :history-prefix-regions
-                      (list (cons (point-min) prefix-end)))
-                (point-max) t)))
-          (should (string-match-p "Inherited context"
-                                  (plist-get selection :content)))
-          (should (string-match-p "Current body"
-                                  (plist-get selection :content)))
-          (should-not (string-match-p "Stable anchor"
-                                      (plist-get selection :content)))
-          (should (= 0 (plist-get selection :preserved-tail-turns))))))))
-
-(mevedel-deftest mevedel--compact-run-prepare ()
-  ,test
-  (test)
-  :doc "populates the run state from compactable and pending text"
-  (with-temp-buffer
-    (insert "history\n")
-    (let* ((pending-start (point))
-           (_ (insert "pending"))
-           (ready #'identity)
-           (state
-            (mevedel--compact-run-state-create
-             :aggressive t
-             :target '(:body-start 1 :invocation root))))
-      (should
-       (eq state
-           (mevedel--compact-run-prepare
-            state pending-start '(:summary-policy policy)
-            "instructions" pending-start "prepared" ready)))
-      (should (string-match-p
-               "history"
-               (mevedel--compact-run-state-old-content state)))
-      (should-not (string-match-p
-                   "pending"
-                   (mevedel--compact-run-state-old-content state)))
-      (should (equal "pending"
-                     (mevedel--compact-run-state-pending-text state)))
-      (should (eq 'policy (mevedel--compact-run-state-policy state)))
-      (should (equal "prepared"
-                     (mevedel--compact-run-state-prepared-summary state)))
-      (should (eq ready
-                  (mevedel--compact-run-state-summary-ready state)))))
-
-  :doc "omits complete directive turns from summarizer history"
-  (with-temp-buffer
-    (insert "ordinary before\n")
-    (insert (mevedel--format-hook-audit-record
-             '(:type directive-turn-boundary :edge start
-               :directive-id "d1" :action discuss :turn 2)))
-    (insert "directive prompt\ndirective answer\n")
-    (insert (mevedel--format-hook-audit-record
-             '(:type directive-turn-boundary :edge end
-               :directive-id "d1" :action discuss :turn 2
-               :outcome success :sequence 1)))
-    (insert "ordinary after\n")
-    (let ((state
-           (mevedel--compact-run-state-create
-            :aggressive t
-            :target '(:body-start 1 :invocation root))))
-      (mevedel--compact-run-prepare
-       state (point-max) '(:summary-policy policy)
-       nil nil "prepared" #'identity)
-      (let ((history (mevedel--compact-run-state-old-content state)))
-        (should (string-match-p "ordinary before" history))
-        (should (string-match-p "ordinary after" history))
-        (should-not (string-match-p "directive prompt" history))
-        (should-not (string-match-p "directive answer" history))))))
-
-(mevedel-deftest mevedel--compact-run (:quiet t)
-  ,test
-  (test)
-  :doc "rejects an unpersisted buffer before hooks or model requests"
-  (with-temp-buffer
-    (org-mode)
-    (insert "Prompt\n")
-    (let (hook-called request-called)
-      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (&rest _)
-                   (setq hook-called t)))
-                ((symbol-function 'gptel-request)
-                 (lambda (&rest _)
-                   (setq request-called t))))
-        (should-error
-         (mevedel--compact-run :aggressive t :pending-start (point-max))
-         :type 'user-error))
-      (should-not hook-called)
-      (should-not request-called)))
-
-  :doc "summarizer-only pressure skips when no compactable prefix remains"
-  (test-mevedel-compact--with-persisted-buffer (buffer session)
-    (insert "Prompt\n")
-    (insert (propertize "Response\n" 'gptel 'response))
-    (let ((pending-start (point)) result)
-      (insert "Pending\n")
-      (mevedel--compact-run
-       :pending-start pending-start
-       :auto t
-       :admission
-       '(:summary-policy (:backend nil :model nil :max-tokens 0)
-         :target-pressure nil)
-       :callback (lambda (err) (setq result err)))
-      (should (eq result :skip))))
-
-  :doc "target pressure fails when no compactable prefix remains"
-  (test-mevedel-compact--with-persisted-buffer (buffer session)
-    (insert "Prompt\n")
-    (insert (propertize "Response\n" 'gptel 'response))
-    (let ((pending-start (point)) result request-called)
-      (insert "Pending\n")
-      (cl-letf (((symbol-function 'gptel-request)
-                 (lambda (&rest _) (setq request-called t))))
-        (mevedel--compact-run
-         :pending-start pending-start
-         :auto t
-         :admission
-         '(:summary-policy (:backend nil :model nil :max-tokens 0)
-           :target-pressure t)
-         :callback (lambda (err) (setq result err))))
-      (should (string-match-p "No compactable history" result))
-      (should-not request-called)))
-
-  :doc "preflight includes the capped body, base prompt, and PreCompact context"
-  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let (result request-called)
-      (insert (make-string 120 ?b) "\n")
-      (insert (propertize "Response\n" 'gptel 'response))
-      (put 'mevedel-small-summary-model :context-window 0.08)
-      (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
-                     (lambda (&rest _) (make-string 120 ?s)))
-                    ((symbol-function 'mevedel-hooks-run-event)
-                     (lambda (_event _plist callback &rest _)
-                       (funcall callback
-                                (list :additional-context
-                                      (list (make-string 120 ?h))))))
-                    ((symbol-function 'display-warning) #'ignore)
-                    ((symbol-function 'gptel-request)
-                     (lambda (&rest _) (setq request-called t))))
-            (let ((mevedel-model-reserve-tokens 0))
-              (mevedel--compact-run
-               :aggressive t
-               :pending-start (point-max)
-               :auto t
-               :admission
-               '(:summary-policy
-                 (:backend nil :model mevedel-small-summary-model
-                  :max-tokens 0 :request-params nil)
-               :target-pressure t)
-               :callback (lambda (err) (setq result err)))))
-      (should (string-match-p "exceeds usable context" result))
-      (should-not request-called)
-      (should (= mevedel--compact-failure-count 0))
-      (should-not mevedel--compaction-in-flight)))
-
-  :doc "summarizes a forked history prefix while excluding the stable task anchor"
-  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let (captured-prompt result)
-      (insert "Inherited live context.\n")
-      (let ((history-prefix-end (point)))
-        (insert "Stable child task anchor.\n")
-        (let ((body-start (point)))
-          (insert "Child conversation body.\n")
-          (let ((pending-start (point))
-                (target (mevedel--compact-main-target)))
-            (insert "Pending continuation.\n")
-            (setq target
-                  (plist-put target :history-prefix-regions
-                             (list (cons (point-min) history-prefix-end))))
-            (setq target (plist-put target :body-start body-start))
-            (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
-                       (lambda (&rest _) "system prompt"))
-                      ((symbol-function 'mevedel-hooks-run-event)
-                       (lambda (_event _plist callback &rest _)
-                         (funcall callback nil)))
-                      ((symbol-function 'display-warning) #'ignore)
-                      ((symbol-function 'gptel-request)
-                       (lambda (prompt &rest args)
-                         (setq captured-prompt prompt)
-                         (funcall (plist-get args :callback) 'abort nil))))
-              (mevedel--compact-run
-               :target target
-               :aggressive t
-               :pending-start pending-start
-               :callback (lambda (err) (setq result err)))))))
-      (should (string-match-p "Inherited live context" captured-prompt))
-      (should (string-match-p "Child conversation body" captured-prompt))
-      (should-not (string-match-p "Stable child task anchor" captured-prompt))
-      (should (equal result "Compaction aborted"))))
-
-  :doc "successful root compaction starts a compact epoch after PostCompact"
-  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let (events result)
-      (insert "Prompt\n")
-      (insert (propertize "Response\n" 'gptel 'response))
-      (let* ((pending-start (point))
-             (target (mevedel--compact-main-target)))
-        (insert "Pending prompt\n")
-        (setq target
-              (plist-put target :apply
-                         (lambda (&rest _)
-                           (push 'apply events))))
-        (setq target
-              (plist-put target :complete
-                         (lambda (&rest _)
-                           (push 'complete events))))
-        (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
-                   (lambda (&rest _) "system prompt"))
-                  ((symbol-function 'mevedel-hooks-run-event)
-                   (lambda (event _payload callback &rest _)
-                     (push event events)
-                     (funcall callback nil)))
-                  ((symbol-function 'mevedel--run-session-start-hooks)
-                   (lambda (source)
-                     (push (list 'SessionStart source) events)
-                     (mevedel-hooks-record-session-context
-                      session
-                      '(:additional-context ("compact context"))
-                      'SessionStart)))
-                  ((symbol-function 'gptel-get-preset)
-                   (lambda (&rest _) '(:description "test")))
-                  ((symbol-function 'gptel-request)
-                   (lambda (_prompt &rest args)
-                     (funcall (plist-get args :callback)
-                              test-mevedel-compact--valid-summary nil)))
-                  ((symbol-function 'message) #'ignore))
-          (mevedel--compact-run
-           :target target
-           :aggressive t
-           :pending-start pending-start
-           :auto t
-           :admission
-           '(:summary-policy (:backend nil :model nil :max-tokens 0)
-             :target-pressure t)
-           :callback (lambda (err) (setq result err)))))
-      (should-not result)
-      (should (equal (nreverse events)
-                     '(PreCompact apply PostCompact
-                       (SessionStart "compact") complete)))
-      (should (string-match-p "compact context" (buffer-string)))
-      (should-not (mevedel-session-hook-context-pending session))
-      (should (string-match-p
-               "compact context"
-               mevedel--compact-current-request-hook-context))))
-
-  :doc "successful retained-agent compaction does not start a root epoch"
-  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let (events result)
-      (insert "Prompt\n")
-      (insert (propertize "Response\n" 'gptel 'response))
-      (let* ((pending-start (point))
-             (target (mevedel--compact-main-target)))
-        (insert "Pending prompt\n")
-        (setq target (plist-put target :invocation 'retained-agent))
-        (setq target (plist-put target :origin "/root/agent"))
-        (setq target (plist-put target :apply (lambda (&rest _))))
-        (setq target (plist-put target :complete (lambda (&rest _))))
-        (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
-                   (lambda (&rest _) "system prompt"))
-                  ((symbol-function 'mevedel-hooks-run-event)
-                   (lambda (event _payload callback &rest _)
-                     (push event events)
-                     (funcall callback nil)))
-                  ((symbol-function 'mevedel--run-session-start-hooks)
-                   (lambda (_source)
-                     (ert-fail "Agent compaction started a root epoch")))
-                  ((symbol-function 'gptel-get-preset)
-                   (lambda (&rest _) '(:description "test")))
-                  ((symbol-function 'gptel-request)
-                   (lambda (_prompt &rest args)
-                     (funcall (plist-get args :callback)
-                              test-mevedel-compact--valid-summary nil)))
-                  ((symbol-function 'message) #'ignore))
-          (mevedel--compact-run
-           :target target
-           :aggressive t
-           :pending-start pending-start
-           :auto t
-           :admission
-           '(:summary-policy (:backend nil :model nil :max-tokens 0)
-             :target-pressure t)
-           :callback (lambda (err) (setq result err)))))
-      (should-not result)
-      (should (equal (nreverse events) '(PreCompact PostCompact)))))
-
-  :doc "applies a prepared summary without another model request"
-  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let (applied result)
-      (insert "Prompt\n")
-      (insert (propertize "Response\n" 'gptel 'response))
-      (let ((target (mevedel--compact-main-target)))
-        (setq target
-              (plist-put target :apply
-                         (lambda (_target summary &rest _)
-                           (setq applied summary))))
-        (setq target (plist-put target :complete (lambda (&rest _))))
-        (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
-                   (lambda (&rest _) "system prompt"))
-                  ((symbol-function 'mevedel-hooks-run-event)
-                   (lambda (_event _payload callback &rest _)
-                     (funcall callback nil)))
-                  ((symbol-function 'mevedel--run-session-start-hooks)
-                   #'ignore)
-                  ((symbol-function 'gptel-request)
-                   (lambda (&rest _)
-                     (ert-fail "Prepared summary sent another request")))
-                  ((symbol-function 'message) #'ignore))
-          (mevedel--compact-run
-           :target target
-           :aggressive t
-           :prepared-summary "cached"
-           :summary-ready (lambda (summary) (concat summary " ready"))
-           :callback (lambda (err) (setq result err)))))
-      (should-not result)
-      (should (equal applied "cached ready"))))
-
-  :doc "blocked compaction emits neither PostCompact nor SessionStart"
-  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let (events result)
-      (insert "Prompt\n")
-      (insert (propertize "Response\n" 'gptel 'response))
-      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (event _payload callback &rest _)
-                   (push event events)
-                   (funcall callback
-                            '(:continue nil :stop-reason "blocked"))))
-                ((symbol-function 'mevedel--run-session-start-hooks)
-                 (lambda (_source)
-                   (ert-fail "Blocked compaction started a context epoch")))
-                ((symbol-function 'gptel-request)
-                 (lambda (&rest _)
-                   (ert-fail "Blocked compaction sent a request"))))
-        (mevedel--compact-run
-         :aggressive t
-         :pending-start (point-max)
-         :callback (lambda (err) (setq result err))))
-      (should (equal "blocked" result))
-      (should (equal (nreverse events) '(PreCompact)))))
-
-  :doc "cancels the isolated summary request and settles compaction"
-  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let (provider-callback provider-cancelled result)
-      (insert "Prompt\n")
-      (insert (propertize "Response\n" 'gptel 'response))
-      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event _payload callback &rest _)
-                   (funcall callback nil)))
-                ((symbol-function 'mevedel-context-summary-generate)
-                 (lambda (_source _purpose callback &rest _)
-                   (setq provider-callback callback)
-                   (lambda ()
-                     (setq provider-cancelled t)
-                     (funcall provider-callback '(:outcome aborted)))))
-                ((symbol-function 'display-warning) #'ignore)
-                ((symbol-function 'message) #'ignore))
-        (mevedel--compact-run
-         :aggressive t
-         :pending-start (point-max)
-         :callback (lambda (err) (setq result err)))
-        (should mevedel--compaction-in-flight)
-        (funcall mevedel--compaction-cancel))
-      (should provider-cancelled)
-      (should (equal result "Compaction aborted"))
-      (should-not mevedel--compaction-in-flight)
-      (should-not mevedel--compaction-cancel)
-      (should (= mevedel--compact-failure-count 0))))
-
-  :doc "cancellation rejects a late PreCompact callback"
-  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let (hook-callback result
-          (requests 0)
-          (starts 0))
-      (insert "Prompt\n")
-      (insert (propertize "Response\n" 'gptel 'response))
-      (let ((target (mevedel--compact-main-target)))
-        (setq target
-              (plist-put target :start (lambda (&rest _) (cl-incf starts))))
-        (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                   (lambda (_event _payload callback &rest _)
-                     (setq hook-callback callback)))
-                  ((symbol-function 'mevedel-context-summary-generate)
-                   (lambda (&rest _)
-                     (cl-incf requests))))
-          (mevedel--compact-run
-           :target target
-           :aggressive t
-           :pending-start (point-max)
-           :callback (lambda (err) (setq result err)))
-          (should hook-callback)
-          (funcall mevedel--compaction-cancel)
-          (funcall hook-callback nil)))
-      (should (equal result "Compaction aborted"))
-      (should (= starts 0))
-      (should (= requests 0))))
-
-  :doc "applied compaction wins cancellation while PostCompact is held"
-  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let (hook-callback results
-          (completes 0)
-          (epochs 0))
-      (insert "Prompt\n")
-      (insert (propertize "Response\n" 'gptel 'response))
-      (let ((target (mevedel--compact-main-target)))
-        (setq target (plist-put target :apply #'ignore))
-        (setq target
-              (plist-put target :complete
-                         (lambda (&rest _) (cl-incf completes))))
-        (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                   (lambda (event _payload callback &rest _)
-                     (if (eq event 'PostCompact)
-                         (setq hook-callback callback)
-                       (funcall callback nil))))
-                  ((symbol-function 'mevedel--compact-begin-root-context-epoch)
-                   (lambda (&rest _) (cl-incf epochs)))
-                  ((symbol-function 'message) #'ignore))
-          (mevedel--compact-run
-           :target target
-           :aggressive t
-           :prepared-summary "cached"
-           :callback (lambda (err) (push err results)))
-          (should hook-callback)
-          (funcall mevedel--compaction-cancel)
-          (should-not results)
-          (should mevedel--compaction-in-flight)
-          (funcall hook-callback nil)))
-      (should (equal results '(nil)))
-      (should (= epochs 1))
-      (should (= completes 1))
-      (should-not mevedel--compaction-in-flight)
-      (should-not mevedel--compaction-cancel)))
-
-  :doc "cancellation owns retry backoff and rejects stale summary callbacks"
-  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let ((requests 0)
-          (hooks 0)
-          (retry-token (list 'retry))
-          applied
-          cancelled-timer
-          provider-callback
-          result
-          retry-callback)
-      (insert "Prompt\n")
-      (insert (propertize "Response\n" 'gptel 'response))
-      (let ((target (mevedel--compact-main-target)))
-        (setq target
-              (plist-put
-               target :apply
-               (lambda (_target summary &rest _)
-                 (setq applied summary))))
-        (setq target (plist-put target :complete #'ignore))
-        (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                   (lambda (_event _payload callback &rest _)
-                     (cl-incf hooks)
-                     (funcall callback nil)))
-                  ((symbol-function 'mevedel-context-summary-generate)
-                   (lambda (_source _purpose callback &rest _)
-                     (cl-incf requests)
-                     (setq provider-callback callback)
-                     (when (= requests 1)
-                       (funcall callback
-                                '(:outcome error :error "temporary")))
-                     #'ignore))
-                  ((symbol-function 'run-at-time)
-                   (lambda (_delay _repeat callback &rest args)
-                     (setq retry-callback
-                           (lambda () (apply callback args)))
-                     retry-token))
-                  ((symbol-function 'cancel-timer)
-                   (lambda (timer)
-                     (setq cancelled-timer timer)))
-                  ((symbol-function 'display-warning) #'ignore)
-                  ((symbol-function 'message) #'ignore))
-          (mevedel--compact-run
-           :target target
-           :aggressive t
-           :pending-start (point-max)
-           :callback (lambda (err) (setq result err)))
-          (should retry-callback)
-          (funcall mevedel--compaction-cancel)
-          (funcall provider-callback
-                   '(:outcome success :summary "late summary"))
-          (funcall retry-callback)))
-      (should (equal result "Compaction aborted"))
-      (should (eq cancelled-timer retry-token))
-      (should (= hooks 1))
-      (should (= requests 1))
-      (should-not applied)
-      (should-not mevedel--compaction-in-flight)
-      (should-not mevedel--compaction-cancel)))
-
-  :doc "settles a synchronous generator failure as a retryable attempt"
-  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let ((attempts 0) result)
-      (insert "Prompt\n")
-      (insert (propertize "Response\n" 'gptel 'response))
-      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event _payload callback &rest _)
-                   (funcall callback nil)))
-                ((symbol-function 'mevedel-context-summary-generate)
-                 (lambda (&rest _)
-                   (cl-incf attempts)
-                   (error "Summarization provider is unavailable")))
-                ((symbol-function 'run-at-time)
-                 (lambda (_delay _repeat function &rest args)
-                   (apply function args)))
-                ((symbol-function 'display-warning) #'ignore)
-                ((symbol-function 'message) #'ignore))
-        (mevedel--compact-run
-         :aggressive t
-         :pending-start (point-max)
-         :callback (lambda (err) (setq result err))))
-      (should (= 3 attempts))
-      (should (string-match-p "Summarization provider is unavailable" result))
-      (should-not mevedel--compaction-in-flight)))
-
-  :doc "request failures retain three identical attempts"
-  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let ((attempts 0) events prompts result)
-      (insert "Prompt\n")
-      (insert (propertize "Response\n" 'gptel 'response))
-      (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
-                     (lambda (&rest _) "system prompt"))
-                    ((symbol-function 'mevedel-hooks-run-event)
-                     (lambda (event _plist callback &rest _)
-                       (push event events)
-                       (funcall callback nil)))
-                    ((symbol-function 'mevedel--run-session-start-hooks)
-                     (lambda (_source)
-                       (ert-fail "Failed compaction started a context epoch")))
-                    ((symbol-function 'gptel-get-preset)
-                     (lambda (&rest _) '(:description "test")))
-                    ((symbol-function 'run-at-time)
-                     (lambda (_delay _repeat function &rest args)
-                       (apply function args)))
-                    ((symbol-function 'message) #'ignore)
-                    ((symbol-function 'display-warning) #'ignore)
-                    ((symbol-function 'gptel-request)
-                     (lambda (prompt &rest args)
-                       (cl-incf attempts)
-                       (push prompt prompts)
-                       (funcall (plist-get args :callback)
-                                nil '(:error "temporary")))))
-            (mevedel--compact-run
-             :aggressive t
-             :pending-start (point-max)
-             :auto t
-             :admission
-             '(:summary-policy (:backend nil :model nil :max-tokens 0)
-               :target-pressure t)
-             :callback (lambda (err) (setq result err))))
-      (should (= attempts 3))
-      (should (equal (nreverse events)
-                     '(PreCompact PreCompact PreCompact)))
-      (should (= 1 (length (delete-dups prompts))))
-      (should (string-match-p "temporary" result))))
-
-  :doc "manual compaction failure stops the view spinner"
-  (let ((chat-buf (generate-new-buffer " *mevedel-compact-chat*"))
-        (view-buf (generate-new-buffer " *mevedel-compact-view*"))
-        (updated-status nil)
-        (stopped nil))
-    (unwind-protect
-        (with-current-buffer chat-buf
-          (org-mode)
-          (setq-local mevedel--compaction-in-flight nil)
-          (setq-local mevedel--view-buffer view-buf)
-          (setq-local mevedel--session nil)
-          (insert "Prompt\n")
-          (insert (propertize "Response\n" 'gptel 'response))
-          (require 'gptel)
-          (setq-local gptel--request-alist nil)
-          (setq-local gptel-use-tools nil)
-          (setq-local gptel-tools nil)
-          (cl-letf (((symbol-function 'mevedel--compact-current-persisted-p)
-                     (lambda () t))
-                    ((symbol-function 'mevedel-system-render-prompt-file)
-                     (lambda (&rest _)
-                       "system prompt"))
-                    ((symbol-function 'mevedel-view--update-spinner)
-                     (lambda (status)
-                       (setq updated-status status)))
-                    ((symbol-function 'mevedel-view--stop-spinner)
-                     (lambda ()
-                       (setq stopped t)))
-                    ((symbol-function 'gptel-get-preset)
-                     (lambda (&rest _)
-                       '(:description "test")))
-                    ((symbol-function 'run-at-time)
-                     (lambda (_time _repeat function &rest args)
-                       (apply function args)
-                       nil))
-                    ((symbol-function 'message)
-                     #'ignore)
-                    ((symbol-function 'display-warning)
-                     #'ignore)
-                    ((symbol-function 'gptel-request)
-                     (lambda (_prompt &rest args)
-                       (funcall (plist-get args :callback) 'abort nil))))
-            (mevedel--compact-run :aggressive t :pending-start (point-max)))
-	  (should (equal updated-status "Compacting..."))
-	  (should stopped)
-	  (should-not mevedel--compaction-in-flight))
-      (when (buffer-live-p chat-buf)
-	(kill-buffer chat-buf))
-      (when (buffer-live-p view-buf)
-	(kill-buffer view-buf))))
-
-  :doc "applies a generated continuation summary with PreCompact evidence"
-  (let ((chat-buf (generate-new-buffer " *mevedel-compact-summary-callback*"))
-        applied-summary
-        applied-hook-audits
-        captured-source
-        captured-purpose
-        failure)
-    (unwind-protect
-        (with-current-buffer chat-buf
-          (org-mode)
-          (setq-local mevedel--compaction-in-flight nil)
-          (setq-local mevedel--session nil)
-          (insert "Prompt\n")
-          (insert (propertize "Response\n" 'gptel 'response))
-          (require 'gptel)
-          (setq-local gptel--request-alist nil)
-          (setq-local gptel-use-tools nil)
-          (setq-local gptel-tools nil)
-          (setq-local gptel-stream t)
-          (let ((mevedel-compact-warn-on-completion nil)
-                (mevedel-pre-compact-functions
-                 (list (lambda (_event)
-                         '(:additional-context ("compact note")
-                           :system-message "because")))))
-            (cl-letf (((symbol-function 'mevedel--compact-current-persisted-p)
-                       (lambda () t))
-                      ((symbol-function 'mevedel--compact-apply)
-                       (lambda (summary _tail _pending hook-audits &rest _)
-                         (setq applied-summary summary
-                               applied-hook-audits hook-audits)))
-                      ((symbol-function 'message)
-                       #'ignore)
-                      ((symbol-function 'display-warning)
-                       (lambda (_type message &rest _)
-                         (setq failure message)))
-                      ((symbol-function 'mevedel-context-summary-generate)
-                       (lambda (source purpose callback &rest _)
-                         (setq captured-source source
-                               captured-purpose purpose)
-                         (funcall callback
-                                  (list :outcome 'success
-                                        :summary
-                                        test-mevedel-compact--valid-summary))
-                         #'ignore)))
-              (mevedel--compact-run :aggressive t :pending-start (point-max))))
-          (should (eq captured-purpose 'continuation))
-          (should (string-match-p "compact note" captured-source))
-          (should-not failure)
-          (should (equal test-mevedel-compact--valid-summary applied-summary))
-          (should-not (string-match-p "<!-- mevedel-hook-audit -->"
-                                      applied-summary))
-          (should (= 1 (length applied-hook-audits)))
-          (let ((audit (car applied-hook-audits)))
-            (should (eq (plist-get audit :type) 'compact-context))
-            (should (equal (plist-get (car (plist-get audit :handlers))
-                                     :contexts)
-                           '("compact note"))))
-          (should-not mevedel--compaction-in-flight))
-      (when (buffer-live-p chat-buf)
-        (kill-buffer chat-buf))))
-
-  :doc "uses the summarization workload tier for the request"
-  (let ((chat-buf (generate-new-buffer " *mevedel-compact-workload*"))
-        (captured-workload nil)
-        captured-policy)
-    (unwind-protect
-        (with-current-buffer chat-buf
-          (org-mode)
-          (setq-local mevedel--compaction-in-flight nil)
-          (setq-local mevedel--session nil)
-          (insert "Prompt\n")
-          (insert (propertize "Response\n" 'gptel 'response))
-          (cl-letf (((symbol-function 'mevedel--compact-current-persisted-p)
-                     (lambda () t))
-                    ((symbol-function 'mevedel-model-resolve-workload)
-                     (lambda (workload &rest _)
-                       (setq captured-workload workload)
-                       '(:backend workload-backend :model workload-model
-                         :effort high)))
-                    ((symbol-function 'message)
-                     #'ignore)
-                    ((symbol-function 'display-warning)
-                     #'ignore)
-                    ((symbol-function 'mevedel-context-summary-generate)
-                     (lambda (_source _purpose callback &rest args)
-                       (setq captured-policy (plist-get args :policy))
-                       (funcall callback '(:outcome aborted))
-                       #'ignore)))
-            (mevedel--compact-run :aggressive t :pending-start (point-max)))
-          (should (eq captured-workload 'summarization))
-          (should (eq (plist-get captured-policy :backend)
-                      'workload-backend))
-          (should (eq (plist-get captured-policy :model) 'workload-model))
-          (should (eq (plist-get captured-policy :effort) 'high))
-          (should-not mevedel--compaction-in-flight))
-      (when (buffer-live-p chat-buf)
-        (kill-buffer chat-buf))))
-
-  :doc "async PreCompact hook marks compaction in flight before request"
-  (let ((chat-buf (generate-new-buffer " *mevedel-compact-prehook*"))
-        hook-callback
-        request-called)
-    (unwind-protect
-        (with-current-buffer chat-buf
-          (org-mode)
-          (setq-local mevedel--compaction-in-flight nil)
-          (setq-local mevedel--session nil)
-          (insert "Prompt\n")
-          (insert (propertize "Response\n" 'gptel 'response))
-          (require 'gptel)
-          (setq-local gptel--request-alist nil)
-          (setq-local gptel-use-tools nil)
-          (setq-local gptel-tools nil)
-          (cl-letf (((symbol-function 'mevedel--compact-current-persisted-p)
-                     (lambda () t))
-                    ((symbol-function 'mevedel-system-render-prompt-file)
-                     (lambda (&rest _)
-                       "system prompt"))
-                    ((symbol-function 'gptel-request)
-                     (lambda (&rest _)
-                       (setq request-called t)))
-                    ((symbol-function 'mevedel-hooks-run-event)
-                     (lambda (_event _plist callback &rest _)
-                       (setq hook-callback callback)))
-                    ((symbol-function 'message)
-                     #'ignore)
-                    ((symbol-function 'display-warning)
-                     #'ignore))
-            (mevedel--compact-run :aggressive t :pending-start (point-max))
-            (should mevedel--compaction-in-flight)
-            (should hook-callback)
-            (should-not request-called)
-            (should-error
-             (mevedel--compact-run :aggressive t :pending-start (point-max))
-             :type 'user-error)
-            (funcall hook-callback
-                     '(:continue nil :stop-reason "blocked"))
-            (should-not mevedel--compaction-in-flight)))
-      (when (buffer-live-p chat-buf)
-        (kill-buffer chat-buf)))))
-
-(mevedel-deftest mevedel--compact-run-auto-file-reference-reminder ()
-  ,test
-  (test)
-  :doc "auto compaction keeps file-reference reminder out of pending FIFO"
-  (let ((chat-buf (generate-new-buffer " *mevedel-compact-auto-reminder*"))
-        queued)
-    (unwind-protect
-        (with-current-buffer chat-buf
-          (org-mode)
-          (setq-local mevedel--compaction-in-flight nil)
-          (setq-local mevedel--session nil)
-          (insert "Prompt\n")
-          (insert (propertize "Response\n" 'gptel 'response))
-          (require 'gptel)
-          (setq-local gptel--request-alist nil)
-          (setq-local gptel-use-tools nil)
-          (setq-local gptel-tools nil)
-          (let ((mevedel-compact-warn-on-completion nil))
-            (cl-letf (((symbol-function 'mevedel--compact-current-persisted-p)
-                       (lambda () t))
-                      ((symbol-function 'mevedel-system-render-prompt-file)
-                       (lambda (&rest _)
-                         "system prompt"))
-                      ((symbol-function 'gptel-get-preset)
-                       (lambda (&rest _)
-                         '(:description "test")))
-                      ((symbol-function 'mevedel--compact-apply)
-                       #'ignore)
-                      ((symbol-function 'mevedel--compact-file-reference-reminder-body)
-                       (lambda (&rest _)
-                         "Re-read /tmp/old.el"))
-                      ((symbol-function 'mevedel-session-enqueue-pending-reminder)
-                       (lambda (_session body)
-                         (setq queued body)))
-                      ((symbol-function 'mevedel-hooks-run-event)
-                       (lambda (_event _plist callback &rest _)
-                         (funcall callback nil)))
-                      ((symbol-function 'message)
-                       #'ignore)
-                      ((symbol-function 'display-warning)
-                       #'ignore)
-                      ((symbol-function 'gptel-request)
-                       (lambda (_prompt &rest args)
-                         (funcall (plist-get args :callback)
-                                  test-mevedel-compact--valid-summary nil))))
-              (mevedel--compact-run
-               :aggressive t
-               :pending-start (point-max)
-               :auto t)))
-          (should (equal mevedel--compact-current-request-reminder
-                         "Re-read /tmp/old.el"))
-          (should-not queued))
-      (when (buffer-live-p chat-buf)
-        (kill-buffer chat-buf)))))
-
-(mevedel-deftest mevedel--compact-workload-policy ()
-  ,test
-  (test)
-  :doc "resolves the summarization workload with default request settings"
-  (let ((gptel-max-tokens 999)
-        (gptel--request-params '(:temperature 0.5)))
-    (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
-               (lambda (workload &rest _)
-                 (should (eq workload 'summarization))
-                 '(:backend summary-backend :model summary-model))))
-      (let ((policy (mevedel--compact-workload-policy)))
-        (should (eq (plist-get policy :backend) 'summary-backend))
-        (should (eq (plist-get policy :model) 'summary-model))
-        (should (plist-member policy :max-tokens))
-        (should-not (plist-get policy :max-tokens))
-        (should (plist-member policy :request-params))
-        (should-not (plist-get policy :request-params))))))
-
-(mevedel-deftest mevedel--compact-target-policy ()
-  ,test
-  (test)
-  :doc "captures the realized request settings used for target budgeting"
-  (let ((gptel-backend 'target-backend)
-        (gptel-model 'target-model)
-        (gptel-reasoning-effort 'high)
-        (gptel-max-tokens 300)
-        (gptel--request-params '(:temperature 0.5)))
-    (should
-     (equal
-      (mevedel--compact-target-policy)
-      '(:backend target-backend :model target-model :effort high :max-tokens 300
-        :request-params (:temperature 0.5))))))
-
-(mevedel-deftest mevedel--compact-policy-threshold-tokens ()
-  ,test
-  (test)
-  :doc "applies the configured ratio to the policy's usable context"
-  (put 'mevedel-policy-model :context-window 0.2)
-  (let ((mevedel-compact-token-threshold 0.5)
-        (mevedel-model-reserve-tokens 20))
-    (should
-     (= 90
-        (mevedel--compact-policy-threshold-tokens
-         '(:backend nil :model mevedel-policy-model :max-tokens 10))))))
-
-(mevedel-deftest mevedel--compact-admission ()
-  ,test
-  (test)
-  :doc "distinguishes below-threshold, summarizer-only, and target pressure"
-  (put 'mevedel-admission-target :context-window 0.2)
-  (put 'mevedel-admission-summary :context-window 0.1)
-  (let ((mevedel-compact-token-threshold 0.5)
-        (mevedel-model-reserve-tokens 0)
-        (summary-policy
-         '(:backend nil :model mevedel-admission-summary :max-tokens 0))
-        (target-policy
-         '(:backend nil :model mevedel-admission-target :max-tokens 0)))
-    (cl-letf (((symbol-function 'mevedel--compact-workload-policy)
-               (lambda () summary-policy)))
-      (should-not (mevedel--compact-admission 49 target-policy))
-      (should
-       (equal (mevedel--compact-admission 50 target-policy)
-              (list :summary-policy summary-policy
-                    :target-pressure nil)))
-      (should
-       (equal (mevedel--compact-admission 100 target-policy)
-              (list :summary-policy summary-policy
-                    :target-pressure t))))))
-
-(mevedel-deftest mevedel--compact-current-persisted-p ()
-  ,test
-  (test)
-  :doc "requires current buffer to be the session's active segment"
-  (let* ((tempdir (make-temp-file "mevedel-compact-persisted-" t))
-         (workspace (mevedel-workspace-get-or-create
-                     'project "compact-persisted" tempdir "compact-persisted"))
-         (session (mevedel-session-create "main" workspace)))
-    (unwind-protect
-        (progn
-          (setf (mevedel-session-save-path session) tempdir)
-          (setf (mevedel-session-current-segment session) 2)
-          (with-temp-buffer
-            (setq buffer-file-name
-                  (mevedel-session-artifacts-segment-path tempdir 2))
-            (setq-local mevedel--session session)
-            (should (mevedel--compact-current-persisted-p)))
-          (with-temp-buffer
-            (setq buffer-file-name
-                  (mevedel-session-artifacts-segment-path tempdir 1))
-            (setq-local mevedel--session session)
-            (should-not (mevedel--compact-current-persisted-p)))
-          (with-temp-buffer
-            (setq buffer-file-name "aliased-segment")
-            (setq-local mevedel--session session)
-            (cl-letf (((symbol-function 'mevedel--same-file-p)
-                       (lambda (_left _right) t)))
-              (should (mevedel--compact-current-persisted-p)))))
-      (mevedel-workspace-clear-registry)
-      (delete-directory tempdir t))))
-
-(mevedel-deftest mevedel--compact-apply ()
-  ,test
-  (test)
-  :doc "rotates without carrying Goal state and includes hook audits"
-  (let* ((tempdir (make-temp-file "mevedel-compact-apply-" t))
-         (workspace (mevedel-workspace-get-or-create
-                     'project "compact-apply" tempdir "compact-apply"))
-         (session (mevedel-session-create "main" workspace))
-         (steering
-          (mevedel-session-enqueue-pending-input
-           session 'steering '(:input "steer after compact")))
-         (follow-up
-          (mevedel-session-enqueue-pending-input
-           session 'follow-up '(:input "turn after compact")))
-         (execution-state (mevedel-execution--state-for-session session))
-         (buffer (generate-new-buffer " *mevedel-compact-apply*")))
-    (unwind-protect
-        (with-current-buffer buffer
-          (org-mode)
-          (insert "Original transcript\n")
-          (let ((begin (point)))
-            (insert "Running Bash\n")
-            (insert
-             (propertize
-              (mevedel-pipeline--format-render-data-block
-               '(:execution-id "exec-000001" :state running
-                 :live-execution-p t)
-               "archived-call")
-              'gptel '(tool . "archived-call")))
-            (put-text-property begin (point) 'gptel
-                               '(tool . "archived-call")))
-          (setq-local mevedel--session session)
-          (setf (mevedel-session-goal session)
-                (mevedel-goal--create
-                 :id "goal-compact" :objective "Finish the work"
-                 :status 'active :tokens-used 0 :time-used-seconds 0
-                 :turns-run 0))
-          (mevedel-session-set-pending-input-paused session t)
-          (mevedel-session-set-pending-input-failure-paused session t)
-          (mevedel-session-artifacts-ensure-files session buffer)
-          (let* ((plan
-                  (mevedel-execution-transcript-prepare-archive
-                   buffer '("archived-call")))
-                 (target
-                  (list :buffer buffer :session session
-                        :execution-archive-plan plan)))
-            (mevedel--compact-main-apply
-             target "summary" "tail" "pending"
-             (list '(:type compact-context
-                     :event "PreCompact"
-                     :context "compact note"))
-             nil 0))
-          (should (eq execution-state
-                      (mevedel-session-execution-state session)))
-          (should (equal (list steering)
-                         (mevedel-session-pending-steering session)))
-          (should (equal (list follow-up)
-                         (mevedel-session-pending-follow-ups session)))
-          (should (mevedel-session-pending-input-paused session))
-          (should
-           (mevedel-session-pending-input-failure-paused session))
-          (should (= 2 (mevedel-session-current-segment session)))
-          (should (string-match-p "summary" (buffer-string)))
-          (should (string-match "<!-- mevedel-hook-audit -->"
-                                (buffer-string)))
-          (should (eq 'mevedel-hook-audit
-                      (get-text-property (match-beginning 0)
-                                         'gptel (buffer-string))))
-          (should (string-match-p "tail" (buffer-string)))
-          (should (string-match-p "pending\n\\'" (buffer-string)))
-          (should-not (mevedel-session-pending-reminders session))
-          (let* ((ids
-                  (mevedel--compact-archived-tool-use-ids
-                   (point-min) (point-max)))
-                 (plan
-                  (mevedel-execution-transcript-prepare-archive
-                   buffer ids))
-                 (target
-                  (list :buffer buffer :session session
-                        :execution-archive-plan plan)))
-            (should (equal '("archived-call") ids))
-            (should (= 1 (length (plist-get plan :live))))
-            (mevedel--compact-main-apply
-             target "summary again" "tail again" "pending\n"
-             nil nil 0))
-          (should (= 3 (mevedel-session-current-segment session)))
-          (ert-info ("archive survives repeated compaction")
-            (should (= 1
-                       (length
-                        (mevedel-transcript-audit-records
-                         (buffer-string) 'execution-archive)))))
-          (mevedel-view-stream-handle-execution-event
-           (list :type 'terminal :session session :data-buffer buffer
-                 :owner "/root" :tool-use-id "archived-call"
-                 :facts '(:state completed :outcome success :exit-code 0)
-                 :whole-output "done"))
-          (ert-info ("terminal event replaces the live archive")
-            (should (= 1
-                       (length
-                        (mevedel-transcript-audit-records
-                         (buffer-string) 'execution-completion)))))
-          (let ((segment-path
-                 (mevedel-session-artifacts-segment-path
-                  (mevedel-session-save-path session) 3)))
-            (should (file-exists-p segment-path))
-            (with-temp-buffer
-              (insert-file-contents segment-path)
-              (org-mode)
-              (require 'mevedel-transcript-restore)
-              (mevedel-transcript-restore-properties)
-              (should (string-match-p "summary again" (buffer-string)))
-              (should (string-match-p "tail again" (buffer-string)))
-              (should (= 1
-                         (length
-                          (mevedel-transcript-audit-records
-                           (buffer-string) 'execution-completion))))
-              (should-not (string-match-p "pending" (buffer-string))))))
-      (mevedel-session-persistence-lock-release
-       (mevedel-session-save-path session) session)
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (set-buffer-modified-p nil))
-        (kill-buffer buffer))
-      (mevedel-workspace-clear-registry)
-      (delete-directory tempdir t))))
-(mevedel-deftest mevedel--compact-threshold-tokens ()
-  ,test
-  (test)
-  :doc "rejects an integer threshold"
-  (let ((mevedel-compact-token-threshold 150000))
-    (should-error (mevedel--compact-threshold-tokens) :type 'user-error))
-
-  :doc "rejects ratio endpoints and out-of-range values"
-  (dolist (threshold '(0.0 1.0 -0.1 1.1 invalid))
-    (let ((mevedel-compact-token-threshold threshold))
-      (should-error (mevedel--compact-threshold-tokens) :type 'user-error)))
-
-  :doc "float threshold applies to usable context"
-  ;; The configured limit only applies when no model declares a window.
-  (let ((mevedel-model-context-limit 200000)
-        (mevedel-model-reserve-tokens 20000)
-        (mevedel-compact-token-threshold 0.8)
-        (gptel-model nil)
-        (gptel-max-tokens nil))
-    (should (= (mevedel--compact-threshold-tokens) 144000)))
-
-  :doc "reserve is capped on small context windows"
-  (let ((mevedel-model-context-limit 8000)
-        (mevedel-model-reserve-tokens 20000)
-        (mevedel-compact-token-threshold 0.8)
-        (gptel-model nil)
-        (gptel-max-tokens nil))
-    (should (= (mevedel--compact-usable-tokens) 4000))
-    (should (= (mevedel--compact-threshold-tokens) 3200))))
-
-(mevedel-deftest mevedel--compact-turn-starts-before ()
-  ,test
-  (test)
-  :doc "ignores leading org metadata when finding turn starts"
-  (with-temp-buffer
-    (insert ":PROPERTIES:\n:foo: bar\n:END:\n")
-    (let ((u1-start (point)))
-      (insert "u1\n")
-      (let ((a1-start (point)))
-        (insert "a1\n")
-        (put-text-property a1-start (point) 'gptel 'response))
-      (let ((u2-start (point)))
-        (insert "u2\n")
-        (let ((a2-start (point)))
-          (insert "a2\n")
-          (put-text-property a2-start (point) 'gptel 'response))
-        (should (equal (mevedel--compact-turn-starts-before (point-max))
-                       (list u1-start u2-start))))))
-
-  :doc "does not count prompt text after limit in a widened user span"
-  (with-temp-buffer
-    (let ((u1-start (point)))
-      (insert "u1\n")
-      (let ((a1-start (point)))
-        (insert "a1\n")
-        (put-text-property a1-start (point) 'gptel 'response))
-      (insert "\n  ")
-      (let ((limit (point)))
-        (insert "u2\n")
-        (should (equal (mevedel--compact-turn-starts-before limit)
-                       (list u1-start))))))
-  :doc "skips unpropertized reasoning and tool scaffolding before prompt"
-  (with-temp-buffer
-    (let ((u1-start (point)))
-      (insert "u1\n")
-      (let ((a1-start (point)))
-        (insert "a1\n")
-        (put-text-property a1-start (point) 'gptel 'response))
-      (insert "#+begin_reasoning\nThinking text.\n")
-      (insert "#+begin_tool (WebFetch :url \"https://example.com\")\n")
-      (let ((tool-start (point)))
-        (insert "(:name \"WebFetch\" :args (:url \"https://example.com\"))\n\n"
-                "body\n")
-        (put-text-property tool-start (point) 'gptel '(tool . "call_1")))
-      (insert "#+end_tool\nMore thinking.\n#+end_reasoning\n")
-      (let ((u2-start (point)))
-        (insert "u2\n")
-        (let ((a2-start (point)))
-          (insert "a2\n")
-          (put-text-property a2-start (point) 'gptel 'response))
-        (should (equal (mevedel--compact-turn-starts-before (point-max))
-                       (list u1-start u2-start))))))
-  :doc "keeps user-authored org block marker as turn start"
-  (with-temp-buffer
-    (let ((u1-start (point)))
-      (insert "u1\n")
-      (let ((a1-start (point)))
-        (insert "a1\n")
-        (put-text-property a1-start (point) 'gptel 'response))
-      (let ((u2-start (point)))
-        (insert "#+begin_src emacs-lisp\n")
-        (insert "(message \"hello\")\n")
-        (insert "#+end_src\n")
-        (let ((a2-start (point)))
-          (insert "a2\n")
-          (put-text-property a2-start (point) 'gptel 'response))
-        (should (equal (mevedel--compact-turn-starts-before (point-max))
-                       (list u1-start u2-start)))))))
-
-(mevedel-deftest mevedel-compact-context-snapshot ()
-  ,test
-  (test)
-
-  :doc "forks all effective live context with text properties"
-  (with-temp-buffer
-    (insert "#+begin_summary\nOld turns summarized.\n#+end_summary\n")
-    (insert "Recent prompt.\n")
-    (let ((response-start (point)))
-      (insert "Recent response.\n")
-      (put-text-property response-start (point) 'gptel 'response))
-    (let ((snapshot (mevedel-compact-context-snapshot 'all)))
-      (should (equal (buffer-string) snapshot))
-      (should (eq 'response
-                  (get-text-property
-                   (string-match "Recent response" snapshot) 'gptel snapshot)))))
-
-  :doc "forks no context"
-  (with-temp-buffer
-    (insert "Parent history.\n")
-    (should (equal "" (mevedel-compact-context-snapshot 'none))))
-
-  :doc "forks an anchored summary and only the requested recent turns"
-  (with-temp-buffer
-    (insert "#+begin_summary\nArchived raw text summarized.\n#+end_summary\n")
-    (insert "First live prompt.\n")
-    (let ((response-start (point)))
-      (insert "First live response.\n")
-      (put-text-property response-start (point) 'gptel 'response))
-    (insert "Second live prompt.\n")
-    (let ((response-start (point)))
-      (insert "Second live response.\n")
-      (put-text-property response-start (point) 'gptel 'response))
-    (let ((snapshot (mevedel-compact-context-snapshot 1)))
-      (should (string-match-p "Archived raw text summarized" snapshot))
-      (should-not (string-match-p "First live prompt" snapshot))
-      (should (string-match-p "Second live prompt" snapshot))))
-
-  :doc "keeps an agent task anchor with its summary"
-  (with-temp-buffer
-    (org-mode)
-    (let ((invocation
-           (mevedel-agent-invocation--create :path "/root/parent")))
-      (setq-local mevedel--agent-invocation invocation)
-      (test-mevedel-compact--insert-agent-task
-       invocation "parent" "Original task.")
-      (insert "#+begin_summary\nEarlier work summarized.\n#+end_summary\n"
-              "Recent prompt.\n"))
-    (let ((response-start (point)))
-      (insert "Recent response.\n")
-      (put-text-property response-start (point) 'gptel 'response))
-    (let ((snapshot (mevedel-compact-context-snapshot 1)))
-      (should (string-prefix-p "* Agent Task: parent" snapshot))
-      (should (string-match-p "Earlier work summarized" snapshot))
-      (should (string-match-p "Recent prompt" snapshot)))))
-
-(mevedel-deftest mevedel-compact-summary-context-evidence ()
-  ,test
-  (test)
-  :doc "freezes realized parent evidence without the triggering Agent call"
-  (with-temp-buffer
-    (org-mode)
-    (insert "Parent requirement.\n")
-    (let ((start (point)))
-      (insert "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
-              "Sibling evidence.\n")
-      (put-text-property start (point) 'gptel '(tool . "call_read")))
-    (let ((start (point)))
-      (insert "(:name \"Agent\" :args (:task_name \"child\"))\n\n"
-              "Triggering tool placeholder.\n")
-      (put-text-property start (point) 'gptel '(tool . "call_agent")))
-    (let ((evidence
-           (mevedel-compact-summary-context-evidence "call_agent")))
-      (erase-buffer)
-      (insert "Later parent text.")
-      (should (string-match-p "Parent requirement" evidence))
-      (should (string-match-p "Sibling evidence" evidence))
-      (should-not (string-match-p "Triggering tool" evidence))
-      (should-not (string-match-p "task_name" evidence))))
-
-  :doc "includes only skill provenance from the delegating conversation"
-  (with-temp-buffer
-    (org-mode)
-    (let* ((session (mevedel-session--create :name "main" :turn-count 4))
-           (invocation
-            (mevedel-agent-invocation--create :path "/root/parent"))
-           (parent-skill
-            (mevedel-skill-invocation-record--create
-             :name "parent-skill" :role 'command :origin 'model
-             :agent-path "/root/parent" :turn 4))
-           (root-skill
-            (mevedel-skill-invocation-record--create
-             :name "root-skill" :role 'command :origin 'user
-             :agent-path "/root" :turn 3)))
-      (setf (mevedel-session-invoked-skills session)
-            (list root-skill parent-skill))
-      (setq-local mevedel--session session
-                  mevedel--agent-invocation invocation)
-      (insert "Delegating evidence.\n")
-      (let ((evidence
-             (mevedel-compact-summary-context-evidence "call_agent")))
-        (should (string-match-p "parent-skill" evidence))
-        (should-not (string-match-p "root-skill" evidence))))))
-
-(mevedel-deftest mevedel--compact-tail-start ()
-  ,test
-  (test)
-  :doc "keeps configured recent response turns when budget allows"
-  (with-temp-buffer
-    (insert "u1\n")
-    (let ((a1-start (point)))
-      (insert "a1\n")
-      (put-text-property a1-start (point) 'gptel 'response))
-    (let ((after-a1 (point)))
-      (insert "u2\n")
-      (let ((a2-start (point)))
-        (insert "a2\n")
-        (put-text-property a2-start (point) 'gptel 'response))
-      (insert "u3\n")
-      (let ((a3-start (point)))
-        (insert "a3\n")
-        (put-text-property a3-start (point) 'gptel 'response))
-      (let ((mevedel-model-context-limit 200000)
-            (gptel-model nil)
-            (mevedel-compact-tail-turns 2)
-            (mevedel-compact-tail-budget 0.25))
-        (should (= (mevedel--compact-tail-start (point-max) nil)
-                   after-a1)))))
-
-  :doc "drops older preserved turns when tail budget would be exceeded"
-  (with-temp-buffer
-    (insert "u1\n")
-    (let ((a1-start (point)))
-      (insert "a1\n")
-      (put-text-property a1-start (point) 'gptel 'response))
-    (insert "u2\n")
-    (let ((a2-start (point)))
-      (insert (make-string 40 ?a) "\n")
-      (put-text-property a2-start (point) 'gptel 'response))
-    (let ((after-a2 (point)))
-      (insert "u3\n")
-      (let ((a3-start (point)))
-        (insert (make-string 40 ?b) "\n")
-        (put-text-property a3-start (point) 'gptel 'response))
-      (let ((mevedel-model-context-limit 100)
-            (mevedel-model-reserve-tokens 20)
-            (gptel-model nil)
-            (mevedel-compact-tail-turns 2)
-            (mevedel-compact-tail-budget 0.01))
-        (should (= (mevedel--compact-tail-start (point-max) nil)
-                   after-a2)))))
-
-  :doc "drops older turn even when session has only target turn count"
-  (with-temp-buffer
-    (insert "u1\n")
-    (let ((a1-start (point)))
-      (insert (make-string 40 ?a) "\n")
-      (put-text-property a1-start (point) 'gptel 'response))
-    (let ((after-a1 (point)))
-      (insert "u2\n")
-      (let ((a2-start (point)))
-        (insert (make-string 40 ?b) "\n")
-        (put-text-property a2-start (point) 'gptel 'response))
-	  (let ((mevedel-model-context-limit 100)
-	        (mevedel-model-reserve-tokens 20)
-	        (gptel-model nil)
-	        (mevedel-compact-tail-turns 2)
-	        (mevedel-compact-tail-budget 0.01))
-	    (should (= (mevedel--compact-tail-start (point-max) nil)
-	               after-a1)))))
-
-  :doc "keeps tool-using response chunks inside the same turn"
-  (with-temp-buffer
-    (insert "u1\n")
-    (let ((a1-start (point)))
-      (insert "a1\n")
-      (put-text-property a1-start (point) 'gptel 'response))
-    (let ((u2-start (point)))
-      (insert "u2\n")
-      (let ((a2a-start (point)))
-        (insert "a2 part 1\n")
-        (put-text-property a2a-start (point) 'gptel 'response))
-      (let ((tool-start (point)))
-        (insert "tool result\n")
-        (put-text-property tool-start (point) 'gptel '(tool . result)))
-      (let ((a2b-start (point)))
-        (insert "a2 part 2\n")
-        (put-text-property a2b-start (point) 'gptel 'response))
-      (insert "u3\n")
-      (let ((a3-start (point)))
-        (insert "a3\n")
-        (put-text-property a3-start (point) 'gptel 'response))
-      (let ((mevedel-model-context-limit 200000)
-            (gptel-model nil)
-            (mevedel-compact-tail-turns 2)
-            (mevedel-compact-tail-budget 0.25))
-        (should (= (mevedel--compact-tail-start (point-max) nil)
-                   u2-start)))))
-
-  :doc "retains a directive boundary pair when its turn enters the tail"
-  (with-temp-buffer
-    (insert "u1\n")
-    (let ((response-start (point)))
-      (insert "a1\n")
-      (put-text-property response-start (point) 'gptel 'response))
-    (let ((boundary-start (point)))
-      (insert (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge start
-                 :directive-id "d1" :action discuss :turn 2)))
-      (insert "directive prompt\n")
-      (let ((response-start (point)))
-        (insert "directive answer\n")
-        (put-text-property response-start (point) 'gptel 'response))
-      (insert (mevedel--format-hook-audit-record
-               '(:type directive-turn-boundary :edge end
-                 :directive-id "d1" :action discuss :turn 2
-                 :outcome success :sequence 1)))
-      (insert "u3\n")
-      (let ((response-start (point)))
-        (insert "a3\n")
-        (put-text-property response-start (point) 'gptel 'response))
-      (let ((mevedel-model-context-limit 200000)
-            (gptel-model nil)
-            (mevedel-compact-tail-turns 2)
-            (mevedel-compact-tail-budget 0.25))
-        (should (= boundary-start
-                   (mevedel--compact-tail-start (point-max) nil)))))))
-
-(mevedel-deftest mevedel--compact-rebuild-prompt-buffer ()
-  ,test
-  (test)
-  :doc "reapplies directive context projection after rebuilding the prompt"
-  (let ((source (generate-new-buffer " *compact-source*"))
-        (prompt (generate-new-buffer " *compact-prompt*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer source
-            (insert "ordinary\n")
-            (insert (mevedel--format-hook-audit-record
-                     '(:type directive-turn-boundary :edge start
-                       :directive-id "d1" :action discuss :turn 2)))
-            (insert "directive body\n")
-            (insert (mevedel--format-hook-audit-record
-                     '(:type directive-turn-boundary :edge end
-                       :directive-id "d1" :action discuss :turn 2
-                       :outcome success :sequence 1))))
-          (with-current-buffer prompt
-            (mevedel--compact-rebuild-prompt-buffer
-             prompt source nil nil nil)
-            (goto-char (point-min))
-            (should-not (get-text-property (point) 'gptel))
-            (search-forward "directive body")
-            (should (eq 'ignore (get-text-property (match-beginning 0)
-                                                    'gptel)))))
-      (kill-buffer source)
-      (kill-buffer prompt))))
-
-(mevedel-deftest mevedel--compact-pending-text-from-prompt-buffer ()
-  ,test
-  (test)
-  :doc "uses prompt-buffer response boundary after inserted reminders"
-  (with-temp-buffer
-    (insert "old user\n")
-    (let ((response-start (point)))
-      (insert "old response\n")
-      (put-text-property response-start (point) 'gptel 'response))
-    (insert "<system-reminder>\nexpanded reminder\n</system-reminder>\n")
-    (insert "new user prompt\n")
-    (let ((text (mevedel--compact-pending-text-from-prompt-buffer)))
-      (should (string-prefix-p "<system-reminder>" text))
-      (should (string-match-p "expanded reminder" text))
-      (should (string-match-p "new user prompt" text)))))
-
-(mevedel-deftest mevedel--compact-region-with-tool-output-cap ()
-  ,test
-  (test)
-  :doc "caps tool output spans while preserving surrounding text"
-  (with-temp-buffer
-    (insert "before\n")
-    (let ((tool-start (point)))
-      (insert "abcdef")
-      (put-text-property tool-start (point) 'gptel '(tool . "call-1")))
-    (insert "\nafter\n")
-    (let ((text (mevedel--compact-region-with-tool-output-cap
-                 (point-min) (point-max) 3 t)))
-      (should (string-match-p "before" text))
-      (should (string-match-p "abc" text))
-      (should-not (string-match-p "def" text))
-      (should (string-match-p "omitted 3 chars" text))
-      (should (string-match-p "after" text))))
-
-  :doc "restores tool property only on parseable org tool sexp and result"
-  (with-temp-buffer
-    (insert "#+begin_tool (Bash :command \"date\")\n")
-    (let ((tool-start (point)))
-      (insert "(:name \"Bash\" :args (:command \"date\"))\n\nresult\n")
-      (let ((tool-end (point)))
-        (insert "#+end_tool\n")
-        (put-text-property tool-start tool-end 'gptel '(tool . "call-date"))))
-    (let ((text (mevedel--compact-region-with-tool-output-cap
-                 (point-min) (point-max) 1000 nil)))
-      (with-temp-buffer
-        (insert text)
-        (let* ((sexp-start (progn
-                             (goto-char (point-min))
-                             (search-forward "(:name")
-                             (match-beginning 0)))
-               (suffix-start (progn
-                               (goto-char (point-min))
-                               (search-forward "#+end_tool")
-                               (match-beginning 0))))
-          (should-not (eq (car-safe (get-text-property (point-min) 'gptel))
-                          'tool))
-          (should (equal (get-text-property sexp-start 'gptel)
-                         '(tool . "call-date")))
-          (should-not (eq (car-safe (get-text-property suffix-start 'gptel))
-                          'tool))
-          (goto-char sexp-start)
-          (should (equal "Bash" (plist-get (read (current-buffer)) :name)))))))
-
-  :doc "does not restore tool property over unparseable org tool scaffolding"
-  (with-temp-buffer
-    (let ((tool-start (point)))
-      (insert "#+begin_tool (Bash :command \"date\")\nnot a sexp\n#+end_tool\n")
-      (put-text-property tool-start (point) 'gptel '(tool . "call-bad")))
-    (let ((text (mevedel--compact-region-with-tool-output-cap
-                 (point-min) (point-max) 1000 nil)))
-      (with-temp-buffer
-        (insert text)
-        (goto-char (point-min))
-        (while (not (eobp))
-          (should-not (eq (car-safe (get-text-property (point) 'gptel))
-                          'tool))
-          (goto-char (next-single-property-change (point) 'gptel nil
-                                                  (point-max)))))))
-
-  :doc "does not restore tool property over unparseable Lisp-looking spans"
-  (with-temp-buffer
-    (let ((tool-start (point)))
-      (insert "(:name \"Bash\" :args")
-      (put-text-property tool-start (point) 'gptel '(tool . "call-bad")))
-    (let ((text (mevedel--compact-region-with-tool-output-cap
-                 (point-min) (point-max) 1000 nil)))
-      (with-temp-buffer
-        (insert text)
-        (should-not (eq (car-safe (get-text-property (point-min) 'gptel))
-                        'tool)))))
-
-  :doc "ignores stray readable sexps inside malformed org tool result text"
-  (with-temp-buffer
-    (let ((tool-start (point)))
-      (insert "#+begin_tool (Bash :command \"date\")\n"
-              "result mentions (:name \"Fake\")\n"
-              "#+end_tool\n")
-      (put-text-property tool-start (point) 'gptel '(tool . "call-bad")))
-    (let ((text (mevedel--compact-region-with-tool-output-cap
-                 (point-min) (point-max) 1000 nil)))
-      (with-temp-buffer
-        (insert text)
-        (goto-char (point-min))
-        (while (not (eobp))
-          (should-not (eq (car-safe (get-text-property (point) 'gptel))
-                          'tool))
-          (goto-char (next-single-property-change (point) 'gptel nil
-                                                  (point-max)))))))
-
-  :doc "keeps large Edit tool arguments readable when truncation lands inside args"
-  (with-temp-buffer
-    (let ((large-arg (make-string 2000 ?x)))
-      (insert "#+begin_tool (Edit :file_path \"mevedel-chat.el\" :old_string \"...\")\n")
-      (let ((tool-start (point)))
-        (insert (prin1-to-string
-                 (list :name "Edit"
-                       :args (list :file_path "mevedel-chat.el"
-                                   :old_string large-arg
-                                   :new_string large-arg))))
-        (insert "\n\nEdited mevedel-chat.el (+1 -1)\n#+end_tool\n")
-        (put-text-property tool-start (point) 'gptel '(tool . "call-edit"))))
-    (let* ((text (mevedel--compact-region-with-tool-output-cap
-                  (point-min) (point-max) 200 t))
-           (sexp-start (string-match "(:name" text))
-           (read-result (read-from-string text sexp-start))
-           (sexp (car read-result)))
-      (should (equal "Edit" (plist-get sexp :name)))
-      (should (equal "mevedel-chat.el" (plist-get (plist-get sexp :args)
-                                                  :file_path)))
-      (should (string-match-p "string argument truncated" text))
-      (should (string-match-p "^#\\+end_tool" text))))
-
-  :doc "keeps the org tool close marker after truncating a large result body"
-  (with-temp-buffer
-    (insert "#+begin_tool (Read :file_path \"big.txt\")\n")
-    (let ((tool-start (point)))
-      (insert "(:name \"Read\" :args (:file_path \"big.txt\"))\n\n")
-      (insert (make-string 500 ?r))
-      (insert "\n#+end_tool\n")
-      (put-text-property tool-start (point) 'gptel '(tool . "call-read")))
-    (let ((text (mevedel--compact-region-with-tool-output-cap
-                 (point-min) (point-max) 80 t)))
-      (should (string-match-p "tool output truncated" text))
-      (should (string-match-p "\n#\\+end_tool\n\\'" text))))
-
-  :doc "shortens large args in unpropertied org tool headers"
-  (with-temp-buffer
-    (let* ((large-arg (make-string 2000 ?x))
-           (header-form (list 'Edit :file_path "mevedel-chat.el"
-                              :old_string large-arg)))
-      (insert "#+begin_tool " (prin1-to-string header-form) "\n")
-      (let ((tool-start (point)))
-        (insert "(:name \"Edit\" :args (:file_path \"mevedel-chat.el\"))\n\n")
-        (insert "Edited mevedel-chat.el (+1 -1)\n#+end_tool\n")
-        (put-text-property tool-start (point) 'gptel '(tool . "call-edit")))
-      (let* ((text (mevedel--compact-region-with-tool-output-cap
-                    (point-min) (point-max) 200 t))
-             (header-start (string-match "#\\+begin_tool " text))
-             (header (car (read-from-string text (match-end 0)))))
-        (should header-start)
-        (should (eq 'Edit (car header)))
-        (should (equal "mevedel-chat.el" (plist-get (cdr header) :file_path)))
-        (should (string-match-p "string argument truncated"
-                                (plist-get (cdr header) :old_string))))))
-
-  :doc "escapes nested-looking tool markers in truncated result bodies"
-  (with-temp-buffer
-    (insert "#+begin_tool (Read :file_path \"outer.txt\")\n")
-    (let ((tool-start (point)))
-      (insert "(:name \"Read\" :args (:file_path \"outer.txt\"))\n\n")
-      (insert "outer before\n")
-      (insert "#+begin_tool (Bash :command \"echo nested\")\n")
-      (insert "(:name \"Bash\" :args (:command \"echo nested\"))\n")
-      (insert "nested result\n#+end_tool\nouter after\n#+end_tool\n")
-      (put-text-property tool-start (point) 'gptel '(tool . "call-read")))
-    (let* ((text (mevedel--compact-region-with-tool-output-cap
-                  (point-min) (point-max) 80 t))
-           (begin-count (cl-loop with pos = 0
-                                 while (string-match "^#\\+begin_tool" text pos)
-                                 count t
-                                 do (setq pos (match-end 0))))
-           (end-count (cl-loop with pos = 0
-                               while (string-match "^#\\+end_tool" text pos)
-                               count t
-                               do (setq pos (match-end 0)))))
-      (should (= 1 begin-count))
-      (should (= 1 end-count))
-      (should (string-match-p "# [+]begin_tool" text))
-      (should (string-match-p "tool output truncated" text))))
-
-  :doc "escapes nested-looking tool markers in retained result bodies"
-  (with-temp-buffer
-    (insert "#+begin_tool (Read :file_path \"outer.txt\")\n")
-    (let ((tool-start (point)))
-      (insert "(:name \"Read\" :args (:file_path \"outer.txt\"))\n\n")
-      (insert "short before\n#+begin_tool (Bash :command \"nested\")\nshort after\n")
-      (insert "#+end_tool\n")
-      (put-text-property tool-start (point) 'gptel '(tool . "call-read")))
-    (let* ((text (mevedel--compact-region-with-tool-output-cap
-                  (point-min) (point-max) 10000 t))
-           (begin-count (cl-loop with pos = 0
-                                 while (string-match "^#\\+begin_tool" text pos)
-                                 count t
-                                 do (setq pos (match-end 0))))
-           (end-count (cl-loop with pos = 0
-                               while (string-match "^#\\+end_tool" text pos)
-                               count t
-                               do (setq pos (match-end 0)))))
-      (should (= 1 begin-count))
-      (should (= 1 end-count))
-      (should (string-match-p "# [+]begin_tool" text))
-      (should-not (string-match-p "tool output truncated" text)))))
-
-(mevedel-deftest mevedel--compact-skill-provenance ()
-  ,test
-  (test)
-  :doc "returns no provenance when no session"
-  (should-not (mevedel--compact-skill-provenance nil 0))
-
-  :doc "returns no provenance when the session has no skill records"
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "c1" :root "/tmp/c1" :name "c1"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws)))
-    (should-not (mevedel--compact-skill-provenance session 0)))
-
-  :doc "lists invoked skills with name, args, role, origin, and turn"
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "c2" :root "/tmp/c2" :name "c2"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
-         (rec1 (mevedel-skill-invocation-record--create
-                :name "grill-me" :args "spec 22"
-                :role 'command :origin 'user :agent-path "/root" :turn 3
-                :source-path "/skills/grill-me/SKILL.md"
-                :prepared-body "Body 1"))
-         (rec2 (mevedel-skill-invocation-record--create
-                :name "review-spec" :args nil
-                :role 'command :origin 'model
-                :agent-path "/root/reviewer" :turn 7
-                :source-path "/skills/review-spec/SKILL.md"
-                :prepared-body "Body 2")))
-    (setf (mevedel-session-invoked-skills session) (list rec1 rec2))
-    (setf (mevedel-session-turn-count session) 9)
-    (let ((items (mevedel--compact-skill-provenance session 0)))
-      (should (= 2 (length items)))
-      (should (string-match-p "\\$grill-me spec 22" (car items)))
-      (should (string-match-p "role: command, origin: user" (car items)))
-      (should (string-match-p "turn: 3" (car items)))
-      (should (string-match-p "\\$review-spec" (cadr items)))
-      (should (string-match-p "role: command, origin: model"
-                              (cadr items))))
-    (let ((items (mevedel--compact-skill-provenance session 3)))
-      (should (= 1 (length items)))
-      (should (string-match-p "\\$grill-me" (car items))))
-    (let ((items (mevedel--compact-skill-provenance
-                  session 0 "/root/reviewer")))
-      (should (= 1 (length items)))
-      (should (string-match-p "\\$review-spec" (car items))))))
 
 (provide 'test-mevedel-compact)
 ;;; test-mevedel-compact.el ends here

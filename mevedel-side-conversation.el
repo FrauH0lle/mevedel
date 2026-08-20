@@ -43,9 +43,9 @@
 (declare-function mevedel-chat-install-request-hooks "mevedel-chat" ())
 (declare-function mevedel-chat-prepare-transcript-buffer "mevedel-chat" ())
 
-;; `mevedel-compact'
-(declare-function mevedel-compact-context-snapshot
-                  "mevedel-compact" (context))
+;; `mevedel-compact-evidence'
+(declare-function mevedel-compact-evidence-context-snapshot
+                  "mevedel-compact-evidence" (context))
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-effective-rules
@@ -505,9 +505,9 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
 
 (defun mevedel-side-conversation--snapshot ()
   "Return the invocation-time model context for a new side conversation."
-  (require 'mevedel-compact)
+  (require 'mevedel-compact-evidence)
   (if (not mevedel--current-request)
-      (mevedel-compact-context-snapshot 'all)
+      (mevedel-compact-evidence-context-snapshot 'all)
     (let* ((fsm (mevedel-request-fsm mevedel--current-request))
            (info (and fsm (gptel-fsm-info fsm)))
            (base (and info
