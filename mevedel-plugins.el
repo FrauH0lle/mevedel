@@ -23,6 +23,8 @@
 (declare-function dired "dired" (dirname &optional switches))
 
 ;; `mevedel-cockpit'
+(declare-function mevedel-cockpit-call-in-data
+                  "mevedel-cockpit" (context function &rest args))
 (declare-function mevedel-cockpit-context-session
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-context-workspace
@@ -995,12 +997,18 @@ Workspace runtime data is retained."
           (format "Removed plugin %s." name))))
     (format "Unknown plugin: %s." name)))
 
-(defun mevedel-plugins--refresh-current-session ()
-  "Refresh current session skills when `mevedel-skills' is available."
+(defun mevedel-plugins--refresh-session (&optional context)
+  "Refresh CONTEXT's session skills when `mevedel-skills' is available.
+Without CONTEXT, refresh the session owned by the current buffer."
   (when (fboundp 'mevedel-skills-rescan)
     (condition-case err
         (progn
-          (mevedel-skills-rescan)
+          (if context
+              (progn
+                (require 'mevedel-cockpit)
+                (mevedel-cockpit-call-in-data
+                 context #'mevedel-skills-rescan))
+            (mevedel-skills-rescan))
           t)
       (user-error nil)
       (error
@@ -1011,9 +1019,9 @@ Workspace runtime data is retained."
           :warning)
          message)))))
 
-(defun mevedel-plugins--reload ()
-  "Reload plugin-visible skills for the current session when possible."
-  (let ((result (mevedel-plugins--refresh-current-session)))
+(defun mevedel-plugins--reload (&optional context)
+  "Reload plugin-visible skills for CONTEXT's session when possible."
+  (let ((result (mevedel-plugins--refresh-session context)))
     (cond
      ((eq result t)
       "Plugin registry reloaded. Refreshed current session skills.")
@@ -1024,7 +1032,7 @@ Workspace runtime data is retained."
 
 (defun mevedel-plugins--with-refresh (message)
   "Refresh current session skills and return MESSAGE."
-  (mevedel-plugins--refresh-current-session)
+  (mevedel-plugins--refresh-session)
   message)
 
 
@@ -1246,9 +1254,10 @@ Workspace runtime data is retained."
 (defun mevedel-plugins-list-toggle-enabled ()
   "Toggle activation for the plugin at point."
   (interactive)
-  (let* ((plugin (mevedel-plugins-list--plugin-at-point))
+  (let* ((context (mevedel-cockpit-surface-context))
+         (plugin (mevedel-plugins-list--plugin-at-point))
          (workspace (mevedel-plugins-list--workspace
-                     (mevedel-cockpit-surface-context)))
+                     context))
          (name (mevedel-plugin-name plugin)))
     (if (mevedel-plugins--enabled-p plugin workspace)
         (progn
@@ -1257,15 +1266,16 @@ Workspace runtime data is retained."
       (if (mevedel-plugins-enable name workspace)
           (message "mevedel: enabled plugin %s" name)
         (message "mevedel: enable cancelled for plugin %s" name)))
-    (mevedel-plugins--refresh-current-session)
+    (mevedel-plugins--refresh-session context)
     (mevedel-plugins-list--refresh-preserving name)))
 
 (defun mevedel-plugins-list-toggle-hooks ()
   "Toggle hooks for the plugin at point."
   (interactive)
-  (let* ((selected (mevedel-plugins-list--plugin-at-point))
+  (let* ((context (mevedel-cockpit-surface-context))
+         (selected (mevedel-plugins-list--plugin-at-point))
          (workspace (mevedel-plugins-list--workspace
-                     (mevedel-cockpit-surface-context)))
+                     context))
          (name (mevedel-plugin-name selected)))
     (cond
      ((not (mevedel-plugin-hooks selected))
@@ -1283,32 +1293,34 @@ Workspace runtime data is retained."
       (message "mevedel: enabled hooks for plugin %s" name))
      (t
       (message "mevedel: hook enable cancelled for plugin %s" name)))
-    (mevedel-plugins--refresh-current-session)
+    (mevedel-plugins--refresh-session context)
     (mevedel-plugins-list--refresh-preserving name)))
 
 (defun mevedel-plugins-list-update ()
   "Update the plugin at point."
   (interactive)
-  (let* ((name (mevedel-plugins-list--selected-name))
+  (let* ((context (mevedel-cockpit-surface-context))
+         (name (mevedel-plugins-list--selected-name))
          (workspace (mevedel-plugins-list--workspace
-                     (mevedel-cockpit-surface-context)))
+                     context))
          (message (mevedel-plugins--update
                    name
                    workspace)))
-    (mevedel-plugins--refresh-current-session)
+    (mevedel-plugins--refresh-session context)
     (mevedel-plugins-list--refresh-preserving name)
     (message "%s" message)))
 
 (defun mevedel-plugins-list-remove ()
   "Remove the plugin at point."
   (interactive)
-  (let* ((name (mevedel-plugins-list--selected-name))
+  (let* ((context (mevedel-cockpit-surface-context))
+         (name (mevedel-plugins-list--selected-name))
          (workspace (mevedel-plugins-list--workspace
-                     (mevedel-cockpit-surface-context)))
+                     context))
          (message (mevedel-plugins--remove
                    name
                    workspace)))
-    (mevedel-plugins--refresh-current-session)
+    (mevedel-plugins--refresh-session context)
     (mevedel-plugins-list--refresh-preserving name)
     (message "%s" message)))
 
@@ -1321,11 +1333,11 @@ Workspace runtime data is retained."
   "Install plugin TARGET and refresh the cockpit."
   (interactive (list (read-string "Install plugin OWNER/REPO: ")))
   (require 'mevedel-cockpit)
-  (mevedel-cockpit-surface-context)
-  (let* ((selected (tabulated-list-get-id))
+  (let* ((context (mevedel-cockpit-surface-context))
+         (selected (tabulated-list-get-id))
          (message (mevedel-plugins--install target))
          (name (mevedel-plugins-list--installed-name message)))
-    (mevedel-plugins--refresh-current-session)
+    (mevedel-plugins--refresh-session context)
     (mevedel-plugins-list--refresh-preserving (or name selected))
     (message "%s" message)))
 
@@ -1333,9 +1345,9 @@ Workspace runtime data is retained."
   "Reload plugin-visible session skills and refresh the cockpit."
   (interactive)
   (require 'mevedel-cockpit)
-  (mevedel-cockpit-surface-context)
-  (let ((name (tabulated-list-get-id))
-        (message (mevedel-plugins--reload)))
+  (let* ((context (mevedel-cockpit-surface-context))
+         (name (tabulated-list-get-id))
+         (message (mevedel-plugins--reload context)))
     (mevedel-plugins-list--refresh-preserving name)
     (message "%s" message)))
 

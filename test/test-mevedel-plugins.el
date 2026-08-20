@@ -945,6 +945,112 @@ captured instead of being written to the run log."
                        (mevedel-plugins--find "demo" list-workspace)
                        list-workspace))))))
 
+  :doc "every cockpit mutation refreshes its owner without changing its draft"
+  (let ((plugin-user-dir user-dir)
+        (state-file (mevedel-plugins-state-file workspace)))
+    (require 'mevedel-skills-core)
+    (require 'mevedel-view)
+    (require 'mevedel-view-composer)
+    (dolist (scenario '(enable disable hooks update remove install reload))
+      (let* ((root (mevedel-plugins-test--plugin-root
+                    plugin-user-dir "repo"))
+             (skill-dir (file-name-concat root "skills" "alpha"))
+             (fresh-root (mevedel-plugins-test--github-install-root
+                          "owner" "fresh"))
+             (draft "> plugin action\nsecond line")
+             (point-offset 6)
+             (session (mevedel-session-create
+                       "main" workspace workspace-root)))
+        (unwind-protect
+            (progn
+              (make-directory skill-dir t)
+              (with-temp-file (file-name-concat skill-dir "SKILL.md")
+                (insert (concat "---\nname: alpha\n"
+                                "description: Alpha skill\n---\nAlpha body\n")))
+              (when (eq scenario 'hooks)
+                (make-directory (file-name-concat root "hooks") t)
+                (with-temp-file (file-name-concat root "hooks" "hooks.json")
+                  (insert (concat "{\"hooks\":{\"PreToolUse\":[{"
+                                  "\"matcher\":\"Bash\",\"hooks\":[{"
+                                  "\"type\":\"command\","
+                                  "\"command\":\"echo action\"}]}]}}"))))
+              (mevedel-plugins-test--write-manifest
+               root
+               (if (eq scenario 'hooks)
+                   "{\"name\":\"demo\",\"skills\":\"skills\",\"hooks\":\"hooks/hooks.json\"}"
+                 "{\"name\":\"demo\",\"skills\":\"skills\"}"))
+              (unless (eq scenario 'enable)
+                (cl-letf (((symbol-function 'yes-or-no-p)
+                           (lambda (_prompt) t)))
+                  (mevedel-plugins-enable "demo" workspace)))
+              (mevedel-view-test--with-buffers
+                (with-current-buffer data-buf
+                  (setq-local mevedel--session session))
+                (when (memq scenario '(disable remove))
+                  (mevedel-test--with-captured-messages nil
+                    (with-current-buffer data-buf
+                      (mevedel-skills-rescan))))
+                (with-current-buffer view-buf
+                  (mevedel-view-test--insert-composer-draft
+                   draft point-offset))
+                (mevedel-plugins-list-open
+                 (mevedel-cockpit-context-for-buffer view-buf))
+                (cl-letf (((symbol-function 'yes-or-no-p)
+                           (lambda (_prompt) t))
+                          (mevedel-plugins-git-executor
+                           (lambda (_directory args)
+                             (pcase scenario
+                               ('update
+                                (delete-directory skill-dir t)
+                                (let ((beta-dir
+                                       (file-name-concat
+                                        root "skills" "beta")))
+                                  (make-directory beta-dir t)
+                                  (with-temp-file
+                                      (file-name-concat beta-dir "SKILL.md")
+                                    (insert (concat
+                                             "---\nname: beta\n"
+                                             "description: Beta skill\n"
+                                             "---\nBeta body\n")))))
+                               ('install
+                                (let ((destination (car (last args))))
+                                  (make-directory destination t)
+                                  (mevedel-plugins-test--write-manifest
+                                   destination "{\"name\":\"fresh\"}"))))
+                             (list 0 ""))))
+                  (with-current-buffer mevedel-plugins-list-buffer-name
+                    (mevedel-test--with-captured-messages nil
+                      (pcase scenario
+                        ((or 'enable 'disable)
+                         (mevedel-plugins-list-toggle-enabled))
+                        ('hooks (mevedel-plugins-list-toggle-hooks))
+                        ('update (mevedel-plugins-list-update))
+                        ('remove (mevedel-plugins-list-remove))
+                        ('install (mevedel-plugins-list-install "owner/fresh"))
+                        ('reload (mevedel-plugins-list-reload))))))
+                (let ((names (mapcar #'mevedel-skill-name
+                                     (mevedel-session-skills session))))
+                  (pcase scenario
+                    ('update
+                     (should (member "demo:beta" names))
+                     (should-not (member "demo:alpha" names)))
+                    ((or 'disable 'remove)
+                     (should-not (member "demo:alpha" names)))
+                    (_
+                     (should (member "demo:alpha" names)))))
+                (with-current-buffer view-buf
+                  (should (equal draft
+                                 (buffer-substring-no-properties
+                                  (mevedel-view--input-start) (point-max))))
+                  (should (= (+ (mevedel-view--input-start) point-offset)
+                             (point))))))
+          (when (file-directory-p root)
+            (delete-directory root t))
+          (when (file-directory-p fresh-root)
+            (delete-directory fresh-root t))
+          (when (file-exists-p state-file)
+            (delete-file state-file))))))
+
   :doc "dispatches update and remove actions at point"
   (let ((root (mevedel-plugins-test--github-install-root "owner" "repo"))
         calls)
