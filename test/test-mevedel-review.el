@@ -13,6 +13,7 @@
 (require 'mevedel-prompt-submission)
 (require 'mevedel-structs)
 (require 'mevedel-tool-exec)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-view)
 (require 'mevedel-view-render)
 (require 'mevedel-workspace)
@@ -861,10 +862,10 @@
         (mevedel-agent-conversation-refresh invocation))
       (with-current-buffer data-buf
         (pcase-let ((`(,start . ,end)
-                     (mevedel-pipeline--find-render-data-block-by-agent-id
+                     (mevedel-tool-render-data-find-agent-block
                       "reviewer--draft")))
           (let* ((raw (buffer-substring start end))
-                 (render-data (cdr (mevedel-pipeline-extract-render-data raw))))
+                 (render-data (cdr (mevedel-tool-render-data-extract raw))))
             (should (eq 'completed (plist-get render-data :status)))
             (should (= 2 (plist-get render-data :calls))))))
       (with-current-buffer view-buf

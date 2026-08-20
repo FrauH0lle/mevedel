@@ -11,16 +11,16 @@
 (eval-when-compile (require 'cl-lib))
 (require 'subr-x)
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--render-data-trusted-range-p
-                  "mevedel-pipeline" (start end &optional object))
-
 ;; `mevedel-tool-media'
 (declare-function mevedel-tool-media-extract
                   "mevedel-tool-media"
                   (result-string &optional tool-results-dir
                                  expected-tool-use-id
                                  allow-payload-tool-use-id))
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-trusted-range-p
+                  "mevedel-tool-render-data" (start end &optional object))
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel-transcript-audit-spans
@@ -398,6 +398,7 @@ blocks that still carry stale tool properties."
   "Return canonical control ranges in START..END.
 BASE-SEGMENTS are raw `gptel' property runs used to validate persisted
 tool blocks.  Each result is `(TYPE START END VALUE...)'."
+  (require 'mevedel-tool-render-data)
   (let ((ranges
          (append
           (mevedel-transcript--delimited-ranges
@@ -459,10 +460,8 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
                              (mevedel-transcript-audit-trusted-range-p
                               (cadr range) (point)))))
                     (and render-p
-                         (progn
-                           (require 'mevedel-pipeline)
-                           (mevedel-pipeline--render-data-trusted-range-p
-                            (cadr range) (caddr range))))
+                         (mevedel-tool-render-data-trusted-range-p
+                          (cadr range) (caddr range)))
                   (and (eq (car range) 'mailbox)
                        (mevedel-transcript--mailbox-control-context-p
                         range base-segments))

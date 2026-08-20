@@ -12,6 +12,7 @@
 (require 'mevedel-mention-bindings)
 (require 'mevedel-mentions)
 (require 'mevedel-pipeline)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-skills-core)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-plan)
@@ -700,7 +701,7 @@
          (plan (mevedel-skill-invocation-plan--create
                 :text text))
          (block (mevedel-skills-plan-render-data plan expanded))
-         (data (cdr (mevedel-pipeline-extract-render-data block))))
+         (data (cdr (mevedel-tool-render-data-extract block))))
     (should (eq 'mevedel-render-data (get-text-property 0 'gptel block)))
     (should (eq 'inline-skill (plist-get data :kind)))
     (should (equal text (plist-get data :display-text)))

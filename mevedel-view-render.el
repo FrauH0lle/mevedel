@@ -71,19 +71,6 @@
 (declare-function mevedel--directive-action-context
                   "mevedel-overlays" (record workspace))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--format-render-data-block
-		  "mevedel-pipeline" (render-data &optional tool-use-id))
-(declare-function mevedel-pipeline--strip-render-data-blocks
-		  "mevedel-pipeline" (string &optional expected-tool-use-id))
-(declare-function mevedel-pipeline--tool-segment-bounds
-		  "mevedel-pipeline" (tool-use-id))
-(declare-function mevedel-pipeline-extract-render-data
-		  "mevedel-pipeline"
-		  (result-string &optional session
-				 expected-tool-use-id
-				 allow-payload-tool-use-id))
-
 ;; `mevedel-plan'
 (declare-function mevedel-plan-extract-proposed "mevedel-plan" (text))
 (declare-function mevedel-plan-strip-proposed "mevedel-plan" (text))
@@ -165,7 +152,19 @@
 		  (name &optional category))
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-renderer "mevedel-tool-registry" (cl-x)
-		  t)
+                  t)
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-extract
+                  "mevedel-tool-render-data"
+                  (result-string &optional session expected-tool-use-id
+                                 allow-payload-tool-use-id))
+(declare-function mevedel-tool-render-data-format
+                  "mevedel-tool-render-data" (render-data &optional tool-use-id))
+(declare-function mevedel-tool-render-data-segment-bounds
+                  "mevedel-tool-render-data" (tool-use-id))
+(declare-function mevedel-tool-render-data-strip
+                  "mevedel-tool-render-data" (string &optional expected-tool-use-id))
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tool-ui--render-agent "mevedel-tool-ui"
@@ -1399,6 +1398,7 @@ tool marker on its own line with no `gptel' property, so a segment
 whose start drifted onto the marker (boundary expansion, patched
 render-data block) would otherwise fail to parse and force the
 renderer to fall back to the bare `Tool' one-liner."
+  (require 'mevedel-tool-render-data)
   (with-current-buffer data-buf
     (let* ((raw (or raw
                     (mevedel-view--tool-segment-text seg-start seg-end)))
@@ -1438,7 +1438,7 @@ renderer to fall back to the bare `Tool' one-liner."
                        full-result))
                      (full-result
                       (mevedel--strip-hook-audit-blocks full-result))
-                     (extract (mevedel-pipeline-extract-render-data
+                     (extract (mevedel-tool-render-data-extract
                                full-result
                                (and (boundp 'mevedel--session)
                                     mevedel--session)
@@ -2120,9 +2120,10 @@ bodies for initially collapsed tools."
 (defun mevedel-view--tool-row-region (data-buffer tool-use-id)
   "Return the visible source-backed row for TOOL-USE-ID in DATA-BUFFER.
 The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
+  (require 'mevedel-tool-render-data)
   (when-let* ((bounds
                (with-current-buffer data-buffer
-                 (mevedel-pipeline--tool-segment-bounds tool-use-id))))
+                 (mevedel-tool-render-data-segment-bounds tool-use-id))))
     (let ((pos (point-min))
           (limit (point-max))
           found)
@@ -2241,8 +2242,8 @@ system reminder wrappers."
 
 (defun mevedel-view--strip-render-data-display-text (text)
   "Return TEXT without hidden render-data side-channel scaffolding."
-  (require 'mevedel-pipeline)
-  (mevedel-pipeline--strip-render-data-blocks (or text "")))
+  (require 'mevedel-tool-render-data)
+  (mevedel-tool-render-data-strip (or text "")))
 
 (defun mevedel-view--render-data-only-text-p (text)
   "Return non-nil if TEXT is only render-data scaffolding."
@@ -2357,14 +2358,16 @@ turn shows one bogus thinking summary per tool boundary."
 
 (defun mevedel-view--inline-skill-render-data-from-text (text)
   "Return inline-skill render-data from TEXT, or nil."
-  (let ((data (cdr (mevedel-pipeline-extract-render-data text))))
+  (require 'mevedel-tool-render-data)
+  (let ((data (cdr (mevedel-tool-render-data-extract text))))
     (and (consp data)
          (eq (plist-get data :kind) 'inline-skill)
          data)))
 
 (defun mevedel-view--collaboration-event-from-text (text)
   "Return a canonical started collaboration event from TEXT, or nil."
-  (let ((data (cdr (mevedel-pipeline-extract-render-data text))))
+  (require 'mevedel-tool-render-data)
+  (let ((data (cdr (mevedel-tool-render-data-extract text))))
     (and (consp data)
          (eq (plist-get data :kind) 'collaboration-event)
          (eq (plist-get data :event) 'started)
@@ -2372,7 +2375,8 @@ turn shows one bogus thinking summary per tool boundary."
 
 (defun mevedel-view--request-summary-render-data-from-text (text)
   "Return request-summary render-data from TEXT, or nil."
-  (let ((data (cdr (mevedel-pipeline-extract-render-data text))))
+  (require 'mevedel-tool-render-data)
+  (let ((data (cdr (mevedel-tool-render-data-extract text))))
     (and (consp data)
          (eq (plist-get data :kind) 'request-summary)
          data)))
@@ -2440,9 +2444,9 @@ turn shows one bogus thinking summary per tool boundary."
 SEARCH-START bounds duplicate detection to the current response tail.
 EXTRA is additional request metadata to persist.
 Return the new data-buffer end position."
+  (require 'mevedel-tool-render-data)
   (when-let* ((elapsed (mevedel-view--request-summary-elapsed-seconds
                         data-buf)))
-    (require 'mevedel-pipeline)
     (with-current-buffer data-buf
       (let ((tail-start (or search-start (point-min))))
         (mevedel-view--delete-request-summaries
@@ -2451,7 +2455,7 @@ Return the new data-buffer end position."
           (goto-char (point-max))
           (unless (bolp) (insert "\n"))
           (insert
-           (mevedel-pipeline--format-render-data-block
+           (mevedel-tool-render-data-format
             (append
              (list :kind 'request-summary
                    :elapsed-seconds elapsed)
@@ -3101,10 +3105,11 @@ VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
 
 (defun mevedel-view--user-turn-display-text (segments data-buf)
   "Return persisted view text from user SEGMENTS in DATA-BUF, or nil."
+  (require 'mevedel-tool-render-data)
   (with-current-buffer data-buf
     (cl-loop for seg in segments
              when (eq (car seg) 'render-data)
-             for data = (cdr (mevedel-pipeline-extract-render-data
+             for data = (cdr (mevedel-tool-render-data-extract
                               (buffer-substring
                                (cadr seg) (caddr seg))))
              when (and (eq (plist-get data :kind) 'user-display)

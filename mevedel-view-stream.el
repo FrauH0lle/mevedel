@@ -26,10 +26,6 @@
 (declare-function mevedel-execution-transcript-retry-pending-terminals
                   "mevedel-execution-transcript" (data-buffer))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--tool-segment-bounds
-                  "mevedel-pipeline" (tool-use-id))
-
 ;; `mevedel-structs'
 (declare-function mevedel-request-active-elapsed-seconds
                   "mevedel-structs" (request &optional now))

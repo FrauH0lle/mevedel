@@ -30,6 +30,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-control-transfer)
 (require 'mevedel-tool-repair)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-tools)
 (require 'mevedel-worktree)
 (require 'helpers
@@ -132,7 +133,7 @@ publication."
   (propertize
    (concat "#+begin_tool (Bash :command \"true\")\n"
            "(:name \"Bash\" :args (:command \"true\"))\n\n"
-           (mevedel-pipeline--format-render-data-block
+           (mevedel-tool-render-data-format
             render-data tool-use-id)
            "#+end_tool\n")
    'gptel (cons 'tool tool-use-id)))

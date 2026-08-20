@@ -12,6 +12,7 @@
 (require 'mevedel-permission-queue)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-turn)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
@@ -81,7 +82,7 @@
                       (match-beginning 0)))
                    (data
                     (cdr
-                     (mevedel-pipeline-extract-render-data
+                     (mevedel-tool-render-data-extract
                       (buffer-substring block-start (point-max))))))
               (should (eq 'request-summary (plist-get data :kind)))
               (should (eq 'error (plist-get data :outcome)))
@@ -129,7 +130,7 @@
             (search-forward "<!-- mevedel-render-data -->")
             (let ((data
                    (cdr
-                    (mevedel-pipeline-extract-render-data
+                    (mevedel-tool-render-data-extract
                      (buffer-substring
                       (match-beginning 0) (point-max))))))
               (should (equal message-text (plist-get data :error-data)))

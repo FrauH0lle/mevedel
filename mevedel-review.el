@@ -78,10 +78,6 @@
 (declare-function mevedel-execution-target-native-path
                   "mevedel-execution-target" (target path))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--format-render-data-block
-                  "mevedel-pipeline" (render-data &optional tool-use-id))
-
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-commit
                   "mevedel-prompt-submission" (submission))
@@ -120,6 +116,10 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 (defvar mevedel-session--read-only-mode)
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-format
+                  "mevedel-tool-render-data" (render-data &optional tool-use-id))
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-begin
@@ -1072,10 +1072,10 @@ permission policy decides whether verifier validation commands may run."
   "Insert hidden progress handle for INVOCATION, HINT, and COMMAND."
   (when-let* (((mevedel-agent-invocation-p invocation))
               (path (mevedel-agent-invocation-path invocation)))
-    (require 'mevedel-pipeline)
+    (require 'mevedel-tool-render-data)
     (let* ((render-data
             (mevedel-review--progress-render-data invocation hint command))
-           (block (mevedel-pipeline--format-render-data-block render-data)))
+           (block (mevedel-tool-render-data-format render-data)))
       (goto-char (point-max))
       (unless (bolp) (insert "\n"))
       (insert block)

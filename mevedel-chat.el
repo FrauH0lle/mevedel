@@ -188,12 +188,6 @@
 (declare-function mevedel-permission-validate-persistent-stores
                   "mevedel-permissions" (workspace))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--format-render-data-block
-		  "mevedel-pipeline" (render-data &optional tool-use-id))
-(declare-function mevedel-pipeline--strip-render-data-blocks
-		  "mevedel-pipeline" (string &optional expected-tool-use-id))
-
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff--append-implementation-input
                   "mevedel-plan-handoff" (prompt selection))
@@ -355,7 +349,13 @@
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tools--generate-diff "mevedel-tool-fs"
-		  (original modified filepath))
+                  (original modified filepath))
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-format
+                  "mevedel-tool-render-data" (render-data &optional tool-use-id))
+(declare-function mevedel-tool-render-data-strip
+                  "mevedel-tool-render-data" (string &optional expected-tool-use-id))
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
@@ -1282,6 +1282,7 @@ disabled, or malformed selection signals before any request starts."
 
 (defun mevedel--directive-discussion-transcript (directive)
   "Return DIRECTIVE's current-request local discussion as plain text."
+  (require 'mevedel-tool-render-data)
   (mapconcat
    (lambda (turn)
      (format "User: %s\nAssistant%s: %s"
@@ -1292,7 +1293,7 @@ disabled, or malformed selection signals before any request starts."
                (format " (%s)"
                        (mevedel-directive-discussion-turn-outcome turn)))
              (string-trim-right
-              (mevedel-pipeline--strip-render-data-blocks
+              (mevedel-tool-render-data-strip
                (mevedel-directive-discussion-turn-result turn)))))
    (cl-remove-if-not
     (lambda (turn)
@@ -2212,8 +2213,8 @@ with NO-SPINNER forwarded when non-nil."
     (insert prompt "\n")
     (mevedel--clear-user-turn-gptel-properties user-turn-start (point))
     (when (and display-text (not (equal display-text prompt)))
-      (require 'mevedel-pipeline)
-      (insert (mevedel-pipeline--format-render-data-block
+      (require 'mevedel-tool-render-data)
+      (insert (mevedel-tool-render-data-format
                (list :kind 'user-display :text display-text)))))
   (mevedel-collaboration--safe-accepted-prompt (current-buffer))
   (let ((data-turn-start (copy-marker (point) nil)))

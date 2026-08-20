@@ -132,8 +132,10 @@ Data model
   mevedel-plan.el             lifecycle-neutral plan data and artifacts
   mevedel-plan-handoff.el     durable accepted-plan preparation and kickoff
   mevedel-permissions.el      9-step permission decision chain
-  mevedel-pipeline.el         tool execution pipeline
+  mevedel-tool-permission.el permission-step orchestration, hooks, prompts, logging
+  mevedel-pipeline.el         tool context, standard steps, sequencing, ordering
   mevedel-tool-media.el       tool media storage, scrubbing, provider payloads
+  mevedel-tool-render-data.el render-data codec, provider scrubber, transcript mutation
   mevedel-tool-registry.el    mevedel-tool struct, mevedel-define-tool macro
   mevedel-tool-repair.el      structured validation and atomic input repair
   mevedel-tool-repair-gptel.el  lossless gptel argument decoding bridge

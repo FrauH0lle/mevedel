@@ -24,6 +24,7 @@
 (require 'mevedel-skills-preparation)
 (require 'mevedel-structs)
 (require 'mevedel-tool-exec)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-tools)
 (require 'mevedel-workspace)
 
@@ -1528,7 +1529,7 @@ description: Yell
       (mevedel-pipeline-run-tool
        tool (lambda (value) (setq pipeline-result value))
        '(:name "costly")))
-    (let* ((parts (mevedel-pipeline-extract-render-data
+    (let* ((parts (mevedel-tool-render-data-extract
                    pipeline-result session))
            (visible (car parts))
            (render-data (cdr parts))

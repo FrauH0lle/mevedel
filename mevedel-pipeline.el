@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Sequential step-based execution engine for mevedel tools.  Each tool
+;; Owns tool context, standard steps, sequencing, and ordering.  Each tool
 ;; invocation runs through a standard pipeline: validate -> pre-tool-hooks ->
 ;; normalize-paths -> prepare-resources -> permission -> capture-coverage ->
 ;; snapshot -> handler -> repair-reminder -> persist -> specialist-nudges ->
@@ -10,6 +10,9 @@
 ;; Goal-budget-warning -> attach-render-data -> attach-media.
 ;; Interactive handlers own any confirmation needed after the pipeline's
 ;; permission and snapshot steps.
+;; Permission orchestration lives in mevedel-tool-permission.el.  Render-data
+;; serialization, provider scrubbing, and transcript mutation live in
+;; mevedel-tool-render-data.el.
 ;;
 ;; The persist step saves oversized results to disk and replaces them
 ;; with a preview + logical artifact address, preventing LLM context overflow from
@@ -19,26 +22,16 @@
 
 (require 'cl-lib)
 
-(require 'mevedel-permissions)
 (require 'mevedel-structs)
 (require 'mevedel-hooks)
 (require 'mevedel-utilities)
-(require 'mevedel-permission-log)
-(require 'mevedel-permission-queue)
 (require 'mevedel-tool-repair)
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 (defvar gptel-backend)
 
-;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-path
-                  "mevedel-agents" (cl-x) t)
-
 ;; `mevedel-execution'
-(declare-function mevedel-execution-mutation-blocked-p
-                  "mevedel-execution" (session))
 (declare-function mevedel-execution-sandbox-summary-class
                   "mevedel-execution" (summary))
 (defvar mevedel-execution--sandbox-summary-cell)
@@ -65,30 +58,6 @@
                          &optional session workspace request invocation))
 (declare-function mevedel-hooks-tool-event-plist
                   "mevedel-hooks" (event context &rest extra))
-
-;; `mevedel-permissions'
-(declare-function mevedel-check-permission-async "mevedel-permissions"
-                  (tool-name cont &rest args))
-(declare-function mevedel-check-permission-async-with-metadata
-                  "mevedel-permissions" (tool-name cont &rest args))
-(declare-function mevedel-permission--apply-prompt-result
-                  "mevedel-permissions" (result tool-name &rest args))
-(declare-function mevedel-permission--checker-args
-                  "mevedel-permissions" (context))
-(declare-function mevedel-permission--invocation-context
-                  "mevedel-permissions" (&rest args))
-(declare-function mevedel-permission--normalize-outcome
-                  "mevedel-permissions" (outcome))
-(declare-function mevedel-permission--one-shot-mutations-p
-                  "mevedel-permissions" (request &optional explicit))
-(declare-function mevedel-permission--one-shot-prompt-entry
-                  "mevedel-permissions" (entry &optional data-buffer))
-(declare-function mevedel-permission--one-shot-prompt-outcome
-                  "mevedel-permissions" (outcome))
-(declare-function mevedel-permission--path-protected-p
-                  "mevedel-permissions" (path))
-(declare-function mevedel-permission-decision-raw-outcome
-                  "mevedel-permissions" (decision))
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-address-like-p "mevedel-resource" (value))
@@ -129,57 +98,45 @@
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
-(declare-function mevedel-telemetry-forwarded-audit-p
-                  "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-record-audit
                   "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
 
-;; `mevedel-tool-exec'
-(declare-function mevedel-tool-exec--bash-decision-specifier-value
-                  "mevedel-tool-exec" (command))
-
 ;; `mevedel-tool-fs'
 (declare-function mevedel--snapshot-file-if-needed "mevedel-tool-fs" (filepath))
 
 ;; `mevedel-tool-media'
-(declare-function mevedel-tool-media-add-to-provider-result
-                  "mevedel-tool-media" (backend parsed media-by-index))
 (declare-function mevedel-tool-media-attach-result
                   "mevedel-tool-media"
                   (result media tool-results-dir tool-use-id &optional session))
-(declare-function mevedel-tool-media-extract
-                  "mevedel-tool-media"
-                  (result-string &optional tool-results-dir expected-tool-use-id
-                                 allow-payload-tool-use-id session))
 (declare-function mevedel-tool-media-normalize-items
                   "mevedel-tool-media" (items))
-(declare-function mevedel-tool-media-prepare-tool-result
-                  "mevedel-tool-media"
-                  (backend tool-call tool-results-dir &optional session))
 (declare-function mevedel-tool-media-result-for-hooks
                   "mevedel-tool-media" (result media))
-(declare-function mevedel-tool-media-strip-blocks
-                  "mevedel-tool-media" (string))
 
 ;; `mevedel-tool-patch'
-(declare-function mevedel-tool-patch--get-paths-from-proposal
-                  "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch--parse
                   "mevedel-tool-patch" (patch &optional root))
 (declare-function mevedel-tool-patch--prepare-resources
                   "mevedel-tool-patch" (proposal))
 (defvar mevedel-tool-patch--prepared-proposal)
 
+;; `mevedel-tool-permission'
+(declare-function mevedel-tool-permission-deny
+                  "mevedel-tool-permission"
+                  (context fail reason &optional model-reason provenance))
+(declare-function mevedel-tool-permission-log-decision
+                  "mevedel-tool-permission" (context decision &rest props))
+(declare-function mevedel-tool-permission-paths
+                  "mevedel-tool-permission" (tool args &optional context))
+(declare-function mevedel-tool-permission-step
+                  "mevedel-tool-permission" (context next fail))
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-async-p "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-domain "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-name "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-paths "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-handler "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-max-result-size "mevedel-tool-registry" (cl-x) t)
@@ -188,6 +145,16 @@
 (declare-function mevedel-tool-render-transform
                   "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-snapshot-p "mevedel-tool-registry" (cl-x) t)
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-format
+                  "mevedel-tool-render-data"
+                  (render-data &optional tool-use-id))
+(declare-function mevedel-tool-render-data-size
+                  "mevedel-tool-render-data" (data))
+(declare-function mevedel-tool-render-data-strip-non-media
+                  "mevedel-tool-render-data"
+                  (string &optional expected-tool-use-id))
 
 ;; `mevedel-tool-repair-diagnostics'
 (declare-function mevedel-tool-repair-audit-record
@@ -200,10 +167,6 @@
 (declare-function mevedel-tools--ctx-record-used "mevedel-tools" (ctx name))
 (declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
 (defvar mevedel-tools--current-fsm)
-
-;; `mevedel-transcript-audit'
-(declare-function mevedel-transcript-audit-spans
-                  "mevedel-transcript-audit" (text &optional type))
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
@@ -845,7 +808,7 @@ permission or handler work begins."
   (when-let* ((issues (mevedel-tool-repair-validate tool args)))
     (mevedel-tool-repair-format-issues tool issues)))
 
-(defun mevedel-pipeline--record-hook-context (context decision &optional event)
+(defun mevedel-pipeline-record-hook-context (context decision &optional event)
   "Append DECISION's additional hook context to CONTEXT.
 EVENT labels generated hook event blocks."
   (if-let* ((entries (mevedel-hooks-context-entries
@@ -865,7 +828,7 @@ EVENT labels generated hook event blocks."
                 formatted)
       text)))
 
-(defun mevedel-pipeline--record-hook-audit (context records)
+(defun mevedel-pipeline-record-hook-audit (context records)
   "Append hook audit RECORDS to CONTEXT."
   (let ((records (if (and (listp records)
                           (keywordp (car-safe records)))
@@ -884,17 +847,17 @@ EVENT labels generated hook event blocks."
               (mapconcat #'mevedel--format-hook-audit-record records ""))
     text))
 
-(defun mevedel-pipeline--append-hook-side-channel (text context)
+(defun mevedel-pipeline-append-hook-side-channel (text context)
   "Append accumulated hook context and audit records from CONTEXT to TEXT."
   (mevedel-pipeline--append-hook-audit-records
    (mevedel-pipeline--append-hook-context-string text context)
    (plist-get context :hook-audit-records)))
 
-(defun mevedel-pipeline--hook-context-audit-records (decision event)
+(defun mevedel-pipeline-hook-context-audit-records (decision event)
   "Return audit records for DECISION additional context at EVENT."
   (mevedel-hooks-context-audit-records decision event 'tool-context))
 
-(defun mevedel-pipeline--hook-permission-audit-record
+(defun mevedel-pipeline-hook-permission-audit-record
     (event outcome decision &optional reason)
   "Return a permission audit record for hook EVENT and OUTCOME."
   (append
@@ -927,7 +890,7 @@ EVENT labels generated hook event blocks."
    (when-let* ((reason (mevedel-hooks-decision-reason decision)))
      (list :reason reason))))
 
-(defun mevedel-pipeline--run-hook-event
+(defun mevedel-pipeline-run-hook-event
     (event event-plist callback context session workspace request invocation)
   "Run hook EVENT with EVENT-PLIST in CONTEXT's live dispatch buffer.
 
@@ -941,113 +904,6 @@ the hook runner."
       (mevedel-hooks-run-event
        event event-plist callback session workspace request invocation))))
 
-(defun mevedel-pipeline--permission-origin (context &optional explicit-origin)
-  "Return the canonical agent path for permission CONTEXT.
-EXPLICIT-ORIGIN takes precedence when non-nil."
-  (or explicit-origin
-      (plist-get context :origin)
-      (and-let* ((request (plist-get context :request))
-                 ((mevedel-request-p request)))
-        (mevedel-request-origin request))
-      (and-let* ((inv (plist-get context :invocation))
-                 ((fboundp 'mevedel-agent-invocation-p))
-                 ((mevedel-agent-invocation-p inv)))
-        (mevedel-agent-invocation-path inv))
-      "/root"))
-
-(defun mevedel-pipeline--permission-sanitized-pattern (tool-name pattern)
-  "Return log-safe PATTERN metadata for TOOL-NAME."
-  (cond
-   ((and (equal tool-name "Bash") pattern)
-    (if (fboundp 'mevedel-tool-exec--bash-decision-specifier-value)
-        (mevedel-tool-exec--bash-decision-specifier-value pattern)
-      "shell command"))
-   (t pattern)))
-
-(defun mevedel-pipeline--permission-specifier-props (context)
-  "Return sanitized permission specifier properties from CONTEXT."
-  (let* ((tool (plist-get context :tool))
-         (tool-name (and tool (mevedel-tool-name tool)))
-         (args (plist-get context :args))
-         (path (or (plist-get context :permission-path)
-                   (when-let* ((fn (and tool (mevedel-tool-get-path tool))))
-                     (ignore-errors (funcall fn args)))))
-         (raw-pattern (when-let* ((fn (and tool (mevedel-tool-get-pattern tool))))
-                        (ignore-errors (funcall fn args))))
-         (pattern (mevedel-pipeline--permission-sanitized-pattern
-                   tool-name raw-pattern))
-         (domain (when-let* ((fn (and tool (mevedel-tool-get-domain tool))))
-                   (ignore-errors (funcall fn args))))
-         (name (when-let* ((fn (and tool (mevedel-tool-get-name tool))))
-                 (ignore-errors (funcall fn args))))
-         (key (cond (pattern :pattern)
-                    (domain :domain)
-                    (name :name)
-                    (path :path)))
-         (value (or pattern domain name path)))
-    (append (and key (list :specifier-key key))
-            (and value (list :specifier-value value))
-            (and path
-                 (list :protected-path
-                       (mevedel-permission--path-protected-p path))))))
-
-(defun mevedel-pipeline--log-permission-decision
-    (context decision &rest props)
-  "Persist sanitized DECISION diagnostics for CONTEXT with PROPS."
-  (let ((session (plist-get context :session)))
-    (when (and session
-               (not (plist-get decision :logged)))
-      (let* ((tool (plist-get context :tool))
-             (tool-name (and tool (mevedel-tool-name tool)))
-             (mode (or (and session (mevedel-session-permission-mode session))
-                       mevedel-permission-mode))
-             (raw (mevedel-permission-decision-raw-outcome decision))
-             (outcome (or (plist-get decision :outcome)
-                          (mevedel-permission--normalize-outcome raw)))
-             (specifier (mevedel-pipeline--permission-specifier-props context)))
-        (apply #'mevedel-permission-log
-               session 'permission-decision
-               (append
-                (list :tool-name tool-name
-                      :origin (mevedel-pipeline--permission-origin context)
-                      :mode mode
-                      :outcome outcome
-                      :via (plist-get decision :via))
-                specifier
-                (when (plist-member decision :bucket)
-                  (list :bucket (plist-get decision :bucket)))
-                props))
-        ;; The detailed permission log remains side-local because it may
-        ;; contain resource paths and human justifications.  Forward only a
-        ;; fixed value-free subset to a distinct durable audit target.
-        (when (mevedel-telemetry-forwarded-audit-p session)
-          (apply #'mevedel-telemetry-record-audit
-                 session 'permission-decision
-                 (append
-                  (list :tool-name tool-name
-                        :origin (mevedel-pipeline--permission-origin context)
-                        :mode mode :outcome outcome
-                        :via (plist-get decision :via))
-                  (when (plist-member specifier :specifier-key)
-                    (list :specifier-key
-                          (plist-get specifier :specifier-key)))
-                  (when (plist-member specifier :protected-path)
-                    (list :protected-path
-                          (and (plist-get specifier :protected-path) t)))
-                  (when (plist-member decision :bucket)
-                    (list :bucket (plist-get decision :bucket))))))))))
-
-(defun mevedel-pipeline--permission-decision-with-via
-    (decision via &rest props)
-  "Return DECISION metadata adjusted to VIA and PROPS."
-  (let ((raw (mevedel-permission-decision-raw-outcome decision)))
-    (append (list :outcome (mevedel-permission--normalize-outcome raw)
-                  :raw-outcome raw
-                  :via via)
-            (when (plist-member decision :bucket)
-              (list :bucket (plist-get decision :bucket)))
-            props)))
-
 (defun mevedel-pipeline--step-pre-tool-hooks (context next fail)
   "Run `PreToolUse' hooks for CONTEXT, then call NEXT or FAIL.
 
@@ -1055,12 +911,13 @@ Hooks see validated args and may rewrite them.  Rewritten args are
 validated again before the pipeline continues.  Permission decisions
 from hooks are carried in CONTEXT for the permission step, where they
 can tighten policy or skip a prompt without overriding explicit denies."
+  (require 'mevedel-tool-permission)
   (let* ((tool (plist-get context :tool))
          (session (plist-get context :session))
          (workspace (plist-get context :workspace))
          (request (plist-get context :request))
          (invocation (plist-get context :invocation)))
-    (mevedel-pipeline--run-hook-event
+    (mevedel-pipeline-run-hook-event
      'PreToolUse
      (mevedel-hooks-tool-event-plist 'PreToolUse context)
      (lambda (decision)
@@ -1080,31 +937,31 @@ can tighten policy or skip a prompt without overriding explicit denies."
                             "hook stopped tool execution"
                           "hook denied tool execution"))))
                 (updated
-                 (mevedel-pipeline--record-hook-audit
-                  (mevedel-pipeline--record-hook-context
+                 (mevedel-pipeline-record-hook-audit
+                  (mevedel-pipeline-record-hook-context
                    context decision 'PreToolUse)
                   (append
                    (list
-                    (mevedel-pipeline--hook-permission-audit-record
+                    (mevedel-pipeline-hook-permission-audit-record
                      'PreToolUse 'deny decision reason))
-                    (mevedel-pipeline--hook-context-audit-records
+                    (mevedel-pipeline-hook-context-audit-records
                     decision 'PreToolUse)))))
-             (mevedel-pipeline--log-permission-decision
+             (mevedel-tool-permission-log-decision
               context
               (list :outcome 'deny
                     :raw-outcome `(deny . ,reason)
                     :via 'pre-tool-hook))
-             (mevedel-pipeline--fail-permission-denied
+             (mevedel-tool-permission-deny
               updated fail
               (if stopped-p reason (format "Permission denied: %s" reason))
               reason 'PreToolUse)))
           (t
-           (let ((updated (mevedel-pipeline--record-hook-context
+           (let ((updated (mevedel-pipeline-record-hook-context
                            context decision 'PreToolUse)))
              (setq updated
-                   (mevedel-pipeline--record-hook-audit
+                   (mevedel-pipeline-record-hook-audit
                     updated
-                    (mevedel-pipeline--hook-context-audit-records
+                    (mevedel-pipeline-hook-context-audit-records
                      decision 'PreToolUse)))
              (when (plist-member decision :permission-decision)
                (setq updated
@@ -1122,7 +979,7 @@ can tighten policy or skip a prompt without overriding explicit denies."
                        (funcall fail err)
                      (funcall next
                               (plist-put
-                               (mevedel-pipeline--record-hook-audit
+                               (mevedel-pipeline-record-hook-audit
                                 updated
                                 (mevedel-pipeline--hook-input-rewrite-audit-record
                                  'PreToolUse
@@ -1133,440 +990,6 @@ can tighten policy or skip a prompt without overriding explicit denies."
                (funcall next updated)))))))
      context session workspace request invocation)))
 
-(defun mevedel-pipeline--apply-hook-permission-decision (outcome context)
-  "Apply CONTEXT's hook permission decision to permission OUTCOME.
-
-Hook `deny' always wins.  Hook `ask' can tighten an `allow' into a
-prompt.  Hook `allow' is applied at the `PermissionRequest' boundary
-when the normal resolver returns `ask'; explicit denials stay intact."
-  (let ((decision (plist-get context :hook-permission-decision)))
-    (pcase decision
-      ('deny 'deny)
-      ('ask
-       (if (memq outcome '(allow approve implement implement-clear))
-           'ask
-         outcome))
-      (_ outcome))))
-
-(defun mevedel-pipeline--fail-permission-denied
-    (context fail reason &optional model-reason provenance)
-  "Run `PermissionDenied' hooks for CONTEXT, then call FAIL with REASON.
-
-MODEL-REASON and PROVENANCE are included in the hook event when available."
-  (let ((session (plist-get context :session))
-        (workspace (plist-get context :workspace)))
-    (mevedel-pipeline--run-hook-event
-     'PermissionDenied
-     (mevedel-hooks-tool-event-plist
-      'PermissionDenied context
-      :permission-reason (or model-reason reason)
-      :permission-provenance provenance)
-     (lambda (decision)
-       (let* ((updated (mevedel-pipeline--record-hook-context
-                        context decision 'PermissionDenied))
-              (updated
-               (mevedel-pipeline--record-hook-audit
-                updated
-                (mevedel-pipeline--hook-context-audit-records
-                 decision 'PermissionDenied)))
-              (final-reason
-               (or (plist-get decision :permission-reason)
-                   reason)))
-         (funcall fail
-                  (mevedel-pipeline--append-hook-side-channel
-                   final-reason updated))))
-     context session workspace
-     (plist-get context :request)
-     (plist-get context :invocation))))
-
-(defun mevedel-pipeline--permission-denial-outcome-p (outcome)
-  "Return non-nil when OUTCOME is an interactive denial."
-  (or (memq outcome '(deny deny-once deny-session))
-      (and (consp outcome) (memq (car outcome) '(deny feedback)))))
-
-(defun mevedel-pipeline--permission-denial-provenance (context decision)
-  "Return the original denial source from CONTEXT or DECISION."
-  (or (plist-get context :permission-denial-provenance)
-      (plist-get decision :via)
-      'policy))
-
-(defun mevedel-pipeline--request-permission
-    (context entry session settle &optional ask-decision fallback-outcome)
-  "Run `PermissionRequest' for ENTRY, then call SETTLE or enqueue.
-SETTLE receives the updated CONTEXT and the permission outcome.
-ASK-DECISION is logged only when hooks leave queue admission unresolved.
-FALLBACK-OUTCOME settles an unresolved request without queue admission."
-  (let* ((one-shot-p (plist-get context :one-shot-mutations-p))
-         (entry (if one-shot-p
-                    (mevedel-permission--one-shot-prompt-entry
-                     entry (plist-get context :buffer))
-                  entry))
-         (original-settle settle)
-         (settle
-          (if one-shot-p
-              (lambda (updated outcome)
-                (funcall original-settle updated
-                         (mevedel-permission--one-shot-prompt-outcome
-                          outcome)))
-            settle))
-         (workspace (plist-get context :workspace)))
-    (mevedel-pipeline--run-hook-event
-     'PermissionRequest
-     (mevedel-hooks-tool-event-plist
-      'PermissionRequest context
-      :specifier-key (plist-get entry :specifier-key)
-      :specifier-value (plist-get entry :specifier-value))
-     (lambda (decision)
-       (let* ((updated
-               (mevedel-pipeline--record-hook-context
-                context decision 'PermissionRequest))
-              (updated
-               (mevedel-pipeline--record-hook-audit
-                updated
-                (mevedel-pipeline--hook-context-audit-records
-                 decision 'PermissionRequest)))
-              (stop-p (and (plist-member decision :continue)
-                           (not (plist-get decision :continue))))
-              (permission-decision
-               (plist-get decision :permission-decision)))
-         (cond
-          ((or stop-p (eq permission-decision 'deny))
-           (let* ((detail
-                   (or (and stop-p (plist-get decision :stop-reason))
-                       (plist-get decision :permission-reason)
-                       "hook denied permission"))
-                  (reason (format "blocked by PermissionRequest: %s" detail)))
-             (setq updated
-                   (mevedel-pipeline--record-hook-audit
-                    updated
-                    (mevedel-pipeline--hook-permission-audit-record
-                     'PermissionRequest 'deny decision reason)))
-             (mevedel-pipeline--log-permission-decision
-              updated
-              (list :outcome 'deny
-                    :raw-outcome `(deny . ,reason)
-                    :via 'permission-request-hook))
-             (funcall settle
-                      (plist-put updated :permission-denial-provenance
-                                 'PermissionRequest)
-                      `(deny . ,reason))))
-          ((and (eq permission-decision 'allow) (not one-shot-p))
-           (setq updated
-                 (mevedel-pipeline--record-hook-audit
-                  updated
-                  (mevedel-pipeline--hook-permission-audit-record
-                   'PermissionRequest 'allow decision)))
-           (mevedel-pipeline--log-permission-decision
-            updated
-            (list :outcome 'allow :raw-outcome 'allow
-                  :via 'permission-request-hook))
-           (funcall settle updated 'allow))
-          (t
-           (if (and fallback-outcome (null permission-decision)
-                    (not one-shot-p))
-               (funcall settle updated fallback-outcome)
-             (when ask-decision
-               (mevedel-pipeline--log-permission-decision
-                updated ask-decision))
-             (let ((queued (copy-sequence entry)))
-               (when-let* ((request (plist-get context :request)))
-                 (setq queued
-                       (plist-put queued :request-id
-                                  (mevedel-request-id request))))
-               (setq queued
-                     (plist-put
-                      queued :callback
-                      (lambda (outcome)
-                        (funcall
-                         settle
-                         (if (mevedel-pipeline--permission-denial-outcome-p
-                              outcome)
-                             (plist-put updated :permission-denial-provenance
-                                        'user)
-                           updated)
-                         outcome))))
-               (mevedel-permission--enqueue queued session)))))))
-     context session workspace
-     (plist-get context :request)
-     (plist-get context :invocation))))
-
-(defun mevedel-pipeline--step-permission-one (context next fail)
-  "Check permission for the tool invocation.
-
-Reads session / workspace from CONTEXT (captured at
-`mevedel-pipeline-run-tool' entry) so that an async continuation
-firing from another buffer still sees the correct session state.
-
-Invokes `mevedel-check-permission-async' for the shared decision chain.
-When the chain (or a tool slot) yields `ask', the step
-drives the generic async prompt and applies the result through
-`mevedel-permission--apply-prompt-result' so session / persistent
-rule and resource-grant storage is honored.  A missing filesystem
-boundary creates exact read or write authority without broadening an
-allowed root.
-
-Dispatches the final outcome through NEXT (allow-equivalent
-outcomes) or FAIL (all denial shapes, plus `aborted')."
-  (let* ((tool (plist-get context :tool))
-         (args (plist-get context :args))
-         (tool-name (mevedel-tool-name tool))
-         (session (plist-get context :session))
-         (workspace (plist-get context :workspace))
-         (request (plist-get context :request))
-         (invocation (plist-get context :invocation))
-         (one-shot-mutations-p
-          (mevedel-permission--one-shot-mutations-p request))
-         (context
-          (plist-put context :one-shot-mutations-p one-shot-mutations-p))
-         (permission-context
-          (mevedel-permission--invocation-context
-           :tool tool
-           :args args
-           :session session
-           :workspace workspace
-           :request request
-           :invocation invocation
-           :one-shot-mutations-p one-shot-mutations-p
-           :patch-local-only-p
-           (plist-get (plist-get context :patch-proposal) :local-only-p)
-           :buffer (plist-get context :buffer)
-           :path (plist-get context :permission-path)
-           :permission-request
-           (lambda (entry queue-session settle)
-             (mevedel-pipeline--request-permission
-              context entry (or queue-session session)
-              (lambda (updated outcome)
-                (setq context updated)
-                (funcall settle outcome))
-              nil
-              (and (eq 'allow (plist-get context :hook-permission-decision))
-                   'allow)))
-           :warn-no-session-p t))
-         (path (plist-get permission-context :path))
-         (workspace-root (plist-get permission-context :workspace-root))
-         (allowed-roots (plist-get permission-context :allowed-roots)))
-    (apply #'mevedel-check-permission-async-with-metadata
-     tool-name
-     (lambda (decision)
-       (let* ((raw-outcome (mevedel-permission-decision-raw-outcome decision))
-              (hooked-outcome
-               (mevedel-pipeline--apply-hook-permission-decision
-                raw-outcome context))
-              (context
-               (if (eq hooked-outcome raw-outcome)
-                   context
-                 (mevedel-pipeline--record-hook-audit
-                  context
-                  (mevedel-pipeline--hook-permission-audit-record
-                   'PreToolUse hooked-outcome
-                   (plist-get context :hook-permission-hook-decision)))))
-              (logged-decision
-               (if (eq hooked-outcome raw-outcome)
-                   decision
-                 (mevedel-pipeline--permission-decision-with-via
-                  (plist-put (copy-sequence decision)
-                             :raw-outcome hooked-outcome)
-                  'pre-tool-hook))))
-         (when (and (memq 'edit (mevedel-tool-groups tool))
-                    (eq 'allow
-                        (mevedel-permission-decision-raw-outcome
-                         logged-decision))
-                    (eq 'rule (plist-get logged-decision :via))
-                    (memq (plist-get logged-decision :bucket)
-                          '(:session :persistent :defcustom)))
-           (setq context (plist-put context :auto-apply-edit-p t)))
-         (mevedel-pipeline--dispatch-permission-outcome
-          hooked-outcome context next fail
-          :tool-name tool-name :path path :session session
-          :workspace workspace :workspace-root workspace-root
-          :allowed-roots allowed-roots
-          :decision logged-decision
-          :permission-context permission-context)))
-     (mevedel-permission--checker-args permission-context))))
-
-(defun mevedel-pipeline--tool-paths (tool args &optional context)
-  "Return every filesystem path declared by TOOL for ARGS.
-
-Addressed read-only operands are already authorized by their resource
-attempt and do not become permission paths.  Ordinary paths retain the
-existing path extraction behavior."
-  (let* ((proposal (plist-get context :patch-proposal))
-         (paths
-          (condition-case nil
-              (if proposal
-                  (mevedel-tool-patch--get-paths-from-proposal proposal)
-                (cond
-                 ((mevedel-tool-get-paths tool)
-                  (funcall (mevedel-tool-get-paths tool) args))
-                 ((mevedel-tool-get-path tool)
-                  (list (funcall (mevedel-tool-get-path tool) args)))))
-            (error nil)))
-         (attempts (plist-get context :resource-attempts))
-         (canonical (plist-get context :canonical-path-map)))
-    (delete-dups
-     (delq nil
-           (mapcar
-            (lambda (path)
-              (if (and (stringp path) (cdr (assoc path attempts)))
-                  nil
-                (or (cdr (assoc path canonical)) path)))
-            paths)))))
-
-(defun mevedel-pipeline--step-permission (context next fail)
-  "Authorize each filesystem path in CONTEXT before continuing."
-  (let* ((tool (plist-get context :tool))
-         (session (plist-get context :session))
-         (paths (mevedel-pipeline--tool-paths
-                 tool (plist-get context :args) context)))
-    (cond
-     ((and session
-           (not (mevedel-tool-read-only-p tool))
-           (progn
-             (require 'mevedel-execution)
-             (mevedel-execution-mutation-blocked-p session)))
-      (funcall fail
-               "Mutating execution is blocked by an unknown remote outcome"))
-     ((null paths)
-      (mevedel-pipeline--step-permission-one context next fail))
-     (t
-      (cl-labels
-          ((authorize (remaining current all-direct-p)
-             (if (null remaining)
-                 (funcall next
-                          (plist-put current :auto-apply-edit-p
-                                     all-direct-p))
-               (let ((path-context
-                      (plist-put
-                       (plist-put (copy-sequence current)
-                                  :permission-path (car remaining))
-                       :auto-apply-edit-p nil)))
-                 (mevedel-pipeline--step-permission-one
-                  path-context
-                  (lambda (updated)
-                    (authorize
-                     (cdr remaining) updated
-                     (and all-direct-p
-                          (plist-get updated :auto-apply-edit-p))))
-                  fail)))))
-        (authorize paths context t))))))
-
-(cl-defun mevedel-pipeline--dispatch-permission-outcome
-    (outcome context next fail
-             &key tool-name path session workspace workspace-root allowed-roots
-             decision permission-context)
-  "Translate permission OUTCOME for CONTEXT into NEXT or FAIL.
-
-OUTCOME is the union of (a) results emitted by a permission slot via
-`cont' (`allow', `deny', `(deny . REASON)', `(feedback . TEXT)',
-`aborted', `ask') and (b) results emitted by the generic async prompt
-overlay after an `ask' is routed through it (`allow-once',
-`allow-session', `always-allow', `deny-once', `deny-session',
-`aborted').
-
-`ask' routes through the standard prompt path and recurses with the
-user’s UI choice.  Rule-scope outcomes (`allow-session' etc.) are
-pre-collapsed via `mevedel-permission--apply-prompt-result' so that
-session / persistent rules land with the correct scope before the
-translator fires NEXT / FAIL.
-
-TOOL-NAME, PATH, SESSION, WORKSPACE, WORKSPACE-ROOT, ALLOWED-ROOTS,
-DECISION, and PERMISSION-CONTEXT describe the permission context."
-  (when (and decision (not (eq outcome 'ask)))
-    (mevedel-pipeline--log-permission-decision context decision))
-  (pcase outcome
-    ;; `ask' arrives from the decision chain itself (steps 3/7/8/9) or
-    ;; from a tool slot that defers to the generic prompt.  Drive the
-    ;; prompt with workspace-boundary rule shaping identical to the
-    ;; sync pipeline's.
-    ('ask
-     (let* ((args (plist-get context :args))
-            (tool (plist-get context :tool))
-            (permission-context
-             (or permission-context
-                 (mevedel-permission--invocation-context
-                  :tool tool
-                  :args args
-                  :session session
-                  :workspace workspace
-                  :request (plist-get context :request)
-                  :invocation (plist-get context :invocation)
-                  :buffer (plist-get context :buffer)
-                  :path path
-                  :workspace-root workspace-root
-                  :allowed-roots allowed-roots)))
-            (rule-tool (plist-get permission-context :rule-tool))
-            (rule-key (plist-get permission-context :rule-key))
-            (rule-value (plist-get permission-context :rule-value))
-            (decision-metadata decision)
-            (resource-decision-p
-             (memq (plist-get decision-metadata :via)
-                   '(protected-path workspace-boundary)))
-            (resource-access
-             (and resource-decision-p
-                  (plist-get permission-context :resource-access))))
-       (mevedel-pipeline--request-permission
-        context
-        (list :kind 'generic
-              :tool-name tool-name
-              :args args
-              :mutation-p (not (mevedel-tool-read-only-p tool))
-              :specifier-key rule-key
-              :specifier-value rule-value
-              :protected-path
-              (eq (plist-get decision-metadata :via) 'protected-path)
-              :resource-access resource-access
-              :include-always
-              (plist-get permission-context :include-always)
-              :workspace workspace
-              :origin (mevedel-pipeline--permission-origin context))
-        session
-        (lambda (prompt-context prompt-outcome)
-          (condition-case err
-              (let ((collapsed
-                     (pcase prompt-outcome
-                       ((or 'allow-once 'allow-session 'always-allow
-                            'deny-once 'deny-session)
-                        (mevedel-permission--apply-prompt-result
-                         prompt-outcome rule-tool session workspace
-                         (and (eq rule-key :path) rule-value)
-                         :spec-key rule-key
-                         :spec-value rule-value
-                         :resource-access resource-access))
-                       ((or 'allow 'deny 'aborted) prompt-outcome)
-                       (other other))))
-                (mevedel-pipeline--dispatch-permission-outcome
-                 collapsed prompt-context next fail
-                 :tool-name tool-name :path path :session session
-                 :workspace workspace :workspace-root workspace-root
-                 :allowed-roots allowed-roots
-                 :permission-context permission-context))
-            (error
-             (funcall fail (error-message-string err)))))
-        decision-metadata
-        (and (eq 'allow (plist-get context :hook-permission-decision))
-             'allow))))
-    ((or 'allow 'approve 'implement 'implement-clear)
-     (funcall next context))
-    ('deny
-     (mevedel-pipeline--fail-permission-denied
-      context fail "Permission denied" nil
-      (mevedel-pipeline--permission-denial-provenance context decision)))
-    (`(deny . ,reason)
-     (mevedel-pipeline--fail-permission-denied
-      context fail (format "Permission denied: %s" reason) reason
-      (mevedel-pipeline--permission-denial-provenance context decision)))
-    (`(feedback . ,text)
-     (mevedel-pipeline--fail-permission-denied
-      context fail (format "Permission denied: %s" text) text
-      (mevedel-pipeline--permission-denial-provenance context decision)))
-    ('aborted
-     (funcall fail "aborted"))
-    ;; Defense in depth: an unrecognized outcome (slot bug, primitive
-    ;; returning an unexpected symbol) fails loudly rather than
-    ;; stranding the FSM with neither `next' nor `fail' fired.
-    (_ (funcall fail (format "Unexpected permission outcome: %S"
-                             outcome)))))
-
 (defun mevedel-pipeline--step-snapshot (context next _fail)
   "Snapshot files before modification.
 
@@ -1575,9 +998,10 @@ snapshots it.  Only included for tools declaring snapshots.  CONTEXT must
 contain `:tool' and `:args'.  NEXT is called on success.  FAIL is
 unused -- a snapshot failure is best-effort and should never fail the
   pipeline."
+  (require 'mevedel-tool-permission)
   (let ((tool (plist-get context :tool))
         (args (plist-get context :args)))
-    (dolist (path (mevedel-pipeline--tool-paths tool args context))
+    (dolist (path (mevedel-tool-permission-paths tool args context))
       (mevedel--snapshot-file-if-needed path))
     (funcall next context)))
 
@@ -1773,27 +1197,6 @@ buffer."
       (funcall next context))))
 
 
-(defconst mevedel-pipeline--render-data-open "<!-- mevedel-render-data -->"
-  "Opening delimiter marking a hidden render-data side-channel block.
-Emitted inside tool results so the view buffer interpreter can extract
-the serialized render-data without re-running the tool.")
-
-(defconst mevedel-pipeline--render-data-close "<!-- /mevedel-render-data -->"
-  "Closing delimiter marking the end of a render-data side-channel block.")
-
-(defun mevedel-pipeline--plain-render-data (value)
-  "Return VALUE with text properties stripped from all contained strings."
-  (cond
-   ((stringp value)
-    (mevedel--normalize-message-text (substring-no-properties value)))
-   ((consp value)
-    (cons (mevedel-pipeline--plain-render-data (car value))
-          (mevedel-pipeline--plain-render-data (cdr value))))
-   ((vectorp value)
-    (apply #'vector
-           (mapcar #'mevedel-pipeline--plain-render-data value)))
-   (t value)))
-
 (defconst mevedel-pipeline--render-transform-max-data-size 8192
   "Maximum printed size of render-data produced by `:render-transform'.
 
@@ -1802,10 +1205,6 @@ handlers intentionally carry larger structured payloads, such as edit
 diffs.  Transform functions are for bounded metadata derived from a
 string result, not for copying the result body into a hidden side
 channel.")
-
-(defun mevedel-pipeline--render-transform-data-size (data)
-  "Return the printed size of DATA after stripping text properties."
-  (length (prin1-to-string (mevedel-pipeline--plain-render-data data))))
 
 (defun mevedel-pipeline--step-render-transform (context next _fail)
   "Run CONTEXT's TOOL `:render-transform', then call NEXT.
@@ -1832,8 +1231,10 @@ FAIL is unused; transform failures warn and leave CONTEXT unchanged."
             (cond
              ((null render-data)
               (funcall next context))
-             ((> (mevedel-pipeline--render-transform-data-size render-data)
-                 mevedel-pipeline--render-transform-max-data-size)
+             ((progn
+                (require 'mevedel-tool-render-data)
+                (> (mevedel-tool-render-data-size render-data)
+                   mevedel-pipeline--render-transform-max-data-size))
               (display-warning
                'mevedel
                (format "Render transform for %s returned oversized metadata"
@@ -1851,604 +1252,6 @@ FAIL is unused; transform failures warn and leave CONTEXT unchanged."
           :warning)
          (funcall next context))))))
 
-(defun mevedel-pipeline--format-render-data-block
-    (render-data &optional tool-use-id)
-  "Return the serialized side-channel block for RENDER-DATA.
-When TOOL-USE-ID is non-nil, bind the block to that tool call.
-The returned string is propertized `invisible' = t so the data buffer
-hides it as a best-effort display courtesy.
-
-The block survives verbatim into the chat buffer (which feeds the view
-parser and persistence).  An `:around' advice on
-`gptel--parse-tool-results' -- installed by
-`mevedel-pipeline-install-tool-result-scrubber' -- strips the block at
-the single chokepoint where tool result strings become the LLM-bound
-API message, without touching the callback that drives chat-buffer
-display."
-  (let ((data (mevedel-pipeline--plain-render-data render-data)))
-    (setq data (copy-sequence data))
-    (if tool-use-id
-        (setq data
-              (plist-put data :mevedel-tool-use-id tool-use-id))
-      (cl-remf data :mevedel-tool-use-id))
-    (propertize
-     (concat "\n" mevedel-pipeline--render-data-open "\n"
-             (let ((print-level nil)
-                   (print-length nil)
-                   (print-circle t))
-               (prin1-to-string data))
-             "\n" mevedel-pipeline--render-data-close "\n")
-     'invisible t
-     'gptel 'mevedel-render-data
-     'mevedel-render-data t)))
-
-(defun mevedel-pipeline--read-render-data-payload (payload)
-  "Read one render-data plist from PAYLOAD or return a failure sentinel."
-  (condition-case nil
-      (let* ((read-eval nil)
-             (parsed (read-from-string payload))
-             (data (car parsed))
-             (end (cdr parsed))
-             (rest (substring payload end)))
-        (if (and (consp data)
-                 (string-blank-p rest)
-                 (proper-list-p data)
-                 (zerop (% (length data) 2))
-                 (cl-loop for tail on data by #'cddr
-                          always (keywordp (car tail))))
-            data
-          :mevedel-parse-failed))
-    (error :mevedel-parse-failed)))
-
-(defun mevedel-pipeline--render-data-blocks (string)
-  "Return valid render-data blocks found in STRING, oldest first.
-Each entry is `(BEGIN END DATA)'.  Invalid marker-looking text is skipped.
-BEGIN and END include the formatter's optional surrounding newlines."
-  (when (stringp string)
-    (let ((search-start 0)
-          blocks open)
-      (while (setq open
-                   (string-search mevedel-pipeline--render-data-open
-                                  string search-start))
-        (let* ((payload-start
-                (+ open (length mevedel-pipeline--render-data-open)))
-               (close
-                (string-search mevedel-pipeline--render-data-close
-                               string payload-start)))
-          (if (not close)
-              (setq search-start payload-start)
-            (let* ((payload
-                    (string-trim
-                     (substring string payload-start close)))
-                   (data
-                    (mevedel-pipeline--read-render-data-payload payload))
-                   (next-open
-                    (string-search mevedel-pipeline--render-data-open
-                                   string payload-start))
-                   (close-end
-                    (+ close (length mevedel-pipeline--render-data-close))))
-              (cond
-               ((not (eq data :mevedel-parse-failed))
-                (let ((begin
-                       (if (and (> open 0)
-                                (eq (aref string (1- open)) ?\n))
-                           (1- open)
-                         open))
-                      (end
-                       (if (and (< close-end (length string))
-                                (eq (aref string close-end) ?\n))
-                           (1+ close-end)
-                         close-end)))
-                  (push (list begin end data) blocks))
-                (setq search-start close-end))
-               ((and next-open (< next-open close))
-                (setq search-start next-open))
-               (t
-                (setq search-start close-end)))))))
-      (nreverse blocks))))
-
-(defun mevedel-pipeline--render-data-trusted-range-p
-    (start end &optional object)
-  "Return non-nil when START..END is trusted render data in OBJECT.
-OBJECT is a string or buffer and defaults to the current buffer."
-  (let ((source (or object (current-buffer))))
-    (while (and (< start end)
-                (memq (if (stringp source)
-                          (aref source (1- end))
-                        (with-current-buffer source
-                          (char-after (1- end))))
-                      '(?\s ?\t ?\r ?\n)))
-      (setq end (1- end)))
-    (and (< start end)
-         (or
-          (and (eq t (get-text-property start 'mevedel-render-data source))
-               (= end (next-single-property-change
-                       start 'mevedel-render-data source end)))
-          (and (eq 'mevedel-render-data
-                   (get-text-property start 'gptel source))
-               (= end (next-single-property-change
-                       start 'gptel source end)))))))
-
-(defun mevedel-pipeline--render-data-owner-p (data expected-tool-use-id)
-  "Return non-nil when DATA belongs to EXPECTED-TOOL-USE-ID.
-Nil EXPECTED-TOOL-USE-ID selects only unbound render data."
-  (if expected-tool-use-id
-      (and (plist-member data :mevedel-tool-use-id)
-           (equal expected-tool-use-id
-                  (plist-get data :mevedel-tool-use-id)))
-    (not (plist-member data :mevedel-tool-use-id))))
-
-(defun mevedel-pipeline--render-data-block-authorized-p
-    (block string expected-tool-use-id)
-  "Return non-nil when BLOCK in STRING has the expected authority."
-  (and (mevedel-pipeline--render-data-owner-p
-        (caddr block) expected-tool-use-id)
-       (or expected-tool-use-id
-           (mevedel-pipeline--render-data-trusted-range-p
-            (car block) (cadr block) string))))
-
-(defun mevedel-pipeline--render-data-without-owner (data)
-  "Return a copy of DATA without its internal owner field."
-  (let ((plain (copy-sequence data)))
-    (cl-remf plain :mevedel-tool-use-id)
-    plain))
-
-(defun mevedel-pipeline--strip-render-data-blocks
-    (string &optional expected-tool-use-id)
-  "Remove render-data owned by EXPECTED-TOOL-USE-ID from STRING.
-Nil EXPECTED-TOOL-USE-ID removes only unbound blocks."
-  (if-let* ((blocks
-             (cl-remove-if-not
-              (lambda (block)
-                (mevedel-pipeline--render-data-block-authorized-p
-                 block string expected-tool-use-id))
-              (mevedel-pipeline--render-data-blocks string))))
-      (let ((cursor 0)
-            parts)
-        (dolist (block blocks)
-          (push (substring string cursor (car block)) parts)
-          (setq cursor (cadr block)))
-        (push (substring string cursor) parts)
-        (apply #'concat (nreverse parts)))
-    string))
-
-(defun mevedel-pipeline--strip-side-channel-blocks (string)
-  "Return STRING with mevedel side-channel blocks removed."
-  (require 'mevedel-tool-media)
-  (mevedel-tool-media-strip-blocks
-   (mevedel-pipeline--strip-non-media-side-channel-blocks string)))
-
-(defun mevedel-pipeline--strip-non-media-side-channel-blocks
-    (string &optional expected-tool-use-id)
-  "Remove trusted non-media side channels from STRING.
-Render data must belong to EXPECTED-TOOL-USE-ID; nil selects unbound data."
-  (mevedel--strip-hook-audit-blocks
-   (mevedel-pipeline--strip-render-data-blocks
-    string expected-tool-use-id)))
-
-(defun mevedel-pipeline--find-render-data-block-by-agent-id (agent-id)
-  "Return bounds of the first render-data block for AGENT-ID.
-
-The return value is (BEG . END), or nil when no block has a matching
-`:agent-id'.
-Searches the current buffer from `point-min'.  Used by the
-background handle patch path to locate the block whose hidden
-plist should be updated when a sub-agent's status changes."
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (let (found)
-        (while (and (not found)
-                    (search-forward mevedel-pipeline--render-data-open nil t))
-          (let* ((open-beg (match-beginning 0))
-                 (block-beg (if (and (> open-beg (point-min))
-                                     (eq (char-before open-beg) ?\n))
-                                (1- open-beg)
-                              open-beg)))
-            (if (not (search-forward mevedel-pipeline--render-data-close nil t))
-                (goto-char (point-max))
-              (let* ((close-end (match-end 0))
-                     (block-end (if (and (< close-end (point-max))
-                                         (eq (char-after close-end) ?\n))
-                                    (1+ close-end)
-                                  close-end))
-                     (raw (buffer-substring-no-properties block-beg block-end))
-                     (block (car (mevedel-pipeline--render-data-blocks raw)))
-                     (plist (and block (caddr block))))
-                (when (and (eq (plist-get plist :kind)
-                               'collaboration-event)
-                           (eq (plist-get plist :event) 'started)
-                           (if (plist-member plist :mevedel-tool-use-id)
-                               (mevedel-pipeline--render-data-call-range-p
-                                plist block-beg block-end)
-                             (mevedel-pipeline--render-data-trusted-range-p
-                              block-beg block-end))
-                           (equal (plist-get plist :agent-id) agent-id))
-                  (setq found (cons block-beg block-end)))))))
-        found))))
-
-(defun mevedel-pipeline--patch-render-data-block (beg end new-plist)
-  "Replace the render-data block between BEG and END with NEW-PLIST.
-Preserves the surrounding text and the hidden-block delimiters.
-The new block is formatted via
-`mevedel-pipeline--format-render-data-block' so it stays
-round-trippable through `mevedel-pipeline-extract-render-data'.
-
-Inherits the `gptel' text property of the surrounding text onto the
-inserted block.  Without this inheritance, the block becomes a hole in
-the gptel-property run that delimits the tool segment; the view
-buffer's `extract-segments' then splits the tool segment in two and
-the LLM-invisible block leaks into the visible body of the tool
-result."
-  (save-excursion
-    (save-restriction
-      (widen)
-      (let ((surrounding-gptel
-             (or (and (> beg (point-min))
-                      (get-text-property (1- beg) 'gptel))
-                 (and (< end (point-max))
-                      (get-text-property end 'gptel))))
-            (tool-use-id
-             (when-let* ((block
-                          (car
-                           (mevedel-pipeline--render-data-blocks
-                            (buffer-substring-no-properties beg end)))))
-               (plist-get (caddr block) :mevedel-tool-use-id))))
-        (goto-char beg)
-        (delete-region beg end)
-        (let ((block
-               (mevedel-pipeline--format-render-data-block
-                new-plist tool-use-id)))
-          (when surrounding-gptel
-            (setq block (propertize block 'gptel surrounding-gptel)))
-          (insert block))))))
-
-(defun mevedel-pipeline--tool-segment-bounds (tool-use-id)
-  "Return current-buffer bounds carrying TOOL-USE-ID, or nil."
-  (let ((target (cons 'tool tool-use-id))
-        (position (point-min))
-        bounds)
-    (while (and (< position (point-max)) (not bounds))
-      (let* ((value (get-text-property position 'gptel))
-             (next (or (next-single-property-change
-                        position 'gptel nil (point-max))
-                       (point-max))))
-        (when (equal value target)
-          (let ((end next))
-            (while (and (< end (point-max))
-                        (equal (get-text-property end 'gptel) target))
-              (setq end (or (next-single-property-change
-                             end 'gptel nil (point-max))
-                            (point-max))))
-            (setq bounds (cons position end))))
-        (setq position next)))
-    bounds))
-
-(defun mevedel-pipeline--render-data-call-range-p (data beg end)
-  "Return non-nil when DATA at BEG..END belongs to its tool segment."
-  (when-let* ((tool-use-id (plist-get data :mevedel-tool-use-id))
-              ((stringp tool-use-id)))
-    (let ((target (cons 'tool tool-use-id))
-          (positions (list beg (and (> beg (point-min)) (1- beg))))
-          authorized)
-      (while (and positions (not authorized))
-        (when-let* ((position (pop positions))
-                    ((< position (point-max)))
-                    ((equal target (get-text-property position 'gptel))))
-          (let ((next (or (next-single-property-change
-                           position 'gptel nil (point-max))
-                          (point-max))))
-            (setq authorized
-                  (or (and (= position beg) (<= end next))
-                      (and (memq next (list beg (1+ beg)))
-                           (mevedel-pipeline--render-data-trusted-range-p
-                            (max beg next) end)))))))
-      authorized)))
-
-(defun mevedel-pipeline--render-data-block-bounds
-    (beg end &optional expected-tool-use-id)
-  "Return matching render-data bounds inside BEG..END, or nil.
-The block must belong to EXPECTED-TOOL-USE-ID; nil selects unbound data."
-  (when-let* ((block
-               (cl-find-if
-                (lambda (candidate)
-                  (mevedel-pipeline--render-data-owner-p
-                   (caddr candidate) expected-tool-use-id))
-                (mevedel-pipeline--render-data-blocks
-                 (buffer-substring-no-properties beg end)))))
-    (cons (+ beg (car block)) (+ beg (cadr block)))))
-
-(defun mevedel-pipeline--next-tool-segment-start (position tool-use-id)
-  "Return the first different tool segment after POSITION.
-TOOL-USE-ID identifies property runs that still belong to the current tool."
-  (let ((cursor position)
-        found)
-    (while (and (< cursor (point-max)) (not found))
-      (let ((property (get-text-property cursor 'gptel)))
-        (when (and (consp property)
-                   (eq (car property) 'tool)
-                   (not (equal (cdr property) tool-use-id)))
-          (setq found cursor)))
-      (unless found
-        (setq cursor
-              (or (next-single-property-change
-                   cursor 'gptel nil (point-max))
-                  (point-max)))))
-    found))
-
-(defun mevedel-pipeline--plist-merge (base updates)
-  "Return a copy of BASE with each key in UPDATES replaced."
-  (let ((merged (copy-tree base)))
-    (while updates
-      (setq merged (plist-put merged (pop updates) (pop updates))))
-    merged))
-
-(defun mevedel-pipeline-update-tool-render-data
-    (buffer tool-use-id updates)
-  "Merge UPDATES into TOOL-USE-ID's hidden render data in BUFFER.
-
-Return non-nil when the authoritative tool segment was found and updated.
-The side channel remains inside the segment's `gptel' property run, so it is
-persisted with the transcript while the provider scrubber keeps it model-hidden."
-  (when (and (buffer-live-p buffer)
-             (stringp tool-use-id)
-             (listp updates))
-    (with-current-buffer buffer
-      (save-restriction
-        (widen)
-        (when-let* ((segment
-                     (mevedel-pipeline--tool-segment-bounds tool-use-id)))
-          (let* ((beg (car segment))
-                 (end (cdr segment))
-                 (search-end
-                  (or (mevedel-pipeline--next-tool-segment-start
-                       end tool-use-id)
-                      (point-max)))
-                 (block
-                  (mevedel-pipeline--render-data-block-bounds
-                   beg search-end tool-use-id))
-                 (existing
-                  (and block
-                       (cdr
-                        (mevedel-pipeline-extract-render-data
-                         (buffer-substring-no-properties
-                          (car block) (cdr block))
-                         nil tool-use-id))))
-                 (render-data
-                  (mevedel-pipeline--plist-merge existing updates))
-                 (inhibit-modification-hooks t)
-                 (inhibit-read-only t))
-            (if block
-                (mevedel-pipeline--patch-render-data-block
-                 (car block) (cdr block) render-data)
-              (goto-char end)
-              (insert
-               (propertize
-                (mevedel-pipeline--format-render-data-block
-                 render-data tool-use-id)
-                'gptel (get-text-property beg 'gptel))))
-            t))))))
-
-(defun mevedel-pipeline-tool-render-data (buffer tool-use-id)
-  "Return TOOL-USE-ID's hidden render data in BUFFER, or nil."
-  (when (and (buffer-live-p buffer) (stringp tool-use-id))
-    (with-current-buffer buffer
-      (save-restriction
-        (widen)
-        (when-let* ((segment
-                     (mevedel-pipeline--tool-segment-bounds tool-use-id))
-                    (block
-                     (mevedel-pipeline--render-data-block-bounds
-                      (car segment) (cdr segment) tool-use-id)))
-          (cdr
-           (mevedel-pipeline-extract-render-data
-            (buffer-substring-no-properties (car block) (cdr block))
-            nil tool-use-id)))))))
-
-(defun mevedel-pipeline-reconcile-lost-executions
-    (buffer &optional successor-execution-ids)
-  "Mark stale running Bash render records in BUFFER as lost.
-
-This repairs transcript state after resume or fork.  It never attempts to
-reattach an operating-system process.  Records named by
-SUCCESSOR-EXECUTION-IDS are marked archived because a newer segment owns their
-terminal truth.  Return the number of repaired records."
-  (let (records archived-records)
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (save-restriction
-          (widen)
-          (save-excursion
-            (goto-char (point-min))
-            (while (search-forward mevedel-pipeline--render-data-open nil t)
-              (let* ((open-begin (match-beginning 0))
-                     (begin
-                      (if (and (> open-begin (point-min))
-                               (eq (char-before open-begin) ?\n))
-                          (1- open-begin)
-                        open-begin)))
-                (when (search-forward mevedel-pipeline--render-data-close nil t)
-                  (let* ((close-end (match-end 0))
-                         (end
-                          (if (and (< close-end (point-max))
-                                   (eq (char-after close-end) ?\n))
-                              (1+ close-end)
-                            close-end))
-                         (block
-                          (car
-                           (mevedel-pipeline--render-data-blocks
-                            (buffer-substring-no-properties begin end))))
-                         (stored (and block (caddr block)))
-                         (data
-                          (and (mevedel-pipeline--render-data-call-range-p
-                                stored begin end)
-                               (mevedel-pipeline--render-data-without-owner
-                                stored))))
-                    (when (and data
-                               (or (plist-get data :execution-id)
-                                   (plist-get data :live-execution-p))
-                               (or (eq (plist-get data :state) 'running)
-                                   (plist-get data :live-execution-p)))
-                      (push (list begin end data) records)))))))
-          (dolist (record records)
-            (pcase-let ((`(,begin ,end ,data) record))
-              (mevedel-pipeline--patch-render-data-block
-               begin end
-               (mevedel-pipeline--plist-merge
-                data
-                (if (member (plist-get data :execution-id)
-                            successor-execution-ids)
-                    '(:state archived :status nil :live-execution-p nil
-                      :termination compacted :outcome nil)
-                  '(:state lost :status error :live-execution-p nil
-                    :termination lost :outcome failure))))))
-          (require 'mevedel-transcript-audit)
-          (setq archived-records
-                (cl-remove-if-not
-                 (lambda (span)
-                   (let* ((record (plist-get span :record))
-                          (data (plist-get record :render-data)))
-                     (and (or (eq (plist-get data :state) 'running)
-                              (plist-get data :live-execution-p))
-                          data)))
-                 (mevedel-transcript-audit-spans
-                  (buffer-substring (point-min) (point-max))
-                  'execution-archive)))
-          (dolist (span (reverse archived-records))
-            (let* ((record (plist-get span :record))
-                   (data (plist-get record :render-data))
-                   (successor-p
-                    (member (plist-get data :execution-id)
-                            successor-execution-ids))
-                   (begin (+ (point-min) (plist-get span :start)))
-                   (end (+ (point-min) (plist-get span :end))))
-              (setq record
-                    (plist-put
-                     record :type 'execution-completion))
-              (setq record
-                    (plist-put
-                     record :render-data
-                     (mevedel-pipeline--plist-merge
-                      data
-                      (if successor-p
-                          '(:state archived :status nil
-                            :live-execution-p nil
-                            :termination compacted :outcome nil)
-                        '(:state lost :status error
-                          :live-execution-p nil
-                          :termination lost :outcome failure)))))
-              (delete-region begin end)
-              (goto-char begin)
-              (insert (mevedel--format-hook-audit-record record))))))
-    (+ (length records) (length archived-records)))))
-
-(defun mevedel--parse-tool-results-scrub-advice (orig-fun backend tool-use)
-  "Strip render-data blocks from TOOL-USE results for BACKEND via ORIG-FUN.
-
-Wraps `gptel--parse-tool-results' (a `cl-defgeneric' with per-backend
-methods in gptel-openai.el, gptel-anthropic.el, ...) which is the sole
-point at which `:result' strings are copied into the API-shaped
-tool_result message.  Both request paths funnel through it:
-
-- Tool-follow-up requests (`gptel--handle-tool-result' ->
-  `gptel--parse-tool-results' -> `gptel--inject-prompt').
-- User-initiated requests that re-parse the chat buffer
-  (`gptel--parse-buffer' calls `gptel--parse-tool-results' on each
-  stored tool-call region).
-
-The advice temporarily substitutes cleaned strings into the `:result'
-slot of each tool-call plist, calls ORIG-FUN so the backend method
-builds its message from the scrubbed values, then restores the original
-`:result' values.  Everything downstream that consumes `:tool-use' or
-`:tool-result' for display (the gptel callback feeding the chat buffer,
-the view parser, persistence) keeps seeing the full block."
-  (require 'mevedel-tool-media)
-  (let ((saved nil))
-    (unwind-protect
-        (let* ((media-by-index nil)
-               (session (bound-and-true-p mevedel--session))
-              (tool-results-dir
-               (when-let ((save-path (and session
-                                          (mevedel-session-save-path session))))
-                 (file-name-concat save-path "tool-results"))))
-          (dolist (tc tool-use)
-            (let* ((orig (plist-get tc :result))
-                   (clean-tc (copy-sequence tc))
-                   (prepared
-                    (progn
-                      (when (stringp orig)
-                        (plist-put
-                         clean-tc :result
-                         (mevedel-pipeline--strip-non-media-side-channel-blocks
-                          orig (plist-get tc :id))))
-                      (mevedel-tool-media-prepare-tool-result
-                       backend clean-tc tool-results-dir session)))
-                   (llm-result (car prepared))
-                   (native-media (cdr prepared)))
-              (push native-media media-by-index)
-              (when (and llm-result (not (equal orig llm-result)))
-                (push (cons tc orig) saved)
-                (plist-put tc :result llm-result))))
-          (mevedel-tool-media-add-to-provider-result
-           backend
-           (funcall orig-fun backend tool-use)
-           (nreverse media-by-index)))
-      (dolist (entry saved)
-        (plist-put (car entry) :result (cdr entry))))))
-
-(defun mevedel-pipeline-install-tool-result-scrubber ()
-  "Install gptel interop advice for tool-result continuation paths."
-  (require 'mevedel-tool-media)
-  (advice-add 'gptel--parse-tool-results :around
-              #'mevedel--parse-tool-results-scrub-advice))
-
-(defun mevedel-pipeline-uninstall-tool-result-scrubber ()
-  "Remove gptel interop advice for tool-result continuation paths."
-  (advice-remove 'gptel--parse-tool-results
-                 #'mevedel--parse-tool-results-scrub-advice))
-
-(defun mevedel-pipeline-extract-render-data
-    (result-string &optional session expected-tool-use-id
-                   allow-payload-tool-use-id)
-  "Return (VISIBLE-PART . RENDER-DATA) parsed from RESULT-STRING.
-VISIBLE-PART is the tool result with the side-channel block stripped.
-RENDER-DATA is the plist deserialized from inside the block, or
-nil when no valid block is present.  Unparseable payloads are treated as
-absent: the original string is returned verbatim in VISIBLE-PART.
-SESSION, EXPECTED-TOOL-USE-ID, and ALLOW-PAYLOAD-TOOL-USE-ID
-control trusted side-channel lookup."
-  (require 'mevedel-tool-media)
-  (let ((tool-results-dir
-         (when-let* ((save-path (and session
-                                     (mevedel-session-save-path session))))
-           (file-name-concat save-path "tool-results"))))
-    (if (not (stringp result-string))
-        (cons result-string nil)
-      (let* ((blocks
-              (cl-remove-if-not
-               (lambda (block)
-                 (mevedel-pipeline--render-data-block-authorized-p
-                  block result-string expected-tool-use-id))
-               (mevedel-pipeline--render-data-blocks result-string)))
-             (block (car (last blocks)))
-             (visible
-              (if block
-                  (concat (substring result-string 0 (car block))
-                          (substring result-string (cadr block)))
-                result-string))
-             (media-visible
-              (car (mevedel-tool-media-extract
-                    (mevedel-tool-media-strip-blocks visible)
-                    tool-results-dir
-                    expected-tool-use-id
-                    allow-payload-tool-use-id
-                    session))))
-        (cons (if block (string-trim-right media-visible) media-visible)
-              (and block
-                   (mevedel-pipeline--render-data-without-owner
-                    (caddr block))))))))
-
 (defun mevedel-pipeline--step-attach-render-data (context next _fail)
   "Embed render-data from CONTEXT, then call NEXT.
 
@@ -2458,7 +1261,7 @@ the serialized data.  Explicit status is stored under `:status' for renderer
 dispatch.  The block is propertized `invisible' for the data-buffer display
 and recognised by the view interpreter via its delimiters.  An `:around'
 advice on `gptel--parse-tool-results' strips the block on the LLM path only;
-see `mevedel-pipeline--format-render-data-block'.
+see `mevedel-tool-render-data-format'.
 
 FAIL is unused; render-data attachment never fails.
 
@@ -2483,11 +1286,13 @@ When neither was produced, passes CONTEXT through unchanged."
               (plist-put (copy-sequence render-data) :status status)
             render-data)))
     (if (and render-data (stringp result))
-        (funcall next
-                 (plist-put context :result
-                            (concat result
-                                    (mevedel-pipeline--format-render-data-block
-                                     render-data tool-use-id))))
+        (progn
+          (require 'mevedel-tool-render-data)
+          (funcall next
+                   (plist-put context :result
+                              (concat result
+                                      (mevedel-tool-render-data-format
+                                       render-data tool-use-id)))))
       (funcall next context))))
 
 (defun mevedel-pipeline--step-attach-media-data (context next _fail)
@@ -2573,6 +1378,7 @@ possibly-updated context."
 Hooks receive both `:raw-result' and the final `:result'.  Only an
 explicit `:updated-result' changes the model-visible tool result."
   (require 'mevedel-tool-media)
+  (require 'mevedel-tool-render-data)
   (let* ((media (mevedel-tool-media-normalize-items
                  (plist-get context :media)))
          (context (plist-put context :media media))
@@ -2580,12 +1386,12 @@ explicit `:updated-result' changes the model-visible tool result."
          (result (plist-get context :result))
          (model-result
           (mevedel-tool-media-result-for-hooks
-           (mevedel-pipeline--strip-non-media-side-channel-blocks
+           (mevedel-tool-render-data-strip-non-media
             result tool-use-id)
            media))
          (raw-result
           (mevedel-tool-media-result-for-hooks
-           (mevedel-pipeline--strip-non-media-side-channel-blocks
+           (mevedel-tool-render-data-strip-non-media
             (plist-get context :raw-result) tool-use-id)
            media))
          (error-p (eq 'error (mevedel-pipeline--context-status context)))
@@ -2594,7 +1400,7 @@ explicit `:updated-result' changes the model-visible tool result."
                   'PostToolUse))
          (session (plist-get context :session))
          (workspace (plist-get context :workspace)))
-    (mevedel-pipeline--run-hook-event
+    (mevedel-pipeline-run-hook-event
      event
      (mevedel-hooks-tool-event-plist
       event context
@@ -2603,17 +1409,17 @@ explicit `:updated-result' changes the model-visible tool result."
       :tool-response model-result
       :error (and error-p result))
      (lambda (decision)
-       (let ((context (mevedel-pipeline--record-hook-context
+       (let ((context (mevedel-pipeline-record-hook-context
                        context decision event)))
          (setq context
-               (mevedel-pipeline--record-hook-audit
+               (mevedel-pipeline-record-hook-audit
                 context
-                (mevedel-pipeline--hook-context-audit-records
+                (mevedel-pipeline-hook-context-audit-records
                  decision event)))
          (cond
           ((plist-member decision :updated-result)
            (setq context
-                 (mevedel-pipeline--record-hook-audit
+                 (mevedel-pipeline-record-hook-audit
                   context
                   (mevedel-pipeline--hook-result-rewrite-audit-record
                    event model-result
@@ -2623,7 +1429,7 @@ explicit `:updated-result' changes the model-visible tool result."
                     (plist-put
                      (plist-put
                       context :result
-                      (mevedel-pipeline--append-hook-side-channel
+                      (mevedel-pipeline-append-hook-side-channel
                        (plist-get decision :updated-result)
                        context))
                      :media nil)))
@@ -2631,7 +1437,7 @@ explicit `:updated-result' changes the model-visible tool result."
            (funcall next
                     (plist-put
                      context :result
-                     (mevedel-pipeline--append-hook-side-channel
+                     (mevedel-pipeline-append-hook-side-channel
                       result context)))))))
      context session workspace
      (plist-get context :request)
@@ -2692,6 +1498,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
                             neither render-data nor explicit status
   17. attach-media-data  -- always included; no-op when handler returned
                              no media"
+  (require 'mevedel-tool-permission)
   (let ((steps nil))
     (push #'mevedel-pipeline--step-attach-media-data steps)
     (push #'mevedel-pipeline--step-attach-render-data steps)
@@ -2708,7 +1515,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
     (when (mevedel-tool-snapshot-p tool)
       (push #'mevedel-pipeline--step-snapshot steps))
     (push #'mevedel-pipeline--step-capture-coverage steps)
-    (push #'mevedel-pipeline--step-permission steps)
+    (push #'mevedel-tool-permission-step steps)
     (push #'mevedel-pipeline--step-prepare-resources steps)
     (push #'mevedel-pipeline--step-normalize-paths steps)
     (push #'mevedel-pipeline--step-pre-tool-hooks steps)

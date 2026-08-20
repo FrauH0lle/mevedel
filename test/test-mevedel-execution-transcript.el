@@ -24,6 +24,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-transcript-restore)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-workspace)
 (require 'mevedel-workspace-identity)
 
@@ -101,7 +102,7 @@
     (let ((start (point)))
       (insert
        "(:name \"Bash\" :args (:command \"true\"))\n\nrunning"
-       (mevedel-pipeline--format-render-data-block
+       (mevedel-tool-render-data-format
         '(:execution-id "exec-terminal" :state running
                         :live-execution-p t)
         "terminal-call"))
@@ -114,7 +115,7 @@
             :facts '(:execution-id "exec-terminal" :state completed
                                    :outcome success))))
     (let ((render-data
-           (mevedel-pipeline-tool-render-data
+           (mevedel-tool-render-data-for-tool
             (current-buffer) "terminal-call")))
       (should (equal "finished"
                      (plist-get render-data :execution-output)))
@@ -127,13 +128,13 @@
   (with-temp-buffer
     (insert
      (propertize
-      (mevedel-pipeline--format-render-data-block
+      (mevedel-tool-render-data-format
        '(:execution-id "exec-live" :state running :live-execution-p t)
        "live-call")
       'gptel '(tool . "live-call")))
     (insert
      (propertize
-      (mevedel-pipeline--format-render-data-block
+      (mevedel-tool-render-data-format
        '(:execution-id "exec-done" :state completed
                        :live-execution-p nil)
        "done-call")

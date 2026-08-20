@@ -26,6 +26,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-media)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair)
 (require 'mevedel-mentions)
@@ -851,7 +852,7 @@
   :doc "preserves untrusted render-data delimiter lines as transcript text"
   (let* ((literal
           (substring-no-properties
-           (mevedel-pipeline--format-render-data-block
+           (mevedel-tool-render-data-format
             '(:kind request-summary :elapsed-seconds 9))))
          (reasoning (propertize literal 'gptel 'ignore)))
     (should (equal literal
@@ -1396,7 +1397,7 @@
     (mevedel-view-test--insert-data data-buf "Use $implement\n" nil)
     (mevedel-view-test--insert-data
      data-buf
-     (mevedel-pipeline--format-render-data-block
+     (mevedel-tool-render-data-format
       '(:kind inline-skill
         :display-text "Use $implement"
         :expanded-prompt
@@ -1421,7 +1422,7 @@
     (mevedel-view-test--insert-data data-buf "First answer.\n\n" 'response)
     (mevedel-view-test--insert-data
      data-buf
-     (mevedel-pipeline--format-render-data-block
+     (mevedel-tool-render-data-format
       '(:kind request-summary :elapsed-seconds 7))
      'ignore)
     (mevedel-view-test--insert-data
@@ -1432,7 +1433,7 @@
     (mevedel-view-test--insert-data data-buf "Second answer.\n\n" 'response)
     (mevedel-view-test--insert-data
      data-buf
-     (mevedel-pipeline--format-render-data-block
+     (mevedel-tool-render-data-format
       '(:kind request-summary :elapsed-seconds 3))
      'ignore)
     (with-current-buffer view-buf
@@ -1497,7 +1498,7 @@
     (mevedel-view-test--insert-data data-buf "Assistant answer.\n" 'response)
     (mevedel-view-test--insert-data
      data-buf
-     (mevedel-pipeline--format-render-data-block
+     (mevedel-tool-render-data-format
       '(:kind inline-skill :name "handoff" :arguments ""
               :display-text "/handoff"))
      'ignore)
@@ -2252,7 +2253,7 @@
     (let ((provider-message "Processing failed."))
       (with-current-buffer data-buf
         (insert
-         (mevedel-pipeline--format-render-data-block
+         (mevedel-tool-render-data-format
           `(:kind request-summary
             :elapsed-seconds 7
             :outcome error
@@ -2303,7 +2304,7 @@
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
       (insert
-       (mevedel-pipeline--format-render-data-block
+       (mevedel-tool-render-data-format
         '(:kind request-summary
           :elapsed-seconds 1
           :outcome error
@@ -2954,7 +2955,7 @@
               (let ((start (point)))
                 (insert call "\n\n" result)
                 (when render-data
-                  (insert (mevedel-pipeline--format-render-data-block
+                  (insert (mevedel-tool-render-data-format
                            render-data id)))
                 (put-text-property start (point) 'gptel (cons 'tool id))
                 (list 'tool start (point)))))
@@ -3013,7 +3014,7 @@
                 (mapcar
                  (lambda (item) (plist-get item :summary))
                  (plist-get
-                  (mevedel-pipeline-tool-render-data data-buf "call-agent")
+                  (mevedel-tool-render-data-for-tool data-buf "call-agent")
                   :activity)))))
       (with-current-buffer view-buf
         (should (equal draft (mevedel-view--input-text)))
@@ -3407,7 +3408,7 @@
         (should
          (equal source
                 (with-current-buffer data-buf
-                  (mevedel-pipeline--tool-segment-bounds "call-custom"))))
+                  (mevedel-tool-render-data-segment-bounds "call-custom"))))
         (should
          (equal "call-custom"
                 (get-text-property
@@ -3501,7 +3502,7 @@
   :doc "generic rendering honors structured error status without failure prose"
   (with-temp-buffer
     (insert "(:name \"ThirdParty\" :args (:query \"thing\"))\nplain failure")
-    (insert (mevedel-pipeline--format-render-data-block '(:status error)))
+    (insert (mevedel-tool-render-data-format '(:status error)))
     (let ((rendering (mevedel-view--segment-rendering
                       (current-buffer) (point-min) (point-max))))
       (should (equal "ThirdParty: thing (error)"
@@ -4038,7 +4039,7 @@
     (let* ((render-data '(:kind diff :patch "--- a\n+++ b\n+hi\n"
                           :path "/tmp/f" :rel-path "f"))
            (body (concat "visible body"
-                         (mevedel-pipeline--format-render-data-block
+                         (mevedel-tool-render-data-format
                           render-data "call_1"))))
       (mevedel-view-test--insert-data
        data-buf
@@ -4054,9 +4055,9 @@
   :doc "keeps numbered render markers in Read output as literal text"
   (mevedel-view-test--with-buffers
     (let ((literal
-           (concat "158 " mevedel-pipeline--render-data-open
+           (concat "158 " mevedel-tool-render-data-open
                    "\n159 (:kind user-display :text \"literal\")"
-                   "\n160 " mevedel-pipeline--render-data-close)))
+                   "\n160 " mevedel-tool-render-data-close)))
       (mevedel-view-test--insert-data
        data-buf
        (concat "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n"
@@ -4089,7 +4090,7 @@
             (concat "#+begin_tool (RecoverEdit :file_path \"/tmp/f\")\n"
                     "(:name \"RecoverEdit\" :args (:file_path \"/tmp/f\"))\n\n"
                     "visible body"
-                    (mevedel-pipeline--format-render-data-block
+                    (mevedel-tool-render-data-format
                      render-data "call_1")
                     "#+end_tool\n")))
       (mevedel-view-test--insert-data data-buf block '(tool . "call_1"))
@@ -4341,8 +4342,8 @@
       (should (= 2 calls))))
   :doc "round-trip through serialization preserves render-data"
   (let* ((data '(:kind diff :patch "@@ @@\n+a\n" :path "/tmp/x"))
-         (serialized (mevedel-pipeline--format-render-data-block data))
-         (extract (mevedel-pipeline-extract-render-data
+         (serialized (mevedel-tool-render-data-format data))
+         (extract (mevedel-tool-render-data-extract
                    (concat "result" serialized))))
     (should (equal data (cdr extract)))))
 
@@ -4355,7 +4356,7 @@
                                     nil)
     (mevedel-view-test--insert-data
      data-buf
-     (mevedel-pipeline--format-render-data-block
+     (mevedel-tool-render-data-format
       '(:kind collaboration-event
         :event started
         :path "/root/review"
@@ -4498,7 +4499,7 @@
       (insert "</goal-context>\n\n")
       (insert "Planning instructions:\nDo nothing.\n")
       (let ((start (point)))
-        (insert (mevedel-pipeline--format-render-data-block
+        (insert (mevedel-tool-render-data-format
                  '(:kind user-display :text "Dry-run Goal")))
         (add-text-properties start (point) '(gptel ignore))))
     (let* ((segments

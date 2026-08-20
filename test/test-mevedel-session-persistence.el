@@ -809,7 +809,7 @@
          (owner-id (make-string 64 ?a))
          (inspector-id (make-string 64 ?b))
          (running
-          (mevedel-pipeline--format-render-data-block
+          (mevedel-tool-render-data-format
            '(:execution-id "foreign-stale" :state running
              :status success :live-execution-p t)))
          restored)
@@ -3671,7 +3671,7 @@
                      (should (eq mevedel--workspace workspace))
                      (push 'transcript events)))
                   ((symbol-function
-                    'mevedel-pipeline-reconcile-lost-executions)
+                    'mevedel-tool-render-data-reconcile-lost-executions)
                    (lambda (_buffer) 0))
                   ((symbol-function
                     'mevedel-session-artifacts-check-target-incarnation)

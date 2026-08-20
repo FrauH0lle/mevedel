@@ -188,12 +188,6 @@
 (declare-function mevedel-gptel-stream-bridge-uninstall
                   "mevedel-gptel-stream-bridge" ())
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-install-tool-result-scrubber
-                  "mevedel-pipeline" ())
-(declare-function mevedel-pipeline-uninstall-tool-result-scrubber
-                  "mevedel-pipeline" ())
-
 ;; `mevedel-presets'
 (declare-function mevedel--define-presets "mevedel-presets")
 (declare-function mevedel-preset-apply
@@ -227,6 +221,12 @@
 (declare-function mevedel-directive-state "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-install-provider-adapter
+                  "mevedel-tool-render-data" ())
+(declare-function mevedel-tool-render-data-uninstall-provider-adapter
+                  "mevedel-tool-render-data" ())
 
 ;; `mevedel-tool-repair'
 (declare-function mevedel-tool-repair-install-shape-adapter
@@ -737,8 +737,8 @@ always prompt for the session name."
   ;; `:result' strings become API-shaped tool_result messages) catches
   ;; both tool-follow-up and user-initiated request paths while leaving
   ;; the chat-buffer display / view parser / persistence untouched.
-  (require 'mevedel-pipeline)
-  (mevedel-pipeline-install-tool-result-scrubber)
+  (require 'mevedel-tool-render-data)
+  (mevedel-tool-render-data-install-provider-adapter)
 
   ;; Preserve empty object versus null before gptel runs tool hooks.
   (require 'mevedel-tool-repair)
@@ -806,8 +806,8 @@ always prompt for the session name."
                #'mevedel--compact-transform-auto)
 
   ;; Remove render-data scrubber advice
-  (when (featurep 'mevedel-pipeline)
-    (mevedel-pipeline-uninstall-tool-result-scrubber))
+  (when (featurep 'mevedel-tool-render-data)
+    (mevedel-tool-render-data-uninstall-provider-adapter))
 
   ;; Remove lossless tool-argument shape restoration.
   (when (featurep 'mevedel-tool-repair)

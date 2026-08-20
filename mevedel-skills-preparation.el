@@ -18,10 +18,6 @@
                   "mevedel-execution-target" (target))
 
 ;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-extract-render-data
-                  "mevedel-pipeline"
-                  (result-string &optional session expected-tool-use-id
-                                 allow-payload-tool-use-id))
 (declare-function mevedel-pipeline-run-tool
                   "mevedel-pipeline" (tool callback args))
 
@@ -47,6 +43,12 @@
 (declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get
                   "mevedel-tool-registry" (name &optional category))
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-extract
+                  "mevedel-tool-render-data"
+                  (result-string &optional session expected-tool-use-id
+                                 allow-payload-tool-use-id))
 
 ;;
 ;;; Argument tokenization
@@ -443,13 +445,14 @@ original shell-injection marker used in diagnostics."
      (t
       (condition-case err
           (progn
+            (require 'mevedel-tool-render-data)
             (unless (fboundp 'mevedel-tools--current-deferred-context)
               (require 'mevedel-tools))
             (mevedel-pipeline-run-tool
              tool
              (lambda (result)
                (pcase-let* ((`(,visible . ,render-data)
-                              (mevedel-pipeline-extract-render-data result))
+                              (mevedel-tool-render-data-extract result))
                              (status (plist-get render-data :status)))
                  (cond
                   ((and (stringp visible)

@@ -6,6 +6,31 @@
 
 (require 'cl-lib)
 
+;; `gptel'
+(declare-function gptel-make-openai "gptel")
+(defvar gptel-backend)
+(defvar gptel-model)
+
+;; `mevedel-permission-log'
+(declare-function mevedel-permission-log-path "mevedel-permission-log"
+                  (session))
+
+;; `mevedel-transcript-audit'
+(declare-function mevedel--read-hook-audit-record "mevedel-transcript-audit"
+                  (text))
+
+;; `mevedel-utilities'
+(defvar mevedel--hook-audit-close)
+(defvar mevedel--hook-audit-open)
+
+;; `tabulated-list'
+(defvar tabulated-list-entries)
+
+;; `tramp'
+(defvar tramp-histfile-override)
+(defvar tramp-local-host-regexp)
+(defvar tramp-methods)
+
 (unless (cl-every
          (lambda (directory)
            (and directory
@@ -16,17 +41,9 @@
                          "XDG_DATA_HOME" "XDG_STATE_HOME"))))
   (error "Tests require HOME and XDG roots under temporary-file-directory"))
 
-(defvar tabulated-list-entries)
-(defvar tramp-histfile-override)
-(defvar tramp-local-host-regexp)
-(defvar tramp-methods)
-
 ;; gptel ships no default backend, and a session cannot be saved without one.
 ;; Tests that create chat buffers would otherwise warn on every teardown save
 ;; instead of exercising the persistence path they mean to cover.
-(defvar gptel-backend)
-(defvar gptel-model)
-(declare-function gptel-make-openai "gptel")
 (with-eval-after-load 'gptel
   (unless (default-value 'gptel-backend)
     (setq-default gptel-backend
@@ -70,6 +87,45 @@ A muted call returns the text it would have shown, as `message' does."
                        mevedel-test--muted-message-regexps))
         text
       (apply original format args))))
+
+(defun mevedel-test--permission-log-entries (session)
+  "Read permission log entries for SESSION."
+  (let ((file (mevedel-permission-log-path session))
+        entries)
+    (when (and file (file-exists-p file))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (goto-char (point-min))
+        (condition-case nil
+            (while t
+              (push (read (current-buffer)) entries))
+          (end-of-file nil))))
+    (nreverse entries)))
+
+(defun mevedel-test--hook-audit-records (text)
+  "Return hook audit records parsed from TEXT."
+  (let (records)
+    (with-temp-buffer
+      (insert (or text ""))
+      (goto-char (point-min))
+      (while (search-forward mevedel--hook-audit-open nil t)
+        (let ((record-start (point)))
+          (when (search-forward mevedel--hook-audit-close nil t)
+            (when-let* ((record
+                         (mevedel--read-hook-audit-record
+                          (buffer-substring-no-properties
+                           record-start (match-beginning 0)))))
+              (push record records))))))
+    (nreverse records)))
+
+(defun mevedel-test--drop-sessionless-permission-warning
+    (original type message &rest args)
+  "Call ORIGINAL unless MESSAGE is the sessionless permission warning.
+TYPE and ARGS are passed through unchanged."
+  (unless (and (eq type 'mevedel)
+               (string-match-p "no session in context"
+                               (format "%s" message)))
+    (apply original type message args)))
 
 (advice-add 'message :around #'mevedel-test--mute-third-party-message)
 

@@ -26,6 +26,7 @@
 (require 'mevedel-skills-invoke)
 (require 'mevedel-structs)
 (require 'mevedel-transcript)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-workspace)
 
 (mevedel-deftest mevedel-skills-input-current-prompt-region ()
@@ -681,11 +682,11 @@ spanning lines")))
         (goto-char (point-max))
         (should (eq 'skill (mevedel-skills-input-dispatch-command)))
         (should (equal "### Hello world!"
-                       (mevedel-pipeline--strip-render-data-blocks
+                       (mevedel-tool-render-data-strip
                         (buffer-string))))
         (should (string-search "<!-- mevedel-render-data -->"
                                (buffer-string)))
-        (let ((data (cdr (mevedel-pipeline-extract-render-data
+        (let ((data (cdr (mevedel-tool-render-data-extract
                           (buffer-string)))))
           (should (equal "Hello world!"
                          (plist-get data :expanded-prompt)))))))
@@ -803,7 +804,7 @@ spanning lines")))
         (goto-char (point-max))
         (should (eq 'skill (mevedel-skills-input-dispatch-command)))
         (should (equal "Old response\n\nHello world!"
-                       (mevedel-pipeline--strip-render-data-blocks
+                       (mevedel-tool-render-data-strip
                         (buffer-string))))))))
 
 

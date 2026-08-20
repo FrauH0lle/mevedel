@@ -17,6 +17,7 @@
 (require 'mevedel-skills-prompt)
 (require 'mevedel-structs)
 (require 'mevedel-tool-repair)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-workspace)
@@ -199,7 +200,7 @@
                     "hidden hook\n"
                     "</hook-context>\n\n")
             (insert
-             (mevedel-pipeline--format-render-data-block
+             (mevedel-tool-render-data-format
               '(:secret "hidden render data")))
             (let ((response-start (point)))
               (insert "Final assistant answer.\n")
@@ -654,12 +655,12 @@
 			 (let* ((agent (mevedel-agent--create :name "explorer"))
 				(inv (mevedel-agent-invocation--create :agent agent))
 				(scans 0))
-			   (insert (mevedel-pipeline--format-render-data-block
+                           (insert (mevedel-tool-render-data-format
 				    '(:agent-id "explorer--1" :status running)))
 			   (mevedel-agent-conversation--cache-render-data-bounds
 			    inv (point-min) (point-max))
 			   (cl-letf (((symbol-function
-				       'mevedel-pipeline--find-render-data-block-by-agent-id)
+                                       'mevedel-tool-render-data-find-agent-block)
 				      (lambda (_agent-id)
 					(cl-incf scans)
 					nil)))
@@ -681,7 +682,7 @@
 				(scans 0)
 				(fallback-bounds nil)
 				(block-end nil))
-			   (insert (mevedel-pipeline--format-render-data-block
+                           (insert (mevedel-tool-render-data-format
 				    '(:agent-id "other--1" :status running)))
 			   (setq block-end (point))
 			   (insert "tail\n")
@@ -689,11 +690,11 @@
 			    inv (point-min) block-end)
 			   (goto-char (point-max))
 			   (setq fallback-bounds (cons (point) nil))
-			   (insert (mevedel-pipeline--format-render-data-block
+                           (insert (mevedel-tool-render-data-format
 				    '(:agent-id "explorer--1" :status running)))
 			   (setcdr fallback-bounds (point))
 			   (cl-letf (((symbol-function
-				       'mevedel-pipeline--find-render-data-block-by-agent-id)
+                                       'mevedel-tool-render-data-find-agent-block)
 				      (lambda (agent-id)
 					(cl-incf scans)
 					(and (equal agent-id "explorer--1")
@@ -997,7 +998,7 @@
                ((symbol-function
                  'mevedel-agent-conversation--render-data-bounds)
                 (lambda (&rest _) nil))
-               ((symbol-function 'mevedel-pipeline-update-tool-render-data)
+               ((symbol-function 'mevedel-tool-render-data-update)
                 (lambda (buffer tool-use-id updates)
                   (setq patched (list buffer tool-use-id updates))
                   t))
@@ -1093,7 +1094,7 @@
              (equal
               summary
               (plist-get
-               (mevedel-pipeline-tool-render-data parent "call_race")
+               (mevedel-tool-render-data-for-tool parent "call_race")
                :sandbox-summary)))))
       (kill-buffer parent))))
 
