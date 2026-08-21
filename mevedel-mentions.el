@@ -700,6 +700,13 @@ optional strings from the `#L<start>[-<end>]' suffix."
                        (max 1 (1+ (- end-line start-line))))
                       (start-line 1)
                       (t nil)))
+         ;; A line number below one, or an end before its start, has no
+         ;; reading.  The Read tool repairs such input silently, so
+         ;; forwarding it attaches content the label does not describe and
+         ;; the model has no way to notice.
+         (range-invalid (or (and start-line (< start-line 1))
+                            (and start-line end-line
+                                 (< end-line start-line))))
          (expanded (mevedel-resource-normalize-file-path
                     (or bound-path path)))
          (session (plist-get info :session))
@@ -752,6 +759,10 @@ to the user."
                        (format "file @file:%s is unavailable: %s"
                                display-path msg))))))
     (cond
+     ;; Pure syntax, so this rejects ahead of the permission check: there is
+     ;; nothing to authorize for a token that names no lines.
+     (range-invalid
+      (funcall deny-placeholder "invalid line range"))
      ((not (eq 'allow
                (mevedel-check-permission
                 "Read"

@@ -114,7 +114,13 @@ schema, send-time binding, and dispatch branches.
   unavailable. Optional
   `#L<start>[-<end>]` pins a line range for text files (not recorded in
   touched-files, since LLM may still need other parts) and remains request
-  syntax rather than part of the pathname locator. Directories
+  syntax rather than part of the pathname locator. The start must be at
+  least one and the end no earlier than the start; a token violating either
+  is rejected with an explanatory placeholder rather than attached, since
+  the read would otherwise be repaired silently and labelled with the range
+  that was asked for. The binding schema still accepts such a token, because
+  a binding carries the target's identity rather than the range's validity.
+  Directories
   return a gitignore-filtered recursive listing
   (`rg --files --hidden --sort path`, without following descendant symlinks)
   capped at
