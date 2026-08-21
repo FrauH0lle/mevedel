@@ -193,6 +193,65 @@
 (mevedel-deftest mevedel-view-stream-handle-execution-event ()
   ,test
   (test)
+  :doc "the pending live line stays plain while the row carries the metadata"
+  ;; The pending line is keyed by gptel's tool-call name and arguments,
+  ;; and an execution event arrives keyed by the provider's call id, so
+  ;; the two never met.  What the user sees mid-run is the plain pending
+  ;; line; the execution metadata and output tail belong to the row.
+  (mevedel-view-stream-test--with-buffers
+    (let* ((session (mevedel-session--create :name "execution-pending"))
+           (draft "> quoted\nsecond line")
+           (bash-tool
+            (mevedel-tool--create
+             :name "Bash" :renderer #'mevedel-tool-exec--render-bash)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-max))))
+        (mevedel-view-stream-test--insert-composer-draft draft 3))
+      (let ((point-offset
+             (with-current-buffer view-buf
+               (- (point) (mevedel-view--input-start)))))
+        (cl-letf (((symbol-function 'mevedel-tool-get)
+                   (lambda (name) (and (equal name "Bash") bash-tool)))
+                  ((symbol-function 'mevedel-view--render-incremental)
+                   #'ignore))
+          (with-current-buffer data-buf
+            ;; Exactly the plist gptel passes: name and arguments, no id.
+            (mevedel-view-stream-pre-tool
+             (list :name "Bash" :args '(:command "printf run")
+                   :buffer (buffer-name data-buf)))
+            (should-not
+             (mevedel-view-stream-handle-execution-event
+              (list :type 'progress :session session :data-buffer data-buf
+                    :owner "main"
+                    :tool-use-id "call-live"
+                    :tool-args '(:command "printf run")
+                    :output-tail "line 6\nline 7"
+                    :facts '(:execution-id "exec-000001" :state running
+                             :wall-time-seconds 2.5 :output-bytes 9
+                             :output-lines 1 :omitted-output-bytes 0)))))
+          (with-current-buffer view-buf
+            (should (equal 1 (length mevedel-view--pending-tool-calls)))
+            (let ((label (cdar mevedel-view--pending-tool-calls)))
+              (should (equal "Calling Bash..." label))
+              (should-not (string-match-p "exec-000001" label))
+              (should-not (string-match-p "line 7" label)))
+            ;; The tail did reach the execution cache the row renders from.
+            (should (equal "line 6\nline 7"
+                           (plist-get (gethash "call-live"
+                                               mevedel-view--execution-events)
+                                      :output-tail)))
+            (should (equal draft
+                           (buffer-substring-no-properties
+                            (mevedel-view--input-start) (point-max))))
+            (should (= point-offset
+                       (- (point) (mevedel-view--input-start)))))))))
+
   :doc "progress stays transient while terminal rows persist across cache turnover"
   (mevedel-view-stream-test--with-buffers
     (let* ((session (mevedel-session--create :name "execution-view"))
@@ -493,20 +552,30 @@
 ;;
 ;;; Pending tool lifecycle
 
-(mevedel-deftest mevedel-view--pending-tool-key
-  (:doc "keys pending tool calls by call id when available")
+(mevedel-deftest mevedel-view--pending-tool-fingerprint
+  (:doc "keys pending tool calls by the arguments gptel actually sends")
   ,test
   (test)
-  :doc "uses backend call id before name/args fingerprint"
-  (should (equal "call-1"
-                 (mevedel-view--pending-tool-key
-                  '(:id "call-1" :name "Read" :args (:file_path "a")))))
-  :doc "identical calls with distinct ids stay distinct"
+  :doc "fingerprints the tool name and its arguments"
+  (should (equal '("Read" . "(:file_path \"a\")")
+                 (mevedel-view--pending-tool-fingerprint
+                  '(:name "Read" :args (:file_path "a")))))
+
+  :doc "different arguments fingerprint differently"
   (should-not (equal
-               (mevedel-view--pending-tool-key
-                '(:id "call-1" :name "Read" :args (:file_path "a")))
-               (mevedel-view--pending-tool-key
-                '(:id "call-2" :name "Read" :args (:file_path "a"))))))
+               (mevedel-view--pending-tool-fingerprint
+                '(:name "Read" :args (:file_path "a")))
+               (mevedel-view--pending-tool-fingerprint
+                '(:name "Read" :args (:file_path "b")))))
+
+  :doc "identical calls share a fingerprint"
+  ;; gptel passes no call id, so two identical parallel calls cannot be
+  ;; told apart here; the pending list keeps one entry per call instead.
+  (should (equal
+           (mevedel-view--pending-tool-fingerprint
+            '(:name "Read" :args (:file_path "a")))
+           (mevedel-view--pending-tool-fingerprint
+            '(:name "Read" :args (:file_path "a"))))))
 
 
 (mevedel-deftest mevedel-view--pending-tool-calls
@@ -514,7 +583,9 @@
   ,test
   (test)
 
-  :doc "pre/post hooks add and remove entries by call id"
+  :doc "pre/post hooks add and remove entries for the arguments gptel sends"
+  ;; gptel builds its tool-hook arguments from the name, the arguments,
+  ;; and the result, so there is no call id to key on.
   (mevedel-view-stream-test--with-buffers
     (let ((render-count 0)
           (mevedel-view-tool-boundary-render-delay 0))
@@ -528,21 +599,51 @@
         (with-current-buffer data-buf
           (should-not
            (mevedel-view-stream-pre-tool
-            '(:id "call-1" :name "Read" :args (:file_path "a"))))
+            '(:name "Read" :args (:file_path "a"))))
           (should-not
            (mevedel-view-stream-pre-tool
-            '(:id "call-2" :name "Grep" :args (:pattern "x"))))
+            '(:name "Grep" :args (:pattern "x"))))
           (with-current-buffer view-buf
-            (should (equal '(("call-1" . "Calling Read: a...")
-                             ("call-2" . "Calling Grep: x..."))
+            (should (equal '(((("Read" . "(:file_path \"a\")") . 1)
+                              . "Calling Read: a...")
+                             ((("Grep" . "(:pattern \"x\")") . 2)
+                              . "Calling Grep: x..."))
                            mevedel-view--pending-tool-calls)))
           (should-not
            (mevedel-view-stream-post-tool
-            '(:id "call-1" :name "Read" :args (:file_path "a"))))))
+            '(:name "Read" :args (:file_path "a"))))))
       (with-current-buffer view-buf
-        (should (equal '(("call-2" . "Calling Grep: x..."))
+        (should (equal '(((("Grep" . "(:pattern \"x\")") . 2)
+                          . "Calling Grep: x..."))
                        mevedel-view--pending-tool-calls)))
       (should (= 3 render-count))))
+
+  :doc "identical parallel calls each keep their own live line"
+  ;; Two identical calls share a fingerprint, so collapsing them dropped
+  ;; the line as soon as the first one finished, while the second was
+  ;; still running.
+  (mevedel-view-stream-test--with-buffers
+    (let ((mevedel-view-tool-boundary-render-delay 0))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min)))))
+      (cl-letf (((symbol-function 'mevedel-view--render-incremental) #'ignore))
+        (with-current-buffer data-buf
+          (dotimes (_ 2)
+            (mevedel-view-stream-pre-tool
+             '(:name "Read" :args (:file_path "a"))))
+          (with-current-buffer view-buf
+            (should (= 2 (length mevedel-view--pending-tool-calls))))
+          (mevedel-view-stream-post-tool
+           '(:name "Read" :args (:file_path "a")))
+          (with-current-buffer view-buf
+            (should (= 1 (length mevedel-view--pending-tool-calls))))
+          (mevedel-view-stream-post-tool
+           '(:name "Read" :args (:file_path "a")))
+          (with-current-buffer view-buf
+            (should-not mevedel-view--pending-tool-calls))))))
 
   :doc "tool-boundary renders are debounced and coalesced"
   (mevedel-view-stream-test--with-buffers
@@ -558,10 +659,10 @@
         (with-current-buffer data-buf
           (should-not
            (mevedel-view-stream-pre-tool
-            '(:id "call-1" :name "Read" :args (:file_path "a"))))
+            '(:name "Read" :args (:file_path "a"))))
           (should-not
            (mevedel-view-stream-pre-tool
-            '(:id "call-2" :name "Grep" :args (:pattern "x")))))
+            '(:name "Grep" :args (:pattern "x")))))
         (should (= 0 render-count))
         (let ((deadline (+ (float-time) 1.0)))
           (while (and (= render-count 0)
@@ -592,7 +693,7 @@
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
-                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+                '(:name "Read" :args (:file_path "a")))))
             (with-current-buffer view-buf
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
@@ -628,7 +729,7 @@
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
-                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+                '(:name "Read" :args (:file_path "a")))))
             (with-current-buffer view-buf
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
@@ -662,7 +763,7 @@
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
-                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+                '(:name "Read" :args (:file_path "a")))))
             (with-current-buffer view-buf
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
@@ -702,7 +803,7 @@
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
-                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+                '(:name "Read" :args (:file_path "a")))))
             (with-current-buffer view-buf
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
@@ -746,7 +847,7 @@
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
-                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+                '(:name "Read" :args (:file_path "a")))))
             (with-current-buffer view-buf
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
@@ -787,7 +888,7 @@
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
-                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+                '(:name "Read" :args (:file_path "a")))))
             (with-current-buffer view-buf
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
@@ -826,7 +927,7 @@
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
-                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+                '(:name "Read" :args (:file_path "a")))))
             (with-current-buffer view-buf
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
@@ -870,7 +971,7 @@
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
-                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+                '(:name "Read" :args (:file_path "a")))))
             (with-current-buffer view-buf
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
@@ -1243,7 +1344,7 @@
             (with-current-buffer data-buf
               (should-not
                (mevedel-view-stream-pre-tool
-                '(:id "call-1" :name "Read" :args (:file_path "a")))))
+                '(:name "Read" :args (:file_path "a")))))
             (with-current-buffer view-buf
               (let* ((text (buffer-substring-no-properties
                             (point-min) (point-max)))
@@ -1274,10 +1375,10 @@
         (with-current-buffer data-buf
           (should-not
            (mevedel-view-stream-pre-tool
-            '(:id "call-1" :name "Read" :args (:file_path "a"))))
+            '(:name "Read" :args (:file_path "a"))))
           (should-not
            (mevedel-view-stream-post-tool
-            '(:id "call-1" :name "Read" :args (:file_path "a"))))))))
+            '(:name "Read" :args (:file_path "a"))))))))
 
   :doc "Agent pre-tool hook does not add a duplicate pending Calling Agent line"
   (mevedel-view-stream-test--with-buffers
@@ -1326,14 +1427,18 @@
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf (copy-marker (point-max))))
         (setq mevedel-view--pending-tool-calls
-              '(("call-1" . "Calling Read...")
-                ("call-2" . "Calling Grep...")))
+              (list (cons (mevedel-view--pending-tool-claim-key
+                           '(:name "Read" :args (:file_path "a")))
+                          "Calling Read...")
+                    (cons (mevedel-view--pending-tool-claim-key
+                           '(:name "Grep" :args (:pattern "x")))
+                          "Calling Grep...")))
         (mevedel-view--refresh-pending-tool-lines))
       (unwind-protect
           (progn
             (with-current-buffer data-buf
               (mevedel-view-stream-post-tool
-               '(:id "call-1" :name "Read" :args (:file_path "a"))))
+               '(:name "Read" :args (:file_path "a"))))
             (with-current-buffer view-buf
               (let ((text (buffer-substring-no-properties
                            (point-min) (point-max))))
@@ -1345,11 +1450,14 @@
                   (should (eq 'history-live
                               (get-text-property
                                grep-pos 'mevedel-view-zone-namespace)))
-                  (should (equal "call-2"
+                  ;; The fragment is identified by the pending key,
+                  ;; which stays put when an earlier call finishes.
+                  (should (equal (car (car mevedel-view--pending-tool-calls))
                                  (get-text-property
                                   grep-pos 'mevedel-view-zone-id))))
-                (should (equal '(("call-2" . "Calling Grep..."))
-                               mevedel-view--pending-tool-calls)))))
+                (should (= 1 (length mevedel-view--pending-tool-calls)))
+                (should (equal "Calling Grep..."
+                               (cdar mevedel-view--pending-tool-calls))))))
         (with-current-buffer view-buf
           (mevedel-view--cancel-scheduled-render)))))
 
@@ -1406,7 +1514,11 @@
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-max))))
       (setq mevedel-view--pending-tool-calls
-            '(("call-1" . "Calling Agent: explorer...")))
+            (list (cons (mevedel-view--pending-tool-claim-key
+                         '(:name "Agent"
+                           :args (:task_name "explore"
+                                  :message "Inspect.")))
+                        "Calling Agent: explorer...")))
       (mevedel-view--insert-pending-tool-lines
        mevedel-view--pending-tool-calls)
       (should (string-match-p "Calling Agent"
@@ -1414,7 +1526,7 @@
                                (point-min) (point-max)))))
     (with-current-buffer data-buf
       (mevedel-view-stream-post-tool
-       '(:id "call-1" :name "Agent"
+       '(:name "Agent"
          :args (:task_name "explore" :message "Inspect."))))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
@@ -1777,7 +1889,7 @@
                     (mevedel-view--input-start)))))
           (with-current-buffer data-buf
             (mevedel-view-stream-pre-tool
-             '(:id "call-1" :name "Read" :args (:file_path "foo.el"))))
+             '(:name "Read" :args (:file_path "foo.el"))))
           (with-current-buffer view-buf
             (should (mevedel-view--position-in-input-region-p
                      (window-point (selected-window))))
@@ -2214,7 +2326,7 @@
         (mevedel-view-stream-spinner-hook
          '(:name "Read" :args (:file_path "foo.el")))
         (mevedel-view-stream-pre-tool
-         '(:id "call-1" :name "Read" :args (:file_path "foo.el"))))
+         '(:name "Read" :args (:file_path "foo.el"))))
       (with-current-buffer view-buf
         (should (mevedel-view--request-progress-visible-p))
         (should (text-property-any

@@ -647,7 +647,10 @@ Current fragment namespaces:
 - `history-live`: pending tool live-tail rows in the history region, built
   from `mevedel-view--pending-tool-calls`. They are removed and recreated
   from pending state; they must not be preserved as source-backed transcript
-  text or deleted by heuristic `Calling ...` line matching.
+  text or deleted by heuristic `Calling ...` line matching. There is one row
+  per call, not per distinct tool: gptel's tool-call hooks carry no call id,
+  so identical parallel calls are told apart by a serial paired with their
+  name/argument fingerprint, and that pair is the fragment's identity.
 - `status`: `tasks`, live `executions`, and `agents` status-zone blocks.
   Task and aggregate-agent disclosure state is backed by fragment collapse
   state.
