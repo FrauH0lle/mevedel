@@ -806,7 +806,11 @@
           (should (eq (plist-get rendering :view-buffer) view-buf))
           (should (eq (plist-get rendering :last-turn-role) 'assistant))
           (should (markerp
-                   (plist-get rendering :last-assistant-turn-start)))))
+                   (plist-get rendering :last-assistant-turn-start)))
+          (should (markerp
+                   (plist-get rendering :last-assistant-turn-end)))
+          (should (< (plist-get rendering :last-assistant-turn-start)
+                     (plist-get rendering :last-assistant-turn-end)))))
       (should (string-match-p "Response" (buffer-string))))))
 
 (mevedel-deftest mevedel-view--full-rerender-reanchor ()
@@ -1966,14 +1970,15 @@
 
   :doc "preserves in-flight live tail when data has no assistant replacement yet"
   (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Read files\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf "*** Read files\nAssistant\nCalling Read...\n" nil)
     (with-current-buffer view-buf
       (let ((inhibit-read-only t)
             (start nil))
         (goto-char mevedel-view--input-marker)
         (set-marker-insertion-type mevedel-view--input-marker t)
         (setq start (point))
-        (insert "Assistant\n... Thinking... (1 lines)\nCalling Read...\n")
+        (insert "Assistant\nCalling Read...\nAgent: reviewer done\n")
         (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
         (set-marker mevedel-view--status-marker (point))
         (set-marker mevedel-view--interaction-marker (point))
@@ -1984,7 +1989,44 @@
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Read files" text))
         (should (string-match-p "Assistant" text))
-        (should (string-match-p "Calling Read" text)))))
+        (should (string-match-p "Calling Read" text))
+        (should (string-match-p "reviewer done" text)))))
+
+  :doc "stable-prefix matching stays within the latest assistant turn"
+  (mevedel-view-test--with-buffers
+    (let ((draft "> quoted\nsecond line"))
+      (mevedel-view-test--insert-data data-buf "*** First\n" nil)
+      (mevedel-view-test--insert-data
+       data-buf "Shared first.\nShared second.\n" 'response)
+      (mevedel-view-test--insert-data data-buf "\n\n*** Second\n" nil)
+      (mevedel-view-test--insert-data
+       data-buf "Newest answer.\n" 'response)
+      (mevedel-view-test--insert-data
+       data-buf "\n\n*** Follow-up\nAssistant\nShared first.\n" nil)
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t)
+              start)
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (setq start (point))
+          (insert (concat "Assistant\n"
+                          "Shared first.\n"
+                          "Shared second.\n"
+                          "Agent: reviewer done\n"))
+          (setq mevedel-view--in-flight-turn-start (copy-marker start nil))
+          (set-marker mevedel-view--status-marker (point))
+          (set-marker mevedel-view--interaction-marker (point))
+          (set-marker mevedel-view--input-marker (point))
+          (set-marker-insertion-type mevedel-view--input-marker nil))
+        (mevedel-view-test--insert-composer-draft draft 4)
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (= 3 (mevedel-view-test--count-substring
+                        "Shared first." text)))
+          (should (string-match-p "reviewer done" text)))
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4))))))
 
   :doc "loads persisted session summaries once for a full transcript render"
   (mevedel-view-test--with-buffers
@@ -2873,8 +2915,8 @@
 
   :doc "finds live-tail lines separated by blank gaps"
   (with-temp-buffer
-    (insert "before\nalpha\n\n   beta\nafter\n")
-    (should (= 8 (mevedel-view--live-tail-lines-rendered-position
+    (insert "before\n   alpha\n\n   beta\nafter\n")
+    (should (= 11 (mevedel-view--live-tail-lines-rendered-position
                   '("alpha" "beta") (point-max)))))
 
   :doc "does not build an overflowing regexp for long unmatched tails"
@@ -2884,7 +2926,15 @@
     (let ((lines (mapcar (lambda (i) (format "missing-%04d" i))
                          (number-sequence 0 1500))))
       (should-not (mevedel-view--live-tail-lines-rendered-position
-                   lines (point-max))))))
+                   lines (point-max)))))
+
+  :doc "requires complete literal lines rather than prefixes or substrings"
+  (with-temp-buffer
+    (insert "Assistant\nokay\nbroken token\n")
+    (should-not (mevedel-view--live-tail-lines-rendered-position
+                 '("Assistant" "ok") (point-max)))
+    (should-not (mevedel-view--live-tail-lines-rendered-position
+                 '("ok") (point-max)))))
 
 (mevedel-deftest mevedel-view--render-tool-group ()
   ,test

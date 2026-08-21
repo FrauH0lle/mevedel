@@ -5458,14 +5458,17 @@ continuation context."
 
 ;;
 ;;; Full re-render
-(defun mevedel-view--live-tail-rendered-position (live-tail limit)
+(defun mevedel-view--live-tail-rendered-position
+    (live-tail limit &optional prefix-start prefix-end)
   "Return the position where LIVE-TAIL already appears before LIMIT.
 
 Full rerenders may preserve an in-flight view tail when the data buffer
 has not yet received a replacement assistant turn.  Some refresh paths
 can lose the data-turn anchor while the same assistant text is already
 renderable from the data buffer; in that case appending the preserved
-tail would duplicate the visible transcript."
+tail would duplicate the visible transcript.  PREFIX-START restricts
+stable-prefix matching to the latest rendered assistant turn, which
+ends at PREFIX-END."
   (let* ((tail (string-trim
                 (substring-no-properties (or live-tail ""))))
          (lines (and (not (string-empty-p tail))
@@ -5478,9 +5481,9 @@ tail would duplicate the visible transcript."
                                   0 (min 2 (length stable-lines)))))
     (when lines
       (or (mevedel-view--live-tail-lines-rendered-position lines limit)
-          (when (cdr prefix-lines)
+          (when (and prefix-start prefix-end (cdr prefix-lines))
             (mevedel-view--live-tail-lines-rendered-position
-             prefix-lines limit))))))
+             prefix-lines prefix-end prefix-start))))))
 
 (defun mevedel-view--volatile-live-tail-line-p (line)
   "Return non-nil when LINE is too volatile for live-tail matching."
@@ -5513,8 +5516,10 @@ tail would duplicate the visible transcript."
         (string-match-p "\\`[[:space:]]*[✓✗●!›…]?[[:space:]]*Agent:"
                         trimmed))))
 
-(defun mevedel-view--live-tail-lines-rendered-position (lines limit)
-  "Return position where LINES appear before LIMIT, allowing blank gaps."
+(defun mevedel-view--live-tail-lines-rendered-position
+    (lines limit &optional start)
+  "Return position where literal LINES appear from START to LIMIT.
+Blank gaps and indentation between lines are allowed."
   (when lines
     (cl-labels
         ((skip-gap ()
@@ -5529,22 +5534,30 @@ tail would duplicate the visible transcript."
            (let ((end (+ (point) (length line))))
              (and (<= end limit)
                   (equal line (buffer-substring-no-properties
-                               (point) end))))))
+                               (point) end))
+                  (or (= end limit)
+                      (eq (char-after end) ?\n))))))
       (let ((first (car lines))
             (rest (cdr lines)))
         (save-excursion
-          (goto-char (point-min))
+          (goto-char (or start (point-min)))
+          (unless (bolp)
+            (forward-line 1))
           (catch 'found
-            (while (search-forward first limit t)
-              (let ((start (match-beginning 0)))
+            (while (< (point) limit)
+              (skip-chars-forward " \t" limit)
+              (let ((candidate (point)))
                 (save-excursion
-                  (catch 'mismatch
-                    (dolist (line rest)
-                      (unless (and (skip-gap)
-                                   (looking-at-line-p line))
-                        (throw 'mismatch nil))
-                      (goto-char (+ (point) (length line))))
-                    (throw 'found start)))))))))))
+                  (when (looking-at-line-p first)
+                    (goto-char (+ (point) (length first)))
+                    (catch 'mismatch
+                      (dolist (line rest)
+                        (unless (and (skip-gap)
+                                     (looking-at-line-p line))
+                          (throw 'mismatch nil))
+                        (goto-char (+ (point) (length line))))
+                      (throw 'found candidate)))))
+              (forward-line 1))))))))
 
 (defun mevedel-view--insert-compaction-indicator
     (view-buf &optional hook-audits source)
@@ -5695,6 +5708,7 @@ turn.  SAVED-STATES restores matching disclosure state."
                     (mevedel-session-persistence-list-sessions
                      (mevedel-session-workspace session) 'cached))))
                last-assistant-turn-start
+               last-assistant-turn-end
                last-current-assistant-turn-start
                last-turn-role)
           (with-current-buffer view-buf
@@ -5710,7 +5724,10 @@ turn.  SAVED-STATES restores matching disclosure state."
                                 data-turn-start-pos))
                     (setq last-current-assistant-turn-start
                           view-turn-start))))
-              (mevedel-view--render-turn turn data-buf t session))
+              (mevedel-view--render-turn turn data-buf t session)
+              (when (eq last-turn-role 'assistant)
+                (setq last-assistant-turn-end
+                      (copy-marker mevedel-view--input-marker nil))))
             (mevedel-view--collapse-settled-directive-turns)
             (when saved-states
               (mevedel-view-disclosure-restore-state
@@ -5720,6 +5737,7 @@ turn.  SAVED-STATES restores matching disclosure state."
           (list
            :view-buffer view-buf
            :last-assistant-turn-start last-assistant-turn-start
+           :last-assistant-turn-end last-assistant-turn-end
            :last-current-assistant-turn-start
            last-current-assistant-turn-start
            :last-turn-role last-turn-role)))))))
@@ -5734,6 +5752,8 @@ PRESERVED-LIVE-TAIL contains any view-only streamed text."
     (let ((view-buf (plist-get rendering :view-buffer))
           (last-assistant
            (plist-get rendering :last-assistant-turn-start))
+          (last-assistant-end
+           (plist-get rendering :last-assistant-turn-end))
           (last-current-assistant
            (plist-get rendering :last-current-assistant-turn-start))
           (last-role (plist-get rendering :last-turn-role)))
@@ -5741,7 +5761,8 @@ PRESERVED-LIVE-TAIL contains any view-only streamed text."
         (let ((tail-start
                (and preserved-live-tail
                     (mevedel-view--live-tail-rendered-position
-                     preserved-live-tail mevedel-view--input-marker))))
+                     preserved-live-tail mevedel-view--input-marker
+                     last-assistant last-assistant-end))))
           (cond
            (last-current-assistant
             (mevedel-view--debug-log
