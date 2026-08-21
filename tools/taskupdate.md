@@ -17,7 +17,7 @@ depended on it, so downstream tasks become unblocked.
 ### Fields
 
 - `id` — **required** integer task ID to update
-- `subject` — optional new subject line
+- `subject` — optional new non-blank subject line
 - `description` — optional new description (empty string clears it)
 - `status` — optional `"pending"`, `"in_progress"`, or `"completed"`
 - `owner` — optional retained agent path such as `/root/worker_2`, or a

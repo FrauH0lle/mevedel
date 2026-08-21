@@ -164,11 +164,16 @@ An explicitly empty string targets the main session owner."
    ((not (stringp note))
     (error "Parameter note must be a string"))
    (t
-    (let ((trimmed
-           (string-trim
-            (replace-regexp-in-string "[\n\r\t ]+" " " note))))
+    (let ((trimmed (string-clean-whitespace note)))
       (unless (string-empty-p trimmed)
         trimmed)))))
+
+(defun mevedel-tool-task--normalize-subject (value)
+  "Return VALUE as the single non-blank line a task subject must be."
+  (let ((subject (and (stringp value) (string-clean-whitespace value))))
+    (when (or (null subject) (string-empty-p subject))
+      (error "Task subject must be a non-empty string"))
+    subject))
 
 (defun mevedel-tool-task--status-note-entry (session owner)
   "Return SESSION's status note entry for OWNER."
@@ -254,8 +259,7 @@ Returns the new `mevedel-task' struct."
          (blocked-by-raw (mevedel-tool-task--plist-get-any
                           p :blockedBy :blocked_by :blocked-by))
          (metadata (mevedel-tool-task--plist-get-any p :metadata)))
-    (unless (and (stringp subject) (not (string-empty-p subject)))
-      (error "Task subject is required and must be a non-empty string"))
+    (setq subject (mevedel-tool-task--normalize-subject subject))
     (let* ((status (mevedel-tool-task--parse-status status-raw))
            (task (mevedel-task--create
                   :id (or id (mevedel-tool-task--next-id session))
@@ -291,9 +295,7 @@ Returns the updated task.  Signals an error if ID is unknown."
           metadata metadata-p)
       (when-let* ((subject-value
                    (mevedel-tool-task--plist-get-any p :subject)))
-        (unless (stringp subject-value)
-          (error "Task subject must be a string"))
-        (setq subject subject-value
+        (setq subject (mevedel-tool-task--normalize-subject subject-value)
               subject-p t))
       (when (plist-member p :description)
         (let ((d (plist-get p :description)))
@@ -463,7 +465,7 @@ group and sorting agent-owned groups by owner label."
       (when (and (stringp activity)
                  (not (string-empty-p activity)))
         (truncate-string-to-width
-         (replace-regexp-in-string "[\n\r\t ]+" " " activity)
+         (string-clean-whitespace activity)
          72 nil nil t)))))
 
 (defun mevedel-tool-task--format-id-list (ids)
@@ -838,29 +840,32 @@ Accepts a vector, list, or single task object; always returns a list."
      (t
       (format "Cleared status note for %s." label)))))
 
-(defun mevedel-tool-task--apply-note-arg (session args owner-keys)
-  "Apply ARGS' optional top-level :note for SESSION.
-OWNER-KEYS names the optional owner argument aliases.  Returns a
-feedback string when :note has a value, otherwise nil."
+(defun mevedel-tool-task--prepare-note-arg (session args owner-keys)
+  "Return (OWNER . NOTE) for ARGS' optional top-level :note in SESSION.
+OWNER-KEYS names the optional owner argument aliases.  Returns nil when
+:note is absent.  Both the owner and the note text are resolved here, so
+an unresolvable owner signals before any task has been mutated; NOTE is
+nil when the note clears the owner's entry."
   (when (mevedel-tool-task--argument-value-present-p args :note)
-    (let* ((owner (mevedel-tool-task--owner-from-args
-                   session args owner-keys))
-           (note (mevedel-tool-task--normalize-note (plist-get args :note)))
-           stored)
-      (if note
-          (if (mevedel-tool-task--owner-has-active-p session owner)
-              (progn
-                (mevedel-tool-task--set-status-note session owner note)
-                (setq stored t))
-            (mevedel-tool-task--set-status-note session owner nil))
+    (cons (mevedel-tool-task--owner-from-args session args owner-keys)
+          (mevedel-tool-task--normalize-note (plist-get args :note)))))
+
+(defun mevedel-tool-task--apply-note-arg (session prepared)
+  "Store PREPARED, a `mevedel-tool-task--prepare-note-arg' result, in SESSION.
+Returns a feedback string when PREPARED is non-nil, otherwise nil.
+Whether a note is storable depends on the owner having an open task, so
+this runs after the task mutation it accompanies."
+  (when prepared
+    (let ((owner (car prepared))
+          (note (cdr prepared))
+          stored)
+      (if (and note (mevedel-tool-task--owner-has-active-p session owner))
+          (progn
+            (mevedel-tool-task--set-status-note session owner note)
+            (setq stored t))
         (mevedel-tool-task--set-status-note session owner nil))
       (mevedel-tool-task--clear-inactive-status-notes session)
       (mevedel-tool-task--note-feedback owner note stored))))
-
-(defun mevedel-tool-task--validate-note-arg (args)
-  "Validate ARGS' optional :note before mutating tasks."
-  (when (mevedel-tool-task--argument-value-present-p args :note)
-    (mevedel-tool-task--normalize-note (plist-get args :note))))
 
 (defun mevedel-tool-task--handle-create (args)
   "Handler for TaskCreate.  ARGS has :tasks."
@@ -868,8 +873,10 @@ feedback string when :note has a value, otherwise nil."
          (specs (mevedel-tool-task--tasks-arg args))
          (next-id (mevedel-tool-task--next-id session))
          (created nil)
+         (prepared-note
+          (mevedel-tool-task--prepare-note-arg
+           session args mevedel-tool-task--note-owner-keys))
          note-feedback)
-    (mevedel-tool-task--validate-note-arg args)
     (dolist (spec specs)
       (push (mevedel-tool-task--create-one session spec next-id) created)
       (cl-incf next-id))
@@ -877,8 +884,7 @@ feedback string when :note has a value, otherwise nil."
     (setf (mevedel-session-tasks session)
           (append (mevedel-session-tasks session) created))
     (setq note-feedback
-          (mevedel-tool-task--apply-note-arg
-           session args mevedel-tool-task--note-owner-keys))
+          (mevedel-tool-task--apply-note-arg session prepared-note))
     (mevedel-tool-task--mark-write session)
     (mevedel-tool-task--refresh-display)
     (let ((base (format "Created %d task%s:\n%s"
@@ -902,11 +908,12 @@ feedback string when :note has a value, otherwise nil."
                            nconc (list k v))))
     (unless (integerp id)
       (error "Parameter id is required and must be an integer"))
-    (mevedel-tool-task--validate-note-arg args)
-    (let* ((task (mevedel-tool-task--update-one session id updates))
+    (let* ((prepared-note
+            (mevedel-tool-task--prepare-note-arg
+             session args mevedel-tool-task--note-owner-keys))
+           (task (mevedel-tool-task--update-one session id updates))
            (note-feedback
-            (mevedel-tool-task--apply-note-arg
-             session args mevedel-tool-task--note-owner-keys)))
+            (mevedel-tool-task--apply-note-arg session prepared-note)))
       (mevedel-tool-task--clear-inactive-status-notes session)
       (mevedel-tool-task--mark-write session)
       (mevedel-tool-task--refresh-display)
@@ -924,7 +931,9 @@ feedback string when :note has a value, otherwise nil."
     (unless (mevedel-tool-task--argument-value-present-p args :note)
       (error "Parameter note is required"))
     (let* ((feedback
-            (mevedel-tool-task--apply-note-arg session args '(:owner))))
+            (mevedel-tool-task--apply-note-arg
+             session
+             (mevedel-tool-task--prepare-note-arg session args '(:owner)))))
       (mevedel-tool-task--mark-write session)
       (mevedel-tool-task--refresh-display)
       (list :result feedback))))

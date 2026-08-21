@@ -311,6 +311,32 @@
       (list :tasks (vector (list :subject "valid")
                            (list :subject "bad" :status "bogus")))))
     (should (null (mevedel-session-tasks session)))
+    (should (null (mevedel-session-last-task-write-turn session))))
+
+  :doc "rejects a subject that is blank once its whitespace is collapsed"
+  (test-mevedel-tool-task--with-session session
+    (should-error
+     (mevedel-tool-task--handle-create
+      (list :tasks (vector (list :subject "\n\n")))))
+    (should (null (mevedel-session-tasks session)))
+    (should (null (mevedel-session-last-task-write-turn session))))
+
+  :doc "stores a subject as the one display line the status fragment budgets"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "one\ntwo\tthree"))))
+    (should
+     (equal "one two three"
+            (mevedel-task-subject (car (mevedel-session-tasks session))))))
+
+  :doc "an unknown noteOwner creates no task and no note"
+  (test-mevedel-tool-task--with-session session
+    (should-error
+     (mevedel-tool-task--handle-create
+      (list :tasks (vector (list :subject "first"))
+            :note "progress" :noteOwner "/root/ghost")))
+    (should (null (mevedel-session-tasks session)))
+    (should (null (mevedel-session-task-status-notes session)))
     (should (null (mevedel-session-last-task-write-turn session)))))
 
 
@@ -441,7 +467,38 @@
   :doc "requires an integer id"
   (test-mevedel-tool-task--with-session session
     (should-error
-     (mevedel-tool-task--handle-update (list :status "completed")))))
+     (mevedel-tool-task--handle-update (list :status "completed"))))
+
+  :doc "rejects a blank or multiline subject and keeps the stored one"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "Original"))))
+    (let ((task (car (mevedel-session-tasks session))))
+      (should-error
+       (mevedel-tool-task--handle-update (list :id 1 :subject "")))
+      (should (equal "Original" (mevedel-task-subject task)))
+      (mevedel-tool-task--handle-update (list :id 1 :subject "one\ntwo"))
+      (should (equal "one two" (mevedel-task-subject task)))))
+
+  :doc "an unknown noteOwner leaves the task and its dependents untouched"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "A")
+                          (list :subject "B" :blockedBy (vector 1)))))
+    (let* ((tasks (mevedel-session-tasks session))
+           (first (car tasks))
+           (second (cadr tasks))
+           (last-write (mevedel-session-last-task-write-turn session)))
+      (should-error
+       (mevedel-tool-task--handle-update
+        (list :id 1 :status "completed"
+              :note "progress" :noteOwner "/root/ghost")))
+      (should (eq 'pending (mevedel-task-status first)))
+      (should (null (mevedel-task-completed-turn first)))
+      (should (equal '(1) (mevedel-task-blocked-by second)))
+      (should (null (mevedel-session-task-status-notes session)))
+      (should (= last-write
+                 (mevedel-session-last-task-write-turn session))))))
 
 
 ;;

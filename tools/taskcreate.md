@@ -25,7 +25,7 @@ or from other tasks via `blockedBy` / `blocks`.
 
 Pass `tasks` as an array. Each task object may contain:
 
-- `subject` — **required** short one-line summary
+- `subject` — **required** short one-line summary; must be non-blank
 - `description` — optional longer notes
 - `status` — optional `"pending"`, `"in_progress"`, or `"completed"`
   (defaults to `"pending"`)
