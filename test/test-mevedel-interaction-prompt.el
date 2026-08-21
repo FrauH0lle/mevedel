@@ -18,6 +18,22 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(defun mevedel-interaction-prompt-test--released-registry (action)
+  "Return prompt registration state after settling through ACTION."
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create :name "t"))
+           (request (mevedel-request--create :session session))
+           (overlay (make-overlay (point) (point) nil t)))
+      (setq-local mevedel--session session
+                  mevedel--current-request request)
+      (overlay-put overlay 'mevedel-user-request t)
+      (push overlay mevedel--prompt-overlays)
+      (mevedel--prompt--register-canceller nil overlay)
+      (pcase action
+        ('settle (mevedel--prompt--settle overlay 'approve))
+        ('cancel (mevedel-request-drain-cancellers request)))
+      mevedel--prompt-canceller-registered-for)))
+
 (mevedel-deftest mevedel--prompt-attribution-line
   ()
   ,test
@@ -60,6 +76,7 @@
       (should-not mevedel--prompt-overlays)))
 
   :doc "removes interaction descriptor when prompt settles"
+  (require 'mevedel-view-composer)
   (with-temp-buffer
     (let* ((mevedel-view--interaction-descriptors
             (make-hash-table :test #'equal))
@@ -90,7 +107,14 @@
       (puthash id overlay mevedel-view--interaction-overlays)
       (delete-overlay overlay)
       (mevedel--prompt--settle overlay 'approve)
-      (should-not received))))
+      (should-not received)))
+
+  :doc "settlement does not leave the completed request strongly reachable"
+  (let ((registry
+         (mevedel-interaction-prompt-test--released-registry 'settle)))
+    (garbage-collect)
+    (should (eq 'key (hash-table-weakness registry)))
+    (should (= 0 (hash-table-count registry)))))
 
 (mevedel-deftest mevedel--prompt--overlay-at-point
   ()
@@ -203,7 +227,14 @@
       (when (buffer-live-p view-buffer)
         (kill-buffer view-buffer))
       (when (buffer-live-p source-buffer)
-        (kill-buffer source-buffer)))))
+        (kill-buffer source-buffer))))
+
+  :doc "request cancellation does not leave the request strongly reachable"
+  (let ((registry
+         (mevedel-interaction-prompt-test--released-registry 'cancel)))
+    (garbage-collect)
+    (should (eq 'key (hash-table-weakness registry)))
+    (should (= 0 (hash-table-count registry)))))
 
 (mevedel-deftest mevedel--prompt-concurrent-overlays
   (:doc "two overlays settle independently in user-chosen order")

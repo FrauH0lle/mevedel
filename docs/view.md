@@ -614,8 +614,9 @@ they are not parallel renderers.
 
 `mevedel-interaction-prompt.el` owns the common lifecycle for those opaque
 handles: exactly-once settlement, request-local cancellation, buffer-kill
-cleanup, and standard prompt framing. Ask, permission, plan,
-and preview code retain their domain-specific descriptors and outcomes.
+cleanup, weak request-registration bookkeeping, and standard prompt framing.
+Ask, permission, plan, and preview code retain their domain-specific
+descriptors and outcomes.
 
 Current fragment namespaces:
 
