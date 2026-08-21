@@ -54,8 +54,6 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-resolve-role "mevedel-agents" (role))
-(declare-function mevedel-agents-ensure-reviewer "mevedel-agents" ())
-(declare-function mevedel-agents-ensure-verifier "mevedel-agents" ())
 
 ;; `mevedel-chat'
 (declare-function mevedel--active-chat-buffer
@@ -956,16 +954,12 @@ permission policy decides whether verifier validation commands may run."
   (mevedel-review--git-allow-rules))
 
 (defun mevedel-review--ensure-dispatch-deps (&optional command)
-  "Load modules needed when a validation COMMAND is autoloaded directly."
+  "Load modules needed when a validation COMMAND is autoloaded directly.
+Loading the agents module registers the bundled agents."
   (require 'mevedel-agents)
-  (if (eq command 'verify)
-      (progn
-        (mevedel-agents-ensure-verifier)
-        (unless (mevedel-agent-get "verifier")
-          (user-error "Verifier agent is not available")))
-    (mevedel-agents-ensure-reviewer)
-    (unless (mevedel-agent-get "reviewer")
-      (user-error "Reviewer agent is not available"))))
+  (unless (mevedel-agent-get (if (eq command 'verify) "verifier" "reviewer"))
+    (user-error "The %s agent is not available"
+                (if (eq command 'verify) "verifier" "reviewer"))))
 
 (defun mevedel-review--ensure-dispatch-allowed (data-buffer)
   "Signal if DATA-BUFFER cannot accept a direct review dispatch."

@@ -684,18 +684,14 @@ unavailable until it changes."
   (mevedel-session-goal
    (mevedel-cockpit-context-session (mevedel-menu--context))))
 
-(defun mevedel-menu--owned-goal ()
-  "Return the Goal owned directly by the current session."
-  (mevedel-menu--current-goal))
-
 (defun mevedel-menu--goal-active-p ()
   "Return non-nil when the current Goal can be paused."
-  (when-let* ((goal (mevedel-menu--owned-goal)))
+  (when-let* ((goal (mevedel-menu--current-goal)))
     (eq (mevedel-goal-status goal) 'active)))
 
 (defun mevedel-menu--goal-resumable-p ()
   "Return non-nil when the current Goal can be resumed."
-  (when-let* ((goal (mevedel-menu--owned-goal)))
+  (when-let* ((goal (mevedel-menu--current-goal)))
     (memq (mevedel-goal-status goal) '(paused blocked))))
 
 (defun mevedel-menu--goal-start-inapt-p ()
