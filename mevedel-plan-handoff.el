@@ -564,6 +564,15 @@ projected evidence.  CHAT-BUFFER is left unchanged."
       (unless settled
         (setq-local mevedel-compact-run-cancel cancel)))))
 
+(defun mevedel-plan-handoff--strip-path-prefix (text prefix)
+  "Return TEXT with PREFIX removed wherever it begins a path.
+Only at a path boundary: a bare replacement also rewrites a longer path
+that merely contains PREFIX, so a snapshot or mount point spelled around
+the repository root would be corrupted rather than shortened."
+  (replace-regexp-in-string
+   (concat "\\(\\`\\|[^[:alnum:]._~/-]\\)" (regexp-quote prefix))
+   "\\1" text t))
+
 (defun mevedel-plan-handoff--portable-paths (summary session)
   "Return SUMMARY with SESSION's repository root prefix removed.
 
@@ -576,19 +585,23 @@ source checkout.
 Both spellings go, because a model-visible path is target-native: on a
 remote session the native spelling is the only one the evidence carries."
   (require 'mevedel-worktree)
+  (require 'mevedel-execution-target)
   (let* ((directory (file-name-as-directory
                      (expand-file-name
                       (mevedel-session-working-directory session))))
+         ;; Outside a repository the working directory is the only base there
+         ;; is.  No diagnostic: this runs in the summary callback, and
+         ;; emitting one changes the current buffer under a caller that
+         ;; requires its own.
          (root (or (mevedel-worktree-repository-root directory) directory))
          (target (mevedel-session-execution-target session))
          (native (and target
                       (mevedel-execution-target-remote-p target)
                       (file-name-as-directory
                        (mevedel-execution-target-native-path target root)))))
-    (setq summary (string-replace root "" summary))
-    (if (and native (not (equal native root)))
-        (string-replace native "" summary)
-      summary)))
+    (dolist (prefix (delete-dups (delq nil (list root native))))
+      (setq summary (mevedel-plan-handoff--strip-path-prefix summary prefix)))
+    summary))
 
 (defun mevedel-plan-handoff--prepare-here-summary
     (session chat-buffer record target focus source-transform)

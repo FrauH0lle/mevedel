@@ -172,7 +172,11 @@ The public probe for callers that need the repository root rather than the
 directory they happen to be sitting in."
   (when-let* ((root (mevedel-worktree--git-success-output
                      directory "rev-parse" "--show-toplevel")))
-    (file-name-as-directory (expand-file-name root))))
+    ;; Git answers in the target's own path domain, so expand it back into
+    ;; the caller's: plain `expand-file-name' leaves a remote answer looking
+    ;; local.  This is the same conversion `--collect-status' applies.
+    (file-name-as-directory
+     (mevedel-worktree--expand-git-path root directory))))
 
 (defun mevedel-worktree--git-exit (directory &rest args)
   "Return Git exit status for ARGS in DIRECTORY."
