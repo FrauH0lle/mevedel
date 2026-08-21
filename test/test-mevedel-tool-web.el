@@ -2,18 +2,22 @@
 
 ;;; Commentary:
 
-;; Registration-only tests: the web tools now wrap gptel-agent's
-;; upstream structs via :wrap, so the assertions focus on the wrap
-;; metadata rather than on any local handler function.
+;; WebSearch and WebFetch wrap gptel-agent's upstream structs via :wrap, so
+;; their assertions focus on the wrap metadata.  YouTube is registered
+;; natively, so its assertions cover the adapter that owns the response
+;; buffers of the upstream call.
 
 ;;; Code:
 
 (require 'mevedel-tool-registry)
+(require 'mevedel-pipeline)
+(require 'mevedel-tools)
 (require 'gptel-request)
 (require 'gptel-agent-tools)
 (require 'mevedel-view)
 (require 'mevedel-tool-web)
 (require 'mevedel-view-render)
+(require 'mevedel-view-segments)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -21,6 +25,20 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+
+
+;;
+;;; Helpers
+
+(defun test-mevedel-tool-web--response-buffer (name &optional continuation)
+  "Return a fake response buffer NAME retrieved for CONTINUATION.
+Records CONTINUATION the way `url-retrieve' records its callback
+arguments in a response buffer."
+  (let ((buffer (generate-new-buffer name)))
+    (when continuation
+      (with-current-buffer buffer
+        (setq-local url-callback-arguments (list continuation))))
+    buffer))
 
 
 ;;
@@ -84,7 +102,7 @@
       (should (cl-every (lambda (tool) (mevedel-tool-read-only-p tool))
                         web-tools))))
 
-  :doc "wrap leaves the upstream gptel-agent entries in place"
+  :doc "registration leaves the upstream gptel-agent entries in place"
   (progn
     (mevedel-tool-web--register)
     (should (gptel-get-tool '("gptel-agent" "WebSearch")))
@@ -170,6 +188,164 @@
               (should (eq 'org-mode (plist-get plist :body-mode))))))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
+
+
+;;
+;;; YouTube resource ownership
+
+(mevedel-deftest mevedel-tool-web--youtube ()
+  ,test
+  (test)
+  :doc "releases only the response buffers its own retrievals created"
+  (let* ((unrelated (test-mevedel-tool-web--response-buffer
+                     " *test-yt-unrelated*"))
+         (foreign (test-mevedel-tool-web--response-buffer
+                   " *test-yt-foreign*" #'ignore))
+         (owned nil)
+         (result nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-tool-web--youtube-function)
+                     (lambda ()
+                       (lambda (continuation _url)
+                         (setq owned
+                               (list (test-mevedel-tool-web--response-buffer
+                                      " *test-yt-watch*" continuation)
+                                     (test-mevedel-tool-web--response-buffer
+                                      " *test-yt-redirect*" continuation)
+                                     (test-mevedel-tool-web--response-buffer
+                                      " *test-yt-caption*" continuation)))
+                         (funcall continuation "transcript")))))
+            (mevedel-tool-web--youtube
+             (lambda (value) (setq result value))
+             '(:url "https://www.youtube.com/watch?v=abc")))
+          (should (equal '(:result "transcript") result))
+          (should-not (cl-find-if #'buffer-live-p owned))
+          (should (buffer-live-p foreign))
+          (should (buffer-live-p unrelated)))
+      (dolist (buffer (cons unrelated (cons foreign owned)))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))))
+  :doc "releases buffers when the call reports an error"
+  (let ((owned nil)
+        (result nil))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-tool-web--youtube-function)
+                     (lambda ()
+                       (lambda (continuation _url)
+                         (setq owned
+                               (test-mevedel-tool-web--response-buffer
+                                " *test-yt-failed*" continuation))
+                         (funcall continuation
+                                  "Error fetching page: failed")))))
+            (mevedel-tool-web--youtube
+             (lambda (value) (setq result value))
+             '(:url "https://www.youtube.com/watch?v=abc")))
+          (should (string-prefix-p "Error fetching page"
+                                   (plist-get result :result)))
+          (should-not (buffer-live-p owned)))
+      (when (buffer-live-p owned) (kill-buffer owned))))
+  :doc "settles once when the handler calls back and then signals"
+  (let ((results nil))
+    (cl-letf (((symbol-function 'mevedel-tool-web--youtube-function)
+               (lambda ()
+                 (lambda (continuation _url)
+                   (funcall continuation "first")
+                   (error "Upstream failed after answering")))))
+      (mevedel-tool-web--youtube
+       (lambda (value) (push value results))
+       '(:url "https://www.youtube.com/watch?v=abc")))
+    (should (equal '((:result "first")) results)))
+  :doc "reports a synchronous upstream failure as an error result"
+  (let ((result nil))
+    (cl-letf (((symbol-function 'mevedel-tool-web--youtube-function)
+               (lambda () (lambda (_only-one-argument) nil))))
+      (mevedel-tool-web--youtube
+       (lambda (value) (setq result value))
+       '(:url "https://www.youtube.com/watch?v=abc")))
+    (should (string-prefix-p "Error: " (plist-get result :result))))
+  :doc "reports an unavailable upstream tool instead of calling nil"
+  (let ((result nil))
+    (cl-letf (((symbol-function 'mevedel-tool-web--youtube-function)
+               (lambda () nil)))
+      (mevedel-tool-web--youtube
+       (lambda (value) (setq result value))
+       '(:url "https://www.youtube.com/watch?v=abc")))
+    (should (string-match-p "unavailable" (plist-get result :result)))))
+
+(mevedel-deftest mevedel-tool-web--youtube-function ()
+  ,test
+  (test)
+  :doc "resolves the upstream handler only while it stays asynchronous"
+  (let* ((tool (gptel-get-tool '("gptel-agent" "YouTube")))
+         (sync (and tool (gptel--copy-tool tool))))
+    (should (functionp (mevedel-tool-web--youtube-function)))
+    (setf (gptel-tool-async sync) nil)
+    (cl-letf (((symbol-function 'gptel-get-tool) (lambda (_path) sync)))
+      (should-not (mevedel-tool-web--youtube-function))))
+  :doc "url-http stamps retrieval arguments into the response buffer"
+  (let* ((server nil)
+         (port nil)
+         (continuation (lambda (&rest _) nil))
+         (buffer nil))
+    (unwind-protect
+        (progn
+          (setq server
+                (make-network-process
+                 :name "mevedel-web-test-server" :server t :host 'local
+                 :service t :family 'ipv4 :noquery t
+                 :filter
+                 (lambda (proc _string)
+                   (process-send-string
+                    proc "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
+                   (process-send-eof proc))))
+          (setq port (plist-get (process-contact server t) :service))
+          ;; Upstream passes its callback among the retrieval arguments,
+          ;; which is what makes it identify its own response buffers.
+          (setq buffer
+                (url-retrieve (format "http://127.0.0.1:%s/" port)
+                              #'ignore (list continuation) t))
+          (should (buffer-live-p buffer))
+          (should (with-current-buffer buffer
+                    (memq continuation
+                          (bound-and-true-p url-callback-arguments)))))
+      (when (buffer-live-p buffer)
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer buffer)))
+      (when (process-live-p server) (delete-process server)))))
+
+
+(mevedel-deftest mevedel-tool-web--youtube/pipeline
+  (:before-each (mevedel-tool-clear-registry)
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+  :doc "the registered tool returns its result through the handler step"
+  (let ((context nil))
+    (mevedel-tool-web--register)
+    (cl-letf (((symbol-function 'mevedel-tool-web--youtube-function)
+               (lambda () (lambda (callback _url) (funcall callback "shown")))))
+      (mevedel-pipeline--step-handler
+       (list :tool (mevedel-tool-get "YouTube" "mevedel-gptel-agent")
+             :args '(:url "https://www.youtube.com/watch?v=abc")
+             :name "YouTube")
+       (lambda (value) (setq context value))
+       #'ignore))
+    (should (equal "shown" (plist-get context :result)))
+    (should-not (eq 'error (plist-get context :status))))
+  :doc "an unresolvable upstream handler settles as an error result"
+  (let ((context nil))
+    (mevedel-tool-web--register)
+    (cl-letf (((symbol-function 'mevedel-tool-web--youtube-function)
+               (lambda () nil)))
+      (mevedel-pipeline--step-handler
+       (list :tool (mevedel-tool-get "YouTube" "mevedel-gptel-agent")
+             :args '(:url "https://www.youtube.com/watch?v=abc")
+             :name "YouTube")
+       (lambda (value) (setq context value))
+       #'ignore))
+    (should (string-match-p "unavailable" (plist-get context :result)))))
+
 
 (provide 'test-mevedel-tool-web)
 ;;; test-mevedel-tool-web.el ends here
