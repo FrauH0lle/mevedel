@@ -611,5 +611,33 @@
       (delete-directory root t)
       (delete-directory metadata t))))
 
+(mevedel-deftest mevedel-workspace-file-buffers ()
+  ,test
+  (test)
+  :doc "returns live buffers visiting files under the workspace root"
+  (let* ((root (make-temp-file "mevedel-wfb-" t))
+         (inside (file-name-concat root "inside.el"))
+         (outside (make-temp-file "mevedel-wfb-outside-" nil ".el"))
+         buffers)
+    (unwind-protect
+        (progn
+          (write-region "" nil inside nil 'silent)
+          (setq buffers (list (find-file-noselect inside)
+                              (find-file-noselect outside)))
+          (let ((workspace (mevedel-workspace-get-or-create
+                            'project root root "wfb")))
+            (let ((found (mevedel-workspace-file-buffers workspace)))
+              (should (memq (car buffers) found))
+              (should-not (memq (cadr buffers) found))))
+          ;; No workspace, no scan.
+          (should-not (mevedel-workspace-file-buffers nil)))
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer)
+          (set-buffer-modified-p nil)
+          (kill-buffer buffer)))
+      (mevedel-workspace-clear-registry)
+      (delete-file outside)
+      (delete-directory root t))))
+
 (provide 'test-mevedel-workspace)
 ;;; test-mevedel-workspace.el ends here

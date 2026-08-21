@@ -6,6 +6,10 @@
 ;; validation, safe string copying, and range-aware invalidation after edits.
 ;; Mention kinds keep ownership of target lookup and request-time expansion.
 
+;; This module also owns the @file/@mcp mention grammar: validation
+;; here and expansion in `mevedel-mentions' read the same regexps, and
+;; the binding layer must not reach up for them.
+
 ;;; Code:
 
 (eval-when-compile
@@ -24,7 +28,6 @@ reach up into the expansion module for it.")
 (defconst mevedel-mention-bindings-mcp-regexp
   "@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)"
   "Regexp matching an @mcp resource mention.")
-
 
 
 ;;

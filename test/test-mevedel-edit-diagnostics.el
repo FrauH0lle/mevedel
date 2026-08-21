@@ -78,6 +78,7 @@
       (when (buffer-live-p source) (kill-buffer source))
       (when (buffer-live-p chat) (kill-buffer chat))
       (delete-directory root t))))
+
 (mevedel-deftest mevedel-edit-diagnostics-after-edit
   (:after-each (mevedel-workspace-clear-registry))
   ,test
