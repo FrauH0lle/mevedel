@@ -24,6 +24,12 @@
 (declare-function mevedel--mark-buffer-source-missing
                   "mevedel-directive-source" (buffer))
 
+;; `mevedel-edit-diagnostics'
+(declare-function mevedel-edit-diagnostics-after-edit
+                  "mevedel-edit-diagnostics" (buffer path continuation))
+(declare-function mevedel-edit-diagnostics-before-edit
+                  "mevedel-edit-diagnostics" (buffer path))
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
                   "mevedel-execution-target" (workspace-root))
@@ -59,12 +65,6 @@
                   "mevedel-resource" (attempt &optional executor options))
 (declare-function mevedel-resource-prepare
                   "mevedel-resource" (operation address context))
-
-;; `mevedel-edit-diagnostics'
-(declare-function mevedel-edit-diagnostics-after-edit
-                  "mevedel-edit-diagnostics" (buffer path continuation))
-(declare-function mevedel-edit-diagnostics-before-edit
-                  "mevedel-edit-diagnostics" (buffer path))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-shallow-ensure-files

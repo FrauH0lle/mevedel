@@ -31,7 +31,6 @@
 (declare-function flymake-diagnostics "flymake" (&optional beg end))
 (declare-function flymake-disabled-backends "flymake" ())
 (declare-function flymake-start "flymake" (&optional defer force))
-(defvar flymake-after-update-hook)
 (defvar flymake-mode)
 
 ;; `mevedel-reminders'
@@ -398,7 +397,7 @@ identifies the turn.  FLYMAKE-P and FLYCHECK-P select the active checkers."
                  (finish 'timeout nil))))))))
 
 (defun mevedel-edit-diagnostics-after-edit (buffer path continuation)
-  "Refresh diagnostics for PATH, then call CONTINUATION.
+  "Refresh BUFFER's diagnostics for PATH, then call CONTINUATION.
 Only an existing visited buffer is checked.  Active Flymake and Flycheck
 checkers get up to 30 seconds to finish."
   (let* ((path (expand-file-name path))
