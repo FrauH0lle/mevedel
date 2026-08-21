@@ -166,6 +166,14 @@
     (when (eq 0 (plist-get result :exit))
       (string-trim (plist-get result :output)))))
 
+(defun mevedel-worktree-repository-root (directory)
+  "Return DIRECTORY's Git top level, or nil when it is not in a repository.
+The public probe for callers that need the repository root rather than the
+directory they happen to be sitting in."
+  (when-let* ((root (mevedel-worktree--git-success-output
+                     directory "rev-parse" "--show-toplevel")))
+    (file-name-as-directory (expand-file-name root))))
+
 (defun mevedel-worktree--git-exit (directory &rest args)
   "Return Git exit status for ARGS in DIRECTORY."
   (plist-get (apply #'mevedel-worktree--git-result directory args) :exit))

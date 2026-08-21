@@ -198,7 +198,12 @@ no verbatim tail, and therefore retains `PreCompact`/`PostCompact`, bounded
 request retries, segment rotation, persistence, and the new compact context
 epoch. Worktree/Summary makes one summary request without compaction hooks,
 source mutation, segment rotation, or a context epoch. Before target insertion
-it rewrites source-checkout absolute paths relative to the repository root.
+it rewrites source-checkout absolute paths relative to the repository root,
+in both the client and the target-native spelling: model-visible paths are
+target-native, so on a remote session that is the only spelling the evidence
+carries. The repository root is the base rather than the session's working
+directory, because the target session's working directory is its own worktree
+top level.
 The successful result is cached in the durable retry record, so a later
 artifact, worktree, or implementation-start failure does not regenerate it.
 
