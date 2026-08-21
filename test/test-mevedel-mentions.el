@@ -1602,10 +1602,39 @@ Returns (buffer . overlay)."
         (kill-buffer buf)
         (when (and file (file-exists-p file)) (delete-file file))))))
 
-(mevedel-deftest mevedel-file-capf
-  (:doc "`mevedel-file-capf' binds a completed file's absolute pathname")
+(mevedel-deftest mevedel-file-capf ()
   ,test
   (test)
+  :doc "completion stays inside the session's allowed roots"
+  ;; The candidate list is built from whatever the user typed, expanded
+  ;; against the workspace root, with no containment test: `../' walks to the
+  ;; filesystem root and an absolute prefix enumerates anywhere.  On a remote
+  ;; workspace that also drives synchronous TRAMP while the user is typing.
+  (let* ((base (make-temp-file "mevedel-capf-base-" t))
+         (root (expand-file-name "ws" base))
+         (temporary-file-directory (file-name-as-directory
+                                    (expand-file-name "tmp" root)))
+         (workspace (mevedel-workspace--create
+                     :type 'file :id root :root root :name "capf-root")))
+    (make-directory temporary-file-directory t)
+    (with-temp-file (expand-file-name "sibling.txt" base) (insert "outside\n"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-workspace)
+                   (lambda (&optional _buffer) workspace)))
+          ;; No parent candidate at a root boundary.
+          (with-temp-buffer
+            (insert "@file:")
+            (should-not (member "../" (nth 2 (mevedel-file-capf)))))
+          ;; An out-of-root prefix yields nothing and probes nothing.
+          (with-temp-buffer
+            (insert (format "@file:%s/" (directory-file-name base)))
+            (cl-letf (((symbol-function 'directory-files)
+                       (lambda (&rest _)
+                         (error "enumerated outside the allowed roots"))))
+              (should-not (mevedel-file-capf)))))
+      (delete-directory base t)))
+
+  :doc "`mevedel-file-capf' binds a completed file's absolute pathname"
   (let* ((root (make-temp-file "mevedel file capf-" t))
          (path (expand-file-name "target file.txt" root))
          (workspace (mevedel-workspace--create
