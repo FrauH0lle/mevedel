@@ -10,6 +10,21 @@
   "## Scope\n- test\n## Constraints & Preferences\n- none\n## Work & Evidence\n- test\n## Key Decisions\n- none\n## Open Questions & Risks\n- none\n## Critical Context\n- none\n## Relevant Files\n- none\n## Skills Invoked\n- none\n## Next Steps\n- test"
   "Valid continuation summary used by compaction tests.")
 
+(defun test-mevedel-compact--read-telemetry (session)
+  "Return the telemetry events SESSION has written, oldest first."
+  (require 'mevedel-telemetry)
+  (mevedel-telemetry-flush session)
+  (when-let* ((path (mevedel-telemetry-path session))
+              ((file-exists-p path)))
+    (with-temp-buffer
+      (insert-file-contents path)
+      (goto-char (point-min))
+      (let (events)
+        (condition-case nil
+            (while t (push (read (current-buffer)) events))
+          (end-of-file nil))
+        (nreverse events)))))
+
 (defun test-mevedel-compact--failing-hook (_event)
   "Signal the hook failure used by fail-closed compaction tests."
   (error "Hook failed"))
