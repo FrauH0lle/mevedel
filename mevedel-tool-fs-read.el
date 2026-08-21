@@ -593,6 +593,15 @@ text limit and may be sent by models as a defaulted optional value."
     (dolist (key '(:offset :limit :max_width :max_height :max_tokens))
       (when (equal (plist-get normalized key) 0)
         (plist-put normalized key nil)))
+    ;; A stale line number or model arithmetic near the top of a file
+    ;; goes negative; answering it with content, or with an empty
+    ;; success, reads as the file rather than as the range.  The media
+    ;; keys keep their own validator, which owns their message.
+    (dolist (key '(:offset :limit))
+      (let ((value (plist-get normalized key)))
+        (when (and (numberp value) (< value 0))
+          (error "Parameter %s must be a positive integer"
+                 (substring (symbol-name key) 1)))))
     normalized))
 
 (defun mevedel-tool-fs-read--media-file (path args)
@@ -1019,8 +1028,21 @@ wrap in `condition-case'."
                       (delete-region (point-min) (point))
                       (cl-incf buffer-start-offset deleted))
                     (goto-char (point-min))))
+                (when (and range-found
+                           (> lines-to-skip 0)
+                           (= (point-min) (point-max))
+                           (>= byte-offset file-size))
+                  ;; The skip consumed the final newline exactly and no
+                  ;; bytes remain: the offset names the first line past
+                  ;; the end, which is the one a stale continuation hint
+                  ;; hands the model.  An empty buffer with bytes still
+                  ;; unread just means the next chunk has not arrived.
+                  (setq range-found nil))
                 (if (not range-found)
-                    (erase-buffer)
+                    (error "Read offset %d starts after the last line of %s"
+                           start-line
+                           (mevedel-tool-fs-read--visible-path
+                            (or display-path path)))
                   (let (selected-end)
                     (cl-block read
                       (while (> lines-to-read 0)
@@ -1269,7 +1291,10 @@ content, not a read failure.\n</system-reminder>"
               (num-lines (or limit mevedel-tool-fs-read--default-limit)))
           (goto-char (point-min))
           (when (> start-line 1)
-            (forward-line (1- start-line))
+            (when (or (not (zerop (forward-line (1- start-line))))
+                      (eobp))
+              (error "Read offset %d starts after the last line of %s"
+                     start-line address))
             (delete-region (point-min) (point)))
           (let ((line-truncated-p
                  (mevedel-tool-fs-read--truncate-buffer-to-lines num-lines)))

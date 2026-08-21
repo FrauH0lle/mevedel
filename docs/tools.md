@@ -139,6 +139,11 @@ Code navigation answers the location it was asked for or reports why it
 cannot. A Treesitter line or column the file does not have is an error, never
 the nearest position that does exist; the buffer is widened first, and the
 column is an Emacs display column, so a tab counts as the width it displays.
+Read and Grep pagination follows the same policy: a negative `offset`,
+`limit`, or `head_limit` is an error, a Read range starting past the last
+line is an error naming the offset, and a Grep offset past the last output
+line answers about the range instead of returning an empty success
+indistinguishable from no matches.
 Imenu descends every nesting level and prefixes each leaf with its category
 path, so class- and namespace-shaped indexes are listed to their full depth,
 with whole-buffer line numbers even when the visiting buffer is narrowed. Only

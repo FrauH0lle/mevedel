@@ -590,6 +590,45 @@
             (should (string-match-p "2\tb" result))
             (should-not (string-match-p "3\tc" result))))
       (delete-file tmp)))
+  :doc "rejects a negative text range"
+  ;; A negative limit read as an empty success, and a negative offset
+  ;; was clamped to line 1 -- content the label does not describe.
+  (let ((tmp (make-temp-file "mevedel-test-")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp (insert "a\nb\nc\n"))
+          (should-error
+           (mevedel-tool-fs-read--file (list :file_path tmp :limit -5))
+           :type 'error)
+          (should-error
+           (mevedel-tool-fs-read--file (list :file_path tmp :offset -3))
+           :type 'error)
+          ;; A negative float must not slip past an integer-only check.
+          (should-error
+           (mevedel-tool-fs-read--file (list :file_path tmp :offset -3.0))
+           :type 'error))
+      (delete-file tmp)))
+  :doc "reports a range that starts after the last line"
+  ;; An empty success is indistinguishable from an empty file, and this
+  ;; tool explicitly annotates the genuinely-empty case.  Line four of a
+  ;; three-line file is the exact offset a stale continuation hint hands
+  ;; the model.
+  (let ((tmp (make-temp-file "mevedel-test-")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp (insert "a\nb\nc\n"))
+          (should-error
+           (mevedel-tool-fs-read--file (list :file_path tmp :offset 99))
+           :type 'error)
+          (should-error
+           (mevedel-tool-fs-read--file (list :file_path tmp :offset 4))
+           :type 'error)
+          ;; The last real line still reads.
+          (should (string-match-p
+                   "3\tc"
+                   (mevedel-tool-fs-read--file
+                    (list :file_path tmp :offset 3)))))
+      (delete-file tmp)))
   :doc "errors on non-existent file"
   (should-error
    (mevedel-tool-fs-read--file (list :file_path "/nonexistent/file.txt"))
