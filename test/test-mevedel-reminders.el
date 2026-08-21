@@ -766,7 +766,8 @@ this collapses both shapes to the delivered text."
 ;;; Agent invocation wiring
 
 (mevedel-deftest mevedel-agent-invocation-create
-  (:after-each (setq mevedel-agent--registry nil))
+  (:before-each (mevedel-test--capture-agent-registry)
+   :after-each (mevedel-test--restore-agent-registry))
   ,test
   (test)
 
@@ -966,7 +967,8 @@ this collapses both shapes to the delivered text."
 
 
 (mevedel-deftest mevedel-reminders-make-max-turns-warning
-  (:after-each (setq mevedel-agent--registry nil))
+  (:before-each (mevedel-test--capture-agent-registry)
+   :after-each (mevedel-test--restore-agent-registry))
   ,test
   (test)
 
@@ -2299,7 +2301,8 @@ this collapses both shapes to the delivered text."
 
 
 (mevedel-deftest mevedel-agent-invocation-create/max-turns
-  (:after-each (setq mevedel-agent--registry nil))
+  (:before-each (mevedel-test--capture-agent-registry)
+   :after-each (mevedel-test--restore-agent-registry))
   ,test
   (test)
 

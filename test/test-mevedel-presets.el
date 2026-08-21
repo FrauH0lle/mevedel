@@ -926,7 +926,8 @@
 ;;; mevedel-define-agent macro
 
 (mevedel-deftest mevedel-define-agent
-  (:after-each (setq mevedel-agent--registry nil))
+  (:before-each (mevedel-test--capture-agent-registry)
+   :after-each (mevedel-test--restore-agent-registry))
   ,test
   (test)
 

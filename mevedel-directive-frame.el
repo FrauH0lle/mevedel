@@ -28,16 +28,12 @@
 (eval-when-compile (require 'cl-lib))
 
 ;; `mevedel-chat'
-(declare-function mevedel--directive-session-buffer
-                  "mevedel-chat" (directive workspace))
 
 ;; `mevedel-directive-source'
 (declare-function mevedel--directive-record
                   "mevedel-directive-source" (directive))
 
 ;; `mevedel-instruction-registry'
-(declare-function mevedel--instruction-buffer-workspace
-                  "mevedel-instruction-registry" (buffer))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-current-label
@@ -537,24 +533,6 @@ the frame and a long one does not cover the buffer behind it."
 
 ;;
 ;;; Display
-
-(defun mevedel-directive-frame--resolve (directive)
-  "Return (VIEW-BUFFER . DIRECTIVE-ID) for DIRECTIVE, or signal."
-  (require 'mevedel-chat)
-  (require 'mevedel-overlays)
-  (let* ((owner (or (mevedel--topmost-instruction directive 'directive)
-                    directive))
-         (workspace
-          (mevedel--instruction-buffer-workspace (overlay-buffer owner)))
-         (record (mevedel--directive-record owner))
-         (data-buffer
-          (car (mevedel--directive-session-buffer record workspace)))
-         (view-buffer
-          (and (buffer-live-p data-buffer)
-               (buffer-local-value 'mevedel--view-buffer data-buffer))))
-    (unless (buffer-live-p view-buffer)
-      (error "Directive session has no live view"))
-    (cons view-buffer (mevedel-directive-id record))))
 
 ;;;###autoload
 (defun mevedel-directive-frame-display (directive view-buffer &optional focus)

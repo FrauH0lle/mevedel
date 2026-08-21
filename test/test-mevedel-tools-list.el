@@ -425,9 +425,10 @@
       (mevedel-tools-list-test--cleanup-list data-buffer))))
 
 (mevedel-deftest mevedel-tools-list--main-data-buffer
-  (:after-each (progn
+  (:before-each (mevedel-test--capture-agent-registry)
+   :after-each (progn
                  (mevedel-workspace-clear-registry)
-                 (setq mevedel-agent--registry nil)
+                 (mevedel-test--restore-agent-registry)
                  (mevedel-tools-list-test--cleanup-list)))
   ,test
   (test)

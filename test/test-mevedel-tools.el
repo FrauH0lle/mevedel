@@ -40,10 +40,6 @@
 
 (defvar gptel--known-backends)
 
-(defvar mevedel-tools-test--agent-registry
-  (copy-sequence mevedel-agent--registry)
-  "Stable built-in agent registry for isolated tool tests.")
-
 
 ;;
 ;;; Helpers
@@ -121,7 +117,8 @@
       (should (equal '(:parsed t) (plist-get config :tools))))))
 
 (mevedel-deftest mevedel-tools--ctx-deferred-set
-  (:after-each (mevedel-workspace-clear-registry))
+  (:before-each (mevedel-test--capture-agent-registry)
+   :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
 
@@ -140,7 +137,7 @@
           '((("mevedel" "Y") . "y")))
     (should (equal '((("mevedel" "Y") . "y"))
                    (mevedel-tools--ctx-deferred-set inv)))
-    (setq mevedel-agent--registry nil))
+    (mevedel-test--restore-agent-registry))
 
   :doc "setf writes to the correct underlying slot per struct"
   (let* ((_ (mevedel-define-agent a2 :description "a" :tools nil))
@@ -153,11 +150,12 @@
                    (mevedel-session-deferred-set session)))
     (should (equal '((("y" "b") . "2"))
                    (mevedel-agent-invocation-deferred-set inv)))
-    (setq mevedel-agent--registry nil)))
+    (mevedel-test--restore-agent-registry)))
 
 
 (mevedel-deftest mevedel-tools--ctx-deferred-injected
-  (:after-each (mevedel-workspace-clear-registry))
+  (:before-each (mevedel-test--capture-agent-registry)
+   :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
 
@@ -174,15 +172,16 @@
     (push (cons "Bar" 3) (mevedel-tools--ctx-deferred-injected inv))
     (should (equal '(("Bar" . 3))
                    (mevedel-agent-invocation-deferred-injected inv)))
-    (setq mevedel-agent--registry nil)))
+    (mevedel-test--restore-agent-registry)))
 
 
 ;;
 ;;; Deferred context resolution
 
 (mevedel-deftest mevedel-tools--deferred-context-for
-  (:after-each (progn (mevedel-workspace-clear-registry)
-                      (setq mevedel-agent--registry nil)))
+  (:before-each (mevedel-test--capture-agent-registry)
+   :after-each (progn (mevedel-workspace-clear-registry)
+                      (mevedel-test--restore-agent-registry)))
   ,test
   (test)
 
@@ -223,8 +222,9 @@
     (should-not (mevedel-tools--deferred-context-for fsm))))
 
 (mevedel-deftest mevedel-tools--current-deferred-context
-  (:after-each (progn (mevedel-workspace-clear-registry)
-                      (setq mevedel-agent--registry nil)))
+  (:before-each (mevedel-test--capture-agent-registry)
+   :after-each (progn (mevedel-workspace-clear-registry)
+                      (mevedel-test--restore-agent-registry)))
   ,test
   (test)
 
@@ -1065,7 +1065,8 @@ function returning the states entered by test handlers."
 ;;; Deferred search
 
 (mevedel-deftest mevedel-tools--search-deferred
-  (:after-each (mevedel-workspace-clear-registry))
+  (:before-each (mevedel-test--capture-agent-registry)
+   :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
 
@@ -1110,7 +1111,7 @@ function returning the states entered by test handlers."
           '((("mevedel" "Edit") . "Replace text in a file")))
     (let ((matches (mevedel-tools--search-deferred inv "edit")))
       (should (= 1 (length matches))))
-    (setq mevedel-agent--registry nil)))
+    (mevedel-test--restore-agent-registry)))
 
 
 ;;
@@ -1499,8 +1500,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
       (kill-buffer buf))))
 
 (mevedel-deftest mevedel-tools--handle-deferred-inject
-  (:after-each (progn (mevedel-workspace-clear-registry)
-                      (setq mevedel-agent--registry nil)))
+  (:before-each (mevedel-test--capture-agent-registry)
+   :after-each (progn (mevedel-workspace-clear-registry)
+                      (mevedel-test--restore-agent-registry)))
   ,test
   (test)
 

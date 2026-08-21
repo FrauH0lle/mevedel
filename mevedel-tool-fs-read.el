@@ -64,7 +64,6 @@
                   "mevedel-system" (workspace &optional working-directory))
 
 ;; `mevedel-tool-fs'
-(declare-function mevedel-tool-fs-current-workspace-root "mevedel-tool-fs" ())
 (declare-function mevedel-tool-fs-display-path "mevedel-tool-fs" (path))
 (declare-function mevedel-tool-fs-executable-find "mevedel-tool-fs" (name path))
 (declare-function mevedel-tool-fs-handler-result "mevedel-tool-fs" (result))
