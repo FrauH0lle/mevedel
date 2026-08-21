@@ -775,22 +775,43 @@ Returns:
         (when skill
           (let* ((delete-context
                   (mevedel-skills-input-command-delete-context skill-pos))
-                 (delete-start (plist-get delete-context :delete-start))
                  (after-prefix (plist-get delete-context :after-prefix))
                  (buffer (current-buffer))
-                 (region-end (cdr region))
-                 (dispatch-result 'skill))
+                 ;; Preparation is asynchronous whenever the body injects, so
+                 ;; the draft can move, shrink, or be replaced before the
+                 ;; outcome arrives.  Markers follow an edit where integers
+                 ;; would address the wrong text or past the end of the
+                 ;; buffer, and the snapshot says whether this is still the
+                 ;; command that was dispatched.
+                 (delete-start (copy-marker
+                                (plist-get delete-context :delete-start) nil))
+                 (region-end (copy-marker (cdr region) t))
+                 (snapshot (buffer-substring-no-properties
+                            delete-start region-end)))
             (mevedel-skills-invoke
              skill args
              (lambda (outcome)
-               (when (buffer-live-p buffer)
-                 (with-current-buffer buffer
-                   (setq dispatch-result
-                         (mevedel-skills-input--handle-user-skill-outcome
-                          skill outcome delete-start region-end
-                          after-prefix continue-fn)))))
+               (unwind-protect
+                   (when (and (buffer-live-p buffer)
+                              (marker-position delete-start)
+                              (marker-position region-end))
+                     (with-current-buffer buffer
+                       (if (equal snapshot
+                                  (buffer-substring-no-properties
+                                   delete-start region-end))
+                           (mevedel-skills-input--handle-user-skill-outcome
+                            skill outcome
+                            (marker-position delete-start)
+                            (marker-position region-end)
+                            after-prefix continue-fn)
+                         (message
+                          "mevedel: skill draft changed during preparation, not sent"))))
+                 (set-marker delete-start nil)
+                 (set-marker region-end nil)))
              :origin 'user)
-            dispatch-result))))))
+            ;; The outcome decides what happened, and it may arrive after this
+            ;; returns; the caller only needs to know a skill took the send.
+            'skill))))))
 
 (defun mevedel-skills-input--prepare-inline-attachments
     (mentions callback &optional prepared)

@@ -385,6 +385,13 @@ skill before dispatching anything; the first injection, permission,
 validation, or hook failure sends neither a partial request nor a child and
 leaves the direct draft or queued entry editable.
 
+Preparation is asynchronous whenever a body injects, so the raw `gptel-send`
+path tracks the command it dispatched with markers rather than the positions
+it started from, and abandons a late outcome when that text no longer matches
+what was dispatched. A draft the user edits, shortens, or replaces during
+preparation is therefore left as the user left it, and nothing is sent for
+arguments that no longer exist.
+
 Skill completion binds the exact visible token to the selected canonical
 `SKILL.md` source immediately. Manually typed known skills bind at send before
 preparation, queueing, and history insertion. Dispatch reloads the selected

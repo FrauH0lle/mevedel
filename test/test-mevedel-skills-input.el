@@ -691,6 +691,56 @@ spanning lines")))
           (should (equal "Hello world!"
                          (plist-get data :expanded-prompt)))))))
 
+  :doc "a draft shortened during preparation does not break the dispatch"
+  ;; Preparation is asynchronous whenever the body injects, and the range to
+  ;; replace is captured before it starts.  If the draft shrinks meanwhile,
+  ;; that captured end is past the end of the buffer.
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "greet"
+                 :body "Hello !el`(+ 1 2)`"))
+         (pending nil))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+                   (lambda (_tool callback &rest _)
+                     (setq pending callback))))
+          (insert "### $greet world and more text here")
+          (goto-char (point-max))
+          (mevedel-skills-input-dispatch-command)
+          (should pending)
+          ;; The user trims the draft while the injection is still running.
+          (delete-region (- (point-max) 20) (point-max)))
+        (funcall pending "3")
+        (should (stringp (buffer-string))))))
+
+  :doc "a draft replaced during preparation is left alone and not sent"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "greet"
+                 :body "Hello !el`(+ 1 2)`"))
+         (pending nil)
+         (sent nil))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+                   (lambda (_tool callback &rest _)
+                     (setq pending callback))))
+          (insert "### $greet world")
+          (goto-char (point-max))
+          (mevedel-skills-input-dispatch-command)
+          (should pending)
+          ;; The user rewrites the command into something else entirely.
+          (delete-region (point-min) (point-max))
+          (insert "### never mind"))
+        (mevedel-test--with-captured-messages nil
+          (funcall pending "3"))
+        ;; The prepared body belongs to arguments that no longer exist.
+        (should (equal "### never mind" (buffer-string)))
+        (should-not sent))))
+
   :doc "user-invocable: false leading skill falls through to inline planning"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
