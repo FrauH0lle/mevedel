@@ -608,70 +608,90 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                       (submission (plist-get entry :submission))
                       (dropped-file-grants
                        (plist-get entry :dropped-file-grants)))
-                 (let ((before-send
-                        (lambda ()
-                          (mevedel-view--activate-dropped-file-grants
-                           dropped-file-grants session)))
-                       (after-insert
-                        (lambda ()
-                          (when (fboundp 'mevedel-telemetry-record)
-                            (mevedel-telemetry-record
-                             session 'user-message-dequeued
-                             :message-hash (secure-hash 'sha256 input)
-                             :queue-depth-before
-                             (length (mevedel-view--pending-follow-ups session))
-                             :queue-duration-ms
-                             (and (numberp (plist-get entry :queued-at-time))
-                                  (round
-                                   (* 1000.0
-                                      (- (float-time)
-                                         (plist-get entry
-                                                    :queued-at-time)))))
-                             :enqueue-goal-id
-                             (plist-get entry :queued-at-goal-id)
-                             :dequeue-goal-id
-                             (and (mevedel-session-goal session)
-                                  (mevedel-goal-id
-                                   (mevedel-session-goal session)))))
-                          (mevedel-view--set-pending-follow-ups
-                           (delq entry
-                                 (mevedel-view--pending-follow-ups session))
-                           session)
-                          (mevedel-view--interaction-rebuild))))
+                 (let* ((active-grants-before
+                         (copy-sequence
+                          (mevedel-session-active-dropped-file-grants
+                           session)))
+                        (delivered nil)
+                        (before-send
+                         (lambda ()
+                           (mevedel-view--activate-dropped-file-grants
+                            dropped-file-grants session)))
+                        ;; The entry needs its grant active to expand its own
+                        ;; mentions, so an attempt that never reaches the
+                        ;; transcript gives that authority back.  Once the
+                        ;; prompt is inserted and the entry dequeued it is
+                        ;; delivered, and a later failure keeps the grant.
+                        (release
+                         (lambda ()
+                           (unless delivered
+                             (mevedel-session--set-active-dropped-file-grants
+                              session active-grants-before))
+                           (setq mevedel-view--pending-guest-attribution nil)
+                           (mevedel-view--interaction-rebuild)))
+                        (after-insert
+                         (lambda ()
+                           (when (fboundp 'mevedel-telemetry-record)
+                             (mevedel-telemetry-record
+                              session 'user-message-dequeued
+                              :message-hash (secure-hash 'sha256 input)
+                              :queue-depth-before
+                              (length
+                               (mevedel-view--pending-follow-ups session))
+                              :queue-duration-ms
+                              (and (numberp (plist-get entry :queued-at-time))
+                                   (round
+                                    (* 1000.0
+                                       (- (float-time)
+                                          (plist-get entry
+                                                     :queued-at-time)))))
+                              :enqueue-goal-id
+                              (plist-get entry :queued-at-goal-id)
+                              :dequeue-goal-id
+                              (and (mevedel-session-goal session)
+                                   (mevedel-goal-id
+                                    (mevedel-session-goal session)))))
+                           (setq delivered t)
+                           (mevedel-view--set-pending-follow-ups
+                            (delq entry
+                                  (mevedel-view--pending-follow-ups session))
+                            session)
+                           (mevedel-view--interaction-rebuild))))
                    ;; Consumed where the prompt and its hook audits are
                    ;; inserted; cleared on every blocked or failed path.
                    (setq mevedel-view--pending-guest-attribution
                          (plist-get entry :guest-name))
-                   (cond
-                    (scope
-                     (condition-case err
-                         (progn
-                           (funcall before-send)
-                           (mevedel-view--dispatch-directive-input scope input)
-                           (funcall after-insert))
-                       (error
-                        (setq mevedel-view--pending-guest-attribution nil)
-                        (mevedel-view--interaction-rebuild)
-                        (message
-                         "mevedel: queued directive follow-up failed: %s"
-                         (error-message-string err)))))
-                    (submission
-                     (mevedel-view--dispatch-prepared-outcome
-                      submission data-buffer
-                      :before-send before-send
-                      :after-insert after-insert
-                      :on-block
-                      (lambda ()
-                        (setq mevedel-view--pending-guest-attribution nil)
-                        (mevedel-view--interaction-rebuild))))
-                    (t
-                     (mevedel-view--submit-planned-input
-                      input before-send
-                      (lambda ()
-                        (setq mevedel-view--pending-guest-attribution nil)
-                        (mevedel-view--interaction-rebuild))
-                      nil after-insert
-                      (plist-get entry :inert-skills))))))))))))))
+                   ;; A blocked dispatch reports through its own callback,
+                   ;; but preparation and the submit hook re-signal instead,
+                   ;; so both exits have to release what `before-send' took.
+                   (condition-case err
+                       (cond
+                        (scope
+                         (condition-case scope-err
+                             (progn
+                               (funcall before-send)
+                               (mevedel-view--dispatch-directive-input
+                                scope input)
+                               (funcall after-insert))
+                           (error
+                            (funcall release)
+                            (message
+                             "mevedel: queued directive follow-up failed: %s"
+                             (error-message-string scope-err)))))
+                        (submission
+                         (mevedel-view--dispatch-prepared-outcome
+                          submission data-buffer
+                          :before-send before-send
+                          :after-insert after-insert
+                          :on-block release))
+                        (t
+                         (mevedel-view--submit-planned-input
+                          input before-send release
+                          nil after-insert
+                          (plist-get entry :inert-skills))))
+                     ((error quit)
+                      (funcall release)
+                      (signal (car err) (cdr err))))))))))))))
 
 (defun mevedel-view--run-follow-up-drain (data-buffer)
   "Drain one pending follow-up for DATA-BUFFER if it is live.

@@ -282,7 +282,11 @@ Files dropped into the view buffer can add exact, session-scoped `Read`
 grants when the next sent prompt still mentions the same path. These
 grants are in-memory only, do not grant the containing directory, do not
 apply to write tools, and are still lower precedence than explicit deny or
-ask rules and protected-path resource checks.
+ask rules and protected-path resource checks. A queued steering entry or
+follow-up activates its grant before its own mention expansion, which
+needs it to read the dropped file, so the grant is provisional until that
+entry is delivered: an entry that fails to deliver stays pending and its
+grant is given back.
 
 Local slash commands may own deterministic workflows outside the model tool
 pipeline. `/worktree status` and `/worktree create` run argv-safe Git commands

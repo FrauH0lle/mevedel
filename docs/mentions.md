@@ -192,6 +192,8 @@ not grant the containing directory, does not apply to write tools, and is
 not persisted. Explicit deny or ask rules, protected paths, unreadable
 files, and missing files still take their normal paths through the
 permission chain. Pending grants are cleared when the composer is cleared.
+For a queued entry the grant is activated before that entry's mention
+expansion and released again if the entry never reaches the model.
 
 ## Clipboard images
 

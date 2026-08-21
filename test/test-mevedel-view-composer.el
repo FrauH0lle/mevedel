@@ -3931,6 +3931,87 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (= 1 (mevedel-view-test--count-matches
                       "reserved retry context" (buffer-string)))))))
 
+  :doc "an undelivered follow-up leaves no active file grant behind"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'file :id "grant-retry" :root "/tmp"
+                       :name "grant-retry"))
+           (session (mevedel-session-create "main" workspace))
+           (dropped (expand-file-name "dropped.txt" "/tmp"))
+           (submission
+            (mevedel-prompt-submission-create
+             :input "granted prompt" :display-text "granted prompt"
+             :session session :state 'reserved
+             :outcome '(:model-input "granted prompt"
+                        :transcript-input "granted prompt"
+                        :hook-input "granted prompt")))
+           (entry (list :input "granted prompt" :submission submission
+                        :dropped-file-grants (list dropped))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace))
+      (mevedel-session-set-pending-inputs session 'follow-up (list entry))
+      (cl-letf (((symbol-function 'mevedel-view--forward-input-now)
+                 (lambda (&rest _) (error "Before transcript"))))
+        (mevedel-view--drain-follow-up data-buf))
+      ;; The entry stays pending, so the grant it activated to expand its
+      ;; own mentions must not outlive the attempt.
+      (should (eq entry (car (mevedel-session-pending-follow-ups session))))
+      (should-not (mevedel-session-active-dropped-file-grants session))))
+
+  :doc "a plain follow-up failing before insertion gives its grant back"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'file :id "grant-plain" :root "/tmp"
+                       :name "grant-plain"))
+           (session (mevedel-session-create "main" workspace))
+           (dropped (expand-file-name "dropped.txt" "/tmp"))
+           ;; No :submission and no :scope, which is what
+           ;; `mevedel-view--queue-follow-up' actually queues.
+           (entry (list :input "plain prompt"
+                        :dropped-file-grants (list dropped))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace))
+      (mevedel-session-set-pending-inputs session 'follow-up (list entry))
+      (cl-letf (((symbol-function 'mevedel-view--forward-input-now)
+                 (lambda (&rest _) (error "Target not ready"))))
+        (should-error (mevedel-view--drain-follow-up data-buf)))
+      (should (eq entry (car (mevedel-session-pending-follow-ups session))))
+      (should-not (mevedel-session-active-dropped-file-grants session))
+      (with-current-buffer view-buf
+        (should-not mevedel-view--pending-guest-attribution))))
+
+  :doc "a follow-up that fails after insertion keeps its file grant"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'file :id "grant-kept" :root "/tmp"
+                       :name "grant-kept"))
+           (session (mevedel-session-create "main" workspace))
+           (dropped (expand-file-name "kept.txt" "/tmp"))
+           (submission
+            (mevedel-prompt-submission-create
+             :input "kept prompt" :display-text "kept prompt"
+             :session session :state 'reserved
+             :outcome '(:model-input "kept prompt"
+                        :transcript-input "kept prompt"
+                        :hook-input "kept prompt")))
+           (entry (list :input "kept prompt" :submission submission
+                        :dropped-file-grants (list dropped))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace))
+      (mevedel-session-set-pending-inputs session 'follow-up (list entry))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (error "Send failed"))))
+        (mevedel-view--drain-follow-up data-buf))
+      ;; The prompt was inserted and the entry dequeued, so the grant the
+      ;; model needs stays active even though the send failed.
+      (should-not (mevedel-session-pending-follow-ups session))
+      (should
+       (equal (list dropped)
+              (mevedel-session-active-dropped-file-grants session)))))
+
   :doc "a queued directive follow-up keeps its scope through dispatch"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create

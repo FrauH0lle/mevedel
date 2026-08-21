@@ -971,7 +971,8 @@ remain steering, become `Needs review`, and pause all automatic pending-input
 delivery. The user must edit, delete, or recategorize the failed entries, then
 resume delivery from the cockpit. Later follow-ups remain intact.
 
-Entries retain atomically bound mention text and dropped-file grants.
+Entries retain atomically bound mention text and dropped-file grants; a
+grant activates durably only when its entry is delivered.
 Follow-ups run skill planning, mention expansion, and `UserPromptSubmit` only
 when their own turn dispatches; an already prepared steering entry is not
 prepared twice. Accepted input is added to ordinary workspace input history.
