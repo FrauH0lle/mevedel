@@ -1096,9 +1096,9 @@ hooks:
         (should (equal "skill:demo" (mevedel-agent-name agent)))
         (should (equal "captured-system-prompt"
                        (mevedel-agent-system-prompt agent)))
-        ;; The synthetic agent is registered into the buffer-local
-        ;; `mevedel-agents--specs' so spawn can resolve it.
-        (should (assoc-string "skill:demo" mevedel-agents--specs))))))
+        ;; The dispatch passes this agent directly, so a name only the
+        ;; fork knows never enters the preset-owned role roster.
+        (should-not mevedel-agents--specs)))))
 
 (mevedel-deftest mevedel-skills-dispatch-prepared-fork ()
   ,test

@@ -52,10 +52,6 @@
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
-(declare-function mevedel-agents-set-specs
-                  "mevedel-agents" (specs))
-(declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string
@@ -661,11 +657,7 @@ inherited via the request-locals snapshot captured by
 `mevedel-agent-exec-run' at dispatch time, which carries the
 calling buffer's `gptel-tools' through to the spawned agent
 buffer.
-
-Side effect: the synthetic agent is also registered (or refreshed)
-in the request-local agent role roster so the
-spawn path can resolve it the same way it resolves named agents.
-Registration is keyed on the `skill:<skill-name>' identifier."
+"
   (let* ((skill-name (mevedel-skill-name skill))
          (agent-name (concat "skill:" skill-name))
          (parent-system (and (boundp 'gptel-system-prompt)
@@ -680,11 +672,6 @@ Registration is keyed on the `skill:<skill-name>' identifier."
            :system-prompt (or parent-system "")
            :max-turns nil
            :reminders nil)))
-    (let ((spec (mevedel-agent-to-gptel-spec agent))
-          (existing (mevedel-agents-specs)))
-      (mevedel-agents-set-specs
-       (cons spec
-             (cl-remove agent-name existing :key #'car :test #'equal))))
     agent))
 
 (defun mevedel-skills--build-fork-agent (skill)

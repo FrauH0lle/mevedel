@@ -520,39 +520,6 @@
     (mevedel-review--ensure-dispatch-deps 'verify)
     (should (mevedel-agent-get "verifier"))))
 
-(mevedel-deftest mevedel-review--ensure-agent-spec ()
-  ,test
-  (test)
-  :doc "installs reviewer spec into the dispatch data buffer"
-  (let ((data (generate-new-buffer " *mevedel-review-agent-spec*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer data
-            (setq-local mevedel-agents--specs nil))
-          (mevedel-review--ensure-agent-spec data 'review)
-          (with-current-buffer data
-            (let ((spec (cdr (assoc "reviewer"
-                                    mevedel-agents--specs))))
-              (should spec)
-              (should (plist-get spec :system))
-              (should (plist-get spec :tools)))))
-      (kill-buffer data)))
-
-  :doc "installs verifier spec into the dispatch data buffer"
-  (let ((data (generate-new-buffer " *mevedel-verify-agent-spec*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer data
-            (setq-local mevedel-agents--specs nil))
-          (mevedel-review--ensure-agent-spec data 'verify)
-          (with-current-buffer data
-            (let ((spec (cdr (assoc "verifier"
-                                    mevedel-agents--specs))))
-              (should spec)
-              (should (plist-get spec :system))
-              (should (plist-get spec :tools)))))
-      (kill-buffer data))))
-
 (mevedel-deftest mevedel-review--next-task-name ()
   ,test
   (test)
@@ -595,6 +562,9 @@
   (test)
   :doc "spawns and awaits a retained reviewer leaf through agent control"
   (let ((data (generate-new-buffer " *mevedel-review-run-task*"))
+        ;; Spawn is stubbed here, so this pins that dispatch leaves the
+        ;; roster untouched, not that the gate would have passed.
+        (roster (list (cons "worker" (list :system "w" :tools nil))))
         captured-options captured-message captured-name captured-session
         outcomes)
     (unwind-protect
@@ -603,6 +573,7 @@
                       (mevedel-session--create :authority-mode 'pid-lock :name "review"))
           (setq-local mevedel--current-request
                       (mevedel-request--create :session mevedel--session))
+          (setq-local mevedel-agents--specs roster)
           (let ((progress-callback #'ignore))
             (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
                        (lambda (session task-name message callback
@@ -626,8 +597,13 @@
               (should (equal "review" captured-name))
               (should (equal "prompt\n\n<hook-context>extra</hook-context>"
                              captured-message))
+              ;; Passing the resolved agent asks nothing of the roster, so
+              ;; the gate that reads it has nothing to bypass.
+              (should-not (plist-get captured-options :role))
               (should (equal "reviewer"
-                             (plist-get captured-options :role)))
+                             (mevedel-agent-name
+                              (plist-get captured-options :agent))))
+              (should (equal roster mevedel-agents--specs))
               (should (equal "none"
                              (plist-get captured-options :context)))
               (should (equal "target"
@@ -680,8 +656,10 @@
              "prompt" "target"
              (lambda (result) (setq outcome result))
              nil nil 'verify)
+            (should-not (plist-get captured-options :role))
             (should (equal "verifier"
-                           (plist-get captured-options :role)))
+                           (mevedel-agent-name
+                            (plist-get captured-options :agent))))
             (should (equal (mevedel-review--verify-permission-rules)
                            (plist-get captured-options
                                       :skill-permission-rules)))
@@ -1085,7 +1063,8 @@
             (should (equal "target" task-description))
             (should (equal "prompt" task-prompt))
             (with-current-buffer data
-              (should (assoc "reviewer" mevedel-agents--specs))
+              ;; Dispatch leaves the preset-owned role roster alone.
+              (should-not mevedel-agents--specs)
               (let ((text (buffer-string)))
                 (should (string-search "/review target" text))
                 (should (string-search "review result" text))
