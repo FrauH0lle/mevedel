@@ -416,6 +416,17 @@ LABEL is a user-facing surface label used in the dead-owner error."
                (not (mevedel-cockpit-context-session context)))
       (user-error "No mevedel session in this buffer")))
   (require 'tabulated-list)
+  ;; One buffer name per surface, so a second session would otherwise
+  ;; take the first session's buffer by overwriting its context -- and
+  ;; with it the only handle the surface had on what it still owes that
+  ;; session.  Kill it instead, so whatever it owns is released by its
+  ;; own teardown.
+  (when-let* ((existing (get-buffer (plist-get surface :buffer-name)))
+              (previous (buffer-local-value 'mevedel-cockpit--context
+                                            existing))
+              ((not (eq (mevedel-cockpit-context-session previous)
+                        (mevedel-cockpit-context-session context)))))
+    (kill-buffer existing))
   (let ((buffer (get-buffer-create (plist-get surface :buffer-name))))
     (with-current-buffer buffer
       (funcall (plist-get surface :mode))
