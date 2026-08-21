@@ -537,7 +537,30 @@
                           (mevedel-session-permission-mode session)))
               (should (equal "> first\nsecond"
                              (mevedel-view--input-text))))))
-      (set-default-toplevel-value 'mevedel-permission-mode saved))))
+      (set-default-toplevel-value 'mevedel-permission-mode saved)))
+
+  :doc "keeps the committed mode when an incomplete view cannot repaint"
+  (let ((data-buffer (generate-new-buffer " *mev-cycle-data*"))
+        (view-buffer (generate-new-buffer " *mev-cycle-view*")))
+    (unwind-protect
+        (let ((session (mevedel-session--create
+                        :name "main" :permission-mode 'ask)))
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session
+                        mevedel--view-buffer view-buffer
+                        mevedel-permission-mode 'ask))
+          (with-current-buffer view-buffer
+            (setq-local mevedel--data-buffer data-buffer)
+            (insert "> quoted\nsecond line")
+            (cl-letf (((symbol-function 'mevedel-view-refresh-input-prompt)
+                       (lambda () (error "Injected repaint failure"))))
+              (should (eq 'edits (mevedel-view-cycle-permission-mode))))
+            (should (equal "> quoted\nsecond line" (buffer-string))))
+          (should (eq 'edits (mevedel-session-permission-mode session))))
+      (when (buffer-live-p view-buffer)
+        (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer)))))
 
 (mevedel-deftest mevedel-view-toggle-plan-mode
   (:quiet t :doc "toggles Plan independently while retaining permission mode and draft")

@@ -1213,7 +1213,6 @@ follows `mevedel-view--input-marker'."
       (with-current-buffer data-buf
         (require 'mevedel-permissions)
         (mevedel-permission-mode-transition next))
-      (mevedel-view-refresh-input-prompt)
       (message "mevedel: permission mode %s"
                (car (mevedel-view--permission-mode-display next)))
       next)))
