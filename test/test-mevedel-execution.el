@@ -10,6 +10,7 @@
 (require 'cl-lib)
 (require 'mevedel-agents)
 (require 'mevedel-execution)
+(require 'mevedel-execution-process)
 (require 'mevedel-resource)
 (require 'mevedel-sandbox)
 (require 'mevedel-structs)
@@ -59,64 +60,6 @@
       (should (= 0 (plist-get result :exit-code)))
       (should-not (plist-get result :error))
       (should (equal "immediate" (plist-get result :output)))))
-  :doc "preserves filter output when the watchdog observes exit before delivery"
-  (let ((original-make-process (symbol-function 'make-process))
-        (original-accept-process-output
-         (symbol-function 'accept-process-output))
-        (original-run-at-time (symbol-function 'run-at-time))
-        (mevedel-sandbox-mode 'off)
-        chunks filter settle watch done result drain-just-this-one)
-    (cl-letf (((symbol-function 'make-process)
-               (lambda (&rest args)
-                 (setq filter (plist-get args :filter))
-                 (apply
-                  original-make-process
-                  (plist-put
-                   (plist-put
-                    args :filter
-                    (lambda (process chunk)
-                      (push (cons process chunk) chunks)))
-                   :sentinel #'ignore))))
-              ((symbol-function 'run-at-time)
-               (lambda (time repeat function &rest args)
-                 (cond
-                  ((and (equal time 0.1) (equal repeat 0.1))
-                   (setq watch (lambda () (apply function args)))
-                   (funcall original-run-at-time 3600 nil #'ignore))
-                  ((eq function #'mevedel-execution--settle-main-exit)
-                   (setq settle (lambda () (apply function args)))
-                   (funcall original-run-at-time 3600 nil #'ignore))
-                  (t
-                   (apply original-run-at-time
-                          time repeat function args))))))
-      (mevedel-execution-start-one-shot
-       (lambda (child-result)
-         (setq result child-result
-               done t))
-       :name "mevedel-test-watchdog-output"
-       :command '("sh" "-c" "printf recovered")
-       :workdir temporary-file-directory
-       :writable-roots (list temporary-file-directory))
-      (with-timeout (2 (error "Process did not exit"))
-        (while (not chunks)
-          (funcall original-accept-process-output nil 0.01))
-        (while (process-live-p (caar chunks))
-          (funcall original-accept-process-output nil 0.01)))
-      (funcall watch)
-      (should settle)
-      (cl-letf (((symbol-function 'accept-process-output)
-                 (lambda (_process _seconds _millisec just-this-one)
-                   (setq drain-just-this-one just-this-one)
-                   (when chunks
-                     (dolist (entry (nreverse chunks))
-                       (funcall filter (car entry) (cdr entry)))
-                     (setq chunks nil)
-                     t))))
-        (funcall settle))
-      (should done)
-      (should (= 1 drain-just-this-one))
-      (should (= 0 (plist-get result :exit-code)))
-      (should (equal "recovered" (plist-get result :output)))))
   :doc "settles an exited child even when Emacs does not deliver its sentinel"
   (let ((original-make-process (symbol-function 'make-process))
         (mevedel-sandbox-mode 'off)
@@ -262,7 +205,7 @@
       (delete-directory root t)))
   :doc "never replays a command after a signal, timeout, or emitted marker"
   (let* ((root (make-temp-file "mevedel-fallback-uncertain-" t))
-         (mevedel-execution--child-kill-delay 0.05))
+         (mevedel-execution-process--child-kill-delay 0.05))
     (unwind-protect
         (dolist
             (case
@@ -316,7 +259,7 @@
   (let* ((root (make-temp-file "mevedel-execution-timeout-" t))
          (pid-file (file-name-concat root "child.pid"))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          result pid)
     (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
@@ -342,7 +285,7 @@
   (let* ((root (make-temp-file "mevedel-execution-normal-exit-" t))
          (pid-file (file-name-concat root "child.pid"))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          result pid)
     (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
@@ -367,7 +310,7 @@
       (delete-directory root t)))
   :doc "spools large output without retaining a process buffer"
   (let ((mevedel-sandbox-mode 'off)
-        (mevedel-execution-output-limit (* 2 1024 1024)))
+        (mevedel-execution-process-output-limit (* 2 1024 1024)))
     (let ((result
            (mevedel-execution-run-one-shot
             :name "mevedel-test-large-output"
@@ -383,8 +326,8 @@
       (should-not (get-buffer " *mevedel-test-large-output*"))))
   :doc "enforces the output spool cap and reports the limit"
   (let ((mevedel-sandbox-mode 'off)
-        (mevedel-execution-output-limit 4096)
-        (mevedel-execution--child-kill-delay 0.05))
+        (mevedel-execution-process-output-limit 4096)
+        (mevedel-execution-process--child-kill-delay 0.05))
     (let ((result
            (mevedel-execution-run-one-shot
             :name "mevedel-test-output-cap"
@@ -396,7 +339,7 @@
       (should (= 4096 (string-bytes (plist-get result :output))))))
   :doc "allows output exactly equal to the configured spool cap"
   (let ((mevedel-sandbox-mode 'off)
-        (mevedel-execution-output-limit 4096))
+        (mevedel-execution-process-output-limit 4096))
     (let ((result
            (mevedel-execution-run-one-shot
             :name "mevedel-test-exact-output-cap"
@@ -410,89 +353,6 @@
 
 ;;
 ;;; Managed Bash execution
-
-(mevedel-deftest mevedel-execution--begin-stop ()
-  ,test
-  (test)
-  :doc "latches the first terminal cause across competing stop events"
-  (let* ((mevedel-execution--child-kill-delay 30)
-         (record (mevedel-execution--record-create)))
-    (unwind-protect
-        (progn
-          (should (mevedel-execution--begin-stop record 'stopped))
-          (should-not (mevedel-execution--begin-stop record 'timed-out))
-          (should (eq 'stopped
-                      (mevedel-execution--record-termination record))))
-      (setf (mevedel-execution--record-finished-p record) t)
-      (mevedel-execution--release-runtime record))))
-
-(mevedel-deftest mevedel-execution--group-live-p ()
-  ,test
-  (test)
-  :doc "requires a successful process-group probe"
-  (progn
-    (skip-unless (not (eq system-type 'windows-nt)))
-    (let ((record (mevedel-execution--record-create :group-id 42)))
-      (cl-letf (((symbol-function 'signal-process)
-                 (lambda (_group _signal) -1)))
-        (should-not (mevedel-execution--group-live-p record)))
-      (cl-letf (((symbol-function 'signal-process)
-                 (lambda (_group _signal) 0)))
-        (should (mevedel-execution--group-live-p record))))))
-
-(mevedel-deftest mevedel-execution--settle-after-kill ()
-  ,test
-  (test)
-  :doc "marks a remote outcome unknown when the group survives KILL"
-  (let ((record
-         (mevedel-execution--record-create
-          :execution-id "exec-1"
-          :termination 'stopped
-          :workdir "/ssh:user@host:/srv/project/"))
-        marked
-        finished)
-    (cl-letf (((symbol-function 'mevedel-execution--group-live-p)
-               (lambda (_record) t))
-              ((symbol-function 'mevedel-execution--mark-unknown)
-               (lambda (_record error-data)
-                 (setq marked error-data)
-                 (setf (mevedel-execution--record-termination record)
-                       'unknown)))
-              ((symbol-function 'mevedel-execution--finish-managed)
-               (lambda (_record) (setq finished t))))
-      (mevedel-execution--settle-after-kill record))
-    (should marked)
-    (should finished)
-    (should (eq 'unknown
-                (mevedel-execution--record-termination record)))))
-
-(mevedel-deftest mevedel-execution--signal-record ()
-  ,test
-  (test)
-  :doc "kills the native Windows process group"
-  (let ((record (mevedel-execution--record-create :process 'process))
-        (native-comp-enable-subr-trampolines nil)
-        (system-type 'windows-nt)
-        calls)
-    (cl-letf (((symbol-function 'process-live-p) (lambda (_process) t))
-              ((symbol-function 'kill-process)
-               (lambda (process current-group)
-                 (push (list 'kill process current-group) calls)))
-              ((symbol-function 'signal-process)
-               (lambda (&rest args) (push (cons 'signal args) calls))))
-      (mevedel-execution--signal-record record 'KILL))
-    (should (equal '((kill process t)) calls))))
-
-(mevedel-deftest mevedel-execution--utf8-prefix ()
-  ,test
-  (test)
-  :doc "never splits a multibyte character at the byte budget"
-  (let ((euro (string #x20ac)))
-    (should (equal (concat "a" euro)
-                   (mevedel-execution--utf8-prefix
-                    (concat "a" euro "b") 4)))
-    (should (equal "a" (mevedel-execution--utf8-prefix
-                        (concat "a" euro "b") 3)))))
 
 (mevedel-deftest mevedel-execution--retain-output ()
   ,test
@@ -508,67 +368,6 @@
     (should (= 5 (mevedel-execution--record-unread-chars record)))
     (should (equal "abc" (mevedel-execution--record-unread-head record)))
     (should (equal "cde" (mevedel-execution--record-unread-tail record)))))
-
-(mevedel-deftest mevedel-execution--write-managed-output ()
-  ,test
-  (test)
-  :doc "spools complete UTF-8 characters at the output limit"
-  (let* ((spool (make-temp-file "mevedel-managed-write-"))
-         (euro (string #x20ac))
-         (mevedel-execution-output-limit 4)
-         (mevedel-execution--child-kill-delay 30)
-         (record
-          (mevedel-execution--record-create
-           :spool-path spool :newline-count 0)))
-    (unwind-protect
-        (progn
-          (mevedel-execution--write-managed-output
-           record (concat "a" euro "b"))
-          (should (equal (concat "a" euro)
-                         (with-temp-buffer
-                           (insert-file-contents spool)
-                           (buffer-string))))
-          (should (mevedel-execution--record-output-limit-p record)))
-      (setf (mevedel-execution--record-finished-p record) t)
-      (mevedel-execution--release-runtime record)
-      (delete-file spool)))
-  :doc "stops after spool failure without retaining unwritten chunks"
-  (let* ((root (make-temp-file "mevedel-managed-write-failure-" t))
-         (session (test-mevedel-execution--session root))
-         (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
-         initial final process)
-    (unwind-protect
-        (progn
-          (setq initial
-                (test-mevedel-execution--start-managed
-                 session root
-                 '("sh" "-c" "printf ready; sleep 30")))
-          (let* ((id (plist-get (plist-get initial :facts) :execution-id))
-                 (state (mevedel-session-execution-state session))
-                 (record
-                  (gethash id (mevedel-execution--state-records state)))
-                 (spool (mevedel-execution--record-spool-path record))
-                 (retained (mevedel-execution--record-output-chars record)))
-            (setq process (mevedel-execution--record-process record))
-            (delete-directory (file-name-directory spool) t)
-            (mevedel-execution--write-managed-output record "lost-one\n")
-            (mevedel-execution--write-managed-output record "lost-two\n")
-            (should (eq 'output-write-failed
-                        (mevedel-execution--record-termination record)))
-            (should (consp (mevedel-execution--record-error-data record)))
-            (should (= retained
-                       (mevedel-execution--record-output-chars record)))
-            (should (= 0 (mevedel-execution--record-output-bytes record)))
-            (setq final (test-mevedel-execution--observe session id))
-            (should (eq 'output-write-failed
-                        (plist-get (plist-get final :facts) :termination)))
-            (should (plist-get final :error))
-            (should (= 0 (plist-get (plist-get final :facts)
-                                    :output-bytes)))
-            (should-not (process-live-p process))))
-      (mevedel-execution-teardown-session session)
-      (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution--unread-preview ()
   ,test
@@ -589,14 +388,9 @@
   ,test
   (test)
   :doc "ignores process-filter output delivered after terminal settlement"
-  (let ((spool (make-temp-file "mevedel-managed-finished-")))
-    (unwind-protect
-        (let ((record
-               (mevedel-execution--record-create
-                :finished-p t :spool-path spool)))
-          (mevedel-execution--managed-append record "late output\n")
-          (should (= 0 (file-attribute-size (file-attributes spool)))))
-      (delete-file spool))))
+  (let ((record (mevedel-execution--record-create :finished-p t)))
+    (mevedel-execution--managed-append record "late output\n")
+    (should-not (mevedel-execution--record-output-chars record))))
 
 (mevedel-deftest mevedel-execution--resolve-outcome ()
   ,test
@@ -630,7 +424,7 @@
          (session (test-mevedel-execution--session root))
          (request (mevedel-request--create :session session))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          initial abandoned final id)
     (unwind-protect
         (progn
@@ -656,7 +450,7 @@
   (let* ((root (make-temp-file "mevedel-managed-list-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          one two)
     (unwind-protect
         (progn
@@ -690,7 +484,7 @@
   (let* ((root (make-temp-file "mevedel-managed-owner-live-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          initial id)
     (unwind-protect
         (progn
@@ -715,7 +509,7 @@
          (session (test-mevedel-execution--session root))
          (pid-file (file-name-concat root "child.pid"))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          initial polled stopped id pid)
     (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
@@ -748,7 +542,7 @@
   (let* ((root (make-temp-file "mevedel-managed-pty-kill-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          initial stopped id)
     (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
@@ -760,10 +554,7 @@
                    "trap '' TERM; printf ready; while :; do sleep 1; done")
                  :tty t))
           (setq id (plist-get (plist-get initial :facts) :execution-id))
-          (let* ((state (mevedel-session-execution-state session))
-                 (record
-                  (gethash id (mevedel-execution--state-records state))))
-            (should (mevedel-execution--begin-stop record 'stopped)))
+          (should (mevedel-execution-stop-user session id))
           (should-error
            (mevedel-execution-observe
             session "main" id #'ignore :chars "late\n" :wait-ms 250)
@@ -785,7 +576,7 @@
   (let* ((root (make-temp-file "mevedel-managed-stop-all-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.2)
+         (mevedel-execution-process--child-kill-delay 0.2)
          main main-id)
     (unwind-protect
         (progn
@@ -805,59 +596,6 @@
           (should (= 0 (mevedel-execution-stop-all-user session))))
       (mevedel-execution-teardown-session session)
       (delete-directory root t))))
-
-(mevedel-deftest mevedel-execution--process-ended ()
-  ,test
-  (test)
-  :doc "ignores a terminal sentinel from a replaced process"
-  (let* ((old
-          (make-process
-           :name "mevedel-test-old-process"
-           :command '("sh" "-c" "exit 7")
-           :buffer nil :sentinel #'ignore :noquery t))
-         (current
-          (make-process
-           :name "mevedel-test-current-process"
-           :command '("sh" "-c" "sleep 30")
-           :buffer nil :sentinel #'ignore :noquery t))
-         (record
-          (mevedel-execution--record-create
-           :execution-id "exec-test" :process current)))
-    (unwind-protect
-        (progn
-          (test-mevedel-execution--wait
-           (lambda () (memq (process-status old) '(exit signal))))
-          (mevedel-execution--process-ended record old)
-          (should-not (mevedel-execution--record-exit-code record))
-          (should-not (mevedel-execution--record-settle-timer record)))
-      (mevedel-execution--release-runtime record)
-      (ignore-errors (delete-process old))))
-
-  :doc "reschedules settlement when the armed settle timer was stranded"
-  (let* ((process
-          (make-process
-           :name "mevedel-test-stranded-process"
-           :command '("sh" "-c" "exit 0")
-           :buffer nil :sentinel #'ignore :noquery t))
-         (stranded (run-at-time 30 nil #'ignore))
-         (record
-          (mevedel-execution--record-create
-           :execution-id "exec-stranded" :process process
-           :settle-timer stranded)))
-    ;; A sentinel that fires inside a TRAMP wait arms its settle timer
-    ;; on a let-bound `timer-list', so the object survives while the
-    ;; scheduling is lost.  A canceled timer is observably identical.
-    (cancel-timer stranded)
-    (unwind-protect
-        (progn
-          (test-mevedel-execution--wait
-           (lambda () (memq (process-status process) '(exit signal))))
-          (mevedel-execution--process-ended record process)
-          (let ((timer (mevedel-execution--record-settle-timer record)))
-            (should (mevedel-execution--timer-pending-p timer))
-            (should-not (eq timer stranded))))
-      (mevedel-execution--release-runtime record)
-      (ignore-errors (delete-process process)))))
 
 (mevedel-deftest mevedel-execution-start-bash
   (:doc "runs managed commands through fallback and resource capture")
@@ -904,10 +642,10 @@
          captured result)
     (unwind-protect
         (cl-letf
-            (((symbol-function
+             (((symbol-function
                'mevedel-execution-telemetry-prepare-resource-capture)
-              (lambda (given-session command-text command)
-                (setq captured (list given-session command-text command))
+              (lambda (context command-text command)
+                (setq captured (list context command-text command))
                 nil)))
           (mevedel-execution-start-bash
            (lambda (value) (setq result value))
@@ -917,9 +655,9 @@
            :workdir root :writable-roots (list root)
            :artifact-directory root :yield-time-ms nil)
           (test-mevedel-execution--wait (lambda () result))
-          (should
-           (equal (list session "printf ok" '("sh" "-c" "printf ok"))
-                  captured)))
+          (should (car captured))
+          (should (equal '("printf ok" ("sh" "-c" "printf ok"))
+                         (cdr captured))))
       (mevedel-execution-teardown-session session)
       (delete-directory root t)))
 
@@ -1078,7 +816,7 @@
                           (mevedel-execution--state-next-id state)))
                  (record (gethash pending-id
                                   (mevedel-execution--state-records state)))
-                 (spool (mevedel-execution--record-spool-path record)))
+                 (spool (mevedel-execution--spool-path record)))
             (should (string-match-p "\.mevedel-pending-executions"
                                     spool))
             (should-not (mevedel-resource-artifact-address spool session)))

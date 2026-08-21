@@ -8,6 +8,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-execution)
+(require 'mevedel-execution-process)
 (require 'mevedel-execution-target)
 (require 'mevedel-session-durability)
 (require 'mevedel-structs)
@@ -30,6 +31,13 @@ local test roots model file workspaces so they retain PID-lock authority."
   (let ((attributes (process-attributes pid)))
     (or (null attributes)
         (equal "Z" (alist-get 'state attributes)))))
+
+(defun test-mevedel-execution--attach-child (record spool-path)
+  "Attach an unlaunched process child using SPOOL-PATH to RECORD."
+  (setf (mevedel-execution--record-child record)
+        (mevedel-execution-process-create
+         :workdir temporary-file-directory :spool-path spool-path))
+  record)
 
 (defun test-mevedel-execution--read-pid (path)
   "Return the process id stored at PATH."

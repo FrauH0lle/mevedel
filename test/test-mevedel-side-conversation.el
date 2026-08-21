@@ -16,6 +16,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-execution-test-helpers"))
+(require 'mevedel-execution-process)
 
 (defvar mevedel-plugin-extra-roots)
 (defvar org-mode-hook)
@@ -939,7 +940,7 @@
           (mevedel-workspace--create
            :type 'file :id root :root root :name "btw-close-bash"))
          (session (mevedel-session-create "main" workspace root))
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          side-view side-data side-session fsm result pid)
     (skip-unless (not (eq system-type 'windows-nt)))
     (setf (mevedel-session-permission-mode session) 'full-auto
