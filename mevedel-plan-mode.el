@@ -823,6 +823,7 @@ opening an editable draft."
 
 (defun mevedel-plan-approval--current-session ()
   "Resolve the session that owns the pending Plan approval."
+  (require 'mevedel-queue)
   (mevedel-queue--current-session))
 
 (defun mevedel-plan-approval--deliver (entry outcome phase &optional retain)
