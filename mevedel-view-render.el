@@ -4386,7 +4386,8 @@ Each tool call gets its own collapsible entry.  A registered
 `:renderer' is invoked when the segment carries a render-data
 side-channel, falling back to the default one-liner otherwise.
 Adjacent visible renderings with equal `:coalesce-key' values keep
-only the final row and show the number of combined calls."
+only the final row and show the number of combined calls.  Hook audits
+from every combined call remain in source order."
   (let* ((tool-segments
           (mevedel-view--merge-tool-hook-audit-segments
            tool-segments data-buf))
@@ -4425,9 +4426,19 @@ only the final row and show the number of combined calls."
                                (plist-get previous :rendering)
                                :coalesce-key)))
                         (progn
+                          (setq rendering
+                                (plist-put
+                                 (copy-sequence rendering)
+                                 :hook-audits
+                                 (append
+                                  (plist-get
+                                   (plist-get previous :rendering)
+                                   :hook-audits)
+                                  (plist-get rendering :hook-audits))))
                           (setq entry
                                 (plist-put
-                                 entry :count
+                                 (plist-put entry :rendering rendering)
+                                 :count
                                  (1+ (plist-get previous :count))))
                           (setcar out entry))
                       (push entry out))))))))

@@ -2994,40 +2994,52 @@
         (should (search-forward "body must survive cache"
                                 mevedel-view--input-marker t)))))
 
-  :doc "adjacent visible rows with one key render only the final row and count"
+  :doc "coalesced rows retain every source-ordered hook audit"
   (mevedel-view-test--with-buffers
-    (let (segments)
-      (mevedel-tool-register
-       (mevedel-tool--create
-        :name "PollingTool"
-        :category "mevedel"
-        :renderer
-        (lambda (_name args _result _data)
-          (list :header (format "Polled %s" (plist-get args :value))
-                :expandable-p nil
-                :coalesce-key "polling-tool"))))
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "PollingTool"
+      :category "mevedel"
+      :renderer
+      (lambda (_name args _result _data)
+        (list :header (format "Polled %s" (plist-get args :value))
+              :expandable-p nil
+              :coalesce-key "polling-tool"))))
+    (with-current-buffer data-buf
+      (dolist (spec
+               '(("first"
+                  (:type tool-input-rewrite
+                   :event "PreToolUse"
+                   :original-input (:value "raw")
+                   :updated-input (:value "first")))
+                 ("second"
+                  (:type tool-result-rewrite
+                   :event "PostToolUse"
+                   :original-result "raw"
+                   :updated-result "second"))))
+        (let ((start (point))
+              (value (car spec)))
+          (insert (format
+                   "(:name \"PollingTool\" :args (:value \"%s\"))\n\nok\n"
+                   value)
+                  (mevedel--format-hook-audit-record (cadr spec)))
+          (put-text-property
+           start (point) 'gptel
+           (cons 'tool (format "call-%s" value))))))
+    (let ((data-before (with-current-buffer data-buf (buffer-string))))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let* ((visible (buffer-substring-no-properties
+                         (point-min) mevedel-view--input-marker))
+               (input-audit (string-match "hook changed tool input" visible))
+               (result-audit (string-match "hook changed tool result" visible)))
+          (should-not (string-match-p "Polled first" visible))
+          (should (string-match-p "Polled second ×2" visible))
+          (should input-audit)
+          (should result-audit)
+          (should (< input-audit result-audit))))
       (with-current-buffer data-buf
-        (dolist (value '("first" "second"))
-          (let ((start (point)))
-            (insert (format
-                     "(:name \"PollingTool\" :args (:value \"%s\"))\n\nok\n"
-                     value))
-            (put-text-property
-             start (point) 'gptel
-             (cons 'tool (format "call-%s" value)))
-            (push (list 'tool start (point)) segments))))
-      (setq segments (nreverse segments))
-      (let ((data-before (with-current-buffer data-buf (buffer-string))))
-        (with-current-buffer view-buf
-          (let ((inhibit-read-only t))
-            (goto-char mevedel-view--input-marker)
-            (mevedel-view--render-tool-group segments data-buf))
-          (let ((visible (buffer-substring-no-properties
-                          (point-min) mevedel-view--input-marker)))
-            (should-not (string-match-p "Polled first" visible))
-            (should (string-match-p "Polled second ×2" visible))))
-        (with-current-buffer data-buf
-          (should (equal data-before (buffer-string)))))))
+        (should (equal data-before (buffer-string))))))
 
   :doc "retained-agent growth keeps adjacent collaboration disclosures exact"
   (mevedel-view-test--with-buffers
