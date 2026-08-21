@@ -439,6 +439,7 @@
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
         (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-keep-recent-count nil)
                (mevedel-session-persistence--cleanup-throttle
                 (make-hash-table :test #'equal))
                (live-session (mevedel-session-create "live" workspace))
@@ -551,6 +552,7 @@
       (mevedel-workspace-clear-registry)))
   :doc "cleanup errors do not block sibling workspaces or lock release"
   (let* ((mevedel-session-max-age-days 7)
+         (mevedel-session-keep-recent-count nil)
          (mevedel-session-persistence--cleanup-throttle
           (make-hash-table :test #'equal))
          (mevedel-workspace--registry (make-hash-table :test #'equal))
@@ -3364,6 +3366,7 @@
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
         (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-keep-recent-count nil)
                ;; Reset the throttle so tests don't leak.
                (mevedel-session-persistence--cleanup-throttle
                 (make-hash-table :test #'equal))
@@ -3425,6 +3428,7 @@
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
         (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-keep-recent-count nil)
                (mevedel-session-persistence--cleanup-throttle
                 (make-hash-table :test #'equal))
                (session (mevedel-session-create "obsolete" workspace))
@@ -3461,6 +3465,7 @@
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
         (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-keep-recent-count nil)
                (mevedel-session-persistence--cleanup-throttle
                 (make-hash-table :test #'equal))
                (session (mevedel-session-create "missing" workspace))
@@ -3493,6 +3498,7 @@
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
         (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-keep-recent-count nil)
                (mevedel-session-persistence--cleanup-throttle
                 (make-hash-table :test #'equal))
                (s (mevedel-session-create "stuck" workspace))
@@ -3537,6 +3543,7 @@
               (test-mevedel-session-persistence--make-remote-restore-fixture
                host local-root "Published transcript\n")
             (let ((mevedel-session-max-age-days 7)
+                  (mevedel-session-keep-recent-count nil)
                   (mevedel-session-persistence--cleanup-throttle
                    (make-hash-table :test #'equal))
                   (mevedel-session-durability--client-id
@@ -3578,6 +3585,7 @@
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
         (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-keep-recent-count nil)
                (mevedel-session-persistence--cleanup-throttle
                 (make-hash-table :test #'equal))
                (s (mevedel-session-create "reused" workspace))
@@ -3621,6 +3629,59 @@
             (when (buffer-live-p b)
               (with-current-buffer b (set-buffer-modified-p nil))
               (kill-buffer b))))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "keeps the newest sessions regardless of age"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((mevedel-session-max-age-days 7)
+               (mevedel-session-keep-recent-count 1)
+               (mevedel-session-persistence--cleanup-throttle
+                (make-hash-table :test #'equal))
+               (s1 (mevedel-session-create "older" workspace))
+               (b1 (generate-new-buffer "*test-older-buf*"))
+               (s2 (mevedel-session-create "newer" workspace))
+               (b2 (generate-new-buffer "*test-newer-buf*")))
+          (unwind-protect
+              (progn
+                (with-current-buffer b1
+                  (org-mode)
+                  (insert "Older\n")
+                  (mevedel-session-artifacts-save s1 b1))
+                (with-current-buffer b2
+                  (org-mode)
+                  (insert "Newer\n")
+                  (mevedel-session-artifacts-save s2 b2))
+                ;; Both sessions are far past the cap; s2 is the newer one.
+                (dolist (spec (list (cons s1 28) (cons s2 14)))
+                  (let* ((path    (mevedel-session-save-path (car spec)))
+                         (sidecar (mevedel-session-artifacts-sidecar-path
+                                   path))
+                         (plist   (mevedel-session-codec-read sidecar))
+                         (forged  (format-time-string
+                                   "%FT%H-%M-%S"
+                                   (time-subtract (current-time)
+                                                  (* (cdr spec)
+                                                     24 60 60)))))
+                    (plist-put plist :updated-at forged)
+                    (mevedel-session-codec-write sidecar plist)
+                    (mevedel-session-persistence-lock-release
+                     path (car spec))))
+                (let ((deleted
+                       (mevedel-session-persistence-cleanup-expired
+                        workspace t)))
+                  (should (= 1 deleted))
+                  (should-not (file-directory-p
+                               (mevedel-session-save-path s1)))
+                  (should (file-directory-p
+                           (mevedel-session-save-path s2)))))
+            (when (buffer-live-p b1)
+              (with-current-buffer b1 (set-buffer-modified-p nil))
+              (kill-buffer b1))
+            (when (buffer-live-p b2)
+              (with-current-buffer b2 (set-buffer-modified-p nil))
+              (kill-buffer b2))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
   :doc "no-op when cap is nil"
@@ -4084,6 +4145,7 @@
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
         (let* ((mevedel-session-max-age-days 1)
+               (mevedel-session-keep-recent-count nil)
                (mevedel-session-persistence--cleanup-throttle
                 (make-hash-table :test #'equal))
                (session (mevedel-session-create "main" workspace))
