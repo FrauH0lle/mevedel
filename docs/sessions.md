@@ -1126,7 +1126,11 @@ still-live publishing generation back to active before reserving a new window.
 are obsolete, unreadable, or missing. Exit cleanup scans every workspace
 registered during the Emacs invocation before releasing live-session locks.
 Cleanup uses `:updated-at` when available, otherwise the sidecar or session
-directory modification time. It skips active locks and is throttled to once per
+directory modification time. The `mevedel-session-keep-recent-count`
+(default 3) most-recently-updated sessions are exempt regardless of age:
+the chooser sweeps before any lock is taken, so without this floor a
+long absence would delete the very session the user came back to resume.
+Cleanup skips active locks and is throttled to once per
 workspace per Emacs invocation. Expired session cleanup removes its `local/`
 scratch directory with the rest of the session. Portable project session
 stores are never auto-cleaned; their portable lease protocol has no deletion
@@ -1138,6 +1142,7 @@ All in `mevedel-session-persistence.el`:
 
 - `mevedel-sessions-directory` (default `.mevedel/sessions/`)
 - `mevedel-session-max-age-days` (default 30)
+- `mevedel-session-keep-recent-count` (default 3)
 - `mevedel-file-history-max-snapshot-bytes` (default 1 MB)
 - `mevedel-session-lease-seconds` (in `mevedel-session-durability.el`,
   default 90; renewal runs from a timer that cannot fire inside blocking

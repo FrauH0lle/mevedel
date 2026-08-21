@@ -429,9 +429,25 @@ invocation).  Age comes from `:updated-at', or the sidecar or session
 directory modification time when metadata cannot provide it.  Sessions with
 active locks are always
 skipped: any cross-host lock, or a same-host lock whose PID is live and not
-known to have been reused.  A nil value disables auto-cleanup entirely."
+known to have been reused, as are the `mevedel-session-keep-recent-count'
+most-recently-updated sessions.  A nil value disables auto-cleanup
+entirely."
   :type '(choice (integer :tag "Days")
           (const :tag "Disabled" nil))
+  :group 'mevedel)
+
+(defcustom mevedel-session-keep-recent-count 3
+  "Number of most-recently-updated sessions exempt from auto-cleanup.
+
+The newest sessions of a file workspace, counted by the same timestamp
+auto-cleanup ages against, survive `mevedel-session-max-age-days'
+regardless of age.  Without this floor a long absence would delete the
+very session a returning user opens the chooser to resume: the chooser
+sweeps expired sessions before listing them, and at that point the
+session is not yet locked.  A nil value applies the age cap to every
+session."
+  :type '(choice (integer :tag "Sessions")
+          (const :tag "No floor" nil))
   :group 'mevedel)
 
 
@@ -2332,7 +2348,9 @@ Scans session directories independently of resume compatibility.  Uses
 `:updated-at' when available, otherwise the sidecar or directory modification
 time.
 
-Portable project stores are not auto-cleaned.  File-workspace cleanup skips
+Portable project stores are not auto-cleaned.  The
+`mevedel-session-keep-recent-count' most-recently-updated sessions are
+never deleted regardless of age.  File-workspace cleanup skips
 sessions with an active lock.  Cross-host locks are active.
 Same-host locks are stale when their PID is dead or when the live
 process start time proves PID reuse.  Throttled to at most once per
@@ -2355,7 +2373,8 @@ uses portable authority, or the throttle has already fired."
         (puthash ws-key t mevedel-session-persistence--cleanup-throttle)
         (let ((threshold-secs (* mevedel-session-max-age-days 24 60 60))
               (now            (float-time))
-              (deleted        0))
+              (deleted        0)
+              (candidates     nil))
           (dolist (save-path
                    (and (file-directory-p sessions-dir)
                         (directory-files sessions-dir t "\\`[^.]")))
@@ -2375,14 +2394,28 @@ uses portable authority, or the throttle has already fired."
                             (if (file-exists-p sidecar-path)
                                 sidecar-path
                               save-path))))))
-                (when (and parsed-time
-                           (> (- now (float-time parsed-time))
-                              threshold-secs)
-                           (not
-                            (mevedel-session-persistence--active-lock-p
-                             save-path)))
-                  (delete-directory save-path t)
-                  (cl-incf deleted)))))
+                (push (cons save-path
+                            (and parsed-time (float-time parsed-time)))
+                      candidates))))
+          ;; The newest sessions are exempt regardless of age: the chooser
+          ;; sweeps before any lock is taken, so without this floor a
+          ;; 30-day absence would delete the session the user came back to
+          ;; resume.  A session without a readable timestamp sorts oldest,
+          ;; so it never displaces a dated one from the floor.
+          (setq candidates
+                (sort candidates
+                      (lambda (a b) (> (or (cdr a) 0) (or (cdr b) 0)))))
+          (when mevedel-session-keep-recent-count
+            (setq candidates
+                  (nthcdr mevedel-session-keep-recent-count candidates)))
+          (pcase-dolist (`(,save-path . ,updated-secs) candidates)
+            (when (and updated-secs
+                       (> (- now updated-secs) threshold-secs)
+                       (not
+                        (mevedel-session-persistence--active-lock-p
+                         save-path)))
+              (delete-directory save-path t)
+              (cl-incf deleted)))
           (when (> deleted 0)
             (message "Cleaned up %d expired session%s"
                      deleted (if (= deleted 1) "" "s")))
