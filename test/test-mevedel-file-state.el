@@ -270,6 +270,22 @@
             (should (eq 'modified (plist-get (car changes) :status)))))
       (delete-file tmp)))
 
+  :doc "detects a same-size rewrite that restored its mtime"
+  ;; Userland can set mtime but not ctime, so a tool that restores
+  ;; timestamps still moves the inode's change time.  Comparing it closes
+  ;; the case that mtime and size alone cannot see.
+  (let* ((cache (mevedel-test-file-cache-create))
+         (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (let ((stamp (file-attribute-modification-time (file-attributes tmp))))
+          (mevedel-file-cache-put cache (mevedel-file-state-from-file tmp))
+          (write-region "world" nil tmp nil 'silent)
+          (set-file-times tmp stamp)
+          (let ((changes (mevedel-file-cache-detect-external-changes cache)))
+            (should (= 1 (length changes)))
+            (should (eq 'modified (plist-get (car changes) :status)))))
+      (delete-file tmp)))
+
   :doc "detects a rewrite whose mtime went backwards"
   (let* ((cache (mevedel-test-file-cache-create))
          (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))

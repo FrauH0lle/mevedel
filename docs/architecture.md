@@ -243,11 +243,12 @@ Tools execute in the data-buffer context with `default-directory` set to
 the session working directory. File modifications are tracked per request
 via `mevedel-request-file-snapshots`, while cross-turn file metadata
 lives on the workspace file cache and session touched-files map. A cached
-entry counts as current only while both its mtime and its size are
-unchanged: a clock that did not advance is not proof the bytes did not,
-since restoring timestamps, a backwards clock, and coarse-grained
-filesystem stamps all leave it standing. A rewrite that keeps both the
-mtime and the size is a known blind spot, because closing it means reading
+entry counts as current only while its modification time, its inode change
+time, and its reported size are all unchanged: a modification time alone is
+not proof, since restoring timestamps, a backwards clock, and
+coarse-grained filesystem stamps all leave it standing, while a change time
+cannot be set from userland and so moves anyway. A rewrite that restores
+all three is the remaining blind spot, and closing that would mean reading
 every cached file on every poll.
 
 `mevedel-execution-target.el` binds each session to one local or TRAMP target,
