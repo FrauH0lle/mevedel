@@ -647,6 +647,89 @@
                        sent)))
         (should (= 2 (length welcomes)))))))
 
+(mevedel-deftest mevedel-collaboration--handle-prompt--media-cleanup
+  (:doc "leaves no saved image behind when the prompt is not queued")
+  (let* ((guests (make-hash-table :test #'eql))
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-guest-media-" t)))
+         (data-buffer (generate-new-buffer " *collab-media-data*"))
+         (view-buffer (generate-new-buffer " *collab-media-view*"))
+         (room (list :data-buffer data-buffer :guests guests
+                     :transport 'transport))
+         (image (list :mime "image/png"
+                      :data (base64-encode-string "\211PNG\r\n" t))))
+    (unwind-protect
+        (progn
+          (puthash 1 (list :name "Phone" :writable t :ready t) guests)
+          (with-current-buffer data-buffer
+            ;; A live view but no session: the real enqueue refuses, which
+            ;; is the path that used to leave the media behind.
+            (setq-local mevedel--view-buffer view-buffer))
+          (cl-letf (((symbol-function 'mevedel-view--media-dir)
+                     (lambda () root))
+                    ((symbol-function 'mevedel-collaboration--transport-send)
+                     (lambda (&rest _) t)))
+            (mevedel-collaboration--handle-prompt
+             room 1 (list :text "look at this" :images (list image))))
+          (should-not (directory-files root nil "\\`guest-"))
+          ;; The duplicate latch must not have swallowed the retry either,
+          ;; since nothing was actually queued.
+          (should-not (plist-get (gethash 1 guests) :last-prompt)))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-collaboration--handle-prompt--media-failure
+  (:doc "keeps the room when a guest image cannot be written")
+  (let* ((guests (make-hash-table :test #'eql))
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-guest-media-fail-" t)))
+         (data-buffer (generate-new-buffer " *collab-fail-data*"))
+         (view-buffer (generate-new-buffer " *collab-fail-view*"))
+         (room (list :data-buffer data-buffer :guests guests
+                     :transport 'transport))
+         (image (list :mime "image/png"
+                      :data (base64-encode-string "PNGDATA" t)))
+         (writes 0)
+         diagnostics)
+    (unwind-protect
+        (progn
+          (puthash 1 (list :name "Phone" :writable t :ready t) guests)
+          (with-current-buffer data-buffer
+            (setq-local mevedel--view-buffer view-buffer)
+            (setq-local mevedel--session
+                        (mevedel-session--create :name "share")))
+          ;; The requires happen inside the handler, so they must not run
+          ;; with `write-region' stubbed.
+          (require 'mevedel-pending-inputs)
+          (require 'mevedel-view-input-files)
+          (mevedel-test--with-captured-diagnostics diagnostics
+            (cl-letf* (((symbol-function 'mevedel-view--media-dir)
+                        (lambda () root))
+                       (real (symbol-function 'write-region))
+                       ((symbol-function 'write-region)
+                        (lambda (&rest args)
+                          ;; The set is attached whole or not at all, so the
+                          ;; first image must not survive the second's
+                          ;; failure.
+                          (if (= (cl-incf writes) 1)
+                              (apply real args)
+                            (error "Disk full"))))
+                       ((symbol-function
+                         'mevedel-collaboration--transport-send)
+                        (lambda (&rest _) t)))
+              ;; A failed write must not reach the frame handler, which
+              ;; treats an error as an observer failure and stops the room.
+              (mevedel-collaboration--handle-prompt
+               room 1 (list :text "look" :images (list image image)))))
+          (should (string-match-p "could not be saved" diagnostics))
+          (should (= 2 writes))
+          (should-not (directory-files root nil "\\`guest-"))
+          (should-not (plist-get (gethash 1 guests) :last-prompt)))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-collaboration--handle-prompt
   (:doc "queues a writable guest prompt and ignores unauthorized or invalid ones")
   (let* ((guests (make-hash-table :test #'eql))

@@ -615,27 +615,55 @@ never enters model-visible context."
                    (< (- now (cdr last))
                       mevedel-collaboration--duplicate-prompt-window))
           (cl-return-from mevedel-collaboration--handle-prompt))
-        (plist-put guest :last-prompt (cons text now)))
-      (let* ((data-buffer (mevedel-collaboration--room-data-buffer room))
-             (view-buffer (and data-buffer
-                               (buffer-local-value 'mevedel--view-buffer
-                                                   data-buffer))))
-        (when (buffer-live-p view-buffer)
-          (require 'mevedel-pending-inputs)
-          (require 'mevedel-view-input-files)
-          ;; Attached images ride the same pipeline as clipboard images
-          ;; pasted in Emacs: saved under the session media directory,
-          ;; then mentioned and read-granted by the queue seam.
-          (let ((paths (with-current-buffer view-buffer
+        (let* ((data-buffer (mevedel-collaboration--room-data-buffer room))
+               (view-buffer (and data-buffer
+                                 (buffer-local-value 'mevedel--view-buffer
+                                                     data-buffer))))
+          (when (buffer-live-p view-buffer)
+            (require 'mevedel-pending-inputs)
+            (require 'mevedel-view-input-files)
+            ;; Attached images ride the same pipeline as clipboard images
+            ;; pasted in Emacs: saved under the session media directory,
+            ;; then mentioned and read-granted by the queue seam.
+            ;; Both are durable, and the queue seam still refuses a prompt
+            ;; whose session view is not live, so neither outlives a prompt
+            ;; that was not queued.
+            (let ((paths
+                   (condition-case err
+                       (with-current-buffer view-buffer
                          (mevedel-collaboration--save-guest-images
-                          (plist-get frame :images)))))
-            (when (mevedel-view-enqueue-external-follow-up
-                   data-buffer text
-                   :guest-name (plist-get guest :name)
-                   :paths paths)
-              (mevedel-collaboration--transport-send
-               (plist-get room :transport) peer
-               (list :t "queued")))))))))
+                          (plist-get frame :images)))
+                     (error
+                      ;; A failed media write is this prompt's problem, not
+                      ;; the room's: letting it reach the frame handler
+                      ;; tears the session down for every guest.
+                      (display-warning
+                       'mevedel
+                       (format "Guest image could not be saved: %s"
+                               (error-message-string err))
+                       :warning)
+                      (cl-return-from
+                          mevedel-collaboration--handle-prompt))))
+                  (queued nil))
+              ;; Latch before the enqueue, which redraws and can therefore
+              ;; re-enter, and give the latch back when nothing was queued.
+              (plist-put guest :last-prompt (cons text now))
+              (unwind-protect
+                  (progn
+                    (setq queued
+                          (mevedel-view-enqueue-external-follow-up
+                           data-buffer text
+                           :guest-name (plist-get guest :name)
+                           :paths paths))
+                    (when queued
+                      (mevedel-collaboration--transport-send
+                       (plist-get room :transport) peer
+                       (list :t "queued"))))
+                (unless queued
+                  (plist-put guest :last-prompt nil)
+                  (dolist (path paths)
+                    (when (file-exists-p path)
+                      (ignore-errors (delete-file path)))))))))))))
 
 (defun mevedel-collaboration--save-guest-images (images)
   "Save valid guest IMAGES under the session media directory.
@@ -666,19 +694,36 @@ budget -- drops the whole set rather than attaching a partial one."
         (let ((dir (mevedel-view--media-dir))
               (stamp (format-time-string "%Y%m%d-%H%M%S"))
               (n 0)
+              (complete nil)
               paths)
-          (dolist (entry (nreverse decoded))
-            (let ((path (file-name-concat
-                         dir (format "guest-%s-%d.%s" stamp
-                                     (cl-incf n) (car entry)))))
-              (while (file-exists-p path)
-                (setq path (file-name-concat
-                            dir (format "guest-%s-%d.%s" stamp
-                                        (cl-incf n) (car entry)))))
-              (let ((coding-system-for-write 'binary))
-                (write-region (cdr entry) nil path nil 'silent))
-              (push path paths)))
-          (nreverse paths))))))
+          (unwind-protect
+              (progn
+                (dolist (entry (nreverse decoded))
+                  (let ((path nil))
+                    ;; `excl' makes the name its own claim: testing first and
+                    ;; writing after leaves a window another writer can take,
+                    ;; and remote media I/O can yield inside it.
+                    (while (null path)
+                      (let ((candidate
+                             (file-name-concat
+                              dir (format "guest-%s-%d.%s" stamp
+                                          (cl-incf n) (car entry))))
+                            (coding-system-for-write 'binary))
+                        (condition-case nil
+                            (progn
+                              (write-region (cdr entry) nil candidate nil
+                                            'silent nil 'excl)
+                              (setq path candidate))
+                          (file-already-exists nil))))
+                    (push path paths)))
+                (setq complete t)
+                (nreverse paths))
+            ;; A set is attached whole or not at all, so a set that failed
+            ;; part way through takes its own files with it.
+            (unless complete
+              (dolist (path paths)
+                (when (file-exists-p path)
+                  (ignore-errors (delete-file path)))))))))))
 
 (defun mevedel-collaboration--handle-abort (room peer)
   "Abort the running request for writable guest PEER."
