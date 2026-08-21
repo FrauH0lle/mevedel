@@ -110,8 +110,9 @@ Successful `Grep` and `Read` results may receive a bounded appended
 `<system-reminder>` when the call looks like code-symbol or structure
 discovery and a specialist tool would be more precise. Nudges are
 throttled per specialist family and suppress obvious good uses of the
-generic tools, such as regex/literal Grep searches, exact Read ranges,
-media/PDF reads, duplicate reads, and non-code files.
+generic tools, such as regex/literal Grep searches, comment-only Grep
+hits, exact Read ranges, media/PDF reads, duplicate reads, and non-code
+files.
 
 `mevedel-specialist-nudges.el` owns this post-tool prompting policy,
 including eligibility, per-session or per-invocation throttling, deferred-tool
