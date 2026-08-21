@@ -86,6 +86,20 @@ It receives DIRECTORY and ARGS, and returns (STATUS OUTPUT).")
           (list 1 (format "%s" result))))
     (error (list 1 (error-message-string err)))))
 
+(defun mevedel-plugins--make-staging-directory (dest)
+  "Create and return a staging directory for a plugin clone bound for DEST.
+A sibling of DEST, so publishing it is a same-filesystem rename, and
+uniquely named, so two concurrent installs of one repository cannot clone
+into each other's staging tree or delete it on the way out."
+  (let ((staging
+         (make-temp-name
+          (expand-file-name mevedel-plugins-staging-prefix
+                            (file-name-directory (directory-file-name dest))))))
+    ;; Not `make-temp-file': its 0700 would become the published plugin's
+    ;; mode.  Creating the name here also fails if it somehow exists.
+    (make-directory staging)
+    staging))
+
 (defun mevedel-plugins-install (target)
   "Install GitHub plugin TARGET."
   (require 'mevedel-plugin-registry)
@@ -93,12 +107,7 @@ It receives DIRECTORY and ARGS, and returns (STATUS OUTPUT).")
     (if (not (mevedel-plugins--github-target-p repo))
         "Invalid plugin target: use OWNER/REPO or a GitHub repository."
       (let* ((dest (mevedel-plugins--github-install-dir repo))
-             (present (file-directory-p dest))
-             (args (list "clone" "--depth" "1"
-                         (format "https://github.com/%s.git" repo)
-                         dest))
-             status
-             output)
+             (present (file-directory-p dest)))
         (if present
             (if-let* ((plugin (mevedel-plugins-read-manifest dest)))
                 (let ((name (mevedel-plugin-name plugin)))
@@ -111,18 +120,43 @@ It receives DIRECTORY and ARGS, and returns (STATUS OUTPUT).")
                        "installing %s.")
                dest target))
           (make-directory (file-name-directory dest) t)
-          (pcase-let ((`(,git-status ,git-output)
-                       (mevedel-plugins--git (mevedel-plugins-dir) args)))
-            (setq status git-status
-                  output git-output))
-          (if (not (zerop status))
-              (format "Failed to install plugin %s: %s"
-                      target
-                      (if (string-empty-p output) "git failed" output))
-            (if-let* ((plugin (mevedel-plugins-read-manifest dest)))
-                (format "Installed plugin %s." (mevedel-plugin-name plugin))
-              (format "Failed to install plugin %s: no Codex plugin manifest found."
-                      target))))))))
+          ;; Clone into a staging sibling and publish only what validates:
+          ;; the destination is the discovery tree, so a rejected clone left
+          ;; there is enableable, unremovable through the cockpit, and turns
+          ;; every retry into the already-exists dead end.
+          (let ((staging (mevedel-plugins--make-staging-directory dest)))
+            (unwind-protect
+                (pcase-let ((`(,status ,output)
+                             (mevedel-plugins--git
+                              (mevedel-plugins-dir)
+                              (list "clone" "--depth" "1"
+                                    (format "https://github.com/%s.git" repo)
+                                    staging))))
+                  (let ((plugin (and (zerop status)
+                                     (mevedel-plugins-read-manifest staging))))
+                    (cond
+                     ((not (zerop status))
+                      (format "Failed to install plugin %s: %s"
+                              target
+                              (if (string-empty-p output) "git failed" output)))
+                     ((not plugin)
+                      (format
+                       (concat "Failed to install plugin %s: no Codex plugin "
+                               "manifest found.")
+                       target))
+                     ;; The already-installed guard ran before the clone, and
+                     ;; it only tests for a directory.
+                     ((file-exists-p dest)
+                      (format
+                       (concat "Plugin path %s already exists; remove it "
+                               "before installing %s.")
+                       dest target))
+                     (t
+                      (rename-file staging dest)
+                      (format "Installed plugin %s."
+                              (mevedel-plugin-name plugin))))))
+              (when (file-directory-p staging)
+                (delete-directory staging t)))))))))
 
 (defun mevedel-plugins-update (name &optional workspace)
   "Update installed plugin NAME with git pull.
