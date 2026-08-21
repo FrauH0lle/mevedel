@@ -150,6 +150,8 @@
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+(declare-function mevedel-workspace--file-in-allowed-roots-p
+                  "mevedel-workspace" (file &optional buffer))
 
 (defvar-local mevedel-mentions--agent-enabled-p t
   "Whether mention completion offers retained agents in this buffer.")
@@ -1219,9 +1221,16 @@ When a file is selected, replaces @file:path with the absolute path."
             ;; Parse current input to determine directory context
             (let* ((dir-part (file-name-directory current-input))
                    (current-dir (expand-file-name (or dir-part "") workspace-root))
-                   ;; Get immediate children of current directory
+                   ;; Candidate discovery is bounded by the same roots the
+                   ;; mention itself is authorized against.  Without this the
+                   ;; typed prefix decides what gets enumerated: `../' walks
+                   ;; to the filesystem root, an absolute prefix reaches
+                   ;; anywhere, and on a remote workspace both drive
+                   ;; synchronous TRAMP while the user is still typing.
                    (candidates
-                    (when (file-directory-p current-dir)
+                    (when (and (mevedel-workspace--file-in-allowed-roots-p
+                                current-dir)
+                               (file-directory-p current-dir))
                       (let* ((entries (directory-files current-dir nil "^[^.]"))
                              (file-entries
                               (delq nil
@@ -1250,8 +1259,11 @@ When a file is selected, replaces @file:path with the absolute path."
                         ;; Build final candidate list: special entries + file entries
                         (append (delq nil
                                       (list
-                                       ;; Add .. unless at filesystem root
-                                       (when (not (string= current-dir "/"))
+                                       ;; Offer the parent only while it is
+                                       ;; still inside an allowed root, which
+                                       ;; also stops at the filesystem root.
+                                       (when (mevedel-workspace--file-in-allowed-roots-p
+                                              parent-dir)
                                          (propertize (concat (or dir-part "") "../")
                                                      'mevedel-abs-path parent-dir
                                                      'mevedel-is-dir t))

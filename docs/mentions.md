@@ -216,6 +216,13 @@ attachment path as a dropped file. If no clipboard image is available,
 `@mcp:server:`). Font-lock uses `success`/`shadow`/`link` box faces.
 Registered in `mevedel-install`/`-uninstall`.
 
+`@file` completion enumerates only inside the session's allowed roots, so
+`../` stops at each root boundary and an out-of-root or remote-escaping
+typed prefix returns no candidates and performs no filesystem probe. Such a
+path stays manually typeable and faces the ordinary `Read` check; candidate
+discovery is a bound on what is offered, never a grant. This matches what
+resource-address completion already does.
+
 Resource-address completion offers scheme prefixes first and bounded
 scheme-specific descendants afterward. It inserts plain canonical text and
 does not bind a mention, attach context, invoke a skill, delegate an agent,
