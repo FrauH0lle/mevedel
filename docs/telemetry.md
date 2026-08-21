@@ -27,10 +27,18 @@ workflow.
 ## Data policy
 
 Telemetry records lifecycle metadata, sizes, classifications, hashes, and
-bounded identifiers. The emitter rejects fields that can contain raw prompts,
-commands, tool arguments or results, hook/process output, expressions,
-justifications, and environment contents. Shell commands are correlated by a
-SHA-256 hash; Eask test paths are extracted only when they are repository-local
+bounded identifiers. The emitter keeps only the keys named in
+`mevedel-telemetry--allowed-keys` and drops everything else, at every depth: a
+nested property list is filtered by the same rule as the event's own
+properties, so an aggregate field cannot carry a prompt, a command, a path, or
+a tool result past the boundary. The list is an allowlist because a denylist
+has to name every field that might leak, which makes silence the default for
+any field a caller invents. The names of dropped keys -- names only -- are
+recorded on the event as `:dropped-keys`, so a caller whose property was
+omitted can see that instead of nothing. Adding a property to telemetry means
+adding its key to that list, and classifying or hashing anything derived from
+a payload first. Shell commands are correlated by a SHA-256 hash; a Buddy
+scope key is hashed for the same reason; Eask test paths are extracted only when they are repository-local
 `test/*.el` names. Cache identity is a hash of the relevant parent environment,
 not the environment values.
 
@@ -163,7 +171,10 @@ At profiler start and stop, telemetry records Git HEAD, dirty-file count,
 status hash, an exact dirty-content hash (tracked diff plus untracked
 file content hashes), loaded gptel and gptel-agent file hashes and repository
 commits, Emacs and system versions, configured sandbox mode, and Bubblewrap
-availability. Paths and file contents are not written to telemetry.
+availability. File contents are not written to telemetry, and neither are
+paths, with one exception: `:artifacts-directory` records the absolute
+client-side directory holding the profiler artifacts, because a reader who
+cannot find those files cannot use the run.
 
 ## Comparing session instrumentation modes
 

@@ -63,7 +63,7 @@
            :request-id "request-1"
            :outcome 'allow
            :command "SECRET raw command"
-           :safe-note "bounded\nvalue")
+           :origin "bounded\nvalue")
           (should (= 1 (length (mevedel-session-telemetry-pending session))))
           (setf (mevedel-session-save-path session) root)
           (mevedel-telemetry-flush session)
@@ -81,7 +81,7 @@
             (should (= 2 (plist-get entry :goal-turns-run)))
             (should (numberp (plist-get entry :elapsed-ms)))
             (should (stringp (plist-get entry :time)))
-            (should (equal "bounded\nvalue" (plist-get entry :safe-note)))
+            (should (equal "bounded\nvalue" (plist-get entry :origin)))
             (should-not (plist-member entry :command))
             (should-not (string-match-p
                          "SECRET"
@@ -95,6 +95,44 @@
           (should-not (mevedel-session-telemetry-pending session))
           (should-not (string-match-p "Added to"
                                       (or (current-message) ""))))
+      (delete-directory root t)))
+
+  :doc "keeps a forwarded permission payload's paths out of the log"
+  (let* ((root (make-temp-file "mevedel-telemetry-" t))
+         (session (test-mevedel-telemetry--session root)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) root)
+          ;; `mevedel-permission-log' forwards its whole props plist here,
+          ;; and those props carry the exact resources of the decision.
+          (mevedel-telemetry-record
+           session 'permission-decision
+           :outcome 'allow
+           :specifier-key :path
+           :specifier-value "/home/someone/secret.el"
+           :additional-permissions
+           '(:file-system ((:path "/home/someone/other.el" :access read))))
+          (let ((entry (car (test-mevedel-telemetry--read
+                             (file-name-concat root "telemetry-log.el")))))
+            (should (eq 'allow (plist-get entry :outcome)))
+            (should (eq :path (plist-get entry :specifier-key)))
+            (should-not (string-match-p "secret\\|other"
+                                        (format "%S" entry)))
+            (should (memq :specifier-value (plist-get entry :dropped-keys)))
+            (should (memq :additional-permissions
+                          (plist-get entry :dropped-keys)))))
+      (delete-directory root t)))
+
+  :doc "cannot be told what to report as dropped"
+  (let* ((root (make-temp-file "mevedel-telemetry-" t))
+         (session (test-mevedel-telemetry--session root)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) root)
+          (mevedel-telemetry-record session 'one :dropped-keys '(:invented))
+          (let ((entry (car (test-mevedel-telemetry--read
+                             (file-name-concat root "telemetry-log.el")))))
+            (should-not (memq :invented (plist-get entry :dropped-keys)))))
       (delete-directory root t)))
 
   :doc "retains a materialized event when persistence fails and retries it"
@@ -383,12 +421,50 @@
   (should (equal '(a b) (mevedel-telemetry--take-bounded '(a b) 2))))
 
 (mevedel-deftest mevedel-telemetry--safe-props
-  (:doc "rejects payload and envelope keys while bounding nested values")
+  ()
+  ,test
+  (test)
+  :doc "keeps allowlisted metadata and bounds its nested values"
   (let ((safe (mevedel-telemetry--safe-props
-               '(:command "secret" :event forged :safe ("ok" (1 2))))))
+               '(:command "secret" :event forged
+                 :skill-names ("ok" (1 2))))))
     (should-not (plist-member safe :command))
     (should-not (plist-member safe :event))
-    (should (equal '("ok" (1 2)) (plist-get safe :safe)))))
+    (should (equal '("ok" (1 2)) (plist-get safe :skill-names))))
+  :doc "drops a payload key that no denylist happened to name"
+  (dolist (key '(:path :text :url :specifier-value :resource-path
+                 :commands-summary))
+    (should-not (plist-member
+                 (mevedel-telemetry--safe-props
+                  (list :status 'ok key "/home/someone/secret.el"))
+                 key))
+    (should (eq 'ok (plist-get
+                     (mevedel-telemetry--safe-props
+                      (list :status 'ok key "/home/someone/secret.el"))
+                     :status))))
+  :doc "filters a nested property list by the same allowlist"
+  (let ((safe (mevedel-telemetry--safe-props
+               '(:cumulative-usage (:input-tokens 5 :command "nested")))))
+    (should (equal '(:input-tokens 5) (plist-get safe :cumulative-usage))))
+  :doc "drops an unlisted container instead of walking into it"
+  (let* ((mevedel-telemetry--dropped-keys nil)
+         (safe (mevedel-telemetry--safe-props
+                '(:cumulative-usage
+                  (:file-system ((:path "/home/someone/secret.el"
+                                  :access read)))))))
+    (should-not (string-match-p "secret" (format "%S" safe)))
+    (should (memq :file-system mevedel-telemetry--dropped-keys)))
+
+  :doc "still reduces an object it cannot represent to its type"
+  (should (eq :hash-table
+              (mevedel-telemetry--safe-value (make-hash-table))))
+
+  :doc "filters a payload key nested two levels down"
+  (let* ((mevedel-telemetry--dropped-keys nil)
+         (safe (mevedel-telemetry--safe-props
+                '(:cumulative-usage (:modes (:command "nested-secret"))))))
+    (should-not (string-match-p "nested-secret" (format "%S" safe)))
+    (should (memq :command mevedel-telemetry--dropped-keys))))
 
 (mevedel-deftest mevedel-telemetry--envelope
   (:doc "clamps process elapsed time when its fallback clock moves backwards")
