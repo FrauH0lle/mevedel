@@ -60,7 +60,10 @@ Normal sessions keep tool-, request-, interaction-, execution-, agent-, Goal-,
 and other outcome-level events. They omit routine per-pipeline-step spans,
 per-hook-handler lifecycle spans, hook-event spans with no matching handlers,
 valid input-validation spans, and no-op valid repair events. Hook events that
-actually run handlers and nontrivial repair outcomes remain visible.
+actually run handlers and nontrivial repair outcomes remain visible. A
+compaction attempt refused before admission is not measured at all; one
+rejected after measurement starts closes its span as rejected, so every
+recorded start has a finish.
 
 An active `mevedel-telemetry-profiler-start` run records the full detailed
 stream for its owning session. `mevedel-session-debug` starts that same

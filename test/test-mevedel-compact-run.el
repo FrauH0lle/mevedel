@@ -269,7 +269,8 @@
   (test-mevedel-compact--with-persisted-buffer (buffer session)
     (insert "Prompt\n")
     (insert (propertize "Response\n" 'gptel 'response))
-    ;; No boundary yet: rejected before anything is measured.
+    ;; No boundary yet: the attempt is measured, rejected, and its
+    ;; span closed before the signal reaches the caller.
     (should-error (mevedel-compact-run-start) :type 'user-error)
     (let ((mevedel-compact-run-in-flight t))
       (should-error (mevedel-compact-run-start) :type 'user-error))
@@ -281,6 +282,30 @@
                      (test-mevedel-compact--read-telemetry session)))))
       (should (= (seq-count (lambda (stage) (eq stage 'start)) stages)
                  (seq-count (lambda (stage) (eq stage 'finish)) stages)))))
+
+  :doc "a settlement before the signal is not finished twice"
+  ;; `--begin-attempt' settles through the owner and re-signals; the
+  ;; outer handler must find the span already consumed.
+  (test-mevedel-compact--with-persisted-buffer (buffer session)
+    (insert "Prompt\n")
+    (insert (propertize "Response\n" 'gptel 'response)
+            "Prompt two\n"
+            (propertize "Response two\n" 'gptel 'response))
+    (cl-letf (((symbol-function 'mevedel-compact-run--begin-attempt)
+               (lambda (state)
+                 (mevedel-compact-run--finish state "boom")
+                 (error "Hook failed"))))
+      ;; Aggressive drops the preserved tail, so the admission gates pass
+      ;; and the signal really comes from the settled attempt.
+      (let ((err (should-error (mevedel-compact-run-start :aggressive t))))
+        (should (equal "Hook failed" (cadr err)))))
+    (let ((stages
+           (mapcar (lambda (event) (plist-get event :stage))
+                   (seq-filter
+                    (lambda (event)
+                      (eq (plist-get event :event) 'compaction))
+                    (test-mevedel-compact--read-telemetry session)))))
+      (should (equal '(start finish) stages))))
 
   :doc "rejects an unpersisted buffer before hooks or model requests"
   (with-temp-buffer
