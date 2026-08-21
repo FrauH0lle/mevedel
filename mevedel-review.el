@@ -147,7 +147,9 @@
                          prior-context))
 (declare-function mevedel-view--start-fork-skill-turn
                   "mevedel-view-composer"
-                  (input display-text &optional hook-context))
+                  (input display-text &optional hook-context
+                         submitted-draft))
+(declare-function mevedel-view--visible-draft "mevedel-view-composer" ())
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add
@@ -1286,44 +1288,48 @@ parent request has accepted the review turn."
   "Run COMMAND task for DISPLAY, PROMPT, and HINT from VIEW-BUFFER.
 DATA-BUFFER receives the task transcript."
   (with-current-buffer view-buffer
-    (mevedel-view--run-prompt-submit-hook
-     display display
-     (lambda (submission)
-       (when (and (buffer-live-p view-buffer)
-                  (buffer-live-p data-buffer))
-         (let ((hook-input (mevedel-prompt-submission-input submission))
-               (hook-context
-                (mevedel-prompt-submission-context submission)))
-           (if (not (equal hook-input display))
-               (let ((model-input (if hook-context
-                                      (concat hook-input "\n\n" hook-context)
-                                    hook-input)))
-             (mevedel-view--forward-input
-                  model-input
-                  :display-text hook-input
-                  :before-send
-                  (lambda ()
-                    (mevedel-view-history-add hook-input))
-                  :prompt-checked t
-                  :submission submission))
-             (mevedel-view-history-add display)
-             (mevedel-view--start-fork-skill-turn
-              (if hook-context
-                  (concat display "\n\n" hook-context)
-                display)
-              display hook-context)
-             (mevedel-prompt-submission-commit submission)
-             (with-current-buffer data-buffer
-               (mevedel-review--run-task
-                prompt hint
-                (lambda (outcome)
-                  (mevedel-review--handle-view-outcome
-                   outcome view-buffer data-buffer command))
-                hook-context
-                (lambda (invocation)
-                  (mevedel-review--insert-progress-handle
-                   invocation hint command))
-                command cwd target)))))))))
+    ;; Captured before the hook runs: it may be asynchronous, and the
+    ;; composer must keep whatever the user types meanwhile.
+    (let ((submitted-draft (mevedel-view--visible-draft)))
+      (mevedel-view--run-prompt-submit-hook
+       display display
+       (lambda (submission)
+         (when (and (buffer-live-p view-buffer)
+                    (buffer-live-p data-buffer))
+           (let ((hook-input (mevedel-prompt-submission-input submission))
+                 (hook-context
+                  (mevedel-prompt-submission-context submission)))
+             (if (not (equal hook-input display))
+                 (let ((model-input (if hook-context
+                                        (concat hook-input "\n\n" hook-context)
+                                      hook-input)))
+                   (mevedel-view--forward-input
+                    model-input
+                    :display-text hook-input
+                    :before-send
+                    (lambda ()
+                      (mevedel-view-history-add hook-input))
+                    :prompt-checked t
+                    :submission submission
+                    :submitted-draft submitted-draft))
+               (mevedel-view-history-add display)
+               (mevedel-view--start-fork-skill-turn
+                (if hook-context
+                    (concat display "\n\n" hook-context)
+                  display)
+                display hook-context submitted-draft)
+               (mevedel-prompt-submission-commit submission)
+               (with-current-buffer data-buffer
+                 (mevedel-review--run-task
+                  prompt hint
+                  (lambda (outcome)
+                    (mevedel-review--handle-view-outcome
+                     outcome view-buffer data-buffer command))
+                  hook-context
+                  (lambda (invocation)
+                    (mevedel-review--insert-progress-handle
+                     invocation hint command))
+                  command cwd target))))))))))
 
 (defun mevedel-review--dispatch (prompt hint &optional cwd command target)
   "Dispatch COMMAND with PROMPT, HINT, CWD, and optional package TARGET."

@@ -2079,6 +2079,40 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (should (string-search "[skill:thermo-review -- attached]"
                              request-data))))
 
+  :doc "a draft typed while skill preparation runs survives the send"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "myskill"
+       :body "Expanded $0"
+       :context 'inline
+       :user-invocable-p t)
+    (let ((prepare (symbol-function 'mevedel-skills-plan-prepare))
+          (send-count 0))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (cl-incf send-count)))
+                ;; Real preparation is asynchronous whenever a body carries
+                ;; a shell or Elisp injection.
+                ((symbol-function 'mevedel-skills-plan-prepare)
+                 (lambda (&rest args)
+                   (run-at-time 0 nil
+                                (lambda () (apply prepare args))))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "Run $myskill now")
+          (mevedel-view-send)
+          (should (= 0 send-count))
+          ;; The user keeps typing while preparation is pending.
+          (delete-region (mevedel-view--input-start) (point-max))
+          (goto-char (point-max))
+          (insert "> quoted\nsecond line")
+          (let ((deadline (+ (float-time) 10)))
+            (while (and (= 0 send-count) (< (float-time) deadline))
+              (accept-process-output nil 0.01)
+              (sit-for 0.01)))
+          (should (= 1 send-count))
+          (should (equal "> quoted\nsecond line"
+                         (mevedel-view--input-text)))))))
+
   :doc "inline skill forwards expanded body with render-data side channel"
   (mevedel-view-test--with-fork-skill
       (mevedel-skill--create
@@ -2834,6 +2868,34 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (should (= 6 (mevedel-view-test--count-matches
                     (regexp-quote "<[skill:g -- attached] rest>") sent)))))
 
+  :doc "a draft typed while a fork skill prepares survives its turn"
+  (mevedel-view-test--with-source-skills
+      '(("forker" "fork" "FORK<$ARGUMENTS>"))
+    (let ((prepare (symbol-function 'mevedel-skills-plan-prepare))
+          (dispatched 0))
+      (cl-letf (((symbol-function 'mevedel-skills-dispatch-prepared-fork)
+                 (lambda (&rest _) (cl-incf dispatched)))
+                ;; Real preparation is asynchronous whenever a body carries
+                ;; a shell or Elisp injection.
+                ((symbol-function 'mevedel-skills-plan-prepare)
+                 (lambda (&rest args)
+                   (run-at-time 0 nil (lambda () (apply prepare args))))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "$forker inspect this")
+          (mevedel-view-send)
+          (should (= 0 dispatched))
+          (delete-region (mevedel-view--input-start) (point-max))
+          (goto-char (point-max))
+          (insert "> quoted\nsecond line")
+          (let ((deadline (+ (float-time) 10)))
+            (while (and (= 0 dispatched) (< (float-time) deadline))
+              (accept-process-output nil 0.01)
+              (sit-for 0.01)))
+          (should (= 1 dispatched))
+          (should (equal "> quoted\nsecond line"
+                         (mevedel-view--input-text)))))))
+
   :doc "leading forks dispatch once while later forks remain instructions"
   (mevedel-view-test--with-source-skills
       '(("alpha" "inline" "ALPHA<$ARGUMENTS>")
@@ -3240,6 +3302,46 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (should-not sent)
       (with-current-buffer data-buf
         (should (equal before (buffer-string)))
+        (setq-local mevedel--session nil))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session nil))))
+
+  :doc "stops the turn UI when the send fails after it started"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace
+            (mevedel-workspace--create
+             :type 'project :id "send-failure"
+             :root temporary-file-directory :name "send-failure"))
+           (session
+            (mevedel-session--create
+             :name "main" :workspace workspace
+             :working-directory temporary-file-directory)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (goto-char (mevedel-view--input-start))
+        (insert "prompt that fails to start"))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   ;; gptel-send already runs in the data buffer, which is
+                   ;; where the first WAIT handler begins the request.
+                   (mevedel-request-begin session)
+                   (error "Provider refused to start"))))
+        (with-current-buffer view-buf
+          (should-error
+           (mevedel-view--forward-input-now "prompt that fails to start")
+           :type 'error)
+          (should-not mevedel-view--in-flight-turn-start)
+          (should-not mevedel-view--data-turn-start)
+          (should-not (timerp mevedel-view--spinner-timer))))
+      (with-current-buffer data-buf
+        (should-not mevedel--current-request)
+        (should (string-match-p "prompt that fails to start" (buffer-string)))
+        ;; The failed start is this turn's only chance to settle, so it
+        ;; must leave a retryable terminal record.
+        (should (string-match-p ":retry manual" (buffer-string)))
+        (should (string-match-p "Provider refused to start" (buffer-string)))
         (setq-local mevedel--session nil))
       (with-current-buffer view-buf
         (setq-local mevedel--session nil))))
@@ -4809,6 +4911,48 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (should-not (string-match-p "/goal draft" text)))))
       (delete-directory root t)))
 
+  :doc "a draft typed while /goal runs its hook survives the command"
+  (let* ((root (make-temp-file "mevedel-view-goal-redraft" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "view-goal-redraft" root
+                     "view-goal-redraft"))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-hook-rules
+          '((UserPromptSubmit
+             ((:matcher "*"
+                        :hooks ((:type command
+                                       :command "sleep 0.2; printf '{}'"
+                                       :timeout 5)))))))
+         (started 0))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (mevedel-session-set-root-buffer session data-buf))
+          (with-current-buffer view-buf
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-goal-start)
+                     (lambda (&rest _) (cl-incf started))))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "/goal ship the campaign")
+              (mevedel-view-send)
+              (should mevedel-view--prompt-hook-pending)
+              ;; The user keeps typing while the hook runs.
+              (delete-region (mevedel-view--input-start) (point-max))
+              (goto-char (point-max))
+              (insert "> quoted\nsecond line")
+              (let ((deadline (+ (float-time) 10)))
+                (while (and mevedel-view--prompt-hook-pending
+                            (< (float-time) deadline))
+                  (accept-process-output nil 0.05))
+                (should-not mevedel-view--prompt-hook-pending)
+                (should (= 1 started))
+                (should (equal "> quoted\nsecond line"
+                               (mevedel-view--input-text)))))))
+      (delete-directory root t)))
+
   :doc "/plan PROMPT enters Plan and submits PROMPT through UserPromptSubmit"
   (let* ((root (make-temp-file "mevedel-view-plan-command" t))
          (workspace (mevedel-workspace-get-or-create
@@ -5102,6 +5246,54 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                   (accept-process-output nil 0.05)))
               (should-not mevedel-view--prompt-hook-pending)
               (should (= send-count 1)))))
+      (delete-directory root t)))
+
+  :doc "a draft typed while UserPromptSubmit runs survives the send"
+  (let* ((root (make-temp-file "mevedel-view-hooks-redraft" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "view-hooks-redraft" root
+                     "view-hooks-redraft"))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-hook-rules
+          '((UserPromptSubmit
+             ((:matcher "*"
+                        :hooks ((:type command
+                                       :command "sleep 0.2; printf '{}'"
+                                       :timeout 5)))))))
+         (send-count 0))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (mevedel-session-set-root-buffer session data-buf))
+          (cl-letf (((symbol-function 'gptel-send)
+                     (lambda (&rest _) (cl-incf send-count))))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "submitted prompt")
+              (mevedel-view-send)
+              (should mevedel-view--prompt-hook-pending)
+              ;; The user keeps typing while the hook runs.
+              (delete-region (mevedel-view--input-start) (point-max))
+              (goto-char (point-max))
+              (insert "> quoted\nsecond line")
+              (mevedel-session--set-dropped-file-grants
+               session (list (file-name-concat root "later.png")))
+              (let ((draft-offset (- (point) (mevedel-view--input-start)))
+                    (deadline (+ (float-time) 10)))
+                (while (and mevedel-view--prompt-hook-pending
+                            (< (float-time) deadline))
+                  (accept-process-output nil 0.05))
+                (should-not mevedel-view--prompt-hook-pending)
+                (should (= send-count 1))
+                (should (equal (list (file-name-concat root "later.png"))
+                               (mevedel-session-dropped-file-grants
+                                session)))
+                (should (equal "> quoted\nsecond line"
+                               (mevedel-view--input-text)))
+                (should (= draft-offset
+                           (- (point) (mevedel-view--input-start))))))))
       (delete-directory root t)))
 
   :doc "abort makes a late UserPromptSubmit callback inert"

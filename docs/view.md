@@ -242,6 +242,14 @@ Terminology:
 - **Input zone**: the read-only prompt prefix plus the editable composer.
   **Composer** refers only to the editable unsent input body.
 
+A submission that starts in the composer captures the draft it forwards, so a
+draft typed while `UserPromptSubmit`, skill preparation, or a slash command
+runs asynchronously survives the send it started, together with its mention
+bindings, dropped-file grants, and point within the draft. Acceptance clears
+the composer only while it still holds the captured draft. A submission that
+captured no draft clears unconditionally: a drained pending input already
+required an empty composer, and a buffer with no composer has none to protect.
+
 The interaction-zone painter in `mevedel-view-interaction.el` renders
 descriptor bodies as `interaction` fragments. Descriptor overlays may still
 span those fragments as callback handles for prompt settlement and preview
@@ -668,6 +676,12 @@ Redraw paths must treat the composer as user-owned text. Full rerenders,
 interaction rebuilds, status/task rows, spinner ticks, pending-tool live
 lines, and targeted agent refreshes should preserve both composer text
 and point while suppressing modification hooks for view-owned changes.
+
+A send that fails or is interrupted before the provider starts gets no
+terminal callback, so that boundary settles the turn itself: it keeps the
+committed user turn, records a retryable failure summary while the request
+still carries its elapsed time, stops the turn UI, and ends the request. A
+later render therefore never continues a dead turn.
 
 `mevedel-view-rerender` is the correctness fallback and is debounced for
 bursty updates. Prefer narrower refresh paths when a stable source exists:
