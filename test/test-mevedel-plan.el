@@ -330,10 +330,51 @@
       (should-not (plist-member metadata :absolute-path))
       (should-not (plist-member metadata :accepted-absolute-path)))))
 
-(mevedel-deftest mevedel-plan-accept
-  (:doc "accepts a plan without depending on Goal controller state")
+(mevedel-deftest mevedel-plan-accept ()
   ,test
   (test)
+  :doc "keeps the proposal resumable when the archive fails"
+  ;; Acceptance publishes twice.  The metadata reset used to happen with the
+  ;; first publication, so a second one that failed left the proposal
+  ;; demoted to `presented' with no proposal id -- a state resume cannot
+  ;; restore, even though acceptance never committed.
+  (let ((save-dir (make-temp-file "mevedel-plan-archive-fail-" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((session (mevedel-session--create
+                           :authority-mode 'pid-lock
+                           :name "test"
+                           :save-path save-dir
+                           :permission-mode 'full-auto
+                           :turn-count 4))
+                 (markdown "# Plan\n\nDo it.")
+                 (publishes 0)
+                 ;; The publisher is required lazily inside the function
+                 ;; under test, so load it before capturing it.
+                 (_ (require 'mevedel-session-artifacts))
+                 (real (symbol-function
+                        'mevedel-session-artifacts-publish-text)))
+            (setf (mevedel-session-plan-metadata session)
+                  (list :path "plan/current.md"
+                        :hash (mevedel-plan-hash markdown)
+                        :status 'proposed
+                        :proposal-id (list "req" 4 (mevedel-plan-hash markdown))
+                        :selection '(:kind whole)))
+            (cl-letf (((symbol-function 'mevedel-session-artifacts-publish-text)
+                       (lambda (&rest args)
+                         (if (= (cl-incf publishes) 1)
+                             (apply real args)
+                           (error "Lease lost")))))
+              (should-error
+               (mevedel-plan-accept markdown session (current-buffer))))
+            (let ((metadata (mevedel-session-plan-metadata session)))
+              (should (eq 'proposed (plist-get metadata :status)))
+              (should (equal (list "req" 4 (mevedel-plan-hash markdown))
+                             (plist-get metadata :proposal-id)))
+              (should (plist-member metadata :selection)))))
+      (delete-directory save-dir t)))
+
+  :doc "accepts a plan without depending on Goal controller state"
   (let ((save-dir (make-temp-file "mevedel-plan-accept-" t)))
     (unwind-protect
         (with-temp-buffer

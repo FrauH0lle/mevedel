@@ -217,11 +217,14 @@ path names the logical artifact, never an immutable publication file."
                           mevedel-plan--relative-current-path)))
       (mevedel-plan-artifact-path session (list :path path)))))
 
-(defun mevedel-plan-write-current
+(defun mevedel-plan--publish-current
     (plan-markdown session buffer &optional relative-path)
-  "Write PLAN-MARKDOWN to SESSION's current plan artifact for BUFFER.
+  "Publish PLAN-MARKDOWN as SESSION's current plan artifact for BUFFER.
 RELATIVE-PATH overrides the default path below SESSION's save directory.
-Return an explicit artifact plist containing `:path' and `:hash'."
+Return an explicit artifact plist containing `:path' and `:hash'.
+
+Publication only: the caller decides when the session's plan metadata
+follows, which matters when a second publication can still fail."
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
@@ -233,7 +236,25 @@ Return an explicit artifact plist containing `:path' and `:hash'."
          (hash (mevedel-plan-hash plan-markdown)))
     (mevedel-session-artifacts-publish-text
      session path plan-markdown 'utf-8-unix)
-    (let* ((turn (or (mevedel-session-turn-count session) 0))
+    (list :path relative-path :hash hash)))
+
+(defun mevedel-plan-write-current
+    (plan-markdown session buffer &optional relative-path)
+  "Write PLAN-MARKDOWN to SESSION's current plan artifact for BUFFER.
+RELATIVE-PATH overrides the default path below SESSION's save directory.
+Return an explicit artifact plist containing `:path' and `:hash'."
+  (let ((artifact (mevedel-plan--publish-current
+                   plan-markdown session buffer relative-path)))
+    (mevedel-plan--reset-current-metadata
+     session (plist-get artifact :path) (plist-get artifact :hash))
+    artifact))
+
+(defun mevedel-plan--reset-current-metadata (session relative-path hash)
+  "Replace SESSION's plan metadata for a freshly presented RELATIVE-PATH.
+HASH identifies the published artifact.  Only the selection survives: a
+presented plan is not an accepted or proposed one."
+  (require 'mevedel-structs)
+  (let* ((turn (or (mevedel-session-turn-count session) 0))
            (previous (mevedel-session-plan-metadata session))
            (metadata
             (list :path relative-path
@@ -248,8 +269,7 @@ Return an explicit artifact plist containing `:path' and `:hash'."
         (setq metadata
               (plist-put metadata :selection
                          (copy-tree (plist-get previous :selection)))))
-      (setf (mevedel-session-plan-metadata session) metadata))
-    (list :path relative-path :hash hash)))
+      (setf (mevedel-session-plan-metadata session) metadata)))
 
 (defun mevedel-plan-archive-accepted
     (current-artifact session &optional relative-path source-session)
@@ -353,10 +373,17 @@ SKIP-VERIFICATION is non-nil, do not leave verification pending."
   "Persist and accept PLAN-MARKDOWN for SESSION and BUFFER.
 CURRENT-RELATIVE-PATH and ACCEPTED-RELATIVE-PATH override artifact locations.
 Return `(:current ARTIFACT :accepted ARTIFACT)' for later dispatch."
-  (let* ((current (mevedel-plan-write-current
+  ;; Publish and archive before any metadata moves.  The reset drops the
+  ;; proposal id, and `mevedel-plan-mark-accepted' carries it forward from
+  ;; the metadata it finds, so resetting first and then failing to archive
+  ;; left a proposal that resume cannot restore -- for an acceptance that
+  ;; never committed.
+  (let* ((current (mevedel-plan--publish-current
                    plan-markdown session buffer current-relative-path))
          (accepted (mevedel-plan-archive-accepted
                     current session accepted-relative-path)))
+    (mevedel-plan--reset-current-metadata
+     session (plist-get current :path) (plist-get current :hash))
     (mevedel-plan-mark-accepted
      session current accepted skip-verification)
     (list :current current :accepted accepted)))
