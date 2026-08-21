@@ -1281,6 +1281,36 @@ description: Review changed code
           (should-not (mevedel-skills--source-key nil)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-skills--write-state
+  (:vars* ((user-dir (make-temp-file "mevedel-skills-write-" t))
+           (mevedel-user-dir (file-name-as-directory user-dir)))
+   :after-each (delete-directory user-dir t))
+  ,test
+  (test)
+
+  :doc "a write that dies after truncating leaves the previous state"
+  ;; This file is global rather than per-workspace, and the reader signals on
+  ;; anything malformed, so a half-written state breaks every enablement
+  ;; check in every session until someone repairs it by hand.
+  (let ((first (mevedel-skills-test--stateful-skill :name "one"))
+        (second (mevedel-skills-test--stateful-skill :name "two"))
+        (real (symbol-function 'write-region)))
+    (mevedel-skills--set-enabled first nil)
+    (should-not (mevedel-skills--skill-enabled-p first))
+    (cl-letf (((symbol-function 'write-region)
+               (lambda (_start _end filename &rest _)
+                 (funcall real "" nil filename nil 'silent)
+                 (error "Disk full"))))
+      (should-error (mevedel-skills--set-enabled second nil)))
+    (should-not (mevedel-skills--skill-enabled-p first)))
+
+  :doc "a completed write leaves no staging file beside the state"
+  (let ((skill (mevedel-skills-test--stateful-skill :name "one")))
+    (mevedel-skills--set-enabled skill nil)
+    (should (equal '("skills-state.el")
+                   (directory-files mevedel-user-dir nil
+                                    directory-files-no-dot-files-regexp)))))
+
 (mevedel-deftest mevedel-skills--set-enabled
   (:vars* ((user-dir (make-temp-file "mevedel-skills-state-" t))
            (mevedel-user-dir (file-name-as-directory user-dir)))
