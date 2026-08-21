@@ -570,7 +570,14 @@ dropped or recovered records."
                       (mevedel-agent-invocation-transcript-status invocation)
                       (cond
                        ((eq (mevedel-agent-record-activity record) 'idle)
-                        'completed)
+                        ;; The durable outcome is what this turn reported;
+                        ;; deriving the label from activity alone tells the
+                        ;; user a failed or interrupted agent finished.
+                        (pcase (mevedel-agent-record-settled-outcome record)
+                          ('errored 'error)
+                          ('interrupted 'aborted)
+                          ('completed 'completed)
+                          (_ 'incomplete)))
                        (readonly-p 'running)
                        (t 'aborted))
                       (mevedel-agent-invocation-frozen-configuration invocation)

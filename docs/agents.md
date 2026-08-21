@@ -309,6 +309,10 @@ sidecar persists an explicit registry record for its canonical and parent
 paths, role and frozen configuration, activity, unread mailbox, pending
 conversation-local hook context, conversation location, and internal storage
 identity, plus the latest settled payload and terminal outcome when present.
+Resume derives an idle turn's transcript status from that durable outcome
+rather than from activity alone, so an agent that failed or was
+interrupted does not come back reading as one that finished, and a settled
+turn with no recorded outcome reads as incomplete rather than complete.
 The canonical path is the only model-facing address; storage identities never
 enter collaboration tools or resource addresses. The mailbox remains a
 bounded delivery preview rather than the source of truth for an agent result.
