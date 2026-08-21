@@ -1491,7 +1491,7 @@ TOOL-PROP."
 
   :doc "separates bounded tool calls/results and replaces native media"
   (let ((tool-results-dir (make-temp-file "mevedel-summary-media-" t))
-        (mevedel-tool-media--store (make-hash-table :test #'equal)))
+        (mevedel-tool-media--store nil))
     (unwind-protect
         (with-temp-buffer
           (org-mode)
@@ -1508,7 +1508,7 @@ TOOL-PROP."
             (insert result "\n#+end_tool\n")
             (put-text-property tool-start (point)
                                'gptel '(tool . "call-read")))
-          (clrhash mevedel-tool-media--store)
+          (setq mevedel-tool-media--store nil)
           (let ((evidence
                  (mevedel-transcript-project-evidence
                   (list (cons (point-min) (point-max)))

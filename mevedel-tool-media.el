@@ -31,6 +31,23 @@
 
 
 ;;
+;;; Customization
+
+(defcustom mevedel-tool-media-cache-max-bytes (* 25 1024 1024)
+  "Maximum captured payload bytes kept in memory for side-channel replay.
+
+Records whose owning tool call published a durable copy are reread from
+that copy after eviction.  Media captured for a request without durable
+storage has no other copy and becomes unavailable once evicted; its
+transcript text still reports the attachment, so the model sees the
+unresolved reference without the payload.  The most recently stored record
+is always retained, so a single record larger than this bound is kept
+until the next one replaces it."
+  :type 'integer
+  :group 'mevedel)
+
+
+;;
 ;;; Storage
 
 (defconst mevedel-tool-media--data-open "<!-- mevedel-media-data -->"
@@ -38,8 +55,9 @@
 
 (defconst mevedel-tool-media--data-close "<!-- /mevedel-media-data -->"
   "Closing delimiter marking the end of a tool media side-channel block.")
-(defvar mevedel-tool-media--store (make-hash-table :test #'equal)
-  "In-memory lookup table for media side-channel records.")
+
+(defvar mevedel-tool-media--store nil
+  "Media side-channel records as (ID . RECORD), newest first.")
 
 (defun mevedel-tool-media--store-id ()
   "Return a fresh opaque id for a media side-channel record."
@@ -134,6 +152,23 @@ payload.  EXPECTED-TOOL-USE-ID comes from the gptel tool-call record."
                     (plist-get record :items))))
     (mevedel-tool-media-normalize-items items)))
 
+(defun mevedel-tool-media--cache-bytes ()
+  "Return the captured payload bytes held in `mevedel-tool-media--store'."
+  (cl-loop for (_id . record) in mevedel-tool-media--store
+           sum (cl-loop for item in (plist-get record :items)
+                        sum (length (plist-get item :data)))))
+
+(defun mevedel-tool-media--cache-put (id record)
+  "Retain RECORD under ID, dropping oldest records past the byte bound.
+Keeps the newest record even when it alone exceeds
+`mevedel-tool-media-cache-max-bytes'."
+  (push (cons id record) mevedel-tool-media--store)
+  (while (and (cdr mevedel-tool-media--store)
+              (> (mevedel-tool-media--cache-bytes)
+                 mevedel-tool-media-cache-max-bytes))
+    (setq mevedel-tool-media--store
+          (butlast mevedel-tool-media--store))))
+
 (defun mevedel-tool-media--store-media-data
     (media &optional tool-results-dir tool-use-id session)
   "Store MEDIA in TOOL-RESULTS-DIR, returning a side-channel reference.
@@ -147,7 +182,7 @@ publication when non-nil."
                          :items items)))
       (mevedel-tool-media--write-media-store-record
        id items tool-results-dir tool-use-id session)
-      (puthash id record mevedel-tool-media--store)
+      (mevedel-tool-media--cache-put id record)
       (append (list :id id)
               (when (stringp tool-use-id)
                 (list :tool-use-id
@@ -233,7 +268,7 @@ selects the owning tool call.  SESSION supplies remote artifact storage."
         (tool-use-id (plist-get reference :tool-use-id)))
     (or (and (stringp id)
              (mevedel-tool-media--store-record-items
-              (gethash id mevedel-tool-media--store)
+              (cdr (assoc id mevedel-tool-media--store))
               id tool-use-id expected-tool-use-id))
         (and expected-tool-use-id
              (equal expected-tool-use-id tool-use-id)
