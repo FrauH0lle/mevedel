@@ -278,6 +278,10 @@ Disabled skills stay on the session for inspection, but they are omitted
 from `$` completion, rejected by explicit `$skill` invocation and
 `Skill(name=...)`, and omitted from model-facing skill discovery. The
 disabled set is stored in `skills-state.el` under `mevedel-user-dir`.
+That file is replaced through a rename, so an interrupted write leaves the
+previous disabled set intact rather than a partial file the reader would
+reject. Unlike plugin state it is global rather than per-workspace, so two
+Emacs instances resolve last-writer-wins on the whole file.
 
 Completion offers local command names at leading `/` and user-invocable
 skill names at leading `$` in the composer, with annotations for every
