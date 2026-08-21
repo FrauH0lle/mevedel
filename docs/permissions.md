@@ -50,14 +50,15 @@ Single decision function `mevedel-check-permission`. Decision chain:
    regardless of allow rules or permission mode
 4. Tool's own `check-permission` slot decides command authority
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
-6. Permission-mode hard deny, if any
-7. For a path not directly covered by a native path rule, resolve an allowed
+6. For a path not directly covered by a native path rule, resolve an allowed
    root, exact allowed path, or exact resource grant
-8. A protected or outside-root path without that authority → ask
-9. Permission-mode fallback when no earlier policy decides; satisfied resource
+7. A protected or outside-root path without that authority → ask
+8. Permission-mode fallback when no earlier policy decides; satisfied resource
    authority does not itself authorize a mutating operation
 
-ApplyPatch is the deliberate exception to step 9. Its reviewed-edit capability
+The permission mode itself never denies: modes decide between automatic
+allowance and a prompt, and every hard denial is a step-2 or step-3 policy.
+ApplyPatch is the deliberate exception to step 8. Its reviewed-edit capability
 is allowed because `ask` mode already supplies mandatory per-file/hunk review
 before any write. Allowed-root patches therefore proceed directly to that
 review. Protected or outside-root paths still require resource authority before

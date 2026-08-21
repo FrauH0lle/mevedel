@@ -516,10 +516,9 @@ The decision chain:
   3. Call the tool checker, when present, to decide command authority
   4. Resolve allow/ask rules innermost-first:
        invocation -> request -> session -> persistent -> defcustom.
-  5. Apply mode hard-deny
-  6. For a path, independently require allowed-root, exact-path, or exact
+  5. For a path, independently require allowed-root, exact-path, or exact
      resource-grant authority; otherwise ask
-  7. Apply the mode/default decision
+  6. Apply the mode/default decision
 
 For tools with a checker, both command authority and resource authority must
 allow.  Neither can substitute for the other."
@@ -696,24 +695,15 @@ mode, and native-resource tail."
            ((eq action 'allow)
             (mevedel-permission--decision 'allow 'rule :bucket bucket))
            ((eq action 'ask)
-            (if (eq (mevedel-permission-mode-decision
-                     mode read-only-p native-edit-p reviewed-edit-p)
-                    'deny)
-                (mevedel-permission--decision 'deny 'mode :bucket bucket)
-              (mevedel-permission--decision 'ask 'rule :bucket bucket)))))))
-     ;; Step 6: mode hard-deny.
-     ((eq (mevedel-permission-mode-decision
-           mode read-only-p native-edit-p reviewed-edit-p)
-          'deny)
-      (mevedel-permission--decision 'deny 'mode))
-     ;; Steps 7-8: missing native resource authority forces a prompt.  An
+            (mevedel-permission--decision 'ask 'rule :bucket bucket))))))
+     ;; Steps 6-7: missing native resource authority forces a prompt.  An
      ;; allowed root or exact grant satisfies only the resource half; the mode
      ;; still decides whether the operation itself is automatic.
      ((and resource-decision
            (eq (mevedel-permission-decision-raw-outcome resource-decision)
                'ask))
       resource-decision)
-     ;; Step 9: mode/default decision.
+     ;; Step 8: mode/default decision.
      (t (let ((mode-result (mevedel-permission-mode-decision
                             mode read-only-p native-edit-p
                             reviewed-edit-p)))

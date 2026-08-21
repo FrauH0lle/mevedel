@@ -1880,61 +1880,31 @@ that pass local tests."))
 (defun mevedel-reminders-install-defaults (session)
   "Install Tier 1 built-in reminders on SESSION.
 
-Currently registers built-in session reminders.  Idempotent: reminders
-with the same type are not added twice."
+Idempotent: a reminder whose type SESSION already carries is not added
+twice.  Each constructor is pure and zero-argument, and the constructed
+reminder names its own type, so the guard needs no second list."
   (let ((existing (mapcar #'mevedel-reminder-type
                           (mevedel-session-reminders session))))
-    (unless (memq 'pending-events existing)
-      (mevedel-session-add-reminder session
-                                    (mevedel-reminders-make-pending-events)))
-    (unless (memq 'date-change existing)
-      (mevedel-session-add-reminder session
-                                    (mevedel-reminders-make-date-change)))
-    (unless (memq 'compaction-available existing)
-      (mevedel-session-add-reminder
-       session (mevedel-reminders-make-compaction-available)))
-    (unless (memq 'token-usage existing)
-      (mevedel-session-add-reminder session
-                                    (mevedel-reminders-make-token-usage)))
-    (unless (memq 'agent-listing-delta existing)
-      (mevedel-session-add-reminder
-       session (mevedel-reminders-make-agent-listing-delta)))
-    (unless (memq 'xref-available existing)
-      (mevedel-session-add-reminder
-       session (mevedel-reminders-make-xref-available)))
-    (unless (memq 'imenu-available existing)
-      (mevedel-session-add-reminder
-       session (mevedel-reminders-make-imenu-available)))
-    (unless (memq 'treesitter-available existing)
-      (mevedel-session-add-reminder
-       session (mevedel-reminders-make-treesitter-available)))
-    (unless (memq 'elisp-introspection-available existing)
-      (mevedel-session-add-reminder
-       session (mevedel-reminders-make-elisp-introspection-available)))
-    (unless (memq 'mode-constraints existing)
-      (mevedel-session-add-reminder session
-                                    (mevedel-reminders-make-mode-constraints)))
-    (unless (memq 'plan-mode existing)
-      (mevedel-session-add-reminder session
-                                    (mevedel-reminders-make-plan-mode)))
-    (unless (memq 'edited-file existing)
-      (mevedel-session-add-reminder session
-                                    (mevedel-reminders-make-edited-file)))
-    (unless (memq 'deferred-tools-roster existing)
-      (mevedel-session-add-reminder
-       session (mevedel-reminders-make-deferred-tools-roster)))
-    (unless (memq 'deferred-tools-expired existing)
-      (mevedel-session-add-reminder
-       session (mevedel-reminders-make-deferred-tools-expired)))
-    (unless (memq 'task-nudge existing)
-      (mevedel-session-add-reminder session
-                                    (mevedel-reminders-make-task-nudge)))
-    (unless (memq 'verification-suggestion existing)
-      (mevedel-session-add-reminder
-       session (mevedel-reminders-make-verification-suggestion)))
-    (unless (memq 'plan-reference existing)
-      (mevedel-session-add-reminder
-       session (mevedel-reminders-make-plan-reference))))
+    (dolist (make (list #'mevedel-reminders-make-pending-events
+                        #'mevedel-reminders-make-date-change
+                        #'mevedel-reminders-make-compaction-available
+                        #'mevedel-reminders-make-token-usage
+                        #'mevedel-reminders-make-agent-listing-delta
+                        #'mevedel-reminders-make-xref-available
+                        #'mevedel-reminders-make-imenu-available
+                        #'mevedel-reminders-make-treesitter-available
+                        #'mevedel-reminders-make-elisp-introspection-available
+                        #'mevedel-reminders-make-mode-constraints
+                        #'mevedel-reminders-make-plan-mode
+                        #'mevedel-reminders-make-edited-file
+                        #'mevedel-reminders-make-deferred-tools-roster
+                        #'mevedel-reminders-make-deferred-tools-expired
+                        #'mevedel-reminders-make-task-nudge
+                        #'mevedel-reminders-make-verification-suggestion
+                        #'mevedel-reminders-make-plan-reference))
+      (let ((reminder (funcall make)))
+        (unless (memq (mevedel-reminder-type reminder) existing)
+          (mevedel-session-add-reminder session reminder)))))
   session)
 
 (provide 'mevedel-reminders)

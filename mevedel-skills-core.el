@@ -120,9 +120,8 @@ invocation.  ALLOWED-TOOLS holds the raw
 ARGUMENT-HINT annotates completion UI.  ARGUMENT-NAMES holds the
 parsed `arguments' frontmatter as a list of names with numeric-only
 entries filtered out.  PATH-PATTERNS contains globs that trigger
-conditional activation.  SHELL is the shell symbol for body shell
-expansion (`bash' default, `powershell' parsed but unsupported).
-HOOKS is the normalized frontmatter `hooks' value.
+conditional activation.  HOOKS is the normalized frontmatter `hooks'
+value.
 WARNINGS holds configuration diagnostics exposed by skill inspection.
 ACTIVE-P records the current activation state for path-scoped
 skills."
@@ -145,7 +144,6 @@ skills."
   argument-hint
   argument-names
   path-patterns
-  shell
   hooks
   warnings
   active-p)
@@ -310,23 +308,17 @@ entries are filtered out so they cannot shadow `$0'/`$1'/etc."
                         (string-match-p "\\`[0-9]+\\'" n)))
                   names)))
 
-(defun mevedel-skills--validate-shell (val source-file)
-  "Validate shell VAL.  Return `bash', `powershell', or `bash' on error.
-Defaults to `bash' when VAL is nil.  SOURCE-FILE identifies the
-offending skill in the warning."
-  (let ((sym (cond ((null val) 'bash)
-                   ((symbolp val) val)
-                   ((stringp val) (intern val))
-                   (t nil))))
-    (cond
-     ((memq sym '(bash powershell)) sym)
-     (t
-      (display-warning
-       'mevedel
-       (format "Skill at %s declares unknown shell %S; using bash"
-               source-file val)
-       :warning)
-      'bash))))
+(defun mevedel-skills--warn-shell (val source-file)
+  "Warn about a frontmatter shell VAL, which skills do not support.
+Body shell expansion always runs through the session Bash pipeline, so
+accepting a declared shell silently would run the skill under different
+semantics than its author wrote.  SOURCE-FILE identifies the skill."
+  (when val
+    (display-warning
+     'mevedel
+     (format "Skill at %s declares shell %S; skills run bash"
+             source-file val)
+     :warning)))
 
 (defun mevedel-skills--parse-allowed-tool-rules (entries source-file)
   "Map each ENTRY through `mevedel-permission-rules-parse'.
@@ -486,6 +478,7 @@ the fallback."
            (when (and declared-hooks (eq source 'project)
                       (not project-hooks-trusted-p))
              (list "Project skill hooks are ignored until the manifest is trusted")))))
+    (mevedel-skills--warn-shell shell source-file)
     (mevedel-skill--create
      :name name
      :display-name (or (and (stringp display-name) display-name) name)
@@ -510,7 +503,6 @@ the fallback."
      :argument-hint (and (stringp argument-hint) argument-hint)
      :argument-names (mevedel-skills--parse-argument-names arguments)
      :path-patterns (mevedel-skills--coerce-list paths)
-     :shell (mevedel-skills--validate-shell shell source-file)
      :hooks
      (when-let* ((rules (mevedel-skills--normalize-hooks
                          hooks (and (eq context 'fork) 'skill-fork))))

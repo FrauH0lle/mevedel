@@ -61,7 +61,7 @@ lazily — read them when planning work in the relevant area. The
   (validate → permission → snapshot → handler → persist), `:wrap` /
   `:groups`, renderers and render-data side channel, oversized result
   persistence
-- [`docs/permissions.md`](docs/permissions.md) — 9-step decision chain,
+- [`docs/permissions.md`](docs/permissions.md) — 8-step decision chain,
   bucket precedence, Bash/Eval specifics,
   sub-agent permission propagation, example config
 - [`docs/guardian-prompts.md`](docs/guardian-prompts.md) — trusted guardian
@@ -136,7 +136,7 @@ Data model
   mevedel-permission-mode.el  mode normalization, session scoping, lifecycle
   mevedel-permission-rules.el rule parsing, matching, buckets, resource grants
   mevedel-permission-persistence.el target-aware authority store codec
-  mevedel-permissions.el      permission preflight and 9-step decision facade
+  mevedel-permissions.el      permission preflight and 8-step decision facade
   mevedel-tool-permission.el permission-step orchestration, hooks, prompts, logging
   mevedel-pipeline.el         tool context, standard steps, sequencing, ordering
   mevedel-tool-media.el       tool media storage, scrubbing, provider payloads

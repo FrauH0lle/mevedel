@@ -318,7 +318,6 @@ Current fields include:
 - `model`, `effort`
 - `context`, `agent`
 - `paths`
-- `shell`
 - `hooks` (skill-scoped hooks active during invocation)
 
 Command hooks retain their skill resource origin.  Project skill hooks are

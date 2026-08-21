@@ -537,32 +537,31 @@ longer accepts the prepared input."
   (unless (and mevedel--data-buffer (buffer-live-p mevedel--data-buffer))
     (user-error "No live data buffer associated with this view"))
   (mevedel-session-durability-with-transaction
-   (mevedel-session-durability-with-transaction
-    (let* ((session (buffer-local-value 'mevedel--session
-                                        mevedel--data-buffer))
-           (occupied
-            (or (buffer-local-value 'mevedel--current-request
-                                    mevedel--data-buffer)
-                (mevedel-session-pending-follow-ups session)
-                (mevedel-view--occupied-root-workflow-p session)
-                mevedel-view--prompt-hook-pending
-                mevedel-view--pending-skill-submission
-                (buffer-local-value 'mevedel-compact-run-in-flight
-                                    mevedel--data-buffer))))
-      (mevedel-session-artifacts-assert-new-mutation-authority session)
-      (if (not occupied)
-          (mevedel-view-send)
-        (when (buffer-local-value 'mevedel-session--read-only-mode
-                                  mevedel--data-buffer)
-          (user-error "Session is open read-only (another host holds the lock)"))
-        (let ((input (if mevedel-view--composer-scope
-                         (mevedel-view--input-text)
-                       (mevedel-view--bind-input-mentions session))))
-          (when (string-empty-p input)
-            (user-error "Nothing to send"))
-          (when (mevedel-skills--parse-slash-line input)
-            (user-error "Slash commands cannot be queued as follow-ups"))
-          (mevedel-view--queue-follow-up input))))))
+   (let* ((session (buffer-local-value 'mevedel--session
+                                       mevedel--data-buffer))
+          (occupied
+           (or (buffer-local-value 'mevedel--current-request
+                                   mevedel--data-buffer)
+               (mevedel-session-pending-follow-ups session)
+               (mevedel-view--occupied-root-workflow-p session)
+               mevedel-view--prompt-hook-pending
+               mevedel-view--pending-skill-submission
+               (buffer-local-value 'mevedel-compact-run-in-flight
+                                   mevedel--data-buffer))))
+     (mevedel-session-artifacts-assert-new-mutation-authority session)
+     (if (not occupied)
+         (mevedel-view-send)
+       (when (buffer-local-value 'mevedel-session--read-only-mode
+                                 mevedel--data-buffer)
+         (user-error "Session is open read-only (another host holds the lock)"))
+       (let ((input (if mevedel-view--composer-scope
+                        (mevedel-view--input-text)
+                      (mevedel-view--bind-input-mentions session))))
+         (when (string-empty-p input)
+           (user-error "Nothing to send"))
+         (when (mevedel-skills--parse-slash-line input)
+           (user-error "Slash commands cannot be queued as follow-ups"))
+         (mevedel-view--queue-follow-up input)))))
   (goto-char (point-max)))
 
 

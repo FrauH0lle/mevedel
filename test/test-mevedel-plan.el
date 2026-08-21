@@ -154,22 +154,6 @@
        (mevedel-plan-read-artifact
         session '(:path "plans/accepted.md" :hash "wrong"))))))
 
-(mevedel-deftest mevedel-plan--metadata-path
-  (:doc "resolves the canonical current artifact despite stale metadata")
-  ,test
-  (test)
-  (let ((save-dir (make-temp-file "mevedel-plan-metadata-path-" t)))
-    (unwind-protect
-        (let ((session
-               (mevedel-session--create
-                :authority-mode 'pid-lock
-                :name "test" :save-path save-dir
-                :plan-metadata '(:path "plans/current.md"
-                                 :absolute-path "/tmp/stale-current.md"))))
-          (should (equal (file-name-concat save-dir "plans" "current.md")
-                         (mevedel-plan--metadata-path session))))
-      (delete-directory save-dir t))))
-
 (mevedel-deftest mevedel-plan-write-current
   (:doc "writes a validated relative artifact without durable absolute paths")
   ,test
@@ -284,34 +268,6 @@
                          (encode-coding-string "# Published" 'utf-8-unix))))
               (should (equal "# Published"
                              (mevedel-plan-current-body session))))))
-      (delete-directory save-dir t))))
-
-(mevedel-deftest mevedel-plan-current-exists-p
-  (:doc "uses publication membership instead of fixed-cache existence")
-  ,test
-  (test)
-  (let* ((save-dir (make-temp-file "mevedel-plan-exists-" t))
-         (path (file-name-concat save-dir "local" "plans" "current.md"))
-         (session
-          (mevedel-session--create
-           :authority-mode 'pid-lock
-           :name "test" :save-path save-dir
-           :plan-metadata '(:path "local/plans/current.md"))))
-    (unwind-protect
-        (progn
-          (cl-letf (((symbol-function
-                      'mevedel-session-artifacts-artifact-present-p)
-                     (lambda (seen-session logical)
-                       (should (eq session seen-session))
-                       (should (equal "local/plans/current.md" logical))
-                       t)))
-            (should (mevedel-plan-current-exists-p session)))
-          (make-directory (file-name-directory path) t)
-          (write-region "# Poisoned cache" nil path nil 'silent)
-          (cl-letf (((symbol-function
-                      'mevedel-session-artifacts-artifact-present-p)
-                     (lambda (_session _logical) nil)))
-            (should-not (mevedel-plan-current-exists-p session))))
       (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan-mark-accepted

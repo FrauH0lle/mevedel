@@ -731,7 +731,10 @@ effort: -1
             (should (= -1 (mevedel-skill-effort bad)))))
       (delete-directory dir t)))
 
-  :doc "shell defaults to bash, accepts powershell, warns on unknown"
+  :doc "warns about any declared shell, which skills do not support"
+  ;; Body shell expansion always runs through the session Bash pipeline;
+  ;; accepting `powershell' silently ran the author's script under
+  ;; different semantics than they wrote.
   (let* ((mevedel-skills-include-bundled nil)
          (dir (make-temp-file "mevedel-skills-test-" t)))
     (unwind-protect
@@ -750,17 +753,12 @@ shell: powershell
            "description: ok
 shell: fish
 " "Body")
-          (let* ((skills (mevedel-skills-scan dir '(".")))
-                 (default (cl-find "default-shell" skills
-                                   :key #'mevedel-skill-name :test #'equal))
-                 (ps (cl-find "ps-shell" skills
-                              :key #'mevedel-skill-name :test #'equal))
-                 (weird (cl-find "weird-shell" skills
-                                 :key #'mevedel-skill-name :test #'equal)))
-            (should (eq 'bash (mevedel-skill-shell default)))
-            (should (eq 'powershell (mevedel-skill-shell ps)))
-            ;; Unknown shell falls back to bash.
-            (should (eq 'bash (mevedel-skill-shell weird)))))
+          (let (warnings)
+            (mevedel-test--with-captured-diagnostics warnings
+              (mevedel-skills-scan dir '(".")))
+            (should (string-match-p "powershell" warnings))
+            (should (string-match-p "fish" warnings))
+            (should-not (string-match-p "default-shell" warnings))))
       (delete-directory dir t)))
 
   :doc "invalid YAML in frontmatter logs a warning and skips the skill"
