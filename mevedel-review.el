@@ -53,12 +53,9 @@
 (declare-function mevedel-agent-invocation-transcript-status
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
+(declare-function mevedel-agent-resolve-role "mevedel-agents" (role))
 (declare-function mevedel-agents-ensure-reviewer "mevedel-agents" ())
 (declare-function mevedel-agents-ensure-verifier "mevedel-agents" ())
-(declare-function mevedel-agents-set-specs
-                  "mevedel-agents" (specs))
-(declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
 
 ;; `mevedel-chat'
 (declare-function mevedel--active-chat-buffer
@@ -970,21 +967,6 @@ permission policy decides whether verifier validation commands may run."
     (unless (mevedel-agent-get "reviewer")
       (user-error "Reviewer agent is not available"))))
 
-(defun mevedel-review--ensure-agent-spec (data-buffer &optional command)
-  "Ensure DATA-BUFFER can dispatch validation COMMAND's agent."
-  (require 'mevedel-agents)
-  (mevedel-review--ensure-dispatch-deps command)
-  (let* ((agent-name (mevedel-review--command-agent-name command))
-         (agent (mevedel-agent-get agent-name)))
-    (unless agent
-      (user-error "%s agent is not available"
-                  (mevedel-review--command-label command)))
-    (with-current-buffer data-buffer
-      (mevedel-agents-set-specs
-       (cons (mevedel-agent-to-gptel-spec agent)
-             (cl-remove agent-name (mevedel-agents-specs)
-                        :key #'car :test #'equal))))))
-
 (defun mevedel-review--ensure-dispatch-allowed (data-buffer)
   "Signal if DATA-BUFFER cannot accept a direct review dispatch."
   (with-current-buffer data-buffer
@@ -1199,7 +1181,8 @@ parent request has accepted the review turn."
                        session
                        (mevedel-review--next-task-name session command)
                        message #'prepared
-                       :role (mevedel-review--command-agent-name command)
+                       :agent (mevedel-agent-resolve-role
+                               (mevedel-review--command-agent-name command))
                        :context "none"
                        :description
                        (or hint (mevedel-review--command-description command))
@@ -1352,7 +1335,6 @@ DATA-BUFFER receives the task transcript."
         (user-error "No mevedel chat buffer available for %s output"
                     command-name))
       (mevedel-review--ensure-dispatch-allowed data-buffer)
-      (mevedel-review--ensure-agent-spec data-buffer command)
       (if view-buffer
           (progn
             (mevedel-review--send-from-view

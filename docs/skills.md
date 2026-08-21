@@ -473,7 +473,13 @@ summary.
 
 At dispatch time, `mevedel-review.el` keeps target/result semantics local,
 creates a unique path such as `/root/review` or `/root/verify_2`, and attaches
-the workflow result consumer before provider dispatch. After the parent
+the workflow result consumer before provider dispatch. It spawns the bundled
+agent it resolved rather than naming a role, so the request-local role
+roster, which belongs to the preset's request setup, is neither read nor
+written. A user command still runs the reviewer whatever that roster holds;
+what it can no longer do is widen the roster the model sees, or leave a
+narrowed one behind that refuses a later spawn. A forked skill's synthetic
+agent is dispatched the same way, for the same reason. After the parent
 submission passes its mutation-authority checks, concrete Git targets receive
 a collision-free package under
 `.mevedel/review-packages/`; the command tells the reviewer or verifier to
