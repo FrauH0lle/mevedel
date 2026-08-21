@@ -165,6 +165,23 @@ Returns (file . FILENAME) if the buffer is visiting a file, nil otherwise."
     (cons 'file filename)))
 
 
+(defun mevedel-workspace-file-buffers (workspace)
+  "Return live buffers visiting files under WORKSPACE's root."
+  (when-let* ((workspace workspace)
+              (root (file-name-as-directory
+                     (expand-file-name (mevedel-workspace-root workspace)))))
+    (cl-remove-if-not
+     (lambda (buffer)
+       (when-let* ((file (buffer-file-name buffer)))
+         (or (file-in-directory-p file root)
+             (let ((true-root (ignore-errors
+                                (file-name-as-directory
+                                 (file-truename root))))
+                   (true-file (ignore-errors (file-truename file))))
+               (and true-root true-file
+                    (file-in-directory-p true-file true-root))))))
+     (buffer-list))))
+
 ;;
 ;;; Workspace type functions
 

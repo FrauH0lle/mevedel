@@ -656,7 +656,7 @@
                        (remote (overlay-get overlay 'mevedel--remote)))
                   (setq remote-feedback (plist-get remote :feedback)))
                 (cl-letf (((symbol-function
-                            'mevedel-reminders-diagnostics-after-edit)
+                            'mevedel-edit-diagnostics-after-edit)
                            (lambda (_buffer _path callback)
                              (setq continuation callback))))
                   (mevedel-patch-review-submit))

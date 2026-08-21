@@ -151,6 +151,7 @@ Data model
   mevedel-queue.el            shared interaction entry metadata
   mevedel-permission-queue.el permission/Bash/Eval/execution-authority queue
   mevedel-reminders.el        system-reminder injection
+  mevedel-edit-diagnostics.el post-edit Flymake/Flycheck report state machine
   mevedel-plugin-registry.el  plugin manifests, activation state, hook consent
   mevedel-plugin-lifecycle.el managed Git install, update, and removal
   mevedel-plugin-ui.el        plugin cockpit and /plugin command
