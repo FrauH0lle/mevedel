@@ -15,6 +15,7 @@
 (require 'mevedel-tool-fs)
 (require 'mevedel-compact)
 (require 'mevedel-reminders)
+(require 'mevedel-turn)
 (require 'mevedel-system)
 (require 'mevedel-agents)
 (require 'mevedel-tool-ui)
@@ -25,6 +26,27 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+
+
+;;
+;;; Helpers
+
+(defun test-mevedel-reminders--content (reminder ctx)
+  "Return REMINDER's body for CTX, applying any staged commit.
+Content returns either a body string or a `:body'/`:commit' plist, so
+this collapses both shapes to the delivered text."
+  (let ((result (funcall (mevedel-reminder-content reminder) ctx)))
+    (if (stringp result)
+        result
+      (when-let* ((commit (plist-get result :commit)))
+        (funcall commit))
+      (plist-get result :body))))
+
+(defun test-mevedel-reminders--collect-and-commit (reminders turn ctx)
+  "Collect REMINDERS at TURN for CTX, run their commits, return the blocks."
+  (let ((staged (mevedel-reminders--collect-from reminders turn ctx)))
+    (mapc #'funcall (plist-get staged :commits))
+    (plist-get staged :blocks)))
 
 (defvar imenu--index-alist)
 (defvar mevedel--agent-invocation)
@@ -278,7 +300,7 @@
              :interval 3))
          (clone-a (car (mevedel-reminders-clone-list (list r))))
          (clone-b (car (mevedel-reminders-clone-list (list r)))))
-    (mevedel-reminders--collect-from (list clone-a) 0 nil)
+    (test-mevedel-reminders--collect-and-commit (list clone-a) 0 nil)
     (should (equal 0 (mevedel-reminder-last-fired clone-a)))
     (should (null (mevedel-reminder-last-fired clone-b)))
     (should (null (mevedel-reminder-last-fired r)))))
@@ -374,10 +396,13 @@
               :type 'a :trigger (lambda (_) t) :content (lambda (_) "one")))
          (r2 (mevedel-reminder-create
               :type 'b :trigger (lambda (_) t) :content (lambda (_) "two")))
-         (blocks (mevedel-reminders--collect-from (list r1 r2) 4 nil)))
+         (staged (mevedel-reminders--collect-from (list r1 r2) 4 nil)))
     (should (equal (list "<system-reminder>\none\n</system-reminder>"
                          "<system-reminder>\ntwo\n</system-reminder>")
-                   blocks))
+                   (plist-get staged :blocks)))
+    ;; Firing is staged, not applied, until the payload carries it.
+    (should-not (mevedel-reminder-last-fired r1))
+    (mapc #'funcall (plist-get staged :commits))
     (should (equal 4 (mevedel-reminder-last-fired r1)))
     (should (equal 4 (mevedel-reminder-last-fired r2))))
 
@@ -389,7 +414,7 @@
              :type 'a
              :trigger (lambda (c) (setq seen-trigger c) t)
              :content (lambda (c) (setq seen-content c) "ok"))))
-    (mevedel-reminders--collect-from (list r) 0 ctx)
+    (test-mevedel-reminders--collect-and-commit (list r) 0 ctx)
     (should (eq seen-trigger ctx))
     (should (eq seen-content ctx))))
 
@@ -515,6 +540,154 @@
           (should (= 3 (length (plist-get data :messages)))))
       (kill-buffer chat-buf)))
 
+  :doc "keeps consumable state when injection fails"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
+         (prompt-buf (generate-new-buffer " *mevedel-test-prompt*"))
+         (backend (gptel-make-openai
+                   "reminder-fail" :key "test" :host "example.test"
+                   :models '(test)))
+         (data (list :messages [(:role "user" :content "actual task")]))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf :backend backend :data data)))
+         (reminder (mevedel-reminders-make-pending-events)))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :id "request-1"
+                                                 :session session))
+            (setf (mevedel-session-pending-reminders session) '("EVENT"))
+            (setf (mevedel-session-hook-context-pending session)
+                  '((:event "SessionStart" :body "HOOK")))
+            (mevedel-session-add-reminder session reminder)
+            (mevedel-reminders-queue-turn-event
+             chat-buf 'demo "TURN"))
+          (with-current-buffer prompt-buf
+            (insert "user prompt body")
+            (mevedel-reminders--transform fsm))
+          (cl-letf (((symbol-function 'gptel--inject-prompt)
+                     (lambda (&rest _) (error "Injection failed"))))
+            (should-error (mevedel-reminders--handle-inject fsm)))
+          ;; Nothing reached the model, so nothing may be consumed.
+          (should (equal '("EVENT")
+                         (mevedel-session-pending-reminders session)))
+          (should-not (mevedel-reminder-last-fired reminder))
+          (with-current-buffer chat-buf
+            (should (plist-get mevedel-reminders--turn-events :items)))
+          ;; Hook context is reserved for the in-flight request rather
+          ;; than left pending, so a mid-request taker cannot deliver it
+          ;; twice; settling the dead turn returns it.
+          (should-not (mevedel-session-hook-context-pending session))
+          (should (mevedel-reminders-restore-reserved-context chat-buf))
+          (should (mevedel-session-hook-context-pending session)))
+      (kill-buffer chat-buf)
+      (kill-buffer prompt-buf)))
+
+  :doc "consumes staged state exactly once when injection succeeds"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
+         (prompt-buf (generate-new-buffer " *mevedel-test-prompt*"))
+         (backend (gptel-make-openai
+                   "reminder-once" :key "test" :host "example.test"
+                   :models '(test)))
+         (data (list :messages [(:role "user" :content "actual task")]))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf :backend backend :data data)))
+         (reminder (mevedel-reminders-make-pending-events)))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :id "request-1"
+                                                 :session session))
+            (setf (mevedel-session-pending-reminders session) '("EVENT"))
+            (setf (mevedel-session-hook-context-pending session)
+                  '((:event "SessionStart" :body "HOOK")))
+            (mevedel-session-add-reminder session reminder)
+            (mevedel-reminders-queue-turn-event chat-buf 'demo "TURN"))
+          (with-current-buffer prompt-buf
+            (insert "user prompt body")
+            (mevedel-reminders--transform fsm))
+          (mevedel-reminders--handle-inject fsm)
+          (should-not (mevedel-session-pending-reminders session))
+          (should-not (mevedel-session-hook-context-pending session))
+          (should (mevedel-reminder-last-fired reminder))
+          (with-current-buffer chat-buf
+            (should-not (plist-get mevedel-reminders--turn-events :items)))
+          (let ((count (length (plist-get data :messages))))
+            (mevedel-reminders--handle-inject fsm)
+            (should (= count (length (plist-get data :messages))))))
+      (kill-buffer chat-buf)
+      (kill-buffer prompt-buf)))
+
+  :doc "a dead turn returns the hook context it reserved"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
+         (prompt-buf (generate-new-buffer " *mevedel-test-prompt*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setf (mevedel-session-hook-context-pending session)
+                  '((:event "SessionStart" :body "HOOK"))))
+          (with-current-buffer prompt-buf
+            (insert "user prompt body")
+            (mevedel-reminders--transform fsm))
+          (should-not (mevedel-session-hook-context-pending session))
+          ;; The turn dies without delivering, and every dead turn ends its
+          ;; request, so that teardown hands the reservation back.
+          (with-current-buffer chat-buf
+            (mevedel-request-end))
+          (should (equal '((:event "SessionStart" :body "HOOK"))
+                         (mevedel-session-hook-context-pending session)))
+          ;; And only once: a second teardown adds nothing.
+          (with-current-buffer chat-buf
+            (mevedel-request-end))
+          (should (= 1 (length
+                        (mevedel-session-hook-context-pending session)))))
+      (kill-buffer chat-buf)
+      (kill-buffer prompt-buf)))
+
+  :doc "consumes hook context even when no reminder block fires"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
+         (prompt-buf (generate-new-buffer " *mevedel-test-prompt*"))
+         (backend (gptel-make-openai
+                   "reminder-context" :key "test" :host "example.test"
+                   :models '(test)))
+         (data (list :messages [(:role "user" :content "actual task")]))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf :backend backend :data data))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :id "request-1"
+                                                 :session session))
+            (setf (mevedel-session-hook-context-pending session)
+                  '((:event "SessionStart" :body "HOOK"))))
+          (with-current-buffer prompt-buf
+            (insert "user prompt body")
+            (mevedel-reminders--transform fsm)
+            ;; The context rides the prompt text, so it contributes no
+            ;; block, and its commit must still run.
+            (should (string-match-p "HOOK" (buffer-string))))
+          (should-not (plist-get (gptel-fsm-info fsm)
+                                 :mevedel-reminder-blocks))
+          (mevedel-reminders--handle-inject fsm)
+          (should-not (mevedel-session-hook-context-pending session)))
+      (kill-buffer chat-buf)
+      (kill-buffer prompt-buf)))
+
   :doc "formats synthetic reminder messages for the active backend"
   (let* ((ws (mevedel-workspace-get-or-create
               'project "/tmp/p/" "/tmp/p/" "p"))
@@ -633,7 +806,7 @@
                            :key #'mevedel-reminder-type))
          (clone-b (cl-find 'a (mevedel-agent-invocation-reminders inv-b)
                            :key #'mevedel-reminder-type)))
-    (mevedel-reminders--collect-from
+    (test-mevedel-reminders--collect-and-commit
      (mevedel-agent-invocation-reminders inv-a) 0 inv-a)
     (should (equal 0 (mevedel-reminder-last-fired clone-a)))
     (should (null (mevedel-reminder-last-fired clone-b))))
@@ -1589,7 +1762,7 @@
             (with-temp-file file (insert "goodbye\n"))
             (set-file-times file future))
           (should (mevedel-reminders--should-fire-p r 0 session))
-          (let ((content (funcall (mevedel-reminder-content r) session)))
+          (let ((content (test-mevedel-reminders--content r session)))
             (should (string-match-p "MODIFIED:" content))
             (should (string-match-p (regexp-quote (expand-file-name file))
                                     content))
@@ -1612,7 +1785,7 @@
            (mevedel-file-state-from-file file))
           (delete-file file)
           (should (mevedel-reminders--should-fire-p r 0 session))
-          (let ((content (funcall (mevedel-reminder-content r) session)))
+          (let ((content (test-mevedel-reminders--content r session)))
             (should (string-match-p "DELETED:" content))
             (should (string-match-p (regexp-quote (expand-file-name file))
                                     content))))
@@ -1635,7 +1808,7 @@
             (with-temp-file file (insert "world"))
             (set-file-times file future))
           ;; First firing formats + consumes.
-          (funcall (mevedel-reminder-content r) session)
+          (test-mevedel-reminders--content r session)
           (should-not (mevedel-reminders--should-fire-p r 0 session)))
       (delete-directory tmp-root t)))
 
@@ -1659,7 +1832,7 @@
               (dotimes (i 40)
                 (insert (format "changed %d\n" i))))
             (set-file-times file future))
-          (let ((content (funcall (mevedel-reminder-content r) session)))
+          (let ((content (test-mevedel-reminders--content r session)))
             (should (string-match-p "more lines truncated" content))))
       (delete-directory tmp-root t)))
 
@@ -1689,7 +1862,7 @@
             ;; Trigger + content on a single firing should only hit
             ;; detect-external-changes once.
             (should (mevedel-reminders--should-fire-p r 0 session))
-            (funcall (mevedel-reminder-content r) session)
+            (test-mevedel-reminders--content r session)
             (should (= 1 call-count))
             ;; A fresh trigger on the next turn recomputes; no changes
             ;; this time, so content is not called.
@@ -1783,7 +1956,7 @@
     (setf (mevedel-session-deferred-expired session)
           '("XrefReferences" "XrefDefinitions"))
     (should (mevedel-reminders--should-fire-p r 1 session))
-    (let ((body (funcall (mevedel-reminder-content r) session)))
+    (let ((body (test-mevedel-reminders--content r session)))
       (should (string-match-p "XrefReferences" body))
       (should (string-match-p "XrefDefinitions" body))
       (should (string-match-p "ToolSearch" body))
@@ -1807,7 +1980,7 @@
                :deferred-expired '("Imenu" "Treesitter")))
          (r (mevedel-reminders-make-agent-deferred-tools-expired)))
     (should (mevedel-reminders--should-fire-p r 1 inv))
-    (let ((body (funcall (mevedel-reminder-content r) inv)))
+    (let ((body (test-mevedel-reminders--content r inv)))
       (should (string-match-p "Imenu" body))
       (should (string-match-p "Treesitter" body))
       (should (string-match-p "ToolSearch" body)))
@@ -1828,7 +2001,7 @@
     (mevedel-session-enqueue-pending-reminder session "second")
     (should (mevedel-reminders--should-fire-p r 0 session))
     (should (equal "first\n\nsecond"
-                   (funcall (mevedel-reminder-content r) session)))
+                   (test-mevedel-reminders--content r session)))
     (should-not (mevedel-session-pending-reminders session))
     (should-not (mevedel-reminders--should-fire-p r 1 session))))
 
@@ -1844,7 +2017,7 @@
          (r (mevedel-reminders-make-date-change)))
     (setf (mevedel-session-last-observed-date session) "2000-01-01")
     (should (mevedel-reminders--should-fire-p r 0 session))
-    (let ((body (funcall (mevedel-reminder-content r) session)))
+    (let ((body (test-mevedel-reminders--content r session)))
       (should (string-match-p "2000-01-01" body))
       (should (string-match-p today body)))
     (should (equal today (mevedel-session-last-observed-date session)))
@@ -1925,11 +2098,21 @@
             (setq-local mevedel-agents--specs
                         '(("verifier" . (:description "Verify")))))
           (should (mevedel-reminders--should-fire-p r 1 session))
-          (let ((body (funcall (mevedel-reminder-content r) session)))
+          (let* ((result (funcall (mevedel-reminder-content r) session))
+                 (body (plist-get result :body))
+                 (commit (plist-get result :commit)))
             (should (string-match-p "Added:" body))
             (should (string-match-p "verifier" body))
             (should (string-match-p "Removed:" body))
-            (should (string-match-p "explorer" body))))
+            (should (string-match-p "explorer" body))
+            ;; The commit runs outside the transform's buffer binding, so
+            ;; it must store the roster the content captured rather than
+            ;; re-read it and find nothing.
+            (setq body nil)
+            (let ((mevedel-reminders--current-chat-buffer nil))
+              (funcall commit))
+            (should (equal '(("verifier" . "Verify"))
+                           (mevedel-session-agent-types-snapshot session)))))
       (kill-buffer buf))))
 
 

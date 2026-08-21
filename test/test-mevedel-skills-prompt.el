@@ -184,6 +184,17 @@
                  :model-invocable-p nil :active-p t)))
     (should-not (mevedel-skills-prompt-section session))))
 
+(defun test-mevedel-skills-prompt--content (reminder ctx)
+  "Return REMINDER's body for CTX, applying any staged commit.
+Content returns either a body string or a `:body'/`:commit' plist, so
+this collapses both shapes to the delivered text."
+  (let ((result (funcall (mevedel-reminder-content reminder) ctx)))
+    (if (stringp result)
+        result
+      (when-let* ((commit (plist-get result :commit)))
+        (funcall commit))
+      (plist-get result :body))))
+
 (mevedel-deftest mevedel-reminders-make-skills-delta ()
   ,test
   (test)
@@ -208,10 +219,18 @@
                          :name "beta" :description "Beta"
                          :active-p t :model-invocable-p t))))
     (should (funcall (mevedel-reminder-trigger reminder) session))
-    (let ((body (funcall (mevedel-reminder-content reminder) session)))
+    ;; The snapshot advances only when the commit runs, and that commit
+    ;; must store the roster captured while the content ran.
+    (let* ((result (funcall (mevedel-reminder-content reminder) session))
+           (body (plist-get result :body)))
       (should (string-match-p "Available skills changed" body))
       (should (string-match-p "Added skills:" body))
-      (should (string-match-p "beta: Beta" body)))
+      (should (string-match-p "beta: Beta" body))
+      (should (equal '(("alpha" . "Alpha"))
+                     (mevedel-session-skills-snapshot session)))
+      (funcall (plist-get result :commit))
+      (should (equal '(("alpha" . "Alpha") ("beta" . "Beta"))
+                     (mevedel-session-skills-snapshot session))))
     (should-not (funcall (mevedel-reminder-trigger reminder) session)))
 
   :doc "removed skills are listed by name only"
@@ -225,7 +244,7 @@
     (setf (mevedel-session-skills-snapshot session)
           '(("gone" . "Old description")))
     (should (funcall (mevedel-reminder-trigger reminder) session))
-    (let ((body (funcall (mevedel-reminder-content reminder) session)))
+    (let ((body (test-mevedel-skills-prompt--content reminder session)))
       (should (string-match-p "Removed skills:" body))
       (should (string-match-p "  - gone" body))
       (should-not (string-match-p "Old description" body))))
