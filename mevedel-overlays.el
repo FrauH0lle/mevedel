@@ -917,6 +917,11 @@ then the function will resize it.  See either `mevedel-create-reference'
 or `mevedel-create-directive' for details on how the resizing works."
   (require 'mevedel-directive-source)
   (require 'mevedel-overlay-ui)
+  ;; A directive's durable record is anchored to a file: without one it
+  ;; can never be reattached after a load, and archiving or detaching it
+  ;; would write a record that no longer loads at all.
+  (when (and (eq type 'directive) (not (buffer-file-name)))
+    (user-error "Cannot create a directive in a buffer visiting no file"))
   (if (use-region-p)
       (let ((intersecting-instructions
              (cl-remove-if (lambda (instr)

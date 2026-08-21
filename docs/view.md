@@ -302,7 +302,9 @@ loss, or archive. Opening it replaces the current displayed view rather than
 splitting beside MevView. It owns no composer, streaming, or interaction
 callbacks; View patch, Reattach, Rewind before..., Archive, and scope-entering
 actions dispatch to the record or execution session. Its activity entries fold
-by default as an overview. Source overlays expose the Activity action only after
+by default as an overview, and each rendered row resolves back to its own
+durable entry by activity kind and settlement sequence together, because
+Rewind acts on whichever entry the row resolved to. Source overlays expose the Activity action only after
 the directive owns a planning, discussion, or implementation turn.
 
 Plan-before-implementation is configured per top-level directive through the

@@ -394,9 +394,16 @@
           (when-let* ((metadata
                        (get-text-property pos 'mevedel-view-directive))
                       (item
-                       (cl-find (plist-get metadata :sequence) entries
-                                :key (lambda (candidate)
-                                       (plist-get candidate :sequence)))))
+                       ;; A sequence is unique across the three collections
+                       ;; only as long as the record is sound, and the row
+                       ;; already knows which kind it renders.
+                       (cl-find-if
+                        (lambda (candidate)
+                          (and (eq (plist-get metadata :activity-kind)
+                                   (plist-get candidate :kind))
+                               (eql (plist-get metadata :sequence)
+                                    (plist-get candidate :sequence))))
+                        entries)))
             (put-text-property
              pos
              (or (next-single-property-change

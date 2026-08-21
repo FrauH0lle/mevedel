@@ -130,6 +130,70 @@
                         (mevedel-directive-state (cadr restored))))))
       (delete-directory directory t)))
 
+  :doc "validates the source region a top-level attached anchor stores"
+  (let* ((directory (make-temp-file "mevedel-attached-anchor-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'file :id directory :root directory
+                     :name "persist"))
+         (file (file-name-concat directory "a.el"))
+         (directive (mevedel-directive--create
+                     :id "attached" :request "Explain this"
+                     :anchor (list :state 'attached :file file
+                                   :start 1 :end 7
+                                   :evidence '(:schema 1 :bodyless nil
+                                               :text "target")))))
+    (unwind-protect
+        (progn
+          (mevedel-workspace-set-directives workspace (list directive))
+          (let ((serialized
+                 (mevedel--serialize-directives workspace directory)))
+            (should (= 1 (length (mevedel--deserialize-directives
+                                  serialized directory))))
+            (dolist (anchor
+                     '((:state attached :start 1 :end 7 :evidence nil)
+                       (:state attached :file 7 :start 1 :end 7
+                               :evidence nil)
+                       (:state attached :file "a.el" :start 7 :end 1
+                               :evidence nil)
+                       (:state attached :file "a.el" :start 1 :end 7
+                               :evidence "target")))
+              (let ((input (copy-tree serialized)))
+                (plist-put (car input) :anchor (copy-sequence anchor))
+                (should-error
+                 (mevedel--deserialize-directives input directory)
+                 :type 'user-error)))))
+      (delete-directory directory t)))
+
+  :doc "rejects one activity sequence shared across two collections"
+  ;; A sequence is allocated as a max+1 over all three collections, and the
+  ;; inspector resolves a rendered row back to a durable entry with it.
+  (let* ((directory (make-temp-file "mevedel-activity-sequence-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'file :id directory :root directory
+                     :name "persist"))
+         (directive
+          (mevedel-directive--create
+           :id "shared" :request "Preserve this"
+           :anchor (list :state 'archived
+                         :file (file-name-concat directory "old.el")
+                         :start 1 :end 2 :evidence nil :properties nil)
+           :attempts (list (mevedel-directive-persistence-test--attempt))
+           :discussion
+           (list (mevedel-directive-discussion-turn--create
+                  :sequence 1 :directive-request "Preserve this"
+                  :message "Why?" :request "discussion prompt"
+                  :result "Because" :outcome 'success
+                  :checkpoint '(:session-id "session" :turn 1))))))
+    (unwind-protect
+        (progn
+          (mevedel-workspace-set-directives workspace (list directive))
+          (should-error
+           (mevedel--deserialize-directives
+            (mevedel--serialize-directives workspace directory)
+            directory)
+           :type 'user-error))
+      (delete-directory directory t)))
+
   :doc "rejects top-level and nested current directive ID collisions"
   (let* ((directory (make-temp-file "mevedel-directive-ids-" t))
          (workspace (mevedel-workspace--create

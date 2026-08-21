@@ -110,6 +110,44 @@
     (mevedel--instruction-current-state-key :global)))
   ,test
   (test)
+  :doc "resolves each row to the entry of its own activity kind"
+  ;; An activity sequence is unique across the three collections when
+  ;; mevedel allocates it, but a corrupt record can repeat one, and the
+  ;; rows resolve back to a durable entry the destructive Rewind acts on.
+  (let* ((fixture (mevedel-directive-activity-test--fixture))
+         (record (nth 3 fixture))
+         (attempt (mevedel-directive-activity-test--attempt))
+         (turn (mevedel-directive-discussion-turn--create
+                :sequence 2 :directive-request "Explain this code"
+                :message "Question" :request "Question prompt"
+                :result "Answer" :outcome 'success
+                :checkpoint '(:session-id "main" :turn 4)))
+         (inspector (generate-new-buffer " *directive-inspector*")))
+    (unwind-protect
+        (progn
+          (setf (mevedel-directive-attempt-sequence attempt) 2
+                (mevedel-directive-attempts record) (list attempt)
+                (mevedel-directive-discussion record) (list turn)
+                (mevedel-directive-state record) 'implemented)
+          (with-current-buffer inspector
+            (mevedel-directive-activity-mode)
+            (setq-local mevedel-directive-activity--workspace (nth 0 fixture)
+                        mevedel-directive-activity--directive record)
+            (mevedel-directive-activity-refresh)
+            (let (entries)
+              (goto-char (point-min))
+              (while (< (point) (point-max))
+                (when-let* ((entry (get-text-property
+                                    (point) 'mevedel-view-zone-entry)))
+                  (push entry entries))
+                (goto-char (or (next-single-property-change
+                                (point) 'mevedel-view-zone-entry)
+                               (point-max))))
+              (should (memq attempt entries))
+              (should (memq turn entries)))))
+      (kill-buffer inspector)
+      (mevedel-directive-activity-test--discard fixture)))
+
   :doc "projects immutable attempts through the ordinary transcript renderer"
   (let* ((fixture (mevedel-directive-activity-test--fixture))
          (record (nth 3 fixture))
