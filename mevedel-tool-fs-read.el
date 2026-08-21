@@ -85,9 +85,6 @@
                   "mevedel-utilities"
                   (name command read-paths &optional writable-roots session))
 
-(defvar mevedel-tool-fs-read--read-render-cache (make-hash-table :test #'equal)
-  "Cache for cheap Read renderer header metadata.")
-
 (defvar mevedel-tool-fs-read--resource-address nil
   "Authored resource address for the current Read operation.")
 
@@ -124,25 +121,6 @@ via `mevedel-view--fontify-as'."
       (setq pos (1+ pos)))
     lines))
 
-(defun mevedel-tool-fs-read--render-metadata (path visible)
-  "Return cached header metadata for Read PATH and VISIBLE result text."
-  (let* ((root (mevedel-tool-fs-current-workspace-root))
-         (base (or (and (boundp 'mevedel--session)
-                        mevedel--session
-                        (ignore-errors
-                          (mevedel-session-working-directory
-                           mevedel--session)))
-                   default-directory))
-         (key (list path root base (length visible) (sxhash-equal visible))))
-    (or (gethash key mevedel-tool-fs-read--read-render-cache)
-        (let ((metadata (list :shown (mevedel-tool-fs-display-path path)
-                              :lines (mevedel-tool-fs-read--line-count visible)
-                              :mode (mevedel-tool-fs-read--mode-for-file path))))
-          (when (> (hash-table-count mevedel-tool-fs-read--read-render-cache) 256)
-            (clrhash mevedel-tool-fs-read--read-render-cache))
-          (puthash key metadata mevedel-tool-fs-read--read-render-cache)
-          metadata))))
-
 (defun mevedel-tool-fs-read-render (name args result _render-data)
   "Rendering plist for the Read tool.
 NAME is \"Read\".  ARGS carries `:file_path'.  RESULT is the line-numbered
@@ -151,14 +129,16 @@ fontifies as the file's natural mode when detectable from extension."
   (require 'mevedel-tool-fs)
   (when (and (stringp result)
              (not (string-match-p "\\`[ \t\n]*Error:" result)))
-    (let* ((path (plist-get args :file_path))
-           (visible (mevedel-tool-fs-strip-system-reminders result))
-           (metadata (mevedel-tool-fs-read--render-metadata path visible))
-           (shown (plist-get metadata :shown))
-           (lines (plist-get metadata :lines)))
-      (list :header (format "%s: %s (%d lines)" (or name "Read") shown lines)
+    ;; Renderer output is disposable UI state rebuilt on each rerender.
+    ;; Hashing the payload to look up a line count of the same payload
+    ;; saved nothing, so the header is simply computed.
+    (let ((path (plist-get args :file_path))
+          (visible (mevedel-tool-fs-strip-system-reminders result)))
+      (list :header (format "%s: %s (%d lines)" (or name "Read")
+                            (mevedel-tool-fs-display-path path)
+                            (mevedel-tool-fs-read--line-count visible))
             :body result
-            :body-mode (plist-get metadata :mode)
+            :body-mode (mevedel-tool-fs-read--mode-for-file path)
             :initially-collapsed-p t))))
 
 (defconst mevedel-tool-fs-read--binary-extensions
@@ -725,27 +705,6 @@ Return a media result plist."
             (mapconcat #'identity (nreverse results) "\n\n")
             (nreverse media))))))))
 
-(defun mevedel-tool-fs-read--edit-distance (a b)
-  "Return Levenshtein edit distance between strings A and B."
-  (let* ((a (downcase a))
-         (b (downcase b))
-         (m (length a))
-         (n (length b))
-         (prev (make-vector (1+ n) 0))
-         (curr (make-vector (1+ n) 0)))
-    (dotimes (j (1+ n))
-      (aset prev j j))
-    (dotimes (i m)
-      (aset curr 0 (1+ i))
-      (dotimes (j n)
-        (aset curr (1+ j)
-              (min (1+ (aref curr j))
-                   (1+ (aref prev (1+ j)))
-                   (+ (aref prev j)
-                      (if (= (aref a i) (aref b j)) 0 1)))))
-      (cl-rotatef prev curr))
-    (aref prev n)))
-
 (defun mevedel-tool-fs-read--missing-file-suggestions (path)
   "Return up to three nearby file suggestions for missing PATH."
   (let* ((dir (or (file-name-directory path) default-directory))
@@ -759,7 +718,8 @@ Return a media result plist."
                  (entry-base (file-name-base entry-name)))
             (when (string-equal (downcase base) (downcase entry-base))
               (push (cons 0 entry) candidates))
-            (push (cons (mevedel-tool-fs-read--edit-distance name entry-name)
+            (push (cons (string-distance (downcase name)
+                                         (downcase entry-name))
                         entry)
                   candidates)))))
     ;; If an absolute path skipped the current working directory, prefer

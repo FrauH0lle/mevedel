@@ -491,22 +491,20 @@
   ,test
   (test)
   :doc "direct preparation:
-`mevedel-sandbox--direct-preparation' records and returns unrestricted facts"
-  (let ((mevedel-sandbox--last-facts nil))
-    (let ((prepared
-           (mevedel-sandbox--direct-preparation
-            '("true") 'unavailable "probe failed")))
-      (should (eq (plist-get prepared :state) 'unrestricted))
-      (should (equal (plist-get prepared :command) '("true")))
-      (should (eq (plist-get prepared :facts)
-                  mevedel-sandbox--last-facts)))))
+`mevedel-sandbox--direct-preparation' returns unrestricted facts"
+  (let ((prepared
+         (mevedel-sandbox--direct-preparation
+          '("true") 'unavailable "probe failed")))
+    (should (eq (plist-get prepared :state) 'unrestricted))
+    (should (equal (plist-get prepared :command) '("true")))
+    (should (eq (plist-get (plist-get prepared :facts) :sandbox)
+                'unavailable))))
 
 (mevedel-deftest mevedel-sandbox-pending-facts ()
   ,test
   (test)
   :doc "reports the selected confined boundary without mutating launch state"
-  (let ((mevedel-sandbox-mode 'best-effort)
-        (mevedel-sandbox--last-facts '(:sentinel t)))
+  (let ((mevedel-sandbox-mode 'best-effort))
     (cl-letf (((symbol-function 'mevedel-sandbox-probe)
                (lambda () '(:available t :executable "/test/bwrap"
                             :mount-proc t))))
@@ -514,8 +512,7 @@
        (equal
         '(:sandbox bubblewrap :filesystem workspace-write :proc fresh
           :network isolated)
-        (mevedel-sandbox-pending-facts)))
-      (should (equal '(:sentinel t) mevedel-sandbox--last-facts))))
+        (mevedel-sandbox-pending-facts)))))
   :doc "reflects requested additive network authority"
   (let ((mevedel-sandbox-mode 'required))
     (cl-letf (((symbol-function 'mevedel-sandbox-probe)
@@ -585,8 +582,7 @@
   (test)
   :doc "confined preparation:
 `mevedel-sandbox--confined-preparation' canonicalizes authority and adds marker"
-  (let ((root (make-temp-file "mevedel-sandbox-confined-" t))
-        (mevedel-sandbox--last-facts nil))
+  (let ((root (make-temp-file "mevedel-sandbox-confined-" t)))
     (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
         (let ((prepared
@@ -596,8 +592,7 @@
           (should (equal (car (plist-get prepared :command)) "/test/bwrap"))
           (should (string-prefix-p "MEVEDEL_SANDBOX_STARTED_"
                                    (plist-get prepared :marker)))
-          (should (eq (plist-get prepared :facts)
-                      mevedel-sandbox--last-facts)))
+          (should (plist-get prepared :facts)))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-sandbox-prepare ()
@@ -1383,15 +1378,13 @@ best-effort fallback after an exact-grant replacement"
   (test)
   :doc "launch failure state:
 `mevedel-sandbox--record-launch-failure' records a retryable runtime verdict"
-  (let ((mevedel-sandbox--probe-cache '((nil . (:available t))))
-        (mevedel-sandbox--last-facts nil))
+  (let ((mevedel-sandbox--probe-cache '((nil . (:available t)))))
     (let ((facts
            (mevedel-sandbox--record-launch-failure
             '(:exit-code 125 :output "backend refused"))))
       (let ((cached (alist-get nil mevedel-sandbox--probe-cache)))
         (should-not (plist-get cached :available))
         (should (plist-get cached :retry-on-execution)))
-      (should (eq facts mevedel-sandbox--last-facts))
       (should (eq (plist-get facts :sandbox) 'unavailable))
       (should (string-match-p "backend refused" (plist-get facts :reason)))))
   :doc "empty backend output:

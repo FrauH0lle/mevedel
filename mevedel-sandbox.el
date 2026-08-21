@@ -126,9 +126,6 @@ remote target is left untouched."
     (setf (alist-get target mevedel-sandbox--probe-cache nil 'remove #'equal)
           nil)))
 
-(defvar mevedel-sandbox--last-facts nil
-  "Most recently prepared child-confinement facts.")
-
 (defconst mevedel-sandbox--marker-script
   (concat
    "if [ \"${MEVEDEL_SANDBOX_GRANT_FAILURE-}\" = 1 ]; then "
@@ -665,7 +662,6 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
          (plist-put
           (mevedel-sandbox--unrestricted-facts sandbox reason)
           :refused t)))
-    (setq mevedel-sandbox--last-facts facts)
     (list :state 'refused :error reason :facts facts)))
 
 (defun mevedel-sandbox-pending-facts
@@ -715,9 +711,8 @@ WORKDIR identifies the execution target that the pending child will use."
 
 (defun mevedel-sandbox--direct-preparation (command sandbox reason)
   "Return direct preparation for COMMAND with SANDBOX and REASON facts."
-  (let ((facts (mevedel-sandbox--unrestricted-facts sandbox reason)))
-    (setq mevedel-sandbox--last-facts facts)
-    (list :state 'unrestricted :command command :facts facts)))
+  (list :state 'unrestricted :command command
+        :facts (mevedel-sandbox--unrestricted-facts sandbox reason)))
 
 (defun mevedel-sandbox--confined-preparation
     (command workdir writable-roots executable mount-proc-p
@@ -833,7 +828,6 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
                    "sh" "-c" mevedel-sandbox--marker-script
                    "mevedel-sandbox" marker)
              command)))
-      (setq mevedel-sandbox--last-facts facts)
       (list :state 'confined
             :command
             (mevedel-sandbox--fd-backed-command
@@ -970,8 +964,7 @@ MODE defaults to the global sandbox mode."
                     (or (plist-get child-result :exit-code) "unknown"))))))
     (setf (alist-get target mevedel-sandbox--probe-cache nil nil #'equal)
           (list :available nil :reason reason :retry-on-execution t))
-    (setq mevedel-sandbox--last-facts
-          (mevedel-sandbox--unrestricted-facts 'unavailable reason))))
+    (mevedel-sandbox--unrestricted-facts 'unavailable reason)))
 
 (provide 'mevedel-sandbox)
 

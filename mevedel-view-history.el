@@ -101,11 +101,7 @@
 
 (defun mevedel-view-history--entries ()
   "Return history entries newest first."
-  (let ((ring (mevedel-view-history--ensure-ring))
-        entries)
-    (dotimes (i (ring-length ring))
-      (push (ring-ref ring i) entries))
-    (nreverse entries)))
+  (ring-elements (mevedel-view-history--ensure-ring)))
 
 (defun mevedel-view-history--input-active-p ()
   "Return non-nil when point is in the editable composer."
@@ -216,12 +212,6 @@ Signal an error when PLIST is not valid input-history data."
                (mevedel--normalize-message-text entry)))
             entries)))
 
-(defun mevedel-view-history--prefix (entries count)
-  "Return the first COUNT entries from ENTRIES."
-  (if (<= count 0)
-      nil
-    (butlast entries (- (length entries) count))))
-
 (defun mevedel-view-history--new-since-load (current loaded)
   "Return CURRENT entries added since LOADED was captured.
 CURRENT and LOADED are newest-first.  History rings drop older entries,
@@ -234,14 +224,12 @@ prefix of LOADED."
       (let ((tail (nthcdr count current)))
         (when (and (<= (length tail) (length loaded))
                    (equal-including-properties
-                    tail
-                    (mevedel-view-history--prefix
-                     loaded (length tail))))
+                    tail (take (length tail) loaded)))
           (setq found t)))
       (unless found
         (setq count (1+ count))))
     (if found
-        (mevedel-view-history--prefix current count)
+        (take count current)
       current)))
 
 (defun mevedel-view-history--merge-entries (current existing &optional loaded)
@@ -262,11 +250,7 @@ their first occurrence and the result is capped to
                  (not (gethash entry seen)))
         (puthash entry t seen)
         (push entry entries)))
-    (setq entries (nreverse entries))
-    (if (> (length entries) mevedel-view-input-history-size)
-        (butlast entries (- (length entries)
-                            mevedel-view-input-history-size))
-      entries)))
+    (take mevedel-view-input-history-size (nreverse entries))))
 
 (defun mevedel-view-history--set-entries (entries)
   "Replace the current buffer's history ring with newest-first ENTRIES."
