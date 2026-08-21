@@ -203,7 +203,8 @@ skills."
             ;; `make-temp-file' creates 0600, which would otherwise become
             ;; the state file's mode.
             (set-file-modes tmp (default-file-modes))
-            (write-region content nil tmp nil 'silent)
+            (let ((coding-system-for-write 'utf-8-unix))
+              (write-region content nil tmp nil 'silent))
             (rename-file tmp file t))
         (when (file-exists-p tmp)
           (delete-file tmp))))))

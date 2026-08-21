@@ -58,6 +58,8 @@ not distort byte counts."
     (when (file-readable-p expanded)
       (let* ((attrs (file-attributes expanded))
              (mtime (and attrs (file-attribute-modification-time attrs)))
+             (ctime (and attrs (file-attribute-status-change-time attrs)))
+             (stat-size (and attrs (file-attribute-size attrs)))
              (content (with-temp-buffer
                         (insert-file-contents-literally expanded)
                         (buffer-string))))
@@ -65,7 +67,9 @@ not distort byte counts."
          :path expanded
          :content content
          :mtime mtime
-         :size (length content))))))
+         :size (length content)
+         :ctime ctime
+         :stat-size stat-size)))))
 
 
 ;;
@@ -142,6 +146,28 @@ Returns STATE."
 ;;
 ;;; External change detection
 
+(defun mevedel-file-state--stamps-equal-p (cached current)
+  "Return non-nil when timestamps CACHED and CURRENT are the same instant.
+Nil is not a timestamp: `time-equal-p' reads it as now, so an entry
+captured without one is never called equal to anything."
+  (and cached current (time-equal-p cached current)))
+
+(defun mevedel-file-state-current-p (state attrs)
+  "Return non-nil when STATE still describes the file ATTRS reports.
+Compares the modification time, the inode change time, and the reported
+size.  A modification time alone is not evidence: restoring timestamps,
+a clock stepping backwards, and a coarse-grained filesystem all leave it
+unchanged.  A change time cannot be set from userland, so it moves even
+when the modification time is restored."
+  (and (mevedel-file-state--stamps-equal-p
+        (mevedel-file-state-mtime state)
+        (file-attribute-modification-time attrs))
+       (mevedel-file-state--stamps-equal-p
+        (mevedel-file-state-ctime state)
+        (file-attribute-status-change-time attrs))
+       (equal (mevedel-file-state-stat-size state)
+              (file-attribute-size attrs))))
+
 (defun mevedel-file-cache-detect-external-changes (cache)
   "Return external-change records for CACHE entries.
 
@@ -174,19 +200,11 @@ changes are not re-reported."
                        :new nil)
                  changes))
           ((file-readable-p path)
-           (let* ((attrs (file-attributes path))
-                  (current-mtime (file-attribute-modification-time attrs))
-                  (cached-mtime (mevedel-file-state-mtime state)))
-             ;; A clock that did not advance is not proof the bytes are the
-             ;; same: a tool that restores timestamps, a backwards clock, or a
-             ;; coarse-grained filesystem all leave it unchanged.  Compare for
-             ;; difference, and consult the size the entry already carries.
-             ;;
-             ;; ponytail: same mtime and same size still reads as unchanged;
-             ;; compare content if a coarse-timestamp target proves it matters.
-             (when (or (not (equal cached-mtime current-mtime))
-                       (not (equal (mevedel-file-state-size state)
-                                   (file-attribute-size attrs))))
+           (let ((attrs (file-attributes path)))
+             ;; ponytail: a rewrite that restores mtime, size, and ctime
+             ;; together still reads as unchanged; that needs a content
+             ;; compare, which costs a full read of every cached file.
+             (unless (mevedel-file-state-current-p state attrs)
                (let ((new-content (with-temp-buffer
                                     (insert-file-contents-literally path)
                                     (buffer-string))))
@@ -286,19 +304,15 @@ SESSION has no workspace."
               ((equal offset (mevedel-file-interaction-read-offset entry)))
               ((equal limit (mevedel-file-interaction-read-limit entry)))
               (state (mevedel-file-cache-get cache key))
-              (cached-mtime (mevedel-file-state-mtime state))
-              ((file-readable-p key))
+              ;; Freshness observes the target now, not what TRAMP cached up
+              ;; to ten seconds ago, and that covers the readable check too.
               (attrs (let ((remote-file-name-inhibit-cache
                             (if (file-remote-p key)
                                 t
                               remote-file-name-inhibit-cache)))
-                       ;; Authorization-grade freshness observes the target
-                       ;; now, not what TRAMP cached up to ten seconds ago.
-                       (file-attributes key)))
-              (current-mtime (file-attribute-modification-time attrs)))
-    (and (equal cached-mtime current-mtime)
-         (equal (mevedel-file-state-size state)
-                (file-attribute-size attrs)))))
+                       (and (file-readable-p key)
+                            (file-attributes key)))))
+    (mevedel-file-state-current-p state attrs)))
 
 (provide 'mevedel-file-state)
 ;;; mevedel-file-state.el ends here

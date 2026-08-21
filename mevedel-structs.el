@@ -128,11 +128,21 @@ content as captured at the last read or write.  MTIME is the file's
 modification time at that same moment (as returned by
 `file-attribute-modification-time').  SIZE is the byte length of
 CONTENT, cached to avoid repeated `length' calls during LRU
-accounting."
+accounting.
+
+CTIME and STAT-SIZE are the inode change time and the size the
+filesystem reported at capture, kept for freshness comparison.  They
+are deliberately separate from SIZE: for a symbolic link or a virtual
+file the reported size and the content length are different
+quantities, and comparing one against the other would report a change
+that never happened.  A change time cannot be set from userland, so it
+moves even when a tool restores the modification time."
   path
   content
   mtime
-  size)
+  size
+  ctime
+  stat-size)
 
 (cl-defstruct (mevedel-file-interaction
                (:constructor mevedel-file-interaction--create))
