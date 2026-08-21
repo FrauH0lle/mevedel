@@ -324,7 +324,8 @@ READ-ONLY-P identifies inspection tools.  NATIVE-EDIT-P identifies tools in
 the native `edit' group; it never applies to Bash or Eval.  REVIEWED-EDIT-P
 identifies edits whose handler supplies mandatory approval in `ask' mode.
 
-Returns `allow', `deny', or `ask'."
+Returns `allow' or `ask': a mode decides between automatic allowance and
+a prompt, and every hard denial is an absolute policy upstream."
   (pcase mode
     ('full-auto 'allow)
     ('edits (if (or read-only-p native-edit-p) 'allow 'ask))

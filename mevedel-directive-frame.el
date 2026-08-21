@@ -621,15 +621,6 @@ an ordinary window when child frames are unavailable."
         (when focus (select-frame-set-input-focus frame))
         frame)))))
 
-;;;###autoload
-(defun mevedel-directive-frame-open (directive &optional focus)
-  "Open DIRECTIVE's execution-session view in a directive frame.
-FOCUS selects the frame.  See `mevedel-directive-frame-display'."
-  (interactive (list (mevedel--topmost-instruction nil 'directive) t))
-  (pcase-let ((`(,view-buffer . ,_id)
-               (mevedel-directive-frame--resolve directive)))
-    (mevedel-directive-frame-display directive view-buffer focus)))
-
 (defun mevedel-directive-frame-close ()
   "Dismiss the directive frame."
   (interactive)

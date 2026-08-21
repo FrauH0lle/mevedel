@@ -209,14 +209,6 @@ path names the logical artifact, never an immutable publication file."
         (error "Accepted plan artifact hash does not match"))
       body)))
 
-(defun mevedel-plan--metadata-path (session)
-  "Return SESSION's canonical current plan path, when available."
-  (require 'mevedel-structs)
-  (let ((metadata (mevedel-session-plan-metadata session)))
-    (when-let* ((path (or (plist-get metadata :path)
-                          mevedel-plan--relative-current-path)))
-      (mevedel-plan-artifact-path session (list :path path)))))
-
 (defun mevedel-plan--publish-current
     (plan-markdown session buffer &optional relative-path)
   "Publish PLAN-MARKDOWN as SESSION's current plan artifact for BUFFER.
@@ -329,17 +321,6 @@ Return a plist containing `:path' and `:hash'."
       (when (mevedel-session-artifacts-artifact-present-p session relative)
         (mevedel--normalize-message-text
          (mevedel-plan--read-path session relative))))))
-
-(defun mevedel-plan-current-exists-p (&optional session)
-  "Return non-nil when SESSION has a current plan artifact on disk."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (when-let* ((session (or session mevedel--session)))
-    (let* ((metadata (mevedel-session-plan-metadata session))
-           (relative (or (plist-get metadata :path)
-                         mevedel-plan--relative-current-path)))
-      (mevedel-session-artifacts-artifact-present-p session relative))))
 
 (defun mevedel-plan-mark-accepted
     (session current-artifact accepted-artifact &optional skip-verification)
