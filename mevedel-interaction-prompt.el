@@ -59,9 +59,9 @@ plist:
   (run-hook-with-args 'mevedel-interaction-prompt-created-hook overlay))
 
 (defvar-local mevedel--prompt-canceller-registered-for nil
-  "The `mevedel-request' structs we registered dismiss cancellers onto.
-Only the first overlay per request pushes a canceller onto that
-request's cancellers list.")
+  "Weak-key set of requests with a registered prompt canceller.
+Only the first overlay per request pushes a canceller onto that request,
+without making the view buffer retain completed requests.")
 
 (defun mevedel--prompt--data-buffer (&optional buffer)
   "Return the data buffer reachable from `current-buffer', else nil.
@@ -86,12 +86,15 @@ current one."
 
 (defun mevedel--prompt--registered-for-p (request)
   "Return non-nil when this buffer already registered REQUEST."
-  (memq request mevedel--prompt-canceller-registered-for))
+  (and (hash-table-p mevedel--prompt-canceller-registered-for)
+       (gethash request mevedel--prompt-canceller-registered-for)))
 
 (defun mevedel--prompt--mark-registered-for (request)
   "Record that this buffer has registered a canceller for REQUEST."
-  (unless (mevedel--prompt--registered-for-p request)
-    (push request mevedel--prompt-canceller-registered-for)))
+  (unless (hash-table-p mevedel--prompt-canceller-registered-for)
+    (setq mevedel--prompt-canceller-registered-for
+          (make-hash-table :test #'eq :weakness 'key)))
+  (puthash request t mevedel--prompt-canceller-registered-for))
 
 (defun mevedel--prompt--register-canceller (&optional source-buffer overlay)
   "Push the prompt-dismiss thunk onto the active request's cancellers list.
