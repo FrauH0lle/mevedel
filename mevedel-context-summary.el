@@ -134,8 +134,19 @@ consumer-supplied relevance data."
    "\n"))
 
 (defun mevedel-context-summary--estimated-tokens (system input)
-  "Return a conservative token estimate for exact SYSTEM and INPUT text."
-  (/ (+ (length system) (length input) 5) 4))
+  "Return an upper bound on the tokens exact SYSTEM and INPUT text cost.
+A provider counts tokens over UTF-8 bytes, and byte-level encodings never
+emit more tokens than bytes, so a non-ASCII byte is charged one token
+while ASCII keeps the historic four-characters-per-token ratio.  This
+gate promises not to dispatch a request the provider will refuse, so it
+has to bound the cost rather than approximate it: counting characters
+under-reads CJK several-fold and emoji further still."
+  (let* ((chars (+ (length system) (length input)))
+         (bytes (+ (string-bytes system) (string-bytes input)))
+         ;; Every non-ASCII character costs at least two bytes, so this
+         ;; lower-bounds how many of the characters were ASCII.
+         (ascii (max 0 (- (* 2 chars) bytes))))
+    (+ (/ (+ ascii 5) 4) (- bytes ascii))))
 
 (defun mevedel-context-summary--policy-buffer (session)
   "Return SESSION's live root data buffer for workload resolution.
