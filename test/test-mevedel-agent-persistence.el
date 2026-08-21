@@ -646,6 +646,66 @@
         (kill-buffer root-buffer))
       (delete-directory root-dir t)))
 
+  :doc "hydrates a settled outcome as the transcript status it reported"
+  (let* ((root-dir (make-temp-file "mevedel-agent-outcome-" t))
+         (session (mevedel-agent-persistence-test--session root-dir))
+         (root-buffer (generate-new-buffer " *agent-outcome-root*"))
+         (agents-dir (file-name-concat root-dir "agents"))
+         (configuration (mevedel-agent-persistence-test--configuration))
+         (records
+          (list (cons 'errored "failed")
+                (cons 'interrupted "stopped")
+                (cons 'completed "finished")
+                (cons nil "unknown"))))
+    (unwind-protect
+        (progn
+          (make-directory agents-dir t)
+          (setf (mevedel-session-save-path session) root-dir)
+          (setf (mevedel-session-agent-registry session)
+                (mapcar
+                 (lambda (entry)
+                   (let ((relative (format "agents/%s.chat.org" (cdr entry))))
+                     (write-region (format "* Agent Task: %s\n" (cdr entry))
+                                   nil (expand-file-name relative root-dir)
+                                   nil 'silent)
+                     (cons (format "/root/%s" (cdr entry))
+                           (mevedel-agent-record--create
+                            :id (cdr entry)
+                            :path (format "/root/%s" (cdr entry))
+                            :parent-path "/root" :role "default"
+                            :configuration configuration :activity 'idle
+                            :settled-outcome (car entry)
+                            :conversation-location relative))))
+                 records))
+          (with-current-buffer root-buffer
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace
+                        (mevedel-session-workspace session)))
+          ;; The count is of dropped records; all three are valid.
+          (should (= 0 (mevedel-agent-persistence-restore-tree
+                        session root-buffer nil)))
+          ;; A resumed agent that failed or was interrupted must not read as
+          ;; one that finished: the transcript badge is derived from this.
+          (dolist (expected '(("/root/failed" . error)
+                              ("/root/stopped" . aborted)
+                              ("/root/finished" . completed)
+                              ("/root/unknown" . incomplete)))
+            (let* ((record (cdr (assoc (car expected)
+                                      (mevedel-session-agent-registry
+                                       session))))
+                   (buffer (mevedel-agent-record-conversation-buffer record)))
+              (should (buffer-live-p buffer))
+              (should
+               (eq (cdr expected)
+                   (mevedel-agent-invocation-transcript-status
+                    (buffer-local-value 'mevedel--agent-invocation
+                                        buffer)))))))
+      (mevedel-agent-control-teardown-session session)
+      (when (buffer-live-p root-buffer)
+        (kill-buffer root-buffer))
+      (delete-directory root-dir t)))
+
   :doc "hydrates a published remote transcript when the fixed cache is missing"
   (let* ((root-dir (make-temp-file "mevedel-agent-remote-tree-" t))
          (session (mevedel-agent-persistence-test--session root-dir))
