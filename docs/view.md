@@ -443,7 +443,13 @@ those inputs changes.
 The session cockpit is the normal control surface from the view. It resolves
 the live view/data pair once and routes each action to the owner buffer. The
 explicit `g gptel menu` cockpit row is the advanced bridge into gptel's menu
-from the paired data buffer.
+from the paired data buffer. One bridge restores at a time: the pending
+view, its data buffer, and the window state to return to are single, because
+`transient-post-exit-hook` runs in an arbitrary buffer and cannot find them
+buffer-locally. Opening the bridge from a second view therefore hands the
+first view its windows back before taking that state over, so an abandoned
+bridge is not silently discarded along with the window state it was still
+waiting to restore.
 
 Its header is one identity line — session, permission mode, request state,
 workspace root, and execution target — followed by a warning-face alert line

@@ -209,9 +209,70 @@
         (when (buffer-live-p other-buf)
           (kill-buffer other-buf))))))
 
+(mevedel-deftest mevedel-gptel-bridge--schedule-return-to-view ()
+  ,test
+  (test)
+  :doc "restores the pending view when only its data buffer differs"
+  (mevedel-gptel-bridge-test--with-buffers
+    (let ((configuration (current-window-configuration))
+          (other-data (generate-new-buffer " *gptel-bridge-data-3*")))
+      (unwind-protect
+          (let ((window (selected-window)))
+            (set-window-buffer window view-buf)
+            (mevedel-gptel-bridge--schedule-return-to-view view-buf data-buf)
+            (set-window-buffer window data-buf)
+            ;; The same view, paired with another data buffer, replaces the
+            ;; window state just as thoroughly.
+            (mevedel-gptel-bridge--schedule-return-to-view view-buf other-data)
+            (should (eq (window-buffer window) view-buf))
+            (should (eq mevedel-gptel-bridge--return-data-buffer other-data)))
+        (when (window-configuration-p configuration)
+          (set-window-configuration configuration))
+        (when (buffer-live-p other-data) (kill-buffer other-data)))))
+
+  :doc "restores an abandoned pending view before taking over the state"
+  (mevedel-gptel-bridge-test--with-buffers
+    (let ((configuration (current-window-configuration))
+          (other-view (generate-new-buffer " *gptel-bridge-view-2*"))
+          (other-data (generate-new-buffer " *gptel-bridge-data-2*")))
+      (unwind-protect
+          (let ((window (selected-window)))
+            (set-window-buffer window view-buf)
+            (mevedel-gptel-bridge--schedule-return-to-view view-buf data-buf)
+            ;; The gptel command replaced the view with the raw data buffer
+            ;; and the user abandoned it, leaving the restoration pending.
+            (set-window-buffer window data-buf)
+            (mevedel-gptel-bridge--schedule-return-to-view
+             other-view other-data)
+            (should (eq (window-buffer window) view-buf))
+            (should (eq mevedel-gptel-bridge--return-view-buffer other-view))
+            (should (eq mevedel-gptel-bridge--return-data-buffer other-data)))
+        (when (window-configuration-p configuration)
+          (set-window-configuration configuration))
+        (dolist (buffer (list other-view other-data))
+          (when (buffer-live-p buffer) (kill-buffer buffer)))))))
+
 (mevedel-deftest mevedel-gptel-bridge--edit-directive-advice ()
   ,test
   (test)
+  :doc "leaves an edit outside the pending pair in its own buffer"
+  ;; A pending restoration is one view's.  An edit launched from anywhere
+  ;; else must not have its settings applied to that view's data buffer.
+  (mevedel-gptel-bridge-test--with-buffers
+    (let (callback callback-buffer)
+      (mevedel-gptel-bridge--schedule-return-to-view view-buf data-buf)
+      (with-temp-buffer
+        (mevedel-gptel-bridge--edit-directive-advice
+         (lambda (&rest args)
+           (setq callback (plist-get (cdr args) :callback)))
+         'gptel-system-prompt
+         :callback (lambda (_message) (setq callback-buffer (current-buffer)))))
+      (should callback)
+      (with-temp-buffer
+        (let ((unrelated (current-buffer)))
+          (funcall callback "new prompt")
+          (should (eq callback-buffer unrelated))))))
+
   :doc "edit-directive callback runs in the data buffer"
   (mevedel-gptel-bridge-test--with-buffers
     (let (callback callback-buffer callback-prompt)
@@ -220,14 +281,17 @@
       (with-current-buffer view-buf
         (setq-local gptel-system-prompt "view prompt"))
       (mevedel-gptel-bridge--schedule-return-to-view view-buf data-buf)
-      (mevedel-gptel-bridge--edit-directive-advice
-       (lambda (&rest args)
-         (setq callback (plist-get (cdr args) :callback)))
-       'gptel-system-prompt
-       :callback
-       (lambda (_message)
-         (setq callback-buffer (current-buffer)
-               callback-prompt gptel-system-prompt)))
+      ;; The bridge switches to the data buffer before gptel's menu runs,
+      ;; so that is where the edit is launched from.
+      (with-current-buffer data-buf
+        (mevedel-gptel-bridge--edit-directive-advice
+         (lambda (&rest args)
+           (setq callback (plist-get (cdr args) :callback)))
+         'gptel-system-prompt
+         :callback
+         (lambda (_message)
+           (setq callback-buffer (current-buffer)
+                 callback-prompt gptel-system-prompt))))
       (should callback)
       (with-temp-buffer
         (setq-local gptel-system-prompt "prompt buffer")
@@ -285,12 +349,13 @@
   (mevedel-gptel-bridge-test--with-buffers
     (let (callback)
       (mevedel-gptel-bridge--schedule-return-to-view view-buf data-buf)
-      (mevedel-gptel-bridge--edit-directive-advice
-       (lambda (&rest args)
-         (setq callback (plist-get (cdr args) :callback)))
-       'gptel-system-prompt
-       :callback
-       (lambda (_message) nil))
+      (with-current-buffer data-buf
+        (mevedel-gptel-bridge--edit-directive-advice
+         (lambda (&rest args)
+           (setq callback (plist-get (cdr args) :callback)))
+         'gptel-system-prompt
+         :callback
+         (lambda (_message) nil)))
       (should callback)
       (let ((transient--prefix t))
         (funcall callback "new prompt"))
