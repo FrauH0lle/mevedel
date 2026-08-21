@@ -432,15 +432,19 @@ tolerated, and content lines are kept raw."
       (error "Invalid patch: At least one file operation is required"))
     (list :patch normalized :root root :operations (nreverse operations))))
 
-(defun mevedel-tool-patch--read-file (path)
-  "Return text contents of regular file PATH."
+(defun mevedel-tool-patch--read-file (path &optional with-coding)
+  "Return text contents of regular file PATH.
+When WITH-CODING is non-nil, return (CONTENTS . CODING-SYSTEM)."
   (unless (file-exists-p path)
     (error "File does not exist: %s" path))
   (when (file-directory-p path)
     (error "Cannot patch a directory: %s" path))
   (with-temp-buffer
     (insert-file-contents path)
-    (buffer-string)))
+    (let ((content (buffer-string)))
+      (if with-coding
+          (cons content last-coding-system-used)
+        content))))
 
 (defun mevedel-tool-patch--lines (text)
   "Return TEXT as LF-normalized lines, retaining a final empty line."
@@ -744,21 +748,26 @@ hunk that previewed cleanly stays unambiguous after a deselection."
            ;; cursor inside `mevedel-tool-patch--apply-hunks' so the
            ;; apply-time disambiguation window matches the preview's.
            (when (cl-some (lambda (hunk) (plist-get hunk :selected)) hunks)
-             (let ((content (mevedel-tool-patch--read-file path)))
+             (pcase-let* ((`(,content . ,coding)
+                           (mevedel-tool-patch--read-file path t))
+                          (updated
+                           (mevedel-tool-patch--apply-hunks
+                            content hunks path)))
                (push (append (list :action 'write :path path)
                              (and (mevedel-tool-patch--local-source-p
                                    operation)
                                   '(:local-p t))
-                             (list :content
-                                   (mevedel-tool-patch--apply-hunks
-                                    content hunks path)))
+                             (list :content updated
+                                   :bytes
+                                   (encode-coding-string updated coding)))
                      changes)))))
         ('move
          (let ((path (mevedel-tool-patch--physical-path operation))
                (destination
                 (mevedel-tool-patch--physical-move-path operation)))
            (when (plist-get operation :selected)
-             (let ((content (mevedel-tool-patch--read-file path)))
+             (pcase-let ((`(,content . ,coding)
+                          (mevedel-tool-patch--read-file path t)))
                (when (file-exists-p destination)
                  (error "Cannot move to existing file: %s" destination))
                (push (append (list :action 'delete :path path)
@@ -770,13 +779,16 @@ hunk that previewed cleanly stays unambiguous after a deselection."
                              (and (mevedel-tool-patch--local-destination-p
                                    operation)
                                   '(:local-p t))
-                             (list :mode (file-modes path)
-                                   :content
-                                   (if-let* ((hunks
-                                              (plist-get operation :hunks)))
-                                       (mevedel-tool-patch--apply-hunks
-                                        content hunks path)
-                                     content)))
+                             (let ((updated
+                                    (if-let* ((hunks
+                                               (plist-get operation :hunks)))
+                                        (mevedel-tool-patch--apply-hunks
+                                         content hunks path)
+                                      content)))
+                               (list :mode (file-modes path)
+                                     :content updated
+                                     :bytes
+                                     (encode-coding-string updated coding))))
                      changes)))))))
     (nreverse changes)))
 
