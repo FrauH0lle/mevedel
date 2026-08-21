@@ -264,6 +264,27 @@ guard detects only changes made by the current test invocation."
    '(".lease" ".recovery" "agents" "plans" "file-history" "instructions"
      "session.meta.el")))
 
+(defvar mevedel-agent--registry)
+
+(defvar mevedel-test--builtin-agent-registry 'unset
+  "The agent registry as the loaded modules built it.
+Captured lazily, before the first test mutates it.")
+
+(defun mevedel-test--restore-agent-registry ()
+  "Restore `mevedel-agent--registry' to its as-loaded contents.
+The cleanup for a test that registers agents: wiping the registry
+instead would destroy the built-in agents later suites depend on."
+  (when (eq mevedel-test--builtin-agent-registry 'unset)
+    (error "Capture the agent registry before restoring it"))
+  (setq mevedel-agent--registry
+        (copy-sequence mevedel-test--builtin-agent-registry)))
+
+(defun mevedel-test--capture-agent-registry ()
+  "Capture the built-in agent registry once, before a test mutates it."
+  (when (eq mevedel-test--builtin-agent-registry 'unset)
+    (setq mevedel-test--builtin-agent-registry
+          (copy-sequence mevedel-agent--registry))))
+
 (defun mevedel-test--cancel-stray-lease-timers ()
   "Cancel portable lease renewal and deferred transport timers a test left.
 
