@@ -150,6 +150,18 @@ sampled runtime objects before serialization.  Open them with
 after every expected profile and report exists and is nonempty; otherwise it
 records `profiler-stop-failed` and signals the save error.
 
+Both ends of a run are atomic about what they leave behind. Stop halts the
+native profiler before it takes its closing environment snapshot, so a
+snapshot that fails cannot leave Emacs profiling after the run has released
+the handle for stopping it -- and the snapshot's own Git and hashing work
+stays out of the profile it describes. If any part of start fails after the
+native profiler is running, start stops it, removes the prompt guard, and
+clears run ownership before re-signalling, so a reported failure to start
+never leaves a run sampling in the background. A run raises
+`profiler-max-stack-depth` globally, because the C log fixes its backtrace
+width when profiling begins; whichever way the run ends restores the previous
+value.
+
 The two debug logs are explicit opt-in artifacts and may contain raw prompts,
 responses, request headers, connection settings, and short rendered text
 previews. Before persistence, mevedel replaces `Authorization`,

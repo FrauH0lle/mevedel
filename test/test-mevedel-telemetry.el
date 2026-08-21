@@ -566,7 +566,10 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry-profiler-start
-		 (:quiet t :doc "starts one session-owned profiler run and installs its guard")
+		 (:quiet t)
+		 ,test
+		 (test)
+		 :doc "starts one session-owned profiler run and installs its guard"
 		 (let* ((root (make-temp-file "mevedel-telemetry-profiler-start-" t))
 			(session (test-mevedel-telemetry--session root))
 			(mevedel-telemetry--profiler-session nil)
@@ -593,6 +596,32 @@
 			 (should (eq session mevedel-telemetry--profiler-session))
 			 (should (string-prefix-p
 				  "run-" mevedel-telemetry--profiler-run-id)))
+		     (setq mevedel-telemetry--profiler-session nil
+			   mevedel-telemetry--profiler-run-id nil)
+		     (delete-directory root t)))
+
+		 :doc "leaves nothing running when setup fails after the profiler started"
+		 (let* ((root (make-temp-file "mevedel-telemetry-profiler-rollback-" t))
+			(session (test-mevedel-telemetry--session root))
+			(mevedel-telemetry--profiler-session nil)
+			(mevedel-telemetry--profiler-run-id nil)
+			(profiler-max-stack-depth 16)
+			stopped)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (setq-local mevedel--session session)
+			 (setf (mevedel-session-save-path session) root)
+			 (cl-letf (((symbol-function 'profiler-start) (lambda (_mode) t))
+				   ((symbol-function 'profiler-stop)
+				    (lambda () (setq stopped t)))
+				   ((symbol-function
+				     'mevedel-telemetry--install-prompt-guard)
+				    (lambda () (error "Guard refused"))))
+			   (should-error (mevedel-telemetry-profiler-start 'cpu)))
+			 (should stopped)
+			 (should-not mevedel-telemetry--profiler-session)
+			 (should-not mevedel-telemetry--profiler-run-id)
+			 (should (= 16 profiler-max-stack-depth)))
 		     (setq mevedel-telemetry--profiler-session nil
 			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t))))
@@ -634,7 +663,10 @@
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-telemetry-profiler-stop
-		 (:quiet t :doc "records complete or failed artifact saves and clears run ownership")
+		 (:quiet t)
+		 ,test
+		 (test)
+		 :doc "records complete or failed artifact saves and clears run ownership"
 		 (let* ((root (make-temp-file "mevedel-telemetry-profiler-stop-" t))
 			(session (test-mevedel-telemetry--session root))
 			(mevedel-telemetry--profiler-session session)
@@ -697,6 +729,52 @@
 			   (should (eq 'profiler-stop-failed (plist-get entry :event)))
 			   (should (eq 'save-artifacts
 				       (plist-get entry :failure-stage)))))
+		     (setq mevedel-telemetry--profiler-session nil
+			   mevedel-telemetry--profiler-run-id nil)
+		     (delete-directory root t)))
+
+		 :doc "stops the native profiler even when the stop snapshot fails"
+		 (let* ((root (make-temp-file "mevedel-telemetry-profiler-order-" t))
+			(session (test-mevedel-telemetry--session root))
+			(mevedel-telemetry--profiler-session session)
+			(mevedel-telemetry--profiler-run-id "run-test")
+			stopped)
+		   (setf (mevedel-session-save-path session) root)
+		   (unwind-protect
+		       (progn
+			 (cl-letf (((symbol-function 'profiler-stop)
+				    (lambda () (setq stopped t)))
+				   ((symbol-function
+				     'mevedel-telemetry--record-environment)
+				    (lambda (_session _boundary)
+				      (error "Snapshot refused"))))
+			   (should-error (mevedel-telemetry-profiler-stop)))
+			 ;; Emacs must not be left profiling with no handle to stop it.
+			 (should stopped)
+			 (should-not mevedel-telemetry--profiler-session))
+		     (setq mevedel-telemetry--profiler-session nil
+			   mevedel-telemetry--profiler-run-id nil)
+		     (delete-directory root t)))
+
+		 :doc "restores the profiler depth the run raised"
+		 (let* ((root (make-temp-file "mevedel-telemetry-profiler-depth-" t))
+			(session (test-mevedel-telemetry--session root))
+			(mevedel-telemetry--profiler-session session)
+			(mevedel-telemetry--profiler-run-id "run-test")
+			(mevedel-telemetry--profiler-prior-stack-depth 16)
+			(profiler-max-stack-depth 64))
+		   (setf (mevedel-session-save-path session) root)
+		   (unwind-protect
+		       (progn
+			 (cl-letf (((symbol-function 'profiler-stop) #'ignore)
+				   ((symbol-function
+				     'mevedel-telemetry--record-environment) #'ignore)
+				   ((symbol-function
+				     'mevedel-telemetry--write-profiler-artifacts)
+				    (lambda (_directory) nil)))
+			   (mevedel-telemetry-profiler-stop))
+			 (should (= 16 profiler-max-stack-depth))
+			 (should-not mevedel-telemetry--profiler-prior-stack-depth))
 		     (setq mevedel-telemetry--profiler-session nil
 			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t))))

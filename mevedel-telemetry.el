@@ -667,6 +667,21 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
            git)))
 
 ;;;###autoload
+(defvar mevedel-telemetry--profiler-prior-stack-depth nil
+  "Value of `profiler-max-stack-depth' from before a mevedel run raised it.
+A run has to set the variable globally, because the C log fixes its backtrace
+width when profiling starts.  Restoring it is the run's job.")
+
+(defun mevedel-telemetry--profiler-release ()
+  "Release every global a profiler run owns."
+  (mevedel-telemetry--remove-prompt-guard)
+  (when mevedel-telemetry--profiler-prior-stack-depth
+    (setq profiler-max-stack-depth
+          mevedel-telemetry--profiler-prior-stack-depth
+          mevedel-telemetry--profiler-prior-stack-depth nil))
+  (setq mevedel-telemetry--profiler-session nil
+        mevedel-telemetry--profiler-run-id nil))
+
 (defun mevedel-telemetry-profiler-start (&optional mode)
   "Start Emacs profiling for the current session in MODE.
 MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
@@ -696,18 +711,29 @@ MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
                    0 8)))
     ;; The C log fixes its backtrace width when the profiler starts, so this
     ;; has to be set before the call, not around the report.
-    (setq profiler-max-stack-depth mevedel-telemetry-profiler-stack-depth)
+    (setq mevedel-telemetry--profiler-prior-stack-depth profiler-max-stack-depth
+          profiler-max-stack-depth mevedel-telemetry-profiler-stack-depth)
     (profiler-start mode)
-    (setq mevedel-telemetry--profiler-session session)
-    (mevedel-telemetry--install-prompt-guard)
-    (mevedel-telemetry--record-environment session 'start)
-    (mevedel-telemetry-record
-     session 'profiler-started
-     :mode mode
-     :emacs-version emacs-version
-     :system-configuration system-configuration)
-    (message "mevedel: profiler started for session %s"
-             (or (mevedel-session-session-id session) "pending"))))
+    ;; Past this line Emacs is profiling, so a failure in the rest of the
+    ;; setup has to undo it: reporting that the run did not start while it
+    ;; keeps sampling is the one outcome with no way back.
+    (condition-case err
+        (progn
+          (setq mevedel-telemetry--profiler-session session)
+          (mevedel-telemetry--install-prompt-guard)
+          (mevedel-telemetry--record-environment session 'start)
+          (mevedel-telemetry-record
+           session 'profiler-started
+           :mode mode
+           :emacs-version emacs-version
+           :system-configuration system-configuration)
+          (message "mevedel: profiler started for session %s"
+                   (or (mevedel-session-session-id session) "pending")))
+      (error
+       (with-demoted-errors "mevedel: profiler rollback failed: %S"
+         (profiler-stop))
+       (mevedel-telemetry--profiler-release)
+       (signal (car err) (cdr err))))))
 
 (defun mevedel-telemetry--write-profiler-artifacts (directory)
   "Write compact native profiler profiles and reports below DIRECTORY.
@@ -772,13 +798,18 @@ so version control never hears about any of it."
   (require 'profiler)
   (let* ((session mevedel-telemetry--profiler-session)
          (directory (mevedel-telemetry-profiler-directory session))
-         (failure-stage 'environment))
+         (failure-stage 'stop))
     (unwind-protect
         (condition-case err
             (progn
-              (mevedel-telemetry--record-environment session 'stop)
-              (setq failure-stage 'stop)
+              ;; Before anything that can fail, and before the snapshot: a
+              ;; snapshot that signals used to leave Emacs profiling with the
+              ;; handle to stop it already thrown away.  Stopping first also
+              ;; keeps the snapshot's own Git and hashing work out of the
+              ;; profile it is describing.
               (profiler-stop)
+              (setq failure-stage 'environment)
+              (mevedel-telemetry--record-environment session 'stop)
               (make-directory directory t)
               (setq failure-stage 'save-artifacts)
               (let ((artifacts
@@ -820,9 +851,7 @@ so version control never hears about any of it."
             :failure-stage failure-stage
             :failure-class (car err))
            (signal (car err) (cdr err))))
-      (mevedel-telemetry--remove-prompt-guard)
-      (setq mevedel-telemetry--profiler-session nil
-            mevedel-telemetry--profiler-run-id nil))))
+      (mevedel-telemetry--profiler-release))))
 
 (defun mevedel-telemetry--redact-gptel-debug-buffer ()
   "Redact credential-bearing headers in the current gptel debug buffer."
