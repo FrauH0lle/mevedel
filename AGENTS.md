@@ -307,10 +307,10 @@ shadows edited source files.
 npx @emacs-eask/cli clean elc
 
 # With Eask installed
-eask test ert test/test-*
+eask test ert test/test-*.el
 
 # Via npx
-npx @emacs-eask/cli test ert test/test-*
+npx @emacs-eask/cli test ert test/test-*.el
 
 # Single file
 npx @emacs-eask/cli test ert test/test-mevedel-compact.el

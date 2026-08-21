@@ -38,6 +38,8 @@
 (require 'mevedel-view)
 (require 'mevedel-mentions)
 (require 'mevedel-skills-ui)
+(require 'mevedel-permission-rules)
+(require 'mevedel-permission-mode)
 
 (defun test-pq--make-session (&optional rules target)
   "Create a fresh queue-test session with optional RULES and TARGET."

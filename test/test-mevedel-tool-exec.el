@@ -18,6 +18,7 @@
 (require 'mevedel-sandbox)
 (require 'mevedel-telemetry)
 (require 'mevedel-workspace)
+(require 'mevedel-permission-rules)
 (require 'helpers
          (file-name-concat
           (file-name-directory

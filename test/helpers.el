@@ -6,6 +6,13 @@
 
 (require 'cl-lib)
 
+;; The shared fixture macros below let-bind these product variables, and a
+;; macro expands in its consumer, so their owners must be loaded here rather
+;; than in every consumer.
+(require 'mevedel-permission-mode)
+(require 'mevedel-plugin-registry)
+(require 'mevedel-structs)
+
 ;; `gptel'
 (declare-function gptel-make-openai "gptel")
 (defvar gptel-backend)

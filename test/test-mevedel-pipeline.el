@@ -24,6 +24,7 @@
 (require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
 (require 'mevedel-permission-log)
+(require 'mevedel-permission-rules)
 (require 'mevedel-permission-prompt)
 (require 'mevedel-permission-queue)
 (require 'mevedel-telemetry)

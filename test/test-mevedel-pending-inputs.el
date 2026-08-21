@@ -26,7 +26,6 @@
 (require 'gptel-request)
 (require 'tabulated-list)
 
-(defvar mevedel-plugin-extra-roots)
 
 (defmacro mevedel-pending-inputs-test--with-session (&rest body)
   "Run BODY with a paired view, data buffer, and pending-input session."

@@ -14,6 +14,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-execution-target)
 (require 'mevedel-models)
+(require 'mevedel-permission-rules)
 (require 'mevedel-plan-mode)
 (require 'mevedel-sandbox)
 (require 'mevedel-workspace)

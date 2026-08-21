@@ -12,6 +12,8 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-bash-policy)
+(require 'mevedel-permission-mode)
+(require 'mevedel-permission-rules)
 (require 'mevedel-permissions)
 (require 'mevedel-pipeline)
 (require 'mevedel-skills-core)

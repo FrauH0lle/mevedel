@@ -12,7 +12,6 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
-(defvar mevedel-plugin-extra-roots)
 (defvar org-mode-hook)
 
 (require 'mevedel-view)

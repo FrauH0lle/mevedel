@@ -1214,7 +1214,7 @@ Use Eask for tests and byte compilation. Clear stale bytecode before tests so ol
 
 ```bash
 npx @emacs-eask/cli clean elc
-npx @emacs-eask/cli test ert test/test-*
+npx @emacs-eask/cli test ert test/test-*.el
 npx @emacs-eask/cli test ert test/test-mevedel-compact.el
 npx @emacs-eask/cli compile
 npx @emacs-eask/cli clean elc
@@ -1223,7 +1223,7 @@ npx @emacs-eask/cli clean elc
 With a local Eask install:
 
 ```bash
-eask test ert test/test-*
+eask test ert test/test-*.el
 ```
 
 Test files mirror modules as `test/test-mevedel-MODULE.el`. Keep byte

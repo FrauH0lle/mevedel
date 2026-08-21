@@ -49,6 +49,11 @@
              (progn
                (require 'mevedel-structs)
                (require 'mevedel-permissions)
+               ;; The mode and rule owners define the variables this case
+               ;; binds.  Without them the let binds lexically and the owner's
+               ;; own defcustom then errors, surfacing as a spurious deny.
+               (require 'mevedel-permission-mode)
+               (require 'mevedel-permission-rules)
                (require 'mevedel-tool-exec-permission)
                (let ((mevedel-permission-mode 'full-auto)
                      (mevedel-permission-rules nil)
