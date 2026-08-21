@@ -53,7 +53,6 @@
                   "mevedel-collaboration-projection" (records))
 (declare-function mevedel-collaboration--tool-result-fields
                   "mevedel-collaboration-projection" (result))
-(defvar mevedel-collaboration--max-message-bytes)
 (defvar mevedel-collaboration--protocol-version)
 
 ;; `mevedel-collaboration-transport'
@@ -65,6 +64,8 @@
                   "mevedel-collaboration-transport" (transport peer frame))
 (declare-function mevedel-collaboration--transport-stop
                   "mevedel-collaboration-transport" (transport))
+(defvar mevedel-collaboration--max-frame-json-bytes)
+(defvar mevedel-collaboration--max-message-bytes)
 
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--settle
@@ -329,19 +330,40 @@ request or prompt transaction."
 ;;
 ;;; Snapshot delivery
 
+(defun mevedel-collaboration--snapshot-frame-overhead ()
+  "Return the encoded bytes a snapshot frame costs before its records.
+Measured with an empty record array and the longer `final' spelling, so a
+chunk that turns out not to be the last one cannot overflow.  A JSON array
+adds one separator per record after the first, which is what the record
+sizes alone never accounted for."
+  (string-bytes
+   (mevedel-collaboration--json-string
+    (list :t "snapshot-chunk"
+          :records (vconcat nil)
+          :final :json-false))))
+
 (defun mevedel-collaboration--snapshot-chunks (records)
-  "Split RECORDS into lists of JSON records each under the wire bound."
-  (let ((limit (- mevedel-collaboration--max-message-bytes 1024))
-        chunks current (size 0))
+  "Split RECORDS into lists of JSON records each under the wire bound.
+The bound belongs to the frame that goes on the wire, not to the records
+in it.  A record too large to travel in a frame of its own is dropped:
+emitting a frame the relay must refuse costs the host connection, and the
+relay collects the room with it, so one oversized record would end the
+session for every guest."
+  (let* ((overhead (mevedel-collaboration--snapshot-frame-overhead))
+         (limit mevedel-collaboration--max-frame-json-bytes)
+         chunks current (size 0))
     (dolist (record records)
       (let* ((json (mevedel-collaboration--json-record record))
              (bytes (string-bytes
                      (mevedel-collaboration--json-string json))))
-        (when (and current (> (+ size bytes) limit))
-          (push (nreverse current) chunks)
-          (setq current nil size 0))
-        (push json current)
-        (setq size (+ size bytes))))
+        (unless (> (+ overhead bytes) limit)
+          ;; One separator for every record after the first in the chunk.
+          (when (and current
+                     (> (+ overhead size 1 bytes) limit))
+            (push (nreverse current) chunks)
+            (setq current nil size 0))
+          (push json current)
+          (setq size (+ size bytes (if (cdr current) 1 0))))))
     (when current
       (push (nreverse current) chunks))
     (nreverse chunks)))
@@ -358,7 +380,10 @@ request or prompt transaction."
      (list :t "welcome"
            :proto mevedel-collaboration--protocol-version
            :readOnly (if (plist-get guest :writable) :json-false t)
-           :recordCount (length records)))
+           ;; Count what is actually sent: a record too large for a frame of
+           ;; its own is dropped, and promising it would leave the guest
+           ;; waiting for a chunk that never arrives.
+           :recordCount (apply #'+ (mapcar #'length chunks))))
     (cl-loop for rest on chunks do
              (mevedel-collaboration--transport-send
               transport peer
@@ -465,6 +490,16 @@ guest sees one card updated in place instead of an accumulating pile."
        (mevedel-collaboration--ui-request-frame
         request-id (gethash request-id requests))))))
 
+(defun mevedel-collaboration--guest-text (value)
+  "Return VALUE trimmed when it is text this host may act on, else nil.
+A guest is untrusted, and every string one sends -- a prompt, a
+questionnaire answer, interaction feedback -- reaches model-visible
+context and the transcript the same way, so one budget covers them all."
+  (and (stringp value)
+       (<= (string-bytes value) mevedel-collaboration--max-prompt-bytes)
+       (let ((trimmed (string-trim value)))
+         (and (not (string-empty-p trimmed)) trimmed))))
+
 (defun mevedel-collaboration--handle-ui-response (room peer frame)
   "Settle the ui-request answered by writable guest PEER through FRAME.
 
@@ -493,22 +528,24 @@ answer can execute the same path the host key binding would."
                  ((and answers
                        (functionp answer-handler)
                        (listp answers)
-                       (cl-every (lambda (answer)
-                                   (and (stringp answer)
-                                        (not (string-empty-p
-                                              (string-trim answer)))))
-                                 answers))
-                  (let ((trimmed (mapcar #'string-trim answers)))
-                    (lambda () (funcall answer-handler trimmed))))
-                 ((and (stringp feedback)
-                       (not (string-empty-p (string-trim feedback)))
-                       feedback-handler)
+                       (let ((trimmed
+                              (mapcar #'mevedel-collaboration--guest-text
+                                      answers)))
+                         (and (not (memq nil trimmed))
+                              ;; Every answer lands in one tool result, so
+                              ;; the set shares the budget its parts pass.
+                              (<= (apply #'+ (mapcar #'string-bytes trimmed))
+                                  mevedel-collaboration--max-prompt-bytes)
+                              (lambda ()
+                                (funcall answer-handler trimmed))))))
+                 ((and feedback-handler
+                       (mevedel-collaboration--guest-text feedback))
                   ;; A function handler owns the whole feedback flow, for
                   ;; prompts whose feedback is not a plain settle outcome.
-                  (if (functionp feedback-handler)
-                      (let ((text (string-trim feedback)))
-                        (lambda () (funcall feedback-handler text)))
-                    (cons 'feedback (string-trim feedback))))
+                  (let ((text (mevedel-collaboration--guest-text feedback)))
+                    (if (functionp feedback-handler)
+                        (lambda () (funcall feedback-handler text))
+                      (cons 'feedback text))))
                  ((and (integerp option) (nth option options))
                   (car (nth option options))))))
           (when (and outcome (buffer-live-p (overlay-buffer overlay)))
@@ -560,10 +597,7 @@ never enters model-visible context."
         (text (plist-get frame :text)))
     (when (and guest
                (plist-get guest :writable)
-               (stringp text)
-               (<= (string-bytes text)
-                   mevedel-collaboration--max-prompt-bytes)
-               (not (string-empty-p (string-trim text))))
+               (mevedel-collaboration--guest-text text))
       ;; The prompt frame may carry a fresher display name than the hello
       ;; did; the badge should show what the guest typed.
       (when (stringp (plist-get frame :name))

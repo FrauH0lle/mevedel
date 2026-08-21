@@ -575,6 +575,14 @@ one stable identity from running through its settled canonical result. A
 guest prompt enters the ordinary pending-input queue as a queued follow-up;
 a hidden `guest-prompt` transcript audit record attributes the inserted
 prompt durably, renders as a badge, and never enters model-visible context.
+Every string a guest sends -- a prompt, a questionnaire answer, interaction
+feedback -- crosses the same per-string byte budget, because each of them
+reaches model-visible context and the transcript the same way. Outbound, every
+frame is bounded by the wire limit at the transport itself, and a snapshot
+record too large to travel in a frame of its own is dropped rather than
+sent: the relay refuses an oversized frame by closing the connection, and
+for the host connection it collects the room with it.
+
 Full-link guests are also presented pending interactions as `ui-request`
 frames — generic requests (approve/deny/feedback), permission prompts
 (one-shot allow-once/deny-once/feedback; session, workspace, and always

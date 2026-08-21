@@ -39,6 +39,12 @@
 ;;
 ;;; Sealing
 
+(defconst mevedel-collaboration--max-message-bytes (* 1 1024 1024)
+  "Encoded bytes one sealed frame may carry.
+The bound belongs here because it is the wire's: the relay refuses a
+larger frame by closing the connection it arrived on, and for the host
+connection it collects the room along with it.")
+
 (defconst mevedel-collaboration--nonce-bytes 12)
 (defconst mevedel-collaboration--tag-bytes 16)
 
@@ -100,6 +106,16 @@ must never signal out of the transport."
                   (aref envelope 3))
           (substring envelope
                      mevedel-collaboration--envelope-header-bytes))))
+
+(defconst mevedel-collaboration--max-frame-json-bytes
+  (- mevedel-collaboration--max-message-bytes
+     mevedel-collaboration--envelope-header-bytes
+     mevedel-collaboration--nonce-bytes
+     mevedel-collaboration--tag-bytes)
+  "Encoded JSON bytes one frame may carry.
+The wire bound covers what is actually written: the peer header, the
+nonce, and the authentication tag travel with the sealed JSON, so they
+come out of the same budget.")
 
 (defun mevedel-collaboration--frame-encode (frame)
   "Serialize FRAME as a JSON string.
@@ -240,21 +256,28 @@ dropped silently."
 PEER 0 broadcasts to every guest; PEER N targets one guest.  Return
 non-nil when the frame was written.  A closed connection drops the
 frame: guests recover state by re-sending hello after their own
-reconnect, so nothing is queued across a relay outage."
+reconnect, so nothing is queued across a relay outage.
+
+A frame over the wire bound is dropped here rather than sent.  This is
+the one place every frame passes, and the relay must refuse an oversized
+one by closing the connection it arrived on -- which for the host means
+the relay collects the room, ending the session for every guest."
   (when (mevedel-collaboration--transport-open-p transport)
     (condition-case nil
-        (progn
-          (websocket-send
-           (plist-get transport :ws)
-           (make-websocket-frame
-            :opcode 'binary
-            :payload (mevedel-collaboration--envelope-pack
-                      peer
-                      (mevedel-collaboration--seal
-                       (plist-get transport :key)
-                       (mevedel-collaboration--frame-encode frame)))
-            :completep t))
-          t)
+        (let ((encoded (mevedel-collaboration--frame-encode frame)))
+          (when (<= (string-bytes encoded)
+                    mevedel-collaboration--max-frame-json-bytes)
+            (websocket-send
+             (plist-get transport :ws)
+             (make-websocket-frame
+              :opcode 'binary
+              :payload (mevedel-collaboration--envelope-pack
+                        peer
+                        (mevedel-collaboration--seal
+                         (plist-get transport :key)
+                         encoded))
+              :completep t))
+            t))
       (websocket-closed (mevedel-collaboration--transport-down transport)
                         nil)
       (error nil))))
