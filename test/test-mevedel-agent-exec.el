@@ -376,6 +376,21 @@ fire-count and payload."
       (should (equal '("Dynamic system." "Second part.") system-prompt))
       (should-not (functionp system-prompt))))
 
+  :doc "materializes the prompt under the model the request will use"
+  ;; Parts of the prompt are budgeted against the model's context
+  ;; window, so an agent on a small local model must not be handed a
+  ;; prompt sized for the spawning buffer's model.
+  (let* ((seen nil)
+         (gptel-backend 'parent-backend)
+         (gptel-model 'parent-model)
+         (gptel-system-prompt
+          (lambda ()
+            (setq seen (cons gptel-backend gptel-model))
+            "System.")))
+    (mevedel-agent-exec-request-snapshot
+     '(:backend frozen-backend :model frozen-model :effort high))
+    (should (equal '(frozen-backend . frozen-model) seen)))
+
   :doc "captures every inherited request local through one schema"
   (let* ((gptel--num-messages-to-send 7)
          (gptel--request-params '(:custom "parent"))

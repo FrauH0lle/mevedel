@@ -1631,22 +1631,26 @@ spanning lines")))
           (should (string-match-p "auto-allow"
                                   (funcall annot "full-auto")))))))
 
-  :doc "Goal approval completes only the two canonical policies"
+  :doc "Goal completes the subcommands it still dispatches"
+  ;; The removed phase and approval commands were still advertised, and
+  ;; `budget\' -- the only way out of a budget-limited Goal -- was not.
+  ;; A word that is not a subcommand becomes objective text, so offering
+  ;; one silently turns the objective into "approval" or "auto ...".
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands '(("goal" . ignore))))
-        (insert "### /goal approval a")
+        (insert "### /goal b")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
                                            :annotation-function))))
           (should capf)
-          (should (equal '("automatic")
-                         (mevedel-skills-test--capf-candidates capf "a")))
-          (should (member "supervised"
-                          (mevedel-skills-test--capf-candidates capf)))
-          (should (equal " approval policy"
-                         (funcall annot "automatic")))))))
+          (should (equal '("budget")
+                         (mevedel-skills-test--capf-candidates capf "b")))
+          (let ((all (mevedel-skills-test--capf-candidates capf)))
+            (should-not (member "auto" all))
+            (should-not (member "approval" all)))
+          (should (string-match-p "token limit" (funcall annot "budget")))))))
 
   :doc "plugin command completes first argument options"
   (let ((session (mevedel-skills-test--make-session)))
@@ -2279,7 +2283,31 @@ spanning lines")))
         (mevedel-cmd--goal "clear"))
       (should (equal '((clear) (resume "new evidence") (pause)
                        (edit "New objective") (budget "5000"))
-                     calls)))))
+                     calls))))
+
+  :doc "dispatches every subcommand it advertises"
+  ;; A word that is not a subcommand becomes objective text, so an
+  ;; advertised word the dispatcher forgot silently starts a Goal named
+  ;; after it.  That is exactly how `auto' and `approval' survived their
+  ;; own removal.
+  (with-temp-buffer
+    (let ((goal (mevedel-goal--create
+                 :id "g1" :objective "Old" :status 'paused))
+          started)
+      (setq-local mevedel--session
+                  (mevedel-session--create :name "main" :goal goal))
+      (cl-letf (((symbol-function 'mevedel-goal-pause) #'ignore)
+                ((symbol-function 'mevedel-goal-edit) #'ignore)
+                ((symbol-function 'mevedel-goal-set-budget) #'ignore)
+                ((symbol-function 'mevedel-goal-resume) #'ignore)
+                ((symbol-function 'mevedel-goal-clear) #'ignore)
+                ((symbol-function 'mevedel-goal-start)
+                 (lambda (objective) (push objective started))))
+        (dolist (candidate mevedel-skills--goal-command-candidates)
+          (mevedel-test--with-captured-messages nil
+            (mevedel-cmd--goal (car candidate)))))
+      (should-not started))))
+
 
 (mevedel-deftest mevedel-cmd--plan ()
   ,test

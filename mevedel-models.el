@@ -93,6 +93,15 @@ thousands of tokens, sometimes as a float."
               (kt (get m :context-window)))
     (round (* kt 1000))))
 
+(defsubst mevedel-model-effective-context-window (&optional model)
+  "Return the context window in tokens to budget MODEL against.
+MODEL defaults to `gptel-model'.  A model that declares no window falls
+back to `mevedel-model-context-limit', and then to a conservative
+default, so a caller always has a number to divide."
+  (or (mevedel-model-context-window model)
+      mevedel-model-context-limit
+      128000))
+
 (defun mevedel-model--max-output-tokens (policy)
   "Return POLICY's configured maximum output token count, or zero."
   (let ((gptel-backend (plist-get policy :backend))
@@ -121,9 +130,8 @@ thousands of tokens, sometimes as a float."
 POLICY is a plist carrying `:backend', `:model', `:max-tokens', and
 `:request-params'.  The response reserve is capped at half the context
 window so small local models keep a meaningful budget."
-  (let* ((context (or (mevedel-model-context-window (plist-get policy :model))
-                      mevedel-model-context-limit
-                      128000))
+  (let* ((context (mevedel-model-effective-context-window
+                   (plist-get policy :model)))
          (reserve (max mevedel-model-reserve-tokens
                        (mevedel-model--max-output-tokens policy))))
     (max 1 (- context (min reserve (max 1 (/ context 2)))))))

@@ -19,6 +19,8 @@
 (defvar gptel-reasoning-effort)
 
 ;; `mevedel-models'
+(declare-function mevedel-model-effective-context-window
+                  "mevedel-models" (&optional model))
 (declare-function mevedel-model-context-window
                   "mevedel-models" (&optional model))
 (declare-function mevedel-model-resolve-workload
@@ -156,9 +158,7 @@ count never becomes the baseline for the chat buffer."
               (mevedel-compact-estimation-estimate-buffer-tokens chat-buffer))
              (model (or (plist-get info :model) gptel-model))
              (context-window
-              (or (mevedel-model-context-window model)
-                  mevedel-model-context-limit
-                  128000))
+              (mevedel-model-effective-context-window model))
              (provider-status
               (cond
                ((null provider-count) 'missing)

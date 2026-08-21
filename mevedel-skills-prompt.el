@@ -23,6 +23,8 @@
                   "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-models'
+(declare-function mevedel-model-effective-context-window "mevedel-models"
+                  (&optional model))
 (defvar mevedel-model-context-limit)
 
 ;; `mevedel-reminders'
@@ -51,10 +53,13 @@
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-tool-permission'
+(declare-function mevedel-tool-permission-paths "mevedel-tool-permission"
+                  (tool args &optional context))
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get
                   "mevedel-tool-registry" (name &optional category))
-(declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
 
 
 ;;
@@ -83,18 +88,19 @@
 
 The dynamic prompt roster enumerates active, model-invocable skills so
 the model can call them by name via the `Skill' tool.  This fraction of
-`mevedel-model-context-limit' (converted to characters at four chars
-per token) caps the roster so it cannot crowd out the user's
-conversation on long sessions."
+the active model's context window, or of `mevedel-model-context-limit'
+when the model declares none (converted to characters at four chars per
+token), caps the roster so it cannot crowd out the user's conversation
+on long sessions."
   :type 'float
   :group 'mevedel)
 
 (defun mevedel-skills--listing-budget-chars ()
   "Return the character budget for the model-facing skills roster.
-Derived from `mevedel-skills-listing-budget' and the fallback model
-context limit; assumes ~4 characters per token."
+Derived from `mevedel-skills-listing-budget' and the context window the
+active model is budgeted against; assumes ~4 characters per token."
   (require 'mevedel-models)
-  (let ((limit (or mevedel-model-context-limit 200000)))
+  (let ((limit (mevedel-model-effective-context-window)))
     (max 0 (floor (* mevedel-skills-listing-budget limit 4)))))
 
 (defun mevedel-skills--format-listing-result (skills)
@@ -371,19 +377,21 @@ and again if that budget status changes."
           (mevedel-skills--skill-snapshot session))))
 
 (defun mevedel-skills--post-tool-activate (info)
-  "Post-tool-call hook: activate conditional skills based on tool path.
+  "Post-tool-call hook: activate conditional skills on every touched path.
 
-INFO is the plist passed by `gptel-post-tool-call-functions'.  Extracts
-the touched path via the tool struct's `get-path' slot and forwards it
-to `mevedel-skills--maybe-activate'."
+INFO is the plist passed by `gptel-post-tool-call-functions'.  Every
+path the tool declares is forwarded to `mevedel-skills--maybe-activate'.
+A tool that touches several paths at once declares them together, and
+ApplyPatch is the only tool that does, so reading one path activated on
+the reads around an edit but never on the edit."
+  (require 'mevedel-tool-permission)
   (when-let* ((session (or (and (boundp 'mevedel--session) mevedel--session)
                            (when-let* ((inv (mevedel-skills--current-invocation)))
                              (mevedel-agent-invocation-parent-session inv))))
               (tool-name (plist-get info :name))
               (args (plist-get info :args))
-              (tool (mevedel-tool-get tool-name))
-              (get-path-fn (mevedel-tool-get-path tool)))
-    (when-let* ((path (ignore-errors (funcall get-path-fn args))))
+              (tool (mevedel-tool-get tool-name)))
+    (dolist (path (mevedel-tool-permission-paths tool args))
       (mevedel-skills--queue-activation-reminder
        (current-buffer) session path
        (mevedel-skills--maybe-activate session path))))
