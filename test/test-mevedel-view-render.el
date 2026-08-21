@@ -4780,7 +4780,7 @@
    (mevedel-view--bash-completion-summary
     "<bash-execution execution_id=\"not-trailing\"/> suffix")))
 
-(mevedel-deftest mevedel-view--render-mailbox-block
+(mevedel-deftest mevedel-view--decorate-mailbox-block
   (:doc "renders pure mailbox deliveries as message cards")
   ,test
   (test)
@@ -4801,6 +4801,21 @@
         (should (string-match-p "^  ✉ message from /root/explorer" text))
         (should (string-match-p "hello" text))
         (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))))
+
+  :doc "incomplete agent-message opener stays ordinary user text"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "<agent-message sender=\"/root/explorer\" recipient=\"/root\">\npartial\n"
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "You\n" text))
+        (should (string-match-p "<agent-message sender=" text))
+        (should (string-match-p "partial" text))
+        (should-not (string-match-p "message from /root/explorer" text)))))
 
   :doc "ordinary root mail ending in Bash XML remains ordinary"
   (mevedel-view-test--with-buffers
@@ -4895,6 +4910,25 @@
       (should (eq (get-text-property
                    (match-beginning 0) 'font-lock-face)
                   'mevedel-view-mailbox-body))))
+
+  :doc "incomplete agent-result opener stays ordinary response text"
+  (mevedel-view-test--with-buffers
+    (let ((draft "> quoted\nsecond line"))
+      (mevedel-view-test--insert-data
+       data-buf
+       "<agent-result sender=\"/root/worker\" recipient=\"/root\">\npartial\n"
+       'response)
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft draft 4)
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Assistant\n" text))
+          (should (string-match-p "<agent-result sender=" text))
+          (should (string-match-p "partial" text))
+          (should-not (string-match-p "Finished /root/worker" text)))
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4))))))
 
   :doc "agent-result body may mention nested result blocks"
   (mevedel-view-test--with-buffers
