@@ -174,11 +174,19 @@ changes are not re-reported."
                        :new nil)
                  changes))
           ((file-readable-p path)
-           (let* ((current-mtime (file-attribute-modification-time
-                                  (file-attributes path)))
+           (let* ((attrs (file-attributes path))
+                  (current-mtime (file-attribute-modification-time attrs))
                   (cached-mtime (mevedel-file-state-mtime state)))
-             (when (and current-mtime cached-mtime
-                        (time-less-p cached-mtime current-mtime))
+             ;; A clock that did not advance is not proof the bytes are the
+             ;; same: a tool that restores timestamps, a backwards clock, or a
+             ;; coarse-grained filesystem all leave it unchanged.  Compare for
+             ;; difference, and consult the size the entry already carries.
+             ;;
+             ;; ponytail: same mtime and same size still reads as unchanged;
+             ;; compare content if a coarse-timestamp target proves it matters.
+             (when (or (not (equal cached-mtime current-mtime))
+                       (not (equal (mevedel-file-state-size state)
+                                   (file-attribute-size attrs))))
                (let ((new-content (with-temp-buffer
                                     (insert-file-contents-literally path)
                                     (buffer-string))))
@@ -280,9 +288,17 @@ SESSION has no workspace."
               (state (mevedel-file-cache-get cache key))
               (cached-mtime (mevedel-file-state-mtime state))
               ((file-readable-p key))
-              (current-mtime (file-attribute-modification-time
-                              (file-attributes key))))
-    (not (time-less-p cached-mtime current-mtime))))
+              (attrs (let ((remote-file-name-inhibit-cache
+                            (if (file-remote-p key)
+                                t
+                              remote-file-name-inhibit-cache)))
+                       ;; Authorization-grade freshness observes the target
+                       ;; now, not what TRAMP cached up to ten seconds ago.
+                       (file-attributes key)))
+              (current-mtime (file-attribute-modification-time attrs)))
+    (and (equal cached-mtime current-mtime)
+         (equal (mevedel-file-state-size state)
+                (file-attribute-size attrs)))))
 
 (provide 'mevedel-file-state)
 ;;; mevedel-file-state.el ends here

@@ -242,7 +242,13 @@ their data or parent view buffers as needed
 Tools execute in the data-buffer context with `default-directory` set to
 the session working directory. File modifications are tracked per request
 via `mevedel-request-file-snapshots`, while cross-turn file metadata
-lives on the workspace file cache and session touched-files map.
+lives on the workspace file cache and session touched-files map. A cached
+entry counts as current only while both its mtime and its size are
+unchanged: a clock that did not advance is not proof the bytes did not,
+since restoring timestamps, a backwards clock, and coarse-grained
+filesystem stamps all leave it standing. A rewrite that keeps both the
+mtime and the size is a known blind spot, because closing it means reading
+every cached file on every poll.
 
 `mevedel-execution-target.el` binds each session to one local or TRAMP target,
 owns qualified/native path conversion, and probes target readiness.  Required

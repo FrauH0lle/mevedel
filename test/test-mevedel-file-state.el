@@ -253,6 +253,35 @@
           (should (null (mevedel-file-cache-detect-external-changes cache))))
       (delete-file tmp)))
 
+  :doc "detects a rewrite that kept its mtime but changed size"
+  ;; A tool that restores timestamps -- cp -p, rsync -t, tar -x, a formatter
+  ;; using touch -r -- leaves the clock saying nothing happened.  Treating
+  ;; "not newer" as "identical" hides the change for the rest of the session,
+  ;; because nothing refreshes the entry either.
+  (let* ((cache (mevedel-test-file-cache-create))
+         (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (let ((stamp (file-attribute-modification-time (file-attributes tmp))))
+          (mevedel-file-cache-put cache (mevedel-file-state-from-file tmp))
+          (write-region "hello there" nil tmp nil 'silent)
+          (set-file-times tmp stamp)
+          (let ((changes (mevedel-file-cache-detect-external-changes cache)))
+            (should (= 1 (length changes)))
+            (should (eq 'modified (plist-get (car changes) :status)))))
+      (delete-file tmp)))
+
+  :doc "detects a rewrite whose mtime went backwards"
+  (let* ((cache (mevedel-test-file-cache-create))
+         (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))
+    (unwind-protect
+        (progn
+          (mevedel-file-cache-put cache (mevedel-file-state-from-file tmp))
+          (write-region "goodbye" nil tmp nil 'silent)
+          (set-file-times tmp (time-subtract (current-time) 60))
+          (should (= 1 (length
+                        (mevedel-file-cache-detect-external-changes cache)))))
+      (delete-file tmp)))
+
   :doc "detects modified file with advanced mtime and different content"
   (let* ((cache (mevedel-test-file-cache-create))
          (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))
@@ -472,6 +501,49 @@
           (mevedel-session-record-file-access session tmp 'read nil nil)
           (should (mevedel-session-read-is-duplicate-p
                    session tmp nil nil)))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "returns nil when content changed under a preserved mtime"
+  ;; A duplicate verdict tells the model to reuse what it already has, so a
+  ;; rewrite the clock did not record would hand it stale bytes.
+  (let* ((tmp (make-temp-file "mevedel-dedup-" nil ".txt" "hello"))
+         (ws (mevedel-workspace--create
+              :type 'file :id "dedup-preserved"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (mevedel-test-file-cache-create)))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (let ((stamp (file-attribute-modification-time
+                      (file-attributes tmp))))
+          (mevedel-session-record-file-access session tmp 'read nil nil)
+          (write-region "hello there" nil tmp nil 'silent)
+          (set-file-times tmp stamp)
+          (should-not (mevedel-session-read-is-duplicate-p
+                       session tmp nil nil)))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "returns nil when the mtime went backwards"
+  (let* ((tmp (make-temp-file "mevedel-dedup-" nil ".txt" "hello"))
+         (ws (mevedel-workspace--create
+              :type 'file :id "dedup-regressed"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (mevedel-test-file-cache-create)))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (progn
+          (mevedel-session-record-file-access session tmp 'read nil nil)
+          (write-region "goodbye" nil tmp nil 'silent)
+          (set-file-times tmp (time-subtract (current-time) 60))
+          (should-not (mevedel-session-read-is-duplicate-p
+                       session tmp nil nil)))
       (when (file-exists-p tmp) (delete-file tmp))))
 
   :doc "returns nil when range differs"
