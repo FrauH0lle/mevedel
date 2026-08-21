@@ -32,6 +32,26 @@
   (should (plist-member envelope :result))
   (plist-get envelope :result))
 
+(defun test-mevedel-tool-code--format-synthetic-tree (root)
+  "Return ROOT formatted as a tree-sitter tree.
+ROOT is a plist tree of (:type TYPE :children LIST), which exercises the
+formatter without a compiled grammar."
+  (cl-letf (((symbol-function 'treesit-node-type)
+             (lambda (node) (plist-get node :type)))
+            ((symbol-function 'treesit-node-check) (lambda (&rest _) nil))
+            ((symbol-function 'treesit-node-start)
+             (lambda (node) (or (plist-get node :start) 1)))
+            ((symbol-function 'treesit-node-end)
+             (lambda (node) (or (plist-get node :end) 1)))
+            ((symbol-function 'treesit-node-field-name) (lambda (_) nil))
+            ((symbol-function 'treesit-node-text)
+             (lambda (node &rest _) (or (plist-get node :text) "")))
+            ((symbol-function 'treesit-node-child-count)
+             (lambda (node) (length (plist-get node :children))))
+            ((symbol-function 'treesit-node-child)
+             (lambda (node i) (nth i (plist-get node :children)))))
+    (mevedel-tool-code--treesit-format-tree root 20)))
+
 (cl-defstruct (mevedel-tool-code-test-location
                (:constructor mevedel-tool-code-test-location-create (file)))
   "Test xref location carrying a source FILE."
@@ -681,6 +701,109 @@
       (when-let* ((buf (find-buffer-visiting tmp)))
         (kill-buffer buf))
       (delete-file tmp)))
+  :doc "lists leaves nested below the first category"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert ";; line 1\n"
+                    ";; line 2\n"
+                    ";; line 3\n"))
+          (require 'imenu)
+          (cl-letf (((symbol-function 'imenu--make-index-alist)
+                     (lambda (&optional _noerror)
+                       (setq imenu--index-alist
+                             (list (cons "*Rescan*" -99)
+                                   (cons "Class"
+                                         (list (cons "Group"
+                                                     (list (cons "method"
+                                                                 21)))
+                                               (cons "field" 11)))
+                                   (cons "top" 1))))))
+            (mevedel-tool-code--imenu
+             (lambda (r)
+               (setq result (test-mevedel-tool-code--handler-result r)))
+             (list :file_path tmp)))
+          (should (stringp result))
+          (should (string-match-p ":1:.*top" result))
+          (should (string-match-p ":2:.*\\[Class\\] field" result))
+          (should (string-match-p ":3:.*\\[Class > Group\\] method" result))
+          (should-not (string-match-p "Rescan" result)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+  :doc "keeps a starred symbol below a category and skips only top-level specials"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert ";; line 1\n"
+                    ";; line 2\n"))
+          (require 'imenu)
+          (cl-letf (((symbol-function 'imenu--make-index-alist)
+                     (lambda (&optional _noerror)
+                       (setq imenu--index-alist
+                             (list (cons "*Rescan*" -99)
+                                   (cons "Variables"
+                                         (list (cons "*global-thing*" 11))))))))
+            (mevedel-tool-code--imenu
+             (lambda (r)
+               (setq result (test-mevedel-tool-code--handler-result r)))
+             (list :file_path tmp)))
+          (should (string-match-p ":2:.*\\[Variables\\] \\*global-thing\\*"
+                                  result))
+          (should-not (string-match-p "Rescan" result)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+  :doc "reports whole-buffer line numbers for a narrowed buffer"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert ";; line 1\n"
+                    ";; line 2\n"
+                    ";; line 3\n"))
+          (let ((buffer (find-file-noselect tmp)))
+            (with-current-buffer buffer
+              (narrow-to-region 11 (point-max)))
+            (require 'imenu)
+            (cl-letf (((symbol-function 'imenu--make-index-alist)
+                       (lambda (&optional _noerror)
+                         (setq imenu--index-alist
+                               (list (cons "narrowed" 21))))))
+              (mevedel-tool-code--imenu
+               (lambda (r)
+                 (setq result (test-mevedel-tool-code--handler-result r)))
+               (list :file_path tmp))))
+          (should (string-match-p ":3:.*narrowed" result)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
+  :doc "lists an item carrying a position, function, and arguments"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".el"))
+         (result nil))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert ";; line 1\n"
+                    ";; line 2\n"))
+          (require 'imenu)
+          (cl-letf (((symbol-function 'imenu--make-index-alist)
+                     (lambda (&optional _noerror)
+                       (setq imenu--index-alist
+                             (list (list "callable" 11 #'ignore "arg"))))))
+            (mevedel-tool-code--imenu
+             (lambda (r)
+               (setq result (test-mevedel-tool-code--handler-result r)))
+             (list :file_path tmp)))
+          (should (string-match-p ":2:.*callable" result)))
+      (when-let* ((buf (find-buffer-visiting tmp)))
+        (kill-buffer buf))
+      (delete-file tmp)))
   :doc "errors on non-existent file"
   (should-error
    (mevedel-tool-code--imenu
@@ -727,7 +850,72 @@
   (with-temp-buffer
     (insert "first line\nsecond line\nthird line\n")
     (let ((pos (mevedel-tool-code--line-column-to-point 2 3)))
-      (should (= pos 15)))))
+      (should (= pos 15))))
+  :doc "rejects a line before the first one instead of clamping"
+  (with-temp-buffer
+    (insert "first line\nsecond line\n")
+    (should-error (mevedel-tool-code--line-column-to-point 0 0))
+    (should-error (mevedel-tool-code--line-column-to-point -2 0)))
+  :doc "rejects a line the buffer does not have"
+  (with-temp-buffer
+    (insert "first line\nsecond line\n")
+    (should-error (mevedel-tool-code--line-column-to-point 99 0)))
+  :doc "rejects a column beyond the requested line"
+  (with-temp-buffer
+    (insert "ab\nsecond line\n")
+    (should-error (mevedel-tool-code--line-column-to-point 1 99))
+    (should-error (mevedel-tool-code--line-column-to-point 1 -1)))
+  :doc "rejects a line past a file with no trailing newline"
+  (with-temp-buffer
+    (insert "ab\ncd")
+    (should (= 4 (mevedel-tool-code--line-column-to-point 2 0)))
+    (should-error (mevedel-tool-code--line-column-to-point 3 0)))
+  :doc "resolves whole-buffer coordinates in a narrowed buffer"
+  (with-temp-buffer
+    (insert "aaa\nbbb\nccc\nddd\n")
+    (narrow-to-region 5 12)
+    (should (= 1 (mevedel-tool-code--line-column-to-point 1 0)))
+    (should (= 13 (mevedel-tool-code--line-column-to-point 4 0))))
+  :doc "accepts the final empty line and end-of-line columns"
+  (with-temp-buffer
+    (insert "ab\ncd\n")
+    (should (= 7 (mevedel-tool-code--line-column-to-point 3 0)))
+    (should (= 3 (mevedel-tool-code--line-column-to-point 1 2)))))
+
+(mevedel-deftest mevedel-tool-code--treesit-format-tree ()
+  ,test
+  (test)
+  :doc "stops a wide tree at the construction limit and says so"
+  (let* ((mevedel-tool-code--treesit-tree-max-chars 200)
+         (children (cl-loop for i from 0 below 60
+                            collect (list :type (format "child-%d" i))))
+         (root (list :type "root" :children children))
+         (result (test-mevedel-tool-code--format-synthetic-tree root)))
+    (should (string-search "child-0 " result))
+    (should (string-search "truncated" result))
+    (should-not (string-search "child-59 " result)))
+  :doc "previews only text whose span fits the preview width"
+  (let* ((root (list :type "root"
+                     :children
+                     (list (list :type "short" :start 1 :end 5
+                                 :text "abcd")
+                           (list :type "long" :start 1 :end 100
+                                 :text "unused")
+                           (list :type "multiline" :start 1 :end 5
+                                 :text "a\nb"))))
+         (result (test-mevedel-tool-code--format-synthetic-tree root)))
+    (should (string-search "\"abcd\"" result))
+    (should-not (string-search "unused" result))
+    (should-not (string-search "\"a\nb\"" result)))
+  :doc "formats a tree within the limit completely"
+  (let* ((root (list :type "root"
+                     :children (list (list :type "leaf-a")
+                                     (list :type "leaf-b"))))
+         (result (test-mevedel-tool-code--format-synthetic-tree root)))
+    (should (string-search "root" result))
+    (should (string-search "  leaf-a" result))
+    (should (string-search "  leaf-b" result))
+    (should-not (string-search "truncated" result))))
 
 (mevedel-deftest mevedel-tool-code--treesitter ()
   ,test

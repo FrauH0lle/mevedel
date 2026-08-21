@@ -135,6 +135,20 @@ tested TRAMP-aware path, while definition lookup and other backends return a
 direct unsupported-backend diagnostic instead of invoking client-side
 programs. Location results are rendered as target-native paths.
 
+Code navigation answers the location it was asked for or reports why it
+cannot. A Treesitter line or column the file does not have is an error, never
+the nearest position that does exist; the buffer is widened first, and the
+column is an Emacs display column, so a tab counts as the width it displays.
+Imenu descends every nesting level and prefixes each leaf with its category
+path, so class- and namespace-shaped indexes are listed to their full depth,
+with whole-buffer line numbers even when the visiting buffer is narrowed. Only
+Imenu's own special entries are skipped, identified by the negative position
+that marks them rather than by their name, so an ordinary symbol whose name
+starts with `*` is listed. Whole-file Treesitter traversal has a construction
+limit well above the tool's result limit: it stops there and says the tree was
+truncated, so a wide or generated file cannot spend unbounded time and memory
+on a tree nothing can consume.
+
 Committed repairs proceed without a retry and add one corrective note to the
 final tool result, including error results. If a multi-step candidate still
 fails validation, its repair audit is marked abandoned and the handler is not

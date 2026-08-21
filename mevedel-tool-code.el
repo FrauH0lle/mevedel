@@ -14,6 +14,7 @@
 
 ;; `imenu'
 (declare-function imenu--make-index-alist "imenu" (&optional noerror))
+(declare-function imenu--subalist-p "imenu" (item))
 (defvar imenu--index-alist)
 
 ;; `mevedel-execution-target'
@@ -281,6 +282,37 @@ and :file_path."
 ;;
 ;;; Imenu Integration
 
+(defun mevedel-tool-code--imenu-leaves (index file-path &optional path)
+  "Return one formatted line per Imenu leaf of INDEX located in FILE-PATH.
+PATH holds the enclosing category names, outermost first.  Descend through
+every nested subalist, so a leaf below more than one category is listed
+rather than dropped.  Skip Imenu's special entries, which mark themselves
+with a negative position rather than with a distinguished name.  Line
+numbers are whole-buffer numbers, because Imenu builds its index widened
+while the visiting buffer may be narrowed."
+  (mapcan
+   (lambda (item)
+     (let* ((name (car-safe item))
+            (value (cdr-safe item))
+            ;; (NAME . POSITION), or Imenu's longer
+            ;; (NAME POSITION FUNCTION ARGUMENTS...) item.
+            (pos (if (consp value) (car value) value)))
+       (cond
+        ((not (stringp name)) nil)
+        ((imenu--subalist-p item)
+         (mevedel-tool-code--imenu-leaves
+          value file-path (append path (list name))))
+        ((not (integer-or-marker-p pos)) nil)
+        ((< pos 0) nil)
+        (t
+         (list (format "%s:%d: %s%s" file-path
+                       (line-number-at-pos pos t)
+                       (if path
+                           (format "[%s] " (string-join path " > "))
+                         "")
+                       name))))))
+   index))
+
 (defun mevedel-tool-code--imenu (callback args)
   "List symbols in a file using imenu.
 CALLBACK receives the result envelope.  ARGS is a plist with :file_path."
@@ -293,41 +325,12 @@ CALLBACK receives the result envelope.  ARGS is a plist with :file_path."
            (with-current-buffer target-buffer
              (imenu--make-index-alist)
              (if imenu--index-alist
-                 (let ((results nil))
-                   (dolist (item imenu--index-alist)
-                     (cond
-                      ;; Skip special entries
-                      ((string-match-p "^\\*" (car item)) nil)
-                      ;; Simple entries (name . marker-or-position)
-                      ((markerp (cdr item))
-                       (push (format "%s:%d: %s" file-path
-                                     (line-number-at-pos
-                                      (marker-position (cdr item)))
-                                     (car item))
-                             results))
-                      ((numberp (cdr item))
-                       (push (format "%s:%d: %s" file-path
-                                     (line-number-at-pos (cdr item))
-                                     (car item))
-                             results))
-                      ;; Nested entries (category . items)
-                      ((listp (cdr item))
-                       (let ((category (car item)))
-                         (dolist (subitem (cdr item))
-                           (when (and (consp subitem)
-                                      (or (markerp (cdr subitem))
-                                          (numberp (cdr subitem))))
-                             (push (format "%s:%d: [%s] %s" file-path
-                                           (line-number-at-pos
-                                            (if (markerp (cdr subitem))
-                                                (marker-position (cdr subitem))
-                                              (cdr subitem)))
-                                           category (car subitem))
-                                   results)))))))
+                 (let ((results (mevedel-tool-code--imenu-leaves
+                                 imenu--index-alist file-path)))
                    (funcall callback
                             (list :result
                                   (if results
-                                      (string-join (nreverse results) "\n")
+                                      (string-join results "\n")
                                     (format "No symbols found in %s"
                                             file-path)))))
                (funcall callback
@@ -383,7 +386,7 @@ and optional :line, :column, :whole_file, :include_ancestors,
                      (funcall callback
                               (list :result
                                     (mevedel-tool-code--treesit-format-tree
-                                     root-node 0 20)))
+                                     root-node 20)))
                    (let ((results nil))
                      (push (format "Node Type: %s" (treesit-node-type node))
                            results)
@@ -448,44 +451,74 @@ and optional :line, :column, :whole_file, :include_ancestors,
                           "Error getting tree-sitter info for %s: %s"
                           file-path (error-message-string err))))))))))
 
-(defun mevedel-tool-code--treesit-format-tree (node level max-depth)
+(defconst mevedel-tool-code--treesit-tree-max-chars (* 200 1024)
+  "Hard cap on the characters a whole-file tree-sitter tree may occupy.
+Sits well above the Treesitter tool result limit so the persisted
+artifact stays useful, while a wide or generated file cannot spend
+unbounded time and memory building a tree nothing can consume.")
+
+(defun mevedel-tool-code--treesit-format-tree (node max-depth)
   "Format NODE and its children as a tree string.
-LEVEL is the current indentation level.
-MAX-DEPTH is the maximum depth to traverse."
-  (if (or (not node) (>= level max-depth))
-      ""
-    (let* ((indent (make-string (* level 2) ?\s))
-           (type (treesit-node-type node))
-           (named (if (treesit-node-check node 'named) " (named)" ""))
-           (start (treesit-node-start node))
-           (end (treesit-node-end node))
-           (field-name (treesit-node-field-name node))
-           (field-str (if field-name (format " [%s]" field-name) ""))
-           (text (treesit-node-text node t))
-           (text-preview (if (and (< (length text) 40)
-                                  (not (string-match-p "\n" text)))
-                             (format " \"%s\"" text)
-                           ""))
-           (result (format "%s%s%s%s (%d-%d)%s\n"
-                           indent type named field-str
-                           start end text-preview))
-           (child-count (treesit-node-child-count node)))
-      ;; Add children
-      (dotimes (i child-count)
-        (when-let ((child (treesit-node-child node i)))
-          (setq result (concat result
-                               (mevedel-tool-code--treesit-format-tree
-                                child (1+ level) max-depth)))))
-      result)))
+MAX-DEPTH is the maximum depth to traverse.  Traversal stops once it has
+built `mevedel-tool-code--treesit-tree-max-chars' characters and says so,
+so a wide file cannot build an unbounded intermediate string."
+  (with-temp-buffer
+    (when (catch 'truncated
+            (cl-labels
+                ((insert-node
+                   (node level)
+                   (when (and node (< level max-depth))
+                     (when (> (buffer-size)
+                              mevedel-tool-code--treesit-tree-max-chars)
+                       (throw 'truncated t))
+                     ;; Read node text only when its span can fit the
+                     ;; preview, so a wide file does not copy every large
+                     ;; node just to reject it.
+                     (let* ((start (treesit-node-start node))
+                            (end (treesit-node-end node))
+                            (field-name (treesit-node-field-name node))
+                            (text (and (< (- end start) 40)
+                                       (treesit-node-text node t))))
+                       (insert (make-string (* level 2) ?\s)
+                               (treesit-node-type node)
+                               (if (treesit-node-check node 'named)
+                                   " (named)"
+                                 "")
+                               (if field-name
+                                   (format " [%s]" field-name)
+                                 "")
+                               (format " (%d-%d)" start end)
+                               (if (and text (not (string-search "\n" text)))
+                                   (format " \"%s\"" text)
+                                 "")
+                               "\n"))
+                     (dotimes (i (treesit-node-child-count node))
+                       (insert-node (treesit-node-child node i)
+                                    (1+ level))))))
+              (insert-node node 0))
+            nil)
+      (insert "... (tree truncated at the construction limit)\n"))
+    (buffer-string)))
 
 (defun mevedel-tool-code--line-column-to-point (line column)
   "Convert LINE and COLUMN to point position in current buffer.
-LINE is 1-based, COLUMN is 0-based (Emacs convention)."
-  (save-excursion
-    (goto-char (point-min))
-    (forward-line (1- line))
-    (move-to-column column)
-    (point)))
+LINE is 1-based, COLUMN is 0-based (Emacs convention).  Signals an error
+for a coordinate the buffer does not have instead of clamping it to the
+nearest position, so a stale or malformed location is repairable rather
+than silently answered for somewhere else."
+  (unless (and (natnump line) (> line 0))
+    (error "Line must be 1 or greater: %S" line))
+  (unless (natnump column)
+    (error "Column must be 0 or greater: %S" column))
+  (save-restriction
+    (widen)
+    (save-excursion
+      (goto-char (point-min))
+      (unless (and (zerop (forward-line (1- line))) (bolp))
+        (error "Line %d is outside the buffer" line))
+      (when (< (move-to-column column) column)
+        (error "Column %d is beyond the end of line %d" column line))
+      (point))))
 
 
 ;;
@@ -634,9 +667,9 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
     :args ((file_path path :required
                       "Path to the file to analyze.")
            (line integer :optional
-                 "Line number (1-based).")
+                 "Line number (1-based); must exist in the file.")
            (column integer :optional
-                   "Column number (0-based).")
+                   "Column number (0-based); must exist on that line.")
            (whole_file boolean :optional
                        "Show the entire file's syntax tree.")
            (include_ancestors boolean :optional
