@@ -3567,7 +3567,20 @@ hint.  Searches that region."
       (unwind-protect
           (progn
             (goto-char start)
-            (while (re-search-forward open-regex (marker-position end-marker) t)
+            (while
+                (let (close)
+                  (while
+                      (and
+                       (re-search-forward
+                        open-regex (marker-position end-marker) t)
+                       (not
+                        (setq close
+                              (save-match-data
+                                (save-excursion
+                                  (mevedel-transcript--mailbox-find-close
+                                   open-regex close-tag
+                                   (marker-position end-marker))))))))
+                  close)
               (let* ((open-start (match-beginning 0))
                      (open-end (match-end 0))
                      (execution-p
