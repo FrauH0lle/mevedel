@@ -399,6 +399,35 @@
   (should-not (mevedel-hooks-normalize-rules
                (intern "test-mevedel-view.el."))))
 
+(mevedel-deftest mevedel-hooks-normalize-rules/invalid-matcher
+  (:doc "drops a group whose matcher is not a usable regexp")
+  (let ((mevedel-hooks--reported-bad-matchers
+         (make-hash-table :test #'equal))
+        warning)
+    (mevedel-test--with-captured-diagnostics warning
+      (should-not
+       (mevedel-hooks-normalize-rules
+        '((UserPromptSubmit
+           ((:matcher "["
+             :hooks ((:type elisp
+                      :function mevedel-hooks-test--context-fn))))))))
+      (should
+       (equal
+        (mevedel-hooks-normalize-rules
+         '((UserPromptSubmit
+            ((:matcher "["
+              :hooks ((:type elisp
+                       :function mevedel-hooks-test--context-fn)))
+             (:matcher "*"
+              :hooks ((:type elisp
+                       :function mevedel-hooks-test--context-fn)))))))
+        '((UserPromptSubmit
+           (:matcher "*"
+            :hooks ((:type elisp
+                     :function mevedel-hooks-test--context-fn))))))))
+    (should (string-match-p "matcher" warning))
+    (should (string-match-p "UserPromptSubmit" warning))))
+
 (mevedel-deftest mevedel-hooks-normalize-rules/scoped-stop
   (:doc "normalizes agent-scoped Stop to SubagentStop")
   (should
@@ -1005,7 +1034,11 @@
                   ("Bash|Read" "Read" t)
                   ("Bash|Read" "Edit" nil)
                   ("B.*" "Bash" t)
-                  (Bash "Bash" t)))
+                  (Bash "Bash" t)
+                  ;; An unusable regexp matches nothing rather than
+                  ;; signalling out of the event that consulted it.
+                  ("[" "Bash" nil)
+                  ("Bash\\(" "Bash" nil)))
     (pcase-let ((`(,matcher ,target ,expected) case))
       (should (eq (not (null (mevedel-hooks-matcher-matches-p
                               matcher target)))
@@ -1286,6 +1319,49 @@
 					'(:updated-input (:command "echo rewritten"))))
 			 (should (= (length (mevedel-session-hook-log session)) 1)))
 		     (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/invalid-matcher
+  (:doc "an unusable matcher is reported and the event still runs")
+  (let* ((root (make-temp-file "mevedel-hooks-bad-matcher" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hook-rules
+          '((PreToolUse
+             ((:matcher "["
+               :hooks ((:type elisp
+                        :function mevedel-hooks-test--deny-fn)))
+              (:matcher "Bash"
+               :hooks ((:type elisp
+                        :function mevedel-hooks-test--rewrite-fn)))))))
+         (mevedel-hooks--reported-bad-matchers
+          (make-hash-table :test #'equal))
+         warning)
+    (unwind-protect
+        (progn
+          (mevedel-test--with-captured-diagnostics warning
+            ;; Twice, because the live defcustom layer is re-normalized on
+            ;; every dispatch.
+            (dotimes (_ 2)
+              (let ((decision
+                     (mevedel-hooks-test--await
+                      (lambda (cb)
+                        (mevedel-hooks-run-event
+                         'PreToolUse
+                         '(:tool-name "Bash"
+                           :tool-input (:command "echo old"))
+                         cb session)))))
+                ;; The usable group still decides; the broken one is
+                ;; skipped rather than aborting the event.
+                (should (equal decision
+                               '(:updated-input
+                                 (:command "echo rewritten")))))))
+          (should (string-match-p "matcher" warning))
+          (should (string-match-p "mevedel-hook-rules" warning))
+          ;; The live defcustom layer is re-normalized per event, so the
+          ;; report has to be remembered rather than repeated per call:
+          ;; splitting on the message leaves exactly two fragments.
+          (should (= 2 (length
+                        (split-string warning "not a valid regexp")))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/request-cancellation
   (:doc "request cancellation stops a command hook before delayed effects")

@@ -218,6 +218,8 @@ Matcher rules:
 - strings containing only letters, digits, `_`, `-`, and `|` are exact
   names or pipe-separated exact alternatives.
 - any other string is an Emacs regexp matched case-sensitively.
+- a regexp that does not compile is dropped with a warning naming its event,
+  so a typo cannot abort the lifecycle event the group was configured under.
 
 Handler-level `:if` can be added later using the existing permission rule
 parser style, e.g. `"Bash(git *)"`. It is not
