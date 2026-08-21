@@ -89,6 +89,12 @@
 (declare-function mevedel-prompt-submission-outcome
                   "mevedel-prompt-submission" (cl-x) t)
 
+;; `mevedel-execution-target'
+(declare-function mevedel-execution-target-native-path
+                  "mevedel-execution-target" (target path))
+(declare-function mevedel-execution-target-remote-p
+                  "mevedel-execution-target" (target))
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-save
                   "mevedel-session-artifacts"
@@ -119,6 +125,8 @@
                   "mevedel-skills-input" (text session))
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-execution-target
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -146,6 +154,8 @@
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree--session-directory
                   "mevedel-worktree" (branch))
+(declare-function mevedel-worktree-repository-root
+                  "mevedel-worktree" (directory))
 (declare-function mevedel-worktree-create-session
                   "mevedel-worktree"
                   (&optional branch purpose clean recovery))
@@ -555,11 +565,30 @@ projected evidence.  CHAT-BUFFER is left unchanged."
         (setq-local mevedel-compact-run-cancel cancel)))))
 
 (defun mevedel-plan-handoff--portable-paths (summary session)
-  "Return SUMMARY with SESSION's working directory prefix removed."
-  (string-replace
-   (file-name-as-directory
-    (expand-file-name (mevedel-session-working-directory session)))
-   "" summary))
+  "Return SUMMARY with SESSION's repository root prefix removed.
+
+The repository root, not the working directory: a target session's working
+directory is its own worktree top level, so only a repository-relative path
+resolves there.  Stripping a subdirectory prefix instead names the wrong
+file, and leaves every path outside that subdirectory pointing at the
+source checkout.
+
+Both spellings go, because a model-visible path is target-native: on a
+remote session the native spelling is the only one the evidence carries."
+  (require 'mevedel-worktree)
+  (let* ((directory (file-name-as-directory
+                     (expand-file-name
+                      (mevedel-session-working-directory session))))
+         (root (or (mevedel-worktree-repository-root directory) directory))
+         (target (mevedel-session-execution-target session))
+         (native (and target
+                      (mevedel-execution-target-remote-p target)
+                      (file-name-as-directory
+                       (mevedel-execution-target-native-path target root)))))
+    (setq summary (string-replace root "" summary))
+    (if (and native (not (equal native root)))
+        (string-replace native "" summary)
+      summary)))
 
 (defun mevedel-plan-handoff--prepare-here-summary
     (session chat-buffer record target focus source-transform)

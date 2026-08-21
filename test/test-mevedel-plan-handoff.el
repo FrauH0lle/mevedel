@@ -637,6 +637,31 @@
       (delete-directory target-save t)
       (delete-directory source-save t))))
 
+(mevedel-deftest mevedel-plan-handoff--portable-paths ()
+  ,test
+  (test)
+  :doc "rewrites evidence paths relative to the repository root"
+  ;; The target session's working directory is its own worktree top level, so
+  ;; only a repository-relative path resolves there.  Stripping the working
+  ;; directory instead points the implementation back at the source checkout
+  ;; whenever the session is rooted in a subdirectory.
+  (let* ((root (make-temp-file "mevedel-portable-root-" t))
+         (subdir (file-name-concat root "subdir")))
+    (unwind-protect
+        (let ((default-directory (file-name-as-directory root)))
+          (make-directory subdir t)
+          (should (zerop (call-process "git" nil nil nil "init" "--quiet")))
+          (let* ((session (mevedel-session--create
+                           :authority-mode 'pid-lock :name "source"
+                           :working-directory (file-name-as-directory subdir)))
+                 (summary (mevedel-plan-handoff--portable-paths
+                           (format "see %s and %s"
+                                   (file-name-concat subdir "a.el")
+                                   (file-name-concat root "other" "b.el"))
+                           session)))
+            (should (equal "see subdir/a.el and other/b.el" summary))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-plan-handoff--prepare-summary
   (:doc "Worktree generates one plan-free portable handoff without compaction")
   ,test
