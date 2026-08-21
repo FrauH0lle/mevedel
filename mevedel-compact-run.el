@@ -149,6 +149,10 @@
       (setf (mevedel-compact-run--state-request-cancel state) nil
             (mevedel-compact-run--state-retry-timer state) nil)
       (when span
+        ;; Consume the span: an error handler further out closes an
+        ;; unsettled span itself, and must find nothing once the
+        ;; settlement owner has reported.
+        (setf (mevedel-compact-run--state-telemetry-span state) nil)
         (mevedel-telemetry-finish
          span
          :outcome (cond
@@ -474,100 +478,87 @@ task-relevance data for a handoff summary.  SOURCE-TRANSFORM filters the
       (user-error "Cannot compact while a request is active"))
     (unless (plist-get target :eligible-p)
       (user-error "Current buffer is not the active persisted segment"))
-    (mevedel-compact-run--start-admitted
-     chat-buffer target aggressive auto callback focus purpose
-     source-transform pending-start admission instructions
-     prepared-summary summary-ready)))
-
-(cl-defun mevedel-compact-run--start-admitted
-    (chat-buffer target aggressive auto callback focus purpose
-                 source-transform pending-start admission instructions
-                 prepared-summary summary-ready)
-  "Measure and begin an admitted compaction attempt.
-
-CHAT-BUFFER and TARGET have already passed admission; the remaining
-arguments are `mevedel-compact-run-start''s own.  A rejection from here
-on closes the telemetry span it opened before it signals."
-  (let* ((session (plist-get target :session))
-         (tokens-before (mevedel-compact-estimation-estimate-tokens))
-         (target-policy (mevedel-compact-estimation-target-policy))
-         (telemetry-span
-          (and session
-               (fboundp 'mevedel-telemetry-start)
-               (apply #'mevedel-telemetry-start
-                      session 'compaction
-                      :trigger (if auto 'auto 'manual)
-                      :aggressive (and aggressive t)
-                      :tokens-before tokens-before
-                      :target-origin (plist-get target :origin)
-                      (mevedel-compact-estimation-telemetry-inputs
-                       tokens-before target-policy))))
-         (state
-          (mevedel-compact-run--state-create
-           :aggressive aggressive
-           :auto auto
-           :callback callback
-           :chat-buffer chat-buffer
-           :focus focus
-           :purpose (or purpose 'continuation)
-           :session session
-           :source-transform source-transform
-           :target target
-           :telemetry-span telemetry-span
-           :tokens-before tokens-before
-           :trigger (if auto "auto" "manual")
-           :workspace (plist-get target :workspace))))
-    (setq mevedel-compact-target-current-request-reminder nil
-          mevedel-compact-target-current-request-hook-context nil)
-    (condition-case err
-        (let ((limit (or pending-start
-                         (mevedel-compact-evidence-find-boundary))))
-      (unless limit
-        (if auto
-            (cl-return-from mevedel-compact-run--start-admitted
+    (let* ((session (plist-get target :session))
+           (tokens-before (mevedel-compact-estimation-estimate-tokens))
+           (target-policy (mevedel-compact-estimation-target-policy))
+           (telemetry-span
+            (and session
+                 (fboundp 'mevedel-telemetry-start)
+                 (apply #'mevedel-telemetry-start
+                        session 'compaction
+                        :trigger (if auto 'auto 'manual)
+                        :aggressive (and aggressive t)
+                        :tokens-before tokens-before
+                        :target-origin (plist-get target :origin)
+                        (mevedel-compact-estimation-telemetry-inputs
+                         tokens-before target-policy))))
+           (state
+            (mevedel-compact-run--state-create
+             :aggressive aggressive
+             :auto auto
+             :callback callback
+             :chat-buffer chat-buffer
+             :focus focus
+             :purpose (or purpose 'continuation)
+             :session session
+             :source-transform source-transform
+             :target target
+             :telemetry-span telemetry-span
+             :tokens-before tokens-before
+             :trigger (if auto "auto" "manual")
+             :workspace (plist-get target :workspace))))
+      (setq mevedel-compact-target-current-request-reminder nil
+            mevedel-compact-target-current-request-hook-context nil)
+      (condition-case err
+          (let ((limit (or pending-start
+                           (mevedel-compact-evidence-find-boundary))))
+            (unless limit
+              (if auto
+                  (cl-return-from mevedel-compact-run-start
                     (mevedel-compact-run--finish state :skip))
-          (user-error "Not enough conversation content to compact")))
-      (mevedel-compact-run--prepare
-       state limit admission instructions pending-start
-       prepared-summary summary-ready)
-      (when (string-blank-p
-             (mevedel-compact-run--state-old-content state))
-        (if auto
-            (cl-return-from mevedel-compact-run--start-admitted
+                (user-error "Not enough conversation content to compact")))
+            (mevedel-compact-run--prepare
+             state limit admission instructions pending-start
+             prepared-summary summary-ready)
+            (when (string-blank-p
+                   (mevedel-compact-run--state-old-content state))
+              (if auto
+                  (cl-return-from mevedel-compact-run-start
                     (mevedel-compact-run--finish
                      state
                      (if (plist-get admission :target-pressure)
                          "No compactable history remains at target pressure"
                        :skip)))
-          (user-error "Not enough conversation content to compact")))
-      (require 'mevedel-hooks)
-      (setq mevedel-compact-run-in-flight t)
-      (setq mevedel-compact-run-cancel
-            (lambda ()
-              (unless (or (mevedel-compact-run--state-settled state)
-                          (mevedel-compact-run--state-applied state))
-                (when-let* ((cancel
-                             (mevedel-compact-run--state-request-cancel
-                              state)))
-                  (funcall cancel))
-                (unless (or (mevedel-compact-run--state-settled state)
-                            (mevedel-compact-run--state-applied state))
-                  (mevedel-compact-run--fail
-                   state "Compaction aborted" nil t)))))
-          (mevedel-compact-run--begin-attempt state))
-      ;; The attempt never started, so the span is closed here rather
-      ;; than through the settlement owner: settling would report an
-      ;; outcome to a caller that is about to receive this signal.
-      (error
-       (mevedel-compact-run--abandon-telemetry state)
-       (signal (car err) (cdr err))))))
+                (user-error "Not enough conversation content to compact")))
+            (require 'mevedel-hooks)
+            (setq mevedel-compact-run-in-flight t)
+            (setq mevedel-compact-run-cancel
+                  (lambda ()
+                    (unless (or (mevedel-compact-run--state-settled state)
+                                (mevedel-compact-run--state-applied state))
+                      (when-let* ((cancel
+                                   (mevedel-compact-run--state-request-cancel
+                                    state)))
+                        (funcall cancel))
+                      (unless (or (mevedel-compact-run--state-settled state)
+                                  (mevedel-compact-run--state-applied state))
+                        (mevedel-compact-run--fail
+                         state "Compaction aborted" nil t)))))
+            (mevedel-compact-run--begin-attempt state))
+        ;; The attempt never started, so the span is closed here rather
+        ;; than through the settlement owner: settling would report an
+        ;; outcome to a caller that is about to receive this signal.
+        (error
+         (mevedel-compact-run--abandon-telemetry state)
+         (signal (car err) (cdr err)))))))
 
 (defun mevedel-compact-run--abandon-telemetry (state)
-  "Close STATE's telemetry span for an attempt that never began."
+  "Close STATE's telemetry span for an attempt that never began.
+A span the settlement owner already consumed is gone by the time this
+runs, so an attempt that settled before signalling is not re-finished."
   (when-let* ((span (mevedel-compact-run--state-telemetry-span state)))
     (setf (mevedel-compact-run--state-telemetry-span state) nil)
-    (when (fboundp 'mevedel-telemetry-finish)
-      (mevedel-telemetry-finish span :outcome 'rejected))))
+    (mevedel-telemetry-finish span :outcome 'rejected)))
 
 (provide 'mevedel-compact-run)
 
