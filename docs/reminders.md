@@ -184,6 +184,9 @@ guidance in the rejection reminder.
 
 ### Edit diagnostics
 
+The edit-diagnostics state machine is its own owner,
+`mevedel-edit-diagnostics.el`: the patch tool drives it, and the reminder
+module only delivers what it queues through the generic turn-event channel.
 Diagnostics are observed only after a successful `ApplyPatch`.
 Before the first edit of a visited file in a request, mevedel captures that
 file's current Flymake and Flycheck diagnostics as its baseline. After the

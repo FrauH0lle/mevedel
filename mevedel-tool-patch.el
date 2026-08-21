@@ -60,11 +60,11 @@
 (declare-function mevedel-resource-prepare
                   "mevedel-resource" (operation address context))
 
-;; `mevedel-reminders'
-(declare-function mevedel-reminders-diagnostics-after-edit
-                  "mevedel-reminders" (buffer path continuation))
-(declare-function mevedel-reminders-diagnostics-before-edit
-                  "mevedel-reminders" (buffer path))
+;; `mevedel-edit-diagnostics'
+(declare-function mevedel-edit-diagnostics-after-edit
+                  "mevedel-edit-diagnostics" (buffer path continuation))
+(declare-function mevedel-edit-diagnostics-before-edit
+                  "mevedel-edit-diagnostics" (buffer path))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-shallow-ensure-files
@@ -1039,11 +1039,11 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
   "Apply CHANGES for DATA-BUFFER, then call CONTINUATION.
 Refresh file tracking immediately and diagnostics before continuation."
   (require 'mevedel-file-state)
-  (require 'mevedel-reminders)
+  (require 'mevedel-edit-diagnostics)
   (mevedel-tool-patch--assert-buffers-unmodified changes)
   (dolist (change changes)
     (unless (plist-get change :local-p)
-      (mevedel-reminders-diagnostics-before-edit
+      (mevedel-edit-diagnostics-before-edit
        data-buffer (plist-get change :path))))
   (mevedel-tool-patch--commit changes)
   (when-let* ((session (and (buffer-live-p data-buffer)
@@ -1060,7 +1060,7 @@ Refresh file tracking immediately and diagnostics before continuation."
                 (cl-remove-if (lambda (change) (plist-get change :local-p))
                               remaining)))
            (if remaining
-               (mevedel-reminders-diagnostics-after-edit
+               (mevedel-edit-diagnostics-after-edit
                 data-buffer (plist-get (car remaining) :path)
                 (lambda () (finish (cdr remaining))))
              (funcall continuation)))))
