@@ -1438,5 +1438,20 @@
       (kill-buffer view-buffer)
       (kill-buffer chat-buffer))))
 
+(mevedel-deftest mevedel-plan-approval--current-session
+  (:doc "loads its owner instead of assuming a caller already did")
+  ;; Buffer cleanup reaches this resolver, and a partial load order left it
+  ;; calling a function whose module nothing had required: the abort then
+  ;; failed with `void-function' and the session was never aborted.
+  (let ((saved (symbol-function 'mevedel-queue--current-session)))
+    (unwind-protect
+        (progn
+          (fmakunbound 'mevedel-queue--current-session)
+          (setq features (delq 'mevedel-queue features))
+          (should-not (mevedel-plan-approval--current-session)))
+      (unless (fboundp 'mevedel-queue--current-session)
+        (fset 'mevedel-queue--current-session saved))
+      (require 'mevedel-queue))))
+
 (provide 'test-mevedel-plan-mode)
 ;;; test-mevedel-plan-mode.el ends here
