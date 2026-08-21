@@ -3,8 +3,10 @@
 ;;; Commentary:
 
 ;; Session-owned queueing, steering, automatic follow-up delivery, inspection,
-;; and composer editing.  Opening the cockpit pauses automatic delivery; queue
-;; edits retain the selected entry until a validated replacement is ready.
+;; and composer editing.  Opening the cockpit pauses automatic delivery, and
+;; closing or killing it resumes delivery and releases a turn parked at the
+;; pending-input boundary; queue edits retain the selected entry until a
+;; validated replacement is ready.
 
 ;;; Code:
 
@@ -31,6 +33,8 @@
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer
                   "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-context-for-buffer
+                  "mevedel-cockpit" (buffer))
 (declare-function mevedel-cockpit-context-session
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-context-view-buffer
@@ -1355,16 +1359,23 @@ an unrelated remote operation started by redisplay or another package included
   "Close the cockpit and resume eligible automatic delivery."
   (interactive)
   (let* ((context (mevedel-cockpit-surface-context))
-         (session (mevedel-pending-inputs--session context))
+         (view (mevedel-cockpit-context-view-buffer context)))
+    (when (and (buffer-live-p view)
+               (buffer-local-value 'mevedel-view--pending-input-edit view))
+      (user-error "Save or cancel the pending-input edit first"))
+    (mevedel-pending-inputs--resume-delivery context)
+    (mevedel-cockpit-quit "Pending Inputs cockpit")))
+
+(defun mevedel-pending-inputs--resume-delivery (context)
+  "Resume eligible automatic delivery for CONTEXT's session.
+
+Clearing the pause is not enough on its own: a steering entry that
+matched the live request parked its turn at the pending-input boundary,
+and only a transition back to WAIT releases it."
+  (let* ((session (mevedel-pending-inputs--session context))
          (view (mevedel-cockpit-context-view-buffer context))
          (failure-paused
-          (mevedel-session-pending-input-failure-paused session))
-         (editing
-          (and (buffer-live-p view)
-               (buffer-local-value
-                'mevedel-view--pending-input-edit view))))
-    (when editing
-      (user-error "Save or cancel the pending-input edit first"))
+          (mevedel-session-pending-input-failure-paused session)))
     (mevedel-session-set-pending-input-paused session nil)
     (when (buffer-live-p view)
       (with-current-buffer view
@@ -1380,11 +1391,34 @@ an unrelated remote operation started by redisplay or another package included
                   (fsm (and request (mevedel-request-fsm request)))
                   ((plist-get (gptel-fsm-info fsm)
                               :mevedel-pending-input-hold)))
-        (gptel--fsm-transition fsm 'WAIT)))
-    (when (and (not failure-paused) (buffer-live-p view))
-      (with-current-buffer view
-        (mevedel-view--schedule-late-follow-up-drain)))
-    (mevedel-cockpit-quit "Pending Inputs cockpit")))
+        (gptel--fsm-transition fsm 'WAIT))
+      (when (buffer-live-p view)
+        (with-current-buffer view
+          (mevedel-view--schedule-late-follow-up-drain))))))
+
+(defun mevedel-pending-inputs--on-kill-buffer ()
+  "Resume delivery when the cockpit is killed while it still owns a pause.
+
+The pause is stored on the session but owned by this buffer's lifetime.
+A kill cannot refuse the way `mevedel-pending-inputs-quit' does, so the
+entry edit that would have blocked the quit is cancelled instead: its
+text would otherwise sit in the composer, where the drain refuses to
+deliver anything, and the resume would be dead on arrival.  Errors are
+demoted because a signal here would abort the kill and leave a live
+cockpit whose banner and session disagree."
+  (with-demoted-errors "mevedel: pending-input teardown failed: %S"
+    (when-let* ((context (mevedel-cockpit-context-for-buffer (current-buffer)))
+                (session (mevedel-cockpit-context-session context))
+                ((mevedel-session-pending-input-paused session)))
+      (when-let* ((view (mevedel-cockpit-context-view-buffer context))
+                  ((buffer-live-p view))
+                  (edit (buffer-local-value 'mevedel-view--pending-input-edit
+                                            view)))
+        ;; This cockpit is on its way out, so the restored draft returns
+        ;; to the view rather than to a buffer about to die.
+        (mevedel-pending-inputs--return-to-cockpit
+         (plist-put (copy-sequence edit) :cockpit-buffer nil)))
+      (mevedel-pending-inputs--resume-delivery context))))
 
 (defconst mevedel-pending-inputs--surface
   `(:buffer-name ,mevedel-pending-inputs-buffer-name
@@ -1424,7 +1458,8 @@ an unrelated remote operation started by redisplay or another package included
   "Major mode for inspecting and editing pending input."
   (require 'mevedel-cockpit)
   (mevedel-cockpit-setup-tabulated-surface
-   mevedel-pending-inputs--surface))
+   mevedel-pending-inputs--surface)
+  (add-hook 'kill-buffer-hook #'mevedel-pending-inputs--on-kill-buffer nil t))
 
 (defun mevedel-pending-inputs-open (&optional context-or-event)
   "Open the Pending Inputs cockpit for CONTEXT-OR-EVENT."

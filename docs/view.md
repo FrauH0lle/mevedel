@@ -975,8 +975,12 @@ delivery. The cockpit edits one entry in the composer without losing an
 existing draft, reorders entries within their category, converts entries
 between steering and follow-up, marks and deletes selected entries, and clears
 all pending input with `C-c C-q`. Saving an edit updates the entry in place;
-cancelling restores the prior draft. Closing the cockpit resumes eligible
-delivery. Queue and recovery actions recheck session mutation authority before
+cancelling restores the prior draft. Closing or killing the cockpit resumes
+eligible delivery, and a kill cannot refuse the way `q` does, so an open entry
+edit is cancelled -- its suspended draft returns to the composer -- rather than
+a paused turn left parked. Opening any cockpit surface for another session
+releases the surface the previous one held. Queue and recovery actions recheck
+session mutation authority before
 restoring reserved submission context or changing session state, so stale,
 foreign, and quiescing surfaces fail closed.
 

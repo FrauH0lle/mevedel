@@ -47,7 +47,12 @@
            (progn ,@body)
          (when-let* ((cockpit
                       (get-buffer mevedel-pending-inputs-buffer-name)))
-           (kill-buffer cockpit))))))
+           ;; Killing the cockpit resumes delivery, and a real drain
+           ;; would leave a timer behind after the case has ended.
+           (cl-letf (((symbol-function
+                       'mevedel-view--schedule-late-follow-up-drain)
+                      #'ignore))
+             (kill-buffer cockpit)))))))
 
 (defun mevedel-pending-inputs-test--replace-composer (view text)
   "Replace VIEW's editable composer with TEXT."
@@ -367,6 +372,164 @@
                     (car
                      (mevedel-session-pending-follow-ups session))))
         (should (eq cockpit (window-buffer (selected-window))))))))
+
+(mevedel-deftest mevedel-pending-inputs--on-kill-buffer ()
+  ,test
+  (test)
+  :doc "killing the cockpit resumes delivery instead of stranding it"
+  ;; The pause lives on the session while the cockpit buffer owns it, so
+  ;; `C-x k' instead of `q' left delivery paused on a live session with
+  ;; no visible way back: reopening refuses on an empty queue.
+  (mevedel-pending-inputs-test--with-session
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up '(:input "later"))
+    (let (scheduled)
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (cl-letf (((symbol-function
+                      'mevedel-view--schedule-late-follow-up-drain)
+                     (lambda () (setq scheduled t))))
+            (kill-buffer cockpit))))
+      (should scheduled)
+      (should-not (mevedel-session-pending-input-paused session))))
+
+  :doc "killing the cockpit releases a WAIT held at the boundary"
+  (mevedel-pending-inputs-test--with-session
+    (let* ((fsm
+            (gptel-make-fsm
+             :state 'WAIT
+             :info '(:mevedel-pending-input-hold t)))
+           (request
+            (mevedel-request--create
+             :id "held-request" :session session :fsm fsm))
+           transition)
+      (mevedel-session-enqueue-pending-input
+       session 'steering
+       '(:input "held" :request-id "held-request"))
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request request))
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (cl-letf (((symbol-function 'gptel--fsm-transition)
+                     (lambda (_fsm state) (setq transition state)))
+                    ((symbol-function
+                      'mevedel-view--schedule-late-follow-up-drain)
+                     #'ignore))
+            (kill-buffer cockpit))))
+      (should (eq transition 'WAIT))
+      (should-not (mevedel-session-pending-input-paused session))))
+
+  :doc "killing during an entry edit restores the draft it suspended"
+  ;; The resume would be dead on arrival otherwise: the entry's text sits
+  ;; in the composer, and the drain refuses to deliver while it is there.
+  (mevedel-pending-inputs-test--with-session
+    (let ((entry (mevedel-session-enqueue-pending-input
+                  session 'follow-up '(:input "queued")))
+          scheduled)
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert "> draft"))
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (with-current-buffer cockpit
+            (mevedel-cockpit-goto-id (plist-get entry :id))
+            (mevedel-pending-inputs-edit))
+          (should (buffer-local-value 'mevedel-view--pending-input-edit
+                                      view-buf))
+          (cl-letf (((symbol-function
+                      'mevedel-view--schedule-late-follow-up-drain)
+                     (lambda () (setq scheduled t))))
+            (kill-buffer cockpit))))
+      (should scheduled)
+      (should-not (buffer-local-value 'mevedel-view--pending-input-edit
+                                      view-buf))
+      (with-current-buffer view-buf
+        (should (equal "> draft" (mevedel-view--input-text))))
+      (should-not (mevedel-session-pending-input-paused session))))
+
+  :doc "a failure pause survives the kill and delivers nothing"
+  (mevedel-pending-inputs-test--with-session
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up '(:input "later"))
+    (mevedel-session-set-pending-input-failure-paused session t)
+    (let (scheduled)
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (cl-letf (((symbol-function
+                      'mevedel-view--schedule-late-follow-up-drain)
+                     (lambda () (setq scheduled t))))
+            (kill-buffer cockpit))))
+      (should-not scheduled)
+      (should (mevedel-session-pending-input-failure-paused session))
+      (should-not (mevedel-session-pending-input-paused session))))
+
+  :doc "reopening for the same session keeps its pause and delivers nothing"
+  (mevedel-pending-inputs-test--with-session
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up '(:input "later"))
+    (let (scheduled)
+      (save-window-excursion
+        (cl-letf (((symbol-function
+                    'mevedel-view--schedule-late-follow-up-drain)
+                   (lambda () (setq scheduled t))))
+          (with-current-buffer view-buf
+            (mevedel-pending-inputs-open))
+          ;; Reopening is an inspection, not a release.
+          (with-current-buffer view-buf
+            (mevedel-pending-inputs-open))))
+      (should-not scheduled)
+      (should (mevedel-session-pending-input-paused session))))
+
+  :doc "opening the cockpit for another session releases the one it held"
+  ;; The buffer name is a constant, so the second session used to take
+  ;; the first session's cockpit and its pause with it.
+  (mevedel-pending-inputs-test--with-session
+    (let ((first-session session))
+      (mevedel-session-enqueue-pending-input
+       first-session 'follow-up '(:input "later"))
+      (cl-letf (((symbol-function
+                  'mevedel-view--schedule-late-follow-up-drain)
+                 #'ignore))
+        (save-window-excursion
+          (with-current-buffer view-buf
+            (mevedel-pending-inputs-open))
+          (should (mevedel-session-pending-input-paused first-session))
+          (mevedel-pending-inputs-test--with-session
+            (mevedel-session-enqueue-pending-input
+             session 'follow-up '(:input "other"))
+            (with-current-buffer view-buf
+              (mevedel-pending-inputs-open))
+            (should (mevedel-session-pending-input-paused session))
+            (should-not
+             (mevedel-session-pending-input-paused first-session)))))))
+
+  :doc "a normal close leaves nothing for the kill hook to resume"
+  (mevedel-pending-inputs-test--with-session
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up '(:input "later"))
+    (let ((drains 0))
+      (save-window-excursion
+        (let ((cockpit
+               (with-current-buffer view-buf
+                 (mevedel-pending-inputs-open))))
+          (cl-letf (((symbol-function
+                      'mevedel-view--schedule-late-follow-up-drain)
+                     (lambda () (cl-incf drains)))
+                    ((symbol-function 'mevedel-cockpit-quit) #'ignore))
+            (with-current-buffer cockpit
+              (mevedel-pending-inputs-quit))
+            (when (buffer-live-p cockpit)
+              (kill-buffer cockpit)))))
+      ;; Once, for the quit.  The hook must not fire again on the kill.
+      (should (= 1 drains)))))
 
 (mevedel-deftest mevedel-pending-inputs-quit ()
   ,test

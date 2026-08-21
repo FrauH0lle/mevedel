@@ -149,6 +149,40 @@
                         #'ignore))))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer)))
 
+  :doc "opening for another session releases the surface the first owns"
+  ;; The buffer name is a constant, so reuse used to overwrite the
+  ;; context -- and with it the only handle on whatever the surface still
+  ;; owed the previous session.
+  (let ((first-view (generate-new-buffer " *cockpit-reuse-view-1*"))
+        (first-data (generate-new-buffer " *cockpit-reuse-data-1*"))
+        (second-view (generate-new-buffer " *cockpit-reuse-view-2*"))
+        (second-data (generate-new-buffer " *cockpit-reuse-data-2*"))
+        (workspace (mevedel-cockpit-test--workspace)))
+    (unwind-protect
+        (let* ((first-session (mevedel-session-create "first" workspace))
+               (second-session (mevedel-session-create "second" workspace))
+               (first-buffer
+                (mevedel-cockpit-open-surface
+                 (mevedel-cockpit-test--surface)
+                 (mevedel-cockpit-test--context
+                  first-view first-data first-view first-session)))
+               (second-buffer
+                (mevedel-cockpit-open-surface
+                 (mevedel-cockpit-test--surface)
+                 (mevedel-cockpit-test--context
+                  second-view second-data second-view second-session))))
+          (should-not (buffer-live-p first-buffer))
+          (should (buffer-live-p second-buffer))
+          ;; Reopening for the same session reuses its own buffer.
+          (should (eq second-buffer
+                      (mevedel-cockpit-open-surface
+                       (mevedel-cockpit-test--surface)
+                       (mevedel-cockpit-test--context
+                        second-view second-data second-view
+                        second-session)))))
+      (mevedel-cockpit-test--cleanup first-view first-data)
+      (mevedel-cockpit-test--cleanup second-view second-data)))
+
   :doc "rejects dead owners before opening"
   (let ((view-buffer (generate-new-buffer " *cockpit-dead-open-view*"))
         (data-buffer (generate-new-buffer " *cockpit-dead-open-data*")))
