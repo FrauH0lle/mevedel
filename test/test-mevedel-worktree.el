@@ -168,7 +168,7 @@
   (let ((view-buffer (or view-buffer data-buffer)))
     (with-current-buffer data-buffer
       (setq-local mevedel--view-buffer view-buffer)
-      (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+      (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
                  (lambda (&optional _context) status))
                 ((symbol-function 'mevedel-worktree-list--sessions)
                  (lambda (_workspace path)
@@ -603,7 +603,7 @@
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
 
-(mevedel-deftest mevedel-worktree--validate-branch-name ()
+(mevedel-deftest mevedel-worktree-validate-branch-name ()
   ,test
   (test)
 
@@ -619,7 +619,7 @@
                       "git: command not found" 127))))
           (let ((err
                  (should-error
-                  (mevedel-worktree--validate-branch-name
+                  (mevedel-worktree-validate-branch-name
                    "worktree/accepted-plan" root)
                   :type 'user-error)))
             (should (string-match-p "Git is required.*execution target"
@@ -640,7 +640,7 @@
                           "git: 'worktree' is not a git command" 129)
                        (mevedel-worktree-test--git-result "")))))
           (should-error
-           (mevedel-worktree--validate-branch-name
+           (mevedel-worktree-validate-branch-name
             "worktree/accepted-plan" root)
            :type 'user-error)
           (should-not (member '("check-ref-format" "--branch"
@@ -683,7 +683,7 @@
 ;;
 ;;; Status collection
 
-(mevedel-deftest mevedel-worktree--collect-status ()
+(mevedel-deftest mevedel-worktree-collect-status ()
   ,test
   (test)
 
@@ -704,7 +704,7 @@
           (cl-letf (((symbol-function 'mevedel-worktree--git-result)
                      (lambda (_dir &rest args)
                        (mevedel-worktree-test--base-response root args))))
-            (let ((status (mevedel-worktree--collect-status context)))
+            (let ((status (mevedel-worktree-collect-status context)))
               (should (eq (plist-get status :session) session))
               (should (eq (plist-get status :workspace) workspace))
               (should (equal (plist-get status :directory) root)))))
@@ -762,7 +762,7 @@
   (test)
 
   :doc "summarizes a branch checkout"
-  (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+  (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
              (lambda (&optional _context)
                (ert-fail "summary should not collect full status")))
             ((symbol-function 'mevedel-worktree--git-success-output)
@@ -814,7 +814,7 @@
           (progn
             (mevedel-worktree-test--install-context status data-buffer)
             (with-current-buffer data-buffer
-              (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+              (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
                          (lambda (&optional context)
                            (setq called-buffer (current-buffer)
                                  called-context context)
@@ -850,7 +850,7 @@
           (progn
             (mevedel-worktree-test--install-context status data-buffer)
             (with-current-buffer data-buffer
-              (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+              (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
                          (lambda (&optional _context) status)))
                 (let* ((description (substring-no-properties
                                      (mevedel-worktree-status--description)))
@@ -879,7 +879,7 @@
           (progn
             (mevedel-worktree-test--install-context status data-buffer)
             (with-current-buffer data-buffer
-              (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+              (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
                          (lambda (&optional _context) status)))
                 (let ((text (mevedel-worktree-status--details-text)))
                   (should (string-match-p "mevedel worktree" text))
@@ -996,7 +996,7 @@
         (progn
           (mevedel-worktree-test--install-context status data-buffer)
           (with-current-buffer data-buffer
-            (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+            (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
                        (lambda (&optional _context) status)))
               (mevedel-worktree-status-details)))
           (with-current-buffer mevedel-worktree-details-buffer-name
@@ -1077,7 +1077,7 @@
           (setq-local mevedel-cockpit--context
                       (mevedel-worktree-test--context
                        status data-buffer data-buffer data-buffer))
-          (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+          (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
                      (lambda (&optional context)
                        (setq called-buffer (current-buffer))
                        (setq called-context context)
@@ -1293,7 +1293,7 @@
          (view-buffer (generate-new-buffer " *mwt-refresh-view*"))
          (data-buffer (generate-new-buffer " *mwt-refresh-data*")))
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+        (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
                    (lambda (&optional _context) status))
                   ((symbol-function 'mevedel-worktree-list--sessions)
                    (lambda (&rest _) nil)))
@@ -1602,7 +1602,7 @@
           (make-directory path t)
           (with-current-buffer data-buffer
             (setq-local default-directory root))
-          (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+          (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
                      (lambda (&optional _context) status))
                     ((symbol-function 'mevedel-worktree--git-result)
                      (lambda (&rest _)
@@ -2071,7 +2071,7 @@
       (delete-directory root t)
       (mevedel-workspace-clear-registry)))))
 
-(mevedel-deftest mevedel-worktree--session-directory
+(mevedel-deftest mevedel-worktree-session-directory
   (:doc "derives the accepted branch's deterministic workspace path")
   ,test
   (test)
@@ -2089,7 +2089,7 @@
              (equal
               (file-name-as-directory
                (file-name-concat root ".worktrees" "accepted"))
-              (mevedel-worktree--session-directory
+              (mevedel-worktree-session-directory
                "plan/accepted")))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))

@@ -623,7 +623,7 @@
             (setq-local mevedel--session target-session))
           (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
                     ((symbol-function
-                      'mevedel-worktree--session-directory)
+                      'mevedel-worktree-session-directory)
                      (lambda (_) target-directory))
                     ((symbol-function 'mevedel-worktree-create-session)
                      (lambda (branch _purpose _clean recovery)
@@ -759,7 +759,7 @@
               (setq-local mevedel--session target-session))
             (cl-letf
                 (((symbol-function
-                   'mevedel-worktree--session-directory)
+                   'mevedel-worktree-session-directory)
                   (lambda (_) target-directory))
                  ((symbol-function 'mevedel-worktree-create-session)
                   (lambda (branch _purpose _clean recovery)
@@ -897,7 +897,7 @@
                   (list :buffer target-buffer :branch branch
                         :directory target-directory)))
                ((symbol-function
-                 'mevedel-worktree--session-directory)
+                 'mevedel-worktree-session-directory)
                 (lambda (_) target-directory))
                ((symbol-function 'mevedel-session-persistence-restore)
                 (lambda (_path) target-buffer))

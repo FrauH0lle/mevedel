@@ -911,8 +911,8 @@
 ;;
 ;;; View rendering
 
-(mevedel-deftest mevedel-tool-task--refresh-display
-  (:doc "`mevedel-tool-task--refresh-display' renders status-zone fragments")
+(mevedel-deftest mevedel-tool-task-refresh-display
+  (:doc "`mevedel-tool-task-refresh-display' renders status-zone fragments")
   ,test
   (test)
   :doc "inserts read-only task fragment text in the live view buffer"
@@ -1058,7 +1058,7 @@
     (setf (mevedel-session-task-status-notes session)
           '((nil :note "stale note" :updated-turn 1)))
     (with-current-buffer data
-      (mevedel-tool-task--refresh-display))
+      (mevedel-tool-task-refresh-display))
     (with-current-buffer view
       (should-not (string-match-p "tasks" (buffer-string)))
       (should-not (string-match-p "stale note" (buffer-string)))))

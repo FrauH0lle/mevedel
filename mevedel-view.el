@@ -101,12 +101,12 @@
 (declare-function mevedel-tool-display-string "mevedel-tool-registry" (tool-name args))
 
 ;; `mevedel-tool-task'
-(declare-function mevedel-tool-task--display-string
+(declare-function mevedel-tool-task-display-string
                   "mevedel-tool-task" (session show-completed))
-(declare-function mevedel-tool-task--session-has-active-p
+(declare-function mevedel-tool-task-session-has-active-p
                   "mevedel-tool-task" (session))
 (declare-function mevedel-toggle-tasks "mevedel-tool-task" ())
-(defvar mevedel-tool-task--status-keymap)
+(defvar mevedel-tool-task-status-keymap)
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools-active-count "mevedel-tools"
@@ -546,7 +546,7 @@ navigation and activation fallbacks."
      "TAB" #'mevedel-view-toggle-section
      "<return>" #'mevedel-view-activate-at-point
      "RET" #'mevedel-view-activate-at-point)
-   mevedel-tool-task--status-keymap))
+   mevedel-tool-task-status-keymap))
 
 (defun mevedel-surface--enforce-ephemeral (&rest _)
   "Keep the current mevedel surface out of Emacs save machinery."
@@ -1203,7 +1203,7 @@ the editable composer signal instead of settling queued interactions."
 
 (defun mevedel-view--status-task-body (session show-completed)
   "Return propertized status-zone task text for SESSION and SHOW-COMPLETED."
-  (let ((body (mevedel-tool-task--display-string session show-completed)))
+  (let ((body (mevedel-tool-task-display-string session show-completed)))
     (add-text-properties 0 (length body) '(mevedel-tool-task t) body)
     body))
 
@@ -1223,7 +1223,7 @@ the editable composer signal instead of settling queued interactions."
          (show-completed (mevedel-view--status-task-show-completed-p))
          (task-active-p (and session
                              (require 'mevedel-tool-task nil t)
-                             (mevedel-tool-task--session-has-active-p
+                             (mevedel-tool-task-session-has-active-p
                               session)))
          (task-body (and task-active-p
                          (mevedel-view--status-task-body

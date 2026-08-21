@@ -1001,7 +1001,7 @@
                      (lambda (&rest _) '(:status completed)))
                     ((symbol-function 'mevedel-tool-task-finalize-owner)
                      (lambda (&rest _) (push 'tasks calls) t))
-                    ((symbol-function 'mevedel-tool-task--refresh-display)
+                    ((symbol-function 'mevedel-tool-task-refresh-display)
                      (lambda () (push 'task-view calls)))
                     ((symbol-function 'mevedel-agent-conversation-refresh)
                      (lambda (&rest _) (push 'handle calls)))

@@ -311,7 +311,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
                           "/topic.md"))
                  (attempt (mevedel-resource-prepare
                            'glob address (list :session session)))
-                 (mevedel-resource--current-attempts
+                 (mevedel-resource-current-attempts
                   (list (cons address attempt)))
                  (mevedel--session session))
             (cl-letf (((symbol-function 'mevedel-execution-start-helper)

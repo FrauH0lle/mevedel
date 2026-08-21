@@ -950,7 +950,7 @@
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       ;; Status/task redraw coverage for this composer shape lives in
-      ;; `mevedel-tool-task--refresh-display'; this case fills the
+      ;; `mevedel-tool-task-refresh-display'; this case fills the
       ;; interaction-zone redraw gap before the fragment migration.
       (let* ((draft "> first line\nsecond line")
              (point-offset (length "> first"))

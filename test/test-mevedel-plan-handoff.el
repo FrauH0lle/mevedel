@@ -449,7 +449,7 @@
           (with-current-buffer target-buffer
             (setq-local mevedel--session target-session))
           (cl-letf (((symbol-function
-                      'mevedel-worktree--session-directory)
+                      'mevedel-worktree-session-directory)
                      (lambda (_) "/tmp/target"))
                     ((symbol-function 'mevedel-worktree-create-session)
                      (lambda (branch _purpose clean-arg recovery)

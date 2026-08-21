@@ -202,7 +202,7 @@ Returns (buffer . overlay)."
   (test)
   (let ((text (copy-sequence "@file:a.txt x@file:b.txt")))
     (mevedel-mentions--bind-user-input-matches
-     text mevedel-mentions--file-regexp 'file
+     text mevedel-mention-bindings-file-regexp 'file
      (lambda (captures)
        (list :path (expand-file-name (car captures) "/tmp"))))
     (should
@@ -1899,7 +1899,7 @@ Returns (buffer . overlay)."
      (gethash '(asset . "/tmp/asset.png")
               (mevedel-session-mentions-shown session)))))
 
-(mevedel-deftest mevedel-mentions--commit-expansion ()
+(mevedel-deftest mevedel-mentions-commit-expansion ()
   ,test
   (test)
   :doc "records accepted expansion hashes at the current session turn"
@@ -1908,7 +1908,7 @@ Returns (buffer . overlay)."
                      :name "commit-expansion"))
          (session (mevedel-session-create "main" workspace))
          (key (cons 'ref "uuid")))
-    (mevedel-mentions--commit-expansion
+    (mevedel-mentions-commit-expansion
      session (list :dedup-updates (list (cons key "hash"))))
     (should (equal (cons (mevedel-session-turn-count session) "hash")
                    (gethash key (mevedel-session-mentions-shown session))))))
