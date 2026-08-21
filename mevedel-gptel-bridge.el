@@ -115,25 +115,42 @@
 
 (defun mevedel-gptel-bridge--schedule-return-to-view
     (view-buffer data-buffer)
-  "Schedule restoration of VIEW-BUFFER after gptel transient exit."
+  "Schedule restoration of VIEW-BUFFER, paired with DATA-BUFFER.
+
+VIEW-BUFFER is restored after the gptel transient exits.  Only one
+restoration is pending at a time, so scheduling a different view also
+restores whichever view is pending already: its own exit hook will never
+run once this state replaces it."
   (when (and view-buffer data-buffer
              (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
-    (unless (and (eq mevedel-gptel-bridge--return-view-buffer view-buffer)
-                 (eq mevedel-gptel-bridge--return-data-buffer data-buffer)
-                 (window-live-p mevedel-gptel-bridge--return-window))
-      (setq mevedel-gptel-bridge--return-view-buffer view-buffer
-            mevedel-gptel-bridge--return-data-buffer data-buffer
-            mevedel-gptel-bridge--return-window
-            (mevedel-gptel-bridge--launch-window view-buffer)
-            mevedel-gptel-bridge--return-window-snapshot
-            (mevedel-gptel-bridge--window-snapshot)))
+    (let ((same-pair (and (eq mevedel-gptel-bridge--return-view-buffer
+                              view-buffer)
+                          (eq mevedel-gptel-bridge--return-data-buffer
+                              data-buffer))))
+      (unless (and same-pair
+                   (window-live-p mevedel-gptel-bridge--return-window))
+        ;; The launch window has to be resolved before the pending view is
+        ;; handed its windows back, because restoring reselects the window
+        ;; that view was launched from.
+        (let ((window (mevedel-gptel-bridge--launch-window view-buffer)))
+          (unless same-pair
+            (mevedel-gptel-bridge--restore-window-buffers))
+          (setq mevedel-gptel-bridge--return-view-buffer view-buffer
+                mevedel-gptel-bridge--return-data-buffer data-buffer
+                mevedel-gptel-bridge--return-window window
+                mevedel-gptel-bridge--return-window-snapshot
+                (mevedel-gptel-bridge--window-snapshot)))))
     (add-hook 'transient-post-exit-hook
               #'mevedel-gptel-bridge--return-to-view)))
 
 (defun mevedel-gptel-bridge--edit-directive-args (args)
   "Return ARGS with a bridge-restoring `:callback' wrapper when needed."
-  (if (not mevedel-gptel-bridge--return-view-buffer)
+  (if (not (memq (current-buffer)
+                 (list mevedel-gptel-bridge--return-view-buffer
+                       mevedel-gptel-bridge--return-data-buffer)))
+      ;; The pending restoration belongs to another view, or to none: its
+      ;; data buffer is not where this edit's settings belong.
       args
     (let* ((leading (and args (not (keywordp (car args)))))
            (sym (and leading (car args)))
