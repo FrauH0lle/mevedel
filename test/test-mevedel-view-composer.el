@@ -227,7 +227,7 @@
                 "ORIGINAL ALPHA BODY"))
               ('disabled
                (with-current-buffer data-buf
-                 (mevedel-skills--set-enabled
+                 (mevedel-skills-set-enabled
                   (mevedel-session-get-skill session "alpha") nil))))
             (mevedel-view-test--write-skill
              user-skills "alpha"

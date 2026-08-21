@@ -25,8 +25,8 @@
   (dolist (symbol '(mevedel-skills-scan
                     mevedel-skills-project-files
                     mevedel-skills-install
-                    mevedel-skills--ensure-fresh
-                    mevedel-skills--maybe-activate))
+                    mevedel-skills-ensure-fresh
+                    mevedel-skills-maybe-activate))
     (should (equal "mevedel-skills-core"
                    (file-name-base (or (symbol-file symbol 'defun) ""))))))
 
@@ -1263,7 +1263,7 @@ description: Review changed code
 ;;
 ;;; Persisted enablement
 
-(mevedel-deftest mevedel-skills--source-key ()
+(mevedel-deftest mevedel-skills-source-key ()
   ,test
   (test)
   :doc "canonicalizes alternate paths to the same source identity"
@@ -1274,9 +1274,9 @@ description: Review changed code
         (progn
           (with-temp-file source)
           (make-symbolic-link source alias)
-          (should (equal (mevedel-skills--source-key source)
-                         (mevedel-skills--source-key alias)))
-          (should-not (mevedel-skills--source-key nil)))
+          (should (equal (mevedel-skills-source-key source)
+                         (mevedel-skills-source-key alias)))
+          (should-not (mevedel-skills-source-key nil)))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-skills--write-state
@@ -1293,23 +1293,23 @@ description: Review changed code
   (let ((first (mevedel-skills-test--stateful-skill :name "one"))
         (second (mevedel-skills-test--stateful-skill :name "two"))
         (real (symbol-function 'write-region)))
-    (mevedel-skills--set-enabled first nil)
-    (should-not (mevedel-skills--skill-enabled-p first))
+    (mevedel-skills-set-enabled first nil)
+    (should-not (mevedel-skills-skill-enabled-p first))
     (cl-letf (((symbol-function 'write-region)
                (lambda (_start _end filename &rest _)
                  (funcall real "" nil filename nil 'silent)
                  (error "Disk full"))))
-      (should-error (mevedel-skills--set-enabled second nil)))
-    (should-not (mevedel-skills--skill-enabled-p first)))
+      (should-error (mevedel-skills-set-enabled second nil)))
+    (should-not (mevedel-skills-skill-enabled-p first)))
 
   :doc "a completed write leaves no staging file beside the state"
   (let ((skill (mevedel-skills-test--stateful-skill :name "one")))
-    (mevedel-skills--set-enabled skill nil)
+    (mevedel-skills-set-enabled skill nil)
     (should (equal '("skills-state.el")
                    (directory-files mevedel-user-dir nil
                                     directory-files-no-dot-files-regexp)))))
 
-(mevedel-deftest mevedel-skills--set-enabled
+(mevedel-deftest mevedel-skills-set-enabled
   (:vars* ((user-dir (make-temp-file "mevedel-skills-state-" t))
            (mevedel-user-dir (file-name-as-directory user-dir)))
    :after-each (delete-directory user-dir t))
@@ -1318,14 +1318,14 @@ description: Review changed code
 
   :doc "disable and enable persist file-backed skill state"
   (let ((skill (mevedel-skills-test--stateful-skill :name "visible")))
-    (mevedel-skills--set-enabled skill nil)
-    (should-not (mevedel-skills--skill-enabled-p skill))
-    (mevedel-skills--set-enabled skill t)
-    (should (mevedel-skills--skill-enabled-p skill)))
+    (mevedel-skills-set-enabled skill nil)
+    (should-not (mevedel-skills-skill-enabled-p skill))
+    (mevedel-skills-set-enabled skill t)
+    (should (mevedel-skills-skill-enabled-p skill)))
 
   :doc "disable rejects skills without a stable source file"
   (should-error
-   (mevedel-skills--set-enabled
+   (mevedel-skills-set-enabled
     (mevedel-skill--create :name "inline") nil)
    :type 'user-error)
 
@@ -1343,10 +1343,10 @@ description: Review changed code
                  :name "shared" :source-file other-file)))
     (unwind-protect
         (progn
-          (mevedel-skills--set-enabled skill nil)
+          (mevedel-skills-set-enabled skill nil)
           (should (mevedel-skills--disabled-keys))
-          (should-not (mevedel-skills--skill-enabled-p renamed))
-          (should (mevedel-skills--skill-enabled-p other)))
+          (should-not (mevedel-skills-skill-enabled-p renamed))
+          (should (mevedel-skills-skill-enabled-p other)))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-skills--read-state
@@ -1483,7 +1483,7 @@ paths:
           (let ((skill (mevedel-session-get-skill session "alpha")))
             (should skill)
             (should-not (mevedel-skill-active-p skill)))
-          (mevedel-skills--maybe-activate session "src/foo.el")
+          (mevedel-skills-maybe-activate session "src/foo.el")
           (should (mevedel-skill-active-p
                    (mevedel-session-get-skill session "alpha")))
           (mevedel-skills-test--write-skill
@@ -1732,7 +1732,7 @@ paths:
   (should-not (mevedel-skills--path-matches-p "foo.el" nil))
   (should-not (mevedel-skills--path-matches-p nil '("*.el"))))
 
-(mevedel-deftest mevedel-skills--maybe-activate ()
+(mevedel-deftest mevedel-skills-maybe-activate ()
   ,test
   (test)
   :doc "flips dormant skills whose patterns match path"
@@ -1748,13 +1748,13 @@ paths:
                   :name "python" :path-patterns '("*.py") :active-p nil))
          (always (mevedel-skill--create :name "always" :active-p t)))
     (setf (mevedel-session-skills session) (list elisp python always))
-    (let ((activated (mevedel-skills--maybe-activate session "src/foo.el")))
+    (let ((activated (mevedel-skills-maybe-activate session "src/foo.el")))
       (should (equal '("elisp")
                      (mapcar #'mevedel-skill-name activated))))
     (should (mevedel-skill-active-p elisp))
     (should-not (mevedel-skill-active-p python))
     ;; Second call on the same path no-ops.
-    (should (null (mevedel-skills--maybe-activate session "src/bar.el")))))
+    (should (null (mevedel-skills-maybe-activate session "src/bar.el")))))
 
 
 
@@ -1820,7 +1820,7 @@ paths:
       (when (buffer-live-p child-buf) (kill-buffer child-buf))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-skills--ensure-fresh
+(mevedel-deftest mevedel-skills-ensure-fresh
   (:before-each (mevedel-skills-test--reset-watchers)
    :after-each (mevedel-skills-test--reset-watchers))
   ,test
@@ -1846,7 +1846,7 @@ paths:
           (mevedel-skills-test--write-skill
            root "beta" "name: beta\ndescription: B\n")
           (mevedel-skills--mark-buffer-dirty buf)
-          (mevedel-skills--ensure-fresh buf session)
+          (mevedel-skills-ensure-fresh buf session)
           (should (= 2 (length (mevedel-session-skills session))))
           (should-not (gethash buf mevedel-skills--dirty-buffers))
           (should (cl-find "beta" (mevedel-session-skills session)
@@ -1929,7 +1929,7 @@ paths:
           (mevedel-skills--stat-recheck session-a buf-a)
           (should (gethash buf-a mevedel-skills--dirty-buffers))
           ;; Rescanning A refreshes only A's stat baseline.
-          (mevedel-skills--ensure-fresh buf-a session-a)
+          (mevedel-skills-ensure-fresh buf-a session-a)
           (should-not (gethash buf-a mevedel-skills--dirty-buffers))
           ;; B still has its own older baseline and must become dirty.
           (mevedel-skills--stat-recheck session-b buf-b)

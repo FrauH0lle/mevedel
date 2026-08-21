@@ -211,7 +211,7 @@ skills."
   "Return persisted disabled stable skill keys."
   (plist-get (mevedel-skills--read-state) :disabled-keys))
 
-(defun mevedel-skills--source-key (source-file)
+(defun mevedel-skills-source-key (source-file)
   "Return the stable identity key for SOURCE-FILE."
   (when source-file
     (concat "file:" (or (ignore-errors (file-truename source-file))
@@ -220,9 +220,9 @@ skills."
 (defun mevedel-skills--state-key (skill)
   "Return stable persisted state key for SKILL."
   (and (mevedel-skill-p skill)
-       (mevedel-skills--source-key (mevedel-skill-source-file skill))))
+       (mevedel-skills-source-key (mevedel-skill-source-file skill))))
 
-(defun mevedel-skills--set-enabled (skill enabled)
+(defun mevedel-skills-set-enabled (skill enabled)
   "Persist file-backed SKILL as enabled or disabled according to ENABLED."
   (unless (mevedel-skill-p skill)
     (user-error "Loaded skill is required"))
@@ -240,7 +240,7 @@ skills."
             (sort (delete-dups disabled-keys) #'string<))
       (mevedel-skills--write-state state))))
 
-(defun mevedel-skills--skill-enabled-p (skill)
+(defun mevedel-skills-skill-enabled-p (skill)
   "Return non-nil when SKILL is not user-disabled."
   (let ((key (mevedel-skills--state-key skill)))
     (not (and key (member key (mevedel-skills--disabled-keys))))))
@@ -872,7 +872,7 @@ are refreshed to match the freshly scanned skill set."
 When called inside a chat buffer, run a hot-reload pull-check first so
 external skill changes are picked up before lookup."
   (when (buffer-live-p (current-buffer))
-    (mevedel-skills--ensure-fresh (current-buffer) session))
+    (mevedel-skills-ensure-fresh (current-buffer) session))
   (cl-find name (mevedel-session-skills session)
            :key #'mevedel-skill-name :test #'equal))
 
@@ -880,8 +880,8 @@ external skill changes are picked up before lookup."
   "Return SESSION skill discovered from exact SOURCE-FILE, or nil.
 No name fallback is attempted."
   (when (buffer-live-p (current-buffer))
-    (mevedel-skills--ensure-fresh (current-buffer) session))
-  (when-let* ((key (mevedel-skills--source-key source-file)))
+    (mevedel-skills-ensure-fresh (current-buffer) session))
+  (when-let* ((key (mevedel-skills-source-key source-file)))
     (cl-find key (mevedel-session-skills session)
              :key #'mevedel-skills--state-key :test #'equal)))
 
@@ -1307,7 +1307,7 @@ does not mask a pending change from another live session."
 
 ;;;; Pull-check
 
-(defun mevedel-skills--ensure-fresh (buffer session)
+(defun mevedel-skills-ensure-fresh (buffer session)
   "Rescan SESSION's skills if BUFFER is marked dirty.
 Optional `stat-when-checking' strategy first stats every known skill
 file and may flip the dirty flag.  When the flag is set, calls
@@ -1384,7 +1384,7 @@ filesystems where `file-notify' is silently unreliable, or when
     (unless session
       (user-error "No mevedel session in this buffer"))
     (mevedel-skills--mark-buffer-dirty (current-buffer))
-    (mevedel-skills--ensure-fresh (current-buffer) session)
+    (mevedel-skills-ensure-fresh (current-buffer) session)
     (message "Rescanned %d skills"
              (length (mevedel-session-skills session)))))
 
@@ -1405,7 +1405,7 @@ Uses `wildcard-to-regexp' for glob translation."
        (cl-some (lambda (pat) (mevedel-skills--glob-matches-p pat path))
                 patterns)))
 
-(defun mevedel-skills--maybe-activate (session path)
+(defun mevedel-skills-maybe-activate (session path)
   "Activate dormant SESSION skills whose path-patterns match PATH.
 
 Idempotent: already-active skills are left alone.  Returns the list of
@@ -1413,7 +1413,7 @@ skills newly activated by this call."
   (let (activated)
     (dolist (skill (mevedel-session-skills session))
       (when (and (not (mevedel-skill-active-p skill))
-                 (mevedel-skills--skill-enabled-p skill)
+                 (mevedel-skills-skill-enabled-p skill)
                  (mevedel-skill-path-patterns skill)
                  (mevedel-skills--path-matches-p
                   path (mevedel-skill-path-patterns skill)))

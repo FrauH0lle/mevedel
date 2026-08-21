@@ -75,8 +75,8 @@ per-test directory rather than the shared synthetic helper path."
                     mevedel-skills--dispatch-slash-command
                     mevedel-skills--fontify-dollar-keyword
                     mevedel-skills--gptel-send-advice
-                    mevedel-skills--parse-slash-line
-                    mevedel-skills--slash-capf
+                    mevedel-skills-parse-slash-line
+                    mevedel-skills-slash-capf
                     mevedel-skills-count-label
                     mevedel-skills-local-command-active-request-p
                     mevedel-skills-install-font-lock
@@ -118,27 +118,27 @@ per-test directory rather than the shared synthetic helper path."
   "Return candidates from CAPF for PREFIX."
   (all-completions (or prefix "") (nth 2 capf)))
 
-(mevedel-deftest mevedel-skills--parse-slash-line ()
+(mevedel-deftest mevedel-skills-parse-slash-line ()
   ,test
   (test)
   :doc "plain `/command' parses to (name \"\" 0)"
   (should (equal '("help" "" 0)
-                 (mevedel-skills--parse-slash-line "/help")))
+                 (mevedel-skills-parse-slash-line "/help")))
 
   :doc "`/command args' parses to (name args 0)"
   (should (equal '("model" "gpt-4" 0)
-                 (mevedel-skills--parse-slash-line "/model gpt-4")))
+                 (mevedel-skills-parse-slash-line "/model gpt-4")))
 
   :doc "colon-qualified names parse as commands"
   (should (equal '("superpowers:brainstorming" "now" 0)
-                 (mevedel-skills--parse-slash-line
+                 (mevedel-skills-parse-slash-line
                   "/superpowers:brainstorming now")))
 
   :doc "additional lines after the command are appended to ARGS"
   (should (equal '("delegate"
                    "Launch three explorer agents:\n  (a) ...\n  (b) ..."
                    0)
-                 (mevedel-skills--parse-slash-line
+                 (mevedel-skills-parse-slash-line
                   "/delegate Launch three explorer agents:
   (a) ...
   (b) ...")))
@@ -147,25 +147,25 @@ per-test directory rather than the shared synthetic helper path."
   (should (equal '("delegate"
                    "Multi-line task body\nspanning lines"
                    0)
-                 (mevedel-skills--parse-slash-line
+                 (mevedel-skills-parse-slash-line
                   "/delegate
 Multi-line task body
 spanning lines")))
 
   :doc "text not starting with `/' returns nil"
-  (should (null (mevedel-skills--parse-slash-line "hello /help")))
+  (should (null (mevedel-skills-parse-slash-line "hello /help")))
 
   :doc "non-identifier command names are rejected"
-  (should (null (mevedel-skills--parse-slash-line "/hi!")))
-  (should (null (mevedel-skills--parse-slash-line "/")))
+  (should (null (mevedel-skills-parse-slash-line "/hi!")))
+  (should (null (mevedel-skills-parse-slash-line "/")))
 
   :doc "leading whitespace is reported via offset"
   (should (equal '("help" "" 3)
-                 (mevedel-skills--parse-slash-line "   /help")))
+                 (mevedel-skills-parse-slash-line "   /help")))
 
   :doc "leading newlines count toward the offset"
   (should (equal '("help" "" 3)
-                 (mevedel-skills--parse-slash-line "\n\n\n/help"))))
+                 (mevedel-skills-parse-slash-line "\n\n\n/help"))))
 
 (mevedel-deftest mevedel-skills--fontify-dollar-keyword ()
   ,test
@@ -186,7 +186,43 @@ spanning lines")))
                                (buffer-substring-no-properties
                                 (- (match-beginning 0) 4)
                                 (match-beginning 0))))
-      (should-not (mevedel-skills--fontify-dollar-keyword (point-max))))))
+      (should-not (mevedel-skills--fontify-dollar-keyword (point-max)))))
+
+  :doc "an installed origin bounds the scan to the draft"
+  ;; The matcher runs on every refontification.  Without the bound it
+  ;; extracted and scanned the whole transcript prefix per keystroke --
+  ;; measured in the hundreds of milliseconds on a long session.
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create :name "alpha" :body "A")))
+    (setf (mevedel-session-skills session) (list skill))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (insert (make-string 5000 ?x) "\n$alpha history\n")
+      (let ((draft-start (point))
+            scanned)
+        (insert "> draft $alpha here")
+        (setq-local mevedel-skills--font-lock-origin
+                    (lambda () draft-start))
+        (cl-letf* ((real (symbol-function
+                          'mevedel-skills-input-scan-tokens))
+                   ((symbol-function 'mevedel-skills-input-scan-tokens)
+                    (lambda (text &rest args)
+                      (push (length text) scanned)
+                      (apply real text args))))
+          (goto-char draft-start)
+          ;; The draft token still matches.
+          (should (mevedel-skills--fontify-dollar-keyword (point-max)))
+          (should (equal "$alpha" (match-string-no-properties 0)))
+          (should (> (match-beginning 0) draft-start))
+          ;; The transcript was never extracted.
+          (should scanned)
+          (dolist (length scanned)
+            (should (<= length (- (point-max) draft-start))))
+          ;; A token before the origin is deliberately left alone.
+          (goto-char (point-min))
+          (setq scanned nil)
+          (should (mevedel-skills--fontify-dollar-keyword (point-max)))
+          (should (>= (match-beginning 0) draft-start)))))))
 
 (mevedel-deftest mevedel-skills--dispatch-slash-command ()
   ,test
@@ -348,7 +384,7 @@ spanning lines")))
               (goto-char (point-max))
               (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
-              (should-not (mevedel-skills--skill-enabled-p skill))
+              (should-not (mevedel-skills-skill-enabled-p skill))
               (should (equal "### " (buffer-string))))))
       (delete-directory user-dir t)))
 
@@ -861,7 +897,7 @@ spanning lines")))
          (enabled (mevedel-skill--create :name "enabled"))
          (disabled (mevedel-skills-test--stateful-skill :name "disabled")))
     (setf (mevedel-session-skills session) (list enabled disabled))
-    (mevedel-skills--set-enabled disabled nil)
+    (mevedel-skills-set-enabled disabled nil)
     (should (equal "1/2" (mevedel-skills-count-label session))))
 
   :doc "returns 0/0 without a session"
@@ -890,7 +926,7 @@ spanning lines")))
         (progn
           (setf (mevedel-session-skills session)
                 (list active disabled plugin))
-          (mevedel-skills--set-enabled disabled nil)
+          (mevedel-skills-set-enabled disabled nil)
           (let ((buffer (mevedel-skills-test--open-list
                          session view-buffer data-buffer)))
             (with-current-buffer buffer
@@ -967,7 +1003,7 @@ spanning lines")))
           (should (equal (substring-no-properties
                           (mevedel-skills-list--status-cell skill))
                          "enabled"))
-          (mevedel-skills--set-enabled skill nil)
+          (mevedel-skills-set-enabled skill nil)
           (should (equal (substring-no-properties
                           (mevedel-skills-list--status-cell skill))
                          "disabled")))
@@ -985,7 +1021,7 @@ spanning lines")))
                  :source 'plugin))
          (entry (unwind-protect
                     (progn
-                      (mevedel-skills--set-enabled skill nil)
+                      (mevedel-skills-set-enabled skill nil)
                       (mevedel-skills-list--entry skill))
                   (delete-directory user-dir t))))
     (should (equal (car entry) "visible"))
@@ -1043,7 +1079,7 @@ spanning lines")))
     (unwind-protect
         (with-temp-buffer
           (mevedel-skills-list-mode)
-          (mevedel-skills--set-enabled disabled nil)
+          (mevedel-skills-set-enabled disabled nil)
           (let ((line (mevedel-skills-list--header-line
                        (list enabled disabled)
                        nil)))
@@ -1108,7 +1144,7 @@ spanning lines")))
                          (lambda (fmt &rest args)
                            (setq message-text (apply #'format fmt args)))))
                 (mevedel-skills-list-toggle-enabled)
-                (should-not (mevedel-skills--skill-enabled-p skill))
+                (should-not (mevedel-skills-skill-enabled-p skill))
                 (should (eq refreshed-buffer view-buffer))
                 (should (equal (cdr (assoc
                                      "visible"
@@ -1116,7 +1152,7 @@ spanning lines")))
                                '("disabled" "visible" "project" "")))
                 (should (string-match-p "disabled" message-text))
                 (mevedel-skills-list-toggle-enabled)
-                (should (mevedel-skills--skill-enabled-p skill))
+                (should (mevedel-skills-skill-enabled-p skill))
                 (should (string-match-p "enabled" message-text))))))
       (mevedel-skills-test--cleanup-list view-buffer data-buffer)
       (delete-directory user-dir t))))
@@ -1964,7 +2000,7 @@ spanning lines")))
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list visible hidden))
-          (mevedel-skills--set-enabled hidden nil)
+          (mevedel-skills-set-enabled hidden nil)
           (mevedel-skills-test--with-chat-buffer session
             (let ((mevedel-slash-commands nil))
               (insert "### $")
@@ -2079,7 +2115,7 @@ spanning lines")))
   (let ((skill (mevedel-skill--create :name "x")))
     (should (null (mevedel-skills--progressive-argument-hint skill)))))
 
-(mevedel-deftest mevedel-skills--remaining-argument-hint ()
+(mevedel-deftest mevedel-skills-remaining-argument-hint ()
   ,test
   (test)
   :doc "argument-hint appears until arguments are typed"
@@ -2087,10 +2123,10 @@ spanning lines")))
                 :name "x"
                 :argument-hint "What should be reviewed?")))
     (should (equal "What should be reviewed?"
-                   (mevedel-skills--remaining-argument-hint skill "")))
+                   (mevedel-skills-remaining-argument-hint skill "")))
     (should (equal "What should be reviewed?"
-                   (mevedel-skills--remaining-argument-hint skill nil)))
-    (should (null (mevedel-skills--remaining-argument-hint
+                   (mevedel-skills-remaining-argument-hint skill nil)))
+    (should (null (mevedel-skills-remaining-argument-hint
                    skill "current changes"))))
 
   :doc "argument names display only remaining slots"
@@ -2098,14 +2134,14 @@ spanning lines")))
                 :name "x"
                 :argument-names '("service" "environment" "region"))))
     (should (equal "[service] [environment] [region]"
-                   (mevedel-skills--remaining-argument-hint skill "")))
+                   (mevedel-skills-remaining-argument-hint skill "")))
     (should (equal "[environment] [region]"
-                   (mevedel-skills--remaining-argument-hint
+                   (mevedel-skills-remaining-argument-hint
                     skill "billing")))
     (should (equal "[region]"
-                   (mevedel-skills--remaining-argument-hint
+                   (mevedel-skills-remaining-argument-hint
                     skill "\"billing api\" staging")))
-    (should (null (mevedel-skills--remaining-argument-hint
+    (should (null (mevedel-skills-remaining-argument-hint
                    skill "billing staging us")))))
 
 (mevedel-deftest mevedel-cmd--model ()

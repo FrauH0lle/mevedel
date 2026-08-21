@@ -305,21 +305,6 @@ current buffer belongs to a live session pair."
   "Run `mevedel-compact' on the current chat buffer with ARGS."
   (mevedel-compact nil args))
 
-(defun mevedel-skills--refresh-view-input-prompt ()
-  "Refresh the associated view prompt when it is available."
-  (let ((view-buf (cond
-                   ((and (boundp 'mevedel--view-buffer)
-                         (buffer-live-p mevedel--view-buffer))
-                    mevedel--view-buffer)
-                   ((and (boundp 'mevedel--data-buffer)
-                         (buffer-live-p mevedel--data-buffer))
-                    (buffer-local-value 'mevedel--view-buffer
-                                        mevedel--data-buffer)))))
-    (when (and view-buf
-               (fboundp 'mevedel-view-refresh-input-prompt))
-      (with-current-buffer view-buf
-        (mevedel-view-refresh-input-prompt)))))
-
 (defun mevedel-cmd--mode (args)
   "Show or set `mevedel-permission-mode' for the current chat buffer.
 ARGS is the raw slash-command argument string.
@@ -434,7 +419,7 @@ Routes through the lifecycle-aware permission transition path."
                       (mapconcat
                        (lambda (skill)
                          (format "$%s" (mevedel-skill-name skill)))
-                       (mevedel-skills--user-visible-skills
+                       (mevedel-skills-user-visible-skills
                         mevedel--session)
                        "  "))))
     (mevedel-skills--open-menu-or-message
@@ -459,7 +444,7 @@ Routes through the lifecycle-aware permission transition path."
 
 (defun mevedel-skills--skill-status-label (skill)
   "Return user-facing enabled status for SKILL."
-  (if (mevedel-skills--skill-enabled-p skill) "enabled" "disabled"))
+  (if (mevedel-skills-skill-enabled-p skill) "enabled" "disabled"))
 
 (defun mevedel-skills--skill-source-label (skill)
   "Return user-facing source label for SKILL."
@@ -475,7 +460,7 @@ Routes through the lifecycle-aware permission transition path."
         (total 0))
     (dolist (skill (and session (mevedel-session-skills session)))
       (setq total (1+ total))
-      (when (mevedel-skills--skill-enabled-p skill)
+      (when (mevedel-skills-skill-enabled-p skill)
         (setq enabled (1+ enabled))))
     (format "%d/%d" enabled total)))
 
@@ -488,7 +473,7 @@ Routes through the lifecycle-aware permission transition path."
   (let ((status (mevedel-skills--skill-status-label skill)))
     (propertize status
                 'face
-                (if (mevedel-skills--skill-enabled-p skill)
+                (if (mevedel-skills-skill-enabled-p skill)
                     'success
                   'shadow))))
 
@@ -528,7 +513,7 @@ Routes through the lifecycle-aware permission transition path."
   "Return the skills cockpit header line for ITEMS and CONTEXT."
   (require 'mevedel-cockpit)
   (let* ((total (length items))
-         (enabled (cl-count-if #'mevedel-skills--skill-enabled-p
+         (enabled (cl-count-if #'mevedel-skills-skill-enabled-p
                                items)))
     (mevedel-cockpit-format-header
      "skills"
@@ -563,12 +548,12 @@ Routes through the lifecycle-aware permission transition path."
   (interactive)
   (let* ((skill (mevedel-skills-list--skill-at-point))
          (name (mevedel-skill-name skill))
-         (enable (not (mevedel-skills--skill-enabled-p skill))))
-    (mevedel-skills--set-enabled skill enable)
+         (enable (not (mevedel-skills-skill-enabled-p skill))))
+    (mevedel-skills-set-enabled skill enable)
     (when-let* ((data-buffer (mevedel-cockpit-context-data-buffer
                               (mevedel-cockpit-surface-context))))
       (with-current-buffer data-buffer
-        (mevedel-skills--refresh-view-input-prompt)))
+        (mevedel-view-refresh-associated-input-prompt)))
     (mevedel-skills-list-refresh)
     (message "mevedel: skill %s %s"
              name
@@ -696,19 +681,19 @@ Routes through the lifecycle-aware permission transition path."
         (mevedel-cmd--skills--require-name name "help")))
       ("enable"
        (setq name (mevedel-cmd--skills--require-name name "enable"))
-       (mevedel-skills--set-enabled
+       (mevedel-skills-set-enabled
         (or (mevedel-session-get-skill mevedel--session name)
             (user-error "Unknown skill: %s" name))
         t)
-       (mevedel-skills--refresh-view-input-prompt)
+       (mevedel-view-refresh-associated-input-prompt)
        (message "Skill %s enabled" name))
       ("disable"
        (setq name (mevedel-cmd--skills--require-name name "disable"))
-       (mevedel-skills--set-enabled
+       (mevedel-skills-set-enabled
         (or (mevedel-session-get-skill mevedel--session name)
             (user-error "Unknown skill: %s" name))
         nil)
-       (mevedel-skills--refresh-view-input-prompt)
+       (mevedel-view-refresh-associated-input-prompt)
        (message "Skill %s disabled" name))
       (_
        (message "Usage: /skills [list|help NAME|enable NAME|disable NAME]")))))
@@ -800,7 +785,7 @@ Handlers have access to the buffer-local `mevedel--session'.")
 ;;
 ;;; Slash-command dispatch
 
-(defun mevedel-skills--parse-slash-line (text)
+(defun mevedel-skills-parse-slash-line (text)
   "Parse TEXT for a leading `/command [args]' line.
 
 Local slash commands (`/model', `/mode', etc.) parse only the first
@@ -849,7 +834,7 @@ Returns:
   (require 'mevedel-skills-input)
   (when-let* ((region (mevedel-skills-input-current-prompt-region))
               (text (buffer-substring-no-properties (car region) (cdr region)))
-              (parsed (mevedel-skills--parse-slash-line text)))
+              (parsed (mevedel-skills-parse-slash-line text)))
     (let* ((name (nth 0 parsed))
            (args (nth 1 parsed))
            (slash-pos (+ (car region) (nth 2 parsed)))
@@ -945,7 +930,7 @@ is available."
       (mapconcat (lambda (n) (format "[%s]" n)) names " "))
      (t nil))))
 
-(defun mevedel-skills--remaining-argument-hint (skill arguments)
+(defun mevedel-skills-remaining-argument-hint (skill arguments)
   "Return display-only remaining argument hint for SKILL and ARGUMENTS.
 
 Explicit `argument-hint' text is shown only before the user starts
@@ -967,14 +952,14 @@ remaining positional slots after shell-style tokenization."
                         remaining " "))))
      (t nil))))
 
-(defun mevedel-skills--user-visible-skills (session &optional inline-only)
+(defun mevedel-skills-user-visible-skills (session &optional inline-only)
   "Return user-invocable skills visible in `$' completion for SESSION.
 When INLINE-ONLY is non-nil, return only inline-context skills."
   (when session
     (cl-remove-if-not
      (lambda (skill)
        (and (mevedel-skill-user-invocable-p skill)
-            (mevedel-skills--skill-enabled-p skill)
+            (mevedel-skills-skill-enabled-p skill)
             (or (not inline-only)
                 (eq (mevedel-skill-context skill) 'inline))))
      (mevedel-session-skills session))))
@@ -993,9 +978,9 @@ the CAPF table was created."
 When INLINE-ONLY is non-nil, include only inline-context skills."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (mevedel-skills--ensure-fresh buffer session)))
+      (mevedel-skills-ensure-fresh buffer session)))
   (mapcar #'mevedel-skill-name
-          (mevedel-skills--user-visible-skills session inline-only)))
+          (mevedel-skills-user-visible-skills session inline-only)))
 
 (defun mevedel-skills--skill-by-name
     (buffer session name &optional inline-only)
@@ -1003,8 +988,8 @@ When INLINE-ONLY is non-nil, include only inline-context skills."
 When INLINE-ONLY is non-nil, include only inline-context skills."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (mevedel-skills--ensure-fresh buffer session)))
-  (cl-find name (mevedel-skills--user-visible-skills session inline-only)
+      (mevedel-skills-ensure-fresh buffer session)))
+  (cl-find name (mevedel-skills-user-visible-skills session inline-only)
            :key #'mevedel-skill-name
            :test #'equal))
 
@@ -1250,7 +1235,7 @@ current line is skipped."
             (+ line-start (length prefix))
           line-start))))))
 
-(defun mevedel-skills--slash-capf-context (&optional input-start)
+(defun mevedel-skills-slash-capf-context (&optional input-start)
   "Return slash completion context at point.
 
 INPUT-START constrains completion to the first view-composer line.  The return
@@ -1352,7 +1337,7 @@ return value is a plist with :kind `root', :start, :end, and
                              :end (point)
                              :inline-only t))))))))))
 
-(defun mevedel-skills--slash-capf
+(defun mevedel-skills-slash-capf
     (buffer session local-commands &optional input-start)
   "Return command and skill CAPF for the current buffer.
 
@@ -1362,7 +1347,7 @@ used for skill discovery.  LOCAL-COMMANDS is the current slash command
 alist.  INPUT-START constrains completion to the first view-composer
 line when called from the view buffer."
   (when session
-    (let ((slash-context (mevedel-skills--slash-capf-context input-start))
+    (let ((slash-context (mevedel-skills-slash-capf-context input-start))
           (skill-context (mevedel-skills--skill-capf-context input-start)))
       (pcase (plist-get slash-context :kind)
         ('root
@@ -1398,7 +1383,7 @@ line when called from the view buffer."
         (_
          (pcase (plist-get skill-context :kind)
            ('root
-            (mevedel-skills--ensure-fresh buffer session)
+            (mevedel-skills-ensure-fresh buffer session)
             (let ((inline-only (plist-get skill-context :inline-only)))
               (list (plist-get skill-context :start)
                     (plist-get skill-context :end)
@@ -1422,21 +1407,33 @@ after an optional gptel prompt prefix.  Inline `$name' completion is
 active in prose for inline-context skills.  Command option completion
 is active for slash commands that declare finite argument choices."
   (when (bound-and-true-p mevedel--session)
-    (mevedel-skills--slash-capf
+    (mevedel-skills-slash-capf
      (current-buffer) mevedel--session mevedel-slash-commands)))
 
 
 ;;
 ;;; Font-lock
 
+(defvar-local mevedel-skills--font-lock-origin nil
+  "Function returning the position `$skill' fontification starts from.
+Nil scans from the beginning of the buffer.  The composer installs its
+input start here, so a keystroke scans the draft rather than the whole
+transcript in front of it -- the matcher runs on every refontification,
+and the transcript prefix made each one cost seconds on a long session.")
+
 (defun mevedel-skills--fontify-dollar-keyword (end)
   "Find a known `$skill' mention before END for font-lock."
   (require 'mevedel-skills-input)
   (when-let* ((session (and (bound-and-true-p mevedel--session)
-                            mevedel--session)))
-    (let* ((origin (point-min))
-           (text (buffer-substring-no-properties origin end))
-           (scan (- (point) origin))
+                            mevedel--session))
+              (origin (max (point-min)
+                           (or (and mevedel-skills--font-lock-origin
+                                    (funcall
+                                     mevedel-skills--font-lock-origin))
+                               (point-min))))
+              ((<= origin end)))
+    (let* ((text (buffer-substring-no-properties origin end))
+           (scan (max 0 (- (point) origin)))
            (token
             (cl-find-if
              (lambda (candidate) (>= (plist-get candidate :start) scan))
@@ -1452,8 +1449,11 @@ is active for slash commands that declare finite argument choices."
           (goto-char token-end)
           t)))))
 
-(defun mevedel-skills-install-font-lock ()
-  "Install font-lock support for known `$skill' mentions."
+(defun mevedel-skills-install-font-lock (&optional origin-function)
+  "Install font-lock support for known `$skill' mentions.
+ORIGIN-FUNCTION, when non-nil, returns the position fontification
+starts from; mentions before it are left alone."
+  (setq-local mevedel-skills--font-lock-origin origin-function)
   (font-lock-add-keywords
    nil
    '((mevedel-skills--fontify-dollar-keyword

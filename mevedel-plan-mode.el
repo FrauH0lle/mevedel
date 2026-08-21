@@ -75,9 +75,9 @@
                   "mevedel-skills-input" (text session))
 
 ;; `mevedel-skills-ui'
-(declare-function mevedel-skills--refresh-view-input-prompt
-		  "mevedel-skills-ui" nil)
-(declare-function mevedel-skills--user-visible-skills
+(declare-function mevedel-view-refresh-associated-input-prompt
+                  "mevedel-view-composer" ())
+(declare-function mevedel-skills-user-visible-skills
                   "mevedel-skills-ui" (session &optional inline-only))
 
 ;; `mevedel-structs'
@@ -180,8 +180,7 @@
         (cl-remf metadata :selection)
         (setf (mevedel-session-plan-metadata session) metadata)))
     (setf (mevedel-session-plan-mode session) t)
-    (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
-      (mevedel-skills--refresh-view-input-prompt))
+    (mevedel-view-refresh-associated-input-prompt)
     (force-mode-line-update t)
     t))
 
@@ -202,8 +201,7 @@
 (defun mevedel-plan-mode--deactivate (session)
   "Leave Plan in SESSION without changing proposal metadata."
   (setf (mevedel-session-plan-mode session) nil)
-  (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
-    (mevedel-skills--refresh-view-input-prompt))
+  (mevedel-view-refresh-associated-input-prompt)
   (force-mode-line-update t))
 
 (defun mevedel-plan-mode--demote-proposal (session discard-selection)
@@ -462,7 +460,7 @@ opening an editable draft."
   (require 'mevedel-skills-ui)
   (let* ((selection (plist-get entry :selection))
          (skills
-          (mevedel-skills--user-visible-skills
+          (mevedel-skills-user-visible-skills
            (plist-get entry :session)))
          (candidates
           (mapcar

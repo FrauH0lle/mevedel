@@ -973,7 +973,7 @@ hooks:
                 :name "hidden"
                 :body "X"))
         outcome)
-    (cl-letf (((symbol-function 'mevedel-skills--skill-enabled-p)
+    (cl-letf (((symbol-function 'mevedel-skills-skill-enabled-p)
                (lambda (_) nil)))
       (mevedel-skills-invoke
        skill nil
@@ -1017,7 +1017,7 @@ hooks:
                 :body "X"
                 :model-invocable-p nil))
         outcome)
-    (cl-letf (((symbol-function 'mevedel-skills--skill-enabled-p)
+    (cl-letf (((symbol-function 'mevedel-skills-skill-enabled-p)
                (lambda (_) nil)))
       (mevedel-skills-invoke
        skill nil
@@ -1564,7 +1564,7 @@ description: Yell
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list skill))
-          (mevedel-skills--set-enabled skill nil)
+          (mevedel-skills-set-enabled skill nil)
           (with-temp-buffer
             (setq mevedel--session session)
             (mevedel-skills--invoke-handler
@@ -1599,7 +1599,7 @@ description: Yell
         (progn
           (setf (mevedel-session-skills session)
                 (list alpha beta model-disabled dormant))
-          (mevedel-skills--set-enabled beta nil)
+          (mevedel-skills-set-enabled beta nil)
           (with-temp-buffer
             (setq mevedel--session session)
             (mevedel-skills--list-handler
@@ -1634,7 +1634,7 @@ description: Yell
     (unwind-protect
         (with-temp-buffer
           (setq mevedel--session session)
-          (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+          (cl-letf (((symbol-function 'mevedel-skills-ensure-fresh)
                      (lambda (_buffer s)
                        (setq refreshed s)
                        (setf (mevedel-session-skills s) (list fresh)))))
@@ -1749,7 +1749,7 @@ description: Yell
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list enabled disabled))
-          (mevedel-skills--set-enabled disabled nil)
+          (mevedel-skills-set-enabled disabled nil)
           (let ((names (mapcar #'mevedel-skill-name
                                (mevedel-skills--listing-candidates session))))
             (should (equal '("enabled") names))))

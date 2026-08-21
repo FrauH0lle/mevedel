@@ -586,7 +586,7 @@
                    '(?s "skills: none")))
                 ((symbol-function 'mevedel--directive-skills-session)
                  (lambda (&rest _) session))
-                ((symbol-function 'mevedel-skills--user-visible-skills)
+                ((symbol-function 'mevedel-skills-user-visible-skills)
                  (lambda (_) (list skill)))
                 ((symbol-function 'completing-read)
                  (lambda (&rest _) "alpha")))

@@ -2586,7 +2586,7 @@
                     (buffer (generate-new-buffer " *mev-chat-mode*"))
                     (refreshed 0))
                (unwind-protect
-                   (cl-letf (((symbol-function 'mevedel-skills--refresh-view-input-prompt)
+                   (cl-letf (((symbol-function 'mevedel-view-refresh-associated-input-prompt)
                               (lambda () (cl-incf refreshed))))
                      (with-current-buffer buffer
                        (setq-local mevedel--session session)
@@ -2613,7 +2613,7 @@
                     (buffer (generate-new-buffer " *mev-chat-mode*"))
                     (refreshed 0))
                (unwind-protect
-                   (cl-letf (((symbol-function 'mevedel-skills--refresh-view-input-prompt)
+                   (cl-letf (((symbol-function 'mevedel-view-refresh-associated-input-prompt)
                               (lambda () (cl-incf refreshed))))
                      (with-current-buffer buffer
                        (setq-local mevedel--session session)
@@ -2641,7 +2641,7 @@
                     (mevedel-permission-mode 'ask)
                     (refreshed 0))
                (unwind-protect
-                   (cl-letf (((symbol-function 'mevedel-skills--refresh-view-input-prompt)
+                   (cl-letf (((symbol-function 'mevedel-view-refresh-associated-input-prompt)
                               (lambda () (cl-incf refreshed))))
                      (with-current-buffer buffer
                        (setq-local mevedel--session session)

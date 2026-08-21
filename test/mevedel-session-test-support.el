@@ -60,7 +60,7 @@
 (defvar mevedel-session-persistence--summary-cache)
 
 ;; `mevedel-skills-core'
-(declare-function mevedel-skills--maybe-activate
+(declare-function mevedel-skills-maybe-activate
                   "mevedel-skills-core" (session path))
 
 ;; `mevedel-tools'

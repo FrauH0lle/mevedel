@@ -53,8 +53,8 @@
 (declare-function mevedel-skill-name "mevedel-skills-core" (skill) t)
 (declare-function mevedel-skill-source-dir "mevedel-skills-core" (skill) t)
 (declare-function mevedel-skill-source-file "mevedel-skills-core" (skill) t)
-(declare-function mevedel-skills--skill-enabled-p "mevedel-skills-core" (skill))
-(declare-function mevedel-skills--source-key "mevedel-skills-core" (source-file))
+(declare-function mevedel-skills-skill-enabled-p "mevedel-skills-core" (skill))
+(declare-function mevedel-skills-source-key "mevedel-skills-core" (source-file))
 (declare-function mevedel-skills-scan "mevedel-skills-core"
                   (&optional workspace-root dirs workspace))
 
@@ -410,8 +410,8 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
 
 (defun mevedel-resource--skill-source-key (source-file)
   "Return the canonical skill source key for SOURCE-FILE."
-  (or (and (fboundp 'mevedel-skills--source-key)
-           (mevedel-skills--source-key source-file))
+  (or (and (fboundp 'mevedel-skills-source-key)
+           (mevedel-skills-source-key source-file))
       (concat "file:" (file-truename source-file))))
 
 (defun mevedel-resource-skill-digest (source-file)
@@ -449,8 +449,8 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
                      (mevedel-skill-source-file skill))))
        (and source
             (equal digest (mevedel-resource-skill-digest source))
-            (or (not (fboundp 'mevedel-skills--skill-enabled-p))
-                (mevedel-skills--skill-enabled-p skill)))))
+            (or (not (fboundp 'mevedel-skills-skill-enabled-p))
+                (mevedel-skills-skill-enabled-p skill)))))
    (mevedel-resource--skill-list session context)))
 
 (defun mevedel-resource--skill-root (skill)
@@ -490,8 +490,8 @@ SCHEME is nil, include metadata for every scheme."
                                 (or (null scheme)
                                     (not (file-remote-p source)))
                                 (or (not (fboundp
-                                          'mevedel-skills--skill-enabled-p))
-                                    (mevedel-skills--skill-enabled-p skill)))))
+                                          'mevedel-skills-skill-enabled-p))
+                                    (mevedel-skills-skill-enabled-p skill)))))
                        (if scheme
                            (mevedel-session-skills session)
                          (mevedel-resource--skill-list session context)))))
@@ -996,8 +996,8 @@ parent is discarded."
   (let ((skills
          (cl-remove-if-not
           (lambda (skill)
-            (or (not (fboundp 'mevedel-skills--skill-enabled-p))
-                (mevedel-skills--skill-enabled-p skill)))
+            (or (not (fboundp 'mevedel-skills-skill-enabled-p))
+                (mevedel-skills-skill-enabled-p skill)))
           (mevedel-resource--skill-list session context))))
     (if skills
         (string-join

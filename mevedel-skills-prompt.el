@@ -209,7 +209,7 @@ omitted only when name-only entries cannot fit in
 BUFFER, when non-nil, is used to refresh dirty skill roots before
 rendering."
   (when (and buffer (buffer-live-p buffer))
-    (mevedel-skills--ensure-fresh buffer session))
+    (mevedel-skills-ensure-fresh buffer session))
   (when-let* ((skills (mevedel-skills--listing-candidates session)))
     (let* ((listing-result (mevedel-skills--format-listing-result skills))
            (listing (plist-get listing-result :text)))
@@ -292,7 +292,7 @@ are reported once and become the new snapshot."
                 (setq delta nil)
                 (when-let* ((buffer (mevedel-skills--current-reminder-buffer
                                      session)))
-                  (mevedel-skills--ensure-fresh buffer session))
+                  (mevedel-skills-ensure-fresh buffer session))
                 (let* ((current (mevedel-skills--skill-snapshot session))
                        (previous (mevedel-session-skills-snapshot session)))
                   (if (eq previous :uninitialized)
@@ -339,7 +339,7 @@ and again if that budget status changes."
      :trigger (lambda (session)
                 (when-let* ((buffer (mevedel-skills--current-reminder-buffer
                                      session)))
-                  (mevedel-skills--ensure-fresh buffer session))
+                  (mevedel-skills-ensure-fresh buffer session))
                 (setq status (mevedel-skills--roster-budget-status session))
                 (let ((changed (not (eq status last-status))))
                   (setq last-status status)
@@ -380,7 +380,7 @@ and again if that budget status changes."
   "Post-tool-call hook: activate conditional skills on every touched path.
 
 INFO is the plist passed by `gptel-post-tool-call-functions'.  Every
-path the tool declares is forwarded to `mevedel-skills--maybe-activate'.
+path the tool declares is forwarded to `mevedel-skills-maybe-activate'.
 A tool that touches several paths at once declares them together, and
 ApplyPatch is the only tool that does, so reading one path activated on
 the reads around an edit but never on the edit."
@@ -394,7 +394,7 @@ the reads around an edit but never on the edit."
     (dolist (path (mevedel-tool-permission-paths tool args))
       (mevedel-skills--queue-activation-reminder
        (current-buffer) session path
-       (mevedel-skills--maybe-activate session path))))
+       (mevedel-skills-maybe-activate session path))))
   nil)
 
 ;;;###autoload

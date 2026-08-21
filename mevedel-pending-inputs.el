@@ -82,7 +82,7 @@
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-skills-ui'
-(declare-function mevedel-skills--parse-slash-line
+(declare-function mevedel-skills-parse-slash-line
                   "mevedel-skills-ui" (text))
 
 ;; `mevedel-structs'
@@ -559,7 +559,7 @@ longer accepts the prepared input."
                       (mevedel-view--bind-input-mentions session))))
          (when (string-empty-p input)
            (user-error "Nothing to send"))
-         (when (mevedel-skills--parse-slash-line input)
+         (when (mevedel-skills-parse-slash-line input)
            (user-error "Slash commands cannot be queued as follow-ups"))
          (mevedel-view--queue-follow-up input)))))
   (goto-char (point-max)))

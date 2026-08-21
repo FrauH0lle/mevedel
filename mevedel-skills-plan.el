@@ -20,7 +20,7 @@
 (declare-function mevedel-skill-context "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-source-file "mevedel-skills-core" (cl-x) t)
-(declare-function mevedel-skills--source-key
+(declare-function mevedel-skills-source-key
                   "mevedel-skills-core" (source-file))
 
 ;; `mevedel-skills-input'
@@ -133,7 +133,7 @@ the leading command forks."
              (remaining (cdr tokens))
              done)
         (puthash (plist-get root :start) t command-starts)
-        (puthash (mevedel-skills--source-key
+        (puthash (mevedel-skills-source-key
                   (mevedel-skill-source-file root-skill))
                  t command-sources)
         (setq fork-p (eq (mevedel-skill-context root-skill) 'fork))
@@ -162,7 +162,7 @@ the leading command forks."
                 (let* ((token (car remaining))
                        (skill (plist-get token :value))
                        (source
-                        (mevedel-skills--source-key
+                        (mevedel-skills-source-key
                          (mevedel-skill-source-file skill))))
                   (if (or (eq (mevedel-skill-context skill) 'fork)
                           (and (not (gethash source command-sources))
@@ -198,7 +198,7 @@ the leading command forks."
                 :end (plist-get token :end)
                 :name (plist-get token :name)
                 :source-key
-                (mevedel-skills--source-key
+                (mevedel-skills-source-key
                  (mevedel-skill-source-file skill))
                 :skill skill
                 :role (if (gethash (plist-get token :start) command-starts)

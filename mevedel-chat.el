@@ -273,8 +273,8 @@
 		  "mevedel-skills-prompt" (session))
 
 ;; `mevedel-skills-ui'
-(declare-function mevedel-skills--refresh-view-input-prompt
-		  "mevedel-skills-ui" nil)
+(declare-function mevedel-view-refresh-associated-input-prompt
+                  "mevedel-view-composer" ())
 (declare-function mevedel-slash-capf "mevedel-skills-ui" nil)
 
 ;; `mevedel-structs'
@@ -2131,8 +2131,7 @@ BUF defaults to the current buffer if not specified."
           (list (mevedel-session-permission-mode mevedel--session)))
     (require 'mevedel-permission-mode)
     (mevedel-permission-mode-set-raw mode)
-    (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
-      (mevedel-skills--refresh-view-input-prompt))))
+    (mevedel-view-refresh-associated-input-prompt)))
 
 (defun mevedel--implementation-permission-mode-restore ()
   "Restore permission mode after a temporary Goal implementation override."
@@ -2150,8 +2149,7 @@ BUF defaults to the current buffer if not specified."
           (if restore
               (setq-local mevedel-permission-mode restore)
             (kill-local-variable 'mevedel-permission-mode))))
-      (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
-        (mevedel-skills--refresh-view-input-prompt)))))
+      (mevedel-view-refresh-associated-input-prompt))))
 
 (defun mevedel--close-unclosed-blocks ()
   "Close any unclosed blocks at the end of the buffer.
