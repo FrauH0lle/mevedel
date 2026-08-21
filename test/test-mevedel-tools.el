@@ -409,6 +409,116 @@
             (should (string-match-p "second steering" (buffer-string)))))
       (kill-buffer buf)))
 
+  :doc "an undelivered entry leaves no active file grant behind"
+  (let* ((session (mevedel-tools-test--make-session))
+         (backend (gptel-make-openai
+                   "Steering grant test" :stream nil :key "unused"
+                   :host "example.test"
+                   :models '(steering-grant-test)))
+         (buf (generate-new-buffer " *mt-steering-grant*"))
+         (data (list :messages []))
+         (delivered (expand-file-name "delivered.txt"))
+         (undelivered (expand-file-name "undelivered.txt"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buf :backend backend :data data
+                           :history '(TRET)
+                           :mevedel-request-id "request-grant"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--session session))
+          (dolist (spec (list (cons "delivered" delivered)
+                              (cons "fails" undelivered)))
+            (mevedel-session-enqueue-pending-input
+             session 'steering
+             (list :input (car spec) :request-id "request-grant"
+                   :dropped-file-grants (list (cdr spec)))))
+          (cl-letf
+              (((symbol-function 'mevedel-mentions-expand-user-input)
+                (lambda (input _session)
+                  (when (equal input "fails")
+                    (error "Expansion failed"))
+                  (list :text input))))
+            (should-error
+             (mevedel-tools--handle-steering-inject fsm)
+             :type 'error))
+          ;; The delivered entry keeps its grant; the entry that never
+          ;; reached the model must not leave a durable exact-file Read
+          ;; grant behind, because it stays pending for the user to drop.
+          (should
+           (equal (list delivered)
+                  (mevedel-session-active-dropped-file-grants session))))
+      (kill-buffer buf)))
+
+  :doc "a rejected media entry leaves no active file grant behind"
+  (let* ((session (mevedel-tools-test--make-session))
+         (backend (gptel-make-openai
+                   "Steering media grant test" :stream nil :key "unused"
+                   :host "example.test"
+                   :models '(steering-media-grant-test)))
+         (buf (generate-new-buffer " *mt-steering-media-grant*"))
+         (data (list :messages []))
+         (dropped (expand-file-name "dropped.png"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buf :backend backend :data data
+                           :history '(TRET)
+                           :mevedel-request-id "request-media"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--session session))
+          (mevedel-session-enqueue-pending-input
+           session 'steering
+           (list :input "look" :request-id "request-media"
+                 :dropped-file-grants (list dropped)))
+          (cl-letf
+              (((symbol-function 'mevedel-mentions-expand-user-input)
+                (lambda (input _session)
+                  (list :text input :media-contexts (list :image dropped)))))
+            (should-error
+             (mevedel-tools--handle-steering-inject fsm)
+             :type 'error))
+          (should-not (mevedel-session-active-dropped-file-grants session)))
+      (kill-buffer buf)))
+
+  :doc "a failure after delivery keeps the delivered entry's file grant"
+  (let* ((session (mevedel-tools-test--make-session))
+         (backend (gptel-make-openai
+                   "Steering post-delivery test" :stream nil :key "unused"
+                   :host "example.test"
+                   :models '(steering-post-delivery-test)))
+         (buf (generate-new-buffer " *mt-steering-post-delivery*"))
+         (data (list :messages []))
+         (dropped (expand-file-name "kept.txt"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buf :backend backend :data data
+                           :history '(TRET)
+                           :mevedel-request-id "request-post"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--session session))
+          (mevedel-session-enqueue-pending-input
+           session 'steering
+           (list :input "go" :request-id "request-post"
+                 :dropped-file-grants (list dropped)))
+          (cl-letf
+              (((symbol-function 'mevedel-mentions-expand-user-input)
+                (lambda (input _session) (list :text input)))
+               ((symbol-function
+                 'mevedel-tools--insert-session-injected-prompt)
+                (lambda (&rest _) (error "Transcript insertion failed"))))
+            (should-error
+             (mevedel-tools--handle-steering-inject fsm)
+             :type 'error))
+          ;; The prompt reached the request, so the model can act on it; the
+          ;; grant it needs to read the dropped file must survive a later
+          ;; commit-step failure.
+          (should
+           (equal (list dropped)
+                  (mevedel-session-active-dropped-file-grants session))))
+      (kill-buffer buf)))
+
   :doc "a later delivery error leaves only the undelivered suffix pending"
   (let* ((session (mevedel-tools-test--make-session))
          (backend (gptel-make-openai
