@@ -490,12 +490,18 @@
       (should (equal "Installed plugin demo."
                      (mevedel-plugins-test--slash
                       session "install owner/repo")))
-      (should (equal (list (list (mevedel-plugins-dir)
-                                 (list "clone" "--depth" "1"
-                                       "https://github.com/owner/repo.git"
-                                       (mevedel-plugins-test--github-install-root
-                                        "owner" "repo"))))
-                     calls))
+      ;; The clone lands in a staging sibling and is published only once its
+      ;; manifest validates, so nothing unusable is ever discoverable.
+      (let ((dest (mevedel-plugins-test--github-install-root "owner" "repo"))
+            (args (cadr (car calls))))
+        (should (equal 1 (length calls)))
+        (should (equal (mevedel-plugins-dir) (car (car calls))))
+        (should (equal (list "clone" "--depth" "1"
+                             "https://github.com/owner/repo.git")
+                       (butlast args)))
+        (should (mevedel-plugins-staging-name-p (car (last args))))
+        (should (file-directory-p dest))
+        (should-not (mevedel-plugins-test--staging-leftovers dest)))
       (should (string-match-p "demo enabled:off hooks:off"
                               (mevedel-plugins-test--list-string workspace)))))
 

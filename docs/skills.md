@@ -87,10 +87,16 @@ the plugin identity/source, exposed skills, each executable hook handler's
 event and matcher, and the workspace plugin data directory rather than dumping
 the full manifest.
 
-For a remote workspace, plugin-state mutations require the live session's
-lease and use the same disclosed, serialized publication path as other
-durability-critical state.  They never write through TRAMP before storage
-disclosure or from a read-only inspector.
+Every plugin-state write replaces the file through a rename, so an
+interrupted write leaves the previous activations and hook consent intact
+rather than a truncated file, which the reader would treat as no state at
+all.  Two Emacs instances writing the same workspace still resolve
+last-writer-wins on the whole file, not per entry.
+
+For a remote workspace, plugin-state mutations additionally require the
+live session's lease and use the same disclosed, serialized publication
+path as other durability-critical state.  They never write through TRAMP
+before storage disclosure or from a read-only inspector.
 
 When multiple plugin roots contain the same manifest name, mevedel keeps
 the highest-precedence plugin and reports shadowed duplicates in
@@ -205,6 +211,9 @@ Plugin management:
   `~/.agents/plugins/github.com/OWNER/REPO`; existing installs are left
   untouched and should be updated with `/plugin update NAME`. Install is
   always global and does not enable the plugin in the current workspace.
+  The clone is staged beside its destination and published only once its
+  manifest validates, so a failed clone or an unusable manifest leaves
+  nothing at the destination and can simply be retried.
 - `/plugin update NAME` runs `git pull --ff-only` for global managed
   installs under `~/.mevedel/plugins/` or `~/.agents/plugins/`.
   If the update changes an enabled plugin's executable hook surface, the

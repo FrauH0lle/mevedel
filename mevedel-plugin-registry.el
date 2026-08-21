@@ -259,6 +259,17 @@ Return nil when ROOT does not contain a usable Codex plugin manifest."
   "Return deterministic directory form for plugin ROOT."
   (file-name-as-directory (expand-file-name root)))
 
+(defconst mevedel-plugins-staging-prefix ".mevedel-staging-"
+  "Filename prefix marking an in-flight plugin clone.
+A clone is staged beside its destination so publishing it is a
+same-filesystem rename, which puts it inside the tree discovery walks.
+Discovery skips these names so a half-built clone is never adopted.")
+
+(defun mevedel-plugins-staging-name-p (path)
+  "Return non-nil when PATH names an in-flight plugin clone."
+  (string-prefix-p mevedel-plugins-staging-prefix
+                   (file-name-nondirectory (directory-file-name path))))
+
 (defun mevedel-plugins--collect-roots-under (root)
   "Return plugin roots at or below ROOT.
 Do not descend into a directory once it is recognized as a plugin root."
@@ -274,7 +285,8 @@ Do not descend into a directory once it is recognized as a plugin root."
                  (dolist (entry (directory-files
                                   dir t directory-files-no-dot-files-regexp))
                    (when (and (file-directory-p entry)
-                              (not (file-symlink-p entry)))
+                              (not (file-symlink-p entry))
+                              (not (mevedel-plugins-staging-name-p entry)))
                      (walk entry)))))))))
       (walk root))
     (nreverse roots)))
@@ -426,8 +438,23 @@ Items include usable plugin manifests and visible metadata errors."
           (mevedel-session-artifacts-publish-text
            session file content 'utf-8-unix))
       (make-directory (file-name-directory file) t)
-      (with-temp-file file
-        (insert content)))))
+      ;; Replace the file through a same-directory rename.  It is the whole
+      ;; record of every plugin's activation and hook consent, and
+      ;; `mevedel-plugins--read-state' reads a truncated file as nil, so a
+      ;; write that died in place would silently disable everything.
+      (let ((tmp (make-temp-file
+                  (expand-file-name ".mevedel-plugins-"
+                                    (file-name-directory file)))))
+        (unwind-protect
+            (progn
+              ;; `make-temp-file' creates 0600, which would become the state
+              ;; file's mode; keep what an ordinary write would have produced.
+              (set-file-modes tmp (default-file-modes))
+              (let ((coding-system-for-write 'utf-8-unix))
+                (write-region content nil tmp nil 'silent))
+              (rename-file tmp file t))
+          (when (file-exists-p tmp)
+            (delete-file tmp)))))))
 
 (defun mevedel-plugins--state-plist (name &optional workspace)
   "Return persisted state plist for plugin NAME in WORKSPACE."

@@ -40,6 +40,14 @@
   "Return new-install plugin root for OWNER and REPO."
   (file-name-concat (mevedel-plugins-dir) "github.com" owner repo))
 
+(defun mevedel-plugins-test--staging-leftovers (dest)
+  "Return in-flight clone directories left beside DEST."
+  (let ((dir (file-name-directory (directory-file-name dest))))
+    (and (file-directory-p dir)
+         (seq-filter #'mevedel-plugins-staging-name-p
+                     (directory-files dir nil
+                                      directory-files-no-dot-files-regexp)))))
+
 (defun mevedel-plugins-test--write-manifest (root json)
   "Write plugin manifest JSON under ROOT."
   (make-directory (file-name-concat root ".codex-plugin") t)

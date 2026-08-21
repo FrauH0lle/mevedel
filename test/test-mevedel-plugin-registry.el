@@ -295,6 +295,39 @@
 (mevedel-deftest mevedel-plugins--write-state ()
   ,test
   (test)
+  :doc "a write that dies after truncating leaves the previous state"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-plugins-local-state-" t)))
+         (workspace (mevedel-plugins-test--workspace root))
+         (real (symbol-function 'write-region)))
+    (unwind-protect
+        (progn
+          (mevedel-plugins--write-state '(("demo" :enabled t)) workspace)
+          (cl-letf (((symbol-function 'write-region)
+                     (lambda (_start _end filename &rest _)
+                       ;; A write that truncates its target and then dies,
+                       ;; as ENOSPC or a killed Emacs would.
+                       (funcall real "" nil filename nil 'silent)
+                       (error "Disk full"))))
+            (should-error
+             (mevedel-plugins--write-state '(("other" :enabled t)) workspace)))
+          (should (equal '(("demo" :enabled t))
+                         (mevedel-plugins--read-state workspace))))
+      (delete-directory root t)))
+
+  :doc "a completed write leaves no staging file beside the state"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-plugins-local-state-" t)))
+         (workspace (mevedel-plugins-test--workspace root)))
+    (unwind-protect
+        (progn
+          (mevedel-plugins--write-state '(("demo" :enabled t)) workspace)
+          (should (equal '("plugins.el")
+                         (directory-files
+                          (mevedel-workspace-state-dir workspace) nil
+                          directory-files-no-dot-files-regexp))))
+      (delete-directory root t)))
+
   :doc "remote plugin state refuses to write without its live session"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-plugins-remote-state-" t)))
