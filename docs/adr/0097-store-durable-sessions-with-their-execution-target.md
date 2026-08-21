@@ -13,11 +13,16 @@ A renewable, generation-based session lease gives one client mutation
 authority while allowing other clients to inspect the last published state.
 Every ownership claim exclusively creates the next generation and activates
 only after validating its unchanged predecessor, so a stale renew or release
-cannot overwrite or delete a newer owner.  Complete lease decisions bypass
+cannot overwrite or delete a newer owner.  Validation covers the record's
+shape and its timestamps: a record whose renewal or expiry is not a finite
+nonnegative number carries no authority, because an infinity never expires
+and a NaN fails every comparison it is put to.  Complete lease decisions bypass
 remote file caches so external generations cannot remain invisible.  Each
 generation preserves either nil or a validated
 `.publications/.../manifest.el` head.  Only the exact current publishing
-generation, with the expected previous head, may compare-and-set a new one.
+generation, with the expected previous head, may replace it, and the
+exclusive creation of the next generation -- not the record replacement --
+is the atomic step that elects a winner.
 
 Fixed session files are non-authoritative caches.  A sidecar-marked transaction
 merges retained and current session-local artifacts in order, writes unique
@@ -36,7 +41,7 @@ child lease into the live session before releasing the parent path.
 Serialized publication uses a bounded publishing lease synchronously renewed
 before and checked after every artifact rather than target I/O from timer
 callbacks.  Pre-commit failure retains one local retry transaction.  A
-successful head compare-and-set is terminal even if later lease normalization
+successful head commit is terminal even if later lease normalization
 fails, avoiding republishing already committed bytes.  Expired publishing
 takeover warns that a write may still be in flight and requires confirmation
 that the prior client is stopped.  Immutable publication generations remain

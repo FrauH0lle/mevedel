@@ -337,7 +337,7 @@
       (when (file-directory-p root)
         (delete-directory root t))))
 
-  :doc "expresses a compare-and-set as a verify its writes depend on"
+  :doc "expresses a precondition as a verify its writes depend on"
   (let* ((root (make-temp-file "mevedel-control-fs-program-" t))
          (record (file-name-concat root "record"))
          (next (file-name-concat root "next")))

@@ -34,6 +34,8 @@
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability--assert-no-pid-lock
                   "mevedel-session-durability" (session-dir))
+(declare-function mevedel-session-durability--finite-nonnegative-number-p
+                  "mevedel-session-durability" (value))
 (declare-function mevedel-session-durability--bind-lease
                   "mevedel-session-durability" (session lease state))
 (declare-function mevedel-session-durability--claim-next
@@ -120,15 +122,6 @@ target directories would mutate the session on behalf of an observer."
                path))
       path))))
 
-(defun mevedel-session-transfer--finite-nonnegative-number-p (value)
-  "Return non-nil when VALUE is a finite nonnegative number."
-  (and (numberp value)
-       (>= value 0)
-       (or (integerp value)
-           (and (floatp value)
-                (not (isnan value))
-                (<= value most-positive-fixnum)))))
-
 (defun mevedel-session-transfer--id-p (value length)
   "Return non-nil when VALUE is a lowercase hexadecimal ID of LENGTH."
   (and (stringp value)
@@ -175,7 +168,7 @@ target directories would mutate the session on behalf of an observer."
         (plist-get record :owner-client-id) 64)
        (mevedel-session-transfer--id-p
         (plist-get record :requester-client-id) 64)
-       (mevedel-session-transfer--finite-nonnegative-number-p
+       (mevedel-session-durability--finite-nonnegative-number-p
         (plist-get record :expires-at))
        (or (null now)
            (<= (plist-get record :expires-at)
@@ -194,7 +187,7 @@ target directories would mutate the session on behalf of an observer."
 
 (defun mevedel-session-transfer--valid-timeout-p (value)
   "Return non-nil when VALUE is an accepted transfer timeout."
-  (and (mevedel-session-transfer--finite-nonnegative-number-p value)
+  (and (mevedel-session-durability--finite-nonnegative-number-p value)
        (> value 0)
        (<= value mevedel-session-transfer--maximum-timeout)))
 
@@ -242,9 +235,9 @@ target directories would mutate the session on behalf of an observer."
         (plist-get record :requester-client-id) 64)
        (mevedel-session-transfer--valid-client-label-p
         (plist-get record :requester-label))
-       (mevedel-session-transfer--finite-nonnegative-number-p
+       (mevedel-session-durability--finite-nonnegative-number-p
         (plist-get record :created-at))
-       (mevedel-session-transfer--finite-nonnegative-number-p
+       (mevedel-session-durability--finite-nonnegative-number-p
         (plist-get record :deadline))
        (>= (plist-get record :deadline) (plist-get record :created-at))
        (<= (- (plist-get record :deadline)
@@ -271,7 +264,7 @@ target directories would mutate the session on behalf of an observer."
        (mevedel-session-transfer--id-p
         (plist-get record :requester-client-id) 64)
        (memq (plist-get record :decision) '(grant reject))
-       (mevedel-session-transfer--finite-nonnegative-number-p
+       (mevedel-session-durability--finite-nonnegative-number-p
         (plist-get record :decided-at))))
 
 (defun mevedel-session-transfer--record-identity-matches-p

@@ -242,9 +242,13 @@ one. Every operation in a program opens and re-proves its own parent, so a
 program is exactly as pinned as the same operations run one at a time, while
 costing one round trip instead of one per operation. A program stops at the
 first operation that does not succeed and reports the rest as skipped, which is
-what lets a caller state a compare-and-set as a `verify` operation its writes
-depend on: the proof and the write it guards share one process, so no other
-client's write can land between them. Each operation reports `ok`, `conflict`,
+what lets a caller state a precondition as a `verify` operation its writes
+depend on: the proof and the write it guards share one process, which narrows
+the window between them to two adjacent syscall sequences rather than a
+network round trip. It does not remove the window -- another client can
+exclusively create the next generation in between -- so a lease commit
+decides who won from what it observes after its write, and exclusive
+creation is the only atomic election. Each operation reports `ok`, `conflict`,
 `absent`, `mismatch`, `failed` or `skipped`, so a caller reproduces the
 per-operation nil-versus-signal contract of the single-operation wrappers.
 Payloads and listings travel base64-encoded inside a NUL-framed request and
@@ -257,8 +261,8 @@ present itself as a result.
 
 Round trips therefore dominate durable session work over a real remote
 connection, and the layer is written to spend as few as it can. One lease
-compare-and-set is one program, not a clock read plus two listings plus two
-reads plus a write. The interpreters those processes run through are resolved
+commit is one program, not a clock read plus two listings plus two reads plus
+a write. The interpreters those processes run through are resolved
 once per target rather than per operation, because locating a program on a
 TRAMP target costs one test per `exec-path` entry and the durability layer
 inhibits the remote file-name cache; a refused operation drops the resolved
@@ -279,9 +283,9 @@ when to read the target again and never becomes a time value, so no deadline is
 ever derived from a client clock.  A
 client reclaims its own expired lease without a prompt, because renewal cannot
 run inside blocking target I/O and confirming a takeover from oneself is
-meaningless; the generation compare-and-set still refuses the reclaim when
-another client claimed the lease meanwhile.  Taking over another client's
-expired lease still requires explicit confirmation.
+meaningless; the exclusive creation of the next generation still refuses the
+reclaim when another client claimed the lease meanwhile.  Taking over another
+client's expired lease still requires explicit confirmation.
 
 ### Portable project durability publication
 
@@ -323,8 +327,8 @@ are one target program, so the whole generation costs one round trip and the
 manifest is still the last byte written inside it.  Updating the exact current
 lease generation's `:publication-head` to that manifest is the only commit
 point.  Every fixed
-cache write precedes this compare-and-set, and no fixed or shared state is
-written after a failed compare-and-set.  Consequently, a reader sees either
+cache write precedes this commit, and no fixed or shared state is written
+after a failed one.  Consequently, a reader sees either
 the complete old manifest or the complete new one even if newer fixed caches
 already exist.  A lifecycle replacement such as Rewind may put `:replace t`
 only on the marker, which starts from an empty manifest rather than overlaying
@@ -1064,13 +1068,19 @@ verified, the lock stays active.
 
 Portable project sessions never use client PIDs as liveness authority.  Their `.lease/`
 directory contains portable generation records with an opaque client id,
-renewal and expiry times, and a diagnostic buffer name.  A new owner
-exclusively creates the next generation in `claiming`, then activates it only
-if the immediately preceding live generation is still exactly the record it
-observed.  Every complete acquire, renewal, and release transaction disables
-remote file caching so an external client's generation is observed
-consistently.  Renew and release can update only their own generation and
-verify that no newer head won.  A successful claim prunes older generations
+renewal and expiry times, and a diagnostic buffer name.  A record is authority
+only while its timestamps are finite nonnegative numbers: these are file bytes
+another machine wrote, and an infinite expiry would never expire while a NaN
+fails every comparison it is put to, so either one is rejected rather than
+compared.  A new owner exclusively creates the next generation in `claiming`,
+then activates it only if the immediately preceding live generation is still
+exactly the record it observed.  A generation appearing beside a live owner's
+record without activating does not end that owner's lease, so its renewal
+heartbeat keeps running until another client's claim is actually active.
+Every complete acquire, renewal, and release transaction disables remote file
+caching so an external client's generation is observed consistently.  Renew
+and release can update only their own generation and verify that no newer head
+won.  A successful claim prunes older generations
 best-effort; aborted candidates are ignored and removed best-effort.
 
 Each generation also carries `:publication-head`, initially nil and otherwise

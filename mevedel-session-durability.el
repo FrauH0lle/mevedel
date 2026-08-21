@@ -559,9 +559,12 @@ last so an absent record still leaves the clock and the listing answered."
   "Replace GENERATION's record below DIRECTORY only while it still is EXPECTED.
 
 EXPECTED is the content observed on the target; RECORD is the replacement.
-The proof and the write share one target process, so no observation of another
-client can slip between them.  Return the record names observed afterwards, or
-nil when the proof failed."
+The proof and the write share one target process, which narrows the window
+between them but does not remove it: another client can exclusively create
+the next generation in between, so `verify' is a precondition and not an
+election, and the caller decides who won from what it observes afterwards.
+Return the record names observed after the write, or nil when the proof
+failed."
   (let* ((path (mevedel-session-durability--generation-path
                 directory generation))
          ;; `verify' stays first: the takeover race tests key on the commit
@@ -608,8 +611,14 @@ nil when the proof failed."
   "Record LEASE and STATE on SESSION and maintain its renewal timer.
 
 BYTES is the exact content LEASE occupies on the target when that is known.
-A later renewal states it as the precondition of its compare-and-set, which
-saves re-reading a record this client just wrote."
+A later renewal states it as the precondition of its own write, which saves
+re-reading a record this client just wrote.
+
+An `owned' state runs the renewal heartbeat and a `lost' one stops it.
+A `contested' state keeps it: another client has a generation outstanding
+but has not activated it, and that claim aborts if this client's write
+landed first, so stopping the heartbeat here would let a lease this client
+still holds expire for real."
   (when session
     (let ((live (and lease (copy-sequence lease)))
           (release-pending
@@ -620,14 +629,29 @@ saves re-reading a record this client just wrote."
       (when release-pending
         (setq live (plist-put live :release-pending t)))
       (setf (mevedel-session-lease session) live)
-      (if (eq state 'owned)
-          (unless (timerp (mevedel-session-lease-renewal-timer session))
-            (setf (mevedel-session-lease-renewal-timer session)
-                  (run-at-time
-                   mevedel-session-lease-renewal-seconds
-                   mevedel-session-lease-renewal-seconds
-                   #'mevedel-session-durability-lease-renew session)))
-        (mevedel-session-durability--cancel-renewal session)))))
+      (cond
+       ((eq state 'owned)
+        (unless (timerp (mevedel-session-lease-renewal-timer session))
+          (setf (mevedel-session-lease-renewal-timer session)
+                (run-at-time
+                 mevedel-session-lease-renewal-seconds
+                 mevedel-session-lease-renewal-seconds
+                 #'mevedel-session-durability-lease-renew session))))
+       ;; Contested keeps the timer: see this function's docstring.
+       ((eq state 'contested))
+       (t
+        (mevedel-session-durability--cancel-renewal session))))))
+
+(defun mevedel-session-durability--finite-nonnegative-number-p (value)
+  "Return non-nil when VALUE is a finite nonnegative number.
+A durable record is file bytes some other client wrote, so a timestamp
+read back from one is only authority if it can be compared: NaN fails
+every comparison, and an infinity never expires."
+  (and (numberp value)
+       ;; NaN fails every comparison, so the lower bound rejects it; the upper
+       ;; one rejects an infinity and a bignum that would never expire.
+       (>= value 0)
+       (<= value most-positive-fixnum)))
 
 (defun mevedel-session-durability--valid-lease-p (lease)
   "Return non-nil when LEASE has the current portable representation."
@@ -644,8 +668,11 @@ saves re-reading a record this client just wrote."
        (stringp (plist-get lease :client-id))
        (string-match-p "\\`[0-9a-f]\\{64\\}\\'"
                        (plist-get lease :client-id))
-       (numberp (plist-get lease :renewed-at))
-       (numberp (plist-get lease :expires-at))
+       (mevedel-session-durability--finite-nonnegative-number-p
+        (plist-get lease :renewed-at))
+       (mevedel-session-durability--finite-nonnegative-number-p
+        (plist-get lease :expires-at))
+       (<= (plist-get lease :renewed-at) (plist-get lease :expires-at))
        (plist-member lease :publication-head)
        (plist-member lease :unsettled-mutation)
        (booleanp (plist-get lease :unsettled-mutation))
@@ -937,7 +964,7 @@ preserved unsettled-mutation flag with UNSETTLED-MUTATION."
            (generation (plist-get bound :generation))
            ;; A transaction that renews repeatedly already knows the bytes it
            ;; last wrote and has a fresh target clock, so it states them as
-           ;; the compare-and-set precondition instead of observing again.  A
+           ;; the write's precondition instead of observing again.  A
            ;; precondition that no longer holds falls back to observation
            ;; below, so a stale belief costs a round trip and never a wrong
            ;; answer.
@@ -1033,10 +1060,17 @@ preserved unsettled-mutation flag with UNSETTLED-MUTATION."
                      (mevedel-session-durability--lease-head directory)))
                 (mevedel-session-durability--bind-lease
                  session latest
-                 (if (mevedel-session-durability--owned-lease-record-p
-                      latest directory now)
-                     'owned
-                   'lost)))
+                 (cond
+                  ((mevedel-session-durability--owned-lease-record-p
+                    latest directory now)
+                   'owned)
+                  ;; The write landed; a generation appearing beside it that
+                  ;; has not activated has not won, and it aborts once its
+                  ;; own precondition check reads this record.  The next
+                  ;; heartbeat reconverges, so keep it running.
+                  ((eq 'claiming (plist-get latest :status))
+                   'contested)
+                  (t 'lost))))
               nil)))
         (if assumed
             ;; The assumption was the only reason this looked unusable.
@@ -1163,7 +1197,8 @@ renewal also normalizes this client's live `publishing\=' generation back to
          (memq (plist-get lease :status) '(active publishing))
          (equal mevedel-session-durability--client-id
                 (plist-get lease :client-id))
-         (numberp (plist-get lease :expires-at))
+         (mevedel-session-durability--finite-nonnegative-number-p
+          (plist-get lease :expires-at))
          (condition-case nil
              (> (plist-get lease :expires-at)
                 (mevedel-session-durability--target-time
