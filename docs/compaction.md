@@ -280,6 +280,16 @@ usable context.  A locally oversized request fails without gptel dispatch or
 retry.  Ordinary gptel request failures still retry the identical request up
 to three times.
 
+This preflight upper-bounds rather than estimates, because refusing locally
+is strictly better than dispatching: a locally refused request is classified
+`size', which does not retry and does not count toward disabling
+auto-compaction, while a request the provider refuses for the same reason is
+an ordinary failure that retries the identical oversized payload three times
+and then disables auto-compaction for the buffer.  Providers count tokens
+over UTF-8 bytes, so the bound charges a non-ASCII byte one token and keeps
+the chars/4 ratio only for ASCII.  The soft chat estimate above stays chars/4
+deliberately; it informs a threshold rather than upholding a promise.
+
 If automatic compaction finds no old body to summarize because the threshold
 is reached entirely by the protected tail, it sends the original request only
 while the target model remains below its own threshold.  At target pressure it
