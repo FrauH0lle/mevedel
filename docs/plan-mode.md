@@ -180,7 +180,11 @@ implementation target and retry.
 ## Acceptance and recovery
 
 Acceptance archives the plan immutably, clears the interaction, exits Plan,
-and shows `Preparing implementation...`. Here/Current keeps the planning
+and shows `Preparing implementation...`. It publishes and archives before it
+moves any proposal metadata, so an acceptance that fails before the immutable
+archive exists leaves the proposal exactly as it was and resume still offers
+it. That mirrors the rule for a failure after the archive, which stays
+accepted. Here/Current keeps the planning
 transcript. Fresh starts a new context with setup material and the accepted
 plan. Both Summary locations project the same effective source history and
 generate the shared eight-section handoff background. The accepted proposal is
