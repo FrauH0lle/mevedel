@@ -50,7 +50,28 @@
                      "local://a#fragment"))
     (should-error (mevedel-resource-parse-address address)))
   :doc "rejects unknown scheme URLs instead of treating them as paths"
-  (should-error (mevedel-resource-parse-address "https://example.test/a")))
+  (should-error (mevedel-resource-parse-address "https://example.test/a"))
+  :doc "rejects an unknown scheme without interning its name"
+  ;; A scheme name arrives in model tool arguments and is parsed before the
+  ;; permission step runs, so an unknown one must leave no symbol behind:
+  ;; Emacs never collects an interned symbol.
+  (let* ((name "mevedelunknownscheme")
+         (address (concat name "://a")))
+    (unwind-protect
+        (progn
+          ;; It must still look address-like, or an unknown scheme would be
+          ;; expanded as a relative filesystem path instead of rejected.
+          (should (mevedel-resource-address-like-p address))
+          (should-error (mevedel-resource-parse-address address))
+          (should-not (intern-soft name)))
+      (unintern name obarray)))
+  :doc "rejects a scheme named after a falsy symbol"
+  ;; `nil' interns to a symbol that is itself false, so interning the prefix
+  ;; made this address look like no address at all, and it was expanded as a
+  ;; relative path instead of rejected.
+  (progn
+    (should (mevedel-resource-address-like-p "nil://a"))
+    (should-error (mevedel-resource-parse-address "nil://a"))))
 
 (mevedel-deftest mevedel-resource-encode-component ()
   ,test
@@ -61,6 +82,13 @@
   :doc "leaves only unreserved bytes literal"
   (should (equal "AZaz09-._~"
                  (mevedel-resource-encode-component "AZaz09-._~"))))
+
+(mevedel-deftest mevedel-resource-supported-scheme-p
+  (:doc "answers a scheme name with the scheme it names")
+  (progn
+    (should (eq 'local (mevedel-resource-supported-scheme-p "LOCAL")))
+    (should (eq 'local (mevedel-resource-supported-scheme-p 'local)))
+    (should-not (mevedel-resource-supported-scheme-p "https"))))
 
 (mevedel-deftest mevedel-resource-locator-class ()
   ,test

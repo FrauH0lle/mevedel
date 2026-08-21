@@ -118,15 +118,21 @@
          (string-match-p "\\`[0-9a-f]\\{64\\}\\'" value))))
 
 (defun mevedel-resource-supported-scheme-p (scheme)
-  "Return non-nil when SCHEME is one of the supported resource schemes."
-  (memq (if (stringp scheme) (intern (downcase scheme)) scheme)
-        mevedel-resource-supported-schemes))
+  "Return the scheme symbol SCHEME names, or nil.
+SCHEME is a name or a symbol; a name is looked up, never interned."
+  (let ((symbol (if (stringp scheme)
+                    (intern-soft (downcase scheme))
+                  scheme)))
+    (and (memq symbol mevedel-resource-supported-schemes) symbol)))
 
 (defun mevedel-resource--scheme-prefix (value)
-  "Return the symbol before `://` in VALUE, or nil."
+  "Return the scheme name before `://` in VALUE, or nil.
+Any URI-shaped prefix answers, not only a supported one: that is what
+makes an unknown scheme a rejected address rather than a relative
+filesystem path."
   (when (and (stringp value)
              (string-match "\\`\\([[:alnum:]][[:alnum:]+.-]*\\)://" value))
-    (intern (downcase (match-string 1 value)))))
+    (downcase (match-string 1 value))))
 
 (defun mevedel-resource-address-like-p (value)
   "Return non-nil when VALUE has a URI-like `scheme://` prefix."
@@ -624,14 +630,15 @@ resolution is intentionally not performed here."
   (when (string-match-p "\\?" address)
     (signal 'mevedel-resource-error
             (list "Resource addresses do not support query strings")))
-  (let ((scheme (mevedel-resource--scheme-prefix address)))
-    (unless scheme
+  (let* ((name (mevedel-resource--scheme-prefix address))
+         (scheme (and name (mevedel-resource-supported-scheme-p name))))
+    (unless name
       (signal 'mevedel-resource-error
               (list "Resource address must use a supported scheme")))
-    (unless (mevedel-resource-supported-scheme-p scheme)
+    (unless scheme
       (signal 'mevedel-resource-error
-              (list (format "Unsupported resource scheme: %s" scheme))))
-    (let* ((prefix (concat (symbol-name scheme) "://"))
+              (list (format "Unsupported resource scheme: %s" name))))
+    (let* ((prefix (concat name "://"))
            (tail (substring address (length prefix)))
            (fragment-data nil)
            (fragment-p (and (eq scheme 'agent)
@@ -1201,10 +1208,7 @@ errors before any content or handler is reached."
   (when (and (stringp address)
              (mevedel-resource-address-like-p address))
     (condition-case err
-        (let* ((operation (if (stringp operation)
-                              (intern (downcase operation))
-                            operation))
-           (parsed (mevedel-resource-parse-address address))
+        (let* ((parsed (mevedel-resource-parse-address address))
            (scheme (plist-get parsed :scheme))
            (components (plist-get parsed :components))
            (session (mevedel-resource--session context))
@@ -1223,14 +1227,12 @@ errors before any content or handler is reached."
                        :workspace workspace
                        :context context
                        :args (copy-tree (plist-get context :args))
-                       :read-only-p (not (memq operation
-                                                 '(apply-patch apply_patch
-                                                   patch)))))
+                       :read-only-p (not (eq operation 'apply-patch))))
            physical root logical-p)
       (unless (or (eq operation 'read)
                   (and (memq operation '(glob grep))
                        (memq scheme '(local artifact skill memory)))
-                  (and (memq operation '(apply-patch apply_patch patch))
+                  (and (eq operation 'apply-patch)
                        (eq scheme 'local)))
         (signal 'mevedel-resource-error
                 (list (format "%s does not support %s addresses"
@@ -1242,7 +1244,7 @@ errors before any content or handler is reached."
                 (list "Bare skill:// supports Read only")))
       ;; A bare directory address names a listing, never a patch endpoint.
       (when (and (null components)
-                 (memq operation '(apply-patch apply_patch patch)))
+                 (eq operation 'apply-patch))
         (signal 'mevedel-resource-error
                 (list (format "Bare %s:// is not a patch target"
                               (symbol-name scheme)))))
