@@ -110,21 +110,23 @@
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
-;; `mevedel-tool-fs'
-(declare-function mevedel-tool-fs--format-large-pdf-reminder
-                  "mevedel-tool-fs" (path))
-(declare-function mevedel-tool-fs--large-pdf-p "mevedel-tool-fs" (path))
-(declare-function mevedel-tool-fs--list-directory
-                  "mevedel-tool-fs" (path &optional max-entries))
-(declare-function mevedel-tool-fs--media-mime-type
-                  "mevedel-tool-fs" (filename))
-(declare-function mevedel-tool-fs--pdf-media-p "mevedel-tool-fs" (filename))
-(declare-function mevedel-tool-fs--read-session-artifact
-                  "mevedel-tool-fs" (session logical path offset limit))
-(declare-function mevedel-tool-fs--slurp-file-contents
-                  "mevedel-tool-fs"
+;; `mevedel-tool-fs-read'
+(declare-function mevedel-tool-fs-read-format-large-pdf-reminder
+                  "mevedel-tool-fs-read" (path))
+(declare-function mevedel-tool-fs-read-large-pdf-p
+                  "mevedel-tool-fs-read" (path))
+(declare-function mevedel-tool-fs-read-list-directory
+                  "mevedel-tool-fs-read" (path &optional max-entries))
+(declare-function mevedel-tool-fs-read-media-mime-type
+                  "mevedel-tool-fs-read" (filename))
+(declare-function mevedel-tool-fs-read-pdf-media-p
+                  "mevedel-tool-fs-read" (filename))
+(declare-function mevedel-tool-fs-read-session-artifact
+                  "mevedel-tool-fs-read" (session logical path offset limit))
+(declare-function mevedel-tool-fs-read-slurp-file-contents
+                  "mevedel-tool-fs-read"
                   (path &optional offset limit display-path))
-(defvar mevedel-tool-fs--media-max-bytes)
+(defvar mevedel-tool-fs-read-media-max-bytes)
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-ensure "mevedel-tool-registry" (name))
@@ -678,6 +680,7 @@ See `mevedel-mention-handlers' for the INFO plist shape.
 The INFO :captures list for this handler is (WHOLE PATH START END), where
 PATH is either a bare path or a braced token, and START and END are
 optional strings from the `#L<start>[-<end>]' suffix."
+  (require 'mevedel-tool-fs-read)
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
@@ -770,7 +773,7 @@ to the user."
      ((and (not artifact-logical)
            (file-directory-p expanded))
       (condition-case err
-          (let* ((listing (mevedel-tool-fs--list-directory
+          (let* ((listing (mevedel-tool-fs-read-list-directory
                            expanded
                            mevedel-file-mention-directory-max-entries))
                  (entries (car listing))
@@ -799,8 +802,8 @@ gitignore-filtered):\n\n```\n%s\n```%s"
                   :hash hash))
         (error
          (funcall deny-placeholder (error-message-string err)))))
-     ((mevedel-tool-fs--media-mime-type expanded)
-      (let ((mime (mevedel-tool-fs--media-mime-type expanded))
+     ((mevedel-tool-fs-read-media-mime-type expanded)
+      (let ((mime (mevedel-tool-fs-read-media-mime-type expanded))
             artifact-bytes)
         (cond
          ((or offset limit)
@@ -814,19 +817,19 @@ gitignore-filtered):\n\n```\n%s\n```%s"
                         (mevedel-session-artifacts-read-artifact
                          session artifact-logical)))
                (file-attribute-size (file-attributes expanded)))
-             mevedel-tool-fs--media-max-bytes)
+             mevedel-tool-fs-read-media-max-bytes)
           (funcall deny-placeholder
                    "media file is too large"
                    (when (and (not artifact-logical)
-                              (mevedel-tool-fs--pdf-media-p expanded))
-                     (mevedel-tool-fs--format-large-pdf-reminder
+                              (mevedel-tool-fs-read-pdf-media-p expanded))
+                     (mevedel-tool-fs-read-format-large-pdf-reminder
                       expanded))))
          (t
           (let ((reminder
                  (and (not artifact-logical)
-                      (mevedel-tool-fs--pdf-media-p expanded)
-                      (mevedel-tool-fs--large-pdf-p expanded)
-                      (mevedel-tool-fs--format-large-pdf-reminder
+                      (mevedel-tool-fs-read-pdf-media-p expanded)
+                      (mevedel-tool-fs-read-large-pdf-p expanded)
+                      (mevedel-tool-fs-read-format-large-pdf-reminder
                        expanded))))
             (list :placeholder
                   (format "[file:%s -- media attached]" display-path)
@@ -843,9 +846,9 @@ gitignore-filtered):\n\n```\n%s\n```%s"
       (condition-case err
           (let* ((content
                   (if artifact-logical
-                      (mevedel-tool-fs--read-session-artifact
+                      (mevedel-tool-fs-read-session-artifact
                        session artifact-logical expanded offset limit)
-                    (mevedel-tool-fs--slurp-file-contents
+                    (mevedel-tool-fs-read-slurp-file-contents
                      expanded offset limit)))
                  (hash (secure-hash 'sha1 content))
                  (range-phrase

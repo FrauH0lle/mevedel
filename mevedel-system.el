@@ -411,7 +411,7 @@ Anything linked from MEMORY.md can be discovered in future conversations.")))
              (mevedel-session-working-directory session))
         (mevedel-system--workspace-root workspace)))))
 
-(defun mevedel-system--workspace-config-files (workspace &optional working-directory)
+(defun mevedel-system-workspace-config-files (workspace &optional working-directory)
   "Return layered workspace instruction files for WORKSPACE.
 
 Files are ordered from workspace root to WORKING-DIRECTORY.  Within a
@@ -443,7 +443,7 @@ present."
 
 (defun mevedel-system--workspace-config-content (workspace &optional working-directory)
   "Return guidance for WORKSPACE and WORKING-DIRECTORY, or nil."
-  (when-let* ((files (mevedel-system--workspace-config-files
+  (when-let* ((files (mevedel-system-workspace-config-files
                      workspace working-directory)))
     (string-join
      (mapcar
@@ -468,7 +468,7 @@ present."
   "Return cache key for the workspace configuration section in CONTEXT."
   (or
    (mapcar #'mevedel-system--file-cache-key
-           (mevedel-system--workspace-config-files
+           (mevedel-system-workspace-config-files
             (mevedel-system-context-workspace context)
             (mevedel-system-context-working-directory context)))
    (list :none

@@ -52,7 +52,7 @@
   (mevedel-tool-media--format-media-data-block
    media
    (and session
-        (mevedel-pipeline--tool-results-dir session buffer))
+        (mevedel-pipeline-tool-results-dir session buffer))
    tool-use-id))
 
 (defun test-mevedel-pipeline--extract-media-data
@@ -61,7 +61,7 @@
   (mevedel-tool-media-extract
    string
    (and session
-        (mevedel-pipeline--tool-results-dir session buffer))
+        (mevedel-pipeline-tool-results-dir session buffer))
    expected-tool-use-id))
 
 (defun test-mevedel-pipeline--raw-bytes (&rest bytes)
@@ -842,7 +842,7 @@ cover, so the permission step's warning about it is captured here."
           (with-temp-file path-a (insert "a"))
           (with-temp-file path-b (insert "b"))
           (mevedel-pipeline--step-snapshot
-           (list :tool tool :args nil)
+           (list :tool tool :args nil :request request)
            (lambda (_context) (setq next-called t)) #'ignore)
           (should next-called)
           (let ((snapshots (mevedel-request-file-snapshots request)))
@@ -2134,7 +2134,7 @@ cover, so the permission step's warning about it is captured here."
          (tool
           (mevedel-tool--create
            :name "Read"
-           :handler #'mevedel-tool-fs--read
+           :handler #'mevedel-tool-fs-read
            :args '((file_path path :required "Path"))
            :groups '(read)
            :read-only-p t
@@ -2174,7 +2174,7 @@ cover, so the permission step's warning about it is captured here."
          (tool
           (mevedel-tool--create
            :name "Read"
-           :handler #'mevedel-tool-fs--read
+           :handler #'mevedel-tool-fs-read
            :args '((file_path path :required "Path"))
            :groups '(read)
            :read-only-p t
@@ -2246,14 +2246,14 @@ cover, so the permission step's warning about it is captured here."
                  (list "Grep" :path outside :action 'deny))))
          (glob
           (mevedel-tool--create
-           :name "Glob" :handler #'mevedel-tool-fs--glob
+           :name "Glob" :handler #'mevedel-tool-fs-search-glob
            :args '((pattern string :required "Pattern")
                    (path path :optional "Root"))
            :async-p t :read-only-p t :groups '(read)
            :get-path (lambda (args) (plist-get args :path))))
          (grep
           (mevedel-tool--create
-           :name "Grep" :handler #'mevedel-tool-fs--grep
+           :name "Grep" :handler #'mevedel-tool-fs-search-grep
            :args '((pattern string :required "Pattern")
                    (path path :optional "Root"))
            :async-p t :read-only-p t :groups '(read)
@@ -3048,68 +3048,72 @@ cover, so the permission step's warning about it is captured here."
                                  (mevedel-test--hook-audit-records result))))
 			   (should (= 1 (length repair-audits)))))
 		     (mevedel-tool-clear-registry)))
-			 :doc "path repair is shared by permission, snapshot, handler, and rendering"
-			 (let* ((expected "/tmp/notes.md")
-				(workspace (mevedel-workspace--create
-				            :type 'project :id temporary-file-directory
-				            :root temporary-file-directory))
-				(session
-				 (mevedel-session--create
-				  :name "path-repair"
-				  :workspace workspace
-			  :permission-mode 'ask
-			  :resource-grants
-			  (list (list :path expected :access 'write))))
-			(mevedel--session session)
-			(get-path-values nil)
-			snapshot-value
-			handler-value
-			render-value
-			(tool (mevedel-tool--create
-			       :name "PathMutation"
-			       :category "mevedel"
-			       :handler (lambda (args)
-					  (setq handler-value
-						(plist-get args :file_path))
-					  '(:result "updated"))
-			       :args '((file_path path :required "File path"))
-			       :check-permission (lambda (_tool _args) 'allow)
-			       :get-path (lambda (args)
-					   (let ((path (plist-get args :file_path)))
-					     (push path get-path-values)
-					     path))
-			       :render-transform
-			       (lambda (_name args _result)
-				 (setq render-value (plist-get args :file_path))
-				 '(:status updated))
-			       :read-only-p nil
-			       :snapshot-p t
-			       :async-p nil))
-			result)
-		   (mevedel-tool-register tool)
-		   (unwind-protect
-		       (with-temp-buffer
-			 (cl-letf (((symbol-function
-				     'mevedel--snapshot-file-if-needed)
-				    (lambda (path) (setq snapshot-value path))))
-			   (let* ((adapted
-				   (mevedel-tool-repair-pre-tool-call
-				    '(:name "PathMutation"
-				      :args
-				      (:file_path
-				       "/tmp/[notes.md](https://notes.md)"))))
-				  (args (plist-get adapted :args)))
-			     (mevedel-pipeline-run-tool
-			      tool (lambda (value) (setq result value)) args)
-			     (should (seq-every-p
-				      (lambda (value) (equal expected value))
-				      get-path-values))
-			     (should (equal expected snapshot-value))
-			     (should (equal expected handler-value))
-			     (should (equal expected render-value))
-			     (should (string-match-p
-				      "Note: Repaired tool input" result)))))
-		     (mevedel-tool-clear-registry)))
+                 :doc "path repair is shared by permission, snapshot, handler, and rendering"
+                 (let* ((expected "/tmp/notes.md")
+                        (workspace (mevedel-workspace--create
+                                    :type 'project :id temporary-file-directory
+                                    :root temporary-file-directory))
+                        (session
+                         (mevedel-session--create
+                          :name "path-repair"
+                          :workspace workspace
+                          :permission-mode 'ask
+                          :resource-grants
+                          (list (list :path expected :access 'write))))
+                        (request (mevedel-request--create
+                                  :file-snapshots (make-hash-table :test #'equal)))
+                        (mevedel--session session)
+                        (mevedel--current-request request)
+                        (get-path-values nil)
+                        snapshot-value
+                        handler-value
+                        render-value
+                        (tool (mevedel-tool--create
+                               :name "PathMutation"
+                               :category "mevedel"
+                               :handler (lambda (args)
+                                          (setq handler-value
+                                                (plist-get args :file_path))
+                                          '(:result "updated"))
+                               :args '((file_path path :required "File path"))
+                               :check-permission (lambda (_tool _args) 'allow)
+                               :get-path (lambda (args)
+                                           (let ((path (plist-get args :file_path)))
+                                             (push path get-path-values)
+                                             path))
+                               :render-transform
+                               (lambda (_name args _result)
+                                 (setq render-value (plist-get args :file_path))
+                                 '(:status updated))
+                               :read-only-p nil
+                               :snapshot-p t
+                               :async-p nil))
+                        result)
+                   (mevedel-tool-register tool)
+                   (unwind-protect
+                       (with-temp-buffer
+                         (cl-letf (((symbol-function
+                                     'mevedel-pipeline--snapshot-file-if-needed)
+                                    (lambda (_request path)
+                                      (setq snapshot-value path))))
+                           (let* ((adapted
+                                   (mevedel-tool-repair-pre-tool-call
+                                    '(:name "PathMutation"
+                                            :args
+                                            (:file_path
+                                             "/tmp/[notes.md](https://notes.md)"))))
+                                  (args (plist-get adapted :args)))
+                             (mevedel-pipeline-run-tool
+                              tool (lambda (value) (setq result value)) args)
+                             (should (seq-every-p
+                                      (lambda (value) (equal expected value))
+                                      get-path-values))
+                             (should (equal expected snapshot-value))
+                             (should (equal expected handler-value))
+                             (should (equal expected render-value))
+                             (should (string-match-p
+                                      "Note: Repaired tool input" result)))))
+                     (mevedel-tool-clear-registry)))
 		 :doc "async tool runs through pipeline"
 		 (let* ((tool (mevedel-tool--create
 			       :name "AsyncEcho"
@@ -4502,6 +4506,41 @@ cover, so the permission step's warning about it is captured here."
 			      (cl-position #'mevedel-pipeline--step-render-transform steps)))
 		   (should (< (cl-position #'mevedel-pipeline--step-render-transform steps)
 			      (cl-position #'mevedel-pipeline--step-persist steps)))))
+
+;;
+;;; File checkpoint capture
+
+(mevedel-deftest mevedel-pipeline--snapshot-file-if-needed ()
+  ,test
+  (test)
+  :doc "captures a regular file once at its pre-turn contents"
+  (let* ((directory (make-temp-file "mevedel-snapshot-" t))
+         (path (file-name-concat directory "tracked.el"))
+         (snapshots (make-hash-table :test #'equal))
+         (mevedel--current-request
+          (mevedel-request--create :file-snapshots snapshots)))
+    (unwind-protect
+        (progn
+          (write-region "before" nil path nil 'silent)
+          (mevedel-pipeline--snapshot-file-if-needed
+           mevedel--current-request path)
+          (write-region "after" nil path nil 'silent)
+          (mevedel-pipeline--snapshot-file-if-needed
+           mevedel--current-request path)
+          (should (equal "before" (gethash path snapshots))))
+      (delete-directory directory t)))
+  :doc "records a known gap when the pre-turn path cannot be read"
+  (let* ((directory (make-temp-file "mevedel-snapshot-gap-" t))
+         (snapshots (make-hash-table :test #'equal))
+         (mevedel--current-request
+          (mevedel-request--create :file-snapshots snapshots)))
+    (unwind-protect
+        (progn
+          (mevedel-pipeline--snapshot-file-if-needed
+           mevedel--current-request directory)
+          (should (stringp
+                   (plist-get (gethash directory snapshots) :gap))))
+      (delete-directory directory t))))
 
 (provide 'test-mevedel-pipeline)
 ;;; test-mevedel-pipeline.el ends here

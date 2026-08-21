@@ -90,6 +90,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-request-directive-uuid "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-ephemeral-p "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
@@ -102,9 +103,6 @@
                   "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
-
-;; `mevedel-tool-fs'
-(declare-function mevedel--snapshot-file-if-needed "mevedel-tool-fs" (filepath))
 
 ;; `mevedel-tool-media'
 (declare-function mevedel-tool-media-attach-result
@@ -231,7 +229,7 @@ of omitted characters."
         result result length mevedel-pipeline--preview-size)
        :text))))
 
-(defun mevedel-pipeline--tool-results-dir (session buffer &optional request)
+(defun mevedel-pipeline-tool-results-dir (session buffer &optional request)
   "Return SESSION's tool-results directory, materializing when possible.
 
 When SESSION has no save path yet, use
@@ -274,7 +272,7 @@ available, falls back to `mevedel-pipeline--truncate-result'."
   (require 'mevedel-session-artifacts)
   (setq result (mevedel--normalize-message-text result))
   (require 'mevedel-resource)
-  (if-let* ((dir (mevedel-pipeline--tool-results-dir session buffer)))
+  (if-let* ((dir (mevedel-pipeline-tool-results-dir session buffer)))
       (let* ((name (mevedel-tool-name tool))
              (file (concat
                     (make-temp-name
@@ -1002,8 +1000,28 @@ unused -- a snapshot failure is best-effort and should never fail the
   (let ((tool (plist-get context :tool))
         (args (plist-get context :args)))
     (dolist (path (mevedel-tool-permission-paths tool args context))
-      (mevedel--snapshot-file-if-needed path))
+      (mevedel-pipeline--snapshot-file-if-needed
+       (plist-get context :request) path))
     (funcall next context)))
+
+(defun mevedel-pipeline--snapshot-file-if-needed (request filepath)
+  "Capture FILEPATH's original state once in REQUEST.
+Missing files are stored as nil; unreadable paths retain a diagnostic gap."
+  (when (and request filepath (stringp filepath))
+    (let* ((abs-path (expand-file-name filepath))
+           (snapshots (mevedel-request-file-snapshots request))
+           (missing (make-symbol "missing")))
+      (when (eq missing (gethash abs-path snapshots missing))
+        (condition-case err
+            (let ((original (when (file-exists-p abs-path)
+                              (with-temp-buffer
+                                (insert-file-contents abs-path)
+                                (buffer-string)))))
+              (puthash abs-path original snapshots))
+          (error
+           (puthash abs-path
+                    (list :gap (error-message-string err))
+                    snapshots)))))))
 
 (defun mevedel-pipeline--untracked-filesystem-effects-p (tool)
   "Return non-nil when TOOL can mutate files outside exact snapshots."
@@ -1311,7 +1329,7 @@ without changing handler return shapes."
                  (plist-put context :result
                             (mevedel-tool-media-attach-result
                              result media
-                             (mevedel-pipeline--tool-results-dir
+                             (mevedel-pipeline-tool-results-dir
                               (plist-get context :session)
                               (plist-get context :buffer)
                               (plist-get context :request))

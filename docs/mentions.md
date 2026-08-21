@@ -116,9 +116,10 @@ schema, send-time binding, and dispatch branches.
   touched-files, since LLM may still need other parts) and remains request
   syntax rather than part of the pathname locator. Directories
   return a gitignore-filtered recursive listing
-  (`rg --files --hidden --follow --sort path`) capped at
+  (`rg --files --hidden --sort path`, without following descendant symlinks)
+  capped at
   `mevedel-file-mention-directory-max-entries` (default 1000). Text
-  contents read via `mevedel-tool-fs--slurp-file-contents` (512 KB cap,
+  contents read through `mevedel-tool-fs-read-slurp-file-contents` (512 KB cap,
   line numbers). An exact path inside an active remote session store resolves
   only through that session's artifact resolver: fixed-path cache files do
   not establish presence or content. Resolved media bytes are staged in a

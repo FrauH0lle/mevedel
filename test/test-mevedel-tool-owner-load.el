@@ -25,6 +25,9 @@
                    "mevedel-pipeline.el"
                    "mevedel-tool-exec-permission.el"
                    "mevedel-tool-exec.el"
+                   "mevedel-tool-fs-read.el"
+                   "mevedel-tool-fs-search.el"
+                   "mevedel-tool-fs.el"
                    "mevedel-tool-permission.el"
                    "mevedel-tool-render-data.el"))
          (cases
@@ -65,16 +68,108 @@
                  (error "Execution permission behavior has the wrong owner"))))
             (exec-facade
              (progn
+               (require 'mevedel-execution-target)
+               (require 'mevedel-structs)
                (require 'mevedel-tool-registry)
                (require 'mevedel-tool-exec)
                (unless (mevedel-tool-ensure "Bash")
                  (error "Execution tool facade did not register Bash"))
+               (let* ((root (make-temp-file "mevedel-cold-exec-" t))
+                      (workspace (mevedel-workspace--create
+                                  :type 'test :id root :root root
+                                  :name "cold-exec"))
+                      (session (mevedel-session--create
+                                :authority-mode 'pid-lock
+                                :execution-target
+                                (mevedel-execution-target-create root)
+                                :save-path root
+                                :workspace workspace)))
+                 (unwind-protect
+                     (unless
+                         (equal
+                          (file-name-concat root "tool-results" "executions")
+                          (mevedel-tool-exec--execution-artifact-directory
+                           session))
+                       (error "Execution facade could not resolve artifacts"))
+                   (delete-directory root t)))
                (unless
                    (string-suffix-p
                     "mevedel-tool-exec.elc"
                     (or (symbol-file 'mevedel-tool-exec--register 'defun)
                         ""))
                  (error "Execution tool behavior has the wrong owner"))))
+            (fs-facade
+             (progn
+               (require 'mevedel-tool-registry)
+               (require 'mevedel-tool-fs)
+               (mevedel-tool-fs--register)
+               (unless (mevedel-tool-ensure "Read")
+                 (error "File-system facade did not register Read"))
+               (unless
+                   (string-suffix-p
+                    "mevedel-tool-fs.elc"
+                    (or (symbol-file 'mevedel-tool-fs--register 'defun) ""))
+                 (error "File-system registration has the wrong owner"))))
+            (fs-read
+             (progn
+               (require 'mevedel-tool-fs-read)
+               (let ((path (make-temp-file "mevedel-cold-read-")))
+                 (unwind-protect
+                     (progn
+                       (write-region "cold\n" nil path nil 'silent)
+                       (unless
+                           (string-search
+                            "1\tcold"
+                            (plist-get
+                             (mevedel-tool-fs-read (list :file_path path))
+                             :result))
+                         (error "Read owner did not read a real file")))
+                   (delete-file path)))
+               (unless
+                   (string-suffix-p
+                    "mevedel-tool-fs-read.elc"
+                    (or (symbol-file 'mevedel-tool-fs-read 'defun) ""))
+                 (error "Read behavior has the wrong owner"))))
+            (fs-search
+             (progn
+               (require 'mevedel-tool-fs-search)
+               (let ((root (make-temp-file "mevedel-cold-search-" t))
+                     (deadline (+ (float-time) 5))
+                     result)
+                 (unwind-protect
+                     (progn
+                       (write-region "cold\n" nil
+                                     (file-name-concat root "cold.txt")
+                                     nil 'silent)
+                       (mevedel-tool-fs-search-glob
+                        (lambda (value) (setq result value))
+                        (list :pattern "*.txt" :path root))
+                       (while (and (null result)
+                                   (< (float-time) deadline))
+                         (accept-process-output nil 0.01))
+                       (unless result
+                         (error "Search owner did not settle"))
+                       (unless (string-match-p
+                                "cold.txt" (plist-get result :result))
+                         (error "Search owner did not glob a real directory"))
+                       (setq result nil)
+                       (mevedel-tool-fs-search-grep
+                        (lambda (value) (setq result value))
+                        (list :pattern "cold" :path root
+                              :output_mode "content"))
+                       (while (and (null result)
+                                   (< (float-time) deadline))
+                         (accept-process-output nil 0.01))
+                       (unless (and result
+                                    (string-match-p
+                                     "cold" (plist-get result :result)))
+                         (error "Search owner did not grep a real directory")))
+                   (delete-directory root t)))
+               (unless
+                   (string-suffix-p
+                    "mevedel-tool-fs-search.elc"
+                    (or (symbol-file 'mevedel-tool-fs-search-glob 'defun) ""))
+                 (error "Search behavior has the wrong owner"))))
             (render
              (progn
                (require 'mevedel-tool-render-data)

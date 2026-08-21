@@ -89,7 +89,7 @@
   :doc "places execution artifacts below the session tool-results directory"
   (let* ((target (mevedel-execution-target-create default-directory))
          (session (mevedel-session--create :authority-mode 'pid-lock :execution-target target)))
-    (cl-letf (((symbol-function 'mevedel-pipeline--tool-results-dir)
+    (cl-letf (((symbol-function 'mevedel-pipeline-tool-results-dir)
                (lambda (_session _buffer) "/tmp/tool-results")))
       (should (equal "/tmp/tool-results/executions"
                      (mevedel-tool-exec--execution-artifact-directory
@@ -98,7 +98,7 @@
   (let* ((target (mevedel-execution-target-create
                   "/ssh:user@host:/srv/project/"))
          (session (mevedel-session--create :authority-mode 'pid-lock :execution-target target)))
-    (cl-letf (((symbol-function 'mevedel-pipeline--tool-results-dir)
+    (cl-letf (((symbol-function 'mevedel-pipeline-tool-results-dir)
                (lambda (&rest _)
                  (ert-fail "Remote spool consulted the target store"))))
       (should-not
