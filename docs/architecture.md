@@ -260,10 +260,13 @@ values belong to `mevedel-execution-process.el`, which owns process creation,
 stable child environments, process-group signaling, timeout cleanup, and
 bounded disk spooling. Bubblewrap admission and fallback remain with the
 managed facade. `mevedel-execution-scheduler.el` admits managed Bash through a
-fair session-scoped readers/writer lane. Bash and batch Eval remain tool
-adapters in `mevedel-tool-exec.el`; native filesystem tools use the execution
-facade's confined one-shot helper without entering the Bash scheduler. The
-Bash adapter also captures its analyzed exit-outcome resolver at spawn, so
+fair session-scoped readers/writer lane. `mevedel-bash-policy.el` owns Bash
+classification, reusable rules, and guardian guidance;
+`mevedel-tool-exec-permission.el` owns Bash/Eval authority and prompt adapters;
+and `mevedel-tool-exec.el` retains their tool lifecycle, rendering, and
+registration. Native filesystem tools use the execution facade's confined
+one-shot helper without entering the Bash scheduler. The Bash adapter also
+captures its analyzed exit-outcome resolver at spawn, so
 later observations derive the same canonical facts without moving command
 semantics into the process owner.
 

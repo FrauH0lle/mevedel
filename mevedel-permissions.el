@@ -1140,6 +1140,7 @@ happen for a non-read-only tool."
 
 (defun mevedel-permission--plan-mode-p (&optional session)
   "Return non-nil when the owning session is planning read-only work."
+  (require 'mevedel-agents)
   (let ((owner
          (or session
              (and (boundp 'mevedel--session) mevedel--session)
