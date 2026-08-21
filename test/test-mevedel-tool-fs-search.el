@@ -756,6 +756,49 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
                        :-i t)))
           (should (string-match-p "test\\.txt" result)))
       (delete-directory tmp-dir t)))
+  :doc "rejects a negative head_limit and offset"
+  ;; A negative head_limit deleted every match and reported "truncated";
+  ;; a negative offset was silently ignored.
+  (progn
+    (should-error
+     (test-mevedel-tool-fs-search--await-callback
+      #'mevedel-tool-fs-search-grep
+      (list :pattern "match" :path "/tmp" :head_limit -3))
+     :type 'error)
+    (should-error
+     (test-mevedel-tool-fs-search--await-callback
+      #'mevedel-tool-fs-search-grep
+      (list :pattern "match" :path "/tmp" :offset -2))
+     :type 'error))
+  :doc "reports an offset past the last result"
+  ;; An empty success is indistinguishable from no matches.
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (result nil))
+    (unwind-protect
+        (progn
+          (dotimes (i 3)
+            (with-temp-file (file-name-concat tmp-dir (format "f%d.txt" i))
+              (insert "match\n")))
+          (setq result
+                (test-mevedel-tool-fs-search--await-callback
+                 #'mevedel-tool-fs-search-grep
+                 (list :pattern "match"
+                       :path tmp-dir
+                       :offset 99)))
+          (should-not (string-empty-p result))
+          (should (string-match-p "after the last" result))
+          ;; A head limit alongside must not append a contradictory
+          ;; truncation notice to the answer.
+          (setq result
+                (test-mevedel-tool-fs-search--await-callback
+                 #'mevedel-tool-fs-search-grep
+                 (list :pattern "match"
+                       :path tmp-dir
+                       :offset 99
+                       :head_limit 1)))
+          (should (string-match-p "after the last" result))
+          (should-not (string-match-p "Results truncated" result)))
+      (delete-directory tmp-dir t)))
   :doc "head_limit truncates output"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (result nil))

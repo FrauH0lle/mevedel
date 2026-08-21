@@ -668,9 +668,14 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
              (head-limit (let ((v (plist-get args :head_limit)))
                            (cond ((null v) 250)
                                  ((and (integerp v) (= v 0)) nil)
+                                 ((and (integerp v) (< v 0))
+                                  (error "Grep :head_limit must be 0 or greater"))
                                  ((integerp v) v)
                                  (t 250))))
-             (offset (or (mevedel-tool-integer-arg args :offset) 0))
+             (offset (let ((v (or (mevedel-tool-integer-arg args :offset) 0)))
+                       (when (< v 0)
+                         (error "Grep :offset must be 0 or greater"))
+                       v))
              (case-fold (mevedel-tool-truthy-p (plist-get args :-i)))
              (line-numbers (let ((v (plist-get args :-n)))
                              (if (null v)
@@ -777,18 +782,28 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                                   (or (> offset 0) head-limit))
                          (goto-char (point-min))
                          (let ((total-lines (count-lines (point-min) (point-max))))
-                           (when (> offset 0)
-                             (forward-line offset)
-                             (delete-region (point-min) (point))
-                             (cl-decf total-lines offset))
-                           (when (and head-limit (> total-lines head-limit))
-                             (goto-char (point-min))
-                             (forward-line head-limit)
-                             (delete-region (point) (point-max))
-                             (goto-char (point-max))
-                             (insert
-                              (format "\n... Results truncated (limit: %d, offset: %d)"
-                                      head-limit offset)))))
+                           ;; An offset past the last output line would
+                           ;; leave an empty success indistinguishable
+                           ;; from no matches; answer about the range,
+                           ;; and about nothing else.
+                           (if (and (> offset 0) (>= offset total-lines))
+                               (progn
+                                 (erase-buffer)
+                                 (insert
+                                  (format "Offset %d starts after the last of %d output lines.  Lower :offset or repeat the search."
+                                          offset total-lines)))
+                             (when (> offset 0)
+                               (forward-line offset)
+                               (delete-region (point-min) (point))
+                               (cl-decf total-lines offset))
+                             (when (and head-limit (> total-lines head-limit))
+                               (goto-char (point-min))
+                               (forward-line head-limit)
+                               (delete-region (point) (point-max))
+                               (goto-char (point-max))
+                               (insert
+                                (format "\n... Results truncated (limit: %d, offset: %d)"
+                                        head-limit offset))))))
                        ;; Bound total output even after line-count truncation.
                        (mevedel-tool-fs-search--truncate-output-buffer
                         mevedel-tool-fs-search--grep-max-output-bytes

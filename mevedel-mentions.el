@@ -705,9 +705,9 @@ optional strings from the `#L<start>[-<end>]' suffix."
                       (start-line 1)
                       (t nil)))
          ;; A line number below one, or an end before its start, has no
-         ;; reading.  The Read tool repairs such input silently, so
-         ;; forwarding it attaches content the label does not describe and
-         ;; the model has no way to notice.
+         ;; reading.  Rejecting it here, before the permission check,
+         ;; keeps the denial message next to the placeholder instead of
+         ;; surfacing as a Read error later.
          (range-invalid (or (and start-line (< start-line 1))
                             (and start-line end-line
                                  (< end-line start-line))))
