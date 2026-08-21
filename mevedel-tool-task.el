@@ -255,7 +255,6 @@ Returns the new `mevedel-task' struct."
          (owner (if (plist-member p :owner)
                     (plist-get p :owner)
                   (mevedel-tool-task--current-agent-owner session)))
-         (blocks-raw (mevedel-tool-task--plist-get-any p :blocks))
          (blocked-by-raw (mevedel-tool-task--plist-get-any
                           p :blockedBy :blocked_by :blocked-by))
          (metadata (mevedel-tool-task--plist-get-any p :metadata)))
@@ -269,7 +268,6 @@ Returns the new `mevedel-task' struct."
                   :owner
                   (mevedel-task-normalize-owner
                    owner (mevedel-session-agent-registry session))
-                  :blocks (mevedel-tool-task--normalize-id-list blocks-raw)
                   :blocked-by (mevedel-tool-task--normalize-id-list
                                blocked-by-raw)
                   :completed-turn (and (eq status 'completed)
@@ -290,7 +288,6 @@ Returns the updated task.  Signals an error if ID is unknown."
           description description-p
           new-status status-p
           owner owner-p
-          blocks blocks-p
           blocked-by blocked-by-p
           metadata metadata-p)
       (when-let* ((subject-value
@@ -312,10 +309,6 @@ Returns the updated task.  Signals an error if ID is unknown."
                      (plist-get p :owner)
                      (mevedel-session-agent-registry session))
               owner-p t))
-      (when (plist-member p :blocks)
-        (setq blocks (mevedel-tool-task--normalize-id-list
-                      (plist-get p :blocks))
-              blocks-p t))
       (when (or (plist-member p :blockedBy)
                 (plist-member p :blocked_by)
                 (plist-member p :blocked-by))
@@ -341,8 +334,6 @@ Returns the updated task.  Signals an error if ID is unknown."
             (mevedel-tool-task--propagate-completion session task))))
       (when owner-p
         (setf (mevedel-task-owner task) owner))
-      (when blocks-p
-        (setf (mevedel-task-blocks task) blocks))
       (when blocked-by-p
         (setf (mevedel-task-blocked-by task) blocked-by))
       (when metadata-p
@@ -350,9 +341,7 @@ Returns the updated task.  Signals an error if ID is unknown."
     task))
 
 (defun mevedel-tool-task--propagate-completion (session task)
-  "Remove TASK's ID from blocked tasks in SESSION.
-Also clears TASK's `blocks' slot once propagated, since downstream
-dependencies no longer point back to it."
+  "Remove TASK's ID from blocked tasks in SESSION."
   (let ((id (mevedel-task-id task)))
     (dolist (other (mevedel-session-tasks session))
       (when (memq id (mevedel-task-blocked-by other))
@@ -681,10 +670,6 @@ MAX-LINES caps the rendered body without changing task storage."
            (push (format "blockedBy=[%s]"
                          (mapconcat #'number-to-string bb ","))
                  parts))
-         (when-let* ((bl (mevedel-task-blocks task)))
-           (push (format "blocks=[%s]"
-                         (mapconcat #'number-to-string bl ","))
-                 parts))
          (string-join (nreverse parts) " ")))
      tasks "\n")))
 
@@ -980,9 +965,6 @@ this runs after the task mutation it accompanies."
         (when-let* ((bb (mevedel-task-blocked-by task)))
           (insert (format "Blocked by: %s\n"
                           (mapconcat #'number-to-string bb ", "))))
-        (when-let* ((bl (mevedel-task-blocks task)))
-          (insert (format "Blocks: %s\n"
-                          (mapconcat #'number-to-string bl ", "))))
         (when-let* ((m (mevedel-task-metadata task)))
           (insert (format "Metadata: %S\n" m)))
         (list :result (buffer-string))))))
@@ -1097,7 +1079,7 @@ this runs after the task mutation it accompanies."
     :prompt-file "tools/taskcreate.md"
     :handler #'mevedel-tool-task--handle-create
     :args ((tasks array :required
-                  "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (canonical agent path or bucket string, optional; use subjects/descriptions for workstream names), blockedBy (array of task IDs, optional), blocks (array of task IDs, optional), metadata (object, optional)."
+                  "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (canonical agent path or bucket string, optional; use subjects/descriptions for workstream names), blockedBy (array of task IDs, optional), metadata (object, optional)."
                   :items (:type object)
                   :minItems 1)
            (note string :optional
@@ -1123,9 +1105,6 @@ this runs after the task mutation it accompanies."
                    "New status: \"pending\", \"in_progress\", or \"completed\". When set to completed, the task is removed from the blocked-by lists of any dependent tasks.")
            (owner string :optional
                   "New canonical agent path or bucket. Pass an empty string to unassign; prefer subjects/descriptions for workstream names.")
-           (blocks array :optional
-                   "Array of task IDs this task blocks."
-                   :items (:type integer))
            (blockedBy array :optional
                       "Array of task IDs blocking this task."
                       :items (:type integer))

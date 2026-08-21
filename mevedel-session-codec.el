@@ -87,7 +87,6 @@
 (declare-function mevedel-session-worktree-source-root "mevedel-structs" (cl-x))
 (declare-function mevedel-task--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-task-blocked-by "mevedel-structs" (cl-x))
-(declare-function mevedel-task-blocks "mevedel-structs" (cl-x))
 (declare-function mevedel-task-completed-turn "mevedel-structs" (cl-x))
 (declare-function mevedel-task-description "mevedel-structs" (cl-x))
 (declare-function mevedel-task-id "mevedel-structs" (cl-x))
@@ -458,7 +457,6 @@ are mapped below the opened workspace root before containment is checked."
         :description (mevedel-task-description task)
         :status      (mevedel-task-status task)
         :owner       (mevedel-task-owner task)
-        :blocks      (mevedel-task-blocks task)
         :blocked-by  (mevedel-task-blocked-by task)
         :completed-turn (mevedel-task-completed-turn task)
         :metadata    (mevedel-task-metadata task)))
@@ -473,7 +471,6 @@ are mapped below the opened workspace root before containment is checked."
    :status      (plist-get plist :status)
    :owner       (mevedel-task-normalize-owner
                  (plist-get plist :owner) agent-registry)
-   :blocks      (plist-get plist :blocks)
    :blocked-by  (plist-get plist :blocked-by)
    :completed-turn (plist-get plist :completed-turn)
    :metadata    (plist-get plist :metadata)))

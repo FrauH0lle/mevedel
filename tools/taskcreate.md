@@ -4,7 +4,7 @@ Tasks are the unified tracking system for planning and progress: they
 work as a flat checklist for simple sessions, and as a dependency
 graph for agent trees. Each task gets an auto-assigned
 integer ID that you can reference later from `TaskUpdate`, `TaskGet`,
-or from other tasks via `blockedBy` / `blocks`.
+or from other tasks via `blockedBy`.
 
 ### When to use `TaskCreate`
 
@@ -34,7 +34,6 @@ Pass `tasks` as an array. Each task object may contain:
   subjects/descriptions for workstream names; use the actual retained path
   instead of inventing a proxy owner for an agent.
 - `blockedBy` — optional array of task IDs that must complete first
-- `blocks` — optional array of task IDs this one blocks
 - `metadata` — optional free-form object for extra data
 
 Top-level `note` may be passed with the create call to update the
