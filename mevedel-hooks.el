@@ -412,8 +412,46 @@ Returns a plist or nil when HANDLER is invalid."
             (t nil))))
         (_ nil)))))
 
-(defun mevedel-hooks--normalize-group (group)
-  "Normalize one matcher GROUP plist."
+(defvar mevedel-hooks--normalizing-source nil
+  "Source description for the rules being normalized, when known.
+Bound around normalization so an unusable matcher can be reported with
+the file or layer that configured it.")
+
+(defvar mevedel-hooks--reported-bad-matchers (make-hash-table :test #'equal)
+  "Unusable matchers already reported, keyed by source, event, and matcher.
+The live defcustom and programmatic layers are re-normalized on every
+lifecycle event, so without this the same typo would be reported on every
+tool call for the life of the process.")
+
+(defun mevedel-hooks--usable-matcher-p (matcher event)
+  "Return non-nil when MATCHER can be matched, reporting it for EVENT if not.
+Only a regexp matcher can fail; symbols are compared literally, and every
+string in the exact-name grammar is also a valid regexp.  Each unusable
+matcher is reported once per source."
+  (or (not (stringp matcher))
+      (condition-case err
+          (progn (string-match-p matcher "") t)
+        (invalid-regexp
+         (let ((key (list mevedel-hooks--normalizing-source event matcher)))
+           (unless (gethash key mevedel-hooks--reported-bad-matchers)
+             (puthash key t mevedel-hooks--reported-bad-matchers)
+             (display-warning
+              'mevedel
+              (format "Ignoring %s hook group%s: matcher %S is not a valid \
+regexp: %s"
+                      event
+                      (if mevedel-hooks--normalizing-source
+                          (format " from %s"
+                                  mevedel-hooks--normalizing-source)
+                        "")
+                      matcher (error-message-string err))
+              :warning)))
+         nil))))
+
+(defun mevedel-hooks--normalize-group (group event)
+  "Normalize one matcher GROUP plist.
+EVENT names the lifecycle event the group was configured under, so an
+unusable matcher can be reported where a reader can find it."
   (when (and (listp group) (keywordp (car-safe group)))
     (let* ((matcher (plist-get group :matcher))
            (matcher (if (or (null matcher)
@@ -430,7 +468,8 @@ Returns a plist or nil when HANDLER is invalid."
            (normalized-hooks
             (delq nil (mapcar #'mevedel-hooks--normalize-handler
                               hooks-list))))
-      (when normalized-hooks
+      (when (and normalized-hooks
+                 (mevedel-hooks--usable-matcher-p matcher event))
         (list :matcher matcher
               :hooks normalized-hooks)))))
 
@@ -455,7 +494,9 @@ treated as `SubagentStop'."
                  (normalized-groups
                   (and (listp groups)
                        (delq nil
-                             (mapcar #'mevedel-hooks--normalize-group
+                             (mapcar (lambda (group)
+                                       (mevedel-hooks--normalize-group
+                                        group event))
                                      groups)))))
             (when normalized-groups
               (push (cons event normalized-groups) normalized))))))
@@ -508,12 +549,13 @@ treated as `SubagentStop'."
 (defun mevedel-hooks--read-config-file (file &optional content)
   "Read and normalize hook config FILE or snapshotted CONTENT."
   (condition-case err
-      (pcase (file-name-extension file)
-        ("el" (mevedel-hooks-normalize-rules
-               (mevedel-hooks--read-lisp-file file content)))
-        ("json" (mevedel-hooks-normalize-rules
-                 (mevedel-hooks--read-json-file file content)))
-        (_ nil))
+      (let ((mevedel-hooks--normalizing-source file))
+        (pcase (file-name-extension file)
+          ("el" (mevedel-hooks-normalize-rules
+                 (mevedel-hooks--read-lisp-file file content)))
+          ("json" (mevedel-hooks-normalize-rules
+                   (mevedel-hooks--read-json-file file content)))
+          (_ nil)))
     (error
      (display-warning
       'mevedel
@@ -782,6 +824,7 @@ memo."
   "Forget every memoized hook configuration so the next event re-reads it."
   (interactive)
   (clrhash mevedel-hooks--config-rules-cache)
+  (clrhash mevedel-hooks--reported-bad-matchers)
   (message "mevedel: hook configuration will be re-read"))
 
 (defun mevedel-hooks-effective-rules
@@ -797,7 +840,9 @@ memo."
       (setq rules
             (append rules
                     (mevedel-hooks-annotate-rules-source
-                     (mevedel-hooks-normalize-rules mevedel-hook-rules)
+                     (let ((mevedel-hooks--normalizing-source
+                            "mevedel-hook-rules"))
+                       (mevedel-hooks-normalize-rules mevedel-hook-rules))
                      'user nil user-emacs-directory)))
       (setq rules (append rules (mevedel-hooks--config-rules workspace)))
       (when session
@@ -887,7 +932,12 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
       (if (string-match-p "\\`[[:alnum:]_-]+\\(?:|[[:alnum:]_-]+\\)*\\'"
                           matcher)
           (member target (split-string matcher "|" t))
-        (string-match-p matcher target)))
+        ;; A matcher that cannot compile matches nothing.  Normalization
+        ;; drops and reports configured ones; a hand-built rule must not
+        ;; abort the event around it.
+        (condition-case nil
+            (string-match-p matcher target)
+          (invalid-regexp nil))))
      (t nil))))
 
 (defun mevedel-hooks--matching-handlers (event event-plist rules)
