@@ -8,6 +8,7 @@
 
 (require 'gptel-request)
 (require 'mevedel-context-summary)
+(require 'mevedel-execution-target)
 (require 'mevedel-plan)
 (require 'mevedel-plan-handoff)
 (require 'mevedel-plan-mode)
@@ -640,6 +641,47 @@
 (mevedel-deftest mevedel-plan-handoff--portable-paths ()
   ,test
   (test)
+  :doc "rewrites a remote session's paths in both spellings"
+  ;; Git prints a target-native root, and every model-visible path is
+  ;; target-native too, but the summary can also carry the client spelling
+  ;; the user sees.  Both have to go.
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-portable-remote-" t)))
+         (remote-root (format "/mevedelmock:portable:%s" root)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("portable")
+          (let ((default-directory root))
+            (should (zerop (call-process "git" nil nil nil "init" "--quiet"))))
+          (let* ((session (mevedel-session--create
+                           :authority-mode 'pid-lock :name "source"
+                           :execution-target
+                           (mevedel-execution-target-create remote-root)
+                           :working-directory remote-root))
+                 (summary (mevedel-plan-handoff--portable-paths
+                           (format "native %s and client %s"
+                                   (file-name-concat root "a.el")
+                                   (file-name-concat remote-root "b.el"))
+                           session)))
+            (should (equal "native a.el and client b.el" summary))))
+      (delete-directory root t)))
+
+  :doc "leaves a longer path that merely contains the root alone"
+  ;; A bare replacement rewrites any occurrence, so a snapshot or mount point
+  ;; spelled around the repository root would be corrupted rather than
+  ;; shortened.
+  (let ((root (file-name-as-directory (make-temp-file "mevedel-portable-anchor-" t))))
+    (unwind-protect
+        (let ((default-directory root))
+          (should (zerop (call-process "git" nil nil nil "init" "--quiet")))
+          (let* ((session (mevedel-session--create
+                           :authority-mode 'pid-lock :name "source"
+                           :working-directory root))
+                 (summary (mevedel-plan-handoff--portable-paths
+                           (format "own %s snap /mnt/snap%sx"
+                                   (file-name-concat root "a.el") root)
+                           session)))
+            (should (equal (format "own a.el snap /mnt/snap%sx" root) summary))))
+      (delete-directory root t)))
+
   :doc "rewrites evidence paths relative to the repository root"
   ;; The target session's working directory is its own worktree top level, so
   ;; only a repository-relative path resolves there.  Stripping the working
