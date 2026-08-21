@@ -2,24 +2,36 @@
 
 ;;; Commentary:
 
-;; Web-related tool wrappings: WebSearch, WebFetch, YouTube.
-;; These wrap the upstream gptel-agent tools so every call flows
-;; through the mevedel pipeline (permissions, result persistence,
-;; display) while the underlying implementation stays in gptel-agent.
+;; Web tool registration: WebSearch, WebFetch, YouTube.  Every call flows
+;; through the mevedel pipeline (permissions, result persistence, display)
+;; while the implementation stays in gptel-agent.  WebSearch and WebFetch
+;; wrap the upstream tools; YouTube is adapted natively because its upstream
+;; handler leaks the response buffers only a call owner can release.
 
 ;;; Code:
+
+(require 'gptel-agent-tools)
 
 (eval-when-compile
   (require 'mevedel-tool-registry))
 
-(require 'gptel-agent-tools)
-
 ;; `gptel-request'
 (declare-function gptel-get-tool "ext:gptel-request" (path))
+(declare-function gptel-tool-async "ext:gptel-request" (tool))
+(declare-function gptel-tool-function "ext:gptel-request" (tool))
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--positional-to-plist
+                  "mevedel-pipeline" (raw-args specs))
+(declare-function mevedel-pipeline-run-tool
+                  "mevedel-pipeline" (tool callback args))
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool--register-wrap
                   "mevedel-tool-registry" (&rest keys))
+(declare-function mevedel-tool--resolve-prompt
+                  "mevedel-tool-registry" (prompt))
+(declare-function mevedel-tool-register "mevedel-tool-registry" (tool))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
@@ -36,6 +48,58 @@
       (let ((host (url-host (url-generic-parse-url url))))
         (and host (not (string-empty-p host)) host)))))
 
+
+;;
+;;; YouTube resource ownership
+
+(defun mevedel-tool-web--youtube-function ()
+  "Return the upstream asynchronous YouTube handler, or nil.
+Returns nil when the tool is absent or has stopped being asynchronous,
+because this adapter calls it with a continuation."
+  (when-let* ((tool (gptel-get-tool '("gptel-agent" "YouTube")))
+              ((gptel-tool-async tool)))
+    (gptel-tool-function tool)))
+
+(defun mevedel-tool-web--release-youtube-responses (continuation)
+  "Kill the response buffers retrieved for CONTINUATION.
+`url-http' records the retrieval arguments in every response buffer it
+creates and carries them across redirects, and the upstream handler passes
+its callback among those arguments at every stage, so CONTINUATION
+identifies exactly the buffers this call produced and nothing else."
+  (let ((kill-buffer-query-functions nil))
+    (dolist (buffer (buffer-list))
+      (when (with-current-buffer buffer
+              (memq continuation (bound-and-true-p url-callback-arguments)))
+        (kill-buffer buffer)))))
+
+(defun mevedel-tool-web--youtube (callback args)
+  "Read the YouTube video in ARGS and call CALLBACK with the result.
+
+The upstream handler retrieves the watch page, the metadata API, and the
+caption track, and kills none of the response buffers, so this adapter
+owns them: the buffers that carry its own continuation are killed once
+the call settles.  A call that never settles keeps its buffers."
+  (if-let* ((fn (mevedel-tool-web--youtube-function)))
+      (letrec ((settled nil)
+               (continuation
+                (lambda (result)
+                  (unless settled
+                    (setq settled t)
+                    (mevedel-tool-web--release-youtube-responses continuation)
+                    (funcall callback (list :result result))))))
+        (condition-case error
+            (funcall fn continuation (plist-get args :url))
+          (error
+           (funcall continuation
+                    (format "Error: %s" (error-message-string error))))))
+    (funcall callback
+             (list :result
+                   "Error: gptel-agent's YouTube tool is unavailable"))))
+
+
+;;
+;;; Renderers
+
 (defun mevedel-tool-web--render-transform (name args result)
   "Return bounded render metadata for web tool NAME with ARGS and RESULT."
   (let ((url (plist-get args :url))
@@ -46,10 +110,6 @@
           :query query
           :lines (length (split-string result "\n" t))
           :chars (length result))))
-
-
-;;
-;;; Renderers
 
 (defun mevedel-tool-web--render-fetch (name args result render-data)
   "Return rendering plist for NAME using ARGS, RESULT, and RENDER-DATA.
@@ -89,7 +149,7 @@ why)."
 
 ;;;###autoload
 (defun mevedel-tool-web--register ()
-  "Wrap gptel-agent's web tools for mevedel."
+  "Register mevedel's web tools over gptel-agent's implementations."
 
   (mevedel-define-tool
     :wrap (gptel-get-tool '("gptel-agent" "WebSearch"))
@@ -112,10 +172,19 @@ why)."
     :render-transform #'mevedel-tool-web--render-transform
     :renderer #'mevedel-tool-web--render-fetch)
 
+  ;; Registered natively rather than wrapped, because the upstream
+  ;; handler leaks its response buffers and only an owner of the call can
+  ;; release them.
   (mevedel-define-tool
-    :wrap (gptel-get-tool '("gptel-agent" "YouTube"))
+    :name "YouTube"
+    :description "Find the description and transcript for a YouTube video."
     :summary "Find the description and transcript for a YouTube video."
     :prompt-file "tools/youtube.md"
+    :handler #'mevedel-tool-web--youtube
+    :args ((url string :required
+                "The YouTube video URL, for example \"https://www.youtube.com/watch?v=H2qJRnV8ZGA\""))
+    :async-p t
+    :category "mevedel-gptel-agent"
     :groups (web)
     :read-only-p t
     :max-result-size 50000

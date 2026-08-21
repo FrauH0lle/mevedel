@@ -177,6 +177,19 @@ current source with `gptel-get-tool`, so a reconnect can replace its function
 without rewrapping when that contract is unchanged.  Contract drift fails the
 call and requires rewrapping.  Re-registering the same wrapped `(category,
 name)` replaces the prior mevedel wrapper, matching native tool registration.
+Wrapping is the default for gptel-agent's tools, but a source that leaks
+resources cannot be wrapped, because only the owner of a call can release them.
+YouTube is therefore registered natively: the mevedel handler resolves the
+upstream asynchronous function through `gptel-get-tool` on every call, so
+upstream keeps owning the protocol, while mevedel owns the response buffers the
+call retrieves. `url-http` records the retrieval arguments in every response
+buffer it creates and carries them across redirects, and the upstream handler
+passes its callback among those arguments at every stage, so the handler's own
+continuation identifies exactly its buffers, including the one YouTube's
+watch-page redirect adds, and no buffer belonging to anything else. They are
+killed when the call settles, once; a call that never settles keeps its
+buffers.
+
 Preset application also resolves its tool specs from the current registry.
 Reloading a native tool therefore updates the next request's schema and
 handler instead of leaving a stale `gptel-tool` captured by an older preset.
