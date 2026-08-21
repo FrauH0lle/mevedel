@@ -120,7 +120,7 @@ Data model
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
   mevedel-prompt-submission.el accepted prompt + lifecycle-context transaction
   mevedel-bash-analysis.el    conservative shell parsing and normalized command facts
-  mevedel-bash-policy.el      argument-aware read-only command policies
+  mevedel-bash-policy.el      Bash classification, reusable rules, guardian policy
   mevedel-transport.el        remote reentrancy detection and idle-transport deferral
   mevedel-execution-target.el immutable local/TRAMP target, path domains, readiness
   mevedel-execution.el        managed execution registry, admission, and facade
@@ -233,7 +233,8 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-fs.el          Read, Glob, Grep
   mevedel-tool-patch.el       ApplyPatch parse/match/apply engine + tool
   mevedel-tool-code.el        XrefReferences, XrefDefinitions, Imenu, Treesitter
-  mevedel-tool-exec.el        Bash, Eval
+  mevedel-tool-exec-permission.el Bash/Eval authority and prompt adapters
+  mevedel-tool-exec.el        Bash/Eval lifecycle, rendering, registration
   mevedel-tool-web.el         WebSearch, WebFetch, YouTube
   mevedel-interaction-prompt.el  shared interaction overlay lifecycle
   mevedel-permission-prompt.el   generic, Bash, Eval, and execution-authority prompt UI

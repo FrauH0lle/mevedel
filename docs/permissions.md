@@ -323,6 +323,12 @@ and dangerous-command presentation, and Eval presentation. The queue retains
 ordering and outcome semantics; the shared interaction primitive retains
 overlay settlement and request cancellation.
 
+`mevedel-bash-policy.el` supplies Bash classification, reusable rule patterns,
+and guardian guidance. `mevedel-tool-exec-permission.el` combines that policy
+with the generic permission chain, persists approved authority, and adapts
+Bash and Eval decisions to the permission queue. Execution and rendering stay
+in `mevedel-tool-exec.el`.
+
 Permission diagnostics are persisted to `permission-log.el` in the session
 directory when `mevedel-permission-log-enabled` is non-nil. The log is
 diagnostic only: resume never replays it into live permission state.

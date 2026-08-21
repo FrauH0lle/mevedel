@@ -11,12 +11,12 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-bash-policy)
 (require 'mevedel-permissions)
 (require 'mevedel-pipeline)
 (require 'mevedel-skills-core)
 (require 'mevedel-skills-preparation)
 (require 'mevedel-structs)
-(require 'mevedel-tool-exec)
 (require 'mevedel-tools)
 (require 'mevedel-workspace)
 
@@ -273,7 +273,7 @@ ARGUMENTS: hello"
 Tests need a deterministic permit so they can assert on the
 substituted output without depending on the user's defcustom
 configuration."
-  `(cl-letf (((symbol-function 'mevedel-tools--check-bash-permission)
+  `(cl-letf (((symbol-function 'mevedel-bash-policy-check-permission)
               (lambda (_command &rest _args) 'allow)))
      ,@body))
 
@@ -348,14 +348,14 @@ Return the outcome plist produced by the async helper."
       (should (eq 'shell-failure (plist-get outcome :reason)))))
 
   :doc "permission deny yields :status error :reason permission-denied"
-  (cl-letf (((symbol-function 'mevedel-tools--check-bash-permission)
+  (cl-letf (((symbol-function 'mevedel-bash-policy-check-permission)
              (lambda (_c &rest _) 'deny)))
     (let ((outcome (mevedel-skills-test--shell-injections-sync "!`anything`")))
       (should (eq 'error (plist-get outcome :status)))
       (should (eq 'permission-denied (plist-get outcome :reason)))))
 
   :doc "permission ask yields :status error :reason permission-denied"
-  (cl-letf (((symbol-function 'mevedel-tools--check-bash-permission)
+  (cl-letf (((symbol-function 'mevedel-bash-policy-check-permission)
              (lambda (_c &rest _) 'ask)))
     (let ((outcome (mevedel-skills-test--shell-injections-sync "!`anything`")))
       (should (eq 'error (plist-get outcome :status)))

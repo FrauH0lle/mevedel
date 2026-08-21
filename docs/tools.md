@@ -545,6 +545,11 @@ the model which path or expression fields to narrow before retrying.
 
 ## Managed Bash execution
 
+`mevedel-tool-exec.el` owns Bash/Eval tool registration, execution lifecycle,
+and rendering. Bash classification and guardian policy live in
+`mevedel-bash-policy.el`; execution-specific permission normalization and
+prompt adaptation live in `mevedel-tool-exec-permission.el`.
+
 Bash source runs through `bash -lc`, so login-shell initialization contributes
 to the requested command's output. Managed Bash has no automatic timeout; use
 the native `timeout` command when the command itself needs a deadline. On Unix,

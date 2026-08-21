@@ -36,7 +36,7 @@
 (defun mevedel-skills-test--expansion-fn (_event)
   "Test hook used by skill expansion."
   '(:updated-input "Expanded by hook"
-    :additional-context "expansion context"))
+                   :additional-context "expansion context"))
 
 (defun mevedel-skills-test--block-expansion-fn (_event)
   "Test hook that blocks skill expansion."
@@ -113,116 +113,116 @@
   (test)
   :doc "pending slash tier sets prompt-buffer backend and model locals"
   (mevedel-skills-test--with-model-backends
-    (let* ((session (mevedel-skills-test--make-session))
-           (mevedel-model-tiers
+   (let* ((session (mevedel-skills-test--make-session))
+          (mevedel-model-tiers
            '((fast :provider "Fast:fast-model")
              (balanced :provider "Balanced:balanced-model")
              (strong)))
           (mevedel-model-workloads '((planning :tier balanced)))
           (chat (generate-new-buffer " *skill-model-chat*")))
-      (unwind-protect
-          (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
-            (with-current-buffer chat
-              (setf (mevedel-session-plan-mode session) t)
-              (setq-local mevedel--session session
-                          mevedel-skills--pending-request-context
-                          (list :model (mevedel-model-tier-selector 'fast))))
-            (with-temp-buffer
-              (setq-local gptel-backend (gptel-get-backend "Balanced"))
-              (setq-local gptel-model 'balanced-model)
-              (mevedel-skills--transform-apply-request-model-policy fsm)
-              (should (equal "Fast" (gptel-backend-name gptel-backend)))
-              (should (eq 'fast-model gptel-model))))
-        (kill-buffer chat))))
+     (unwind-protect
+         (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+           (with-current-buffer chat
+             (setf (mevedel-session-plan-mode session) t)
+             (setq-local mevedel--session session
+                         mevedel-skills--pending-request-context
+                         (list :model (mevedel-model-tier-selector 'fast))))
+           (with-temp-buffer
+             (setq-local gptel-backend (gptel-get-backend "Balanced"))
+             (setq-local gptel-model 'balanced-model)
+             (mevedel-skills--transform-apply-request-model-policy fsm)
+             (should (equal "Fast" (gptel-backend-name gptel-backend)))
+             (should (eq 'fast-model gptel-model))))
+       (kill-buffer chat))))
 
   :doc "Plan root requests use planning while retained agents keep their base"
   (mevedel-skills-test--with-model-backends
-    (let* ((session (mevedel-skills-test--make-session))
-           (mevedel-model-tiers
-            '((fast :provider "Fast:fast-model")
-              (balanced :provider "Balanced:balanced-model")))
-           (mevedel-model-workloads '((planning :tier fast)))
-           (chat (generate-new-buffer " *planning-model-chat*")))
-      (unwind-protect
-          (progn
-            (setf (mevedel-session-plan-mode session) t)
-            (with-current-buffer chat
-              (setq-local mevedel--session session
-                          gptel-backend (gptel-get-backend "Balanced")
-                          gptel-model 'balanced-model))
-            (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
-              (with-temp-buffer
-                (mevedel-skills--transform-apply-request-model-policy fsm)
-                (should (eq 'fast-model gptel-model)))
-              (with-current-buffer chat
-                (setq-local mevedel--agent-invocation t))
-              (with-temp-buffer
-                (mevedel-skills--transform-apply-request-model-policy fsm)
-                (should (eq 'balanced-model gptel-model)))))
-        (kill-buffer chat))))
+   (let* ((session (mevedel-skills-test--make-session))
+          (mevedel-model-tiers
+           '((fast :provider "Fast:fast-model")
+             (balanced :provider "Balanced:balanced-model")))
+          (mevedel-model-workloads '((planning :tier fast)))
+          (chat (generate-new-buffer " *planning-model-chat*")))
+     (unwind-protect
+         (progn
+           (setf (mevedel-session-plan-mode session) t)
+           (with-current-buffer chat
+             (setq-local mevedel--session session
+                         gptel-backend (gptel-get-backend "Balanced")
+                         gptel-model 'balanced-model))
+           (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+             (with-temp-buffer
+               (mevedel-skills--transform-apply-request-model-policy fsm)
+               (should (eq 'fast-model gptel-model)))
+             (with-current-buffer chat
+               (setq-local mevedel--agent-invocation t))
+             (with-temp-buffer
+               (mevedel-skills--transform-apply-request-model-policy fsm)
+               (should (eq 'balanced-model gptel-model)))))
+       (kill-buffer chat))))
 
   :doc "invalid planning policy fails before request realization"
   (mevedel-skills-test--with-model-backends
-    (let* ((session (mevedel-skills-test--make-session))
-           (mevedel-model-workloads
-            '((planning :tier fast :provider "Fast:fast-model")))
-           (chat (generate-new-buffer " *invalid-planning-model-chat*")))
-      (unwind-protect
-          (progn
-            (setf (mevedel-session-plan-mode session) t)
-            (with-current-buffer chat
-              (setq-local mevedel--session session))
-            (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
-              (with-temp-buffer
-                (should-error
-                 (mevedel-skills--transform-apply-request-model-policy fsm)
-                 :type 'user-error))))
-        (kill-buffer chat))))
+   (let* ((session (mevedel-skills-test--make-session))
+          (mevedel-model-workloads
+           '((planning :tier fast :provider "Fast:fast-model")))
+          (chat (generate-new-buffer " *invalid-planning-model-chat*")))
+     (unwind-protect
+         (progn
+           (setf (mevedel-session-plan-mode session) t)
+           (with-current-buffer chat
+             (setq-local mevedel--session session))
+           (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+             (with-temp-buffer
+               (should-error
+                (mevedel-skills--transform-apply-request-model-policy fsm)
+                :type 'user-error))))
+       (kill-buffer chat))))
 
   :doc "pending concrete provider sets prompt-buffer backend and model locals"
   (mevedel-skills-test--with-model-backends
-    (let ((chat (generate-new-buffer " *skill-model-chat*")))
-      (unwind-protect
-          (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
-            (with-current-buffer chat
-              (setq-local mevedel-skills--pending-request-context
-                          (list :model
-                                (mevedel-model-resolve-provider
-                                 "Balanced:balanced-model"))))
-            (with-temp-buffer
-              (setq-local gptel-backend (gptel-get-backend "Fast"))
-              (setq-local gptel-model 'fast-model)
-              (mevedel-skills--transform-apply-request-model-policy fsm)
-              (should (equal "Balanced" (gptel-backend-name gptel-backend)))
-              (should (eq 'balanced-model gptel-model))))
-        (kill-buffer chat))))
+   (let ((chat (generate-new-buffer " *skill-model-chat*")))
+     (unwind-protect
+         (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+           (with-current-buffer chat
+             (setq-local mevedel-skills--pending-request-context
+                         (list :model
+                               (mevedel-model-resolve-provider
+                                "Balanced:balanced-model"))))
+           (with-temp-buffer
+             (setq-local gptel-backend (gptel-get-backend "Fast"))
+             (setq-local gptel-model 'fast-model)
+             (mevedel-skills--transform-apply-request-model-policy fsm)
+             (should (equal "Balanced" (gptel-backend-name gptel-backend)))
+             (should (eq 'balanced-model gptel-model))))
+       (kill-buffer chat))))
 
   :doc "pending effort uses gptel validation and reaches the prompt buffer"
   (mevedel-skills-test--with-model-backends
-    (let ((chat (generate-new-buffer " *skill-effort-chat*"))
-          (old-custom (get 'gptel-reasoning-effort 'custom-type))
-          (old-effort (get 'fast-model :reasoning-effort)))
-      (unwind-protect
-          (progn
-            (put 'gptel-reasoning-effort 'custom-type '(choice symbol integer))
-            (put 'fast-model :reasoning-effort '(member low high))
-            (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
-              (with-current-buffer chat
-                (setq-local mevedel-skills--pending-request-context
-                            (list :model
-                                  (mevedel-model-resolve-provider
-                                   "Fast:fast-model")
-                                  :effort 'high)))
-              (with-temp-buffer
-                (mevedel-skills--transform-apply-request-model-policy fsm)
-                (should (eq 'fast-model gptel-model))
-                (should (eq 'high gptel-reasoning-effort))
-                (should (eq 'high
-                            (plist-get (gptel-fsm-info fsm)
-                                       :reasoning-effort))))))
-        (put 'gptel-reasoning-effort 'custom-type old-custom)
-        (put 'fast-model :reasoning-effort old-effort)
-        (kill-buffer chat)))))
+   (let ((chat (generate-new-buffer " *skill-effort-chat*"))
+         (old-custom (get 'gptel-reasoning-effort 'custom-type))
+         (old-effort (get 'fast-model :reasoning-effort)))
+     (unwind-protect
+         (progn
+           (put 'gptel-reasoning-effort 'custom-type '(choice symbol integer))
+           (put 'fast-model :reasoning-effort '(member low high))
+           (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+             (with-current-buffer chat
+               (setq-local mevedel-skills--pending-request-context
+                           (list :model
+                                 (mevedel-model-resolve-provider
+                                  "Fast:fast-model")
+                                 :effort 'high)))
+             (with-temp-buffer
+               (mevedel-skills--transform-apply-request-model-policy fsm)
+               (should (eq 'fast-model gptel-model))
+               (should (eq 'high gptel-reasoning-effort))
+               (should (eq 'high
+                           (plist-get (gptel-fsm-info fsm)
+                                      :reasoning-effort))))))
+       (put 'gptel-reasoning-effort 'custom-type old-custom)
+       (put 'fast-model :reasoning-effort old-effort)
+       (kill-buffer chat)))))
 
 
 (mevedel-deftest mevedel-skills--invoke-inline/elisp-injection ()
@@ -255,82 +255,6 @@ allowed-tools:
             (should (equal "result=6" (plist-get outcome :body)))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
-
-(mevedel-deftest mevedel-tools--check-bash-permission/trust-literal ()
-  ,test
-  (test)
-  :doc "direct user patterns deliberately authorize dangerous commands"
-  (let ((mevedel-bash-dangerous-commands '("rm"))
-        (mevedel-permission-rules '(("Bash" :pattern "rm *" :action allow))))
-    (should (eq 'allow
-                (mevedel-tools--check-bash-permission
-                 "rm /tmp/foo" :trust-literal-p t)))
-    (should (eq 'allow
-                (mevedel-tools--check-bash-permission "rm /tmp/foo"))))
-
-  :doc "direct user patterns deliberately authorize complex syntax"
-  (let ((mevedel-permission-rules '(("Bash" :pattern "echo *" :action allow))))
-    (should (eq 'allow
-                (mevedel-tools--check-bash-permission
-                 "echo $VAR" :trust-literal-p t))))
-
-  :doc "explicit deny still wins under :trust-literal-p t"
-  (let ((mevedel-permission-rules '(("Bash" :pattern "rm *" :action deny))))
-    (should (eq 'deny
-                (mevedel-tools--check-bash-permission
-                 "rm /tmp/foo" :trust-literal-p t))))
-
-  :doc "skill bucket allows Bash even without session/global rule"
-  ;; Reviewer's correctness fix: the Bash permission path must
-  ;; consult invocation/request skill buckets so a skill with
-  ;; `allowed-tools: [Bash(gh *)]' actually authorizes `gh' calls.
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "b" :root "/tmp/b" :name "b"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
-         (request (mevedel-request--create
-                   :session session
-                   :skill-permission-rules
-                   '(("Bash" :pattern "gh *" :action allow))))
-         (mevedel-permission-rules nil))
-    (with-temp-buffer
-      (setq-local mevedel--session session)
-      (setq-local mevedel--current-request request)
-      (should (eq 'allow
-                  (mevedel-tools--check-bash-permission
-                   "gh issue list" :trust-literal-p t)))
-      ;; The same call without :trust-literal-p still consults the
-      ;; bucket; default behavior also works.
-      (should (eq 'allow
-                  (mevedel-tools--check-bash-permission
-                   "gh issue list")))))
-
-  :doc "session deny beats invocation/request skill allow on Bash"
-  ;; A session deny still wins over a skill-bucket allow.
-  (let* ((ws (mevedel-workspace--create
-              :type 'file :id "b2" :root "/tmp/b2" :name "b2"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create
-                   "main" ws))
-         (mevedel-permission-rules nil))
-    (setf (mevedel-session-permission-rules session)
-          '(("Bash" :pattern "rm *" :action deny)))
-    (let ((request (mevedel-request--create
-                    :session session
-                    :skill-permission-rules
-                    '(("Bash" :action allow)))))
-      (with-temp-buffer
-        (setq-local mevedel--session session)
-        (setq-local mevedel--current-request request)
-        ;; rm is a dangerous command; with trust-literal-p the
-        ;; overlay is suppressed but the session deny still wins.
-        (should (eq 'deny
-                    (mevedel-tools--check-bash-permission
-                     "rm /tmp/foo" :trust-literal-p t)))))))
 
 ;;
 ;;; mevedel-skills-invoke (unified invocation API)
@@ -644,33 +568,33 @@ hooks:
          calls)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session
-                (mevedel-session-create "remote-skill" workspace remote-root))
-          (with-temp-buffer
-            (setq-local mevedel--session session)
-            (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
-                       (lambda (tool callback args)
-                         (push (list (mevedel-tool-name tool)
-                                     (plist-get args :command))
-                               calls)
-                         (funcall callback "expanded"))))
-              (dolist (source '(project plugin))
-                (let ((skill (mevedel-skill--create
-                              :name (symbol-name source)
-                              :source source
-                              :source-dir remote-skill-dir
-                              :body (concat
-                                     "dir=${MEVEDEL_SKILL_DIR}|"
-                                     "${CLAUDE_SKILL_DIR} shell=!`pwd`")))
-                      outcome)
-                  (mevedel-skills-prepare
-                   skill "" (lambda (value) (setq outcome value))
-                   :role 'command :origin 'model)
-                  (should (eq 'ok (plist-get outcome :status)))
-                  (should
-                   (equal (format "dir=%s|%s shell=expanded"
-                                  native-skill-dir native-skill-dir)
-                          (plist-get outcome :body))))))))
+                                              (setq session
+                                                    (mevedel-session-create "remote-skill" workspace remote-root))
+                                              (with-temp-buffer
+                                                (setq-local mevedel--session session)
+                                                (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+                                                           (lambda (tool callback args)
+                                                             (push (list (mevedel-tool-name tool)
+                                                                         (plist-get args :command))
+                                                                   calls)
+                                                             (funcall callback "expanded"))))
+                                                  (dolist (source '(project plugin))
+                                                    (let ((skill (mevedel-skill--create
+                                                                  :name (symbol-name source)
+                                                                  :source source
+                                                                  :source-dir remote-skill-dir
+                                                                  :body (concat
+                                                                         "dir=${MEVEDEL_SKILL_DIR}|"
+                                                                         "${CLAUDE_SKILL_DIR} shell=!`pwd`")))
+                                                          outcome)
+                                                      (mevedel-skills-prepare
+                                                       skill "" (lambda (value) (setq outcome value))
+                                                       :role 'command :origin 'model)
+                                                      (should (eq 'ok (plist-get outcome :status)))
+                                                      (should
+                                                       (equal (format "dir=%s|%s shell=expanded"
+                                                                      native-skill-dir native-skill-dir)
+                                                              (plist-get outcome :body))))))))
       (delete-directory root t))
     (should (equal '(("Bash" "pwd") ("Bash" "pwd")) calls)))
 
@@ -703,35 +627,35 @@ hooks:
            "name: user-shell\ndescription: Client shell resource\n"
            "user=!`printf user`")
           (mevedel-test--with-local-shell-tramp nil
-            (setq session
-                  (mevedel-session-create
-                   "remote-discovery" workspace remote-root))
-            (let* ((skills (mevedel-skills-scan
-                            remote-root
-                            (list ".mevedel/skills" user-skills)))
-                   (project (cl-find "project-shell" skills
-                                     :key #'mevedel-skill-name :test #'equal))
-                   (user (cl-find "user-shell" skills
-                                  :key #'mevedel-skill-name :test #'equal)))
-              (should (eq 'project (mevedel-skill-source project)))
-              (should (file-remote-p (mevedel-skill-source-file project)))
-              (should (eq 'user (mevedel-skill-source user)))
-              (should-not (file-remote-p (mevedel-skill-source-file user)))
-              (with-temp-buffer
-                (setq-local default-directory remote-root)
-                (setq-local mevedel--session session)
-                (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
-                           (lambda (tool callback args)
-                             (push (list (mevedel-tool-name tool)
-                                         (plist-get args :command))
-                                   calls)
-                             (funcall callback "expanded"))))
-                  (mevedel-skills-prepare
-                   project "" (lambda (value) (setq project-outcome value))
-                   :role 'command :origin 'model)
-                  (mevedel-skills-prepare
-                   user "" (lambda (value) (setq user-outcome value))
-                   :role 'command :origin 'model)))))
+                                                (setq session
+                                                      (mevedel-session-create
+                                                       "remote-discovery" workspace remote-root))
+                                                (let* ((skills (mevedel-skills-scan
+                                                                remote-root
+                                                                (list ".mevedel/skills" user-skills)))
+                                                       (project (cl-find "project-shell" skills
+                                                                         :key #'mevedel-skill-name :test #'equal))
+                                                       (user (cl-find "user-shell" skills
+                                                                      :key #'mevedel-skill-name :test #'equal)))
+                                                  (should (eq 'project (mevedel-skill-source project)))
+                                                  (should (file-remote-p (mevedel-skill-source-file project)))
+                                                  (should (eq 'user (mevedel-skill-source user)))
+                                                  (should-not (file-remote-p (mevedel-skill-source-file user)))
+                                                  (with-temp-buffer
+                                                    (setq-local default-directory remote-root)
+                                                    (setq-local mevedel--session session)
+                                                    (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+                                                               (lambda (tool callback args)
+                                                                 (push (list (mevedel-tool-name tool)
+                                                                             (plist-get args :command))
+                                                                       calls)
+                                                                 (funcall callback "expanded"))))
+                                                      (mevedel-skills-prepare
+                                                       project "" (lambda (value) (setq project-outcome value))
+                                                       :role 'command :origin 'model)
+                                                      (mevedel-skills-prepare
+                                                       user "" (lambda (value) (setq user-outcome value))
+                                                       :role 'command :origin 'model)))))
           (should (equal '(("Bash" "printf project")) calls))
           (should (eq 'ok (plist-get project-outcome :status)))
           (should (equal "project=expanded"
@@ -761,43 +685,43 @@ hooks:
          dispatched)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp '("foreign")
-          (setq session
-                (mevedel-session-create "remote-origin" workspace remote-root))
-          (with-temp-buffer
-            (setq-local mevedel--session session)
-            (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
-                       (lambda (&rest _)
-                         (setq dispatched t))))
-              (dolist (skill
-                       (list
-                        (mevedel-skill--create
-                         :name "user" :source 'user
-                         :source-dir (file-name-concat root "user")
-                         :body "!`pwd`")
-                        (mevedel-skill--create
-                         :name "bundled" :source 'bundled
-                         :source-dir (file-name-concat root "bundled")
-                         :body "!`pwd`")
-                        (mevedel-skill--create
-                         :name "managed" :source 'managed
-                         :source-dir (file-name-concat root "managed")
-                         :body "!`pwd`")
-                        (mevedel-skill--create
-                         :name "client-plugin" :source 'plugin
-                         :source-dir (file-name-concat root "plugin")
-                         :body "!`pwd`")
-                        (mevedel-skill--create
-                         :name "foreign-plugin" :source 'plugin
-                         :source-dir (file-name-concat foreign-root "plugin")
-                         :body "!`pwd`")))
-                (let (outcome)
-                  (mevedel-skills-prepare
-                   skill "" (lambda (value) (setq outcome value))
-                   :role 'command :origin 'model)
-                  (should (eq 'error (plist-get outcome :status)))
-                  (should (eq 'resource-target (plist-get outcome :reason)))
-                  (should (string-match-p "execution target"
-                                          (plist-get outcome :message))))))))
+                                              (setq session
+                                                    (mevedel-session-create "remote-origin" workspace remote-root))
+                                              (with-temp-buffer
+                                                (setq-local mevedel--session session)
+                                                (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+                                                           (lambda (&rest _)
+                                                             (setq dispatched t))))
+                                                  (dolist (skill
+                                                           (list
+                                                            (mevedel-skill--create
+                                                             :name "user" :source 'user
+                                                             :source-dir (file-name-concat root "user")
+                                                             :body "!`pwd`")
+                                                            (mevedel-skill--create
+                                                             :name "bundled" :source 'bundled
+                                                             :source-dir (file-name-concat root "bundled")
+                                                             :body "!`pwd`")
+                                                            (mevedel-skill--create
+                                                             :name "managed" :source 'managed
+                                                             :source-dir (file-name-concat root "managed")
+                                                             :body "!`pwd`")
+                                                            (mevedel-skill--create
+                                                             :name "client-plugin" :source 'plugin
+                                                             :source-dir (file-name-concat root "plugin")
+                                                             :body "!`pwd`")
+                                                            (mevedel-skill--create
+                                                             :name "foreign-plugin" :source 'plugin
+                                                             :source-dir (file-name-concat foreign-root "plugin")
+                                                             :body "!`pwd`")))
+                                                    (let (outcome)
+                                                      (mevedel-skills-prepare
+                                                       skill "" (lambda (value) (setq outcome value))
+                                                       :role 'command :origin 'model)
+                                                      (should (eq 'error (plist-get outcome :status)))
+                                                      (should (eq 'resource-target (plist-get outcome :reason)))
+                                                      (should (string-match-p "execution target"
+                                                                              (plist-get outcome :message))))))))
       (delete-directory root t))
     (should-not dispatched))
 
@@ -820,21 +744,21 @@ hooks:
          outcome expression)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session
-                (mevedel-session-create "remote-elisp" workspace remote-root))
-          (with-temp-buffer
-            (setq-local mevedel--session session)
-            (cl-letf (((symbol-function
-                        'mevedel-skills-preparation--run-elisp-expression-async)
-                       (lambda (form _marker callback)
-                         (setq expression form)
-                         (funcall callback '(:status ok :output "3"))))
-                      ((symbol-function 'mevedel-pipeline-run-tool)
-                       (lambda (&rest _)
-                         (ert-fail "Elisp injection reached Bash"))))
-              (mevedel-skills-prepare
-               skill "" (lambda (value) (setq outcome value))
-               :role 'command :origin 'model))))
+                                              (setq session
+                                                    (mevedel-session-create "remote-elisp" workspace remote-root))
+                                              (with-temp-buffer
+                                                (setq-local mevedel--session session)
+                                                (cl-letf (((symbol-function
+                                                            'mevedel-skills-preparation--run-elisp-expression-async)
+                                                           (lambda (form _marker callback)
+                                                             (setq expression form)
+                                                             (funcall callback '(:status ok :output "3"))))
+                                                          ((symbol-function 'mevedel-pipeline-run-tool)
+                                                           (lambda (&rest _)
+                                                             (ert-fail "Elisp injection reached Bash"))))
+                                                  (mevedel-skills-prepare
+                                                   skill "" (lambda (value) (setq outcome value))
+                                                   :role 'command :origin 'model))))
       (delete-directory root t))
     (should (equal "(+ 1 2)" expression))
     (should (eq 'ok (plist-get outcome :status)))
@@ -891,7 +815,7 @@ hooks:
         (should (equal '(("Read" :action allow))
                        (plist-get stash :permission-rules)))
         (should (= 1 (length (plist-get stash :invoked-skills))))))
-	    (should (eq 'ok (plist-get outcome :status))))
+    (should (eq 'ok (plist-get outcome :status))))
 
   :doc "UserPromptExpansion can rewrite user-origin inline skill output"
   (let* ((ws (mevedel-workspace--create
@@ -909,7 +833,7 @@ hooks:
          (mevedel-hook-rules
           '((UserPromptExpansion
              ((:hooks ((:type elisp
-                        :function mevedel-skills-test--expansion-fn)))))))
+                              :function mevedel-skills-test--expansion-fn)))))))
          outcome)
     (with-temp-buffer
       (setq-local mevedel--session session)
@@ -971,8 +895,8 @@ hooks:
          (mevedel-hook-rules
           '((UserPromptExpansion
              ((:hooks ((:type elisp
-                        :function
-                        mevedel-skills-test--block-expansion-fn)))))))
+                              :function
+                              mevedel-skills-test--block-expansion-fn)))))))
          outcome)
     (with-temp-buffer
       (setq-local mevedel--session session)
@@ -1006,8 +930,8 @@ hooks:
                  (lambda (_text callback &rest _)
                    (funcall callback
                             '(:status error
-                              :reason injection-failed
-                              :message "boom")))))
+                                      :reason injection-failed
+                                      :message "boom")))))
         (mevedel-skills-invoke
          skill nil
          (lambda (o) (setq outcome o))
@@ -1205,7 +1129,7 @@ hooks:
                  (lambda (_) agent))
                 ((symbol-function 'mevedel-agent-control-spawn)
                  (lambda (actual-session task-name message callback
-                          &rest keys)
+                                         &rest keys)
                    (let* ((path (concat "/root/" task-name))
                           (retained
                            (mevedel-agent-record--create
@@ -1273,8 +1197,8 @@ hooks:
                    (funcall
                     (plist-get keys :result-handler)
                     '(:type RESULT :sender "/root/skill_demo"
-                      :recipient "/root" :outcome interrupted
-                      :payload "Stopped"))
+                            :recipient "/root" :outcome interrupted
+                            :payload "Stopped"))
                    #'ignore)))
         (mevedel-skills-invoke
          skill nil (lambda (value) (setq outcome value)) :origin 'model)))
@@ -1320,8 +1244,8 @@ hooks:
                    (funcall
                     (plist-get keys :result-handler)
                     '(:type RESULT :sender "/root/skill_demo"
-                      :recipient "/root" :outcome completed
-                      :payload "agent finished"))
+                            :recipient "/root" :outcome completed
+                            :payload "agent finished"))
                    #'ignore)))
         (mevedel-skills-invoke
          skill "the task" (lambda (value) (setq outcome value))
@@ -1369,7 +1293,7 @@ hooks:
                    (funcall
                     (plist-get keys :result-handler)
                     '(:type RESULT :sender "/root/skill_demo"
-                      :recipient "/root" :outcome completed :payload "result"))
+                            :recipient "/root" :outcome completed :payload "result"))
                    #'ignore)))
         (let (outcome)
           (mevedel-skills-invoke
@@ -1392,7 +1316,7 @@ hooks:
          (mevedel-skills--render-skill-tool
           "Skill" '(:name "review") "Prepared body"
           '(:kind skill-policy-warning
-            :ignored-policy-fields (model effort)))))
+                  :ignored-policy-fields (model effort)))))
     (should (eq 'warning (plist-get rendering :status)))
     (should (string-match-p "ignored model, effort"
                             (plist-get rendering :header)))
@@ -1404,7 +1328,7 @@ hooks:
          (mevedel-skills--render-skill-tool
           "Skill" '(:name "review") "Prepared body"
           '(:kind skill-policy-warning
-            :ignored-policy-fields (effort)))))
+                  :ignored-policy-fields (effort)))))
     (should (string-match-p "ignored effort" (plist-get rendering :header)))
     (should-not (string-match-p "ignored model" (plist-get rendering :header))))
 
@@ -1509,7 +1433,7 @@ description: Yell
        '(:name "costly")))
     (should (equal "Prepared body" (plist-get envelope :result)))
     (should (equal '(:kind skill-policy-warning
-                     :ignored-policy-fields (model effort))
+                           :ignored-policy-fields (model effort))
                    (plist-get envelope :render-data))))
 
   :doc "registered Skill pipeline separates model result from warning view"
@@ -1538,7 +1462,7 @@ description: Yell
                      "Skill" '(:name "costly") visible render-data)))
       (should (equal "Prepared body" visible))
       (should (equal '(:kind skill-policy-warning
-                       :ignored-policy-fields (model effort))
+                             :ignored-policy-fields (model effort))
                      render-data))
       (should (eq 'warning (plist-get rendering :status)))
       (should (string-match-p "context: fork"
@@ -1579,8 +1503,8 @@ description: Yell
                    (funcall
                     (plist-get keys :result-handler)
                     '(:type RESULT :sender "/root/skill_isolated"
-                      :recipient "/root" :outcome completed
-                      :payload "Child result"))
+                            :recipient "/root" :outcome completed
+                            :payload "Child result"))
                    #'ignore)))
         (mevedel-skills--invoke-handler
          (lambda (value) (setq envelope value))

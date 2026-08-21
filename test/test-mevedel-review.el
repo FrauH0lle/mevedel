@@ -9,10 +9,10 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agent-exec)
+(require 'mevedel-bash-policy)
 (require 'mevedel-hooks)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-structs)
-(require 'mevedel-tool-exec)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-view)
 (require 'mevedel-view-render)
@@ -460,7 +460,7 @@
                         (list (cons :defcustom rules))))
          (mevedel-bash-dangerous-commands nil))
     (cl-labels ((decide (command)
-                  (mevedel-tools--check-bash-permission
+                  (mevedel-bash-policy-check-permission
                    command :permission-context context)))
       (should
        (eq 'allow
@@ -490,7 +490,7 @@
                         (list (cons :defcustom rules))))
          (mevedel-bash-dangerous-commands nil))
     (cl-labels ((decide (command)
-                  (mevedel-tools--check-bash-permission
+                  (mevedel-bash-policy-check-permission
                    command :permission-context context)))
       (should (eq 'deny (decide "git checkout main")))
       (should (eq 'deny (decide "GIT_EXTERNAL_DIFF=sh git diff HEAD")))

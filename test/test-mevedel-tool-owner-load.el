@@ -21,11 +21,61 @@
            (file-name-directory (locate-library "mevedel"))))
          (compiled-root (make-temp-file "mevedel-tool-owner-" t))
          (emacs (expand-file-name invocation-name invocation-directory))
-         (owners '("mevedel-pipeline.el"
+         (owners '("mevedel-bash-policy.el"
+                   "mevedel-pipeline.el"
+                   "mevedel-tool-exec-permission.el"
+                   "mevedel-tool-exec.el"
                    "mevedel-tool-permission.el"
                    "mevedel-tool-render-data.el"))
          (cases
-          '((render
+          '((bash-policy
+             (progn
+               (require 'mevedel-bash-policy)
+               (unless (equal "git (2), rg"
+                              (mevedel-bash-policy-commands-summary
+                               '("git" "git" "rg")))
+                 (error "Bash policy owner did not summarize commands"))
+               (unless
+                   (string-suffix-p
+                    "mevedel-bash-policy.elc"
+                    (or (symbol-file 'mevedel-bash-policy-commands-summary
+                                     'defun)
+                        ""))
+                 (error "Bash policy behavior has the wrong owner"))))
+            (exec-permission
+             (progn
+               (require 'mevedel-structs)
+               (require 'mevedel-permissions)
+               (require 'mevedel-tool-exec-permission)
+               (let ((mevedel-permission-mode 'full-auto)
+                     (mevedel-permission-rules nil)
+                     outcome)
+                 (mevedel-tool-exec-permission-check-eval-async
+                  nil '(:expression "(+ 1 2)")
+                  (lambda (result) (setq outcome result)))
+                 (unless (eq 'allow outcome)
+                   (error "Execution permission owner did not allow Eval")))
+               (unless
+                   (string-suffix-p
+                    "mevedel-tool-exec-permission.elc"
+                    (or (symbol-file
+                         'mevedel-tool-exec-permission-check-eval-async
+                         'defun)
+                        ""))
+                 (error "Execution permission behavior has the wrong owner"))))
+            (exec-facade
+             (progn
+               (require 'mevedel-tool-registry)
+               (require 'mevedel-tool-exec)
+               (unless (mevedel-tool-ensure "Bash")
+                 (error "Execution tool facade did not register Bash"))
+               (unless
+                   (string-suffix-p
+                    "mevedel-tool-exec.elc"
+                    (or (symbol-file 'mevedel-tool-exec--register 'defun)
+                        ""))
+                 (error "Execution tool behavior has the wrong owner"))))
+            (render
              (progn
                (require 'mevedel-tool-render-data)
                (unless (equal "plain"

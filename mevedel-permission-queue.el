@@ -25,6 +25,10 @@
 (declare-function mevedel-agent-control-block-turn
                   "mevedel-agent-control" (session path activity))
 
+;; `mevedel-bash-policy'
+(declare-function mevedel-bash-policy-check-permission
+                  "mevedel-bash-policy" (command &rest keys))
+
 ;; `mevedel-permission-prompt'
 (declare-function mevedel-permission--prompt-async-attributed
                   "mevedel-permission-prompt"
@@ -40,7 +44,8 @@
                              &optional count entry))
 
 ;; `mevedel-permissions'
-(declare-function mevedel-check-permission "mevedel-permissions" t t)
+(declare-function mevedel-check-permission
+                  "mevedel-permissions" (tool-name &rest args))
 (declare-function mevedel-permission--bucket-decision
                   "mevedel-permissions"
                   (buckets tool-name path pattern domain name))
@@ -51,15 +56,15 @@
 (declare-function mevedel-permission--resource-granted-p
                   "mevedel-permissions" (path access grants))
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-assert-new-mutation-authority
+                  "mevedel-session-artifacts" (session))
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
-
-;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-assert-new-mutation-authority
-                  "mevedel-session-artifacts" (session))
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-forwarded-audit-p
@@ -67,14 +72,14 @@
 (declare-function mevedel-telemetry-record-audit
                   "mevedel-telemetry" (session event &rest props))
 
-;; `mevedel-tool-exec'
-(declare-function mevedel--prompt-user-for-eval "mevedel-tool-exec"
+;; `mevedel-tool-exec-permission'
+(declare-function mevedel-tool-exec-permission-full-escalation-rule-decision
+                  "mevedel-tool-exec-permission"
+                  (tool-name detail buckets level))
+(declare-function mevedel-tool-exec-permission-prompt-eval
+                  "mevedel-tool-exec-permission"
                   (expression callback &optional origin count entry
                               mode preserve-ui))
-(declare-function mevedel-tool-exec--full-escalation-rule-decision
-                  "mevedel-tool-exec" (tool-name detail buckets level))
-(declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
-                  (command &rest args))
 
 ;; `mevedel-workspace'
 (declare-function mevedel--all-allowed-roots
@@ -378,18 +383,19 @@ removes the head and returns the pinned tool-level denial."
 
 (defun mevedel-permission-queue--render-eval (entry)
   "Render an eval-kind permission ENTRY using the specialized Eval UI.
-Calls `mevedel--prompt-user-for-eval' with the entry's
+Calls `mevedel-tool-exec-permission-prompt-eval' with the entry's
 `:expression'.  The UI returns one of `'allow-once' / `'deny-once' /
 `(feedback . TEXT)' / `'aborted'; the queue passes these through
 unchanged to the entry's callback (the eval slot adapter does the
 final mapping)."
+  (require 'mevedel-tool-exec-permission)
   (let ((expr (plist-get entry :expression))
         (mode (plist-get entry :mode))
         (preserve-ui (plist-get entry :preserve-ui))
         (origin (mevedel-permission-queue--attribution-origin entry))
         (count (length (mevedel-permission-queue--get
                         (plist-get entry :session)))))
-    (mevedel--prompt-user-for-eval
+    (mevedel-tool-exec-permission-prompt-eval
      expr
      (lambda (outcome)
        (mevedel-permission-queue--on-head-outcome entry outcome))
@@ -485,19 +491,16 @@ the FIFO queue's central rule-coalescing was effectively a
 no-op.  This function now extracts the rule context from the
 entry's captured :session and passes it explicitly.
 
-For Bash, the same context binding flows into
-`mevedel-tools--check-bash-permission' via `mevedel--session'.
-That function reads it directly; we let-bind to make the session visible
-to it as well."
+For Bash, the entry's captured execution directory remains part of the
+re-evaluation context."
+  (require 'mevedel-bash-policy)
+  (require 'mevedel-tool-exec-permission)
   (let* ((session (plist-get entry :session))
          (workspace
           (and session (mevedel-session-workspace session)))
          (allowed-roots
           (when (and workspace (fboundp 'mevedel--all-allowed-roots))
             (ignore-errors (mevedel--all-allowed-roots))))
-         ;; Bind ambient mevedel--session so the Bash safety
-         ;; classifier (which reads mevedel--session directly)
-         ;; sees the captured context too.
          (mevedel--session (or session
                                (and (boundp 'mevedel--session)
                                     mevedel--session))))
@@ -533,6 +536,9 @@ to it as well."
                 :workspace workspace
                 :allowed-roots allowed-roots
                 :pattern command))
+              (context
+               (plist-put context :execution-directory
+                          (plist-get entry :execution-directory)))
               (rule-decision
                (condition-case _err
                    (apply #'mevedel-check-permission
@@ -544,7 +550,7 @@ to it as well."
           ((eq rule-decision 'allow)
            (let ((safety
                   (condition-case _err
-                      (mevedel-tools--check-bash-permission
+                      (mevedel-bash-policy-check-permission
                        command :trust-literal-p nil
                        :permission-context context)
                     (error 'ask))))
@@ -562,7 +568,7 @@ to it as well."
                     :pattern detail))
                   (buckets (plist-get context :buckets))
                   (level-action
-                   (mevedel-tool-exec--full-escalation-rule-decision
+                   (mevedel-tool-exec-permission-full-escalation-rule-decision
                     tool-name detail buckets 'require-escalated)))
              (cond
               ((eq level-action 'deny) 'deny)

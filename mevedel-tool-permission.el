@@ -17,6 +17,10 @@
 (declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
 
+;; `mevedel-bash-policy'
+(declare-function mevedel-bash-policy-decision-specifier-value
+                  "mevedel-bash-policy" (command))
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-mutation-blocked-p
                   "mevedel-execution" (session))
@@ -88,10 +92,6 @@
 (declare-function mevedel-telemetry-record-audit
                   "mevedel-telemetry" (session event &rest props))
 
-;; `mevedel-tool-exec'
-(declare-function mevedel-tool-exec--bash-decision-specifier-value
-                  "mevedel-tool-exec" (command))
-
 ;; `mevedel-tool-patch'
 (declare-function mevedel-tool-patch--get-paths-from-proposal
                   "mevedel-tool-patch" (proposal))
@@ -126,9 +126,8 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
   "Return log-safe PATTERN metadata for TOOL-NAME."
   (cond
    ((and (equal tool-name "Bash") pattern)
-    (if (fboundp 'mevedel-tool-exec--bash-decision-specifier-value)
-        (mevedel-tool-exec--bash-decision-specifier-value pattern)
-      "shell command"))
+    (require 'mevedel-bash-policy)
+    (mevedel-bash-policy-decision-specifier-value pattern))
    (t pattern)))
 
 (defun mevedel-tool-permission--specifier-props (context)
