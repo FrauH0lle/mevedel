@@ -262,6 +262,26 @@
 (mevedel-deftest mevedel-compact-run-start (:quiet t)
   ,test
   (test)
+  :doc "a rejected attempt leaves no unmatched telemetry span"
+  ;; A start with no finish is an interval with no end, and the Goal
+  ;; reproduction procedure reads those pairs to attribute time to
+  ;; compaction that never ran.
+  (test-mevedel-compact--with-persisted-buffer (buffer session)
+    (insert "Prompt\n")
+    (insert (propertize "Response\n" 'gptel 'response))
+    ;; No boundary yet: rejected before anything is measured.
+    (should-error (mevedel-compact-run-start) :type 'user-error)
+    (let ((mevedel-compact-run-in-flight t))
+      (should-error (mevedel-compact-run-start) :type 'user-error))
+    (let* ((stages
+            (mapcar (lambda (event) (plist-get event :stage))
+                    (seq-filter
+                     (lambda (event)
+                       (eq (plist-get event :event) 'compaction))
+                     (test-mevedel-compact--read-telemetry session)))))
+      (should (= (seq-count (lambda (stage) (eq stage 'start)) stages)
+                 (seq-count (lambda (stage) (eq stage 'finish)) stages)))))
+
   :doc "rejects an unpersisted buffer before hooks or model requests"
   (with-temp-buffer
     (org-mode)

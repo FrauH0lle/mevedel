@@ -461,8 +461,34 @@ task-relevance data for a handoff summary.  SOURCE-TRANSFORM filters the
   (require 'mevedel-compact-evidence)
   (require 'mevedel-compact-target)
   (let* ((chat-buffer (current-buffer))
-         (target (or target (mevedel-compact-target-main-target)))
-         (session (plist-get target :session))
+         (target (or target (mevedel-compact-target-main-target))))
+    ;; Refuse before anything is measured: an attempt that is never
+    ;; admitted has no interval, and a telemetry start with no finish
+    ;; makes the log claim a compaction that never ran.
+    (when mevedel-compact-run-in-flight
+      (user-error "Compaction already in progress"))
+    (when (bound-and-true-p mevedel-session--read-only-mode)
+      (user-error "Session is read-only"))
+    (when (and (not pending-start)
+               (mevedel-compact-evidence-buffer-active-p chat-buffer))
+      (user-error "Cannot compact while a request is active"))
+    (unless (plist-get target :eligible-p)
+      (user-error "Current buffer is not the active persisted segment"))
+    (mevedel-compact-run--start-admitted
+     chat-buffer target aggressive auto callback focus purpose
+     source-transform pending-start admission instructions
+     prepared-summary summary-ready)))
+
+(cl-defun mevedel-compact-run--start-admitted
+    (chat-buffer target aggressive auto callback focus purpose
+                 source-transform pending-start admission instructions
+                 prepared-summary summary-ready)
+  "Measure and begin an admitted compaction attempt.
+
+CHAT-BUFFER and TARGET have already passed admission; the remaining
+arguments are `mevedel-compact-run-start''s own.  A rejection from here
+on closes the telemetry span it opened before it signals."
+  (let* ((session (plist-get target :session))
          (tokens-before (mevedel-compact-estimation-estimate-tokens))
          (target-policy (mevedel-compact-estimation-target-policy))
          (telemetry-span
@@ -493,20 +519,13 @@ task-relevance data for a handoff summary.  SOURCE-TRANSFORM filters the
            :workspace (plist-get target :workspace))))
     (setq mevedel-compact-target-current-request-reminder nil
           mevedel-compact-target-current-request-hook-context nil)
-    (when mevedel-compact-run-in-flight
-      (user-error "Compaction already in progress"))
-    (when (bound-and-true-p mevedel-session--read-only-mode)
-      (user-error "Session is read-only"))
-    (when (and (not pending-start)
-               (mevedel-compact-evidence-buffer-active-p chat-buffer))
-      (user-error "Cannot compact while a request is active"))
-    (unless (plist-get target :eligible-p)
-      (user-error "Current buffer is not the active persisted segment"))
-    (let ((limit (or pending-start (mevedel-compact-evidence-find-boundary))))
+    (condition-case err
+        (let ((limit (or pending-start
+                         (mevedel-compact-evidence-find-boundary))))
       (unless limit
         (if auto
-            (cl-return-from mevedel-compact-run-start
-              (mevedel-compact-run--finish state :skip))
+            (cl-return-from mevedel-compact-run--start-admitted
+                    (mevedel-compact-run--finish state :skip))
           (user-error "Not enough conversation content to compact")))
       (mevedel-compact-run--prepare
        state limit admission instructions pending-start
@@ -514,12 +533,12 @@ task-relevance data for a handoff summary.  SOURCE-TRANSFORM filters the
       (when (string-blank-p
              (mevedel-compact-run--state-old-content state))
         (if auto
-            (cl-return-from mevedel-compact-run-start
-              (mevedel-compact-run--finish
-               state
-               (if (plist-get admission :target-pressure)
-                   "No compactable history remains at target pressure"
-                 :skip)))
+            (cl-return-from mevedel-compact-run--start-admitted
+                    (mevedel-compact-run--finish
+                     state
+                     (if (plist-get admission :target-pressure)
+                         "No compactable history remains at target pressure"
+                       :skip)))
           (user-error "Not enough conversation content to compact")))
       (require 'mevedel-hooks)
       (setq mevedel-compact-run-in-flight t)
@@ -535,7 +554,20 @@ task-relevance data for a handoff summary.  SOURCE-TRANSFORM filters the
                             (mevedel-compact-run--state-applied state))
                   (mevedel-compact-run--fail
                    state "Compaction aborted" nil t)))))
-      (mevedel-compact-run--begin-attempt state))))
+          (mevedel-compact-run--begin-attempt state))
+      ;; The attempt never started, so the span is closed here rather
+      ;; than through the settlement owner: settling would report an
+      ;; outcome to a caller that is about to receive this signal.
+      (error
+       (mevedel-compact-run--abandon-telemetry state)
+       (signal (car err) (cdr err))))))
+
+(defun mevedel-compact-run--abandon-telemetry (state)
+  "Close STATE's telemetry span for an attempt that never began."
+  (when-let* ((span (mevedel-compact-run--state-telemetry-span state)))
+    (setf (mevedel-compact-run--state-telemetry-span state) nil)
+    (when (fboundp 'mevedel-telemetry-finish)
+      (mevedel-telemetry-finish span :outcome 'rejected))))
 
 (provide 'mevedel-compact-run)
 
