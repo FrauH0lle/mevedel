@@ -1858,24 +1858,31 @@ record only that context was added, without duplicating the body."
                (with-current-buffer buffer
                  (buffer-substring-no-properties (point-min) (point-max)))
              ""))
+         (release-children ()
+           ;; Cancel the timers and kill the child explicitly: killing its
+           ;; buffer would collect it, but only while this code still owns
+           ;; that buffer.
+           (when (timerp timer) (cancel-timer timer))
+           (when (timerp stderr-cap-timer)
+             (cancel-timer stderr-cap-timer))
+           (when (and process (process-live-p process))
+             (delete-process process))
+           (when (and stderr-process (process-live-p stderr-process))
+             (delete-process stderr-process)))
          (cancel ()
            (unless settled
              (setq settled t)
-             (when (timerp timer) (cancel-timer timer))
-             (when (timerp stderr-cap-timer)
-               (cancel-timer stderr-cap-timer))
-             (when (and process (process-live-p process))
-               (delete-process process))
-             (when (and stderr-process (process-live-p stderr-process))
-               (delete-process stderr-process))
+             (release-children)
              (when (buffer-live-p stdout-buffer) (kill-buffer stdout-buffer))
              (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))))
          (finish (status reason)
            (unless settled
              (setq settled t)
-             (when timer (cancel-timer timer))
-             (when (timerp stderr-cap-timer)
-               (cancel-timer stderr-cap-timer))
+             ;; Teardown must never cost the caller its settlement: a
+             ;; sentinel signalling during release would otherwise leave
+             ;; the event unsettled forever.
+             (with-demoted-errors "mevedel: hook teardown failed: %S"
+               (release-children))
              (truncate-remote-stderr)
              (let* ((stdout (buffer-string-safe stdout-buffer))
                     (stderr (buffer-string-safe stderr-buffer))
@@ -1926,8 +1933,6 @@ record only that context was added, without duplicating the body."
                  :stdout-preview (substring stdout 0 (min 1000 (length stdout)))
                  :stderr-preview (substring stderr 0 (min 1000 (length stderr)))
                  :decision decision))
-               (when (and stderr-process (process-live-p stderr-process))
-                 (delete-process stderr-process))
                (when (buffer-live-p stdout-buffer) (kill-buffer stdout-buffer))
                (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))
                (funcall callback decision)))))
@@ -1971,22 +1976,20 @@ record only that context was added, without duplicating the body."
                           (t (finish 'error
                                      (format "Hook exited with status %s"
                                              code)))))))))
+            ;; Armed before stdin is written: the child is already running,
+            ;; so a write that fails or blocks must be bounded too.
+            (when timeout
+              (setq timer
+                    (run-at-time
+                     timeout nil
+                     (lambda () (finish 'timeout nil)))))
             (process-send-string process
                                  (concat (mevedel-hooks--event-json
                                           (mevedel-hooks--command-event-plist
                                            event-plist session))
                                          "\n"))
             (unless remote
-              (process-send-eof process))
-            (when timeout
-              (setq timer
-                    (run-at-time
-                     timeout nil
-                     (lambda ()
-                       (when (and process
-                                  (process-live-p process))
-                         (delete-process process))
-                       (finish 'timeout nil))))))
+              (process-send-eof process)))
         (error
          (finish 'error (error-message-string err)))))))
 

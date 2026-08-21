@@ -249,7 +249,9 @@ machines.  Project-relative commands such as
 `.mevedel/hooks/block-rm.sh` therefore resolve consistently regardless of the
 session cwd.  A command handler without trusted project, user, or plugin
 provenance is refused before launch.  Default timeout is 30 seconds with a
-global cap. Each
+global cap, armed as soon as the child exists rather than after its stdin is
+written; whatever settles a command handler — exit, timeout, request
+cancellation, or a failed stdin write — leaves no child running.  Each
 stdout/stderr stream is capped by `mevedel-hooks-command-output-max-chars`
 before parsing decisions or writing log previews, so noisy hooks cannot
 inject unbounded output through `updated_result` or block reasons.

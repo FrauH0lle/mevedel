@@ -1403,6 +1403,137 @@
       (mevedel-request-drain-cancellers request)
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-hooks-run-event/settled-child-release
+  (:quiet t)
+  ,test
+  (test)
+  :doc "settlement kills the child and arms the timeout before stdin"
+  (let* ((order nil)
+         (decisions 0)
+         (children nil)
+         (root (make-temp-file "mevedel-hooks-child-release" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hooks-slow-threshold nil)
+         (mevedel-hook-rules
+          '((PreToolUse
+             ((:matcher "Bash"
+               :hooks ((:type command :command "sleep 5" :timeout 30))))))))
+    (unwind-protect
+        (progn
+          (skip-unless (not (eq system-type 'windows-nt)))
+          (cl-letf* ((real-make-process (symbol-function 'make-process))
+                     ((symbol-function 'make-process)
+                      (lambda (&rest args)
+                        (car (push (apply real-make-process args) children))))
+                     (real-run-at-time (symbol-function 'run-at-time))
+                     ((symbol-function 'run-at-time)
+                      (lambda (&rest args)
+                        (push 'timer order)
+                        (apply real-run-at-time args)))
+                     ;; The child is already running when stdin fails, and
+                     ;; killing its buffer would collect it on its own --
+                     ;; which is what settlement must not depend on.
+                     ((symbol-function 'process-send-string)
+                      (lambda (&rest _)
+                        (push 'stdin order)
+                        (error "Broken pipe")))
+                     (real-kill-buffer (symbol-function 'kill-buffer))
+                     ((symbol-function 'kill-buffer)
+                      (lambda (&optional buffer-or-name)
+                        (let ((buffer (get-buffer (or buffer-or-name
+                                                      (current-buffer)))))
+                          ;; Only the hook's own buffers survive, so
+                          ;; unrelated kills keep working.
+                          (if (and buffer
+                                   (string-search "mevedel-hook"
+                                                  (buffer-name buffer)))
+                              t
+                            (funcall real-kill-buffer buffer-or-name))))))
+            (mevedel-hooks-run-event
+             'PreToolUse '(:tool-name "Bash")
+             (lambda (_) (cl-incf decisions)) session))
+          (should children)
+          (should-not (cl-find-if #'process-live-p children))
+          ;; Other machinery may arm timers in this window, so the
+          ;; invariant is that a timer preceded the write, not the exact
+          ;; sequence.
+          (should (eq 'timer (car (nreverse order))))
+          (accept-process-output nil 0.05)
+          (should (= 1 decisions)))
+      (dolist (proc children)
+        (when (process-live-p proc) (delete-process proc)))
+      (dolist (buffer (buffer-list))
+        (when (string-search "mevedel-hook" (buffer-name buffer))
+          (kill-buffer buffer)))
+      (delete-directory root t)))
+
+  :doc "a timeout reports itself rather than the signal that stopped the child"
+  ;; A blocking timeout legitimately reports to the echo area.
+  (let* ((decision nil)
+         (children nil)
+         (root (make-temp-file "mevedel-hooks-timeout-reason" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hooks-slow-threshold nil)
+         (mevedel-hook-rules
+          '((PreToolUse
+             ((:matcher "Bash"
+               :hooks ((:type command :command "sleep 5" :timeout 1
+                        :fail-closed t))))))))
+    (unwind-protect
+        (progn
+          (skip-unless (not (eq system-type 'windows-nt)))
+          (cl-letf* ((real-make-process (symbol-function 'make-process))
+                     ((symbol-function 'make-process)
+                      (lambda (&rest args)
+                        (car (push (apply real-make-process args) children)))))
+            (mevedel-hooks-run-event
+             'PreToolUse '(:tool-name "Bash")
+             (lambda (value) (setq decision (or value 'settled))) session)
+            (let ((deadline (+ (float-time) 5)))
+              (while (and (null decision) (< (float-time) deadline))
+                (accept-process-output nil 0.05))))
+          (should decision)
+          (should-not (cl-find-if #'process-live-p children))
+          (should (string-match-p "timed out"
+                                  (plist-get decision :stop-reason))))
+      (dolist (proc children)
+        (when (process-live-p proc) (delete-process proc)))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/teardown-failure
+  (:doc "a signalling teardown still settles the event")
+  (let* ((root (make-temp-file "mevedel-hooks-teardown-fail" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hooks-slow-threshold nil)
+         (mevedel-hook-rules
+          '((PreToolUse
+             ((:matcher "Bash"
+               :hooks ((:type command :command "sleep 5" :timeout 30)))))))
+         (children nil)
+         (decisions 0))
+    (unwind-protect
+        (progn
+          (skip-unless (not (eq system-type 'windows-nt)))
+          (cl-letf* ((real-make-process (symbol-function 'make-process))
+                     ((symbol-function 'make-process)
+                      (lambda (&rest args)
+                        (car (push (apply real-make-process args) children))))
+                     ((symbol-function 'process-send-string)
+                      (lambda (&rest _) (error "Broken pipe")))
+                     (real-delete-process (symbol-function 'delete-process))
+                     ((symbol-function 'delete-process)
+                      (lambda (&rest _) (error "Sentinel exploded"))))
+            (mevedel-test--with-captured-diagnostics nil
+              (mevedel-hooks-run-event
+               'PreToolUse '(:tool-name "Bash")
+               (lambda (_) (cl-incf decisions)) session))
+            (should (= 1 decisions))
+            ;; Restore before the teardown below needs it.
+            (fset 'delete-process real-delete-process)))
+      (dolist (proc children)
+        (when (process-live-p proc) (delete-process proc)))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-hooks-context-audit-records
   (:quiet t :doc "attributes merged context to handlers in execution order")
   (let* ((root (make-temp-file "mevedel-hooks-context-audit" t))
