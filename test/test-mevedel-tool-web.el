@@ -2,9 +2,10 @@
 
 ;;; Commentary:
 
-;; WebSearch and WebFetch wrap gptel-agent's upstream structs via :wrap, so
-;; their assertions focus on the wrap metadata.  YouTube is registered
-;; natively, so its assertions cover the adapter that owns the response
+; WebFetch wraps gptel-agent's upstream struct via :wrap, so its
+;; assertions focus on the wrap metadata.  WebSearch and YouTube are
+;; registered natively: WebSearch to own a schema whose upstream `count'
+;; argument the upstream callback ignores, YouTube to own the response
 ;; buffers of the upstream call.
 
 ;;; Code:
@@ -49,15 +50,19 @@ arguments in a response buffer."
    :after-each (mevedel-tool-clear-registry))
   ,test
   (test)
-  :doc "registers WebSearch as wrapped read-only web tool"
+  :doc "registers WebSearch natively without the inert count argument"
+  ;; Upstream advertises `count' and its callback hardcodes five results,
+  ;; so offering the argument teaches the model a lie.
   (progn
     (mevedel-tool-web--register)
     (let ((tool (mevedel-tool-get "WebSearch" "mevedel-gptel-agent")))
       (should tool)
       (should (eq t (mevedel-tool-read-only-p tool)))
       (should (memq 'web (mevedel-tool-groups tool)))
+      (should (mevedel-tool-async-p tool))
       (let ((arg-names (mapcar #'car (mevedel-tool-args tool))))
-        (should (memq 'query arg-names)))))
+        (should (memq 'query arg-names))
+        (should-not (memq 'count arg-names)))))
 
   :doc "registers WebFetch with max-result-size"
   (progn

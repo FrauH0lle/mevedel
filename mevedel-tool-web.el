@@ -52,6 +52,20 @@
 ;;
 ;;; YouTube resource ownership
 
+(defun mevedel-tool-web--websearch-function ()
+  "Return the upstream asynchronous WebSearch handler, or nil.
+Returns nil when the tool is absent or has stopped being asynchronous,
+because this adapter calls it with a continuation."
+  (when-let* ((tool (gptel-get-tool '("gptel-agent" "WebSearch")))
+              ((gptel-tool-async tool)))
+    (gptel-tool-function tool)))
+
+(defun mevedel-tool-web--websearch (callback query)
+  "Search the web for QUERY and deliver the result to CALLBACK."
+  (let ((search (or (mevedel-tool-web--websearch-function)
+                    (error "The upstream WebSearch tool is unavailable"))))
+    (funcall search callback query)))
+
 (defun mevedel-tool-web--youtube-function ()
   "Return the upstream asynchronous YouTube handler, or nil.
 Returns nil when the tool is absent or has stopped being asynchronous,
@@ -151,10 +165,20 @@ why)."
 (defun mevedel-tool-web--register ()
   "Register mevedel's web tools over gptel-agent's implementations."
 
+  ;; Registered natively rather than wrapped, because the upstream
+  ;; schema advertises a `count' argument its own callback hardcodes
+  ;; away; wrapping freezes that schema, so owning it here is the only
+  ;; way to stop promising the model an argument that does nothing.
   (mevedel-define-tool
-    :wrap (gptel-get-tool '("gptel-agent" "WebSearch"))
+    :name "WebSearch"
+    :description "Search the web for the top results to a query."
     :summary "Search the web for the top results to a query."
     :prompt-file "tools/websearch.md"
+    :handler #'mevedel-tool-web--websearch
+    :args ((query string :required
+                  "The natural language search query, can be multiple words."))
+    :async-p t
+    :category "mevedel-gptel-agent"
     :groups (web)
     :read-only-p t
     :render-transform #'mevedel-tool-web--render-transform

@@ -27,7 +27,7 @@ Timeout after 30 seconds per search.
 - Returns excerpts, not full page content
 - Use `WebFetch` with returned URLs to read full content
 - Note: `WebFetch` may not work on JavaScript-heavy sites
-- Default returns 5 results, can specify different count
+- Returns the top 5 results
 
 ### Examples of good usage
 
@@ -38,5 +38,5 @@ WebSearch(query="React useEffect official documentation")
 
 <example>
 - Research error message:
-WebSearch(query="TypeError cannot read properties of undefined debugging", count=3)
+WebSearch(query="TypeError cannot read properties of undefined debugging")
 </example>
