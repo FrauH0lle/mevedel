@@ -201,6 +201,35 @@
 (mevedel-deftest mevedel-compact-evidence-turn-starts-before ()
   ,test
   (test)
+  :doc "scans the block prefix linearly across a pass, not per turn"
+  ;; Each prefix scan restarted at point-min, so a pass cost time quadratic in
+  ;; the transcript, and a live segment is bounded only by the compaction
+  ;; threshold.  Assert the characters scanned, not a duration: a pass may
+  ;; cover the buffer a small number of times, never once per turn.
+  (with-temp-buffer
+    (let ((turns 20)
+          (scanned 0)
+          expected)
+      (dotimes (i turns)
+        (insert (format "u%d\n" i))
+        (let ((response-start (point)))
+          (insert (format "#+begin_tool\ncall %d\n#+end_tool\na%d\n" i i))
+          (put-text-property response-start (point) 'gptel 'response)))
+      (setq expected (mevedel-compact-evidence-turn-starts-before (point-max)))
+      (should (= turns (length expected)))
+      (cl-letf* ((real (symbol-function 're-search-forward))
+                 ((symbol-function 're-search-forward)
+                  (lambda (&rest args)
+                    (cl-incf scanned)
+                    (apply real args))))
+        (should (equal expected
+                       (mevedel-compact-evidence-turn-starts-before
+                        (point-max)))))
+      ;; A pass costs searches proportional to the markers it passes, not to
+      ;; markers times turns: twenty turns of one block each cost 491 searches
+      ;; before the prefix count was carried and 149 after.
+      (should (< scanned (* 10 turns)))))
+
   :doc "ignores leading org metadata when finding turn starts"
   (with-temp-buffer
     (insert ":PROPERTIES:\n:foo: bar\n:END:\n")
