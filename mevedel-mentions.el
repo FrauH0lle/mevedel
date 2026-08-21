@@ -150,7 +150,9 @@
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-(declare-function mevedel-workspace--file-in-allowed-roots-p
+(declare-function mevedel-workspace--session-data-buffer
+                  "mevedel-workspace" ())
+(declare-function mevedel-workspace-file-in-allowed-roots-p
                   "mevedel-workspace" (file &optional buffer))
 
 (defvar-local mevedel-mentions--agent-enabled-p t
@@ -1227,9 +1229,16 @@ When a file is selected, replaces @file:path with the absolute path."
                    ;; to the filesystem root, an absolute prefix reaches
                    ;; anywhere, and on a remote workspace both drive
                    ;; synchronous TRAMP while the user is still typing.
+                   (roots-buffer (mevedel-workspace--session-data-buffer))
+                   (allowed-p
+                    (lambda (directory)
+                      ;; A remote target probe can fail; that must bound
+                      ;; completion, not break it while the user types.
+                      (ignore-errors
+                        (mevedel-workspace-file-in-allowed-roots-p
+                         directory roots-buffer))))
                    (candidates
-                    (when (and (mevedel-workspace--file-in-allowed-roots-p
-                                current-dir)
+                    (when (and (funcall allowed-p current-dir)
                                (file-directory-p current-dir))
                       (let* ((entries (directory-files current-dir nil "^[^.]"))
                              (file-entries
@@ -1262,8 +1271,7 @@ When a file is selected, replaces @file:path with the absolute path."
                                        ;; Offer the parent only while it is
                                        ;; still inside an allowed root, which
                                        ;; also stops at the filesystem root.
-                                       (when (mevedel-workspace--file-in-allowed-roots-p
-                                              parent-dir)
+                                       (when (funcall allowed-p parent-dir)
                                          (propertize (concat (or dir-part "") "../")
                                                      'mevedel-abs-path parent-dir
                                                      'mevedel-is-dir t))

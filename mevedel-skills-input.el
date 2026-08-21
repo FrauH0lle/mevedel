@@ -796,14 +796,24 @@ Returns:
                               (marker-position delete-start)
                               (marker-position region-end))
                      (with-current-buffer buffer
+                       ;; The command may sit outside a narrowing the user
+                       ;; applied meanwhile, and reading it must not signal.
                        (if (equal snapshot
-                                  (buffer-substring-no-properties
-                                   delete-start region-end))
+                                  (save-restriction
+                                    (widen)
+                                    (buffer-substring-no-properties
+                                     delete-start region-end)))
                            (mevedel-skills-input--handle-user-skill-outcome
                             skill outcome
                             (marker-position delete-start)
                             (marker-position region-end)
                             after-prefix continue-fn)
+                         ;; Activation happened before preparation, so the
+                         ;; skill's permission rules, model, and effort are
+                         ;; staged in this buffer.  Abandoning without
+                         ;; releasing them would apply them to whatever the
+                         ;; user sends next.
+                         (mevedel-skills-input-clear-pending)
                          (message
                           "mevedel: skill draft changed during preparation, not sent"))))
                  (set-marker delete-start nil)

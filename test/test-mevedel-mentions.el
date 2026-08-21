@@ -1634,6 +1634,46 @@ Returns (buffer . overlay)."
               (should-not (mevedel-file-capf)))))
       (delete-directory base t)))
 
+  :doc "completion reaches a root the user added to the session"
+  ;; The additional-roots alist is buffer-local to the data buffer, so a
+  ;; guard resolved in the view buffer sees only the global default and every
+  ;; root added with `mevedel-add-project-root' becomes uncompletable.
+  (let* ((base (make-temp-file "mevedel-capf-extra-" t))
+         (root (expand-file-name "ws" base))
+         (extra (file-name-as-directory (expand-file-name "extra" base)))
+         ;; Keep the enclosing temp directory out of the allowed set, or the
+         ;; whole fixture is trivially inside a root.
+         (temporary-file-directory (file-name-as-directory
+                                    (expand-file-name "tmp" root)))
+         (workspace (mevedel-workspace--create
+                     :type 'file :id root :root root :name "capf-extra"))
+         (data (generate-new-buffer " *capf-extra-data*")))
+    (make-directory root t)
+    (make-directory temporary-file-directory t)
+    (make-directory extra t)
+    (with-temp-file (expand-file-name "found.txt" extra) (insert "in\n"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-workspace)
+                   (lambda (&optional _buffer) workspace)))
+          (with-current-buffer data
+            (setq-local mevedel--session
+                        (mevedel-session--create :name "main"
+                                                 :workspace workspace))
+            ;; Keyed exactly as `mevedel-add-project-root' keys it: the
+            ;; workspace root as the struct carries it.
+            (setq-local mevedel-workspace-additional-roots
+                        (list (cons root (list extra)))))
+          (with-temp-buffer
+            (setq-local mevedel--data-buffer data)
+            (insert (format "@file:%s" extra))
+            (let ((capf (mevedel-file-capf)))
+              (should capf)
+              (should (member "found.txt"
+                              (mapcar #'file-name-nondirectory
+                                      (nth 2 capf)))))))
+      (when (buffer-live-p data) (kill-buffer data))
+      (delete-directory base t)))
+
   :doc "`mevedel-file-capf' binds a completed file's absolute pathname"
   (let* ((root (make-temp-file "mevedel file capf-" t))
          (path (expand-file-name "target file.txt" root))

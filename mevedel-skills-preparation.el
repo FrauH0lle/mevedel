@@ -385,6 +385,35 @@ shadow `$0'/`$1' shorthand."
 (define-error 'mevedel-skills-shell-abort
   "Skill body shell expansion failed; skill must abort.")
 
+(defun mevedel-skills-preparation--classify-injection
+    (result marker kind reason callback)
+  "Report RESULT for MARKER to CALLBACK as an injection outcome.
+KIND names the injection in messages and REASON is the failure reason to
+report.  The pipeline's canonical status decides the outcome; the display
+text only refines it, because a denial is worth naming separately.  Taking
+the visible half also keeps the serialized side-channel block out of the
+prompt, which only a tool result has stripped for it."
+  (require 'mevedel-tool-render-data)
+  (pcase-let* ((`(,visible . ,render-data)
+                (mevedel-tool-render-data-extract result))
+               (status (plist-get render-data :status)))
+    (cond
+     ((and (stringp visible)
+           (string-prefix-p "Error: Permission denied" visible))
+      (funcall callback
+               `(:status error :reason permission-denied
+                         :message ,(format "%s expansion %s denied: %s"
+                                           kind marker visible))))
+     ((or (eq status 'error)
+          (mevedel-skills-preparation--injection-outcome-error-p visible))
+      (funcall callback
+               `(:status error :reason ,reason
+                         :message ,(format "%s expansion %s failed: %s"
+                                           kind marker visible))))
+     (t
+      (funcall callback
+               `(:status ok :output ,(string-trim-right (or visible ""))))))))
+
 (defun mevedel-skills-preparation--injection-outcome-error-p (result)
   "Return non-nil when pipeline RESULT means body injection failed."
   (and (stringp result)
@@ -451,26 +480,8 @@ original shell-injection marker used in diagnostics."
             (mevedel-pipeline-run-tool
              tool
              (lambda (result)
-               (pcase-let* ((`(,visible . ,render-data)
-                              (mevedel-tool-render-data-extract result))
-                             (status (plist-get render-data :status)))
-                 (cond
-                  ((and (stringp visible)
-                        (string-prefix-p "Error: Permission denied" visible))
-                   (funcall callback
-                            `(:status error :reason permission-denied
-                                      :message ,(format "Shell expansion %s denied: %s"
-                                                        marker visible))))
-                  ((or (eq status 'error)
-                       (mevedel-skills-preparation--injection-outcome-error-p visible))
-                   (funcall callback
-                            `(:status error :reason shell-failure
-                                      :message ,(format "Shell expansion %s failed: %s"
-                                                        marker visible))))
-                  (t
-                   (funcall callback
-                            `(:status ok :output ,(string-trim-right
-                                                   (or visible ""))))))))
+               (mevedel-skills-preparation--classify-injection
+                result marker "Shell" 'shell-failure callback))
              (list :command command
                    :suppress-sandbox-disclosure-p t
                    :wait-for-completion-p t
@@ -512,37 +523,14 @@ original elisp-injection marker used in diagnostics."
      (t
       (condition-case err
           (progn
+            (require 'mevedel-tool-render-data)
             (unless (fboundp 'mevedel-tools--current-deferred-context)
               (require 'mevedel-tools))
             (mevedel-pipeline-run-tool
              tool
              (lambda (result)
-               ;; The pipeline reports the canonical outcome in render data,
-               ;; and reading the display text instead admits a failure whose
-               ;; wording this does not recognise as legitimate body content.
-               ;; Taking the visible half also keeps the serialized block out
-               ;; of the prompt, which only a tool result strips.
-               (pcase-let* ((`(,visible . ,render-data)
-                             (mevedel-tool-render-data-extract result))
-                            (status (plist-get render-data :status)))
-                 (cond
-                  ((and (stringp visible)
-                        (string-prefix-p "Error: Permission denied" visible))
-                   (funcall callback
-                            `(:status error :reason permission-denied
-                                      :message ,(format "Elisp expansion %s denied: %s"
-                                                        marker visible))))
-                  ((or (eq status 'error)
-                       (mevedel-skills-preparation--injection-outcome-error-p
-                        visible))
-                   (funcall callback
-                            `(:status error :reason elisp-failure
-                                      :message ,(format "Elisp expansion %s failed: %s"
-                                                        marker visible))))
-                  (t
-                   (funcall callback
-                            `(:status ok :output ,(string-trim-right
-                                                   (or visible ""))))))))
+               (mevedel-skills-preparation--classify-injection
+                result marker "Elisp" 'elisp-failure callback))
              (list :expression expression
                    :trust-literal-p
                    (mevedel-skills-preparation--author-ranges-p

@@ -432,7 +432,12 @@ the execution target's temporary directory, and any additional roots via
                      (unless (file-name-absolute-p dir)
                        workspace-root)))
                   memory-dirs)
-                 (alist-get workspace-root mevedel-workspace-additional-roots
+                 ;; This alist is buffer-local to the session data buffer,
+                 ;; so it has to be read in BUFFER for the same reason the
+                 ;; temporary root above is.
+                 (alist-get workspace-root
+                            (buffer-local-value
+                             'mevedel-workspace-additional-roots buffer)
                             nil nil #'equal))))
     (delete-dups
      (delq nil
@@ -440,10 +445,12 @@ the execution target's temporary directory, and any additional roots via
                      (file-name-as-directory (expand-file-name root)))
                    roots)))))
 
-(defun mevedel-workspace--file-in-allowed-roots-p (file &optional buffer)
-  "FILE needs to be absolute.
-BUFFER specifies which workspace to check (defaults to current buffer).
-Returns root of file or nil."
+(defun mevedel-workspace-file-in-allowed-roots-p (file &optional buffer)
+  "Return the allowed root containing absolute FILE, or nil.
+BUFFER specifies which workspace to check, defaulting to the current one.
+The additional-roots alist is buffer-local to the session data buffer, so a
+caller in a view buffer must name that buffer or it sees only the global
+default."
   (let ((file (expand-file-name file)))
     (if (file-name-absolute-p file)
         (let ((roots (mevedel--all-allowed-roots buffer)))
