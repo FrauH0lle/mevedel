@@ -1873,9 +1873,7 @@ MANAGED-LIVE-P records whether RECORD was user-visible before teardown."
   (when-let* ((function
                (mevedel-execution--record-teardown-function record)))
     (setf (mevedel-execution--record-teardown-function record) nil)
-    (ignore-errors (funcall function)))
-  (when managed-live-p
-    (mevedel-execution--notify-state-change record)))
+    (ignore-errors (funcall function))))
 
 (defun mevedel-execution--discard-record (record reason)
   "Kill and forget RECORD because of lifecycle REASON."
