@@ -51,6 +51,7 @@
 (declare-function mevedel-view--schedule-render
                   "mevedel-view" (kind data-buffer delay))
 (declare-function mevedel-view--tool-status-string "mevedel-view" (tool-name args))
+(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (defvar mevedel-view--display-map)
 (defvar mevedel-view-pending-tools-visible-max)
 (defvar mevedel-view-spinner-animate)
@@ -1011,26 +1012,51 @@ When NO-PROGRESS is non-nil, record no active progress state."
          :state (mevedel-view--debug-state data-buf start end))
         (with-current-buffer data-buf
           (setq-local mevedel-compact-run-in-flight nil))
-        (mevedel-view--stop-request-progress)
-        (mevedel-view--debug-log
-         'render-response-after-spinner
-         :state (mevedel-view--debug-state data-buf start end))
-        (mevedel-view--cancel-scheduled-render)
-        (setq mevedel-view--pending-tool-calls nil)
-        (mevedel-view--delete-pending-tool-live-lines)
-        (setq end (or (mevedel-view--append-request-summary data-buf start)
-                      end))
-        (mevedel-view--render-incremental data-buf start end)
-        (mevedel-view--debug-log
-         'render-response-after-incremental
-         :state (mevedel-view--debug-state data-buf start end))
-        (mevedel-view--stop-spinner-timer)
-        (when (markerp mevedel-view--in-flight-turn-start)
-          (set-marker mevedel-view--in-flight-turn-start nil))
-        (setq mevedel-view--in-flight-turn-start nil)
-        (when (markerp mevedel-view--data-turn-start)
-          (set-marker mevedel-view--data-turn-start nil))
-        (setq mevedel-view--data-turn-start nil))))
+        ;; Releasing this turn is not optional.  While a pending tool call
+        ;; remains, stopping the progress row leaves the spinner timer
+        ;; running, and a stale in-flight marker keeps the view looking
+        ;; active; an escaping error would also skip the post-response
+        ;; observers that follow, including gptel's font-lock refresh and
+        ;; the Plan proposal presentation.  Everything fallible therefore
+        ;; runs inside the guard, including the zone mutations.
+        (unwind-protect
+            (condition-case err
+                (progn
+                  (mevedel-view--stop-request-progress)
+                  (mevedel-view--debug-log
+                   'render-response-after-spinner
+                   :state (mevedel-view--debug-state data-buf start end))
+                  (mevedel-view--cancel-scheduled-render)
+                  ;; Clear the list before dropping its rows, or the
+                  ;; render below rebuilds the live tail from it.
+                  (setq mevedel-view--pending-tool-calls nil)
+                  (mevedel-view--delete-pending-tool-live-lines)
+                  (setq end
+                        (or (mevedel-view--append-request-summary
+                             data-buf start)
+                            end))
+                  (mevedel-view--render-incremental data-buf start end)
+                  (mevedel-view--debug-log
+                   'render-response-after-incremental
+                   :state (mevedel-view--debug-state data-buf start end)))
+              (error
+               ;; The fallback rerender is debounced by
+               ;; `mevedel-view-rerender-debounce', so it normally runs
+               ;; after the release below.
+               (display-warning
+                'mevedel
+                (format "Terminal response render failed: %s"
+                        (error-message-string err))
+                :warning)
+               (mevedel-view-rerender view-buf)))
+          (setq mevedel-view--pending-tool-calls nil)
+          (mevedel-view--stop-spinner-timer)
+          (when (markerp mevedel-view--in-flight-turn-start)
+            (set-marker mevedel-view--in-flight-turn-start nil))
+          (setq mevedel-view--in-flight-turn-start nil)
+          (when (markerp mevedel-view--data-turn-start)
+            (set-marker mevedel-view--data-turn-start nil))
+          (setq mevedel-view--data-turn-start nil)))))
   nil)
 
 (provide 'mevedel-view-stream)

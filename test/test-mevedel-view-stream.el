@@ -3491,7 +3491,62 @@
       (when (file-exists-p client-file)
         (delete-file client-file))
       (when (file-directory-p local-root)
-        (delete-directory local-root t)))))
+        (delete-directory local-root t))))
+
+  :doc "releases the turn, warns, and reschedules when projection fails"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "*** ask\n\nreply\n"))
+    (with-current-buffer view-buf
+      (mevedel-view-stream-begin-turn
+       (point-min)
+       (with-current-buffer data-buf (copy-marker (point-min) nil)))
+      (setq mevedel-view--pending-tool-calls
+            (list (list :id "call-1" :name "Read")))
+      (should (timerp mevedel-view--spinner-timer))
+      (let (warning later-ran)
+        (mevedel-test--with-captured-diagnostics warning
+          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                     (lambda (&rest _) (error "Projection failed"))))
+            (with-current-buffer data-buf
+              ;; Through the hook, because the point of not signalling is
+              ;; that the observers after this one still run.
+              (let ((gptel-post-response-functions
+                     (list #'mevedel-view-stream-render-response
+                           (lambda (&rest _) (setq later-ran t)))))
+                (run-hook-with-args 'gptel-post-response-functions
+                                    (point-min) (point-max))))))
+        (should (string-match-p "Projection failed" warning))
+        (should later-ran))
+      (should-not mevedel-view--pending-tool-calls)
+      (should-not (timerp mevedel-view--spinner-timer))
+      (should-not mevedel-view--in-flight-turn-start)
+      (should-not mevedel-view--data-turn-start)
+      (should (eq 'full mevedel-view--pending-render-kind))))
+
+  :doc "releases the turn when stopping the progress row fails"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "*** ask\n\nreply\n"))
+    (with-current-buffer view-buf
+      (mevedel-view-stream-begin-turn
+       (point-min)
+       (with-current-buffer data-buf (copy-marker (point-min) nil)))
+      (setq mevedel-view--pending-tool-calls
+            (list (list :id "call-1" :name "Read")))
+      (should (timerp mevedel-view--spinner-timer))
+      (let (warning)
+        (mevedel-test--with-captured-diagnostics warning
+          (cl-letf (((symbol-function 'mevedel-view--stop-request-progress)
+                     (lambda (&rest _) (error "Zone reconcile failed"))))
+            (with-current-buffer data-buf
+              (mevedel-view-stream-render-response
+               (point-min) (point-max)))))
+        (should (string-match-p "Zone reconcile failed" warning)))
+      (should-not mevedel-view--pending-tool-calls)
+      (should-not (timerp mevedel-view--spinner-timer))
+      (should-not mevedel-view--in-flight-turn-start)
+      (should-not mevedel-view--data-turn-start))))
 
 (provide 'test-mevedel-view-stream)
 ;;; test-mevedel-view-stream.el ends here
