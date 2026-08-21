@@ -360,24 +360,25 @@ RENDER-DATA is retained in the hidden transcript audit record."
            (lambda (tool-use-id pending)
              (let ((event (plist-get pending :event))
                    (render-data (plist-get pending :render-data)))
-               (cond
-                ((mevedel-tool-render-data-update
-                  data-buffer tool-use-id render-data)
-                 (push tool-use-id settled))
-                ((and (eq (plist-get event :type) 'terminal)
-                      (mevedel-execution-transcript--archived-row-p
-                       data-buffer tool-use-id))
-                 (condition-case err
-                     (progn
-                       (mevedel-execution-transcript--record-archived-terminal
-                        data-buffer event render-data)
-                       (push tool-use-id settled))
-                   (error
-                    (display-warning
-                     'mevedel
-                     (format "Could not persist archived execution %s: %s"
-                             tool-use-id (error-message-string err))
-                     :warning)))))))
+               ;; One unsettled entry must not abort the sweep, and this
+               ;; runs before the caller releases its turn.
+               (condition-case err
+                   (cond
+                    ((mevedel-tool-render-data-update
+                      data-buffer tool-use-id render-data)
+                     (push tool-use-id settled))
+                    ((and (eq (plist-get event :type) 'terminal)
+                          (mevedel-execution-transcript--archived-row-p
+                           data-buffer tool-use-id))
+                     (mevedel-execution-transcript--record-archived-terminal
+                      data-buffer event render-data)
+                     (push tool-use-id settled)))
+                 (error
+                  (display-warning
+                   'mevedel
+                   (format "Could not settle pending execution %s: %s"
+                           tool-use-id (error-message-string err))
+                   :warning)))))
            mevedel-execution-transcript--pending-terminals)
           (dolist (tool-use-id settled)
             (remhash tool-use-id

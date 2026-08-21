@@ -683,6 +683,14 @@ committed user turn, records a retryable failure summary while the request
 still carries its elapsed time, stops the turn UI, and ends the request. A
 later render therefore never continues a dead turn.
 
+The terminal response boundary releases the turn -- pending tool rows, spinner
+timer, and both in-flight markers -- whether or not the work it guards
+succeeds. Everything fallible runs inside that guard: stopping the progress
+row, the zone mutations, the request summary, and the projection. A failure
+there warns and falls back to one debounced full rerender, so a terminal render
+bug cannot leave a live spinner timer, a stale in-flight anchor, or an error
+that skips the post-response observers that follow.
+
 `mevedel-view-rerender` is the correctness fallback and is debounced for
 bursty updates. Prefer narrower refresh paths when a stable source exists:
 retained-agent metadata replacements use a full rerender, while activity-only
