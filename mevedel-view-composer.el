@@ -23,9 +23,11 @@
 ;; `gptel'
 (declare-function gptel--update-status "ext:gptel"
 		  (msg &optional face))
+(declare-function gptel-backend-name "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 (declare-function gptel-send "ext:gptel" (&optional arg))
+(defvar gptel-backend)
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
 
@@ -377,6 +379,8 @@
 		  "mevedel-view-interaction" (id))
 
 ;; `mevedel-view-render'
+(declare-function mevedel-view--append-request-summary
+                  "mevedel-view-render" (data-buf search-start &optional extra))
 (declare-function mevedel-view--full-rerender "mevedel-view-render" ())
 (declare-function mevedel-view--history-insertion-marker
                   "mevedel-view-render" ())
@@ -406,6 +410,7 @@
 (declare-function mevedel-view-stream-begin-turn
                   "mevedel-view-stream"
                   (view-turn-start data-turn-start &optional no-spinner))
+(declare-function mevedel-view-stream-stop "mevedel-view-stream" ())
 (defvar mevedel-view--data-turn-start)
 (defvar mevedel-view--in-flight-turn-start)
 
@@ -1238,6 +1243,28 @@ follows `mevedel-view--input-marker'."
              (if (mevedel-session-plan-mode session) "on" "off"))
     (mevedel-session-plan-mode session)))
 
+(defun mevedel-view--clear-submitted-input (submitted-draft)
+  "Clear the composer while it still holds SUBMITTED-DRAFT.
+Preparation and prompt hooks can run asynchronously, so anything the user
+typed after the submission captured SUBMITTED-DRAFT is a new draft: it
+stays, with the mention bindings and dropped-file grants it carries.  A
+caller that captured no draft clears unconditionally: a drained pending
+input already required an empty composer, and a buffer with no composer
+has no draft to protect."
+  (when (or (null submitted-draft)
+            (equal submitted-draft (mevedel-view--visible-draft)))
+    (mevedel-view--clear-input)))
+
+(defun mevedel-view--visible-draft ()
+  "Return the composer's visible text, exactly as it stands.
+This is the text a submission captures and the text a later clear
+decision compares against, so it must not be trimmed or normalized.
+Returns nil in a buffer with no editable composer, because a submission
+raised from one has no draft to protect."
+  (when (and (markerp mevedel-view--input-marker)
+             (marker-buffer mevedel-view--input-marker))
+    (buffer-substring-no-properties (mevedel-view--input-start) (point-max))))
+
 (defun mevedel-view--input-text ()
   "Return the user's composer text, trimmed."
   (require 'mevedel-mention-bindings)
@@ -1507,18 +1534,19 @@ and command argument completion for commands with finite choices."
        (mevedel-view--input-start)))))
 
 (defun mevedel-view--start-fork-skill-turn
-    (input display-text &optional hook-context)
+    (input display-text &optional hook-context submitted-draft)
   "Render and record a fork skill INPUT without calling `gptel-send'.
 
 DISPLAY-TEXT is shown in the view for the user turn.  INPUT is written
 to the data buffer as the authoritative user prompt.  The data-turn
 marker is anchored after that prompt so the eventual fork result can be
 rendered by the normal post-response hook.  HOOK-CONTEXT is summarized
-in the view when present."
+in the view when present.  SUBMITTED-DRAFT is the composer text captured
+when the submission started."
   (require 'mevedel-turn)
   (let ((view-turn-start
          (mevedel-view--insert-user-message display-text nil hook-context)))
-    (mevedel-view--clear-input)
+    (mevedel-view--clear-submitted-input submitted-draft)
     (with-current-buffer mevedel--data-buffer
       (when mevedel--session
         (mevedel-request-begin
@@ -1648,11 +1676,14 @@ HOOK-AUDITS are the accepted `UserPromptSubmit' result."
                (mevedel-view--prepared-fork-outcome prepared)))))
 
 (cl-defun mevedel-view--dispatch-prepared-outcome
-    (submission data-buffer &key before-send after-insert on-block dispatch)
+    (submission data-buffer &key before-send after-insert on-block dispatch
+                submitted-draft)
   "Dispatch accepted prompt SUBMISSION through DATA-BUFFER.
 BEFORE-SEND runs at the dispatch boundary.  AFTER-INSERT runs once the prompt
 is durably recorded.  ON-BLOCK runs after a dispatch error.  DISPATCH, when
-non-nil, receives SUBMISSION instead of starting a request."
+non-nil, receives SUBMISSION instead of starting a request.  SUBMITTED-DRAFT is
+the composer text captured before preparation began, so a draft typed while it
+ran survives the send."
   (let* ((view-buffer (current-buffer))
          (outcome (mevedel-prompt-submission-outcome submission))
          (input (mevedel-prompt-submission-display-text submission))
@@ -1681,7 +1712,8 @@ non-nil, receives SUBMISSION instead of starting a request."
             (let* ((skill (plist-get fork-outcome :skill))
                    (name (mevedel-skill-name skill)))
               (mevedel-view--start-fork-skill-turn
-               (concat transcript-input render-data) input view-context)
+               (concat transcript-input render-data) input view-context
+               submitted-draft)
               (mevedel-prompt-submission-commit submission)
               (when after-insert
                 (funcall after-insert))
@@ -1704,7 +1736,8 @@ non-nil, receives SUBMISSION instead of starting a request."
              :prompt-checked t
              :submission submission
              :after-insert after-insert
-             :model-input (concat model-input render-data)))))
+             :model-input (concat model-input render-data)
+             :submitted-draft submitted-draft))))
       (error
        (when (buffer-live-p data-buffer)
          (with-current-buffer data-buffer
@@ -1743,7 +1776,8 @@ non-nil, receives SUBMISSION instead of starting a request."
            :before-send (plist-get plan-submission :before-send)
            :after-insert (plist-get plan-submission :after-insert)
            :on-block (plist-get plan-submission :on-block)
-           :dispatch (plist-get plan-submission :dispatch)))))))
+           :dispatch (plist-get plan-submission :dispatch)
+           :submitted-draft (plist-get plan-submission :submitted-draft)))))))
 
 (defun mevedel-view--handle-prepared-plan (submission prepared)
   "Continue SUBMISSION after PREPARED skill work settles."
@@ -1783,7 +1817,11 @@ carries prompting authority only, never skill invocation."
   (require 'mevedel-skills-input)
   (let ((view-buffer (current-buffer))
         (data-buffer mevedel--data-buffer)
-        (session (mevedel-view--session)))
+        (session (mevedel-view--session))
+        ;; Captured here because both skill preparation and the prompt hook
+        ;; below run asynchronously, and only this entry is still holding
+        ;; the draft the user actually submitted.
+        (submitted-draft (mevedel-view--visible-draft)))
     (require 'mevedel-skills-plan)
     (let* ((plan
             (unless inert-skills
@@ -1820,11 +1858,12 @@ carries prompting authority only, never skill invocation."
                     :before-send before-send
                     :after-insert after-insert
                     :on-block on-block
-                    :dispatch dispatch)))
+                    :dispatch dispatch
+                    :submitted-draft submitted-draft)))
                on-block)
             (mevedel-view--forward-input
              input :before-send before-send :after-insert after-insert
-             :on-block on-block))
+             :on-block on-block :submitted-draft submitted-draft))
         (let* ((token (list :cancelled nil))
                (submission
                 (list :token token
@@ -1835,7 +1874,8 @@ carries prompting authority only, never skill invocation."
                       :before-send before-send
                       :after-insert after-insert
                       :dispatch dispatch
-                      :on-block on-block)))
+                      :on-block on-block
+                      :submitted-draft submitted-draft)))
           (setq mevedel-view--pending-skill-submission token)
           (with-current-buffer data-buffer
             (mevedel-skills-plan-prepare
@@ -2154,7 +2194,7 @@ their local dispatch path."
 		 input
 		 (lambda ()
                    (mevedel-view-history-add input)))))))))))
-  ;; Accepted sends clear the draft and land at the new composer end.
+  ;; Accepted sends clear the submitted draft and land at the composer end.
   ;; Rejected sends preserve the exact input-relative point.
   (unless (mevedel-view--point-in-input-region-p)
     (goto-char (point-max))))
@@ -2164,7 +2204,8 @@ their local dispatch path."
 INPUT is the original composer text, including the slash command."
   (let* ((view-buffer (current-buffer))
          (data-buffer mevedel--data-buffer)
-         (objective args))
+         (objective args)
+         (submitted-draft (mevedel-view--visible-draft)))
     (when (string-blank-p objective)
       (user-error "Goal objective must not be blank"))
     (mevedel-view--run-prompt-submit-hook
@@ -2174,7 +2215,7 @@ INPUT is the original composer text, including the slash command."
                   (buffer-live-p data-buffer))
          (with-current-buffer view-buffer
            (mevedel-view-history-add input)
-           (mevedel-view--clear-input))
+           (mevedel-view--clear-submitted-input submitted-draft))
          (with-current-buffer data-buffer
            (require 'mevedel-goal)
            (mevedel-goal-start
@@ -2290,7 +2331,8 @@ input."
 
 (cl-defun mevedel-view--forward-input
     (input &key display-text before-send after-insert prompt-checked on-block
-           submission model-input)
+           submission model-input
+           (submitted-draft (mevedel-view--visible-draft)))
   "Render INPUT in the history region, forward to the data buffer, and send.
 Helper for `mevedel-view-send'.  When DISPLAY-TEXT is non-nil, show
 that in the view instead of INPUT (e.g., compact skill invocation).
@@ -2300,7 +2342,8 @@ PROMPT-CHECKED is non-nil, skip `UserPromptSubmit' because the caller
 already ran it.  ON-BLOCK is called when a prompt hook blocks.
 SUBMISSION carries hook context, audits, and commit ownership when
 PROMPT-CHECKED is non-nil.  MODEL-INPUT, when non-nil, replaces INPUT only in
-the temporary request prompt.
+the temporary request prompt.  SUBMITTED-DRAFT defaults to the composer text
+captured when this submission starts.
 
 Anchors the incremental-render markers so progress hooks can redraw
 the in-flight assistant turn as tool calls complete:
@@ -2317,7 +2360,8 @@ after the forwarded prompt, where the LLM's response will begin."
           :display-text view-text
           :submission accepted
           :after-insert after-insert
-          :model-input request-input)))
+          :model-input request-input
+          :submitted-draft submitted-draft)))
     (if prompt-checked
         (send-now input (or display-text input) submission model-input)
       (mevedel-view--run-prompt-submit-hook
@@ -2337,11 +2381,14 @@ after the forwarded prompt, where the LLM's response will begin."
        on-block))))
 
 (cl-defun mevedel-view--forward-input-now
-    (input &key display-text submission after-insert model-input)
+    (input &key display-text submission after-insert model-input
+           submitted-draft)
   "Forward INPUT to gptel immediately, after prompt hooks have run.
 DISPLAY-TEXT is shown in the view instead of INPUT when non-nil.  SUBMISSION
 supplies hook context, audits, and commit ownership.  MODEL-INPUT, when non-nil,
-replaces INPUT only in the temporary request prompt."
+replaces INPUT only in the temporary request prompt.  SUBMITTED-DRAFT is the
+composer text this submission captured; a draft the user changed while
+asynchronous preparation ran is left alone instead of cleared."
   (require 'mevedel-compact-run)
   (require 'mevedel-tool-render-data)
   (require 'mevedel-turn)
@@ -2442,15 +2489,36 @@ replaces INPUT only in the temporary request prompt."
                prompt-summary-body prompt-summary-source
                hook-audits-with-source guest-name)))
          (mevedel-view-stream-begin-turn turn-start data-turn-start)
-         ;; Clear composer text.
-         (mevedel-view--clear-input))
+         (mevedel-view--clear-submitted-input submitted-draft))
        (with-current-buffer mevedel--data-buffer
          (mevedel-view--activate-dropped-file-grants
           dropped-file-grants session)
          (setq-local mevedel--pending-model-input model-input)
-         (unwind-protect
-             (gptel-send)
-           (setq-local mevedel--pending-model-input nil)))))))
+         (condition-case err
+             (unwind-protect
+                 (gptel-send)
+               (setq-local mevedel--pending-model-input nil))
+           ((error quit)
+            ;; The user's turn is committed, but a start that failed or was
+            ;; interrupted gets no gptel terminal callback, so this is the
+            ;; only place that can settle it.  The summary is recorded first
+            ;; because it reads the request's elapsed time, which ending the
+            ;; request clears; the UI stops before that teardown so it never
+            ;; outlives the request it describes.
+            (require 'mevedel-view-render)
+            (mevedel-view--append-request-summary
+             (current-buffer) data-turn-start
+             (list :outcome 'error
+                   :backend (or (ignore-errors
+                                  (gptel-backend-name gptel-backend))
+                                "Provider")
+                   :message (error-message-string err)
+                   :retry 'manual))
+            (when (buffer-live-p mevedel--view-buffer)
+              (with-current-buffer mevedel--view-buffer
+                (mevedel-view-stream-stop)))
+            (mevedel-request-end)
+            (signal (car err) (cdr err)))))))))
 
 (defun mevedel-view--transform-model-input (fsm)
   "Replace the latest stored prompt with its one-shot model input for FSM."

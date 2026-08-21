@@ -4,20 +4,21 @@
 
 ;;; Code:
 
-(require 'mevedel-review)
-(require 'mevedel-agents)
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agent-exec)
+(require 'mevedel-agents)
 (require 'mevedel-bash-policy)
+(require 'mevedel-execution-target)
 (require 'mevedel-hooks)
 (require 'mevedel-prompt-submission)
+(require 'mevedel-review)
 (require 'mevedel-structs)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-view)
 (require 'mevedel-view-render)
+(require 'mevedel-view-segments)
 (require 'mevedel-workspace)
-(require 'mevedel-execution-target)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -953,6 +954,47 @@
 (mevedel-deftest mevedel-review--send-from-view ()
   ,test
   (test)
+  :doc "a draft typed while its prompt hook runs survives the review send"
+  (let* ((root (make-temp-file "mevedel-review-redraft" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "review-redraft" root "review-redraft"))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-hook-rules
+          '((UserPromptSubmit
+             ((:matcher "*"
+                        :hooks ((:type command
+                                       :command "sleep 0.2; printf '{}'"
+                                       :timeout 5)))))))
+         (started 0))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session
+                        mevedel--workspace workspace)
+            (mevedel-session-set-root-buffer session data-buf))
+          (with-current-buffer view-buf
+            (setq-local mevedel--session session
+                        mevedel--workspace workspace))
+          (cl-letf (((symbol-function 'mevedel-review--run-task)
+                     (lambda (&rest _) (cl-incf started) #'ignore)))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "/review target")
+              (mevedel-review--send-from-view
+               "/review target" "prompt" "target" view-buf data-buf)
+              (should (= 0 started))
+              ;; The user keeps typing while the hook runs.
+              (delete-region (mevedel-view--input-start) (point-max))
+              (goto-char (point-max))
+              (insert "> quoted\nsecond line")
+              (let ((deadline (+ (float-time) 10)))
+                (while (and (= 0 started) (< (float-time) deadline))
+                  (accept-process-output nil 0.05))
+                (should (= 1 started))
+                (should (equal "> quoted\nsecond line"
+                               (mevedel-view--input-text)))))))
+      (delete-directory root t)))
+
   :doc "persists consumed start context across a full transcript rerender"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
