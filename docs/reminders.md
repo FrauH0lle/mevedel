@@ -34,6 +34,23 @@ with the same key coalesce and are injected at the next `WAIT` owned by that
 same turn. They are discarded when the owner changes and are never carried
 into the next user turn.
 
+Consuming a reminder is a separate step from staging it. A content function
+returns either its body or a `:body`/`:commit` plist, and every commit -- the
+pending-event FIFO, hook context, the observed date, external-change
+snapshots, expired deferred tools, queued turn events, and each reminder's
+fired turn -- runs only once the payload exists at `WAIT`. Hook context is the
+exception in mechanism, not in guarantee: it rides the prompt text rather than
+a block, so the transform reserves it out of the pending list immediately --
+otherwise automatic compaction's context epoch or a prompt prepared in the
+composer could deliver the same entries a second time -- and ending the
+request returns the reservation, which every dead turn does. A
+request that fails to realize, is aborted or cancelled before its first
+`WAIT`, or whose injection signals therefore keeps everything for the next turn
+instead of losing it, and an interval reminder is not marked fired for a turn
+the model never saw. A trigger that mutates state has no commit channel, so a
+reminder whose trigger consumes still reports once per attempt rather than once
+per delivery.
+
 Explicit lifecycle events that intentionally survive a request boundary still
 use the session pending-event FIFO. Durable state reminders are regenerated
 from session state rather than persisted as transient observations. Root and

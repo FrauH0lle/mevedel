@@ -413,8 +413,10 @@
             (should-not (eq source-reminder child-reminder))
             (should-not (eq source-skill child-skill))
             (should-not (eq source-invoked-skill child-invoked-skill))
-            (mevedel-reminders--collect-from
-             (mevedel-session-reminders child) 2 child)
+            (mapc #'funcall
+                  (plist-get (mevedel-reminders--collect-from
+                              (mevedel-session-reminders child) 2 child)
+                             :commits))
             (mevedel-skills--maybe-activate child "/tmp/child.el")
             (setf (mevedel-skill-invocation-record-name child-invoked-skill)
                   "child-skill")

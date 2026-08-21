@@ -306,13 +306,19 @@ are reported once and become the new snapshot."
                         (setq delta (list :added added :removed removed))
                         t)))))
      :content (lambda (session)
-                (prog1
-                    (mevedel-skills--format-delta
-                     (plist-get delta :added)
-                     (plist-get delta :removed))
-                  (setf (mevedel-session-skills-snapshot session)
-                        (mevedel-skills--skill-snapshot session))
-                  (setq delta nil)))
+                ;; Captured here: the snapshot reader needs the buffer the
+                ;; prompt transform binds, which is gone by commit time.
+                (let ((current (mevedel-skills--skill-snapshot session))
+                      (reported delta))
+                  (list :body
+                        (mevedel-skills--format-delta
+                         (plist-get reported :added)
+                         (plist-get reported :removed))
+                        :commit
+                        (lambda ()
+                          (setf (mevedel-session-skills-snapshot session)
+                                current)
+                          (setq delta nil)))))
      :interval nil)))
 
 (defun mevedel-reminders-make-skills-roster-budget ()

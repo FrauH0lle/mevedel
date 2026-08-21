@@ -82,6 +82,10 @@
 (declare-function mevedel-plan-approval-abort
                   "mevedel-plan-mode" (&optional session outcome))
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-restore-reserved-context
+                  "mevedel-reminders" (buffer))
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-mutation-authority
                   "mevedel-session-artifacts" (session &optional buffer))
@@ -295,7 +299,14 @@ ABORT-PLAN-APPROVAL is non-nil, abort it too."
         (mevedel-plan-approval-abort session)))))
 
 (defun mevedel-request-end (&optional abort-plan-approval)
-  "Cancel the current request, then clear `mevedel--current-request'."
+  "Cancel the current request, then clear `mevedel--current-request'.
+
+Also returns any hook context the ended request reserved.  Reminder
+injection runs ahead of the handler that begins a request, so a delivered
+payload has already released its reservation and only an undelivered one
+is returned here."
+  (require 'mevedel-reminders)
+  (mevedel-reminders-restore-reserved-context (current-buffer))
   (when mevedel--current-request
     (let ((request mevedel--current-request))
       (when (fboundp 'mevedel-telemetry-record)

@@ -93,6 +93,8 @@
                   "mevedel-file-state" (cache))
 
 ;; `mevedel-hooks'
+(declare-function mevedel-hooks-consume-session-context
+                  "mevedel-hooks" (session entries))
 (declare-function mevedel-hooks-format-context "mevedel-hooks"
                   (entries))
 
@@ -158,6 +160,12 @@ prompt buffer.")
   "Owner-bound reminder events for the current model turn.
 The value is `(:owner OWNER :items ((KEY :body BODY :commit FUNCTION) ...))'.")
 
+(defvar-local mevedel-reminders--reserved-hook-context nil
+  "Hook-context entries this buffer's in-flight request reserved.
+Held out of the session's pending context while a request carries them,
+and restored by `mevedel-reminders-restore-reserved-context' when that
+request never delivers.")
+
 (defvar-local mevedel-reminders--diagnostic-state nil
   "Per-owner edit diagnostic baselines and pending reports.")
 
@@ -171,8 +179,9 @@ The value is `(:owner OWNER :items ((KEY :body BODY :commit FUNCTION) ...))'.")
 A reminder's TRIGGER is called with a context object (session struct
 for main chat, agent-specific context for sub-agents) and returns
 non-nil when the reminder should fire on the current turn.  CONTENT is
-called with the same context object and returns the reminder body
-string.
+called with the same context object and returns either the reminder body
+string or a plist with `:body' and an optional `:commit' thunk, which
+runs once the payload carrying the body reaches the request.
 
 INTERVAL controls firing frequency:
   - nil        - fire every turn the trigger returns non-nil
@@ -398,22 +407,33 @@ interval it fires once enough turns have passed since the last fire."
   (format "<system-reminder>\n%s\n</system-reminder>" content))
 
 (defun mevedel-reminders--collect-from (reminders turn-count ctx)
-  "Evaluate REMINDERS at TURN-COUNT and return formatted blocks.
+  "Evaluate REMINDERS at TURN-COUNT and return staged blocks and commits.
 
 REMINDERS is a list of `mevedel-reminder' structs.  TURN-COUNT is the
 current turn counter used for interval checks.  CTX is the firing
 context passed to each reminder's trigger and content functions.
 
-Mutates each fired reminder's LAST-FIRED.  Returns a list of block
-strings in the order the reminders appear."
-  (let ((blocks nil))
+A content function returns either a body string or a plist with `:body'
+and an optional `:commit' thunk, the same shape queued turn events use.
+Nothing is consumed here: marking a reminder fired and running any
+content commit are deferred to the returned `:commits', which the
+injector runs once the payload has reached the request.  Returns a plist
+with `:blocks' in reminder order and `:commits'."
+  (let ((blocks nil)
+        (commits nil))
     (dolist (reminder reminders)
       (when (mevedel-reminders--should-fire-p reminder turn-count ctx)
-        (push (mevedel-reminders-format-block
-               (funcall (mevedel-reminder-content reminder) ctx))
-              blocks)
-        (setf (mevedel-reminder-last-fired reminder) turn-count)))
-    (nreverse blocks)))
+        (let* ((result (funcall (mevedel-reminder-content reminder) ctx))
+               (body (if (stringp result) result (plist-get result :body)))
+               (commit (and (not (stringp result))
+                            (plist-get result :commit))))
+          (push (mevedel-reminders-format-block body) blocks)
+          (when commit (push commit commits))
+          (push (lambda ()
+                  (setf (mevedel-reminder-last-fired reminder) turn-count))
+                commits))))
+    (list :blocks (nreverse blocks)
+          :commits (nreverse commits))))
 
 (defun mevedel-reminders--current-buffer ()
   "Return the chat buffer currently collecting reminders, or nil."
@@ -517,8 +537,24 @@ request or agent invocation that owns the event."
                 (plist-put mevedel-reminders--turn-events :items items)))
         t))))
 
-(defun mevedel-reminders--take-turn-events (buffer)
-  "Return and clear live turn-event blocks and commits queued for BUFFER."
+(defun mevedel-reminders-restore-reserved-context (buffer)
+  "Return BUFFER's reserved hook context to its session's pending list.
+Called from the boundaries that settle a turn which never delivered, so
+context reserved for it is offered to the next request instead of lost."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let* ((contexts mevedel-reminders--reserved-hook-context)
+                  (session (bound-and-true-p mevedel--session)))
+        (setq-local mevedel-reminders--reserved-hook-context nil)
+        (setf (mevedel-session-hook-context-pending session)
+              (append contexts
+                      (mevedel-session-hook-context-pending session)))
+        t))))
+
+(defun mevedel-reminders--stage-turn-events (buffer)
+  "Return live turn-event blocks and commits queued for BUFFER.
+The queue is not cleared here: dequeueing is the last of the returned
+`:commits', so events survive a request that never reaches injection."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (let ((owner (mevedel-reminders--turn-owner buffer)))
@@ -528,30 +564,41 @@ request or agent invocation that owns the event."
               (setq mevedel-reminders--turn-events nil)
               nil)
           (let ((items (plist-get mevedel-reminders--turn-events :items)))
-            (prog1
-                (list
-                 :blocks
-                 (mapcar (lambda (entry)
-                           (mevedel-reminders-format-block
-                            (plist-get (cdr entry) :body)))
-                         items)
-                 :commits
-                 (delq nil
-                       (mapcar (lambda (entry)
-                                 (plist-get (cdr entry) :commit))
-                               items)))
-              (when (assq 'diagnostics items)
-                (mevedel-reminders--diagnostics-clear-pending buffer))
-              (setq mevedel-reminders--turn-events nil))))))))
+            (list
+             :blocks
+             (mapcar (lambda (entry)
+                       (mevedel-reminders-format-block
+                        (plist-get (cdr entry) :body)))
+                     items)
+             :commits
+             (append
+              (delq nil
+                    (mapcar (lambda (entry)
+                              (plist-get (cdr entry) :commit))
+                            items))
+              ;; Dequeue last, so a payload that never reaches the
+              ;; request leaves these events queued for the next turn.
+              (list
+               (lambda ()
+                 (when (buffer-live-p buffer)
+                   (with-current-buffer buffer
+                     (when (assq 'diagnostics items)
+                       (mevedel-reminders--diagnostics-clear-pending buffer))
+                     (setq mevedel-reminders--turn-events nil)))))))))))))
 
 (defun mevedel-reminders--handle-inject (fsm)
-  "Inject staged and same-turn reminders into FSM's request payload."
+  "Inject staged and same-turn reminders into FSM's request payload.
+
+Consumable state is committed only once the payload exists, so a request
+that fails to realize or is cancelled before this point keeps everything
+for the next turn."
   (let* ((info (gptel-fsm-info fsm))
          (buffer (plist-get info :buffer))
          (data (plist-get info :data))
-         (initial (plist-get info :mevedel-reminder-blocks)))
+         (initial (plist-get info :mevedel-reminder-blocks))
+         (staged-commits (plist-get info :mevedel-reminder-commits)))
     (when (and data (buffer-live-p buffer))
-      (let* ((events (mevedel-reminders--take-turn-events buffer))
+      (let* ((events (mevedel-reminders--stage-turn-events buffer))
              (blocks (append initial (plist-get events :blocks))))
         (when blocks
           (let* ((backend (plist-get info :backend))
@@ -561,10 +608,20 @@ request or agent invocation that owns the event."
                         (list (cons 'prompt (string-join blocks "\n")))))))
             (gptel--inject-prompt
              backend data message (and initial -1))
-            (mapc #'funcall (plist-get events :commits))))
-        (when initial
+            (dolist (commit (plist-get events :commits))
+              (with-demoted-errors "mevedel: reminder commit failed: %S"
+                (funcall commit)))))
+        ;; Staged commits belong to a payload existing at all: hook
+        ;; context reached it as prompt text rather than as a block, so
+        ;; gating these on `blocks' would leave it pending forever.
+        (dolist (commit staged-commits)
+          (with-demoted-errors "mevedel: reminder commit failed: %S"
+            (funcall commit)))
+        (when (or initial staged-commits)
           (setf (gptel-fsm-info fsm)
-                (plist-put info :mevedel-reminder-blocks nil)))))))
+                (plist-put
+                 (plist-put info :mevedel-reminder-blocks nil)
+                 :mevedel-reminder-commits nil)))))))
 
 (defun mevedel-reminders--transform (fsm)
   "Stage system reminders for separate injection into FSM.
@@ -585,23 +642,43 @@ Runs after `mevedel--transform-expand-mentions'."
               (session (buffer-local-value 'mevedel--session chat-buffer)))
     (let ((mevedel-reminders--current-chat-buffer chat-buffer))
       (require 'mevedel-transcript)
-      (when-let* ((contexts (mevedel-session-hook-context-pending session)))
-        (setf (mevedel-session-hook-context-pending session) nil)
-        (goto-char (mevedel-transcript-prompt-transform-start))
-        (let ((start (point)))
-          (insert "\n"
-                  (mevedel-hooks-format-context contexts)
-                  "\n")
-          (remove-text-properties
-           start (point)
-           '(gptel nil response nil invisible nil front-sticky nil))))
-      (let ((blocks (mevedel-reminders--collect-from
-                     (mevedel-session-reminders session)
-                     (mevedel-session-turn-count session)
-                     session))
-            (info (gptel-fsm-info fsm)))
-        (setf (gptel-fsm-info fsm)
-              (plist-put info :mevedel-reminder-blocks blocks))))))
+      (let ((commits nil))
+        (when-let* ((contexts (mevedel-session-hook-context-pending session)))
+          ;; Reserve rather than defer: these entries are in flight for
+          ;; this request, so leaving them pending would let a mid-request
+          ;; taker -- automatic compaction's context epoch, or a prompt
+          ;; prepared in the composer -- deliver them a second time.  The
+          ;; reservation is restored if the request never delivers.
+          (mevedel-hooks-consume-session-context session contexts)
+          (with-current-buffer chat-buffer
+            (setq-local mevedel-reminders--reserved-hook-context
+                        (append mevedel-reminders--reserved-hook-context
+                                contexts)))
+          (push (lambda ()
+                  (when (buffer-live-p chat-buffer)
+                    (with-current-buffer chat-buffer
+                      (setq-local mevedel-reminders--reserved-hook-context
+                                  nil))))
+                commits)
+          (goto-char (mevedel-transcript-prompt-transform-start))
+          (let ((start (point)))
+            (insert "\n"
+                    (mevedel-hooks-format-context contexts)
+                    "\n")
+            (remove-text-properties
+             start (point)
+             '(gptel nil response nil invisible nil front-sticky nil))))
+        (let* ((staged (mevedel-reminders--collect-from
+                        (mevedel-session-reminders session)
+                        (mevedel-session-turn-count session)
+                        session))
+               (info (gptel-fsm-info fsm)))
+          (setf (gptel-fsm-info fsm)
+                (plist-put
+                 (plist-put info :mevedel-reminder-blocks
+                            (plist-get staged :blocks))
+                 :mevedel-reminder-commits
+                 (append commits (plist-get staged :commits)))))))))
 
 
 ;;
@@ -757,8 +834,11 @@ event is shown once."
                    (mevedel-session-pending-reminders session)))
    :content (lambda (session)
               (let ((items (mevedel-session-pending-reminders session)))
-                (setf (mevedel-session-pending-reminders session) nil)
-                (mapconcat #'identity items "\n\n")))
+                (list :body (mapconcat #'identity items "\n\n")
+                      :commit
+                      (lambda ()
+                        (setf (mevedel-session-pending-reminders session)
+                              nil)))))
    :interval nil))
 
 (defun mevedel-reminders-make-date-change ()
@@ -776,9 +856,13 @@ SESSION's observed date after emitting the reminder."
    :content (lambda (session)
               (let ((previous (mevedel-session-last-observed-date session))
                     (current (format-time-string "%F")))
-                (setf (mevedel-session-last-observed-date session) current)
-                (format "The current date changed during this session. Previous date context: %s. Current date: %s. Use the current date for any relative-date reasoning."
-                        previous current)))
+                (list :body
+                      (format "The current date changed during this session. Previous date context: %s. Current date: %s. Use the current date for any relative-date reasoning."
+                              previous current)
+                      :commit
+                      (lambda ()
+                        (setf (mevedel-session-last-observed-date session)
+                              current)))))
    :interval nil))
 
 (defun mevedel-reminders-make-compaction-available (&optional threshold)
@@ -864,13 +948,19 @@ types are reported once and become the new snapshot."
                         (setq delta (list :added added :removed removed))
                         t)))))
      :content (lambda (session)
-                (prog1
-                    (mevedel-reminders--format-agent-delta
-                     (plist-get delta :added)
-                     (plist-get delta :removed))
-                  (setf (mevedel-session-agent-types-snapshot session)
-                        (mevedel-reminders--agent-snapshot))
-                  (setq delta nil)))
+                ;; Captured here: the roster reader needs the chat buffer
+                ;; this transform binds, which is gone by commit time.
+                (let ((current (mevedel-reminders--agent-snapshot))
+                      (reported delta))
+                  (list :body
+                        (mevedel-reminders--format-agent-delta
+                         (plist-get reported :added)
+                         (plist-get reported :removed))
+                        :commit
+                        (lambda ()
+                          (setf (mevedel-session-agent-types-snapshot session)
+                                current)
+                          (setq delta nil)))))
      :interval nil)))
 
 (defun mevedel-reminders-make-max-turns-warning (&optional threshold)
@@ -985,9 +1075,12 @@ enough to surface immediately rather than throttle."
               (changes (with-memoization memo
                          (mevedel-file-cache-detect-external-changes cache))))
          (setq memo nil)
-         (prog1 (mevedel-reminders--format-edited-files
-                 changes max-diff-lines)
-           (mevedel-file-cache-consume-external-changes cache changes))))
+         (list :body (mevedel-reminders--format-edited-files
+                      changes max-diff-lines)
+               :commit
+               (lambda ()
+                 (mevedel-file-cache-consume-external-changes
+                  cache changes)))))
      :interval nil)))
 
 
@@ -1642,8 +1735,11 @@ so the same names are not re-reported."
               (and (mevedel-session-deferred-expired session) t))
    :content (lambda (session)
               (let ((names (mevedel-session-deferred-expired session)))
-                (prog1 (mevedel-reminders--format-deferred-expired names)
-                  (setf (mevedel-session-deferred-expired session) nil))))
+                (list :body (mevedel-reminders--format-deferred-expired names)
+                      :commit
+                      (lambda ()
+                        (setf (mevedel-session-deferred-expired session)
+                              nil)))))
    :interval nil))
 
 (defun mevedel-reminders-make-agent-deferred-tools-roster ()
@@ -1676,8 +1772,11 @@ from a `mevedel-agent-invocation' context.  Consumes the invocation's
               (and (mevedel-agent-invocation-deferred-expired inv) t))
    :content (lambda (inv)
               (let ((names (mevedel-agent-invocation-deferred-expired inv)))
-                (prog1 (mevedel-reminders--format-deferred-expired names)
-                  (mevedel-agent-invocation-set-deferred-expired inv nil))))
+                (list :body (mevedel-reminders--format-deferred-expired names)
+                      :commit
+                      (lambda ()
+                        (mevedel-agent-invocation-set-deferred-expired
+                         inv nil)))))
    :interval nil))
 
 (defun mevedel-reminders-make-verifier-read-only ()
