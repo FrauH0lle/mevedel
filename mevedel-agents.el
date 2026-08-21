@@ -579,51 +579,33 @@ modifies files."
     skills)
   :max-turns 30)
 
-(defun mevedel-agents--register-verifier ()
-  "Register and return the bundled verifier agent."
-  (mevedel-define-agent verifier
-    :description "Adversarial verification specialist.  Read-only -- \
+(mevedel-define-agent verifier
+  :description "Adversarial verification specialist.  Read-only -- \
 tries to break implementations through edge cases, tests, and code \
 review.  Cannot edit, write, or create files."
-    :tools (read code
-            (:tool "Bash") (:tool "Eval")
-            (:tool "Ask")
-            (:tool "ToolSearch")
-            (:deferred elisp))
-    :system-components
-    '((role :file "agents/verifier.md")
-      report-tone
-      tool-orchestration
-      workspace-config
-      environment)
-    :max-turns 20))
+  :tools (read code
+          (:tool "Bash") (:tool "Eval")
+          (:tool "Ask")
+          (:tool "ToolSearch")
+          (:deferred elisp))
+  :system-components
+  '((role :file "agents/verifier.md")
+    report-tone
+    tool-orchestration
+    workspace-config
+    environment)
+  :max-turns 20)
 
-(mevedel-agents--register-verifier)
-
-(defun mevedel-agents--register-reviewer ()
-  "Register and return the bundled reviewer agent."
-  (mevedel-define-agent reviewer
-    :description "Dedicated code review agent.  Read-only -- inspects diffs and \
+(mevedel-define-agent reviewer
+  :description "Dedicated code review agent.  Read-only -- inspects diffs and \
 returns prioritized structured findings as JSON."
-    :tools (read code (:tool "Bash"))
-    :system-components
-    '((role :file "agents/reviewer.md")
-      tool-orchestration
-      workspace-config
-      environment)
-    :max-turns 12))
-
-(mevedel-agents--register-reviewer)
-
-(defun mevedel-agents-ensure-reviewer ()
-  "Ensure the bundled reviewer agent is registered."
-  (unless (mevedel-agent-get "reviewer")
-    (mevedel-agents--register-reviewer)))
-
-(defun mevedel-agents-ensure-verifier ()
-  "Ensure the bundled verifier agent is registered."
-  (unless (mevedel-agent-get "verifier")
-    (mevedel-agents--register-verifier)))
+  :tools (read code (:tool "Bash"))
+  :system-components
+  '((role :file "agents/reviewer.md")
+    tool-orchestration
+    workspace-config
+    environment)
+  :max-turns 12)
 
 
 ;;

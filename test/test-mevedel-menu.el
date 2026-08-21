@@ -507,15 +507,6 @@
     (with-current-buffer view-buf
       (should-not (mevedel-menu--goal-clearable-p)))))
 
-(mevedel-deftest mevedel-menu--owned-goal ()
-  ,test (test)
-  :doc "returns the current session's direct Goal"
-  (mevedel-menu-test--with-buffers
-    (let ((goal (mevedel-goal--create :id "g1")))
-      (setf (mevedel-session-goal session) goal)
-      (with-current-buffer view-buf
-        (should (eq goal (mevedel-menu--owned-goal)))))))
-
 (mevedel-deftest mevedel-menu--open-goal ()
   ,test (test)
   :doc "routes to the Goal area"

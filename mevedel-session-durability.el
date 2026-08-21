@@ -358,16 +358,6 @@ defaults to GENERATION."
         :expires-at (+ now mevedel-session-lease-seconds)
         :buffer buffer-name))
 
-(defun mevedel-session-durability-lease-holder (session-dir)
-  "Return a display name for SESSION-DIR's current lease holder, or nil.
-
-Records written before hosts were recorded carry no name, which reads as
-unknown rather than as an error."
-  (let ((lease (mevedel-session-durability--lease-head
-                (mevedel-session-durability--lease-path session-dir))))
-    (when (and lease (mevedel-session-durability--valid-lease-p lease))
-      (plist-get lease :host))))
-
 (defun mevedel-session-durability--generation-path (directory generation)
   "Return GENERATION's immutable record path below DIRECTORY."
   (let ((path

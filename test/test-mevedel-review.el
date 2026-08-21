@@ -506,19 +506,19 @@
   (should (fboundp 'mevedel-agent-get))
   (should (mevedel-agent-get "reviewer"))
 
-  :doc "re-registers reviewer after another test clears the registry"
-  (let ((mevedel-agent--registry nil))
-    (mevedel-review--ensure-dispatch-deps)
-    (should (mevedel-agent-get "reviewer")))
-
   :doc "loads the verifier agent registry for autoloaded dispatch"
-  (mevedel-review--ensure-dispatch-deps 'verify)
-  (should (mevedel-agent-get "verifier"))
-
-  :doc "re-registers verifier after another test clears the registry"
-  (let ((mevedel-agent--registry nil))
+  (progn
     (mevedel-review--ensure-dispatch-deps 'verify)
-    (should (mevedel-agent-get "verifier"))))
+    (should (mevedel-agent-get "verifier")))
+
+  :doc "reports a missing agent instead of dispatching without one"
+  ;; The registry is populated when the agents module loads; an empty
+  ;; one means a broken install, which must fail loudly.
+  (let ((mevedel-agent--registry nil))
+    (should-error (mevedel-review--ensure-dispatch-deps)
+                  :type 'user-error)
+    (should-error (mevedel-review--ensure-dispatch-deps 'verify)
+                  :type 'user-error)))
 
 (mevedel-deftest mevedel-review--next-task-name ()
   ,test
@@ -1029,7 +1029,6 @@
   :doc "routes standalone review output to a safe data buffer"
   (let ((source (generate-new-buffer " *mevedel-review-source*"))
         (data (generate-new-buffer " *mevedel-review-data*"))
-        (mevedel-agent--registry nil)
         invoke-buffer task-agent task-description task-prompt)
     (unwind-protect
         (with-current-buffer source
@@ -1037,7 +1036,6 @@
           (with-current-buffer data
             (setq-local mevedel--session
                         (mevedel-session--create :authority-mode 'pid-lock :name "review")))
-          (mevedel-agents-ensure-reviewer)
           (cl-letf (((symbol-function 'mevedel-review--ensure-dispatch-deps)
                      #'ignore)
                     ((symbol-function
