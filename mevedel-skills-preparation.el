@@ -517,22 +517,32 @@ original elisp-injection marker used in diagnostics."
             (mevedel-pipeline-run-tool
              tool
              (lambda (result)
-               (cond
-                ((and (stringp result)
-                      (string-prefix-p "Error: Permission denied" result))
-                 (funcall callback
-                          `(:status error :reason permission-denied
-                                    :message ,(format "Elisp expansion %s denied: %s"
-                                                      marker result))))
-                ((mevedel-skills-preparation--injection-outcome-error-p result)
-                 (funcall callback
-                          `(:status error :reason elisp-failure
-                                    :message ,(format "Elisp expansion %s failed: %s"
-                                                      marker result))))
-                (t
-                 (funcall callback
-                          `(:status ok :output ,(string-trim-right
-                                                 (or result "")))))))
+               ;; The pipeline reports the canonical outcome in render data,
+               ;; and reading the display text instead admits a failure whose
+               ;; wording this does not recognise as legitimate body content.
+               ;; Taking the visible half also keeps the serialized block out
+               ;; of the prompt, which only a tool result strips.
+               (pcase-let* ((`(,visible . ,render-data)
+                             (mevedel-tool-render-data-extract result))
+                            (status (plist-get render-data :status)))
+                 (cond
+                  ((and (stringp visible)
+                        (string-prefix-p "Error: Permission denied" visible))
+                   (funcall callback
+                            `(:status error :reason permission-denied
+                                      :message ,(format "Elisp expansion %s denied: %s"
+                                                        marker visible))))
+                  ((or (eq status 'error)
+                       (mevedel-skills-preparation--injection-outcome-error-p
+                        visible))
+                   (funcall callback
+                            `(:status error :reason elisp-failure
+                                      :message ,(format "Elisp expansion %s failed: %s"
+                                                        marker visible))))
+                  (t
+                   (funcall callback
+                            `(:status ok :output ,(string-trim-right
+                                                   (or visible ""))))))))
              (list :expression expression
                    :trust-literal-p
                    (mevedel-skills-preparation--author-ranges-p
