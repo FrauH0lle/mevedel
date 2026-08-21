@@ -578,6 +578,91 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(mevedel-deftest mevedel-session-durability--bind-lease
+  (:doc "keeps the heartbeat while another client's claim is still in flight")
+  (let* ((root (make-temp-file "mevedel-bind-lease-" t))
+         (session (test-mevedel-session-durability--local-session root))
+         (ours (list :generation 1 :transfer-generation 1 :status 'active
+                     :publication-head nil :unsettled-mutation nil
+                     :client-id mevedel-session-durability--client-id
+                     :host "desktop" :renewed-at 100 :expires-at 190
+                     :buffer "main"))
+         (claiming (list :generation 2 :transfer-generation 2 :status 'claiming
+                         :publication-head nil :unsettled-mutation nil
+                         :client-id (make-string 64 ?b)
+                         :host "laptop" :renewed-at 100 :expires-at 190
+                         :buffer "main")))
+    (unwind-protect
+        (progn
+          (mevedel-session-durability--bind-lease session ours 'owned)
+          (should (timerp (mevedel-session-lease-renewal-timer session)))
+          ;; A contender that only reached `claiming' has not won: its record
+          ;; aborts if our write landed first, and our own record is head
+          ;; again seconds later.  Cancelling the heartbeat here would let a
+          ;; live lease expire for real.
+          (mevedel-session-durability--bind-lease session claiming 'contested)
+          (should (timerp (mevedel-session-lease-renewal-timer session)))
+          ;; A record that actually took over does end the heartbeat.
+          (mevedel-session-durability--bind-lease
+           session (plist-put (copy-sequence claiming) :status 'active) 'lost)
+          (should-not (mevedel-session-lease-renewal-timer session)))
+      (mevedel-session-durability--cancel-renewal session)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-durability--valid-lease-p
+  (:doc "rejects timestamps that are not finite nonnegative numbers")
+  (let ((record
+         (list :generation 1
+               :transfer-generation 1
+               :status 'active
+               :publication-head nil
+               :unsettled-mutation nil
+               :client-id (make-string 64 ?a)
+               :host "desktop"
+               :renewed-at 100
+               :expires-at 190
+               :buffer "main")))
+    (should (mevedel-session-durability--valid-lease-p record))
+    ;; The record is untrusted file bytes another machine may have written,
+    ;; and this predicate is the only gate before every authority decision.
+    (dolist (key '(:renewed-at :expires-at))
+      (dolist (value (list (read "0.0e+NaN")
+                           (read "1.0e+INF")
+                           (read "-1.0e+INF")
+                           -1
+                           (1+ most-positive-fixnum)))
+        (should-not
+         (mevedel-session-durability--valid-lease-p
+          (plist-put (copy-sequence record) key value)))))
+    ;; An expiry before its own renewal is not a coherent record either.
+    (should-not
+     (mevedel-session-durability--valid-lease-p
+      (plist-put (copy-sequence record) :expires-at 99)))))
+
+(mevedel-deftest mevedel-session-durability--lease-state-of
+  (:doc "refuses authority from a record whose expiry cannot be compared")
+  (let* ((root (make-temp-file "mevedel-lease-invalid-" t))
+         (session-dir (file-name-concat root "session"))
+         (lease-dir (file-name-concat session-dir ".lease")))
+    (unwind-protect
+        (progn
+          (make-directory lease-dir t)
+          (dolist (expiry (list (read "1.0e+INF") (read "0.0e+NaN")))
+            ;; Real record bytes, because the round trip through `read' is
+            ;; part of what makes these values reachable at all.
+            (with-temp-file (file-name-concat
+                             lease-dir "00000000000000000001.el")
+              (prin1 (list :generation 1 :transfer-generation 1
+                           :status 'active :publication-head nil
+                           :unsettled-mutation nil
+                           :client-id (make-string 64 ?a)
+                           :host "laptop" :renewed-at 100
+                           :expires-at expiry :buffer "main")
+                     (current-buffer)))
+            (should-error
+             (mevedel-session-durability-lease-state session-dir))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-durability-lease-state ()
   ,test
   (test)

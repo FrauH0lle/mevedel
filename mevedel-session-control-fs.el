@@ -240,8 +240,8 @@ before the operation ran."
    "  out=$(run_op \"$1\" \"$2\" \"$3\" \"$4\" "
    "</dev/null 2>>\"$diagnostics\") || status=$?\n"
    "  printf '%s %s\\0%s\\0' \"$index\" \"$status\" \"$out\"\n"
-   ;; A failed operation ends the program: a compare-and-set expresses its
-   ;; precondition as an earlier operation, so later ones must not run.  An
+   ;; A failed operation ends the program: a caller expresses a precondition
+   ;; as an earlier operation, so later ones must not run.  An
    ;; operation marked optional is one whose failure the caller expects to
    ;; interpret itself, such as ensuring a directory that already exists.
    "  if test \"$status\" -ne 0 && test \"$5\" != 1; then\n"
@@ -551,8 +551,12 @@ therefore does not end the program.
 Every operation opens and re-proves its own parent descriptor inside the one
 process, so a program is exactly as pinned as the same operations run one at
 a time.  The program stops at the first operation that does not succeed, and
-its remaining operations report `skipped'; that is what lets a caller express
-a compare-and-set as a `verify' followed by its writes.  Each result carries
+its remaining operations report `skipped'; that is what lets a caller state a
+precondition as a `verify' its writes depend on.  This narrows the window
+between the proof and the write to two adjacent syscall sequences in one
+target process, but it does not close it: nothing excludes another client
+from the leaf in between, and the exclusive `create' verb is the only
+atomic election primitive here.  Each result carries
 `:status' from the shared vocabulary -- `ok', `conflict', `absent',
 `mismatch', `failed', `skipped' -- so a caller reproduces the nil-versus-
 signal contract of the single-operation wrappers per operation."

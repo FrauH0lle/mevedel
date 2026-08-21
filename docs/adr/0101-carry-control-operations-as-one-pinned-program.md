@@ -12,11 +12,23 @@ and a pathname swapped after the descriptor was opened still cannot redirect the
 operation.
 
 A program stops at the first operation that does not succeed and reports the
-remaining ones as skipped.  A compare-and-set is therefore stated as a `verify`
+remaining ones as skipped.  A precondition is therefore stated as a `verify`
 operation that the writes after it depend on, and the proof and the write it
-guards execute in one process.  This is strictly stronger than reading a record,
-comparing it in Emacs, and writing: that sequence leaves a window between the
-comparison and the write, and a program has none.
+guards execute in one process.  This is stronger than reading a record,
+comparing it in Emacs, and writing: that sequence leaves a network round trip
+between the comparison and the write, and a program leaves two adjacent syscall
+sequences.
+
+Amended: this section first claimed a program leaves no window at all, and
+called the arrangement a compare-and-set.  Both were wrong.  The operations in
+one program are not mutually exclusive against another client -- nothing holds
+a lock on the leaf between them -- so a concurrent exclusive `create` of the
+next lease generation can land between the proof and the write.  What moved the
+decision was tracing that interleaving to its end: the write still happens, and
+the caller then decides who won from what it observes afterwards, which means
+`verify` is a precondition and the exclusive `create` verb is the only atomic
+election primitive here.  The narrowed window is still worth its cost; the
+claim of atomicity was not true and callers must not assume it.
 
 Every operation reports one of `ok`, `conflict`, `absent`, `mismatch`, `failed`
 or `skipped`, so callers reproduce per operation the nil-versus-signal contract

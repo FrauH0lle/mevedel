@@ -958,7 +958,8 @@ Kills the associated view buffer."
                               target-label 'top "Open session cockpit"))
                         (and pending-publication
                              (propertize "publication pending" 'face 'error))
-                        (and (memq lease-state '(foreign expired lost))
+                        (and (memq lease-state
+                                   '(foreign expired lost contested))
                              (propertize (format "lease %s" lease-state)
                                          'face 'warning))
                         (mevedel-view--status-strip-button

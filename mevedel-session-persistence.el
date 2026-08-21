@@ -1096,7 +1096,7 @@ failures and read-only mode when active."
       (when-let* ((lease-state
                    (plist-get (mevedel-session-lease mevedel--session)
                               :state))
-                  ((memq lease-state '(foreign expired lost))))
+                  ((memq lease-state '(foreign expired lost contested))))
         (push (propertize (format " [Lease: %s] " lease-state)
                           'face 'warning)
               parts)))
