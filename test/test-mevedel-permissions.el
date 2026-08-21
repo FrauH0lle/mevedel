@@ -81,9 +81,15 @@
   :doc "double star matches across directories in interior"
   (should (mevedel-permission--match-path-pattern
            "/repo/.git/config" "**/.git/**"))
+  :doc "relative trailing globstar matches its directory root"
+  (should (mevedel-permission--match-path-pattern
+           "/repo/.git" "**/.git/**"))
   :doc "tilde expansion in pattern"
   (should (mevedel-permission--match-path-pattern
            (expand-file-name "~/.ssh/id_rsa") "~/.ssh/*"))
+  :doc "home-relative trailing globstar matches its directory root"
+  (should (mevedel-permission--match-path-pattern
+           (expand-file-name "~/.ssh") "~/.ssh/**"))
   :doc "tilde expansion uses the remote target home"
   (let ((target (mevedel-execution-target-create
                  "/ssh:user@host:/srv/project/")))
@@ -230,7 +236,12 @@
   (test)
   :doc "git directory is protected"
   (let ((mevedel-protected-paths '(("**/.git/**" . read-only))))
+    (should (mevedel-permission--path-protected-p "/repo/.git"))
     (should (mevedel-permission--path-protected-p "/repo/.git/config")))
+  :doc "home-relative trailing globstar protects its directory root"
+  (let ((mevedel-protected-paths '(("~/.ssh/**" . inaccessible))))
+    (should (mevedel-permission--path-protected-p
+             (expand-file-name "~/.ssh"))))
   :doc "ssh directory is protected"
   (let ((mevedel-protected-paths '(("~/.ssh/*" . inaccessible))))
     (should (mevedel-permission--path-protected-p
