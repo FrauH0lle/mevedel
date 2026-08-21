@@ -318,7 +318,30 @@
                   mevedel-permission-mode 'edits)
       (mevedel-permission-mode-transition 'ask)
       (should-not (mevedel-session-plan-mode session))
-      (should (eq 'ask (mevedel-session-permission-mode session))))))
+      (should (eq 'ask (mevedel-session-permission-mode session)))))
+
+  :doc "keeps a committed transition when an incomplete view cannot repaint"
+  (require 'mevedel-skills-ui)
+  (require 'mevedel-view-composer)
+  (let ((data-buffer (generate-new-buffer " *mev-mode-data*"))
+        (view-buffer (generate-new-buffer " *mev-mode-view*")))
+    (unwind-protect
+        (let ((session (mevedel-session--create
+                        :name "main" :permission-mode 'edits)))
+          (with-current-buffer view-buffer
+            (insert "> quoted\nsecond line"))
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session
+                        mevedel--view-buffer view-buffer
+                        mevedel-permission-mode 'edits)
+            (should (eq 'ask (mevedel-permission-mode-transition 'ask))))
+          (should (eq 'ask (mevedel-session-permission-mode session)))
+          (with-current-buffer view-buffer
+            (should (equal "> quoted\nsecond line" (buffer-string)))))
+      (when (buffer-live-p view-buffer)
+        (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer)))))
 
 (mevedel-deftest mevedel-permission--mode-decision ()
   ,test

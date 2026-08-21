@@ -175,7 +175,9 @@ as their matching cockpit rows when a live view/data pair exists:
 `/model`, `/tools` and `/tools list`, `/worktree` and `/worktree status`,
 and `/help`. Outside a cockpit-capable session, commands fall back to the
 older message-style behavior where that still exists. Explicit mutation
-forms remain direct and scriptable.
+forms remain direct and scriptable. Permission-mode state commits before its
+optional view-prompt repaint; an unavailable or incomplete view cannot undo
+the mode change.
 
 Worktree isolation has split surfaces:
 

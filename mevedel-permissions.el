@@ -354,7 +354,8 @@ Runs mode-specific lifecycle hooks."
           (mevedel-permission-mode-apply-full-auto-lifecycle
            previous target session)
           (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
-            (mevedel-skills--refresh-view-input-prompt)))))
+            (ignore-errors
+              (mevedel-skills--refresh-view-input-prompt))))))
     target))
 
 (defun mevedel-permission--set-session-scoped (sym val slot-setter)
