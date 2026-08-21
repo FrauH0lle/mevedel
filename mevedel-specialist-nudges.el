@@ -178,21 +178,28 @@
                mevedel-specialist-nudges--structural-code-patterns)))
 
 (defun mevedel-specialist-nudges--grep-comment-result-p (result)
-  "Return non-nil when Grep RESULT appears to contain only comment hits."
-  (and (stringp result)
-       (let ((lines (split-string result "\n" t)))
-         (and lines
-              (cl-every
-               (lambda (line)
-                 (let ((text (if (string-match
-                                  "\\`[^:\n]+:[0-9]+:\\(?:[0-9]+:\\)?\\(.*\\)\\'"
-                                  line)
-                                 (match-string 1 line)
-                               line)))
-                   (string-match-p
-                    "\\`[[:space:]]*\\(?:;;\\|//\\|#\\|/\\*\\|\\*\\|;\\)"
-                    text)))
-               lines)))))
+  "Return non-nil when every content line in Grep RESULT is a comment hit.
+
+Grep runs ripgrep with `--heading', so a content result is line-numbered
+match and context lines under bare path headings.  Headings, path-only
+and count results, the truncation notice, and anything already appended
+to the result carry no content line and are skipped; a result with no
+content line at all is not classifiable."
+  (when (stringp result)
+    (let ((texts
+           (delq nil
+                 (mapcar
+                  (lambda (line)
+                    (when (string-match "\\`[0-9]+[:-]\\(.*\\)\\'" line)
+                      (match-string 1 line)))
+                  (split-string result "\n" t)))))
+      (and texts
+           (cl-every
+            (lambda (text)
+              (string-match-p
+               "\\`[[:space:]]*\\(?:;;\\|//\\|#\\|/\\*\\|\\*\\|;\\)"
+               text))
+            texts)))))
 
 (defun mevedel-specialist-nudges--read-text-range-p (args)
   "Return non-nil when Read ARGS request a non-default text range."

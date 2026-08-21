@@ -30,23 +30,23 @@
 				(tool (mevedel-tool--create :name "Grep"))
 				(ctx (list :tool tool
 					   :args '(:pattern "thing-name" :type "elisp")
-					   :result "file.el:1:thing-name"
+					   :result "./file.el\n1:thing-name\n"
 					   :session session))
 				(out (mevedel-specialist-nudges-apply ctx)))
 			   (should (string-match-p "XrefReferences" (plist-get out :result)))
 			   (should (string-match-p "available now" (plist-get out :result)))
 			   ;; Same family, same turn: no duplicate nudge.
-			   (setq ctx (plist-put ctx :result "file.el:2:thing-name"))
+			   (setq ctx (plist-put ctx :result "./file.el\n2:thing-name\n"))
 			   (setq out (mevedel-specialist-nudges-apply ctx))
 			   (should-not (string-match-p "XrefReferences" (plist-get out :result)))
 			   ;; A later turn gets the second allowed nudge; the family
 			   ;; is then capped for the context.
 			   (setf (mevedel-session-turn-count session) 1)
-			   (setq ctx (plist-put ctx :result "file.el:3:thing-name"))
+			   (setq ctx (plist-put ctx :result "./file.el\n3:thing-name\n"))
 			   (setq out (mevedel-specialist-nudges-apply ctx))
 			   (should (string-match-p "XrefReferences" (plist-get out :result)))
 			   (setf (mevedel-session-turn-count session) 2)
-			   (setq ctx (plist-put ctx :result "file.el:4:thing-name"))
+			   (setq ctx (plist-put ctx :result "./file.el\n4:thing-name\n"))
 			   (setq out (mevedel-specialist-nudges-apply ctx))
 			   (should-not (string-match-p "XrefReferences" (plist-get out :result))))
 
@@ -60,7 +60,7 @@
 					(tool (mevedel-tool--create :name "Grep"))
 					(ctx (list :tool tool
 						   :args '(:pattern "thing-name" :type "elisp")
-						   :result "file.el:1:thing-name"
+						   :result "./file.el\n1:thing-name\n"
 						   :session session
 						   :invocation invocation))
 					(out (mevedel-specialist-nudges-apply ctx)))
@@ -68,7 +68,7 @@
 				   (should (plist-get (mevedel-agent-invocation-specialist-nudge-state
 					       invocation)
 					      :xref))
-				   (setq ctx (plist-put ctx :result "file.el:2:thing-name"))
+				   (setq ctx (plist-put ctx :result "./file.el\n2:thing-name\n"))
 				   (setq out (mevedel-specialist-nudges-apply ctx))
 				   (should-not (string-match-p "XrefReferences" (plist-get out :result))))
 
@@ -80,7 +80,7 @@
 				(tool (mevedel-tool--create :name "Grep"))
 				(ctx (list :tool tool
 					   :args '(:pattern "thing.*other" :type "elisp")
-					   :result "file.el:1:thing-other"
+					   :result "./file.el\n1:thing-other\n"
 					   :session session))
 				(out (mevedel-specialist-nudges-apply ctx)))
 			   (should-not (string-match-p "XrefReferences" (plist-get out :result))))
@@ -92,11 +92,73 @@
 						  '((("mevedel" "XrefReferences") . "refs"))))
 					(tool (mevedel-tool--create :name "Grep"))
 					(ctx (list :tool tool
-						   :args '(:pattern "TODO" :type "elisp")
-						   :result "file.el:1:;; TODO fix"
+						   ;; An identifier-like pattern: without the
+						   ;; comment guard this nudges toward xref.
+						   :args '(:pattern "mevedel-thing"
+							   :type "elisp"
+							   :output_mode "content")
+						   ;; Grep runs ripgrep with --heading: a bare
+						   ;; path heading, then LINE:text.
+						   :result "./file.el\n1:;; mevedel-thing is gone\n2:;; and more\n"
 						   :session session))
 					(out (mevedel-specialist-nudges-apply ctx)))
 				   (should-not (string-match-p "XrefReferences" (plist-get out :result))))
+
+				:doc "Grep comment hits in a single file are not nudged toward xref"
+				;; With one explicit file argument ripgrep prints no heading, so the
+				;; result is line-numbered content alone.
+				(let* ((session (mevedel-session--create
+				:name "main"
+				:deferred-set '((("mevedel" "XrefReferences") . "refs"))))
+				(tool (mevedel-tool--create :name "Grep"))
+				(ctx (list :tool tool
+				:args '(:pattern "mevedel-thing" :type "elisp"
+				:output_mode "content")
+				:result "1:;; mevedel-thing is gone\n"
+				:session session))
+				(out (mevedel-specialist-nudges-apply ctx)))
+				(should-not (string-match-p "XrefReferences" (plist-get out :result))))
+
+				:doc "Grep comment hits with context lines are not nudged toward xref"
+				(let* ((session (mevedel-session--create
+				:name "main"
+				:deferred-set '((("mevedel" "XrefReferences") . "refs"))))
+				(tool (mevedel-tool--create :name "Grep"))
+				(ctx (list :tool tool
+				:args '(:pattern "mevedel-thing" :type "elisp"
+				:output_mode "content" :-C 1)
+				;; Context lines use LINE-text, matches LINE:text.
+				:result "./file.el\n12-;; before\n13:;; mevedel-thing\n"
+				:session session))
+				(out (mevedel-specialist-nudges-apply ctx)))
+				(should-not (string-match-p "XrefReferences" (plist-get out :result))))
+
+				:doc "Grep code hits are still nudged toward xref"
+				(let* ((session (mevedel-session--create
+				:name "main"
+				:deferred-set '((("mevedel" "XrefReferences") . "refs"))))
+				(tool (mevedel-tool--create :name "Grep"))
+				(ctx (list :tool tool
+				:args '(:pattern "mevedel-thing" :type "elisp"
+				:output_mode "content")
+				:result "./file.el\n1:(defun mevedel-thing ())\n"
+				:session session))
+				(out (mevedel-specialist-nudges-apply ctx)))
+				(should (string-match-p "XrefReferences" (plist-get out :result))))
+
+				:doc "a path-only Grep result carries no content to classify"
+				;; The default output mode lists paths, which say nothing about
+				;; comments: the guard must fail open rather than suppress.
+				(let* ((session (mevedel-session--create
+				:name "main"
+				:deferred-set '((("mevedel" "XrefReferences") . "refs"))))
+				(tool (mevedel-tool--create :name "Grep"))
+				(ctx (list :tool tool
+				:args '(:pattern "mevedel-thing" :type "elisp")
+				:result "./file.el\n"
+				:session session))
+				(out (mevedel-specialist-nudges-apply ctx)))
+				(should (string-match-p "XrefReferences" (plist-get out :result))))
 
 				 :doc "Grep broad single-token searches are not nudged toward xref"
 				 (let* ((session (mevedel-session--create
@@ -106,7 +168,7 @@
 					(tool (mevedel-tool--create :name "Grep"))
 					(ctx (list :tool tool
 						   :args '(:pattern "user" :type "elisp")
-						   :result "user.el:1:(defvar user-name nil)"
+						   :result "./user.el\n1:(defvar user-name nil)\n"
 						   :session session))
 					(out (mevedel-specialist-nudges-apply ctx)))
 				 (should-not (string-match-p "XrefReferences" (plist-get out :result))))
@@ -123,7 +185,7 @@
 							   :args '(:pattern "thing-name"
 								     :path "."
 								     :glob "**/*.el")
-							   :result "file.el:1:thing-name"
+							   :result "./file.el\n1:thing-name\n"
 							   :session session))
 						(out (mevedel-specialist-nudges-apply ctx)))
 					 (should (string-match-p "XrefReferences" (plist-get out :result)))
@@ -138,7 +200,7 @@
 						(ctx (list :tool tool
 							   :args '(:pattern "thing-name"
 								     :path "file.el")
-							   :result "file.el:1:thing-name"
+							   :result "./file.el\n1:thing-name\n"
 							   :session session))
 						(out (mevedel-specialist-nudges-apply ctx)))
 					 (should (string-match-p "Imenu" (plist-get out :result))))
@@ -151,7 +213,7 @@
 					(tool (mevedel-tool--create :name "Grep"))
 					(ctx (list :tool tool
 						   :args '(:pattern "defun" :type "elisp")
-						   :result "file.el:1:(defun thing () nil)"
+						   :result "./file.el\n1:(defun thing () nil)\n"
 						   :session session))
 					(out (mevedel-specialist-nudges-apply ctx)))
 				   (should (string-match-p "Treesitter" (plist-get out :result)))
@@ -171,7 +233,7 @@
 					(non-code (list :tool tool
 							:args '(:pattern "thing-name"
 								:path "README.md")
-							:result "README.md:1:thing-name"
+							:result "./README.md\n1:thing-name\n"
 							:session session))
 					(out (mevedel-specialist-nudges-apply no-match)))
 				   (should-not (string-match-p "XrefReferences"
@@ -321,12 +383,12 @@
 	          (mevedel-specialist-nudges-apply
 	           (list :tool tool
 	                 :args '(:pattern "thing-name" :path "file.el")
-	                 :result "file.el:1:thing-name"
+	                 :result "./file.el\n1:thing-name\n"
 	                 :session session))))
     (should
      (equal
       (concat
-       "file.el:1:thing-name\n\n<system-reminder>\n"
+       "./file.el\n1:thing-name\n\n\n<system-reminder>\n"
        "For precise code symbol references, prefer `XrefReferences(identifier, file_path)'; for definitions or name discovery, prefer `XrefDefinitions(pattern, file_path)'. If the tool is not callable, use ToolSearch(query=\"xref\", load=true); loaded tools are available now for your next tool call.\n"
        "For a symbol outline in one known code file, prefer `Imenu(file_path)' over grepping the file for structure. If the tool is not callable, use ToolSearch(query=\"imenu\", load=true); loaded tools are available now for your next tool call.\n"
        "</system-reminder>")
