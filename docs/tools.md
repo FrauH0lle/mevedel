@@ -182,9 +182,13 @@ current source with `gptel-get-tool`, so a reconnect can replace its function
 without rewrapping when that contract is unchanged.  Contract drift fails the
 call and requires rewrapping.  Re-registering the same wrapped `(category,
 name)` replaces the prior mevedel wrapper, matching native tool registration.
-Wrapping is the default for gptel-agent's tools, but a source that leaks
-resources cannot be wrapped, because only the owner of a call can release them.
-YouTube is therefore registered natively: the mevedel handler resolves the
+Wrapping is the default for gptel-agent's tools, with two reasons to register
+natively instead. A source that leaks resources cannot be wrapped, because
+only the owner of a call can release them; and a source whose advertised
+schema its own implementation does not honour cannot be wrapped either,
+because the frozen schema is the lie -- WebSearch is registered natively so
+mevedel stops offering the `count` argument the upstream callback hardcodes
+away. YouTube is registered natively for the first reason: the mevedel handler resolves the
 upstream asynchronous function through `gptel-get-tool` on every call, so
 upstream keeps owning the protocol, while mevedel owns the response buffers the
 call retrieves. `url-http` records the retrieval arguments in every response
