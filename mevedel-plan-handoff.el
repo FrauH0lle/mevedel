@@ -66,9 +66,9 @@
 (declare-function mevedel-model-set-session-provider
                   "mevedel-models" (session provider &optional buffer))
 
-;; `mevedel-permissions'
+;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-transition
-                  "mevedel-permissions" (mode))
+                  "mevedel-permission-mode" (mode))
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan--metadata-put "mevedel-plan"
@@ -449,7 +449,7 @@ needs no session."
           (setq-local mevedel-goal-token-budget
                       (plist-get selection :goal-token-budget)))
         (require 'mevedel-presets)
-        (require 'mevedel-permissions)
+        (require 'mevedel-permission-mode)
         (mevedel-preset-restore-session target-session target-buffer)
         (mevedel-plan-handoff--apply-model-policy
          selection target-session target-buffer)
@@ -922,7 +922,7 @@ the durable retry was retained"
         (mevedel-plan-handoff--persist session chat-buffer)
         (when (eq location 'here)
           (with-current-buffer chat-buffer
-            (require 'mevedel-permissions)
+            (require 'mevedel-permission-mode)
             (mevedel-permission-mode-transition
              (plist-get selection :mode))))
         (while record

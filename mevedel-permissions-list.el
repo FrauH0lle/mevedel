@@ -34,13 +34,15 @@
 (declare-function mevedel-cockpit-surface-selected
                   "mevedel-cockpit" (&optional no-error))
 
-;; `mevedel-permissions'
+;; `mevedel-permission-persistence'
 (declare-function mevedel-permission-persistent-authority
-                  "mevedel-permissions" (workspace))
+                  "mevedel-permission-persistence" (workspace))
 (declare-function mevedel-permission-remove-persistent-resource-grant
-                  "mevedel-permissions" (workspace path access))
+                  "mevedel-permission-persistence" (workspace path access))
 (declare-function mevedel-permission-remove-persistent-rule
-                  "mevedel-permissions" (workspace rule))
+                  "mevedel-permission-persistence" (workspace rule))
+
+;; `mevedel-permissions'
 (declare-function mevedel-permission-remove-session-resource-grant
                   "mevedel-permissions" (session path access))
 (declare-function mevedel-permission-remove-session-rule
@@ -90,7 +92,7 @@
 
 (defun mevedel-permissions-list--collect (context)
   "Return remembered authority items for CONTEXT."
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-persistence)
   (let* ((session (mevedel-cockpit-context-session context))
          (workspace (mevedel-cockpit-context-workspace context))
          (persistent (and workspace
@@ -167,6 +169,7 @@
 (defun mevedel-permissions-list-revoke ()
   "Revoke the selected remembered authority."
   (interactive)
+  (require 'mevedel-permission-persistence)
   (require 'mevedel-permissions)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-cockpit-context-session context))

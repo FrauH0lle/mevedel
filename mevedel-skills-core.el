@@ -37,9 +37,9 @@
 (declare-function mevedel-hooks-project-file-snapshot
                   "mevedel-hooks" (workspace file))
 
-;; `mevedel-permissions'
-(declare-function mevedel-permission--parse-rule-string
-                  "mevedel-permissions" (entry))
+;; `mevedel-permission-rules'
+(declare-function mevedel-permission-rules-parse
+                  "mevedel-permission-rules" (entry))
 
 ;; `mevedel-plugins'
 (declare-function mevedel-plugins-skill-dirs "mevedel-plugins"
@@ -313,7 +313,7 @@ offending skill in the warning."
       'bash))))
 
 (defun mevedel-skills--parse-allowed-tool-rules (entries source-file)
-  "Map each ENTRY through `mevedel-permission--parse-rule-string'.
+  "Map each ENTRY through `mevedel-permission-rules-parse'.
 
 ENTRIES is the raw `allowed-tools' frontmatter list.  Returns a
 list of parsed mevedel permission rules.  A malformed entry aborts the whole
@@ -321,10 +321,10 @@ skill load: this function signals `user-error' on the first bad
 entry, and `mevedel-skills--build-skill''s `condition-case' skips
   the offending skill with a warning naming SOURCE-FILE."
   (when entries
-    (require 'mevedel-permissions))
+    (require 'mevedel-permission-rules))
   (mapcar (lambda (entry)
             (condition-case err
-                (mevedel-permission--parse-rule-string entry)
+                (mevedel-permission-rules-parse entry)
               (user-error
                (user-error
                 "Malformed allowed-tools entry %S in %s: %s"

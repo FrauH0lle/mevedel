@@ -182,11 +182,13 @@
 (declare-function mevedel-get-directive-patch
                   "mevedel-overlays" (directive))
 
-;; `mevedel-permissions'
+;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-set-raw
-		  "mevedel-permissions" (mode))
+                  "mevedel-permission-mode" (mode))
+
+;; `mevedel-permission-persistence'
 (declare-function mevedel-permission-validate-persistent-stores
-                  "mevedel-permissions" (workspace))
+                  "mevedel-permission-persistence" (workspace))
 
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff--append-implementation-input
@@ -765,7 +767,7 @@ mutation lease."
                 (or (mevedel-session-working-directory mevedel--session)
                     (mevedel-workspace-root workspace)))
     (mevedel--probe-session-target mevedel--session)
-    (require 'mevedel-permissions)
+    (require 'mevedel-permission-persistence)
     (mevedel-permission-validate-persistent-stores workspace)
     ;; Make workspace-additional-roots buffer-local for session-specific
     ;; access grants.  Restore path may have already set this from the
@@ -2127,7 +2129,7 @@ BUF defaults to the current buffer if not specified."
              (bound-and-true-p mevedel--session))
     (setq mevedel--implementation-permission-mode-restore
           (list (mevedel-session-permission-mode mevedel--session)))
-    (require 'mevedel-permissions)
+    (require 'mevedel-permission-mode)
     (mevedel-permission-mode-set-raw mode)
     (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
       (mevedel-skills--refresh-view-input-prompt))))

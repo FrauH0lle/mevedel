@@ -1110,9 +1110,9 @@
                   (mevedel-session-permission-rules session)))
           (should-not (mevedel-session-resource-grants side-session))
           (should-not
-           (mevedel-permission--load-persistent-rules workspace))
+           (mevedel-permission-persistence-load-rules workspace))
           (should-not
-           (mevedel-permission--load-persistent-resource-grants workspace))
+           (mevedel-permission-persistence-load-resource-grants workspace))
           (with-current-buffer side-data
             (mevedel-side-conversation--handle-terminal fsm)))
       (when (buffer-live-p side-view)

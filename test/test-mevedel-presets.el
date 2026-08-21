@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'gptel)
+(require 'mevedel-permission-rules)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tools)
 (require 'mevedel-system)
@@ -164,12 +165,12 @@
                  (mevedel-request-skill-permission-rules
                   mevedel--current-request)))
             (should (eq 'deny
-                        (mevedel-permission--rules-action
+                        (mevedel-permission-rules-action
                          rules "ApplyPatch")))
             (should (eq 'deny
-                        (mevedel-permission--rules-action rules "Agent")))
+                        (mevedel-permission-rules-action rules "Agent")))
             (should-not
-             (mevedel-permission--rules-action rules "Read"))))
+             (mevedel-permission-rules-action rules "Read"))))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
           (mevedel-request-end))
@@ -301,9 +302,9 @@
         (dolist (name '("Agent" "FollowupAgent" "SendMessage"
                         "Bash" "Eval" "ApplyPatch"))
           (should (eq 'deny
-                      (mevedel-permission--rules-action rules name))))
+                      (mevedel-permission-rules-action rules name))))
         (should-not
-         (mevedel-permission--rules-action rules "Read")))))
+         (mevedel-permission-rules-action rules "Read")))))
 
   :doc "makes every built-in role available to model-facing Agent calls"
   (let ((mevedel-preset--registry nil)

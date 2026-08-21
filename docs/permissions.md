@@ -1,5 +1,12 @@
 # Permission system
 
+The subsystem has four owners. `mevedel-permission-mode.el` owns mode
+normalization and session-scoped transitions; `mevedel-permission-rules.el`
+owns rule matching, precedence buckets, protected-path policy, and resource
+grants; `mevedel-permission-persistence.el` owns authority-store validation and
+target-aware I/O. `mevedel-permissions.el` is the decision facade that combines
+those facts with tool policy.
+
 ## Decision flow
 
 ```mermaid
@@ -78,7 +85,7 @@ Hook integration sits around this chain:
   allow. Its payload identifies the original policy, user, `PreToolUse`, or
   `PermissionRequest` provenance.
 
-Permission invocation context is normalized in the permission module before
+Permission invocation context is normalized in the decision facade before
 callers enter the decision chain. That context centralizes specifier
 extraction, rule buckets, mode, allowed roots, exact resource grants,
 missing-session fallback warnings, and the prompt rule shape used for

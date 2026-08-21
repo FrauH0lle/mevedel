@@ -25,7 +25,7 @@
                    "mevedel-directive.el"
                    "mevedel-turn.el"
                    "mevedel-instruction-registry.el"
-                   "mevedel-permissions.el"
+                   "mevedel-permission-persistence.el"
                    "mevedel-file-state.el"))
          (cases
           '((workspace
@@ -84,11 +84,11 @@
                 (mevedel-workspace--create :type 'file :id "cold"))
                (unless (featurep 'mevedel-directive)
                  (error "Instruction consumer did not load Directive"))))
-            (permission-consumer
+            (permission-persistence-consumer
              (progn
                (require 'mevedel-structs)
-               (require 'mevedel-permissions)
-               (mevedel-permission--persistent-file
+               (require 'mevedel-permission-persistence)
+               (mevedel-permission-persistence-file
                 (mevedel-workspace--create
                  :type 'file :id "cold" :root default-directory))
                (unless (featurep 'mevedel-workspace)

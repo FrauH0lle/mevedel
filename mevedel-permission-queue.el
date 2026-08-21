@@ -43,18 +43,20 @@
                   (tool-name detail justification origin cont
                              &optional count entry))
 
+;; `mevedel-permission-rules'
+(declare-function mevedel-permission-rules-bucket-decision
+                  "mevedel-permission-rules"
+                  (buckets tool-name path pattern domain name))
+(declare-function mevedel-permission-rules-resource-granted-p
+                  "mevedel-permission-rules" (path access grants))
+
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission
                   "mevedel-permissions" (tool-name &rest args))
-(declare-function mevedel-permission--bucket-decision
-                  "mevedel-permissions"
-                  (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission--checker-args
                   "mevedel-permissions" (context))
 (declare-function mevedel-permission--invocation-context
                   "mevedel-permissions" (&rest args))
-(declare-function mevedel-permission--resource-granted-p
-                  "mevedel-permissions" (path access grants))
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
@@ -494,6 +496,8 @@ entry's captured :session and passes it explicitly.
 For Bash, the entry's captured execution directory remains part of the
 re-evaluation context."
   (require 'mevedel-bash-policy)
+  (require 'mevedel-permission-rules)
+  (require 'mevedel-permissions)
   (require 'mevedel-tool-exec-permission)
   (let* ((session (plist-get entry :session))
          (workspace
@@ -596,13 +600,13 @@ re-evaluation context."
                        :path path)
                       :resource-access access))
                     (rule-action
-                     (mevedel-permission--bucket-decision
+                     (mevedel-permission-rules-bucket-decision
                       (plist-get context :buckets)
                       tool-name path nil nil nil)))
                (push
                 (cond
                  ((memq rule-action '(deny ask)) rule-action)
-                 ((mevedel-permission--resource-granted-p
+                 ((mevedel-permission-rules-resource-granted-p
                    path access (plist-get context :resource-grants))
                   'allow)
                  (t 'ask))

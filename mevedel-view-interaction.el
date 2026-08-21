@@ -29,10 +29,10 @@
 (declare-function mevedel-permission-queue--render-head
 		  "mevedel-permission-queue" (&optional session))
 
-;; `mevedel-permissions'
+;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
-		  "mevedel-permissions"
-		  (&optional session data-buffer surface-buffer))
+                  "mevedel-permission-mode"
+                  (&optional session data-buffer surface-buffer))
 
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-approval-render "mevedel-plan-mode"
@@ -147,6 +147,7 @@
 
 (defun mevedel-view--interaction-telemetry-close (id)
   "Record and forget telemetry lifetime ID."
+  (require 'mevedel-permission-mode)
   (when-let* ((metadata
                (and (hash-table-p mevedel-view--interaction-telemetry-opened)
                     (gethash id mevedel-view--interaction-telemetry-opened))))
@@ -159,9 +160,8 @@
        :origin (plist-get metadata :origin)
        :permission-mode-base (mevedel-session-permission-mode session)
        :permission-mode-effective
-       (and (fboundp 'mevedel-permission-mode-effective)
-            (mevedel-permission-mode-effective
-             session mevedel--data-buffer (current-buffer)))
+       (mevedel-permission-mode-effective
+        session mevedel--data-buffer (current-buffer))
        :duration-ms
        (round (* 1000.0
                  (- (float-time) (plist-get metadata :opened-at))))))
@@ -638,6 +638,7 @@ This deletes only interaction UI overlays and never settles callbacks."
 
 (defun mevedel-view--interaction-register (descriptor)
   "Register DESCRIPTOR in the interaction zone and return its overlay."
+  (require 'mevedel-permission-mode)
   (unless (hash-table-p mevedel-view--interaction-descriptors)
     (setq mevedel-view--interaction-descriptors
           (make-hash-table :test #'equal)))
@@ -674,9 +675,8 @@ This deletes only interaction UI overlays and never settles callbacks."
          :origin (plist-get descriptor :origin)
          :permission-mode-base (mevedel-session-permission-mode session)
          :permission-mode-effective
-         (and (fboundp 'mevedel-permission-mode-effective)
-              (mevedel-permission-mode-effective
-               session mevedel--data-buffer (current-buffer)))
+         (mevedel-permission-mode-effective
+          session mevedel--data-buffer (current-buffer))
          :active-work-paused
          (and (mevedel-view--interaction-pauses-active-work-p descriptor) t)
          :pending-count
