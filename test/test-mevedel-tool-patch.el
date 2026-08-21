@@ -419,6 +419,42 @@
           (should (file-regular-p blocker)))
       (when (file-directory-p root) (delete-directory root t))))
 
+  :doc "Restores non-default-coded bytes after a later write failure"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-patch-coding-rollback-" t)))
+         (path (file-name-concat root "latin-1.el"))
+         (blocker (file-name-concat root "blocker"))
+         (failure (file-name-concat blocker "failure.el"))
+         (original
+          ";; -*- coding: iso-latin-1 -*-\nold: \u00e4\nkeep: \u00f6\n"))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'iso-latin-1))
+            (with-temp-file path (insert original)))
+          (with-temp-file blocker (insert "not a directory"))
+          (let* ((hunk (list :selected t
+                             :old-lines '("old: \u00e4")
+                             :diff-lines
+                             '("-old: \u00e4" "+new: \u00e4")))
+                 (change
+                  (car
+                   (mevedel-tool-patch--planned-changes
+                    (list :operations
+                          (list (list :kind 'update :path path
+                                      :hunks (list hunk))))))))
+            (should-error
+             (mevedel-tool-patch--commit
+              (list change
+                    (list :action 'write :path failure :content "fail\n")))
+             :type 'error))
+          (should
+           (equal (encode-coding-string original 'iso-latin-1)
+                  (with-temp-buffer
+                    (set-buffer-multibyte nil)
+                    (insert-file-contents-literally path)
+                    (buffer-string)))))
+      (when (file-directory-p root) (delete-directory root t))))
+
   :doc "Synchronizes a buffer visiting the same file through another name"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-patch-sync-" t)))
@@ -814,7 +850,49 @@
                    (mevedel-tool-patch--planned-changes
                     (list :operations
                           (list (list :kind 'add :path path :content "x\n"
-                                      :selected t))))))))
+                                      :selected t)))))))
+  :doc "Preserves a changed file's non-default coding in final bytes"
+  (let* ((path (make-temp-file "mevedel-patch-plan-coding-" nil ".el"))
+         (destination (concat path ".moved"))
+         (original
+          ";; -*- coding: iso-latin-1 -*-\nold: \u00e4\nkeep: \u00f6\n")
+         (expected
+          ";; -*- coding: iso-latin-1 -*-\nnew: \u00e4\nkeep: \u00f6\n"))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'iso-latin-1))
+            (with-temp-file path (insert original)))
+          (let* ((hunk (list :selected t
+                             :old-lines '("old: \u00e4")
+                             :diff-lines
+                             '("-old: \u00e4" "+new: \u00e4")))
+                 (operation (list :kind 'update :path path
+                                  :hunks (list hunk)))
+                 (changes
+                  (mevedel-tool-patch--planned-changes
+                   (list :operations (list operation)))))
+            (mevedel-tool-patch--commit changes)
+            (should
+             (equal (encode-coding-string expected 'iso-latin-1)
+                    (with-temp-buffer
+                      (set-buffer-multibyte nil)
+                      (insert-file-contents-literally path)
+                      (buffer-string)))))
+            (setq changes
+                  (mevedel-tool-patch--planned-changes
+                   (list :operations
+                         (list (list :kind 'move :path path
+                                     :move-path destination :selected t)))))
+            (mevedel-tool-patch--commit changes)
+            (should-not (file-exists-p path))
+            (should
+             (equal (encode-coding-string expected 'iso-latin-1)
+                    (with-temp-buffer
+                      (set-buffer-multibyte nil)
+                      (insert-file-contents-literally destination)
+                      (buffer-string))))))
+      (when (file-exists-p path) (delete-file path))
+      (when (file-exists-p destination) (delete-file destination))))
 
 (mevedel-deftest mevedel-tool-patch--snapshot
   (:doc "Snapshots literal file bytes and modes") ,test (test)

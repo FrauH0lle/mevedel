@@ -103,8 +103,9 @@ untouched lines. Hunks arrive in file order, so an otherwise ambiguous
 match is retried among the candidates at or after the previous hunk's
 position before being rejected; deselected hunks still advance that
 cursor at apply time, keeping the preview's disambiguation window and
-the application's identical. Files with CRLF line endings are written
-back with CRLF. Fuzzy matches are surfaced: the winning pass is recorded
+the application's identical. Updated and moved files retain their detected
+coding system, and files with CRLF line endings are written back with CRLF.
+Fuzzy matches are surfaced: the winning pass is recorded
 on the hunk, the review row gains a warning-face `· fuzzy` suffix with the
 pass in its help-echo, and applied fuzzy hunks add a `Fuzzy: FILE hunk N
 matched while ...` line to the model-visible result and the transcript
