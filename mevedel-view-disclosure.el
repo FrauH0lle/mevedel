@@ -462,22 +462,7 @@ section only."
 
 (defun mevedel-view-disclosure--mailbox-bounds ()
   "Return bounds of the mailbox card at point, or nil."
-  (let ((card (get-text-property (point) 'mevedel-view-mailbox-card)))
-    (when card
-      (let ((start (or (previous-single-property-change
-                        (point) 'mevedel-view-mailbox-card)
-                       (point-min)))
-            (end (or (next-single-property-change
-                      (point) 'mevedel-view-mailbox-card)
-                     (point-max))))
-        (when (and (< start (point))
-                   (not (eq (get-text-property
-                             start 'mevedel-view-mailbox-card)
-                            card)))
-          (setq start (or (next-single-property-change
-                           start 'mevedel-view-mailbox-card)
-                          (point))))
-        (cons start end)))))
+  (mevedel-view-disclosure--mailbox-bounds-at (point)))
 
 (defun mevedel-view-disclosure--mailbox-body-ranges (start end)
   "Return mailbox body ranges between START and END."

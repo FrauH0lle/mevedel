@@ -168,10 +168,6 @@ with `mevedel-toggle-follow'."
   (make-hash-table :test #'equal)
   "Registered root buffers keyed by durable session ids.")
 
-(defvar mevedel-session-control-transfer--presentations
-  (make-hash-table :test #'eq :weakness 'key)
-  "Registered transient presentation buffers keyed by session.")
-
 (defun mevedel-session-control-transfer-register-observer
     (session observer)
   "Register OBSERVER for semantic SESSION lifecycle events.
@@ -290,31 +286,6 @@ Return BUFFER so lifecycle hooks can use this as their value."
                                 mevedel--session))))))
         buffer
       (remhash session-id mevedel-session-control-transfer--roots)
-      nil)))
-
-(defun mevedel-session-control-transfer-register-presentation
-    (session buffer)
-  "Register the transient presentation BUFFER for SESSION."
-  (unless (buffer-live-p buffer)
-    (error "Session presentation buffer must be live"))
-  (puthash session buffer mevedel-session-control-transfer--presentations)
-  buffer)
-
-(defun mevedel-session-control-transfer-unregister-presentation
-    (session buffer)
-  "Unregister BUFFER when it is SESSION's presentation."
-  (when (eq buffer (gethash session
-                            mevedel-session-control-transfer--presentations))
-    (remhash session mevedel-session-control-transfer--presentations))
-  nil)
-
-(defun mevedel-session-control-transfer-presentation-buffer (session)
-  "Return SESSION's live transient presentation buffer, or nil."
-  (when-let ((buffer (gethash session
-                             mevedel-session-control-transfer--presentations)))
-    (if (buffer-live-p buffer)
-        buffer
-      (remhash session mevedel-session-control-transfer--presentations)
       nil)))
 
 (defun mevedel-session-control-transfer-drained-p (session)

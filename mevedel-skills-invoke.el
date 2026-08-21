@@ -58,6 +58,8 @@
                   "mevedel-hooks" (decision &optional event))
 (declare-function mevedel-hooks-decision-reason
                   "mevedel-hooks" (decision))
+(declare-function mevedel-hooks-sanitize-final-decision
+                  "mevedel-hooks" (event decision))
 (declare-function mevedel-hooks-event-plist
                   "mevedel-hooks"
                   (event &optional session workspace &rest extra))
@@ -298,23 +300,6 @@ DISPLAY-CALLBACK receives the lifecycle event when non-nil."
      display-callback
      `(:event done :skill ,skill-name))
     (funcall callback outcome)))
-
-(defun mevedel-skills--safe-hook-decision (event decision)
-  "Return plist-shaped hook DECISION for EVENT, or nil.
-
-Hook runners normally sanitize their callback value, but callers can
-stub them in tests and older compiled code may still deliver malformed
-values.  Skill dispatch reads prompt decisions synchronously, so keep
-that boundary defensive."
-  (if (and (listp decision)
-           (or (null decision)
-               (keywordp (car-safe decision))))
-      decision
-    (display-warning
-     'mevedel
-     (format "Ignoring malformed %s hook decision: %S" event decision)
-     :warning)
-    nil))
 
 (defun mevedel-skills--prompt-rewrite-audit-record (original decision)
   "Return a `UserPromptExpansion' rewrite audit record, or nil."
@@ -620,7 +605,7 @@ Allowed-tool rules apply only to the temporary preparation request."
                                 :message message)))
                (complete (original expanded decision)
                  (setq decision
-                       (mevedel-skills--safe-hook-decision
+                       (mevedel-hooks-sanitize-final-decision
                         'UserPromptExpansion decision))
                  (if (and (plist-member decision :continue)
                           (not (plist-get decision :continue)))

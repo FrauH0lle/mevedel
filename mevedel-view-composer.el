@@ -73,6 +73,8 @@
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string
 		  "mevedel-hooks" (decision &optional event))
+(declare-function mevedel-hooks-sanitize-final-decision
+                  "mevedel-hooks" (event decision))
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
 		  (event &optional session workspace &rest extra))
 (declare-function mevedel-hooks-format-context "mevedel-hooks"
@@ -2221,22 +2223,6 @@ INPUT is the original composer text, including the slash command."
            (mevedel-goal-start
             (mevedel-prompt-submission-input submission) submission)))))))
 
-(defun mevedel-view--safe-hook-decision (event decision)
-  "Return plist-shaped hook DECISION for EVENT, or nil.
-
-Prompt hook callbacks run from process sentinels and can be backed by
-user/project code.  Treat malformed values as no decision so symbols
-such as `passed' cannot escape into `plist-get' or `plist-member'."
-  (if (and (listp decision)
-           (or (null decision)
-               (keywordp (car-safe decision))))
-      decision
-    (display-warning
-     'mevedel
-     (format "Ignoring malformed %s hook decision: %S" event decision)
-     :warning)
-    nil))
-
 (defun mevedel-view--join-hook-contexts (&rest contexts)
   "Return CONTEXTS joined as separate hook context blocks."
   (let ((contexts (delq nil contexts)))
@@ -2282,7 +2268,7 @@ input."
                    (setq mevedel-view--prompt-hook-pending nil)
                    (when (buffer-live-p data-buffer)
                      (setq decision
-                           (mevedel-view--safe-hook-decision
+                           (mevedel-hooks-sanitize-final-decision
                             'UserPromptSubmit decision))
                      (cond
                       ((and (plist-member decision :continue)

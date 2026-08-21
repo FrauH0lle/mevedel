@@ -1026,8 +1026,12 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
   "Return DECISION when it is plist-shaped, otherwise nil."
   (and (mevedel-hooks--decision-plist-p decision) decision))
 
-(defun mevedel-hooks--sanitize-final-decision (event decision)
-  "Return a callback-safe DECISION for EVENT."
+(defun mevedel-hooks-sanitize-final-decision (event decision)
+  "Return a callback-safe DECISION for EVENT, or nil with a warning.
+
+Hook runners sanitize their own callback value, but prompt-decision
+consumers read hook results synchronously and can be handed values from
+stubs or user code, so the boundary stays defensive at one owner."
   (if (mevedel-hooks--decision-plist-p decision)
       decision
     (display-warning
@@ -2168,7 +2172,7 @@ decision plist."
                (unless settled
                  (setq settled t)
                  (setq decision
-                       (mevedel-hooks--sanitize-final-decision
+                       (mevedel-hooks-sanitize-final-decision
                         event decision))
 	                 (when telemetry-span
 	                   (mevedel-telemetry-finish
