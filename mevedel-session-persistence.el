@@ -187,7 +187,6 @@
 ;; `mevedel-session-control-transfer'
 (declare-function mevedel-session-control-transfer-notify "mevedel-session-control-transfer" (session event &rest args))
 (declare-function mevedel-session-control-transfer-observe "mevedel-session-control-transfer" (session))
-(declare-function mevedel-session-control-transfer-presentation-buffer "mevedel-session-control-transfer" (session))
 (declare-function mevedel-session-control-transfer-register-root-buffer "mevedel-session-control-transfer" (session buffer))
 (declare-function mevedel-session-control-transfer-root-buffer-for-id "mevedel-session-control-transfer" (session-id))
 

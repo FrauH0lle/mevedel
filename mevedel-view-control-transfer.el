@@ -37,8 +37,6 @@
                   "mevedel-session-control-transfer" (session predicate))
 (declare-function mevedel-session-control-transfer-register-observer
                   "mevedel-session-control-transfer" (session observer))
-(declare-function mevedel-session-control-transfer-register-presentation
-                  "mevedel-session-control-transfer" (session buffer))
 (declare-function mevedel-session-control-transfer-register-root-buffer
                   "mevedel-session-control-transfer" (session buffer))
 (declare-function mevedel-session-control-transfer-request
@@ -47,8 +45,6 @@
                   "mevedel-session-control-transfer" (session predicate))
 (declare-function mevedel-session-control-transfer-unregister-observer
                   "mevedel-session-control-transfer" (session observer))
-(declare-function mevedel-session-control-transfer-unregister-presentation
-                  "mevedel-session-control-transfer" (session buffer))
 (declare-function mevedel-session-control-transfer-unregister-root-buffer
                   "mevedel-session-control-transfer" (session buffer))
 (defvar mevedel-session-follow-published)
@@ -468,8 +464,6 @@ this view follows."
     (let ((session (buffer-local-value 'mevedel--session
                                        mevedel--data-buffer)))
       (when session
-        (mevedel-session-control-transfer-unregister-presentation
-         session (current-buffer))
         (mevedel-session-control-transfer-unregister-root-buffer
          session mevedel--data-buffer))))
   (when (and mevedel-view--control-transfer-drain-session
@@ -498,7 +492,6 @@ this view follows."
       (when session
         (mevedel-session-control-transfer-register-root-buffer
          session mevedel--data-buffer)
-        (mevedel-session-control-transfer-register-presentation session view)
         (setq-local
          mevedel-view--session-observer-session session
          mevedel-view--session-observer

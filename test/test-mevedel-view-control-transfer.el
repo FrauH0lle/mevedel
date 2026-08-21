@@ -145,9 +145,6 @@
                     mevedel-view--control-transfer-rebuild-function))
         (should (eq data
                     (mevedel-session-control-transfer-root-buffer session)))
-        (should (eq view
-                    (mevedel-session-control-transfer-presentation-buffer
-                     session)))
         (should (memq drain
                       (mevedel-session-control-transfer-drains session)))
         (should (gethash session
@@ -168,8 +165,6 @@
         (should-not mevedel-view--control-transfer-timer)
         (should-not
          (mevedel-session-control-transfer-root-buffer session))
-        (should-not
-         (mevedel-session-control-transfer-presentation-buffer session))
         (should-not
          (mevedel-session-control-transfer-drains session))
         (should-not
