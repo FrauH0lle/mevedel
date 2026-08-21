@@ -117,7 +117,7 @@
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-user-invocable-p
                   "mevedel-skills-core" (cl-x) t)
-(declare-function mevedel-skills--skill-enabled-p
+(declare-function mevedel-skills-skill-enabled-p
                   "mevedel-skills-core" (skill))
 
 ;; `mevedel-skills-input'
@@ -313,7 +313,7 @@ needs no session."
                        (mevedel-session-get-skill-by-source session source))))
       (when source
         (unless (and skill
-                     (mevedel-skills--skill-enabled-p skill)
+                     (mevedel-skills-skill-enabled-p skill)
                      (mevedel-skill-user-invocable-p skill))
           (error "Implementation skill %s is unavailable"
                  (plist-get binding :token)))))))

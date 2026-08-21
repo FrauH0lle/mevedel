@@ -361,7 +361,7 @@
      input)
     (unwind-protect
         (progn
-          (mevedel-skills--set-enabled disabled nil)
+          (mevedel-skills-set-enabled disabled nil)
           (let ((plan (mevedel-skills-plan-user-input input session)))
             (should-not (mevedel-skill-invocation-plan-occurrences plan))))
       (delete-directory root t)
@@ -383,7 +383,7 @@
      bound)
     (unwind-protect
         (progn
-          (mevedel-skills--set-enabled disabled nil)
+          (mevedel-skills-set-enabled disabled nil)
           (dolist (case `((,bound . "unavailable")
                           ("$disabled" . "disabled")
                           ("$internal" . "not user-invocable")))

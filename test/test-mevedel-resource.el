@@ -208,7 +208,7 @@
          (session (mevedel-session--create
                    :authority-mode 'pid-lock :skills (list skill)
                    :workspace workspace)))
-    (cl-letf (((symbol-function 'mevedel-skills--skill-enabled-p)
+    (cl-letf (((symbol-function 'mevedel-skills-skill-enabled-p)
                (lambda (&rest _)
                  (error "Remote skill identity was inspected")))
               ((symbol-function 'mevedel-skills-scan)

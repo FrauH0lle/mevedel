@@ -496,7 +496,7 @@
                      (make-overlay (point-min) (point-min))))
                   ((symbol-function 'mevedel-plan-approval-render)
                    #'ignore)
-                  ((symbol-function 'mevedel-skills--user-visible-skills)
+                  ((symbol-function 'mevedel-skills-user-visible-skills)
                    (lambda (&rest _) (list skill)))
                   ((symbol-function 'completing-read)
                    (lambda (&rest _) "alpha"))

@@ -31,8 +31,8 @@
                   "mevedel-session-artifacts" (session &optional buffer))
 
 ;; `mevedel-skills-ui'
-(declare-function mevedel-skills--refresh-view-input-prompt
-                  "mevedel-skills-ui" ())
+(declare-function mevedel-view-refresh-associated-input-prompt
+                  "mevedel-view-composer" ())
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
@@ -171,9 +171,12 @@ Runs mode-specific lifecycle hooks."
           (mevedel-permission-mode-set-raw target)
           (mevedel-permission-mode--apply-full-auto-lifecycle
            previous target session)
-          (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
+          ;; Permission mode can change before any view exists; the
+          ;; composer module loads with the view, so a missing function
+          ;; here just means there is no prompt to refresh yet.
+          (when (fboundp 'mevedel-view-refresh-associated-input-prompt)
             (ignore-errors
-              (mevedel-skills--refresh-view-input-prompt))))))
+              (mevedel-view-refresh-associated-input-prompt))))))
     target))
 
 (defun mevedel-permission-mode-set-session-scoped (sym val slot-setter)

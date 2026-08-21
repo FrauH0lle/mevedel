@@ -393,7 +393,7 @@ this collapses both shapes to the delivered text."
         (progn
           (setf (mevedel-session-skills session)
                 (list skill user-only disabled))
-          (mevedel-skills--set-enabled disabled nil)
+          (mevedel-skills-set-enabled disabled nil)
           (cl-letf (((symbol-function 'mevedel-tool-get)
                      (lambda (_name &optional _cat) fake-tool)))
             (with-temp-buffer

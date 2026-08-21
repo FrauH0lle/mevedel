@@ -70,7 +70,7 @@
 (declare-function mevedel-skill-source-file "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-user-invocable-p
                   "mevedel-skills-core" (cl-x) t)
-(declare-function mevedel-skills--skill-enabled-p
+(declare-function mevedel-skills-skill-enabled-p
                   "mevedel-skills-core" (skill))
 (declare-function mevedel-skills-install
                   "mevedel-skills-core" (session &optional buffer))
@@ -537,7 +537,7 @@ Unknown unbound names are successful with a nil skill."
      ((and binding (null skill))
       (list :status 'unavailable
             :message (format "bound skill $%s is unavailable" name)))
-     ((and skill (not (mevedel-skills--skill-enabled-p skill)))
+     ((and skill (not (mevedel-skills-skill-enabled-p skill)))
       (list :status 'unavailable
             :message (format "skill $%s is disabled" name)))
      ((and skill (not (mevedel-skill-user-invocable-p skill)))

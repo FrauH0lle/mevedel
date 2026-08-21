@@ -139,7 +139,7 @@
 (declare-function mevedel-skill-source-file "mevedel-skills-core" (cl-x) t)
 
 ;; `mevedel-skills-ui'
-(declare-function mevedel-skills--user-visible-skills
+(declare-function mevedel-skills-user-visible-skills
                   "mevedel-skills-ui" (session &optional inline-only))
 
 ;; `mevedel-structs'

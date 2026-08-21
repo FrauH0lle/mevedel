@@ -246,14 +246,14 @@
 		  (text session))
 
 ;; `mevedel-skills-ui'
-(declare-function mevedel-skills--parse-slash-line "mevedel-skills-ui"
+(declare-function mevedel-skills-parse-slash-line "mevedel-skills-ui"
 		  (text))
-(declare-function mevedel-skills--remaining-argument-hint
+(declare-function mevedel-skills-remaining-argument-hint
 		  "mevedel-skills-ui" (skill arguments))
-(declare-function mevedel-skills--slash-capf "mevedel-skills-ui"
+(declare-function mevedel-skills-slash-capf "mevedel-skills-ui"
 		  (buffer session local-commands &optional input-start))
 (declare-function mevedel-skills-install-font-lock "mevedel-skills-ui"
-		  nil)
+                  (&optional origin-function))
 (declare-function mevedel-skills-local-command-active-request-p
 		  "mevedel-skills-ui" (name args))
 (defvar mevedel-slash-commands)
@@ -1008,7 +1008,10 @@ all displayed windows plus the editable composer text around THUNK."
       (mevedel-view-history-load mevedel--session)
       (add-hook 'completion-at-point-functions
                 #'mevedel-view-slash-capf nil t)
-      (mevedel-skills-install-font-lock)
+      ;; Bound the $skill matcher to the draft: it runs per
+      ;; refontification, and scanning the transcript prefix cost
+      ;; hundreds of milliseconds per keystroke on a long session.
+      (mevedel-skills-install-font-lock #'mevedel-view--input-start)
       (add-hook 'post-command-hook
                 #'mevedel-view--refresh-skill-argument-hint nil t)
       (add-hook 'after-change-functions
@@ -1138,6 +1141,22 @@ later prompt refreshes do not operate on the draft body."
         prompt-start)
     (and (markerp mevedel-view--input-marker)
          (marker-position mevedel-view--input-marker))))
+
+(defun mevedel-view-refresh-associated-input-prompt ()
+  "Refresh the view prompt associated with the current buffer, if any.
+Callable from either half of a view/data pair: prompt-affecting state
+changes land in the data buffer, and the prompt lives in the view."
+  (let ((view-buf (cond
+                   ((and (boundp 'mevedel--view-buffer)
+                         (buffer-live-p mevedel--view-buffer))
+                    mevedel--view-buffer)
+                   ((and (boundp 'mevedel--data-buffer)
+                         (buffer-live-p mevedel--data-buffer))
+                    (buffer-local-value 'mevedel--view-buffer
+                                        mevedel--data-buffer)))))
+    (when (buffer-live-p view-buf)
+      (with-current-buffer view-buf
+        (mevedel-view-refresh-input-prompt)))))
 
 (defun mevedel-view--input-start ()
   "Return the buffer position where the user's editable input begins.
@@ -1473,7 +1492,7 @@ When FORCE is non-nil, replace the current draft unconditionally."
               (name (nth 0 parsed))
               (skill (mevedel-session-get-skill session name))
               ((mevedel-skill-user-invocable-p skill)))
-    (mevedel-skills--remaining-argument-hint skill (nth 1 parsed))))
+    (mevedel-skills-remaining-argument-hint skill (nth 1 parsed))))
 
 (defun mevedel-view--refresh-skill-argument-hint ()
   "Refresh the display-only skill argument hint in the composer."
@@ -1529,7 +1548,7 @@ and command argument completion for commands with finite choices."
              (>= (point) (mevedel-view--input-start)))
     (let ((session (buffer-local-value 'mevedel--session
                                        mevedel--data-buffer)))
-      (mevedel-skills--slash-capf
+      (mevedel-skills-slash-capf
        mevedel--data-buffer session mevedel-slash-commands
        (mevedel-view--input-start)))))
 
@@ -2023,7 +2042,7 @@ SNAPSHOT is the exact Source composer state transferred on publication."
                    (not (eq (plist-get mevedel-view--composer-scope :action)
                             'plan))))
       (user-error "The workflow is occupied -- use C-c TAB to queue this directive follow-up"))
-    (when (mevedel-skills--parse-slash-line input)
+    (when (mevedel-skills-parse-slash-line input)
       (user-error "Slash commands are unavailable in directive scope"))
     (mevedel-view--dispatch-directive-input mevedel-view--composer-scope input)
     (mevedel-view-history-add input)
@@ -2081,7 +2100,7 @@ their local dispatch path."
       (user-error "Nothing to send"))
     (if mevedel-view--composer-scope
         (mevedel-view--send-directive-input input)
-      (let* ((slash-parsed (mevedel-skills--parse-slash-line input))
+      (let* ((slash-parsed (mevedel-skills-parse-slash-line input))
              (fork-target mevedel-view--armed-session-fork)
              (active-request
               (buffer-local-value 'mevedel--current-request

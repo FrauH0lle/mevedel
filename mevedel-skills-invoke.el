@@ -903,12 +903,12 @@ asynchronous agent and calls CALLBACK when that turn settles."
      ((and (eq origin 'model)
            (when-let* ((request (mevedel-skills--current-request))
                        (source-key
-                        (mevedel-skills--source-key
+                        (mevedel-skills-source-key
                          (mevedel-skill-source-file skill))))
              (cl-some
               (lambda (record)
                 (equal source-key
-                       (mevedel-skills--source-key
+                       (mevedel-skills-source-key
                         (mevedel-skill-invocation-record-source-path record))))
               (mevedel-request-attached-skill-records request))))
       (mevedel-skills--invoke-done
@@ -921,7 +921,7 @@ asynchronous agent and calls CALLBACK when that turn settles."
        callback display-callback))
      ;; User-disabled skill gating.
      ((and (not skip-gates)
-           (not (mevedel-skills--skill-enabled-p skill)))
+           (not (mevedel-skills-skill-enabled-p skill)))
       (mevedel-skills--invoke-error
        skill 'disabled
        (if (eq origin 'user)
@@ -1060,7 +1060,7 @@ returns the body; error returns a `Error: ' prefixed message."
   "Return non-nil when SKILL may be shown to the model.
 When ACTIVE-ONLY is non-nil, dormant path-scoped skills are excluded."
   (and (mevedel-skill-model-invocable-p skill)
-       (mevedel-skills--skill-enabled-p skill)
+       (mevedel-skills-skill-enabled-p skill)
        (or (not active-only)
            (mevedel-skill-active-p skill))))
 
@@ -1110,7 +1110,7 @@ CALLBACK is the async tool callback.  ARGS is a plist with optional :query."
       (funcall return "Error: query must be a string."))
      (t
       (when (buffer-live-p (current-buffer))
-        (mevedel-skills--ensure-fresh (current-buffer) session))
+        (mevedel-skills-ensure-fresh (current-buffer) session))
       (let* ((narrowed (and (stringp query)
                             (not (string-empty-p (string-trim query)))))
              (pool (if narrowed

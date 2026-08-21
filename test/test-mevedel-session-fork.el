@@ -417,7 +417,7 @@
                   (plist-get (mevedel-reminders--collect-from
                               (mevedel-session-reminders child) 2 child)
                              :commits))
-            (mevedel-skills--maybe-activate child "/tmp/child.el")
+            (mevedel-skills-maybe-activate child "/tmp/child.el")
             (setf (mevedel-skill-invocation-record-name child-invoked-skill)
                   "child-skill")
             (should (= 1 (mevedel-reminder-last-fired source-reminder)))

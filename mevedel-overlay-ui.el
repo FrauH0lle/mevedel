@@ -150,7 +150,7 @@
 (declare-function mevedel-skill-source-file "mevedel-skills-core" (cl-x) t)
 
 ;; `mevedel-skills-ui'
-(declare-function mevedel-skills--user-visible-skills
+(declare-function mevedel-skills-user-visible-skills
                   "mevedel-skills-ui" (session &optional inline-only))
 
 ;; `mevedel-structs'
@@ -307,7 +307,7 @@ active chat session."
          (candidates
           (mapcar (lambda (skill)
                     (cons (mevedel-skill-name skill) skill))
-                  (mevedel-skills--user-visible-skills session))))
+                  (mevedel-skills-user-visible-skills session))))
     (unless candidates
       (user-error "No user-invocable skills available"))
     (let* ((choice (completing-read "Toggle implementation skill: "
