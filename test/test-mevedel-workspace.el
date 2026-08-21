@@ -359,7 +359,7 @@
           (should-not (member "/ssh:user@host:/client/tmp/" roots))
           (should-not (member "/client/tmp/" roots)))))))
 
-(mevedel-deftest mevedel-workspace--file-in-allowed-roots-p
+(mevedel-deftest mevedel-workspace-file-in-allowed-roots-p
   (:before-each (mevedel-workspace-clear-registry)
    :vars* ((root-dir (file-name-as-directory
                       (make-temp-file "mevedel-ws-roots-" t)))
@@ -384,7 +384,7 @@
     (with-temp-buffer
       (setq-local mevedel--workspace ws)
       (should (equal root-dir
-                     (mevedel-workspace--file-in-allowed-roots-p file)))))
+                     (mevedel-workspace-file-in-allowed-roots-p file)))))
 
   :doc "returns matching additional root when file lives there"
   (let* ((ws (mevedel-workspace-get-or-create
@@ -396,7 +396,7 @@
     (with-temp-buffer
       (setq-local mevedel--workspace ws)
       (should (member
-               (mevedel-workspace--file-in-allowed-roots-p file)
+               (mevedel-workspace-file-in-allowed-roots-p file)
                (list extra-dir
                      (file-name-as-directory
                       (expand-file-name temporary-file-directory)))))))
@@ -421,7 +421,7 @@
           (write-region "" nil file)
           (with-temp-buffer
             (setq-local mevedel--workspace ws)
-            (should (null (mevedel-workspace--file-in-allowed-roots-p file)))))
+            (should (null (mevedel-workspace-file-in-allowed-roots-p file)))))
       (delete-directory parent-dir t))))
 
 

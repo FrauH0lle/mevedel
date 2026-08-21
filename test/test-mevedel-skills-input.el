@@ -730,16 +730,47 @@ spanning lines")))
                      (setq pending callback))))
           (insert "### $greet world")
           (goto-char (point-max))
-          (mevedel-skills-input-dispatch-command)
+          (mevedel-skills-input-dispatch-command
+           (lambda () (setq sent t)))
           (should pending)
           ;; The user rewrites the command into something else entirely.
           (delete-region (point-min) (point-max))
           (insert "### never mind"))
-        (mevedel-test--with-captured-messages nil
-          (funcall pending "3"))
+        (funcall pending "3")
         ;; The prepared body belongs to arguments that no longer exist.
         (should (equal "### never mind" (buffer-string)))
-        (should-not sent))))
+        (should-not sent)
+        (should-not mevedel-skills--pending-request-context))))
+
+  :doc "a same-length edit to the command is not treated as the same command"
+  ;; The corruption half: an edit that keeps the length still moves what the
+  ;; captured range covers, so the old code replaced the wrong text and sent
+  ;; a body prepared for arguments the draft no longer names.
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "greet"
+                 :body "Hello !el`(+ 1 2)`"))
+         (pending nil)
+         (sent nil))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+                   (lambda (_tool callback &rest _)
+                     (setq pending callback))))
+          (insert "### $greet world")
+          (goto-char (point-max))
+          (mevedel-skills-input-dispatch-command
+           (lambda () (setq sent t)))
+          (should pending)
+          ;; Same length, different argument.
+          (goto-char (- (point-max) 5))
+          (delete-char 5)
+          (insert "there"))
+        (funcall pending "3")
+        (should (equal "### $greet there" (buffer-string)))
+        (should-not sent)
+        (should-not mevedel-skills--pending-request-context))))
 
   :doc "user-invocable: false leading skill falls through to inline planning"
   (let* ((session (mevedel-skills-test--make-session))
