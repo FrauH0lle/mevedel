@@ -128,14 +128,14 @@
 (defvar mevedel-view--pending-guest-attribution)
 (defvar mevedel-view--pending-input-edit)
 
-;; `mevedel-permissions'
+;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
-		  "mevedel-permissions"
-		  (&optional session data-buffer surface-buffer))
-(declare-function mevedel-permission-mode-label "mevedel-permissions"
-		  (&optional mode))
+                  "mevedel-permission-mode"
+                  (&optional session data-buffer surface-buffer))
+(declare-function mevedel-permission-mode-label "mevedel-permission-mode"
+                  (&optional mode))
 (declare-function mevedel-permission-mode-transition
-		  "mevedel-permissions" (mode))
+                  "mevedel-permission-mode" (mode))
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-plan-handoff'
@@ -451,7 +451,7 @@
 
 (defun mevedel-view--effective-permission-mode ()
   "Return the permission mode to apply to the current view buffer."
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-mode)
   (mevedel-permission-mode-effective
    (and (boundp 'mevedel--session) mevedel--session)
    (and (boundp 'mevedel--data-buffer)
@@ -461,7 +461,7 @@
 
 (defun mevedel-view--permission-mode-display (mode)
   "Return (LABEL FACE) for permission MODE."
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-mode)
   (list
    (mevedel-permission-mode-label mode)
    (pcase mode
@@ -1211,7 +1211,7 @@ follows `mevedel-view--input-marker'."
            (mevedel-view--next-permission-mode
             (or (mevedel-session-permission-mode session) 'ask))))
       (with-current-buffer data-buf
-        (require 'mevedel-permissions)
+        (require 'mevedel-permission-mode)
         (mevedel-permission-mode-transition next))
       (message "mevedel: permission mode %s"
                (car (mevedel-view--permission-mode-display next)))

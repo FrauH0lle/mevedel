@@ -98,14 +98,13 @@
 (defvar mevedel-model-tiers)
 (defvar mevedel-model-workloads)
 
-;; `mevedel-permissions'
-(declare-function mevedel-permission-mode-effective "mevedel-permissions"
+;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-effective "mevedel-permission-mode"
                   (&optional session data-buffer surface-buffer))
-(declare-function mevedel-permission-mode-label "mevedel-permissions"
+(declare-function mevedel-permission-mode-label "mevedel-permission-mode"
                   (&optional mode))
 (declare-function mevedel-permission-mode-transition
-                  "mevedel-permissions"
-                  (mode &optional prompt display-text hook-context))
+                  "mevedel-permission-mode" (mode))
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-permissions-list'
@@ -278,7 +277,7 @@
 
 (defun mevedel-menu--mode-symbol (&optional session data-buffer surface-buffer)
   "Return the effective permission mode for the cockpit context."
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-mode)
   (let ((context (unless (and session data-buffer surface-buffer)
                    (condition-case nil
                        (mevedel-menu--context)
@@ -297,7 +296,7 @@
 
 (defun mevedel-menu--mode-label (&optional mode)
   "Return the cockpit label for permission MODE."
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-mode)
   (mevedel-permission-mode-label mode))
 
 (defun mevedel-menu--model-label ()
@@ -940,7 +939,7 @@ state rather than as a fourth permission choice."
 
 (defun mevedel-menu--set-mode (mode)
   "Set the current session permission MODE."
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-mode)
   (mevedel-cockpit-call-in-data
    (mevedel-menu--context) #'mevedel-permission-mode-transition mode)
   (force-mode-line-update t))

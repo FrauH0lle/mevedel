@@ -13,8 +13,11 @@
 (require 'mevedel-bash-policy)
 (require 'mevedel-structs)
 (require 'mevedel-execution-target)
+(require 'mevedel-permission-mode)
+(require 'mevedel-permission-persistence)
 (require 'mevedel-permission-log)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permission-rules)
 (require 'mevedel-permissions)
 (require 'mevedel-telemetry)
 (require 'mevedel-turn)
@@ -366,7 +369,7 @@ additive child permissions are available only to batch Eval"
              `(:session ,session)))))
   :doc "treats normalized resource grants as authoritative even when empty"
   (cl-letf (((symbol-function
-              'mevedel-permission--load-persistent-resource-grants)
+              'mevedel-permission-persistence-load-resource-grants)
              (lambda (_workspace)
                (ert-fail "reloaded persistent resource grants"))))
     (should-not
@@ -402,7 +405,7 @@ additive child permissions are available only to batch Eval"
          (session
           (mevedel-session--create
            :name "profile" :workspace workspace))
-         (file (mevedel-permission--persistent-file workspace)))
+         (file (mevedel-permission-persistence-file workspace)))
     (unwind-protect
         (let ((process-environment
                (cons (concat "HOME=" user-home) process-environment)))
@@ -419,7 +422,7 @@ additive child permissions are available only to batch Eval"
                   `(:session ,session :workspace ,workspace
                              :buckets
                              ((:persistent
-                               ,@(mevedel-permission--load-persistent-rules
+                               ,@(mevedel-permission-persistence-load-rules
                                   workspace)))))
                  (path (expand-file-name "~/.npm")))
             (should
@@ -2333,7 +2336,7 @@ default Bash keeps bare dot inspection automatic"
                 'always-allow session workspace "(message x)" nil)))
           (should
            (member '("Eval" :pattern "(message x)" :action allow)
-                   (mevedel-permission--load-persistent-rules workspace))))
+                   (mevedel-permission-persistence-load-rules workspace))))
       (delete-directory root t)))
   :doc "returns structured Eval metadata when requested"
   (let ((result (mevedel-tool-exec-permission--eval-prompt-result
@@ -2600,7 +2603,7 @@ default Bash keeps bare dot inspection automatic"
          (workspace
           (mevedel-workspace--create
            :type 'project :id "bash-prompt" :root root :name "bash-prompt"))
-         (file (mevedel-permission--persistent-file workspace)))
+         (file (mevedel-permission-persistence-file workspace)))
     (unwind-protect
         (progn
           (make-directory (file-name-directory file) t)

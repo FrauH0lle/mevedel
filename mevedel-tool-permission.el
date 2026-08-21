@@ -35,9 +35,16 @@
 (declare-function mevedel-permission-log
                   "mevedel-permission-log" (session event &rest props))
 
+;; `mevedel-permission-mode'
+(defvar mevedel-permission-mode)
+
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission--enqueue
                   "mevedel-permission-queue" (entry &optional session))
+
+;; `mevedel-permission-rules'
+(declare-function mevedel-permission-rules-path-protected-p
+                  "mevedel-permission-rules" (path &optional target))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission-async-with-metadata
@@ -56,11 +63,8 @@
                   "mevedel-permissions" (entry &optional data-buffer))
 (declare-function mevedel-permission--one-shot-prompt-outcome
                   "mevedel-permissions" (outcome))
-(declare-function mevedel-permission--path-protected-p
-                  "mevedel-permissions" (path &optional target))
 (declare-function mevedel-permission-decision-raw-outcome
                   "mevedel-permissions" (decision))
-(defvar mevedel-permission-mode)
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-append-hook-side-channel
@@ -132,6 +136,7 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
 
 (defun mevedel-tool-permission--specifier-props (context)
   "Return sanitized permission specifier properties from CONTEXT."
+  (require 'mevedel-permission-rules)
   (let* ((tool (plist-get context :tool))
          (tool-name (and tool (mevedel-tool-name tool)))
          (args (plist-get context :args))
@@ -155,7 +160,7 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
             (and value (list :specifier-value value))
             (and path
                  (list :protected-path
-                       (mevedel-permission--path-protected-p path))))))
+                       (mevedel-permission-rules-path-protected-p path))))))
 
 (defun mevedel-tool-permission-log-decision
     (context decision &rest props)

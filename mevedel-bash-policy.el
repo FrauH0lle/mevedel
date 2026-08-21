@@ -44,33 +44,39 @@
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
 
-;; `mevedel-permissions'
-(declare-function mevedel-permission--collect-buckets
-                  "mevedel-permissions"
+;; `mevedel-permission-mode'
+(defvar mevedel-permission-mode)
+
+;; `mevedel-permission-persistence'
+(declare-function mevedel-permission-persistence-load-rules
+                  "mevedel-permission-persistence" (workspace))
+
+;; `mevedel-permission-rules'
+(declare-function mevedel-permission-protected-path-policy
+                  "mevedel-permission-rules" ())
+(declare-function mevedel-permission-rules-action
+                  "mevedel-permission-rules" (rules tool-name &rest keys))
+(declare-function mevedel-permission-rules-collect-buckets
+                  "mevedel-permission-rules"
                   (invocation-rules request-rules
                                     session-rules persistent-rules))
-(declare-function mevedel-permission--find-rules
-                  "mevedel-permissions" (rules tool-name &rest keys))
-(declare-function mevedel-permission--first-non-nil-action-with-bucket
-                  "mevedel-permissions"
+(declare-function mevedel-permission-rules-find
+                  "mevedel-permission-rules" (rules tool-name &rest keys))
+(declare-function mevedel-permission-rules-first-action-with-bucket
+                  "mevedel-permission-rules"
                   (buckets tool-name path pattern domain name))
-(declare-function mevedel-permission--load-persistent-rules
-                  "mevedel-permissions" (workspace))
-(declare-function mevedel-permission--path-in-allowed-roots-p
-                  "mevedel-permissions" (path roots))
-(declare-function mevedel-permission--path-protected-p
-                  "mevedel-permissions" (path &optional target))
+(declare-function mevedel-permission-rules-path-in-allowed-roots-p
+                  "mevedel-permission-rules" (path roots))
+(declare-function mevedel-permission-rules-path-protected-p
+                  "mevedel-permission-rules" (path &optional target))
+(declare-function mevedel-permission-rules-qualified-buckets
+                  "mevedel-permission-rules" (buckets qualifier value))
+(declare-function mevedel-permission-rules-resource-granted-p
+                  "mevedel-permission-rules" (path access grants))
+
+;; `mevedel-permissions'
 (declare-function mevedel-permission--plan-mode-p
                   "mevedel-permissions" (&optional session))
-(declare-function mevedel-permission--qualified-buckets
-                  "mevedel-permissions" (buckets qualifier value))
-(declare-function mevedel-permission--resource-granted-p
-                  "mevedel-permissions" (path access grants))
-(declare-function mevedel-permission--rules-action
-                  "mevedel-permissions" (rules tool-name &rest keys))
-(declare-function mevedel-permission-protected-path-policy
-                  "mevedel-permissions" ())
-(defvar mevedel-permission-mode)
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-mode-effective
@@ -250,7 +256,7 @@ the caller already analyzed COMMAND.  PERMISSION-CONTEXT supplies the target."
 REQUEST may supply exact additive filesystem grants for this invocation."
   (require 'mevedel-bash-analysis)
   (require 'mevedel-execution-target)
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-rules)
   (require 'mevedel-sandbox)
   (require 'mevedel-structs)
   (let ((resources
@@ -280,8 +286,8 @@ REQUEST may supply exact additive filesystem grants for this invocation."
         (dolist (path resources)
           (unless (or (member (file-local-name path)
                               mevedel-sandbox-intrinsic-paths)
-                      (mevedel-permission--path-in-allowed-roots-p path roots)
-                      (mevedel-permission--resource-granted-p
+                      (mevedel-permission-rules-path-in-allowed-roots-p path roots)
+                      (mevedel-permission-rules-resource-granted-p
                        path 'read grants))
             (push (if target
                       (mevedel-execution-target-native-path target path)
@@ -478,6 +484,7 @@ avoids saving a brittle whole-chain string such as
 (defun mevedel-bash-policy-effective-permission-mode
     (&optional permission-context)
   "Return effective permission mode for PERMISSION-CONTEXT."
+  (require 'mevedel-permission-mode)
   (require 'mevedel-structs)
   (let ((session (if permission-context
                      (plist-get permission-context :session)
@@ -500,6 +507,7 @@ avoids saving a brittle whole-chain string such as
     (command &optional analysis permission-context)
   "Return non-nil if COMMAND has an obvious protected path in ANALYSIS.
 PERMISSION-CONTEXT supplies the owning execution target."
+  (require 'mevedel-permission-rules)
   (let ((paths (mevedel-bash-policy--bash-resource-paths
                 command analysis permission-context)))
     (when paths
@@ -511,10 +519,10 @@ PERMISSION-CONTEXT supplies the owning execution target."
                               (mevedel-execution-target-create base)))))
         (cl-some
          (lambda (path)
-           (or (mevedel-permission--path-protected-p path target)
+           (or (mevedel-permission-rules-path-protected-p path target)
                ;; Directory roots such as `.git' may be protected by a
                ;; `**/.git/**' policy even when the literal token has no child.
-               (mevedel-permission--path-protected-p
+               (mevedel-permission-rules-path-protected-p
                 (file-name-as-directory path) target)
                (cl-some
                 (lambda (name)
@@ -559,7 +567,7 @@ When PATTERN-ONLY-P is non-nil, ignore generic fallback rules."
                             (plist-member (cdr rule) :pattern))
                           (cdr entry))
                        (cdr entry))))
-          (eq (mevedel-permission--rules-action
+          (eq (mevedel-permission-rules-action
                rules "Bash" :pattern candidate)
               'deny)))
       buckets))
@@ -573,6 +581,7 @@ recognized top-level segments.  Harvested nested candidates use only pattern
 rules, so a generic fallback cannot defeat a specific allow for the containing
 command.  ANALYSIS is the normalized result for COMMAND when already known."
   (require 'mevedel-bash-analysis)
+  (require 'mevedel-permission-rules)
   (let* ((analysis (or analysis (mevedel-bash-analysis-analyze command)))
          (top-level (cons command (plist-get analysis :segments)))
          (harvested (mevedel-bash-policy--bash-deny-candidates command analysis)))
@@ -587,7 +596,8 @@ Includes the request-scoped skill rule buckets so a skill's
 permission check; without this, skill rules silently failed for
 the Bash tool path because Bash had its own flattened resolver."
   (require 'mevedel-agents)
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-persistence)
+  (require 'mevedel-permission-rules)
   (require 'mevedel-structs)
   (if (plist-member permission-context :buckets)
       (plist-get permission-context :buckets)
@@ -622,14 +632,14 @@ the Bash tool path because Bash had its own flattened resolver."
              (session-rules (when session
                               (mevedel-session-permission-rules session)))
              (persistent (when workspace
-                           (mevedel-permission--load-persistent-rules
+                           (mevedel-permission-persistence-load-rules
                             workspace))))
-        (mevedel-permission--collect-buckets
+        (mevedel-permission-rules-collect-buckets
          invocation-rules request-rules session-rules persistent))))
 
 (defun mevedel-bash-policy--bash-bucket-match (buckets command)
   "Return the first non-deny (ACTION . BUCKET) matching COMMAND in BUCKETS."
-  (mevedel-permission--first-non-nil-action-with-bucket
+  (mevedel-permission-rules-first-action-with-bucket
    buckets "Bash" nil command nil nil))
 
 (defun mevedel-bash-policy--bash-direct-match (buckets command)
@@ -983,7 +993,7 @@ suspicious Bash."
   "Return guardian context for COMMAND and PERMISSION-CONTEXT."
   (require 'cl-lib)
   (require 'mevedel-bash-analysis)
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-rules)
   (require 'mevedel-sandbox)
   (require 'mevedel-structs)
   (let* ((session (if permission-context
@@ -1005,7 +1015,7 @@ suspicious Bash."
           (if sandbox-permissions
               (append
                buckets
-               (mevedel-permission--qualified-buckets
+               (mevedel-permission-rules-qualified-buckets
                 buckets :sandbox-permissions sandbox-permissions))
             buckets))
          (matching-allow-patterns
@@ -1015,7 +1025,7 @@ suspicious Bash."
             append
             (cl-loop
              for rule in
-             (mevedel-permission--find-rules
+             (mevedel-permission-rules-find
               rules "Bash" :pattern command)
              for pattern = (plist-get (cdr rule) :pattern)
              when (and pattern

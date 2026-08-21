@@ -133,7 +133,10 @@ Data model
   mevedel-telemetry.el        append-only lifecycle events and profiler capture
   mevedel-plan.el             lifecycle-neutral plan data and artifacts
   mevedel-plan-handoff.el     durable accepted-plan preparation and kickoff
-  mevedel-permissions.el      9-step permission decision chain
+  mevedel-permission-mode.el  mode normalization, session scoping, lifecycle
+  mevedel-permission-rules.el rule parsing, matching, buckets, resource grants
+  mevedel-permission-persistence.el target-aware authority store codec
+  mevedel-permissions.el      permission preflight and 9-step decision facade
   mevedel-tool-permission.el permission-step orchestration, hooks, prompts, logging
   mevedel-pipeline.el         tool context, standard steps, sequencing, ordering
   mevedel-tool-media.el       tool media storage, scrubbing, provider payloads

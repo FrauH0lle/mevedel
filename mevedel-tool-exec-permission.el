@@ -88,36 +88,40 @@
 (declare-function mevedel-permission-queue--render-head
                   "mevedel-permission-queue" (&optional session))
 
+;; `mevedel-permission-persistence'
+(declare-function mevedel-permission-persistence-load-resource-grants
+                  "mevedel-permission-persistence" (workspace))
+
+;; `mevedel-permission-rules'
+(declare-function mevedel-permission-rules-bucket-decision
+                  "mevedel-permission-rules"
+                  (buckets tool-name path pattern domain name))
+(declare-function mevedel-permission-rules-execution-level-decision
+                  "mevedel-permission-rules"
+                  (buckets tool-name level pattern))
+(declare-function mevedel-permission-rules-find
+                  "mevedel-permission-rules"
+                  (rules tool-name &rest keys))
+(declare-function mevedel-permission-rules-network-decision
+                  "mevedel-permission-rules" (buckets tool-name pattern))
+(declare-function mevedel-permission-rules-qualified-buckets
+                  "mevedel-permission-rules" (buckets qualifier value))
+(declare-function mevedel-permission-rules-resource-granted-p
+                  "mevedel-permission-rules" (path access grants))
+
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--apply-prompt-result
                   "mevedel-permissions"
                   (result tool-name &optional session workspace path
                           &rest keys))
-(declare-function mevedel-permission--bucket-decision
-                  "mevedel-permissions"
-                  (buckets tool-name path pattern domain name))
-(declare-function mevedel-permission--execution-level-decision
-                  "mevedel-permissions"
-                  (buckets tool-name level pattern))
-(declare-function mevedel-permission--find-rules
-                  "mevedel-permissions"
-                  (rules tool-name &rest keys))
 (declare-function mevedel-permission--invocation-context
                   "mevedel-permissions" (&rest keys))
-(declare-function mevedel-permission--load-persistent-resource-grants
-                  "mevedel-permissions" (workspace))
-(declare-function mevedel-permission--network-rule-decision
-                  "mevedel-permissions" (buckets tool-name pattern))
 (declare-function mevedel-permission--normalize-outcome
                   "mevedel-permissions" (outcome))
 (declare-function mevedel-permission--one-shot-prompt-entry
                   "mevedel-permissions" (entry &optional data-buffer))
 (declare-function mevedel-permission--one-shot-prompt-outcome
                   "mevedel-permissions" (outcome))
-(declare-function mevedel-permission--qualified-buckets
-                  "mevedel-permissions" (buckets qualifier value))
-(declare-function mevedel-permission--resource-granted-p
-                  "mevedel-permissions" (path access grants))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
@@ -494,7 +498,7 @@ PERMISSION-CONTEXT supplies the session execution target."
          (grants
           (append (plist-get permission-context :resource-grants)
                   (and session (mevedel-session-resource-grants session)))))
-    (mevedel-permission--resource-granted-p
+    (mevedel-permission-rules-resource-granted-p
      (plist-get grant :path) (plist-get grant :access) grants)))
 
 (defun mevedel-tool-exec-permission--filesystem-resource-rule-action
@@ -502,7 +506,7 @@ PERMISSION-CONTEXT supplies the session execution target."
   "Return the authoritative `deny' or `ask' rule for TOOL-NAME's GRANT."
   (let ((buckets (mevedel-bash-policy-buckets permission-context))
         (path (plist-get grant :path)))
-    (let ((action (mevedel-permission--bucket-decision
+    (let ((action (mevedel-permission-rules-bucket-decision
                    buckets tool-name path nil nil nil)))
       (and (memq action '(deny ask)) action))))
 
@@ -541,6 +545,7 @@ PERMISSION-CONTEXT supplies the session execution target."
 
 (defun mevedel-tool-exec-permission--direct-resource-grants (permission-context)
   "Return direct user resource grants from PERMISSION-CONTEXT."
+  (require 'mevedel-permission-persistence)
   (if (plist-member permission-context :resource-grants)
       (plist-get permission-context :resource-grants)
     (let* ((session (plist-get permission-context :session))
@@ -550,12 +555,13 @@ PERMISSION-CONTEXT supplies the session execution target."
       (append
        (and session (mevedel-session-resource-grants session))
        (and workspace
-            (mevedel-permission--load-persistent-resource-grants
+            (mevedel-permission-persistence-load-resource-grants
              workspace))))))
 
 (defun mevedel-tool-exec-permission--remembered-additional-profile
     (tool-name operation permission-context)
   "Return direct remembered authority for TOOL-NAME and OPERATION."
+  (require 'mevedel-permission-rules)
   (let* ((buckets (mevedel-bash-policy-buckets permission-context))
          (direct-buckets
           (seq-filter
@@ -564,12 +570,12 @@ PERMISSION-CONTEXT supplies the session execution target."
            buckets))
          (network
           (eq 'allow
-              (mevedel-permission--network-rule-decision
+              (mevedel-permission-rules-network-decision
                buckets tool-name operation)))
          candidates)
     (dolist (entry direct-buckets)
       (dolist (rule
-               (mevedel-permission--find-rules
+               (mevedel-permission-rules-find
                 (cdr entry) tool-name :pattern operation))
         (when (eq 'allow (plist-get (cdr rule) :action))
           (setq candidates
@@ -581,7 +587,7 @@ PERMISSION-CONTEXT supplies the session execution target."
        network
        (cl-remove-if-not
         (lambda (candidate)
-          (mevedel-permission--resource-granted-p
+          (mevedel-permission-rules-resource-granted-p
            (plist-get candidate :path)
            (plist-get candidate :access)
            grants))
@@ -619,11 +625,12 @@ remembered direct user authority."
 (defun mevedel-tool-exec-permission--additional-authority-state
     (tool-name request permission-context)
   "Classify TOOL-NAME's additive REQUEST under PERMISSION-CONTEXT."
+  (require 'mevedel-permission-rules)
   (let* ((requested (plist-get request :additional-permissions))
          (network (eq t (plist-get requested :network)))
          (network-action
           (and network
-               (mevedel-permission--network-rule-decision
+               (mevedel-permission-rules-network-decision
                 (mevedel-bash-policy-buckets permission-context)
                 tool-name
                 (plist-get request :operation-pattern))))
@@ -892,22 +899,23 @@ INPUT supplies permission context and delegated trust.  Call CONT once."
   (if (equal tool-name "Bash")
       (mevedel-bash-policy-explicit-deny-p buckets detail)
     (eq 'deny
-        (mevedel-permission--bucket-decision
+        (mevedel-permission-rules-bucket-decision
          buckets tool-name nil detail nil nil))))
 
 (defun mevedel-tool-exec-permission-full-escalation-rule-decision
     (tool-name detail buckets level)
   "Return the full-escalation rule decision for TOOL-NAME and DETAIL.
 BUCKETS supplies ordinary and execution-level rules for LEVEL."
+  (require 'mevedel-permission-rules)
   (if (or (mevedel-tool-exec-permission--full-escalation-explicit-deny-p
            tool-name detail buckets)
           (and (equal tool-name "Bash")
                (mevedel-bash-policy-explicit-deny-p
-                (mevedel-permission--qualified-buckets
+                (mevedel-permission-rules-qualified-buckets
                  buckets :sandbox-permissions level)
                 detail)))
       'deny
-    (mevedel-permission--execution-level-decision
+    (mevedel-permission-rules-execution-level-decision
      buckets tool-name level detail)))
 
 (defun mevedel-tool-exec-permission--full-escalation-reusable-rule-p
@@ -1134,10 +1142,11 @@ PRESERVE-UI describe the requested execution scope."
 Normal model-requested Eval asks unless a rule settles it or the effective
 permission mode is `full-auto'.  Deny and ask rules remain final in every
 mode.  TRUST-LITERAL-P identifies author-written skill body injections."
+  (require 'mevedel-permission-rules)
   (let* ((buckets (mevedel-bash-policy-buckets permission-context))
          (mode (mevedel-bash-policy-effective-permission-mode
                 permission-context))
-         (action (mevedel-permission--bucket-decision
+         (action (mevedel-permission-rules-bucket-decision
                   buckets "Eval" nil expression nil nil)))
     (cond
      ((eq action 'deny) 'deny)

@@ -24,10 +24,12 @@
 (declare-function mevedel-execution-target-native-root "mevedel-execution-target" (cl-x))
 (declare-function mevedel-execution-target-restore-incarnation "mevedel-execution-target" (target incarnation))
 
-;; `mevedel-permissions'
-(declare-function mevedel-permission-deserialize-authority "mevedel-permissions" (rules grants target))
-(declare-function mevedel-permission-serialize-authority "mevedel-permissions" (rules grants target))
+;; `mevedel-permission-mode'
 (defvar mevedel-permission-mode)
+
+;; `mevedel-permission-persistence'
+(declare-function mevedel-permission-deserialize-authority "mevedel-permission-persistence" (rules grants target))
+(declare-function mevedel-permission-serialize-authority "mevedel-permission-persistence" (rules grants target))
 
 ;; `mevedel-sandbox'
 (defvar mevedel-sandbox-mode)
@@ -496,7 +498,8 @@ The resulting plist is round-trippable via
 `mevedel-session-codec-deserialize'."
   (require 'mevedel-agent-persistence)
   (require 'mevedel-execution-target)
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-mode)
+  (require 'mevedel-permission-persistence)
   (let* ((execution-target (mevedel-session-execution-target session))
          (authority-mode
           (mevedel-session-codec-authority-mode session))
@@ -695,7 +698,7 @@ their hygiene filters."
   (mevedel-session-codec-validate-current-sidecar plist)
   (require 'mevedel-agent-persistence)
   (require 'mevedel-execution-target)
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-persistence)
   (let* ((workspace-binding
           (mevedel-session-codec--workspace-from-plist
            (plist-get plist :workspace) workspace))

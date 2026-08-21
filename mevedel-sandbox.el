@@ -15,15 +15,18 @@
   (require 'cl-lib)
   (require 'subr-x))
 
-;; `mevedel-permissions'
-(declare-function mevedel-permission--get-session-scoped
-                  "mevedel-permissions" (sym slot-getter))
-(declare-function mevedel-permission--match-path-pattern
-                  "mevedel-permissions" (path pattern))
-(declare-function mevedel-permission--set-session-scoped
-                  "mevedel-permissions" (sym val slot-setter))
+;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-get-session-scoped
+                  "mevedel-permission-mode" (sym slot-getter))
+(declare-function mevedel-permission-mode-set-session-scoped
+                  "mevedel-permission-mode" (sym val slot-setter))
+
+;; `mevedel-permission-rules'
 (declare-function mevedel-permission-protected-path-policy
-                  "mevedel-permissions" ())
+                  "mevedel-permission-rules" ())
+(declare-function mevedel-permission-rules-match-path-p
+                  "mevedel-permission-rules"
+                  (path pattern &optional target))
 (defvar mevedel-protected-paths)
 
 ;; `mevedel-sandbox-grants'
@@ -63,15 +66,15 @@
 
 (defun mevedel-sandbox-mode--set (sym val)
   "Set session-scoped sandbox SYM to canonical VAL."
-  (require 'mevedel-permissions)
-  (mevedel-permission--set-session-scoped
+  (require 'mevedel-permission-mode)
+  (mevedel-permission-mode-set-session-scoped
    sym (mevedel-sandbox-mode-normalize val)
    #'mevedel-session--set-sandbox-mode))
 
 (defun mevedel-sandbox-mode--get (sym)
   "Return sandbox SYM from the current session or its global default."
-  (require 'mevedel-permissions)
-  (mevedel-permission--get-session-scoped
+  (require 'mevedel-permission-mode)
+  (mevedel-permission-mode-get-session-scoped
    sym #'mevedel-session-sandbox-mode))
 
 (defcustom mevedel-sandbox-mode 'best-effort
@@ -366,7 +369,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
 (defun mevedel-sandbox--protected-candidates (workdir writable-roots)
   "Return concrete protected-path candidates for WORKDIR and WRITABLE-ROOTS."
   (require 'cl-lib)
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-rules)
   (let ((target-prefix (file-remote-p workdir))
         target-home candidates)
     (cl-labels
@@ -405,7 +408,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                          (add-candidate directory 'inaccessible t)
                          nil))
                      nil)))
-                (when (mevedel-permission--match-path-pattern path pattern)
+                (when (mevedel-permission-rules-match-path-p path pattern)
                   (add-candidate path mode directory-p))))))
          (search-literal-directory
           (root name mode)

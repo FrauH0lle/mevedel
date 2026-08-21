@@ -15,6 +15,7 @@
                byte-compile-current-file))
           "helpers"))
 (require 'mevedel-cockpit)
+(require 'mevedel-permission-persistence)
 (require 'mevedel-permissions)
 (require 'mevedel-permissions-list)
 (require 'mevedel-session-persistence)
@@ -91,7 +92,7 @@ Return the row's tabulated id."
   (mevedel-permissions-list-test--with-buffers
     (setf (mevedel-session-permission-rules session)
           '(("Bash" :pattern "npx test*" :action allow)))
-    (mevedel-permission--save-persistent-resource-grant
+    (mevedel-permission-persistence-save-resource-grant
      workspace "/tmp/workspace-external" 'write)
     (let ((items (mevedel-permissions-list--collect context)))
       (should (equal '(session workspace)
@@ -105,7 +106,7 @@ Return the row's tabulated id."
   (mevedel-permissions-list-test--with-buffers
     (setf (mevedel-session-permission-rules session)
           '(("Bash" :pattern "npx test*" :action allow)))
-    (mevedel-permission--save-persistent-resource-grant
+    (mevedel-permission-persistence-save-resource-grant
      workspace "/tmp/workspace-external" 'write)
     (let ((header (substring-no-properties
                    (mevedel-permissions-list--header
@@ -146,10 +147,10 @@ Return the row's tabulated id."
   :doc "revokes one workspace resource without touching workspace rules"
   (mevedel-permissions-list-test--with-buffers
     (let ((network '("Bash" :pattern "npx test*" :network t :action allow)))
-      (mevedel-permission--save-persistent-rule
+      (mevedel-permission-persistence-save-rule
        workspace "Bash" 'allow nil
        :spec-key :pattern :spec-value "npx test*" :network t)
-      (mevedel-permission--save-persistent-resource-grant
+      (mevedel-permission-persistence-save-resource-grant
        workspace "/tmp/workspace-external" 'read)
       (with-current-buffer (mevedel-permissions-list-test--open context)
         (mevedel-permissions-list-test--row "resource")

@@ -129,12 +129,6 @@
 ;; `mevedel-permission-log'
 (declare-function mevedel-permission-log-flush "mevedel-permission-log" (session))
 
-;; `mevedel-permissions'
-(declare-function mevedel-permission-deserialize-authority "mevedel-permissions" (rules grants target))
-(declare-function mevedel-permission-invalidate-target-grants "mevedel-permissions" (session))
-(declare-function mevedel-permission-serialize-authority "mevedel-permissions" (rules grants target))
-(defvar mevedel-permission-mode)
-
 ;; `mevedel-persistence'
 (declare-function mevedel--load-instructions-file "mevedel-persistence" (path &optional base-directory confirm quiet workspace directive-records preserve-directives-p))
 (declare-function mevedel--reset-instructions-preserving-directives "mevedel-persistence" (workspace directives))

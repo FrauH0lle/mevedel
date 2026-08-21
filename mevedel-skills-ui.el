@@ -14,7 +14,6 @@
   (require 'tabulated-list))
 
 (require 'mevedel-models)
-(require 'mevedel-permissions)
 (require 'mevedel-skills-core)
 (require 'mevedel-structs)
 
@@ -109,11 +108,11 @@
 (declare-function mevedel-model-resolve-provider
                   "mevedel-models" (spec &optional noerror))
 
-;; `mevedel-permissions'
+;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-normalize
-                  "mevedel-permissions" (mode))
+                  "mevedel-permission-mode" (mode))
 (declare-function mevedel-permission-mode-transition
-                  "mevedel-permissions" (mode))
+                  "mevedel-permission-mode" (mode))
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-plan-mode'
@@ -328,6 +327,7 @@ ARGS is the raw slash-command argument string.
 Recognized modes: ask, edits, and full-auto.
 
 Routes through the lifecycle-aware permission transition path."
+  (require 'mevedel-permission-mode)
   (if (and args (not (string-blank-p args)))
       (let ((mode (mevedel-permission-mode-normalize args)))
         (mevedel-permission-mode-transition mode)
@@ -365,6 +365,7 @@ Routes through the lifecycle-aware permission transition path."
 
 (defun mevedel-cmd--edits (_args)
   "Toggle edits permission mode for the current session."
+  (require 'mevedel-permission-mode)
   (unless (bound-and-true-p mevedel--session)
     (user-error "No mevedel session in this buffer"))
   (let* ((current (or (mevedel-session-permission-mode mevedel--session)

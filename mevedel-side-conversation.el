@@ -66,15 +66,19 @@
 (declare-function mevedel-permission-queue-abort-all
                   "mevedel-permission-queue" (&optional session))
 
-;; `mevedel-permissions'
-(declare-function mevedel-permission--load-persistent-resource-grants
-                  "mevedel-permissions" (workspace))
-(declare-function mevedel-permission--load-persistent-rules
-                  "mevedel-permissions" (workspace))
-(declare-function mevedel-permission-freeze-context
-                  "mevedel-permissions" (persistent-rules resource-grants))
+;; `mevedel-permission-persistence'
+(declare-function mevedel-permission-persistence-load-resource-grants
+                  "mevedel-permission-persistence" (workspace))
+(declare-function mevedel-permission-persistence-load-rules
+                  "mevedel-permission-persistence" (workspace))
+
+;; `mevedel-permission-rules'
 (defvar mevedel-permission-rules)
 (defvar mevedel-protected-paths)
+
+;; `mevedel-permissions'
+(declare-function mevedel-permission-freeze-context
+                  "mevedel-permissions" (persistent-rules resource-grants))
 
 ;; `mevedel-presets'
 (declare-function mevedel--wrap-terminal-handlers
@@ -665,7 +669,7 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
 Returns a plist of invocation-time copies consumed by
 `mevedel-side-conversation--make-session' and
 `mevedel-side-conversation--init-side-buffer'."
-  (require 'mevedel-permissions)
+  (require 'mevedel-permission-persistence)
   (let ((workspace (or mevedel--workspace
                        (mevedel-session-workspace mevedel--session))))
     (list
@@ -693,10 +697,10 @@ Returns a plist of invocation-time copies consumed by
              mevedel--current-request))))
      :protected-paths (copy-tree mevedel-protected-paths)
      :persistent-rules
-     (copy-tree (mevedel-permission--load-persistent-rules workspace))
+     (copy-tree (mevedel-permission-persistence-load-rules workspace))
      :persistent-grants
      (copy-tree
-      (mevedel-permission--load-persistent-resource-grants workspace)))))
+      (mevedel-permission-persistence-load-resource-grants workspace)))))
 
 (defun mevedel-side-conversation--make-session (frozen)
   "Create and return the transient side session from FROZEN parent state."
