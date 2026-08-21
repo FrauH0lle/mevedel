@@ -435,14 +435,17 @@ are listed, and completed task details are hidden. `TAB` or `RET`
 on the fragment toggles completed task details for inspection. The
 fragment caps itself against the live window height; when rows are
 omitted, it keeps a stable prefix with open rows ahead of completed rows
-and reserves one final count row such as `... 4 completed`. Completed
-tasks are not pruned from the session task list.
+and reserves one final count row such as `... 4 completed`. A subject is
+stored as one non-blank line: whitespace runs collapse to a single space
+and a blank subject is rejected. Completed tasks are not pruned from the
+session task list.
 
 Each owner group can also carry a short status note through `TaskNote`
 or the top-level `note`/`noteOwner` arguments on `TaskCreate` and
-`TaskUpdate`. Notes render under the owner header and are dropped from
-view when that owner has no open tasks, so a completed-only task list
-does not keep the overlay visible.
+`TaskUpdate`. An unknown note owner rejects the whole call; no task is
+created or updated. Notes render under the owner header and are dropped
+from view when that owner has no open tasks, so a completed-only task
+list does not keep the overlay visible.
 
 ## Model tiers
 
