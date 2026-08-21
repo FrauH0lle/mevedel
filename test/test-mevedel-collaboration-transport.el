@@ -347,6 +347,27 @@ relay's room plist."
         (mevedel-collaboration--transport-stop transport)
         (should (memq 'stopped states))))))
 
+(mevedel-deftest mevedel-collaboration--transport-send
+  (:doc "drops a frame over the wire bound instead of sending it")
+  (let* ((sent nil)
+         (transport (list :state 'open :ws 'ws :key (make-string 32 ?k))))
+    (cl-letf (((symbol-function 'websocket-openp) (lambda (_ws) t))
+              ((symbol-function 'websocket-send)
+               (lambda (_ws frame) (push frame sent)))
+              ((symbol-function 'make-websocket-frame)
+               (lambda (&rest args) args)))
+      (should (mevedel-collaboration--transport-send
+               transport 1 (list :t "record" :text "small")))
+      (should (= 1 (length sent)))
+      ;; The relay must refuse an oversized frame by closing the connection
+      ;; it arrived on, and for the host that ends the room for every guest.
+      (should-not
+       (mevedel-collaboration--transport-send
+        transport 1
+        (list :t "record"
+              :text (make-string mevedel-collaboration--max-message-bytes ?x))))
+      (should (= 1 (length sent))))))
+
 (mevedel-deftest mevedel-collaboration--transport-down
   (:doc "reconnects with backoff after the relay drops and stops cleanly")
   (mevedel-test--with-path-capture

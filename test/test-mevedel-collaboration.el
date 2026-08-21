@@ -524,8 +524,16 @@
 ;;
 ;;; Snapshot delivery
 
-(mevedel-deftest mevedel-collaboration--snapshot-chunks
-  (:doc "splits records into chunks each under the wire bound")
+(defun test-mevedel-collaboration--chunk-frame-bytes (chunk)
+  "Return the encoded size of the snapshot frame carrying CHUNK."
+  (string-bytes
+   (mevedel-collaboration--json-string
+    (list :t "snapshot-chunk" :records (vconcat chunk) :final t))))
+
+(mevedel-deftest mevedel-collaboration--snapshot-chunks ()
+  ,test
+  (test)
+  :doc "splits records into chunks each under the wire bound"
   (progn
     (should-not (mevedel-collaboration--snapshot-chunks nil))
     (let* ((record (list :id "assistant-x" :kind "assistant" :revision 0
@@ -535,9 +543,46 @@
       (should (> (length chunks) 1))
       (should (= 12 (apply #'+ (mapcar #'length chunks))))
       (dolist (chunk chunks)
-        (should (<= (string-bytes
-                     (mevedel-collaboration--json-string (vconcat chunk)))
-                    mevedel-collaboration--max-message-bytes))))))
+        (should (<= (test-mevedel-collaboration--chunk-frame-bytes chunk)
+                    mevedel-collaboration--max-message-bytes)))))
+
+  :doc "bounds the frame it sends, separators included"
+  ;; Enough tiny records that the separators alone carry a chunk over the
+  ;; bound: summing record sizes admits about 21,400 of these, whose frame
+  ;; is some 20 KiB larger than the sum says.
+  (let* ((record (list :id "t" :kind "user" :revision 0 :text "hi"))
+         (chunks (mevedel-collaboration--snapshot-chunks
+                  (make-list 30000 record))))
+    (should (= 30000 (apply #'+ (mapcar #'length chunks))))
+    (dolist (chunk chunks)
+      (should (<= (test-mevedel-collaboration--chunk-frame-bytes chunk)
+                  mevedel-collaboration--max-message-bytes))))
+
+  :doc "keeps a worst-case escaped record inside one frame"
+  ;; The raw-text bound reserves room for escaping plus the record's own
+  ;; keys, so a maximal record of six-fold expanding characters must still
+  ;; travel rather than be dropped.
+  (let* ((record (list :id "esc" :kind "assistant" :revision 0
+                       :text (make-string
+                              mevedel-collaboration--max-record-text-bytes
+                              ?\C-a)))
+         (chunks (mevedel-collaboration--snapshot-chunks (list record))))
+    (should (= 1 (apply #'+ (mapcar #'length chunks))))
+    (should (<= (test-mevedel-collaboration--chunk-frame-bytes (car chunks))
+                mevedel-collaboration--max-message-bytes)))
+
+  :doc "drops a record too large to travel in a frame of its own"
+  (let* ((oversized (list :id "huge" :kind "assistant" :revision 0
+                          :text (make-string
+                                 mevedel-collaboration--max-message-bytes
+                                 ?x)))
+         (small (list :id "small" :kind "user" :revision 0 :text "hi"))
+         (chunks (mevedel-collaboration--snapshot-chunks
+                  (list small oversized small))))
+    (should (= 2 (apply #'+ (mapcar #'length chunks))))
+    (dolist (chunk chunks)
+      (should (<= (test-mevedel-collaboration--chunk-frame-bytes chunk)
+                  mevedel-collaboration--max-message-bytes)))))
 
 (mevedel-deftest mevedel-collaboration--send-snapshot
   (:doc "sends a targeted welcome then final-flagged snapshot chunks")
@@ -925,7 +970,36 @@
             (should-not received)
             (mevedel-collaboration--handle-ui-response
              room 1 (list :reqId 41 :answers '("MVP first" 42)))
+            (should-not received)
+            ;; A guest is untrusted, and an answer reaches the model and the
+            ;; transcript exactly as a guest prompt does, so it carries the
+            ;; same byte budget.
+            (mevedel-collaboration--handle-ui-response
+             room 1 (list :reqId 41
+                          :answers
+                          (list (make-string
+                                 (1+ mevedel-collaboration--max-prompt-bytes)
+                                 ?x)
+                                "Yes")))
+            (should-not received)
+            ;; Answers that each clear the budget but together exceed it
+            ;; still arrive in one tool result.
+            (mevedel-collaboration--handle-ui-response
+             room 1 (list :reqId 41
+                          :answers
+                          (list (make-string
+                                 (/ mevedel-collaboration--max-prompt-bytes 2)
+                                 ?x)
+                                (make-string
+                                 mevedel-collaboration--max-prompt-bytes ?y))))
             (should-not received))
+          (setq settled nil)
+          (mevedel-collaboration--handle-ui-response
+           room 1 (list :reqId 41
+                        :feedback (make-string
+                                   (1+ mevedel-collaboration--max-prompt-bytes)
+                                   ?x)))
+          (should-not settled)
           ;; A questionnaire overlay's frame carries the questions.
           (overlay-put overlay 'mevedel--remote
                        (append (overlay-get overlay 'mevedel--remote)

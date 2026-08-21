@@ -37,13 +37,14 @@
                   "mevedel-view-render" (text))
 
 (defconst mevedel-collaboration--protocol-version 2)
-(defconst mevedel-collaboration--max-message-bytes (* 1 1024 1024))
 (defconst mevedel-collaboration--max-record-text-bytes
-  (/ (* 1 1024 1024) 6)
+  (/ (- (* 1 1024 1024) 4096) 6)
   "Raw text bytes one projected record carries.
-The wire bound applies to encoded JSON, where escaping expands one byte at
-most six-fold, so bounding the raw text keeps every record sendable without
-measuring an encoding that would only be rejected later.")
+The wire bound applies to the encoded frame, where escaping expands one byte
+at most six-fold, so bounding the raw text keeps every record sendable
+without measuring an encoding that would only be rejected later.  The
+reserve covers the record's own keys and the frame around it, which the
+six-fold worst case alone does not.")
 (defconst mevedel-collaboration--max-tool-result-bytes 50000)
 (defconst mevedel-collaboration--tool-error-regexp
   "\\(?:Error:\\|blocked by\\|<tool_call_error>\\)"

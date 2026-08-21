@@ -42,8 +42,9 @@ const (
 	closeNoRoom     websocket.StatusCode = 4004
 	closeSecondHost websocket.StatusCode = 4009
 	envelopeHeader                       = 4
-	// The projection bounds one record at 1 MiB of encoded JSON; double it
-	// so sealing overhead can never make a compliant frame undeliverable.
+	// The host bounds one frame at 1 MiB on the wire, sealing and envelope
+	// bytes included, and refuses to send a larger one; double it so a
+	// compliant frame can never be undeliverable.
 	maxFrameBytes = 2 << 20
 	writeTimeout  = 5 * time.Second
 	// Keepalive pings hold reverse proxies (nginx proxy_read_timeout) open

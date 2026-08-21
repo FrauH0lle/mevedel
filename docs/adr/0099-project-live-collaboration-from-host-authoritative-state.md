@@ -72,7 +72,18 @@ token; its bearer may submit prompts into the ordinary pending-input queue
 the running request. What moved the decision: the original "writable
 transport grants Emacs-level authority" dichotomy was about terminal
 mirroring, and the projection architecture dissolved it -- a structured
-guest frame grants exactly the action it describes, not Emacs input. The
+guest frame grants exactly the action it describes, not Emacs input.
+
+Amended: that claim held for the action a frame names but not for its size.
+The prompt frame carried a byte budget while the interaction-answer frame
+carried none, and an answer reaches the same pending-input queue and the
+same model-visible context a prompt does -- so the answer path was a second
+input channel with the prompt path's authority and none of its budget.  What
+moved the decision was tracing where an answer lands: the same per-string
+budget now covers every guest-supplied string, enforced host-side, since the
+viewer is not the only client a bearer can use.  The budget is per string
+rather than per frame because a questionnaire's answer count comes from the
+model's own question list, not from the guest. The
 host-user-on-their-own-phone case makes a session that cannot be steered
 until the user returns to Emacs strictly worse than one they can prompt and
 stop remotely, and the authority boundary is explicit: possession of the
