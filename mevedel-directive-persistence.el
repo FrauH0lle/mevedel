@@ -10,6 +10,8 @@
 (eval-when-compile (require 'cl-lib))
 
 ;; `mevedel-directive'
+(declare-function mevedel-directive-activity-sequences
+                  "mevedel-directive" (directive))
 (declare-function mevedel-directive-recompute-state
                   "mevedel-directive" (directive))
 
@@ -226,6 +228,16 @@
             (mevedel-directive-discussion directive))))
    (mevedel-workspace-directives workspace)))
 
+(defun mevedel--directive-anchor-shape-p (anchor)
+  "Return non-nil when ANCHOR stores a well-formed source region.
+Every durable anchor shape names a file and an ordered region, and
+carries its evidence as a plist."
+  (and (stringp (plist-get anchor :file))
+       (natnump (plist-get anchor :start))
+       (natnump (plist-get anchor :end))
+       (<= (plist-get anchor :start) (plist-get anchor :end))
+       (listp (plist-get anchor :evidence))))
+
 (defun mevedel--deserialize-subdirective (serialized base-directory)
   "Return a nested directive from SERIALIZED relative to BASE-DIRECTORY."
   (let ((id (plist-get serialized :id))
@@ -234,10 +246,7 @@
     (unless (and (stringp id)
                  (stringp request)
                  (eq 'attached (plist-get anchor :state))
-                 (stringp (plist-get anchor :file))
-                 (natnump (plist-get anchor :start))
-                 (natnump (plist-get anchor :end))
-                 (listp (plist-get anchor :evidence))
+                 (mevedel--directive-anchor-shape-p anchor)
                  (listp (plist-get anchor :properties)))
       (user-error "Malformed mevedel directive list"))
     (setq anchor
@@ -257,17 +266,14 @@
   (let ((anchor (copy-tree serialized)))
     (unless
         (pcase (plist-get anchor :state)
-          ('attached t)
+          ('attached (mevedel--directive-anchor-shape-p anchor))
           ('detached
            (and (stringp (plist-get anchor :file))
                 (natnump (plist-get anchor :position))
                 (pcase (plist-get anchor :source-order)
                   (`(,(pred natnump) ,(pred natnump)) t))))
           ((or 'source-missing 'archived)
-           (and (stringp (plist-get anchor :file))
-                (natnump (plist-get anchor :start))
-                (natnump (plist-get anchor :end))
-                (listp (plist-get anchor :evidence))
+           (and (mevedel--directive-anchor-shape-p anchor)
                 (listp (plist-get anchor :properties)))))
       (user-error "Malformed mevedel directive list"))
     (when-let* ((file (plist-get anchor :file)))
@@ -487,6 +493,12 @@
              (when (gethash current-id ids)
                (user-error "Malformed mevedel directive list"))
              (puthash current-id t ids))
+           (let ((sequences (make-hash-table :test #'eql)))
+             (dolist (sequence
+                      (mevedel-directive-activity-sequences directive))
+               (when (gethash sequence sequences)
+                 (user-error "Malformed mevedel directive list"))
+               (puthash sequence t sequences)))
            (mevedel-directive-recompute-state directive)
            directive)))
      serialized)))

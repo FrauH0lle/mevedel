@@ -20,6 +20,9 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+;; `gptel'
+(defvar gptel-default-mode)
+
 (require 'mevedel-instruction-test-support
          (file-name-concat
           (file-name-directory
@@ -113,6 +116,18 @@
                   "")
             (should-not (mevedel-get-directive-patch directive))))
       (kill-buffer buffer))))
+
+(mevedel-deftest mevedel--create-instruction ()
+  ,test
+  (test)
+  :doc "refuses a directive in a buffer that visits no file"
+  ;; The durable record is anchored to a file: without one nothing can
+  ;; reattach it, and archiving or detaching it writes a record that no
+  ;; longer loads.
+  (with-temp-buffer
+    (insert "source text")
+    (should-error (mevedel--create-instruction 'directive)
+                  :type 'user-error)))
 
 (mevedel-deftest mevedel--filter-references
   (:vars

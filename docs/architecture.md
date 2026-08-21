@@ -77,7 +77,9 @@ invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
 - **`mevedel-directive-discussion-turn`**: immutable local question, submitted
   request, authored-request snapshot, terminal answer or error, outcome,
   optional selected-attempt index, session/turn checkpoint, and directive-local
-  settlement sequence.
+  settlement sequence. A settlement sequence identifies one event across
+  all three collections -- planning turns, attempts, and discussion turns
+  -- and the codec rejects a record that repeats one.
 - **`mevedel-session`**: per-chat state: workspace, immutable execution target,
   qualified working directory, tasks, touched-files, permission rules/mode,
   exact resource grants, reminders, persisted per-conversation
@@ -142,7 +144,12 @@ remain presentation-neutral or durable-record-neutral respectively.
 
 Directive anchors are either Attached, with a live source range, or Detached,
 with a zero-width source position, former source order, and the last attached
-anchor evidence. Deleting an entire directive range preserves its durable
+anchor evidence. Archived and Source-missing anchors keep the last attached
+region. Every stored anchor names a file and an ordered region, in every one
+of those states, and the codec rejects one that does not. Creating a directive
+therefore requires a file-visiting buffer: without a file nothing could
+reattach it, and detaching or archiving it would freeze a fileless anchor into
+a record that no longer loads. Deleting an entire directive range preserves its durable
 record and replaces the evaporated range overlay with a compact detached row;
 partial edits use normal overlay resizing. Co-located detached rows are ordered
 by their former source positions. References keep their source-bound

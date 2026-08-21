@@ -164,17 +164,23 @@
       (mevedel-directive-discussion directive)
       (mevedel-directive-planning directive)))
 
+(defun mevedel-directive-activity-sequences (directive)
+  "Return every activity settlement sequence DIRECTIVE stores.
+
+One sequence identifies one settlement event across all three activity
+collections, so they are allocated and validated against the union."
+  (delq nil
+        (append
+         (mapcar #'mevedel-directive-attempt-sequence
+                 (mevedel-directive-attempts directive))
+         (mapcar #'mevedel-directive-discussion-turn-sequence
+                 (mevedel-directive-discussion directive))
+         (mapcar (lambda (turn) (plist-get turn :sequence))
+                 (mevedel-directive-planning directive)))))
+
 (defun mevedel-directive-next-activity-sequence (directive)
   "Return the next monotonic activity sequence for DIRECTIVE."
-  (1+ (apply #'max 0
-             (delq nil
-                   (append
-                    (mapcar #'mevedel-directive-attempt-sequence
-                            (mevedel-directive-attempts directive))
-                    (mapcar #'mevedel-directive-discussion-turn-sequence
-                            (mevedel-directive-discussion directive))
-                    (mapcar (lambda (turn) (plist-get turn :sequence))
-                            (mevedel-directive-planning directive)))))))
+  (1+ (apply #'max 0 (mevedel-directive-activity-sequences directive))))
 
 (defun mevedel-directive-recompute-state (directive)
   "Recompute DIRECTIVE state from its surviving model activity."
