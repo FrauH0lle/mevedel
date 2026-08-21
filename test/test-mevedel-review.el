@@ -29,7 +29,6 @@
 (defvar mevedel--agent-invocation)
 (defvar mevedel-agents--specs)
 (defvar mevedel-bash-dangerous-commands)
-(defvar mevedel-plugin-extra-roots)
 (defvar mevedel-session--read-only-mode)
 
 

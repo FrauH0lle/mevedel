@@ -47,7 +47,6 @@
 (require 'mevedel-view-zone)
 (require 'mevedel-view-history)
 
-(defvar mevedel-plugin-extra-roots)
 (defvar org-mode-hook)
 (declare-function gptel-menu "ext:gptel-transient" ())
 (declare-function org-entry-put "org" (pom property value))

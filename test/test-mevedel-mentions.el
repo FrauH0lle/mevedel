@@ -19,6 +19,7 @@
 (require 'mevedel-transcript)
 (require 'mevedel-tool-fs-read)
 (require 'mevedel-workspace)
+(require 'mevedel-permission-rules)
 
 ;; Declared in gptel; declared here so `let' binds it dynamically in
 ;; tests that do not load gptel.

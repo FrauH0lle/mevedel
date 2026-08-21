@@ -33,7 +33,7 @@ Each round:
 2. Run the most focused relevant validation first.
    - Prefer matching ERT files when the changed module has one.
    - Run `npx @emacs-eask/cli compile` for shared or cross-module Elisp changes.
-   - Use broader `npx @emacs-eask/cli test ert test/test-*` only when the change
+   - Use broader `npx @emacs-eask/cli test ert test/test-*.el` only when the change
      warrants it.
 3. Run a reviewer for code-review findings when there are non-trivial diffs.
 4. Run a verifier for adversarial validation. Treat `VERDICT: FAIL` as blocking.

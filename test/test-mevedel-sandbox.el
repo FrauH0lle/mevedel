@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-permission-rules)
 (require 'mevedel-sandbox)
 (require 'mevedel-structs)
 (require 'helpers

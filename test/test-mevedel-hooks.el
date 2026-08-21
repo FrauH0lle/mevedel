@@ -22,6 +22,7 @@
 (require 'mevedel-telemetry)
 (require 'mevedel-view)
 (require 'mevedel-view-stream)
+(require 'mevedel-workspace)
 (require 'tramp)
 
 (defvar mevedel--agent-invocation)

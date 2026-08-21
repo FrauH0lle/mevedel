@@ -18,7 +18,6 @@
           "mevedel-execution-test-helpers"))
 (require 'mevedel-execution-process)
 
-(defvar mevedel-plugin-extra-roots)
 (defvar org-mode-hook)
 
 (require 'gptel-context)
@@ -28,6 +27,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
+(require 'mevedel-bash-policy)
 
 (declare-function gptel-make-openai "ext:gptel-openai" (name &rest args))
 

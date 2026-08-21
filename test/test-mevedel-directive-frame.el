@@ -19,6 +19,7 @@
 (require 'mevedel-chat)
 (require 'mevedel-directive)
 (require 'mevedel-directive-frame)
+(require 'mevedel-directive-source)
 (require 'mevedel-file-state)
 (require 'mevedel-goal)
 (require 'mevedel-hooks)

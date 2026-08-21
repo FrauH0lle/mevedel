@@ -10,6 +10,7 @@
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agents)
 (require 'mevedel-execution-transcript)
+(require 'mevedel-permission-rules)
 (require 'mevedel-permissions)
 (require 'mevedel-pipeline)
 (require 'mevedel-sandbox)
