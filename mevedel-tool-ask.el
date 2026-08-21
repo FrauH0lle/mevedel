@@ -19,12 +19,13 @@
 (declare-function mevedel--prompt--register-canceller
                   "mevedel-interaction-prompt"
                   (&optional source-buffer overlay))
+(declare-function mevedel--prompt--settle "mevedel-interaction-prompt"
+                  (overlay outcome))
 (declare-function mevedel--prompt-announce
                   "mevedel-interaction-prompt" (overlay))
 (declare-function mevedel--prompt-attribution-line
                   "mevedel-interaction-prompt" (origin))
 (defvar mevedel--prompt-overlays)
-(defvar mevedel-interaction-prompt-settled-hook)
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
@@ -36,8 +37,6 @@
 (declare-function mevedel-view--interaction-target-buffer
                   "mevedel-view-interaction"
                   (&optional data-buffer))
-(declare-function mevedel-view--interaction-unregister
-                  "mevedel-view-interaction" (id))
 
 
 ;;
@@ -289,23 +288,11 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
                       do (aset answers index answer))
              (submit-answers)))
 
-         (settled
-           ()
-           "Announce settlement so other surfaces dismiss this Ask."
-           (when (and overlay
-                      (boundp 'mevedel-interaction-prompt-settled-hook))
-             (run-hook-with-args 'mevedel-interaction-prompt-settled-hook
-                                 overlay)))
-
          (quit-questionnaire
            ()
            "Cancel questionnaire and abort execution."
            (interactive)
-           (settled)
-           (when overlay
-             (when (fboundp 'mevedel-view--interaction-unregister)
-               (mevedel-view--interaction-unregister interaction-id))
-             (delete-overlay overlay))
+           (mevedel--prompt--settle overlay 'aborted)
            (mevedel-abort))  ; Abort entire execution
 
          (ask-keymap
@@ -431,7 +418,7 @@ When CONFIRM is non-nil, bind submit/edit commands for the review screen."
                                (insert (format "Q%d: %s\n" (1+ i) (plist-get q :question)))
                                (insert (format "A%d: %s\n\n" (1+ i) a))))
                            (buffer-string))))
-             (cleanup-and-return result)))
+             (mevedel--prompt--settle overlay result)))
 
          (edit-specific-question
            ()
@@ -496,17 +483,7 @@ When CONFIRM is non-nil, bind submit/edit commands for the review screen."
                    (propertize "\n" 'font-lock-face
                                '(:inherit font-lock-string-face
                                  :underline t :extend t)))))
-             (render-ask-body body (ask-keymap t))))
-
-         (cleanup-and-return
-           (result)
-           "Clean up overlay and return RESULT."
-           (settled)
-           (when overlay
-             (when (fboundp 'mevedel-view--interaction-unregister)
-               (mevedel-view--interaction-unregister interaction-id))
-             (delete-overlay overlay))
-           (funcall callback result)))
+             (render-ask-body body (ask-keymap t)))))
 
       ;; Start the questionnaire - show first question
       (update-overlay 0))))

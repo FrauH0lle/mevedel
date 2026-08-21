@@ -452,17 +452,90 @@
           (should (string-match-p "A2: Yes" result))
           (should settled))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
+  :doc "settles one questionnaire exactly once across surfaces"
+  (let* ((session (mevedel-session--create :name "main"))
+         (data-buffer (generate-new-buffer " *mev-ask-once-data*"))
+         (view-buffer (generate-new-buffer " *mev-ask-once-view*"))
+         (settlements 0)
+         (count-settlement (lambda (_overlay) (cl-incf settlements)))
+         results overlay interaction-id)
+    (unwind-protect
+        (progn
+          (add-hook 'mevedel-interaction-prompt-settled-hook count-settlement)
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session)
+            (mevedel-request-begin session))
+          (mevedel-view--setup view-buffer data-buffer)
+          (with-current-buffer data-buffer
+            (mevedel-tools--ask-user
+             (lambda (value) (push value results))
+             [(:question "Which approach?" :options ["MVP" "Risk"])]))
+          (with-current-buffer view-buffer
+            (setq overlay (car mevedel--prompt-overlays)))
+          (setq interaction-id
+                (overlay-get overlay 'mevedel-view-interaction-id))
+          (should interaction-id)
+          (let ((answer (plist-get (overlay-get overlay 'mevedel--remote)
+                                   :answer)))
+            (funcall answer '("Risk"))
+            ;; Deleting the overlay neither erases its properties nor
+            ;; invalidates the closure a guest already holds.
+            (funcall answer '("MVP")))
+          ;; Request teardown is the production route into the gate; a
+          ;; settled questionnaire must not be answered a second time by it.
+          (with-current-buffer data-buffer
+            (mevedel-request-end))
+          (should (= 1 (length results)))
+          (should (string-match-p "A1: Risk" (car results)))
+          (should (= 1 settlements))
+          (should (overlay-get overlay 'mevedel-settled))
+          (with-current-buffer view-buffer
+            ;; The shared gate owns view unregistration, not Ask.
+            (should-not (gethash interaction-id
+                                 mevedel-view--interaction-overlays))
+            (should-not mevedel--prompt-overlays)))
+      (remove-hook 'mevedel-interaction-prompt-settled-hook count-settlement)
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
-;;
-;;; Registration
+  :doc "reports an aborted questionnaire once when the user quits it"
+  (let* ((session (mevedel-session--create :name "main"))
+         (data-buffer (generate-new-buffer " *mev-ask-quit-data*"))
+         (view-buffer (generate-new-buffer " *mev-ask-quit-view*"))
+         (aborts 0)
+         results overlay interaction-id)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-abort)
+                   (lambda (&optional _buf) (cl-incf aborts))))
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session)
+            (mevedel-request-begin session))
+          (mevedel-view--setup view-buffer data-buffer)
+          (with-current-buffer data-buffer
+            (mevedel-tools--ask-user
+             (lambda (value) (push value results))
+             [(:question "Which approach?" :options ["MVP" "Risk"])]))
+          (with-current-buffer view-buffer
+            (setq overlay (car mevedel--prompt-overlays)))
+          (setq interaction-id
+                (overlay-get overlay 'mevedel-view-interaction-id))
+          (with-current-buffer view-buffer
+            (call-interactively
+             (lookup-key (overlay-get overlay 'keymap) (kbd "q"))))
+          (should (equal '(aborted) results))
+          (should (= 1 aborts))
+          (with-current-buffer view-buffer
+            (should-not (gethash interaction-id
+                                 mevedel-view--interaction-overlays)))
+          ;; A guest closure retained from before the quit cannot answer it.
+          (funcall (plist-get (overlay-get overlay 'mevedel--remote) :answer)
+                   '("MVP"))
+          (should (equal '(aborted) results)))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
-(mevedel-deftest mevedel-tool-ask-register
-  (:before-each (mevedel-tool-clear-registry)
-   :after-each (mevedel-tool-clear-registry))
-  ,test
-  (test)
   :doc "registers the Ask handler and renderer"
   (progn
     (mevedel-tool-ask-register)
