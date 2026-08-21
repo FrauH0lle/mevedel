@@ -139,40 +139,65 @@ uses this to avoid treating restored org marker gaps as assistant prose."
         (or (null text)
             (mevedel-transcript--org-scaffolding-only-text-p text))))))
 
-(defun mevedel-transcript--org-block-depth-before (pos block-re)
+(defun mevedel-transcript--org-block-depth-before
+    (pos block-re &optional start depth)
   "Return nesting depth before POS for org blocks matching BLOCK-RE.
 
 BLOCK-RE should match the suffix after `#+begin_' / `#+end_', for
-example `tool\\|reasoning'."
+example `tool\\|reasoning'.  START and DEPTH resume a pass that already
+counted up to START, so a caller walking a transcript forward pays for
+each region once instead of rescanning from the beginning per turn.
+
+The marker is recognized with leading whitespace allowed, which is the
+rule the span walk below already applies and the spelling gptel's own org
+support accepts."
   (save-excursion
     (save-restriction
       (widen)
-      (let ((depth 0)
-            (regexp (format "^#\\+\\(begin\\|end\\)_\\(?:%s\\)\\b"
+      (let ((depth (or depth 0))
+            (regexp (format "^[ \t]*#\\+\\(begin\\|end\\)_\\(?:%s\\)\\b"
                             block-re)))
-        (goto-char (point-min))
+        (goto-char (or start (point-min)))
         (while (re-search-forward regexp pos t)
           (if (equal (match-string 1) "begin")
               (cl-incf depth)
             (setq depth (max 0 (1- depth)))))
         depth))))
 
-(defun mevedel-transcript--user-prompt-start (pos next prop)
+(defun mevedel-transcript-prompt-scan-state ()
+  "Return carried state for a forward pass of prompt-start scans.
+A caller that walks segments in order threads one of these through
+`mevedel-transcript--user-prompt-start' so the block-depth prefix is
+counted once for the pass rather than once per turn."
+  (list (point-min) 0 0))
+
+(defun mevedel-transcript--user-prompt-start (pos next prop &optional state)
   "Return the real PROP prompt start in [POS, NEXT), or nil.
 
 Nil-`gptel' regions can contain a mixture of org block glue and the
 next user prompt, for example `#+end_tool' / reasoning text /
 `#+end_reasoning' / user text.  Scan line-wise so callers agree on the
-first non-empty line outside gptel-owned org blocks."
+first non-empty line outside gptel-owned org blocks.
+
+STATE is optional carried state from `mevedel-transcript-prompt-scan-state'.
+A caller that walks segments forward threads one through, which counts the
+block-depth prefix once for the pass; without it each call counts from the
+beginning of the buffer."
   (when (null prop)
     (save-excursion
       (save-restriction
         (widen)
-        (let ((tool-depth
-               (mevedel-transcript--org-block-depth-before
-                pos "tool\\|reasoning"))
-              (summary-depth
-               (mevedel-transcript--org-block-depth-before pos "summary")))
+        (let* ((from (if state (nth 0 state) (point-min)))
+               (tool-depth
+                (mevedel-transcript--org-block-depth-before
+                 pos "tool\\|reasoning" from (and state (nth 1 state))))
+               (summary-depth
+                (mevedel-transcript--org-block-depth-before
+                 pos "summary" from (and state (nth 2 state)))))
+          (when state
+            (setf (nth 0 state) pos
+                  (nth 1 state) tool-depth
+                  (nth 2 state) summary-depth))
           (goto-char pos)
           (catch 'found
             (while (< (point) next)

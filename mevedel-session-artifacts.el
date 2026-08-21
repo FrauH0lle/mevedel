@@ -481,6 +481,8 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                 (directive-ranges
                  (mevedel-transcript-buffer-directive-ranges))
                 (turn 0)
+                ;; Ditto: one forward pass over the block-depth prefix.
+                (scan-state (mevedel-transcript-prompt-scan-state))
                 (results nil))
             (dolist (seg (mevedel-transcript-segments
                           content-start
@@ -489,7 +491,8 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                 (when (eq type 'user)
                   (when-let* ((prompt-start
                                (mevedel-transcript--user-prompt-start
-                                (max seg-start content-start) seg-end nil)))
+                                (max seg-start content-start) seg-end nil
+                                scan-state)))
                     (let* ((text (buffer-substring-no-properties
                                   prompt-start seg-end))
                            (directive

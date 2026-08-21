@@ -50,7 +50,9 @@
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript--user-prompt-start
-                  "mevedel-transcript" (pos next prop))
+                  "mevedel-transcript" (pos next prop &optional state))
+(declare-function mevedel-transcript-prompt-scan-state
+                  "mevedel-transcript" ())
 (declare-function mevedel-transcript-project-evidence
                   "mevedel-transcript" (ranges &rest keys))
 (declare-function mevedel-transcript-segments
@@ -389,6 +391,9 @@ Tool-call/result spans between assistant response chunks do not create a
 new turn.  BODY-START defaults to the main-session body start."
   (require 'mevedel-transcript)
   (let ((after-response t)
+        ;; The segments arrive in order, so one carried state counts the
+        ;; block-depth prefix once for the whole pass.
+        (scan-state (mevedel-transcript-prompt-scan-state))
         starts)
     (dolist (seg (mevedel-transcript-segments
                   (or body-start (mevedel-compact-evidence-body-start)) limit))
@@ -401,7 +406,7 @@ new turn.  BODY-START defaults to the main-session body start."
              (when-let* ((prompt-start
                           (and after-response
                                (mevedel-transcript--user-prompt-start
-                                (cadr seg) seg-end nil))))
+                                (cadr seg) seg-end nil scan-state))))
                (push prompt-start starts)
                (setq after-response nil)))))))
     (nreverse starts)))

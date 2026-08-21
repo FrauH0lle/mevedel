@@ -755,7 +755,11 @@ The prompt-index is rebuilt from `mevedel-transcript-segments`
 over the live segment. Only shared `user` spans whose real prompt text
 starts outside gptel-owned org tool/reasoning/summary scaffolding become
 rewind entries, so property drawers, compaction summaries, tool glue, and
-stale structural gaps are not offered as user turns.
+stale structural gaps are not offered as user turns. The rebuild is one
+forward pass: the block-depth prefix each span needs is carried along
+rather than recounted from the start of the buffer per turn, which matters
+because the rebuild runs on every settled save and a live segment is
+bounded only by the compaction threshold.
 
 After gptel restores persisted bounds, session restoration calls
 `mevedel-transcript-normalize-properties`. The transcript module reapplies
