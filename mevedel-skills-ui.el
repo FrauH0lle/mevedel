@@ -233,11 +233,10 @@
   "Completion candidates and annotations for `/skills'.")
 
 (defconst mevedel-skills--goal-command-candidates
-  '(("auto" . " start with guarded automatic approval")
-    ("approval" . " show or set supervised/automatic approval")
-    ("edit" . " edit the objective and pause")
+  '(("budget" . " set or remove the token limit")
+    ("edit" . " replace the objective without resetting the run")
     ("pause" . " pause after the active request")
-    ("resume" . " resume from the saved phase")
+    ("resume" . " resume, queueing any steering first")
     ("clear" . " clear lifecycle state only"))
   "Completion candidates and annotations for `/goal'.")
 
@@ -246,7 +245,7 @@
     ("tokens" . " [command] no args; estimate tokens")
     ("model" . " [command] model name")
     ("compact" . " [command] optional summary guidance")
-    ("goal" . " [command] objective | auto OBJECTIVE | approval [POLICY] | edit | pause | resume | clear")
+    ("goal" . " [command] objective | budget N|none | edit OBJECTIVE | pause | resume [steering] | clear")
     ("plan" . " [command] optional prompt; enter Plan mode")
     ("prompt" . " [command] no args; inspect the effective prompt and tools")
     ("mode" . " [command] ask | edits | full-auto")
@@ -1116,10 +1115,8 @@ index of the argument being completed."
   (let ((arg-index (or arg-index 0)))
     (pcase name
       ("goal"
-       (pcase arg-index
-         (0 (mapcar #'car mevedel-skills--goal-command-candidates))
-         (1 (and (equal args '("approval"))
-                 '("supervised" "automatic")))))
+       (and (zerop arg-index)
+            (mapcar #'car mevedel-skills--goal-command-candidates)))
       ("mode" (and (zerop arg-index)
                    (mapcar #'car mevedel-skills--mode-command-candidates)))
       ("skills" (and (zerop arg-index)
@@ -1165,9 +1162,9 @@ index of the argument being completed."
   (let ((arg-index (or arg-index 0)))
     (pcase name
       ("goal"
-       (pcase arg-index
-         (0 (cdr (assoc candidate mevedel-skills--goal-command-candidates)))
-         (1 (and (equal args '("approval")) " approval policy"))))
+       (and (zerop arg-index)
+            (cdr (assoc candidate
+                        mevedel-skills--goal-command-candidates))))
       ("mode" (and (zerop arg-index)
                    (cdr (assoc candidate
                                mevedel-skills--mode-command-candidates))))

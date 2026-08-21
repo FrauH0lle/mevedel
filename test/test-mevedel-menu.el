@@ -939,6 +939,7 @@
                       "Slash commands that open UI"
                       "Direct slash commands"
                       "/mode MODE, /model MODEL"
+                      "/goal OBJECTIVE, /goal budget N|none"
                       "/ps"
                       "/stop [EXECUTION_ID]"
                       "Modes"
@@ -946,7 +947,8 @@
       (should (string-match-p (regexp-quote needle) text)))
     (dolist (stale '("N Next query"
                      "B Previous query"
-                     "b Previous display"))
+                     "b Previous display"
+                     "approval [supervised|automatic]"))
       (should-not (string-match-p (regexp-quote stale) text)))))
 
 (mevedel-deftest mevedel-menu--mode-plan-description ()

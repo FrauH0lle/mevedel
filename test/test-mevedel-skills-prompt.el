@@ -18,6 +18,7 @@
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-structs)
+(require 'mevedel-tool-patch)
 (require 'mevedel-tool-registry)
 (require 'mevedel-workspace)
 
@@ -37,6 +38,20 @@
 
 ;;
 ;;; Prompt roster and conditional activation
+
+(mevedel-deftest mevedel-skills--listing-budget-chars ()
+  ,test
+  (test)
+  :doc "follows the active model context window"
+  ;; `mevedel-model-context-limit' is the fallback for a model that
+  ;; declares no window, so reading it alone pinned the roster to a
+  ;; constant: 2% of a small local window is a much larger share of it.
+  (let ((model (make-symbol "mevedel-test-model")))
+    (put model :context-window 8)
+    (let ((gptel-model model)
+          (mevedel-model-context-limit 200000)
+          (mevedel-skills-listing-budget 0.02))
+      (should (= 640 (mevedel-skills--listing-budget-chars))))))
 
 (mevedel-deftest mevedel-skills--format-listing ()
   ,test
@@ -304,6 +319,54 @@ this collapses both shapes to the delivered text."
 (mevedel-deftest mevedel-skills--post-tool-activate ()
   ,test
   (test)
+  :doc "activates on every path a file-writing tool declares at once"
+  ;; ApplyPatch is the only tool that writes a file, and it declares its
+  ;; paths together rather than one at a time, so a path-scoped skill
+  ;; never woke up on an edit -- only on the reads around it.
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (root (make-temp-file "mevedel-skills-patch-" t))
+         (ws (mevedel-workspace--create
+              :type 'file :id "p" :root root :name "p"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "elisp" :path-patterns '("*.el") :active-p nil
+                 :model-invocable-p t))
+         (fake-tool (mevedel-tool--create
+                     :name "ApplyPatch"
+                     :handler #'ignore
+                     :get-paths #'mevedel-tool-patch--get-paths)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session) (list skill))
+          (cl-letf (((symbol-function 'mevedel-tool-get)
+                     (lambda (_name &optional _cat) fake-tool)))
+            (with-temp-buffer
+              (setq-local default-directory (file-name-as-directory root))
+              (setq-local mevedel--session session)
+              (setq-local mevedel--current-request
+                          (mevedel-request--create :id "request-1"
+                                                   :session session))
+              (mevedel-skills--post-tool-activate
+               (list :name "ApplyPatch"
+                     :args (list :patch
+                                 (concat "*** Begin Patch\n"
+                                         "*** Add File: lib/foo.el\n"
+                                         "+x\n"
+                                         "*** End Patch"))))
+              (should (mevedel-skill-active-p skill))
+              (should (string-match-p
+                       "foo\\.el"
+                       (plist-get
+                        (cdar (plist-get mevedel-reminders--turn-events
+                                         :items))
+                        :body))))))
+      (delete-directory user-dir t)
+      (delete-directory root t)))
+
   :doc "activates conditional skills using the tool's get-path slot"
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
