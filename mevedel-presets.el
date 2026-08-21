@@ -24,6 +24,7 @@
 ;; `gptel'
 (declare-function gptel--apply-preset "ext:gptel" (preset &optional setter))
 (declare-function gptel--modify-value "ext:gptel" (original new-spec))
+(declare-function gptel-get-preset "ext:gptel" (name))
 (declare-function gptel-make-preset "ext:gptel" (name &rest keys))
 
 ;; `gptel-request'
@@ -179,12 +180,48 @@ Mevedel public and private variables take precedence over gptel variables."
                          (concat "gptel-" name)
                          (concat "gptel--" name)))))))
 
+(defun mevedel-preset--parent-list (metadata)
+  "Return the parents declared by preset METADATA."
+  (ensure-list (plist-get metadata :parents)))
+
+(defun mevedel-preset--parents (name)
+  "Return the presets NAME declares as parents.
+
+A preset may be defined through mevedel or directly through gptel, and
+both declare parents the same way, so a cycle can run through either
+registry."
+  (require 'gptel)
+  (mevedel-preset--parent-list
+   (or (alist-get name mevedel-preset--registry)
+       (gptel-get-preset name))))
+
+(defun mevedel-preset--parent-chain-to (name start &optional visited)
+  "Return the parent chain from START up to NAME, or nil.
+
+The chain is a list of preset names beginning at START and ending at
+NAME.  VISITED is the set of presets the walk has already entered: a
+preset that does not reach NAME once never does, and pruning it keeps
+the walk finite over presets gptel defines directly, which it registers
+without a cycle check of its own."
+  (let ((visited (or visited (make-hash-table :test 'eq))))
+    (cond
+     ((eq start name) (list name))
+     ((gethash start visited) nil)
+     (t
+      (puthash start t visited)
+      (let ((parents (mevedel-preset--parents start))
+            chain)
+        (while (and parents (not chain))
+          (setq chain (mevedel-preset--parent-chain-to
+                       name (pop parents) visited)))
+        (and chain (cons start chain)))))))
+
 (defun mevedel-preset--resolved-metadata (name)
   "Return inherited mevedel metadata for preset NAME."
   (let* ((metadata (or (alist-get name mevedel-preset--registry)
                        (user-error "Unknown mevedel preset: %s" name)))
          (resolved nil))
-    (dolist (parent (ensure-list (plist-get metadata :parents)))
+    (dolist (parent (mevedel-preset--parent-list metadata))
       (let ((parent-meta (mevedel-preset--resolved-metadata parent)))
         (when (plist-member parent-meta :agents)
           (setq resolved (plist-put resolved :agents
@@ -202,7 +239,7 @@ Mevedel public and private variables take precedence over gptel variables."
   (let* ((metadata (or (alist-get name mevedel-preset--registry)
                        (user-error "Unknown mevedel preset: %s" name)))
          specs)
-    (dolist (parent (ensure-list (plist-get metadata :parents)))
+    (dolist (parent (mevedel-preset--parent-list metadata))
       (setq specs (append specs (mevedel-preset--setting-specs parent))))
     (append specs (plist-get metadata :settings))))
 
@@ -245,6 +282,13 @@ Mevedel public and private variables take precedence over gptel variables."
 
 (defun mevedel-preset--define (name keys)
   "Register exact preset NAME from evaluated KEYS."
+  ;; Reject a cycle before anything is registered: gptel walks parents
+  ;; unguarded too, and both walks recurse until the Lisp stack gives out.
+  (dolist (parent (ensure-list (plist-get keys :parents)))
+    (when-let* ((chain (mevedel-preset--parent-chain-to name parent)))
+      (user-error "Preset %s cannot inherit from %s: parent cycle %s"
+                  name parent
+                  (mapconcat #'symbol-name (cons name chain) " -> "))))
   (let ((raw-keys keys)
         (gptel-keys nil)
         (settings nil)

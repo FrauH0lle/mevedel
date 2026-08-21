@@ -644,14 +644,97 @@
     (should (equal '(user settings tools agents deferred extras)
                    (nreverse calls)))))
 
+(mevedel-deftest mevedel-preset--parent-chain-to
+  (:after-each
+   (progn
+     (setq mevedel-preset--registry nil)
+     (dolist (name '(test-preset test-preset-parent test-preset-gptel))
+       (setq gptel--known-presets
+             (assq-delete-all name gptel--known-presets)))))
+  ,test
+  (test)
+  :doc "returns the chain from the start preset up to the named one"
+  (progn
+    (mevedel-preset--define 'test-preset '(:parents nil))
+    (mevedel-preset--define 'test-preset-parent '(:parents (test-preset)))
+    (should (equal '(test-preset-parent test-preset)
+                   (mevedel-preset--parent-chain-to
+                    'test-preset 'test-preset-parent)))
+    (should-not (mevedel-preset--parent-chain-to
+                 'test-preset-parent 'test-preset)))
+
+  :doc "terminates when the presets walked already hold a cycle"
+  ;; gptel registers parents without a cycle check, so the walk can be
+  ;; handed one that mevedel never had the chance to reject.
+  (progn
+    (gptel-make-preset 'test-preset-gptel :parents '(test-preset-parent))
+    (gptel-make-preset 'test-preset-parent :parents '(test-preset-gptel))
+    (should-not (mevedel-preset--parent-chain-to
+                 'test-preset 'test-preset-gptel))))
+
 (mevedel-deftest mevedel-preset--define
   (:after-each
    (progn
      (setq mevedel-preset--registry nil)
-     (setq gptel--known-presets
-           (assq-delete-all 'test-preset gptel--known-presets))))
+     (dolist (name '(test-preset test-preset-parent test-preset-base
+                                 test-preset-left test-preset-right
+                                 test-preset-gptel))
+       (setq gptel--known-presets
+             (assq-delete-all name gptel--known-presets)))))
   ,test
   (test)
+  :doc "rejects a parent cycle at definition time, leaving both registries intact"
+  ;; `:parents' is a documented key, and the built-in `mevedel-implement'
+  ;; already inherits from `mevedel-discuss', so pointing discuss back at
+  ;; implement closes a cycle from one line of user configuration.  Resolution
+  ;; is lazy, so the failure surfaces later as `excessive-lisp-nesting', which
+  ;; names neither preset.
+  (progn
+    (mevedel-preset--define 'test-preset-parent '(:parents nil))
+    (mevedel-preset--define 'test-preset '(:parents (test-preset-parent)))
+    (let ((before (alist-get 'test-preset-parent mevedel-preset--registry))
+          (before-gptel (gptel-get-preset 'test-preset-parent)))
+      (let ((err (should-error
+                  (mevedel-preset--define 'test-preset-parent
+                                          '(:parents (test-preset)))
+                  :type 'user-error)))
+        (should (string-match-p "test-preset-parent" (error-message-string err)))
+        (should (string-match-p "test-preset" (error-message-string err))))
+      ;; A rejected definition must not have half-registered.
+      (should (equal before
+                     (alist-get 'test-preset-parent mevedel-preset--registry)))
+      (should (equal before-gptel (gptel-get-preset 'test-preset-parent)))))
+
+  :doc "rejects a preset naming itself as its own parent"
+  (should-error (mevedel-preset--define 'test-preset '(:parents (test-preset)))
+                :type 'user-error)
+
+  :doc "rejects a cycle closed through a preset only gptel knows"
+  ;; gptel registers a preset without a cycle check of its own, and its
+  ;; own parent walk is equally unguarded, so a parent that never went
+  ;; through mevedel still has to be followed.
+  (progn
+    (mevedel-preset--define 'test-preset '(:parents nil))
+    (gptel-make-preset 'test-preset-gptel :parents '(test-preset))
+    (should-error (mevedel-preset--define
+                   'test-preset '(:parents (test-preset-gptel)))
+                  :type 'user-error))
+
+  :doc "accepts a diamond, which is not a cycle"
+  (progn
+    (mevedel-preset--define 'test-preset-base
+                            '(:test-setting base))
+    (mevedel-preset--define 'test-preset-left '(:parents (test-preset-base)))
+    (mevedel-preset--define 'test-preset-right '(:parents (test-preset-base)))
+    (mevedel-preset--define 'test-preset
+                            '(:parents (test-preset-left test-preset-right)))
+    ;; A shared ancestor reached by two paths is not a cycle: the
+    ;; definition is accepted and resolution still terminates.
+    (should (alist-get 'test-preset mevedel-preset--registry))
+    (should (equal '((mevedel-test-setting . base)
+                     (mevedel-test-setting . base))
+                   (mevedel-preset--setting-specs 'test-preset))))
+
   :doc "warns and ignores an ordinary key without a matching variable"
   (let (warning)
     (cl-letf (((symbol-function 'display-warning)
