@@ -219,18 +219,16 @@
 (mevedel-deftest mevedel-task-prune-dangling-dependencies ()
   ,test
   (test)
-  :doc "removes missing IDs from both task dependency directions"
+  :doc "removes missing IDs from task dependencies"
   (let* ((first
           (mevedel-task--create
-           :id 1 :blocks '(2 3) :blocked-by '(2 3)))
+           :id 1 :blocked-by '(2 3)))
          (third
           (mevedel-task--create
-           :id 3 :blocks '(1 2) :blocked-by '(1 2)))
+           :id 3 :blocked-by '(1 2)))
          (tasks (list first third)))
     (should (eq tasks (mevedel-task-prune-dangling-dependencies tasks)))
-    (should (equal '(3) (mevedel-task-blocks first)))
     (should (equal '(3) (mevedel-task-blocked-by first)))
-    (should (equal '(1) (mevedel-task-blocks third)))
     (should (equal '(1) (mevedel-task-blocked-by third)))))
 
 

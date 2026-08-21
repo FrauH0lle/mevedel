@@ -187,12 +187,12 @@ publication."
           (list (mevedel-task--create
                  :id 1 :subject "Plan refactor" :status 'completed
                  :completed-turn 3
-                 :owner nil :blocks nil :blocked-by nil :metadata nil)
+                 :owner nil :blocked-by nil :metadata nil)
                 (mevedel-task--create
                  :id 2 :subject "Implement permission chain"
                  :description "Replace the deprecated specifier handling"
                  :status 'in-progress
-                 :owner "main" :blocks '(1) :blocked-by nil
+                 :owner "main" :blocked-by nil
                  :metadata '(:priority high))))
     session))
 

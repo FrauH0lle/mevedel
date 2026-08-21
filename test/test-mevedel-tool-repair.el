@@ -306,12 +306,12 @@
           (mevedel-tool--create
            :name "TaskUpdate"
            :args '((id integer :required "ID")
-                   (blocks array :optional "Blocks"
-                           :items (:type integer)))))
+                   (blockedBy array :optional "Blocked by"
+                              :items (:type integer)))))
          (empty-call '(:id "empty" :name "TaskUpdate"
-                       :args (:id 3 :blocks nil)))
+                       :args (:id 3 :blockedBy nil)))
          (null-call '(:id "null" :name "TaskUpdate"
-                      :args (:id 4 :blocks :null)))
+                      :args (:id 4 :blockedBy :null)))
          (info (list :tool-use (list empty-call null-call)))
          (fsm (gptel-make-fsm :info info)))
     (cl-letf (((symbol-function 'mevedel-tool-get)
@@ -321,10 +321,10 @@
            (null-args (plist-get null-call :args))
            (empty-outcome (mevedel-tool-repair-attempt tool empty-args))
            (null-outcome (mevedel-tool-repair-attempt tool null-args)))
-      (should (hash-table-p (plist-get empty-args :blocks)))
-      (should (eq :null (plist-get null-args :blocks)))
-      (should (equal [] (plist-get (plist-get empty-outcome :args) :blocks)))
-      (should-not (plist-member (plist-get null-outcome :args) :blocks))
+      (should (hash-table-p (plist-get empty-args :blockedBy)))
+      (should (eq :null (plist-get null-args :blockedBy)))
+      (should (equal [] (plist-get (plist-get empty-outcome :args) :blockedBy)))
+      (should-not (plist-member (plist-get null-outcome :args) :blockedBy))
       (should (eq 'empty-array-placeholder
                   (plist-get (car (plist-get empty-outcome :repairs)) :rule)))
       (should (eq 'omit-optional-null

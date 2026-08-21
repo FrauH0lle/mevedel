@@ -217,7 +217,7 @@
   (let* ((task (mevedel-task--create
                 :id 7 :subject "S" :description "D"
                 :status 'pending :owner "explorer"
-                :blocks '(8) :blocked-by '(5 6)
+                :blocked-by '(5 6)
                 :completed-turn 12
                 :metadata '(:priority low :tag "x")))
          (plist (mevedel-session-codec--task-to-plist task)))
@@ -226,7 +226,6 @@
     (should (equal "D" (plist-get plist :description)))
     (should (eq 'pending (plist-get plist :status)))
     (should (equal "explorer" (plist-get plist :owner)))
-    (should (equal '(8) (plist-get plist :blocks)))
     (should (equal '(5 6) (plist-get plist :blocked-by)))
     (should (= 12 (plist-get plist :completed-turn)))
     (should (equal '(:priority low :tag "x")
@@ -239,7 +238,7 @@
   :doc "rebuilds a task struct from plist"
   (let* ((plist (list :id 3 :subject "X" :description nil
                       :status 'completed :owner nil
-                      :blocks nil :blocked-by nil
+                      :blocked-by nil
                       :completed-turn 9 :metadata nil))
          (task (mevedel-session-codec--task-from-plist plist)))
     (should (mevedel-task-p task))
@@ -251,7 +250,7 @@
   :doc "normalizes empty owner to nil"
   (let* ((plist (list :id 4 :subject "Y" :description nil
                       :status 'pending :owner ""
-                      :blocks nil :blocked-by nil :metadata nil))
+                      :blocked-by nil :metadata nil))
          (task (mevedel-session-codec--task-from-plist plist)))
     (should (mevedel-task-p task))
     (should (null (mevedel-task-owner task)))))
@@ -856,7 +855,7 @@
            (list
             (mevedel-task--create
              :id 1 :subject "valid nested" :status 'pending
-             :owner valid-owner :blocks '(2) :blocked-by '(3))
+             :owner valid-owner :blocked-by '(3))
             (mevedel-task--create
              :id 2 :subject "opaque" :status 'pending
              :owner worker-id)
@@ -878,8 +877,6 @@
              (equal (list valid-owner)
                     (mapcar #'mevedel-task-owner
                             (mevedel-session-tasks restored))))
-            (should-not
-             (mevedel-task-blocks (car (mevedel-session-tasks restored))))
             (should-not
              (mevedel-task-blocked-by
               (car (mevedel-session-tasks restored))))

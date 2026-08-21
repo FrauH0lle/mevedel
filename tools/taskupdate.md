@@ -24,7 +24,6 @@ depended on it, so downstream tasks become unblocked.
   deliberate user-defined bucket; empty string assigns the task to Main.
   Prefer subjects/descriptions for workstream names and use the actual retained
   path instead of inventing a proxy owner for an agent.
-- `blocks` — optional full replacement of the blocks list
 - `blockedBy` — optional full replacement of the blocked-by list
 - `metadata` — optional replacement of the metadata object
 - `note` — optional visible status note for an owner group; empty

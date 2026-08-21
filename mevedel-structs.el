@@ -392,7 +392,6 @@ owner alongside the newly committed session state."
   description       ; string or nil: detailed notes
   status            ; symbol: pending, in-progress, completed
   owner             ; string or nil: canonical agent path or user bucket
-  blocks            ; list of task IDs this task blocks
   blocked-by        ; list of task IDs blocking this task
   completed-turn    ; integer or nil: turn when status changed to completed
   metadata)         ; plist or nil: free-form extra data
@@ -419,14 +418,10 @@ Canonical non-root paths must name a retained agent in AGENT-REGISTRY."
 
 (defun mevedel-task-prune-dangling-dependencies (tasks)
   "Remove dependency edges from TASKS to task IDs absent from TASKS.
-Return TASKS after updating both `blocks' and `blocked-by' in place."
+Return TASKS after updating `blocked-by' in place."
   (let ((ids (mapcar #'mevedel-task-id tasks)))
     (dolist (task tasks)
-      (setf (mevedel-task-blocks task)
-            (cl-loop for id in (mevedel-task-blocks task)
-                     when (memq id ids)
-                     collect id)
-            (mevedel-task-blocked-by task)
+      (setf (mevedel-task-blocked-by task)
             (cl-loop for id in (mevedel-task-blocked-by task)
                      when (memq id ids)
                      collect id))))
