@@ -193,9 +193,10 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
                 (when (plist-member decision :bucket)
                   (list :bucket (plist-get decision :bucket)))
                 props))
-        ;; The detailed permission log remains side-local because it may
-        ;; contain resource paths and human justifications.  Forward only a
-        ;; fixed value-free subset to a distinct durable audit target.
+        ;; The permission log above keeps the resource paths and human
+        ;; justifications of the decision; only its own file does.  Telemetry
+        ;; drops them, and this forwards a fixed value-free subset to a
+        ;; distinct durable audit target.
         (when (mevedel-telemetry-forwarded-audit-p session)
           (apply #'mevedel-telemetry-record-audit
                  session 'permission-decision

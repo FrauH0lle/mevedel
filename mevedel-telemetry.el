@@ -119,15 +119,68 @@ profile file larger and cost a little more per sample."
 (defconst mevedel-telemetry-schema-version 1
   "Schema version written into every telemetry event.")
 
-(defconst mevedel-telemetry--payload-keys
-  '(:args :command :content :detail :environment :expression :input
-    :justification :output :prompt :response :stderr :stdout :tool-args
-    :tool-result)
-  "Keys that may contain raw user, model, process, or tool payloads.")
+(defconst mevedel-telemetry--allowed-keys
+  '(:abort-plan-approval :active-work-paused :additional-read-count
+    :additional-write-count :admitted :after-confined-launch-failure
+    :agent-id :agent-path :agent-type :aggressive :artifacts-directory
+    :artifacts-local :backend :baseline-marker-position
+    :baseline-request-id :blocked :boundary :bubblewrap-available :bucket
+    :budget-status :buffer-chars-model-visible :buffer-chars-total
+    :buffers :cache-identity :cached-tokens :captured-goal-id
+    :chosen-active-context-tokens :chosen-source :chunk-bytes
+    :command-class :command-hash :context :context-chars
+    :context-deduplicated :continuation :conversation-scope
+    :cumulative-usage :cumulative-usage-tokens :dequeue-goal-id
+    :dirty-content-hash :dirty-file-count :dirty-state-hash :duration-ms
+    :effective-wait-ms :effort :emacs-version :enqueue-goal-id
+    :error-class :estimate :estimate-source :execution-id :exit-code
+    :exit-status :failure-class :failure-stage :fallback-offered
+    :fallback-possible :filesystem :first-byte-seen
+    :fresh-visible-prompt-estimate :full-execution-approval-offered
+    :git-head :goal-id :gptel-agent-commit :gptel-agent-file-hash
+    :gptel-commit :gptel-file-hash :gptel-version :handler-count
+    :handler-id :handler-source :handler-type :hook-event
+    :ineligible-reason :input-p :input-tokens :interaction-id :issue-count
+    :kind :lane :launch-failure-reason-class :launch-failure-stage
+    :message-chars :message-hash :mode :model :model-context-window :modes
+    :native-resource-capture :native-resource-report-bytes :network
+    :new-count :new-segment :old-segment :omitted-count :origin :outcome
+    :output-bytes :output-limit :output-tokens :overlap-count :owner
+    :parent-turn :pending-count :permission-mode :permission-mode-base
+    :permission-mode-effective :preexisting-count :preparation-state
+    :previous-owner :previous-status :proc :profile :profile-bytes-total
+    :profile-file-names :prompt-chars :prompt-function :prompt-hash
+    :protected-path-count :provider-context-model :provider-context-status
+    :provider-context-tokens :provider-context-usage
+    :provider-context-window :provider-status :purpose :queue-depth
+    :queue-depth-before :queue-duration-ms :read-only :reason
+    :reason-class :repair-count :report-bytes-total :report-file-names
+    :request-id :requested-yield-time-ms :resolved-count :resource-access
+    :restored :result-bytes :result-chars :retained :roster-chars :rounds
+    :sandbox :sandbox-mode :sandbox-permissions :scope :settled
+    :skill-count :skill-name :skill-names :skip-gates :span-id
+    :specifier-key :stage :status :step :summary-threshold
+    :system-configuration :target-model :target-origin :target-pressure
+    :target-threshold :termination :test-scope :threshold :threshold-ms
+    :timed-out :timeout-ms :token-source :tokens-after :tokens-before
+    :tokens-used :tool-name :tool-use-id :trigger :tty :turns-run :via
+    :workload :yield-time-ms)
+  "Metadata keys telemetry may persist.
+
+An allowlist, not a denylist: telemetry is durable and the data policy in
+`docs/telemetry.md' permits only lifecycle metadata, sizes, classifications,
+hashes, and bounded identifiers.  A denylist has to name every field that
+could carry a prompt, a command, a path, or a tool result, so any caller
+naming a field something new leaks by default.  Keys outside this list are
+dropped and their names -- names only -- reported in `:dropped-keys', which
+is what a new caller sees instead of silence.
+`mevedel-execution-telemetry--audit-prop-keys' filters the same way for
+forwarded audits.")
 
 (defconst mevedel-telemetry--owned-keys
   '(:schema-version :time :elapsed-ms :sequence :event :session-id :turn
-    :preset :goal-id :goal-cycle :goal-phase :goal-status :profiler-run-id)
+    :preset :goal-id :goal-cycle :goal-phase :goal-status :profiler-run-id
+    :dropped-keys)
   "Envelope keys supplied by `mevedel-telemetry-record'.")
 
 (defun mevedel-telemetry--monotonic-now ()
@@ -231,6 +284,11 @@ by, and every caller derives the same answer."
            save-path "diagnostics"
            mevedel-telemetry--profiler-run-id))))))
 
+(defvar mevedel-telemetry--dropped-keys nil
+  "Names of keys the filter dropped while building the current event.
+Bound by `mevedel-telemetry--envelope' so a nested drop is reported once on
+the event rather than inside the structure it was removed from.")
+
 (defun mevedel-telemetry--truncate-string (value)
   "Return VALUE bounded to `mevedel-telemetry-max-string-length'."
   (if (> (length value) mevedel-telemetry-max-string-length)
@@ -261,30 +319,47 @@ symbol instead of their printed representation."
        (mapcar (lambda (item)
                  (mevedel-telemetry--safe-value item (1+ depth)))
                (mevedel-telemetry--take-bounded (append value nil) 32))))
+     ;; A keyword-headed list is a property list, so its keys are subject to
+     ;; the same rule as the event's own: a nested field is the easy way to
+     ;; smuggle a path or a command past a top-level check.
+     ((and (consp value) (keywordp (car value)))
+      (mevedel-telemetry--safe-props value (1+ depth)))
      ((consp value)
       (mapcar (lambda (item)
                 (mevedel-telemetry--safe-value item (1+ depth)))
               (mevedel-telemetry--take-bounded value 32)))
      (t (intern (format ":%s" (type-of value)))))))
 
-(defun mevedel-telemetry--safe-props (props)
-  "Return telemetry-safe PROPS without owned or payload-bearing keys."
+(defun mevedel-telemetry--safe-props (props &optional depth)
+  "Return PROPS reduced to allowlisted metadata keys at DEPTH.
+Keys outside `mevedel-telemetry--allowed-keys' are dropped; their names are
+collected in `mevedel-telemetry--dropped-keys' so the omission is visible to
+whoever added the caller.  Envelope keys are dropped silently: the envelope
+supplies them itself."
   (let (safe)
     (while props
       (let ((key (pop props))
             (value (pop props)))
-        (when (and (keywordp key)
-                   (not (memq key mevedel-telemetry--payload-keys))
-                   (not (memq key mevedel-telemetry--owned-keys)))
+        (cond
+         ((not (keywordp key)) nil)
+         ((memq key mevedel-telemetry--owned-keys) nil)
+         ((memq key mevedel-telemetry--allowed-keys)
           (setq safe
                 (append safe
-                        (list key (mevedel-telemetry--safe-value value)))))))
+                        (list key
+                              (mevedel-telemetry--safe-value value depth)))))
+         (t (cl-pushnew key mevedel-telemetry--dropped-keys)))))
     safe))
 
 (defun mevedel-telemetry--envelope (session event props)
   "Build the common telemetry envelope for SESSION, EVENT, and PROPS."
   (let* ((goal (ignore-errors (mevedel-session-goal session)))
-         (preset (ignore-errors (mevedel-session-preset-name session))))
+         (preset (ignore-errors (mevedel-session-preset-name session)))
+         (mevedel-telemetry--dropped-keys nil)
+         ;; Filter first: the report of what was dropped is only complete
+         ;; once every nested value has been walked.
+         (safe (mevedel-telemetry--safe-props props))
+         (dropped (nreverse mevedel-telemetry--dropped-keys)))
     (unless (and goal (mevedel-goal-p goal))
       (setq goal nil))
     (append
@@ -313,7 +388,8 @@ symbol instead of their printed representation."
              :goal-status (mevedel-goal-status goal)
              :goal-tokens-used (mevedel-goal-tokens-used goal)
              :goal-turns-run (mevedel-goal-turns-run goal)))
-     (mevedel-telemetry--safe-props props))))
+     safe
+     (when dropped (list :dropped-keys dropped)))))
 
 
 ;;
@@ -439,7 +515,11 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
     (apply #'mevedel-telemetry-record
            session event :stage 'start :span-id span-id props)
     (list :session session :event event :span-id span-id
-          :started-at started-at :props (mevedel-telemetry--safe-props props))))
+          :started-at started-at
+          ;; The span's own copy is filtered for storage; the drops are
+          ;; reported by the event recorded just above, not collected here.
+          :props (let ((mevedel-telemetry--dropped-keys nil))
+                   (mevedel-telemetry--safe-props props)))))
 
 (defun mevedel-telemetry-finish (span &rest props)
   "Finish telemetry SPAN with PROPS and return the emitted event."

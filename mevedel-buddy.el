@@ -571,8 +571,14 @@ is used when it happens to exist and skipped otherwise."
     (mevedel-telemetry-current-session)))
 
 (defun mevedel-buddy--telemetry (event &rest props)
-  "Record EVENT with PROPS when a session is live to receive it."
+  "Record EVENT with PROPS when a session is live to receive it.
+A scope key is a project root or a buffer name, so it is hashed here: the
+events only need to agree on which scope they belong to, and telemetry does
+not carry paths."
   (when-let* ((session (mevedel-buddy--session)))
+    (when-let* ((scope (plist-get props :scope)))
+      (setq props (plist-put (copy-sequence props)
+                             :scope (secure-hash 'sha256 scope))))
     (ignore-errors (apply #'mevedel-telemetry-record session event props))))
 
 (defun mevedel-buddy--changed-buffers (changes)
