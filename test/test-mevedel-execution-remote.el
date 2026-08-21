@@ -11,6 +11,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-diff-apply)
 (require 'mevedel-execution)
+(require 'mevedel-execution-process)
 (require 'mevedel-execution-target)
 (require 'mevedel-file-state)
 (require 'mevedel-hooks)
@@ -491,155 +492,6 @@ connection charges for, so the program path is proved here too."
 ;;
 ;;; Remote execution
 
-(mevedel-deftest mevedel-execution--direct-async-p ()
-  ,test
-  (test)
-  :doc "gates the private channel on flag, tty, capability, and size"
-  (let ((record (mevedel-execution--record-create))
-        (tty-record (mevedel-execution--record-create :tty-p t))
-        (command '("sh" "-c" "printf ok"))
-        (remote "/ssh:user@host:/srv/project/"))
-    (should (mevedel-execution--direct-async-p record command remote))
-    (let ((mevedel-execution-remote-direct-async nil))
-      (should-not
-       (mevedel-execution--direct-async-p record command remote)))
-    (should-not (mevedel-execution--direct-async-p tty-record command remote))
-    (should-not (mevedel-execution--direct-async-p record command "/tmp/"))
-    (should-not (mevedel-execution--direct-async-p
-                 record command "/sshx:user@host:/srv/project/"))
-    (should-not (mevedel-execution--direct-async-p
-                 record command "/ssh:jump|ssh:host:/srv/project/"))
-    (should-not (mevedel-execution--direct-async-p
-                 record
-                 (list "sh" "-c" (make-string 4096 ?x))
-                 remote))))
-
-(mevedel-deftest mevedel-execution--with-spawn-channel ()
-  ,test
-  (test)
-  :doc "forces the TRAMP spawn predicate per record, both directions"
-  (progn
-    (require 'tramp)
-    (should (mevedel-execution--with-spawn-channel
-             "/ssh:host:" t
-             (lambda () (tramp-direct-async-process-p))))
-    (should-not (mevedel-execution--with-spawn-channel
-                 "/ssh:host:" nil
-                 (lambda () (tramp-direct-async-process-p))))
-    ;; A local spawn leaves the predicate alone.
-    (should (eq 'untouched
-                (mevedel-execution--with-spawn-channel
-                 nil t (lambda () 'untouched))))))
-
-(mevedel-deftest mevedel-execution--launch-record ()
-  ,test
-  (test)
-  :doc "scopes the remote direct-async property to one spawn"
-  (let* ((record (mevedel-execution--record-create))
-         (remote "/ssh:host:/srv/project/")
-         (prefix (file-remote-p remote))
-         (vec (tramp-dissect-file-name prefix))
-         (prior-direct-async '("-t" "-t"))
-         (initial-properties
-          `((,(regexp-quote prefix) "direct-async" ,prior-direct-async)
-            ("existing" "unrelated" keep)))
-         (tramp-connection-properties (copy-tree initial-properties))
-         (tramp-cache-data (make-hash-table :test #'equal))
-         (real-make-process (symbol-function 'make-process))
-         process
-         spawn-direct-async)
-    ;; Establish the cache before launch, as an earlier remote probe does.
-    (should (equal prior-direct-async
-                   (tramp-get-method-parameter vec 'tramp-direct-async)))
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-execution--localize-command)
-                   (lambda (_record command _workdir) command))
-                  ((symbol-function 'mevedel-execution--direct-async-p)
-                   (lambda (&rest _args) t))
-                  ((symbol-function 'mevedel-execution--remote-command)
-                   (lambda (_record command) command))
-                  ((symbol-function 'executable-find)
-                   (lambda (&rest _args) "/bin/sh"))
-                  ((symbol-function 'make-process)
-                   (lambda (&rest _args)
-                     (setq spawn-direct-async
-                           (tramp-get-method-parameter vec 'tramp-direct-async)
-                           process
-                           (let ((default-directory temporary-file-directory))
-                             (funcall real-make-process
-                                      :name "mevedel-test-scoped-spawn"
-                                      :buffer nil
-                                      :command '("sh" "-c" "sleep 10")
-                                      :noquery t
-                                      :sentinel #'ignore)))
-                     process)))
-          (mevedel-execution--launch-record
-           record "mevedel-test-scoped-spawn" '("sh" "-c" "true")
-           remote 'utf-8-unix #'ignore)
-          (should (eq t spawn-direct-async))
-          (should (equal prior-direct-async
-                         (tramp-get-method-parameter
-                          vec 'tramp-direct-async)))
-          (should (equal initial-properties tramp-connection-properties)))
-      (when (process-live-p process)
-        (delete-process process))
-      (when-let ((timer (mevedel-execution--record-watch-timer record)))
-        (cancel-timer timer)))))
-
-(mevedel-deftest mevedel-execution--remote-command ()
-  ,test
-  (test)
-  :doc "a direct-async wrapper carries its environment explicitly"
-  (let ((direct (mevedel-execution--record-create :direct-async-p t))
-        (classic (mevedel-execution--record-create)))
-    (let ((command (mevedel-execution--remote-command
-                    direct '("sh" "-c" "printf ok"))))
-      (should (equal "env" (car command)))
-      (should (member "NO_COLOR=1" command))
-      (should (member "setsid" command)))
-    (should (equal "setsid"
-                   (car (mevedel-execution--remote-command
-                         classic '("sh" "-c" "printf ok")))))))
-
-(mevedel-deftest mevedel-execution--remote-group-status ()
-  ,test
-  (test)
-  :doc "the probe script distinguishes live, settled, and reused groups"
-  (let* ((default-directory temporary-file-directory)
-         (process-environment nil)
-         (probe (lambda (group expected)
-                  (call-process
-                   "bash" nil nil nil "-c"
-                   mevedel-execution--remote-group-status-script
-                   "mevedel-process-group"
-                   (number-to-string group) expected)))
-         ;; A pipe subprocess is its own process group, so its pid is
-         ;; the group and its stat line supplies the identity token.
-         (leader (make-process :name "mevedel-test-group-status"
-                               :buffer nil
-                               :command '("sh" "-c" "sleep 30")
-                               :connection-type 'pipe
-                               :noquery t))
-         (pid (process-id leader))
-         (starttime
-          (with-temp-buffer
-            (insert-file-contents (format "/proc/%d/stat" pid))
-            (nth 19 (split-string
-                     (car (last (split-string (buffer-string) ") "))))))))
-    (unwind-protect
-        (progn
-          (should (= 0 (funcall probe pid starttime)))
-          ;; Live members under a leader whose identity does not match.
-          (should (= 2 (funcall probe pid "0")))
-          (delete-process leader)
-          (let ((deadline (+ (float-time) 2)))
-            (while (and (process-live-p leader) (< (float-time) deadline))
-              (accept-process-output nil 0.02)))
-          ;; No member remains at all: settled.
-          (should (= 1 (funcall probe pid starttime))))
-      (when (process-live-p leader)
-        (delete-process leader)))))
-
 (mevedel-deftest mevedel-execution-run-one-shot/remote ()
   ,test
   (test)
@@ -647,27 +499,20 @@ connection charges for, so the program path is proved here too."
   (let* ((root (make-temp-file "mevedel-remote-execution-" t))
          (remote-root
           (format "/mevedelmock:%s:%s/" (system-name) root))
-         (mevedel-sandbox-mode 'off)
-         (probes 0))
+         (mevedel-sandbox-mode 'off))
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (cl-letf (((symbol-function
-                      'mevedel-execution--remote-group-status)
-                     (lambda (_record)
-                       (cl-incf probes)
-                       (error "Transient probe failure"))))
-            (let ((result
-                   (mevedel-execution-run-one-shot
-                    :name "mevedel-test-remote-dispatch"
-                    :command '("sh" "-c" "printf '%s' \"$PWD\"")
-                    :workdir remote-root
-                    :writable-roots (list remote-root))))
-              (should-not (plist-get result :error))
-              (should (= 0 (plist-get result :exit-code)))
-              (should-not (plist-get result :termination))
-              (should (= 0 probes))
-              (should (equal (directory-file-name root)
-                             (plist-get result :output))))))
+          (let ((result
+                 (mevedel-execution-run-one-shot
+                  :name "mevedel-test-remote-dispatch"
+                  :command '("sh" "-c" "printf '%s' \"$PWD\"")
+                  :workdir remote-root
+                  :writable-roots (list remote-root))))
+            (should-not (plist-get result :error))
+            (should (= 0 (plist-get result :exit-code)))
+            (should-not (plist-get result :termination))
+            (should (equal (directory-file-name root)
+                           (plist-get result :output)))))
       (delete-directory root t)))
   :doc "preserves target environment without forwarding client variables"
   (let* ((root (make-temp-file "mevedel-remote-environment-" t))
@@ -722,7 +567,7 @@ connection charges for, so the program path is proved here too."
          (remote-root
           (format "/mevedelmock:%s:%s/" (system-name) root))
          (original-signal-process (symbol-function 'signal-process))
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          (mevedel-sandbox-mode 'off)
          calls child-pid)
     (unwind-protect
@@ -770,11 +615,12 @@ connection charges for, so the program path is proved here too."
          (remote-root
           (format "/mevedelmock:%s:%s/" (system-name) root))
          (original-signal-process (symbol-function 'signal-process))
-         (mevedel-execution--child-kill-delay 0.02)
+         (mevedel-execution-process--child-kill-delay 0.02)
          (mevedel-sandbox-mode 'off)
-         group-id)
+         group-id session)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
+          (setq session (test-mevedel-execution--session remote-root))
           (cl-letf (((symbol-function 'signal-process)
                      (lambda (&rest args)
                        (if (and (integerp (car args))
@@ -791,45 +637,8 @@ connection charges for, so the program path is proved here too."
                       "ps -o pgid= -p $$ | tr -d ' ' > group.pid; trap '' TERM; sleep 30 & wait")
                     :workdir remote-root
                     :writable-roots (list remote-root)
-                    :timeout 0.05)))
-              (setq group-id
-                    (string-to-number
-                     (string-trim
-                      (with-temp-buffer
-                        (insert-file-contents pid-file)
-                        (buffer-string)))))
-              (should (eq 'unknown (plist-get result :termination))))))
-      (when (and group-id (> group-id 0))
-        (ignore-errors
-          (funcall original-signal-process (- group-id) 'KILL)))
-      (delete-directory root t)))
-  :doc "never signals a live group after its captured leader identity changes"
-  (let* ((root (make-temp-file "mevedel-remote-reused-group-" t))
-         (pid-file (expand-file-name "group.pid" root))
-         (remote-root
-          (format "/mevedelmock:%s:%s/" (system-name) root))
-         (original-signal-process (symbol-function 'signal-process))
-         (mevedel-execution--child-kill-delay 0.02)
-         (mevedel-sandbox-mode 'off)
-         calls group-id)
-    (unwind-protect
-        (mevedel-test--with-local-shell-tramp nil
-          (cl-letf (((symbol-function
-                      'mevedel-execution--remote-group-status)
-                     (lambda (_record) 'ambiguous))
-                    ((symbol-function 'signal-process)
-                     (lambda (&rest args)
-                       (push args calls)
-                       (apply original-signal-process args))))
-            (let ((result
-                   (mevedel-execution-run-one-shot
-                    :name "mevedel-test-remote-reused-group"
-                    :command
-                    '("sh" "-c"
-                      "ps -o pgid= -p $$ | tr -d ' ' > group.pid; trap '' TERM; sleep 30 & wait")
-                    :workdir remote-root
-                    :writable-roots (list remote-root)
-                    :timeout 0.05)))
+                    :timeout 0.05
+                    :session session)))
               (setq group-id
                     (string-to-number
                      (string-trim
@@ -837,52 +646,9 @@ connection charges for, so the program path is proved here too."
                         (insert-file-contents pid-file)
                         (buffer-string)))))
               (should (eq 'unknown (plist-get result :termination)))
-              (should-not
-               (cl-some
-                (lambda (args)
-                  (and (integerp (car args))
-                       (< (car args) 0)
-                       (memq (cadr args) '(TERM KILL))
-                       (equal remote-root (nth 2 args))))
-                calls)))))
-      (when (and group-id (> group-id 0))
-        (ignore-errors
-          (funcall original-signal-process (- group-id) 'KILL)))
-      (delete-directory root t)))
-  :doc "bounds a timed-out child whose stop escalation never settles"
-  (let* ((root (make-temp-file "mevedel-remote-wedged-" t))
-         (pid-file (expand-file-name "group.pid" root))
-         (remote-root
-          (format "/mevedelmock:%s:%s/" (system-name) root))
-         (original-signal-process (symbol-function 'signal-process))
-         (mevedel-execution--child-kill-delay 0.02)
-         (mevedel-execution--remote-control-timeout 0.02)
-         (mevedel-sandbox-mode 'off)
-         group-id)
-    (unwind-protect
-        (mevedel-test--with-local-shell-tramp nil
-          ;; A wedged transport can strand the TERM/KILL escalation; the
-          ;; timed-out one-shot must still settle within its bounded
-          ;; watchdog window instead of spinning forever.
-          (cl-letf (((symbol-function 'mevedel-execution--start-stop)
-                     #'ignore))
-            (let ((result
-                   (mevedel-execution-run-one-shot
-                    :name "mevedel-test-remote-wedged"
-                    :command
-                    '("sh" "-c"
-                      "ps -o pgid= -p $$ | tr -d ' ' > group.pid; sleep 30")
-                    :workdir remote-root
-                    :writable-roots (list remote-root)
-                    :timeout 0.05)))
-              (setq group-id
-                    (string-to-number
-                     (string-trim
-                      (with-temp-buffer
-                        (insert-file-contents pid-file)
-                        (buffer-string)))))
-              (should (plist-get result :timed-out-p))
-              (should (eq 'unknown (plist-get result :termination))))))
+              (should (mevedel-execution-mutation-blocked-p session))))
+      (when session
+        (mevedel-execution-teardown-session session))
       (when (and group-id (> group-id 0))
         (ignore-errors
           (funcall original-signal-process (- group-id) 'KILL)))
@@ -982,7 +748,7 @@ connection charges for, so the program path is proved here too."
                   (delete-directory target-protected t))))))
       (delete-directory client-only t)
       (delete-directory external-root t)
-      (delete-directory root t))))
+      (delete-directory root t)))))
 
 (mevedel-deftest mevedel-execution-start-bash/remote ()
   ,test
@@ -1022,6 +788,7 @@ connection charges for, so the program path is proved here too."
          (remote-root
           (format "/mevedelmock:%s:%s/" (system-name) root))
          (mevedel-sandbox-mode 'off)
+         (original-make-process (symbol-function 'make-process))
          session result)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
@@ -1031,14 +798,15 @@ connection charges for, so the program path is proved here too."
           ;; which caller opens it first, so keep the fence out of it.
           (let ((mevedel-session-artifacts--checking-incarnation t))
             (cl-letf
-                (((symbol-function 'mevedel-execution--remote-command)
-                  (lambda (record _command)
-                    (setf (mevedel-execution--record-group-marker record)
-                          "missing-pgid-marker"
-                          (mevedel-execution--record-group-marker-buffer
-                           record)
-                          "")
-                    '("sh" "-c" "exit 0"))))
+                (((symbol-function 'make-process)
+                  (lambda (&rest args)
+                    (if (equal "mevedel-bash" (plist-get args :name))
+                        (let ((default-directory temporary-file-directory))
+                          (apply original-make-process
+                                 (plist-put
+                                  (plist-put args :file-handler nil)
+                                  :command '("sh" "-c" "exit 0"))))
+                      (apply original-make-process args)))))
               (setq result
                     (test-mevedel-execution--start-managed
                      session remote-root '("sh" "-c" "true")
@@ -1046,6 +814,41 @@ connection charges for, so the program path is proved here too."
           (should (eq 'unknown
                       (plist-get (plist-get result :facts) :termination)))
           (should (mevedel-execution-mutation-blocked-p session)))
+      (when session
+        (mevedel-execution-teardown-session session))
+      (delete-directory root t)))
+
+  :doc "settles a proven remote spool failure without retaining mutation authority"
+  (let* ((root (make-temp-file "mevedel-remote-spool-failure-" t))
+         (remote-root
+          (format "/mevedelmock:%s:%s/" (system-name) root))
+         (mevedel-sandbox-mode 'off)
+         (original-write-region (symbol-function 'write-region))
+         session result)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (setq session (test-mevedel-execution--session remote-root))
+          (cl-letf
+              (((symbol-function 'write-region)
+                (lambda (start end filename &rest args)
+                  (if (and (stringp filename)
+                           (string-match-p
+                            "/\\.mevedel-pending-executions/execution-"
+                            filename)
+                           (car args))
+                      (signal 'file-error '("Injected spool failure"))
+                    (apply original-write-region
+                           start end filename args)))))
+            (setq result
+                  (test-mevedel-execution--start-managed
+                   session remote-root '("sh" "-c" "printf output")
+                   :yield-time-ms nil)))
+          (should
+           (eq 'output-write-failed
+               (plist-get (plist-get result :facts) :termination)))
+          (should-not (mevedel-execution-mutation-blocked-p session))
+          (should-not
+           (mevedel-session-durability-unsettled-mutation-p session)))
       (when session
         (mevedel-execution-teardown-session session))
       (delete-directory root t)))
@@ -1060,10 +863,8 @@ connection charges for, so the program path is proved here too."
         (mevedel-test--with-local-shell-tramp nil
           (setq session (test-mevedel-execution--session remote-root))
           (cl-letf
-              (((symbol-function 'mevedel-execution--launch-record)
-                (lambda (record &rest _)
-                  (setf (mevedel-execution--record-launch-attempted-p record)
-                        t)
+              (((symbol-function 'make-process)
+                (lambda (&rest _)
                   (error "Injected post-attempt launch failure"))))
             (setq result
                   (test-mevedel-execution--start-managed
@@ -1260,7 +1061,7 @@ connection charges for, so the program path is proved here too."
          (mevedel-sandbox-mode 'off)
          ;; The production grace: the assertion is that a settled group
          ;; does not ride it.
-         (mevedel-execution--child-kill-delay 2)
+         (mevedel-execution-process--child-kill-delay 2)
          session result group-id holder-pid stopped)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil

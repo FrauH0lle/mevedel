@@ -123,7 +123,8 @@ Data model
   mevedel-bash-policy.el      argument-aware read-only command policies
   mevedel-transport.el        remote reentrancy detection and idle-transport deferral
   mevedel-execution-target.el immutable local/TRAMP target, path domains, readiness
-  mevedel-execution.el        bounded child-process lifecycle and session state
+  mevedel-execution.el        managed execution registry, admission, and facade
+  mevedel-execution-process.el opaque child, process-group, and spool lifecycle
   mevedel-execution-transcript.el durable execution render data and archive reconciliation
   mevedel-execution-scheduler.el fair session-scoped Bash admission
   mevedel-execution-telemetry.el safe execution facts and profiler adaptation

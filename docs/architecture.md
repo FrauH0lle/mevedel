@@ -94,11 +94,13 @@ invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
   may point `audit-session` at its durable parent for redacted audit events and
   shared target mutation authority; its runtime queues and unsanitized logs
   remain side-owned. The transient
-  `execution-state` slot is opaque outside
-  `mevedel-execution.el`; process records, timers, spools, and process groups
-  never enter the general session model or persisted sidecar. Execution
-  telemetry receives only immutable identities and privacy-safe fact plists
-  through `mevedel-execution-telemetry.el`. Portable lease
+  `execution-state` slot is opaque outside `mevedel-execution.el`;
+  `mevedel-execution-process.el` keeps child processes, timers, spools, and
+  process groups behind an opaque child value, so they never enter the general
+  session model or persisted sidecar. `mevedel-execution-telemetry.el` owns an
+  opaque per-execution context containing live ownership provenance, mutable
+  summary cells, and privacy-safe event facts, but no live process record.
+  Portable lease
   generations persist only the boolean unsettled-mutation safety latch needed
   when those transient records disappear.
 - **`mevedel-goal`**: identity, objective, lifecycle status and reason,
@@ -252,16 +254,18 @@ client-specific TRAMP spellings reopen the same workspace.  SSH-family
 without `HOME` is blocked during readiness rather than failing later path
 permission checks.
 
-`mevedel-execution.el` is the operating-system process boundary. It owns
-process creation, process-group signaling, timeout cleanup, Bubblewrap launch
-and fallback, stable child environments, bounded disk spooling, and opaque
-per-session process state. `mevedel-execution-scheduler.el` admits managed Bash
-through a fair session-scoped readers/writer lane. Bash and batch Eval remain
-tool adapters in `mevedel-tool-exec.el`; native filesystem tools use the
-execution module's confined one-shot helper interface without entering the
-Bash scheduler. The Bash adapter also captures its analyzed exit-outcome
-resolver at spawn, so later observations derive the same canonical facts
-without moving command semantics into the process module.
+`mevedel-execution.el` owns managed admission, the per-session registry,
+observations, delivery, and the public execution facade. Its opaque child
+values belong to `mevedel-execution-process.el`, which owns process creation,
+stable child environments, process-group signaling, timeout cleanup, and
+bounded disk spooling. Bubblewrap admission and fallback remain with the
+managed facade. `mevedel-execution-scheduler.el` admits managed Bash through a
+fair session-scoped readers/writer lane. Bash and batch Eval remain tool
+adapters in `mevedel-tool-exec.el`; native filesystem tools use the execution
+facade's confined one-shot helper without entering the Bash scheduler. The
+Bash adapter also captures its analyzed exit-outcome resolver at spawn, so
+later observations derive the same canonical facts without moving command
+semantics into the process owner.
 
 `mevedel-execution-telemetry.el` owns privacy-safe execution event projection,
 sandbox attempt summaries, Eask workload recognition, and optional GNU time

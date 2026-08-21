@@ -2,9 +2,10 @@
 
 ;;; Commentary:
 
-;; Owns privacy-safe execution telemetry, sandbox summaries, Eask profiler
-;; recognition, and optional GNU time resource capture.  Callers pass immutable
-;; identities and fact plists; this module never observes live process records.
+;; Owns the opaque per-execution telemetry context, privacy-safe event
+;; projection, sandbox summaries, Eask profiler recognition, and optional GNU
+;; time resource capture.  The context retains live ownership provenance and
+;; mutable aggregation cells, but never observes live process records.
 
 ;;; Code:
 
@@ -29,11 +30,17 @@
                   "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-finish
+                  "mevedel-telemetry" (span &rest props))
 (declare-function mevedel-telemetry-forwarded-audit-p
                   "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-profiler-directory
                   "mevedel-telemetry" (session))
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-record-audit
+                  "mevedel-telemetry" (session event &rest props))
+(declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
 
 (defconst mevedel-execution-telemetry--audit-prop-keys
@@ -58,6 +65,68 @@
 
 (defvar mevedel-execution-telemetry-summary-cell nil
   "Dynamically bound cell collecting child confinement for one tool call.")
+
+(cl-defstruct (mevedel-execution-telemetry--context
+               (:constructor mevedel-execution-telemetry--context-create))
+  "Private telemetry state for one execution."
+  agent-summary-cell
+  execution-id
+  owner
+  pipeline-summary-cell
+  resource-report-path
+  sandbox-summary-cell
+  session
+  span
+  tool-use-id)
+
+(cl-defun mevedel-execution-telemetry-context-create
+    (&key session execution-id tool-use-id owner invocation
+          pipeline-summary-cell span-event span-properties)
+  "Create an opaque telemetry context for one execution."
+  (when invocation (require 'mevedel-agents))
+  (when span-event (require 'mevedel-telemetry))
+  (mevedel-execution-telemetry--context-create
+   :agent-summary-cell
+   (and invocation
+        (mevedel-agent-invocation-p invocation)
+        (mevedel-agent-invocation-sandbox-summary-cell invocation))
+   :execution-id execution-id
+   :owner owner
+   :pipeline-summary-cell pipeline-summary-cell
+   :sandbox-summary-cell (list nil)
+   :session session
+   :span (and span-event session
+              (apply #'mevedel-telemetry-start
+                     session span-event span-properties))
+   :tool-use-id tool-use-id))
+
+(defun mevedel-execution-telemetry-context-summary (context)
+  "Return a copy of CONTEXT's sandbox summary."
+  (copy-tree
+   (car (mevedel-execution-telemetry--context-sandbox-summary-cell context))))
+
+(defun mevedel-execution-telemetry-context-properties (context)
+  "Return profiler properties currently available from CONTEXT."
+  (when-let* ((report
+               (mevedel-execution-telemetry--context-resource-report-path
+                context)))
+    (append
+     (list :native-resource-capture t
+           :resource-report-relative-path
+           (file-name-concat
+            "diagnostics"
+            (file-name-nondirectory
+             (directory-file-name (file-name-directory report)))
+            (file-name-nondirectory report)))
+     (when (file-readable-p report)
+       (list :native-resource-report-bytes
+             (file-attribute-size (file-attributes report)))))))
+
+(defun mevedel-execution-telemetry-finish (context &rest properties)
+  "Finish CONTEXT's optional telemetry span with PROPERTIES."
+  (when-let* ((span (mevedel-execution-telemetry--context-span context)))
+    (require 'mevedel-telemetry)
+    (apply #'mevedel-telemetry-finish span properties)))
 
 (defun mevedel-execution-telemetry-safe-facts (facts)
   "Return the non-sensitive confinement subset of sandbox FACTS."
@@ -130,10 +199,17 @@ requested command started, and REFUSED-P records a policy refusal."
         (or (plist-get facts :additional-filesystem-write) 0)))))
 
 (defun mevedel-execution-telemetry-record-sandbox-attempt
-    (facts started-p refused-p &rest cells)
-  "Record one logical child attempt in each unique mutable cell in CELLS."
+    (context facts started-p refused-p)
+  "Record one logical child attempt from FACTS in CONTEXT."
   (let (seen)
-    (dolist (cell cells)
+    (dolist (cell
+             (list
+              (mevedel-execution-telemetry--context-sandbox-summary-cell
+               context)
+              (mevedel-execution-telemetry--context-pipeline-summary-cell
+               context)
+              (mevedel-execution-telemetry--context-agent-summary-cell
+               context)))
       (when (and (consp cell) (not (memq cell seen)))
         (push cell seen)
         (setcar cell
@@ -153,13 +229,6 @@ requested command started, and REFUSED-P records a policy refusal."
                  (not (eq (plist-get summary :network) 'isolated))
                  (eq (plist-get summary :proc) 'host))
            'warning))))
-
-(defun mevedel-execution-telemetry-agent-summary-cell (invocation)
-  "Return INVOCATION's direct-child summary cell, or nil."
-  (and invocation
-       (fboundp 'mevedel-agent-invocation-p)
-       (mevedel-agent-invocation-p invocation)
-       (mevedel-agent-invocation-sandbox-summary-cell invocation)))
 
 (defun mevedel-execution-telemetry--eask-command-p (command)
   "Return non-nil when COMMAND invokes Eask directly or through npx."
@@ -206,11 +275,12 @@ requested command started, and REFUSED-P records a policy refusal."
             (mevedel-execution-telemetry--cache-identity)))))
 
 (defun mevedel-execution-telemetry-prepare-resource-capture
-    (session command-text command)
-  "Return optional native resource capture for SESSION and COMMAND."
+    (context command-text command)
+  "Return an optional profiled COMMAND and record it in CONTEXT."
   (require 'mevedel-execution-target)
   (require 'mevedel-telemetry)
-  (let* ((target (mevedel-session-execution-target session))
+  (let* ((session (mevedel-execution-telemetry--context-session context))
+         (target (mevedel-session-execution-target session))
          (remote (and target
                       (mevedel-execution-target-remote-p target))))
     (when-let* ((target target)
@@ -234,9 +304,10 @@ requested command started, and REFUSED-P records a policy refusal."
       (make-directory directory t)
       (puthash report t
                mevedel-execution-telemetry--resource-capture-claims)
-      (list :command
-            (append (list time-program "-v" "-o" report "--") command)
-            :report report))))
+      (setf
+       (mevedel-execution-telemetry--context-resource-report-path context)
+       report)
+      (append (list time-program "-v" "-o" report "--") command))))
 
 (defun mevedel-execution-telemetry-mark-direct-fallback (session facts)
   "Mark and warn for SESSION's first direct fallback in FACTS."
@@ -250,24 +321,35 @@ requested command started, and REFUSED-P records a policy refusal."
     (plist-put (copy-sequence facts) :first-direct-fallback t)))
 
 (defun mevedel-execution-telemetry-record
-    (session execution-id tool-use-id owner event props)
-  "Record safe execution EVENT and PROPS for SESSION and immutable identity."
+    (context event props &optional audit)
+  "Record execution EVENT and PROPS from CONTEXT.
+When AUDIT is non-nil, retain only the safe forwarded-audit property set."
   (require 'mevedel-telemetry)
-  (let ((props
-         (if (not (mevedel-telemetry-forwarded-audit-p session))
-             props
-           (let ((safe nil))
-             (dolist (key mevedel-execution-telemetry--audit-prop-keys)
-               (when (plist-member props key)
-                 (setq safe (plist-put safe key (plist-get props key)))))
-             safe))))
+  (let* ((session (mevedel-execution-telemetry--context-session context))
+         (props
+          (if (not (and audit
+                        (mevedel-telemetry-forwarded-audit-p session)))
+              props
+            (let ((safe nil))
+              (dolist (key mevedel-execution-telemetry--audit-prop-keys)
+                (when (plist-member props key)
+                  (setq safe (plist-put safe key (plist-get props key)))))
+              safe))))
     (when session
-      (apply #'mevedel-telemetry-record-audit
+      (apply (if audit
+                 #'mevedel-telemetry-record-audit
+               #'mevedel-telemetry-record)
              session event
-             (append (list :execution-id execution-id
-                           :tool-use-id tool-use-id
-                           :owner owner)
-                     props)))))
+             (append
+              (when audit
+                (list
+                 :execution-id
+                 (mevedel-execution-telemetry--context-execution-id context)
+                 :tool-use-id
+                 (mevedel-execution-telemetry--context-tool-use-id context)
+                 :owner
+                 (mevedel-execution-telemetry--context-owner context)))
+              props)))))
 
 (provide 'mevedel-execution-telemetry)
 ;;; mevedel-execution-telemetry.el ends here

@@ -8,6 +8,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-execution)
+(require 'mevedel-execution-process)
 (require 'mevedel-sandbox)
 (require 'helpers
          (file-name-concat
@@ -27,7 +28,7 @@
   (let* ((root (make-temp-file "mevedel-managed-user-stop-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          events initial id)
     (unwind-protect
         (let ((mevedel-execution-event-functions
@@ -63,7 +64,7 @@
          (session (test-mevedel-execution--session root))
          (origin-buffer (current-buffer))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          changes
          (mevedel-execution-state-change-hook
           (list (lambda (seen-session seen-data-buffer)
@@ -179,7 +180,7 @@
   (let* ((root (make-temp-file "mevedel-managed-user-control-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          terminal)
     (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
@@ -219,7 +220,7 @@
   (let* ((root (make-temp-file "mevedel-managed-user-interrupt-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          callbacks)
     (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect

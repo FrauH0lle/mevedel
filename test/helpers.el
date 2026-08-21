@@ -11,6 +11,9 @@
 (defvar gptel-backend)
 (defvar gptel-model)
 
+;; `mevedel-execution-process'
+(defvar mevedel-execution-process--child-kill-delay)
+
 ;; `mevedel-permission-log'
 (declare-function mevedel-permission-log-path "mevedel-permission-log"
                   (session))
@@ -284,7 +287,7 @@ target is gone, which is slow, noisy, and order dependent."
     ;; Settling state a test left behind reports on that state; the report
     ;; belongs to the test that leaked it, not to the run log.
     (mevedel-test--with-captured-diagnostics nil
-      (let ((mevedel-execution--child-kill-delay 0.05))
+      (let ((mevedel-execution-process--child-kill-delay 0.05))
         (ignore-errors (mevedel-execution-teardown-all))))
     (clrhash mevedel-execution--sessions))
   (when (fboundp 'mevedel-workspace-clear-registry)

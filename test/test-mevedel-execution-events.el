@@ -8,6 +8,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-execution)
+(require 'mevedel-execution-process)
 (require 'mevedel-sandbox)
 (require 'mevedel-structs)
 (require 'helpers
@@ -89,9 +90,8 @@
           (should yield)
           (test-mevedel-execution--wait
            (lambda ()
-             (memq (process-status
-                    (mevedel-execution--record-process record))
-                   '(exit signal))))
+             (mevedel-execution-process-terminal-p
+              (mevedel-execution--record-child record))))
           (funcall yield)
           (test-mevedel-execution--wait (lambda () observation))
           (should (equal "done" (plist-get observation :output)))
@@ -327,7 +327,7 @@
   (let* ((root (make-temp-file "mevedel-managed-yield-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          observation)
     (unwind-protect
         (progn
@@ -362,7 +362,7 @@
   (let* ((root (make-temp-file "mevedel-managed-abort-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          (foreground-request (mevedel-request--create :session session))
          (yielded-request (mevedel-request--create :session session))
          foreground yielded foreground-id yielded-id)
@@ -405,8 +405,8 @@
   (let* ((root (make-temp-file "mevedel-managed-limits-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution-output-limit 64)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process-output-limit 64)
+         (mevedel-execution-process--child-kill-delay 0.05)
          initial final id)
     (unwind-protect
         (progn
@@ -436,7 +436,7 @@
          (session (test-mevedel-execution--session root))
          (pid-file (file-name-concat root "child.pid"))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          observation pid)
     (skip-unless (not (eq system-type 'windows-nt)))
     (unwind-protect
@@ -458,7 +458,7 @@
   (let* ((root (make-temp-file "mevedel-managed-no-progress-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          (mevedel-execution-event-functions (list #'ignore))
          initial id)
     (unwind-protect
@@ -482,7 +482,7 @@
          (session (test-mevedel-execution--session root))
          (artifacts (file-name-concat root "artifacts"))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          (mevedel-execution-live-limit 2)
          ids)
     (unwind-protect
@@ -514,7 +514,7 @@
   (let* ((root (make-temp-file "mevedel-managed-observe-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          initial first final repeated id)
     (unwind-protect
         (progn
@@ -552,7 +552,7 @@
     (let* ((root (make-temp-file "mevedel-managed-pty-input-" t))
            (session (test-mevedel-execution--session root))
            (mevedel-sandbox-mode 'off)
-           (mevedel-execution--child-kill-delay 0.05)
+           (mevedel-execution-process--child-kill-delay 0.05)
            initial first pending second final id)
       (unwind-protect
           (progn
@@ -599,7 +599,7 @@
       (let* ((root (make-temp-file "mevedel-managed-interrupt-" t))
              (session (test-mevedel-execution--session root))
              (mevedel-sandbox-mode 'off)
-             (mevedel-execution--child-kill-delay 0.05)
+             (mevedel-execution-process--child-kill-delay 0.05)
              initial pending final id)
         (unwind-protect
             (progn
@@ -694,7 +694,7 @@
   (let* ((root (make-temp-file "mevedel-managed-independent-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          (calls 0) initial final id)
     (unwind-protect
         (progn
@@ -967,7 +967,7 @@
   (let* ((root (make-temp-file "mevedel-managed-owner-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          initial id)
     (unwind-protect
         (progn

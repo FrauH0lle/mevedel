@@ -481,18 +481,19 @@ terminal outcome.
 
 ## External helper confinement
 
-Native tool implementations launch short-lived external helpers through
-`mevedel-execution.el`, the same process boundary used by Bash and batch Eval.
+Native tool implementations launch short-lived external helpers through the
+`mevedel-execution.el` facade, backed by the same opaque process owner used by
+Bash and batch Eval.
 The caller supplies a structured argv, authorized read paths, and explicit
-writable artifact directories. The module adds a private scratch working
-directory, applies `mevedel-sandbox-mode`, owns timeout/process-group cleanup,
-and removes the scratch directory after the callback. Output streams directly
-into a bounded temporary disk spool rather than an Emacs process buffer; the
-one-shot terminal result contains the captured output and structured exit,
-timeout, output-limit, byte, and wall-time facts. In `best-effort`, it may retry
-directly only after a pre-exec Bubblewrap failure; it never replays a helper
-that may have started. `required` fails the tool explicitly and `off` runs
-directly.
+writable artifact directories. The facade adds a private scratch working
+directory, applies `mevedel-sandbox-mode`, and removes the scratch directory
+after the callback. The process owner handles timeout/process-group cleanup
+and streams output into a bounded temporary disk spool rather than an Emacs
+process buffer. The one-shot terminal result contains the captured output and
+structured exit, timeout, output-limit, byte, and wall-time facts. In
+`best-effort`, the facade may retry directly only after a pre-exec Bubblewrap
+failure; it never replays a helper that may have started. `required` fails the
+tool explicitly and `off` runs directly.
 
 Bubblewrap capability probes are cached independently per execution target.
 Local probes use the short `mevedel-sandbox-probe-timeout`; remote probes use

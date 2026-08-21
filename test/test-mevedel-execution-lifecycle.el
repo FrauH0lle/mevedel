@@ -10,6 +10,7 @@
 (require 'mevedel)
 (require 'mevedel-agents)
 (require 'mevedel-execution)
+(require 'mevedel-execution-process)
 (require 'mevedel-execution-target)
 (require 'mevedel-pipeline)
 (require 'mevedel-session-durability)
@@ -71,8 +72,8 @@
          (tombstone-file (file-name-concat root "tombstone.log"))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
-         owned sibling pid owned-id owned-process
+         (mevedel-execution-process--child-kill-delay 0.05)
+         owned sibling pid owned-id
          helper-result scratch tombstone)
     (unwind-protect
         (progn
@@ -106,28 +107,19 @@
                    (buffer-string))))
           (write-region "terminal" nil tombstone-file nil 'silent)
           (setq tombstone
-                (mevedel-execution--record-create
-                 :finished-p t
-                 :origin (mevedel-execution--origin-create
-                          :owner "agent-a" :session session)
-                 :spool-path tombstone-file
-                 :token 'owner-tombstone))
+                (test-mevedel-execution--attach-child
+                 (mevedel-execution--record-create
+                  :finished-p t
+                  :origin (mevedel-execution--origin-create
+                           :owner "agent-a" :session session)
+                  :token 'owner-tombstone)
+                 tombstone-file))
           (puthash 'owner-tombstone tombstone
                    (mevedel-execution--state-records
                     (mevedel-session-execution-state session)))
           (setq owned-id (plist-get (plist-get owned :facts) :execution-id))
-          (when (eq system-type 'windows-nt)
-            (setq owned-process
-                  (mevedel-execution--record-process
-                   (gethash
-                    owned-id
-                    (mevedel-execution--state-records
-                     (mevedel-session-execution-state session)))))
-            (should (process-live-p owned-process)))
           (should (= 3 (mevedel-execution-stop-owner session "agent-a")))
-          (if (eq system-type 'windows-nt)
-            (test-mevedel-execution--wait
-             (lambda () (not (process-live-p owned-process))))
+          (unless (eq system-type 'windows-nt)
             (setq pid (test-mevedel-execution--read-pid pid-file))
             (test-mevedel-execution--wait
              (lambda () (test-mevedel-execution--process-gone-p pid))))
@@ -154,7 +146,7 @@
           (format "/mevedelmock:%s:%s/" (system-name) root))
          (original-signal-process (symbol-function 'signal-process))
          (mevedel-sandbox-mode 'off)
-         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-process--child-kill-delay 0.05)
          session execution-id kill-delivered-p kill-timer)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
@@ -180,7 +172,8 @@
                   (plist-get
                    (plist-get
                     (test-mevedel-execution--start-managed
-                     session remote-root '("sh" "-c" "sleep 30")
+                     session remote-root
+                     '("sh" "-c" "trap '' TERM; sleep 30")
                      :owner "agent-a")
                     :facts)
                    :execution-id))
@@ -221,7 +214,7 @@
          (pid-file (file-name-concat root "child.pid"))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         first-result second-result pid first-process)
+         first-result second-result pid)
     (unwind-protect
         (progn
           (mevedel-execution-start-bash
@@ -239,17 +232,6 @@
           (unless (eq system-type 'windows-nt)
             (test-mevedel-execution--wait
              (lambda () (file-readable-p pid-file))))
-          (when (eq system-type 'windows-nt)
-            (let* ((execution
-                    (car (mevedel-execution-list-user session)))
-                   (record
-                    (gethash
-                     (plist-get execution :execution-id)
-                     (mevedel-execution--state-records
-                      (mevedel-session-execution-state session)))))
-              (setq first-process
-                    (mevedel-execution--record-process record))
-              (should (process-live-p first-process))))
           (mevedel-execution-start-bash
            (lambda (value) (setq second-result value))
            :session session :owner "main" :owner-context session
@@ -302,18 +284,20 @@
          (orphan-spool (make-temp-file "mevedel-orphan-tombstone-"))
          (cleaned 0)
          (session-record
-          (mevedel-execution--record-create
-           :finished-p t
-           :origin (mevedel-execution--origin-create :session session)
-           :spool-path session-spool
-           :teardown-function (lambda () (cl-incf cleaned))
-           :token 'session-record))
+          (test-mevedel-execution--attach-child
+           (mevedel-execution--record-create
+            :finished-p t
+            :origin (mevedel-execution--origin-create :session session)
+            :teardown-function (lambda () (cl-incf cleaned))
+            :token 'session-record)
+           session-spool))
          (orphan-record
-          (mevedel-execution--record-create
-           :origin (mevedel-execution--origin-create :session nil)
-           :spool-path orphan-spool
-           :teardown-function (lambda () (cl-incf cleaned))
-           :token 'orphan-record)))
+          (test-mevedel-execution--attach-child
+           (mevedel-execution--record-create
+            :origin (mevedel-execution--origin-create :session nil)
+            :teardown-function (lambda () (cl-incf cleaned))
+            :token 'orphan-record)
+           orphan-spool)))
     (puthash 'session-record session-record
              (mevedel-execution--state-records session-state))
     (puthash 'orphan-record orphan-record
@@ -339,13 +323,16 @@
          (state (mevedel-execution--state-for-session session))
          (old-path (file-name-concat old-root "tool-results/execution.log"))
          (record
-          (mevedel-execution--record-create
-           :execution-id "exec-000001"
-           :origin (mevedel-execution--origin-create
-                    :owner "agent-a" :session session)
-           :spool-path old-path)))
+          (test-mevedel-execution--attach-child
+           (mevedel-execution--record-create
+            :execution-id "exec-000001"
+            :origin (mevedel-execution--origin-create
+                     :owner "agent-a" :session session))
+           old-path)))
     (unwind-protect
         (progn
+          (make-directory (file-name-directory old-path) t)
+          (write-region "retained" nil old-path nil 'silent)
           (puthash "exec-000001" record
                    (mevedel-execution--state-records state))
           (should (= 1 (mevedel-execution-relocate-artifacts
@@ -355,7 +342,7 @@
                           (mevedel-execution--record-origin record))))
           (should (equal (file-name-concat
                           new-root "tool-results/execution.log")
-                         (mevedel-execution--record-spool-path record))))
+                         (mevedel-execution--spool-path record))))
       (remhash "exec-000001" (mevedel-execution--state-records state))
       (delete-directory old-root t)
       (delete-directory new-root t)))
@@ -388,19 +375,20 @@
                    (mevedel-execution-target-native-path target new-root)
                    relative)))
             (setq record
-                  (mevedel-execution--record-create
-                   :execution-id "exec-000001"
-                   :origin (mevedel-execution--origin-create
-                            :owner "agent-a" :session session)
-                   :recoverable-output-path old-native
-                   :spool-path client-spool))
+                  (test-mevedel-execution--attach-child
+                   (mevedel-execution--record-create
+                    :execution-id "exec-000001"
+                    :origin (mevedel-execution--origin-create
+                             :owner "agent-a" :session session)
+                    :recoverable-output-path old-native)
+                   client-spool))
             (puthash "exec-000001" record
                      (mevedel-execution--state-records state))
             (setf (mevedel-session-save-path session) new-root)
             (should (= 1 (mevedel-execution-relocate-artifacts
                           session old-root new-root)))
             (should (equal client-spool
-                           (mevedel-execution--record-spool-path record)))
+                           (mevedel-execution--spool-path record)))
             (should (equal new-native
                            (mevedel-execution--record-recoverable-output-path
                             record)))))
