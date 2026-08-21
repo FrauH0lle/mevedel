@@ -179,7 +179,7 @@
                   "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-tool-task'
-(declare-function mevedel-tool-task--refresh-display "mevedel-tool-task" ())
+(declare-function mevedel-tool-task-refresh-display "mevedel-tool-task" ())
 (declare-function mevedel-tool-task-finalize-owner
                   "mevedel-tool-task" (session owner status))
 
@@ -467,7 +467,7 @@
                   status)
              (when (buffer-live-p parent-buffer)
                (with-current-buffer parent-buffer
-                 (mevedel-tool-task--refresh-display)))))))
+                 (mevedel-tool-task-refresh-display)))))))
       (mevedel-agent-runtime--finalize-step
        invocation 'handle
        (lambda () (mevedel-agent-conversation-refresh invocation)))

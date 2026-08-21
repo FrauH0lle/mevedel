@@ -116,10 +116,6 @@
                   "mevedel-instruction-registry" (&optional workspace))
 (defvar mevedel--instruction-state-key-override)
 
-;; `mevedel-menu'
-(declare-function mevedel-menu-open-model-selection
-                  "mevedel-menu" (&rest options))
-
 ;; `mevedel-models'
 (declare-function mevedel-model-current-provider-label
                   "mevedel-models" (&optional buffer))

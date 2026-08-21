@@ -392,7 +392,7 @@
               ((read-resource (address operation path)
                  (let* ((attempt (mevedel-resource-prepare
                                   operation address (list :session session)))
-                        (mevedel-resource--current-attempts
+                        (mevedel-resource-current-attempts
                          (list (cons address attempt)))
                         (mevedel--session session)
                         (result (plist-get
@@ -417,7 +417,7 @@
               (setq virtual-attempt
                     (mevedel-resource-prepare
                      'read virtual-address (list :session session)))
-              (let ((mevedel-resource--current-attempts
+              (let ((mevedel-resource-current-attempts
                      (list (cons virtual-address virtual-attempt))))
                 (let ((result
                        (plist-get
@@ -448,7 +448,7 @@
                                   (mevedel-resource-memory-root-key root)))
                  (attempt (mevedel-resource-prepare
                            'read address (list :session session)))
-                 (mevedel-resource--current-attempts
+                 (mevedel-resource-current-attempts
                   (list (cons address attempt)))
                  (mevedel--session session)
                  (err (should-error

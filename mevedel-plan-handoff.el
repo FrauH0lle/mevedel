@@ -152,7 +152,7 @@
                   "mevedel-view-stream" (status &optional owner))
 
 ;; `mevedel-worktree'
-(declare-function mevedel-worktree--session-directory
+(declare-function mevedel-worktree-session-directory
                   "mevedel-worktree" (branch))
 (declare-function mevedel-worktree-repository-root
                   "mevedel-worktree" (directory))
@@ -371,7 +371,7 @@ needs no session."
             (plist-put
              prepared :target-directory
              (with-current-buffer chat-buffer
-               (mevedel-worktree--session-directory branch))))
+               (mevedel-worktree-session-directory branch))))
       (mevedel-plan--metadata-put session :implementation-retry prepared)
       (mevedel-plan-handoff--persist session chat-buffer))
     (let* ((result

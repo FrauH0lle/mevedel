@@ -97,7 +97,7 @@
                   "mevedel-compact" (fsm))
 
 ;; `mevedel-mentions'
-(declare-function mevedel-mentions--commit-expansion
+(declare-function mevedel-mentions-commit-expansion
                   "mevedel-mentions" (session expansion))
 (declare-function mevedel-mentions-expand-user-input
                   "mevedel-mentions" (text session))
@@ -849,7 +849,7 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
                    session fsm entry
                    (or (plist-get entry :transcript-payload)
                        (plist-get entry :input)))
-                  (mevedel-mentions--commit-expansion session expansion)
+                  (mevedel-mentions-commit-expansion session expansion)
                   (mevedel-skills-commit-invoked-records
                    session
                    (plist-get (plist-get entry :request-context)

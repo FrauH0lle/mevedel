@@ -469,7 +469,7 @@ group and sorting agent-owned groups by owner label."
   "Return non-nil when TASK is not completed."
   (not (eq (mevedel-task-status task) 'completed)))
 
-(defun mevedel-tool-task--session-has-active-p (session)
+(defun mevedel-tool-task-session-has-active-p (session)
   "Return non-nil when SESSION has at least one non-completed task."
   (cl-some #'mevedel-tool-task--active-p
            (mevedel-session-tasks session)))
@@ -690,7 +690,7 @@ MAX-LINES caps the rendered body without changing task storage."
       (min mevedel-tool-task--status-max-body-lines
            (max mevedel-tool-task--status-min-body-lines budget)))))
 
-(defvar mevedel-tool-task--status-keymap
+(defvar mevedel-tool-task-status-keymap
   (define-keymap
     "<tab>" #'mevedel-toggle-tasks
     "TAB"   #'mevedel-toggle-tasks
@@ -708,7 +708,7 @@ the label is correct regardless of where point is when the display
 string is built.  Falls back to `M-x mevedel-toggle-tasks' if the
 command has somehow lost its binding."
   (if-let* ((keys (where-is-internal 'mevedel-toggle-tasks
-                                     mevedel-tool-task--status-keymap
+                                     mevedel-tool-task-status-keymap
                                      t)))
       (key-description keys)
     "M-x mevedel-toggle-tasks"))
@@ -757,7 +757,7 @@ character so keybindings on trailing newlines still toggle the fragment."
      toggle-key
      (propertize " to toggle" 'face 'mevedel-view-zone-separator))))
 
-(defun mevedel-tool-task--display-string (session show-completed)
+(defun mevedel-tool-task-display-string (session show-completed)
   "Return task display for SESSION.
 SHOW-COMPLETED controls whether completed task detail is included."
   (let* ((body (mevedel-tool-task--format-groups
@@ -767,7 +767,7 @@ SHOW-COMPLETED controls whether completed task detail is included."
                      (mevedel-tool-task--task-label))))
     (concat separator body "\n\n")))
 
-(defun mevedel-tool-task--refresh-display ()
+(defun mevedel-tool-task-refresh-display ()
   "Render the current session's task status in its view buffer."
   (when-let* ((session (and (boundp 'mevedel--session) mevedel--session))
               (view-buf (and (boundp 'mevedel--view-buffer)
@@ -871,7 +871,7 @@ this runs after the task mutation it accompanies."
     (setq note-feedback
           (mevedel-tool-task--apply-note-arg session prepared-note))
     (mevedel-tool-task--mark-write session)
-    (mevedel-tool-task--refresh-display)
+    (mevedel-tool-task-refresh-display)
     (let ((base (format "Created %d task%s:\n%s"
                         (length created)
                         (if (= 1 (length created)) "" "s")
@@ -901,7 +901,7 @@ this runs after the task mutation it accompanies."
             (mevedel-tool-task--apply-note-arg session prepared-note)))
       (mevedel-tool-task--clear-inactive-status-notes session)
       (mevedel-tool-task--mark-write session)
-      (mevedel-tool-task--refresh-display)
+      (mevedel-tool-task-refresh-display)
       (let ((base (format "Updated task:\n%s"
                           (mevedel-tool-task--format-for-llm
                            (list task)))))
@@ -920,7 +920,7 @@ this runs after the task mutation it accompanies."
              session
              (mevedel-tool-task--prepare-note-arg session args '(:owner)))))
       (mevedel-tool-task--mark-write session)
-      (mevedel-tool-task--refresh-display)
+      (mevedel-tool-task-refresh-display)
       (list :result feedback))))
 
 (defun mevedel-tool-task--handle-list (args)
@@ -935,7 +935,7 @@ this runs after the task mutation it accompanies."
                         (lambda (t1) (eq (mevedel-task-status t1) filter))
                         tasks)
                      tasks)))
-    (mevedel-tool-task--refresh-display)
+    (mevedel-tool-task-refresh-display)
     (list :result
           (if filter
               (format "Tasks with status %s:\n%s"

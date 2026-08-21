@@ -85,13 +85,15 @@
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
   "RFC 3986 unreserved bytes.")
 
-(defvar mevedel-resource--current-attempts nil
-  "Dynamically bound resource attempts for the active pipeline handler.")
+(defvar mevedel-resource-current-attempts nil
+  "Dynamically bound resource attempts for the active pipeline handler.
+The pipeline binds this around each handler; it is the module's
+dynamic seam, not private state.")
 
 (defvar mevedel-resource--attempt-table (make-hash-table :test #'eq)
   "Private table mapping opaque attempt tokens to resolver data.")
 
-(defvar mevedel-resource--attempts-cell nil
+(defvar mevedel-resource-attempts-cell nil
   "Dynamically bound cell collecting attempts for one pipeline run.")
 
 (define-error 'mevedel-resource-error "Resource address error")
@@ -1313,7 +1315,7 @@ errors before any content or handler is reached."
       (let ((attempt (make-symbol "mevedel-resource-attempt-")))
         (puthash attempt data mevedel-resource--attempt-table)
         (when-let ((cell (or (plist-get context :resource-attempts-cell)
-                             mevedel-resource--attempts-cell)))
+                             mevedel-resource-attempts-cell)))
           (when (consp cell)
             (setcar cell (cons attempt (car cell)))))
         attempt))
@@ -1379,7 +1381,7 @@ executor."
 
 (defun mevedel-resource-current-attempt (address)
   "Return the dynamically active attempt for authored ADDRESS."
-  (cdr (assoc address mevedel-resource--current-attempts)))
+  (cdr (assoc address mevedel-resource-current-attempts)))
 
 (defun mevedel-resource-artifact-address (path session)
   "Return the logical artifact address for PATH owned by SESSION."

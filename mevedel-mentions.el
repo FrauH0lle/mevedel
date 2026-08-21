@@ -13,6 +13,7 @@
   (require 'cl-lib)
   (require 'mevedel-instruction-registry))
 
+(require 'mevedel-mention-bindings)
 (require 'mevedel-overlays)
 
 ;; `gptel'
@@ -155,7 +156,7 @@
 (declare-function mevedel-workspace-file-in-allowed-roots-p
                   "mevedel-workspace" (file &optional buffer))
 
-(defvar-local mevedel-mentions--agent-enabled-p t
+(defvar-local mevedel-mentions-agent-enabled-p t
   "Whether mention completion offers retained agents in this buffer.")
 
 
@@ -242,7 +243,7 @@ an absolute pathname even when the path is currently unavailable."
                    (uuid (overlay-get ref 'mevedel-uuid)))
          (list :reference-uuid uuid))))
     (mevedel-mentions--bind-user-input-matches
-     result mevedel-mentions--file-regexp 'file
+     result mevedel-mention-bindings-file-regexp 'file
      (lambda (captures)
        (list :path
              (mevedel-resource-normalize-file-path
@@ -250,7 +251,7 @@ an absolute pathname even when the path is currently unavailable."
                (car captures))
               working-directory))))
     (mevedel-mentions--bind-user-input-matches
-     result mevedel-mentions--mcp-regexp 'mcp
+     result mevedel-mention-bindings-mcp-regexp 'mcp
      (lambda (captures)
        (list :server (car captures) :uri (cadr captures))))
     result))
@@ -315,16 +316,6 @@ to drill down instead."
   :type 'integer
   :group 'mevedel-mentions)
 
-(defconst mevedel-mentions--file-regexp
-  "@file:\\({\\(?:\\\\.\\|[^}]\\)+}\\|[^ \t\n#]+\\)\\(?:#L\\([0-9]+\\)\\(?:-\\([0-9]+\\)\\)?\\)?"
-  "Regexp matching an @file mention.
-Capture group 1 is the bare path or the braced path token.  Capture
-groups 2 and 3 are optional line-range bounds.")
-
-(defconst mevedel-mentions--mcp-regexp
-  "@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)"
-  "Regexp matching an @mcp resource mention.")
-
 
 ;;
 ;;; Mention dispatch
@@ -333,8 +324,8 @@ groups 2 and 3 are optional line-range bounds.")
   `(("@ref:\\(?:\\([0-9]+\\)\\|{\\([^}]+\\)}\\)"
      ref mevedel--handle-ref-mention)
     ("@agent:\\([[:alnum:]_-]+\\)" nil mevedel--handle-agent-mention)
-    (,mevedel-mentions--mcp-regexp mcp mevedel--handle-mcp-mention)
-    (,mevedel-mentions--file-regexp file mevedel--handle-file-mention))
+    (,mevedel-mention-bindings-mcp-regexp mcp mevedel--handle-mcp-mention)
+    (,mevedel-mention-bindings-file-regexp file mevedel--handle-file-mention))
   "List of mention regex, binding kind, and handler descriptors.
 
 Each handler is called with a plist containing:
@@ -594,7 +585,7 @@ boundary checks."
     (with-temp-buffer
       (insert text)
       (goto-char (point-min))
-      (while (re-search-forward mevedel-mentions--file-regexp nil t)
+      (while (re-search-forward mevedel-mention-bindings-file-regexp nil t)
         (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
           (push (mevedel-resource-normalize-file-path
                  (mevedel-mentions--unescape-braced-file-path
@@ -1028,7 +1019,7 @@ Dispatches per `mevedel-mention-handlers'."
                    collect (cons (plist-get item :key)
                                  (plist-get item :hash))))))
 
-(defun mevedel-mentions--commit-expansion (session expansion)
+(defun mevedel-mentions-commit-expansion (session expansion)
   "Record deduplication data from EXPANSION in SESSION."
   (when (and session (mevedel-session-turn-count session))
     (let ((mentions-shown (mevedel-session-mentions-shown session))
@@ -1067,7 +1058,7 @@ must explicitly commit the result after accepting every media context."
       (let ((mevedel--current-request request))
         (dolist (context (plist-get expansion :media-contexts))
           (apply #'mevedel-mentions--add-media-context context)))
-      (mevedel-mentions--commit-expansion session expansion))))
+      (mevedel-mentions-commit-expansion session expansion))))
 
 
 ;;
@@ -1324,7 +1315,7 @@ or adjacent to quoting chars."
 Highlights file path references, including optional `#L<start>[-<end>]'
 line-range suffix.  Skips mentions in non-user regions or adjacent
 to quoting chars."
-  (mevedel-mentions--fontify-keyword mevedel-mentions--file-regexp end))
+  (mevedel-mentions--fontify-keyword mevedel-mention-bindings-file-regexp end))
 
 (defun mevedel--fontify-agent-keyword (end)
   "Font-lock matcher for @agent:name mentions up to END.
@@ -1335,7 +1326,7 @@ Skips mentions in non-user regions or adjacent to quoting chars."
   "Font-lock matcher for @mcp:server:uri mentions up to END.
 Skips mentions in non-user regions or adjacent to quoting chars."
   (mevedel-mentions--fontify-keyword
-   mevedel-mentions--mcp-regexp end))
+   mevedel-mention-bindings-mcp-regexp end))
 
 (defconst mevedel-mentions--font-lock-keywords
   '((mevedel--fontify-ref-id-keyword
@@ -1434,7 +1425,7 @@ exit-function positions point between the braces."
               (end orig-point))
           (list start end
                 (append '("@ref:" "@ref:{}" "@file:")
-                        (and mevedel-mentions--agent-enabled-p
+                        (and mevedel-mentions-agent-enabled-p
                              '("@agent:"))
                         '("@mcp:"))
                 :exclusive 'no
@@ -1561,7 +1552,7 @@ bare `@' prefix; the other capfs fire once the prefix is complete."
   (add-hook 'completion-at-point-functions #'mevedel-mention-capf nil t)
   (add-hook 'completion-at-point-functions #'mevedel-ref-capf nil t)
   (add-hook 'completion-at-point-functions #'mevedel-file-capf nil t)
-  (when mevedel-mentions--agent-enabled-p
+  (when mevedel-mentions-agent-enabled-p
     (add-hook 'completion-at-point-functions #'mevedel-agent-capf nil t))
   (add-hook 'completion-at-point-functions #'mevedel-mcp-capf nil t))
 

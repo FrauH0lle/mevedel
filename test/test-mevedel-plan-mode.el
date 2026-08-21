@@ -637,7 +637,7 @@
                      (make-overlay (point-min) (point-min))))
                   ((symbol-function 'mevedel--prompt--settle)
                    (lambda (_overlay value) (setq outcome value)))
-                  ((symbol-function 'mevedel-worktree--collect-status)
+                  ((symbol-function 'mevedel-worktree-collect-status)
                    (lambda (&optional _) '(:dirty-p t)))
                   ((symbol-function 'read-string)
                    (lambda (&rest _) (signal 'quit nil))))
@@ -835,7 +835,7 @@
                (lambda (_prompt _initial _history default &rest _)
                  (should (equal "worktree/accepted-plan" default))
                  "plan/topic"))
-              ((symbol-function 'mevedel-worktree--validate-branch-name)
+              ((symbol-function 'mevedel-worktree-validate-branch-name)
                (lambda (branch source-directory)
                  (setq validated (list branch source-directory)))))
       (should (equal "plan/topic"
@@ -1400,7 +1400,7 @@
   (let ((entry
          (list :selection '(:location worktree)
                :chat-buffer (current-buffer))))
-    (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+    (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
                (lambda (&rest _) '(:dirty-p t))))
       (should (string-match-p
                "uncommitted changes"

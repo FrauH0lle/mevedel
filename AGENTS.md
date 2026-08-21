@@ -139,6 +139,9 @@ Data model
   mevedel-permissions.el      permission preflight and 8-step decision facade
   mevedel-tool-permission.el permission-step orchestration, hooks, prompts, logging
   mevedel-pipeline.el         tool context, standard steps, sequencing, ordering
+  mevedel-resource.el         resource-address grammar and attempt lifecycle
+  mevedel-resource-capf.el    resource-address completion
+  mevedel-permission-log.el   durable permission decision log
   mevedel-tool-media.el       tool media storage, scrubbing, provider payloads
   mevedel-tool-render-data.el render-data codec, provider scrubber, transcript mutation
   mevedel-tool-registry.el    mevedel-tool struct, mevedel-define-tool macro
@@ -192,8 +195,12 @@ Chat / view
   mevedel-collaboration-projection.el canonical browser transcript projection
   mevedel-collaboration-transport.el sealed relay WebSocket client
   mevedel-view-markdown.el    Markdown links, images, paths, source panels
+  mevedel-cockpit.el          shared tabulated cockpit surface plumbing
+  mevedel-menu.el             session cockpit transient and model selection
+  mevedel-gptel-bridge.el     view-launched gptel menu and restoration
   mevedel-executions-list.el  session-wide live execution cockpit and user controls
   mevedel-permissions-list.el remembered authority cockpit and per-row revoke
+  mevedel-worktree.el         Git worktrees, status/list surfaces, fork plumbing
   mevedel-instruction-registry.el workspace instruction buckets, IDs, links
   mevedel-overlays.el         instruction geometry, tags, context, prompts
   mevedel-directive-source.el directive anchor/presentation lifecycle
@@ -257,6 +264,7 @@ Support
   mevedel-file-state.el       LRU file cache
   mevedel-diff-apply.el       transactional unified diff staging/application
   mevedel-utilities.el        package version + shared tinting/ediff/env helpers
+  mevedel-init.el             repository guidance bootstrap command
 ```
 
 ## External dependencies

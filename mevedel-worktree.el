@@ -278,7 +278,7 @@ directory they happen to be sitting in."
                  default-directory))
           default-directory)))))
 
-(defun mevedel-worktree--collect-status (&optional context)
+(defun mevedel-worktree-collect-status (&optional context)
   "Collect read-only worktree status for CONTEXT."
   (let* ((context (or context (mevedel-worktree--current-context)))
          (session (plist-get context :session))
@@ -419,7 +419,7 @@ directory they happen to be sitting in."
   (let* ((context (mevedel-cockpit-current-context))
          (data-buffer (mevedel-worktree-status--data-buffer context)))
     (with-current-buffer data-buffer
-      (mevedel-worktree--collect-status context))))
+      (mevedel-worktree-collect-status context))))
 
 (defun mevedel-worktree-status--description ()
   "Return the one-line worktree status, plus an alert when it is actionable.
@@ -587,7 +587,7 @@ The complete repository state lives in the worktree info panel."
   "Return current worktree status from CONTEXT's data buffer."
   (let ((context (or context (mevedel-worktree-list--context))))
     (with-current-buffer (mevedel-worktree-list--context-data-buffer context)
-      (mevedel-worktree--collect-status context))))
+      (mevedel-worktree-collect-status context))))
 
 (defun mevedel-worktree-list--normalize-path (path)
   "Return PATH as an absolute directory name."
@@ -911,7 +911,7 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
         "session"
       (substring slug 0 (min (length slug) 48)))))
 
-(defun mevedel-worktree--default-branch-name (session purpose)
+(defun mevedel-worktree-default-branch-name (session purpose)
   "Return default branch name for SESSION and optional PURPOSE."
   (format "worktree/%s"
           (mevedel-worktree--slugify
@@ -939,7 +939,7 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
           (user-error "Unexpected /worktree create argument: %s" token)))))
     (list :name name :purpose purpose :clean clean)))
 
-(defun mevedel-worktree--validate-branch-name (name &optional directory)
+(defun mevedel-worktree-validate-branch-name (name &optional directory)
   "Validate Git branch NAME for worktree creation.
 
 When DIRECTORY is non-nil, use Git's refname checker for the full
@@ -1230,7 +1230,7 @@ RECOVERY names the exact prepared session or authorizes unique discovery."
     (mevedel--display-chat-buffer chat-buffer)
     chat-buffer))
 
-(defun mevedel-worktree--session-directory (branch)
+(defun mevedel-worktree-session-directory (branch)
   "Return the deterministic Worktree session directory for BRANCH."
   (let* ((context (mevedel-worktree--current-context))
          (session (plist-get context :session))
@@ -1242,7 +1242,7 @@ RECOVERY names the exact prepared session or authorizes unique discovery."
          (workspace (and session (mevedel-session-workspace session))))
     (unless (and session workspace source-directory)
       (user-error "Worktree creation must run from a mevedel session"))
-    (mevedel-worktree--validate-branch-name branch source-directory)
+    (mevedel-worktree-validate-branch-name branch source-directory)
     (let* ((workspace-root
             (file-name-as-directory
              (expand-file-name (mevedel-workspace-root workspace))))
@@ -1331,7 +1331,7 @@ The return value is a plist with `:buffer', `:branch', `:directory', and
               (or branch
                   (read-string
                    "Worktree branch name: " nil nil
-                   (mevedel-worktree--default-branch-name session purpose))))
+                   (mevedel-worktree-default-branch-name session purpose))))
              (workspace (mevedel-session-workspace session))
              (workspace-root (file-name-as-directory
                               (expand-file-name
@@ -1343,10 +1343,10 @@ The return value is a plist with `:buffer', `:branch', `:directory', and
              (status
               (progn
                 (mevedel-worktree--ensure-git source-directory)
-                (mevedel-worktree--collect-status context)))
+                (mevedel-worktree-collect-status context)))
              (repo-root (plist-get status :repo-root))
              (worktree-directory
-              (mevedel-worktree--session-directory branch))
+              (mevedel-worktree-session-directory branch))
              (worktrees-dir
               (file-name-directory
                (directory-file-name worktree-directory)))

@@ -136,11 +136,11 @@
 		  (text mode))
 
 ;; `mevedel-worktree'
-(declare-function mevedel-worktree--collect-status "mevedel-worktree"
+(declare-function mevedel-worktree-collect-status "mevedel-worktree"
 		  (&optional context))
-(declare-function mevedel-worktree--default-branch-name
+(declare-function mevedel-worktree-default-branch-name
 		  "mevedel-worktree" (session purpose))
-(declare-function mevedel-worktree--validate-branch-name
+(declare-function mevedel-worktree-validate-branch-name
 		  "mevedel-worktree" (name &optional directory))
 
 ;;
@@ -387,10 +387,10 @@ opening an editable draft."
   (require 'mevedel-worktree)
   (let* ((session (plist-get entry :session))
          (directory (mevedel-session-working-directory session))
-         (default (mevedel-worktree--default-branch-name
+         (default (mevedel-worktree-default-branch-name
                    session "accepted-plan"))
          (branch (read-string "Worktree branch name: " nil nil default)))
-    (mevedel-worktree--validate-branch-name branch directory)
+    (mevedel-worktree-validate-branch-name branch directory)
     branch))
 
 (defun mevedel-plan-mode--worktree-warning (entry)
@@ -398,7 +398,7 @@ opening an editable draft."
   (when (eq (plist-get (plist-get entry :selection) :location) 'worktree)
     (require 'mevedel-worktree)
     (with-current-buffer (plist-get entry :chat-buffer)
-      (when (plist-get (mevedel-worktree--collect-status) :dirty-p)
+      (when (plist-get (mevedel-worktree-collect-status) :dirty-p)
         "Worktree starts at HEAD; uncommitted changes are not included."))))
 
 (defvar-local mevedel-plan-mode--instructions-entry nil

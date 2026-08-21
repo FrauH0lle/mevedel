@@ -1122,7 +1122,7 @@
         (setq-local mevedel--view-buffer view-buf)
         (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
         (mevedel-view-test--insert-data data-buf "Response\n" 'response)
-        (mevedel-tool-task--refresh-display))
+        (mevedel-tool-task-refresh-display))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (should (string-match-p "visible task" (buffer-string)))
@@ -1170,7 +1170,7 @@
           (setq-local mevedel--session session)
           ;; Render task status before the full rerender so the fragment
           ;; region is rebuilt along with the other chrome zones.
-          (mevedel-tool-task--refresh-display)
+          (mevedel-tool-task-refresh-display)
           (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                      (lambda ()
                        (list (list :path "/root/verifier"

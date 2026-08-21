@@ -69,8 +69,8 @@
                   (value &optional directory))
 (declare-function mevedel-resource-prepare "mevedel-resource"
                   (operation address context))
-(defvar mevedel-resource--attempts-cell)
-(defvar mevedel-resource--current-attempts)
+(defvar mevedel-resource-attempts-cell)
+(defvar mevedel-resource-current-attempts)
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
@@ -765,7 +765,7 @@ permission or handler work begins."
          attempts
          patch-proposal)
     (if (eq operation 'apply-patch)
-        (let ((mevedel-resource--attempts-cell
+        (let ((mevedel-resource-attempts-cell
                (plist-get context :resource-attempts-cell)))
           (setq patch-proposal
                 (mevedel-tool-patch--prepare-resources
@@ -1166,7 +1166,7 @@ buffer."
                    (plist-get context :tool-use-id))
                   (mevedel-pipeline--auto-apply-edit-p
                    (plist-get context :auto-apply-edit-p))
-                  (mevedel-resource--current-attempts
+                  (mevedel-resource-current-attempts
                    (plist-get context :resource-attempts))
                   (mevedel-tool-patch--prepared-proposal
                    (plist-get context :patch-proposal))

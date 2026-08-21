@@ -11,9 +11,20 @@
 (eval-when-compile
   (require 'cl-lib))
 
-;; `mevedel-mentions'
-(defvar mevedel-mentions--file-regexp)
-(defvar mevedel-mentions--mcp-regexp)
+(defconst mevedel-mention-bindings-file-regexp
+  "@file:\\({\\(?:\\\\.\\|[^}]\\)+}\\|[^ \t\n#]+\\)\\(?:#L\\([0-9]+\\)\\(?:-\\([0-9]+\\)\\)?\\)?"
+  "Regexp matching an @file mention.
+Capture group 1 is the bare path or the braced path token.  Capture
+groups 2 and 3 are optional line-range bounds.
+
+The grammar lives here, below every consumer: bindings validation and
+mention expansion read the same shape, and the binding layer must not
+reach up into the expansion module for it.")
+
+(defconst mevedel-mention-bindings-mcp-regexp
+  "@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)"
+  "Regexp matching an @mcp resource mention.")
+
 
 
 ;;
@@ -134,19 +145,17 @@ that is ambiguous with prose."
                  (mevedel-mention-bindings--nonempty-string-p
                   (plist-get binding :reference-uuid))))
            ('file
-            (require 'mevedel-mentions)
             (and (mevedel-mention-bindings--plist-shape-p
                   binding '(:kind :token :path))
                  (string-match-p
-                  (concat "\\`" mevedel-mentions--file-regexp "\\'")
+                  (concat "\\`" mevedel-mention-bindings-file-regexp "\\'")
                   token)
                  (file-name-absolute-p (or (plist-get binding :path) ""))))
            ('mcp
-            (require 'mevedel-mentions)
             (and (mevedel-mention-bindings--plist-shape-p
                   binding '(:kind :token :server :uri))
                  (string-match
-                  (concat "\\`" mevedel-mentions--mcp-regexp "\\'")
+                  (concat "\\`" mevedel-mention-bindings-mcp-regexp "\\'")
                   token)
                  (equal (match-string 1 token)
                         (plist-get binding :server))
@@ -186,8 +195,8 @@ that is ambiguous with prose."
                       (char-to-string (aref text end))))))
            ((or 'file 'mcp)
             (let ((regexp (if (eq (plist-get binding :kind) 'file)
-                              mevedel-mentions--file-regexp
-                            mevedel-mentions--mcp-regexp)))
+                              mevedel-mention-bindings-file-regexp
+                            mevedel-mention-bindings-mcp-regexp)))
               (save-match-data
                 (and (string-match regexp text start)
                      (= start (match-beginning 0))

@@ -102,8 +102,6 @@
 		  (start end binding &optional object))
 
 ;; `mevedel-mentions'
-(declare-function mevedel-mentions--commit-expansion
-		  "mevedel-mentions" (session expansion))
 (declare-function mevedel-mentions-expand-user-input
 		  "mevedel-mentions" (text session))
 (declare-function mevedel-mentions-file-token "mevedel-mentions"
@@ -111,7 +109,7 @@
 (declare-function mevedel-mentions-install "mevedel-mentions" nil)
 (declare-function mevedel-mentions-prepare-user-input
 		  "mevedel-mentions" (text &optional session))
-(defvar mevedel-mentions--agent-enabled-p)
+(defvar mevedel-mentions-agent-enabled-p)
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" nil)
@@ -999,7 +997,7 @@ all displayed windows plus the editable composer text around THUNK."
     (require 'mevedel-view-input-files)
     (require 'mevedel-view-segments)
     (require 'mevedel-pending-inputs)
-    (setq-local mevedel-mentions--agent-enabled-p
+    (setq-local mevedel-mentions-agent-enabled-p
                 (not mevedel-view--side-conversation-p))
     (mevedel-mentions-install)
     (mevedel-view--install-dnd)
