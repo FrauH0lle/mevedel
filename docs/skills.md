@@ -385,6 +385,11 @@ skill before dispatching anything; the first injection, permission,
 validation, or hook failure sends neither a partial request nor a child and
 leaves the direct draft or queued entry editable.
 
+Injection outcomes are classified from the pipeline's canonical status, not
+from the wording of the result: a failure whose text this side does not
+recognise would otherwise become legitimate-looking body content that the
+model cannot distinguish from an expression returning that string.
+
 Preparation is asynchronous whenever a body injects, so the raw `gptel-send`
 path tracks the command it dispatched with markers rather than the positions
 it started from, and abandons a late outcome when that text no longer matches

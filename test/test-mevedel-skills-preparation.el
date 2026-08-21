@@ -399,6 +399,24 @@ Return the outcome plist produced by the async helper."
         (should (eq 'ok (plist-get outcome :status)))
         (should (equal "a=\"xy\" b=z" (plist-get outcome :body))))))
 
+  :doc "an Eval result carrying an error status aborts preparation"
+  ;; The pipeline reports the canonical outcome in render data.  Classifying
+  ;; from the display text alone lets a failure whose text does not start
+  ;; with a known prefix through as legitimate skill body content, and the
+  ;; model cannot tell it from an expression that returned that string.
+  (mevedel-skills-test--with-eval-allowed
+    (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+               (lambda (_tool callback &rest _)
+                 (funcall callback
+                          (concat
+                           "Failed to start Eval batch process: boom"
+                           (mevedel-tool-render-data-format
+                            '(:status error)))))))
+      (let ((outcome (mevedel-skills-test--shell-injections-sync
+                      "!el`(+ 1 2)`")))
+        (should (eq 'error (plist-get outcome :status)))
+        (should (eq 'elisp-failure (plist-get outcome :reason))))))
+
   :doc "Eval errors abort skill preparation"
   (mevedel-skills-test--with-eval-allowed
     (let ((outcome (mevedel-skills-test--shell-injections-sync
