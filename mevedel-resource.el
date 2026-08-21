@@ -563,7 +563,7 @@ or permission callback sees a target."
     (let* ((root (file-name-as-directory (expand-file-name root)))
            (path (expand-file-name
                   (mapconcat #'identity components "/") root)))
-      (unless (mevedel-resource--within-root-p path root)
+      (unless (mevedel-resource-within-root-p path root)
         (signal 'mevedel-resource-error
                 (list "Resource address escapes its owning root")))
       path)))
@@ -585,7 +585,7 @@ yield makes them public under `executions/'."
              (mapcar
               (lambda (path)
                 (when (and (file-regular-p path)
-                           (mevedel-resource--within-root-p path root))
+                           (mevedel-resource-within-root-p path root))
                   (let ((relative (mevedel-resource--canonical-relative
                                    path root)))
                     (unless (and (eq scheme 'artifact)
@@ -1089,7 +1089,7 @@ the union index read, which already tolerates missing roots."
       (_ (signal 'mevedel-resource-error
                  (list "Unknown resource provider"))))))
 
-(defun mevedel-resource--within-root-p (path root)
+(defun mevedel-resource-within-root-p (path root)
   "Return non-nil when PATH resolves beneath ROOT, including ROOT itself."
   (when (and (stringp path) (stringp root))
     (let* ((root (file-name-as-directory (expand-file-name root)))
@@ -1383,7 +1383,7 @@ executor."
   "Return the logical artifact address for PATH owned by SESSION."
   (when-let* ((root (mevedel-resource--root 'artifact session))
               (path (expand-file-name path))
-              ((mevedel-resource--within-root-p path root))
+              ((mevedel-resource-within-root-p path root))
               (relative (mevedel-resource--canonical-relative path root))
               ((not (string-match-p
                      "\\`\\.mevedel-pending-executions\\(?:/\\|\\'\\)"

@@ -35,6 +35,11 @@
 ;; `gptel'
 (defvar gptel-default-mode)
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-run-helper
+                  "mevedel-execution"
+                  (name command read-paths writable-roots &rest keys))
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-readiness
                   "mevedel-execution-target" (cl-x) t)
@@ -50,9 +55,13 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
 
 ;; `mevedel-tool-fs'
 (defvar mevedel--real-path)
+
+;; `mevedel-turn'
+(declare-function mevedel-current-origin "mevedel-turn" ())
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-restore-ignored-properties
@@ -90,6 +99,65 @@ prefix argument, or when HERE is non-nil, insert it at point."
       (message "mevedel %s" version))
      (here (insert (format "mevedel %s" version)))
      (t version))))
+
+
+;;
+;;; External helpers
+
+(defun mevedel-run-helper-capturing-output
+    (name command read-paths &optional writable-roots session)
+  "Run helper COMMAND as NAME, returning (EXIT-CODE . OUTPUT).
+READ-PATHS and WRITABLE-ROOTS declare the helper's filesystem boundary.
+OUTPUT is returned unchanged so callers may interpret its whitespace."
+  (require 'mevedel-execution)
+  (require 'mevedel-turn)
+  (let* ((result (mevedel-execution-run-helper
+                  name command read-paths writable-roots
+                  :session (or session (bound-and-true-p mevedel--session))
+                  :owner (mevedel-current-origin)))
+         (error-data (plist-get result :error)))
+    (when error-data
+      (signal (car error-data) (cdr error-data)))
+    (cons (plist-get result :exit-code)
+          (plist-get result :output))))
+
+(defun mevedel-generate-diff
+    (original modified filepath &optional labels-real)
+  "Generate unified diff between ORIGINAL and MODIFIED for FILEPATH.
+When LABELS-REAL is nil, empty content is labelled `/dev/null'.  Otherwise
+both sides use real `a/FILEPATH' and `b/FILEPATH' labels."
+  (with-temp-buffer
+    (let ((orig-file (make-temp-file "mevedel-orig-"))
+          (mod-file (make-temp-file "mevedel-mod-")))
+      (unwind-protect
+          (progn
+            (with-temp-file orig-file (when original (insert original)))
+            (with-temp-file mod-file (when modified (insert modified)))
+            (let* ((mevedel--session nil)
+                   (output
+                    (cdr
+                     (mevedel-run-helper-capturing-output
+                      "mevedel-diff"
+                      (list "diff" "-u"
+                            "--label" (if (or labels-real
+                                              (and original
+                                                   (not (string-empty-p
+                                                         original))))
+                                          (concat "a/" filepath)
+                                        "/dev/null")
+                            "--label" (if (or labels-real
+                                              (and modified
+                                                   (not (string-empty-p
+                                                         modified))))
+                                          (concat "b/" filepath)
+                                        "/dev/null")
+                            orig-file mod-file)
+                      (list orig-file mod-file)))))
+              (cond ((string-empty-p output) "")
+                    ((string-suffix-p "\n" output) output)
+                    (t (concat output "\n")))))
+        (when (file-exists-p orig-file) (delete-file orig-file))
+        (when (file-exists-p mod-file) (delete-file mod-file))))))
 
 
 ;;

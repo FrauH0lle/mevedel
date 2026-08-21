@@ -61,10 +61,10 @@
 (autoload 'mevedel--prompt-attribution-line "mevedel-interaction-prompt")
 
 ;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--tool-results-dir
-                  "mevedel-pipeline" (session buffer &optional request))
 (declare-function mevedel-pipeline-active-tool-use-id
                   "mevedel-pipeline" ())
+(declare-function mevedel-pipeline-tool-results-dir
+                  "mevedel-pipeline" (session buffer &optional request))
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
@@ -142,11 +142,12 @@ instead of failing the tool call."
 
 (defun mevedel-tool-exec--execution-artifact-directory (session)
   "Return SESSION's retained execution artifact directory, if available."
+  (require 'mevedel-pipeline)
   (unless (and (mevedel-session-execution-target session)
                (mevedel-execution-target-remote-p
                 (mevedel-session-execution-target session)))
     (when-let* ((root
-                 (mevedel-pipeline--tool-results-dir
+                 (mevedel-pipeline-tool-results-dir
                   session
                   (or (and (boundp 'mevedel--data-buffer)
                            mevedel--data-buffer)

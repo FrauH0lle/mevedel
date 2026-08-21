@@ -347,10 +347,6 @@
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 
-;; `mevedel-tool-fs'
-(declare-function mevedel-tools--generate-diff "mevedel-tool-fs"
-                  (original modified filepath))
-
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-format
                   "mevedel-tool-render-data" (render-data &optional tool-use-id))
@@ -375,6 +371,8 @@
 (declare-function mevedel--optimize-transcript-buffer
 		  "mevedel-utilities" nil)
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" nil)
+(declare-function mevedel-generate-diff "mevedel-utilities"
+                  (original modified filepath &optional labels-real))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--ensure "mevedel-view" (data-buf))
@@ -1054,6 +1052,7 @@ if none found."
 Return a unified diff string showing original -> final state for each
 file.  Uses the active request's snapshots to compare original states
 with current file contents in WORKSPACE."
+  (require 'mevedel-utilities)
   (let ((diffs "")
         (workspace-root (mevedel-workspace-root
                          (or workspace (mevedel-workspace))))
@@ -1090,7 +1089,7 @@ with current file contents in WORKSPACE."
                                ((and (and original (not (string-empty-p original)))
                                      (or (not current) (string-empty-p current)))
                                 "deleted file mode 100644\n"))
-                              (mevedel-tools--generate-diff
+                              (mevedel-generate-diff
                                (or original "")
                                (or current "")
                                relpath)

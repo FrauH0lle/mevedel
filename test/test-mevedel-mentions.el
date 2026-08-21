@@ -17,7 +17,7 @@
 (require 'mevedel-mentions)
 (require 'mevedel-resource)
 (require 'mevedel-transcript)
-(require 'mevedel-tool-fs)
+(require 'mevedel-tool-fs-read)
 (require 'mevedel-workspace)
 
 ;; Declared in gptel; declared here so `let' binds it dynamically in
@@ -947,9 +947,9 @@ Returns (buffer . overlay)."
                   ((symbol-function 'gptel--model-mime-capable-p)
                    (lambda (mime &optional _model)
                      (equal mime "application/pdf")))
-                  ((symbol-function 'mevedel-tool-fs--large-pdf-p)
+                  ((symbol-function 'mevedel-tool-fs-read-large-pdf-p)
                    (lambda (_path) t))
-                  ((symbol-function 'mevedel-tool-fs--format-large-pdf-reminder)
+                  ((symbol-function 'mevedel-tool-fs-read-format-large-pdf-reminder)
                    (lambda (_path) "large PDF guidance")))
           (let ((result (mevedel--handle-file-mention
                          (list :match-text (concat "@file:" tmp)
@@ -966,14 +966,14 @@ Returns (buffer . overlay)."
   :doc "oversized PDF media mention includes bounded-page guidance"
   (let ((tmp (make-temp-file "mevedel-file-" nil ".pdf" "%PDF-1.4\n")))
     (unwind-protect
-        (let ((mevedel-tool-fs--media-max-bytes 1))
+        (let ((mevedel-tool-fs-read-media-max-bytes 1))
           (cl-letf (((symbol-function 'gptel--model-capable-p)
                      (lambda (cap &optional _model) (eq cap 'media)))
                     ((symbol-function 'gptel--model-mime-capable-p)
                      (lambda (mime &optional _model)
                        (equal mime "application/pdf")))
                     ((symbol-function
-                      'mevedel-tool-fs--format-large-pdf-reminder)
+                      'mevedel-tool-fs-read-format-large-pdf-reminder)
                      (lambda (_path) "large PDF guidance")))
             (let ((result (mevedel--handle-file-mention
                            (list :match-text (concat "@file:" tmp)

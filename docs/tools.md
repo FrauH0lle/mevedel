@@ -511,6 +511,12 @@ wrapper behavior described below. Remote direct-async channel overrides are
 scoped to the individual spawn and never change the user's global TRAMP
 connection properties.
 
+`mevedel-tool-fs.el` owns registration and the shared path/resource result
+primitives. `mevedel-tool-fs-read.el` owns text/media decoding and bounded Read
+output; `mevedel-tool-fs-search.el` owns Glob/Grep execution and private
+resource-output rewriting. Diff generation belongs to the shared Utilities
+owner, while pre-turn file snapshots belong to Pipeline.
+
 The current external-helper inventory is `diff`; `rg` for Read directory
 listings, Glob, and Grep; `pdfinfo` and `pdftoppm`; and ImageMagick's `magick`
 or `convert`. Their sandbox facts stay out of successful model-visible results.

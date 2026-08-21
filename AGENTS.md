@@ -230,7 +230,9 @@ Prompt / presets / agents
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
 Tools (each dispatches through mevedel-pipeline)
-  mevedel-tool-fs.el          Read, Glob, Grep
+  mevedel-tool-fs.el          filesystem tool registration and shared path/resource primitives
+  mevedel-tool-fs-read.el     Read text/media decoding and bounded output
+  mevedel-tool-fs-search.el   Glob/Grep execution and resource-output privacy
   mevedel-tool-patch.el       ApplyPatch parse/match/apply engine + tool
   mevedel-tool-code.el        XrefReferences, XrefDefinitions, Imenu, Treesitter
   mevedel-tool-exec-permission.el Bash/Eval authority and prompt adapters

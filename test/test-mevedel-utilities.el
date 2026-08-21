@@ -704,5 +704,58 @@ rejects trailing binary operators"
           (kill-buffer buffer)))
       (when (file-directory-p root) (delete-directory root t)))))
 
+(mevedel-deftest mevedel-run-helper-capturing-output ()
+  ,test
+  (test)
+  :doc "routes a structured command and declared paths through the helper layer"
+  (let ((session (mevedel-session--create))
+        captured)
+    (cl-letf (((symbol-function 'mevedel-execution-run-helper)
+               (lambda (&rest args)
+                 (setq captured args)
+                 '(:exit-code 7 :output " helper output \n"))))
+      (let ((mevedel--session session))
+        (should
+         (equal '(7 . " helper output \n")
+                (mevedel-run-helper-capturing-output
+                 "media-helper" '("helper" "--flag") '("/input")
+                 '("/artifacts"))))))
+    (should (equal '("media-helper" ("helper" "--flag") ("/input")
+                     ("/artifacts") :session)
+                   (seq-take captured 5)))
+    (should (eq session (nth 5 captured)))
+    (should (eq :owner (nth 6 captured)))
+    (should (equal "/root" (nth 7 captured)))))
+
+(mevedel-deftest mevedel-generate-diff ()
+  ,test
+  (test)
+  :doc "runs local snapshot diffing locally despite an ambient remote session"
+  (let* ((target
+          (mevedel-execution-target-create
+           "/ssh:builder@example.test:/srv/project/"))
+         (session (mevedel-session--create :execution-target target))
+        captured)
+    (cl-letf (((symbol-function 'mevedel-execution-run-helper)
+               (lambda (&rest args)
+                 (setq captured args)
+                 '(:exit-code 1 :output "unified diff"))))
+      (let ((mevedel--session session))
+        (should (equal "unified diff\n"
+                       (mevedel-generate-diff
+                        "old" "new" "file.el")))))
+    (should (equal "diff" (car (nth 1 captured))))
+    (should (= 2 (length (nth 2 captured))))
+    (should-not (nth 5 captured))
+    (should (eq :owner (nth 6 captured)))
+    (should (equal "/root" (nth 7 captured))))
+  :doc "preserves a trailing blank context line in unified output"
+  (cl-letf (((symbol-function 'mevedel-execution-run-helper)
+             (lambda (&rest _)
+               '(:exit-code 1 :output "@@ -1 +1 @@\n-old\n+new\n \n"))))
+    (should
+     (equal "@@ -1 +1 @@\n-old\n+new\n \n"
+            (mevedel-generate-diff "old\n\n" "new\n\n" "file.el")))))
+
 (provide 'test-mevedel-utilities)
 ;;; test-mevedel-utilities.el ends here

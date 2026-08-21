@@ -121,10 +121,6 @@
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
-;; `mevedel-tool-fs'
-(declare-function mevedel-tools--generate-diff
-                  "mevedel-tool-fs" (original modified filepath))
-
 ;; `mevedel-tool-task'
 (declare-function mevedel-tool-task-format-active-groups-for-reminder
                   "mevedel-tool-task" (session))
@@ -135,6 +131,9 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--plain-data-p "mevedel-utilities" (value))
+(declare-function mevedel-generate-diff
+                  "mevedel-utilities"
+                  (original modified filepath &optional labels-real))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-root "mevedel-workspace" (workspace) t)
@@ -923,6 +922,7 @@ payloads bounded when large rewrites or reformats occur."
 (defun mevedel-reminders--format-edited-file-change (change max-diff-lines)
   "Render CHANGE (plist from detect-external-changes) as a reminder block body.
 MAX-DIFF-LINES caps the unified diff size."
+  (require 'mevedel-utilities)
   (let ((path (plist-get change :path))
         (status (plist-get change :status))
         (old (plist-get change :old))
@@ -932,7 +932,7 @@ MAX-DIFF-LINES caps the unified diff size."
       ('modified
        (concat (format "MODIFIED: %s\n" path)
                (mevedel-reminders--truncate-diff
-                (mevedel-tools--generate-diff (or old "") (or new "") path)
+                (mevedel-generate-diff (or old "") (or new "") path)
                 max-diff-lines))))))
 
 (defun mevedel-reminders--format-edited-files (changes max-diff-lines)

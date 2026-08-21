@@ -5210,7 +5210,7 @@
   "Format MEDIA for SESSION and TOOL-USE-ID."
   (mevedel-tool-media--format-media-data-block
    media
-   (mevedel-pipeline--tool-results-dir session nil)
+   (mevedel-pipeline-tool-results-dir session nil)
    tool-use-id))
 
 (mevedel-deftest mevedel-view--tool-call-parse-media-fallback ()
