@@ -1126,6 +1126,31 @@ Returns (buffer . overlay)."
       (delete-directory outside-dir)
       (delete-directory ws-root)))
 
+  :doc "invalid line ranges are rejected rather than relabeled"
+  ;; A typo hands the model content that does not match the label: a zero
+  ;; start silently reads from line 1, and a reversed range reads one line
+  ;; while claiming a span.  Nothing in the payload contradicts the label,
+  ;; so the model cannot tell.
+  (let ((tmp (make-temp-file "mevedel-file-" nil ".txt"
+                             "line1\nline2\nline3\n")))
+    (unwind-protect
+        (dolist (spec '(("0" nil) ("0" "2") ("3" "1")))
+          (let* ((suffix (if (cadr spec)
+                             (format "#L%s-%s" (car spec) (cadr spec))
+                           (format "#L%s" (car spec))))
+                 (result (mevedel--handle-file-mention
+                          (list :match-text (concat "@file:" tmp suffix)
+                                :capture tmp
+                                :captures (list (concat "@file:" tmp suffix)
+                                                tmp (car spec) (cadr spec))
+                                :workspace-root temporary-file-directory))))
+            (should (string-match-p "invalid line range"
+                                    (plist-get result :placeholder)))
+            (should-not (plist-get result :hash))
+            (should-not (string-match-p
+                         "line1" (or (plist-get result :reminder) "")))))
+      (delete-file tmp)))
+
   :doc "line-range suffix reads only the requested lines"
   (let* ((tmp (make-temp-file "mevedel-file-" nil ".txt"
                               "line1\nline2\nline3\nline4\nline5\n"))
