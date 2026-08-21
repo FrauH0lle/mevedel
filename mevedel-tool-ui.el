@@ -438,7 +438,7 @@
     :args ((query string :required
                   "Search query: tool name or capability description.")
            (load boolean :optional
-                 "Set true when you intend to call the matched tool; it becomes available now for your next tool call."))
+                 "Set true when you intend to call the matched tool; a tool the registry can resolve becomes available now for your next tool call, and the result names any match it could not."))
     :async-p t
     :read-only-p t
     :groups (util)

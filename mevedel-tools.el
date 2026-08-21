@@ -558,6 +558,38 @@ Returns a list of (TOOL-PATH . SHORT-DESCRIPTION) pairs from CTX's
         (format "%s\n  %s" base usage)
       base)))
 
+(defun mevedel-tools--tool-search-report (matches unresolved load)
+  "Return the ToolSearch answer for MATCHES.
+UNRESOLVED holds the entries the registry could not resolve, and is
+empty unless LOAD is non-nil.  MATCHES has already had them removed, so
+under LOAD every remaining match is one the model can now call."
+  (let ((found
+         (and matches
+              (format "Found %d tool(s):\n%s"
+                      (length matches)
+                      (mapconcat #'mevedel-tools--tool-search-format-entry
+                                 matches "\n"))))
+        (unresolved-note
+         (and unresolved
+              (format "Not registered, so not loaded: %s.  Do not call %s."
+                      (mapconcat (lambda (entry) (cadr (car entry)))
+                                 unresolved ", ")
+                      (if (cdr unresolved) "them" "it")))))
+    (cond
+     ((not (or found unresolved-note)) "No matching tools found.")
+     ((not found) unresolved-note)
+     ((not load)
+      (concat found
+              "\n\nCall ToolSearch again with load=true to activate these"
+              " tools. Search by exact tool name when known (for example"
+              " XrefReferences or Imenu), or by capability group such as"
+              " xref, imenu, treesitter, elisp, or web."))
+     (t
+      (concat found
+              "\n\nTools loaded. They are available now; call them in your"
+              " next tool call."
+              (and unresolved-note (concat "\n\n" unresolved-note)))))))
+
 (cl-defun mevedel-tools--tool-search (callback query &optional load)
   "Search deferred tools matching QUERY, optionally LOAD them.
 
@@ -576,29 +608,29 @@ otherwise queues them on the chat buffer's session."
   (let* ((ctx (mevedel-tools--current-deferred-context))
          (matches (and ctx
                        (mevedel-tools--search-deferred ctx query)))
-         (result
-          (if matches
-              (mapconcat #'mevedel-tools--tool-search-format-entry
-                         matches "\n")
-            "No matching tools found.")))
+         (unresolved nil))
     (when (and load matches ctx)
-      ;; Resolve tool structs from the registry and queue on the context.
+      ;; The availability claim below has to come from what the registry
+      ;; actually resolved, not from the entries that matched the query.
       (dolist (entry matches)
-        (when-let* ((tool (ignore-errors (gptel-get-tool (car entry)))))
-          (let ((tool-list (ensure-list tool)))
-            (dolist (t1 tool-list)
+        (if-let* ((tool (ignore-errors (gptel-get-tool (car entry)))))
+            (dolist (t1 (ensure-list tool))
               (unless (cl-find-if (lambda (pending)
                                     (equal (gptel-tool-name pending)
                                            (gptel-tool-name t1)))
                                   (mevedel-tools--ctx-deferred-pending ctx))
-                (push t1 (mevedel-tools--ctx-deferred-pending ctx))))))))
+                (push t1 (mevedel-tools--ctx-deferred-pending ctx))))
+          (push entry unresolved)))
+      ;; An entry that cannot resolve is dropped, or the roster and the
+      ;; unknown-tool guidance keep sending the model back to load it.
+      (when unresolved
+        (let ((stale-p (lambda (entry) (memq entry unresolved))))
+          (setf (mevedel-tools--ctx-deferred-set ctx)
+                (cl-remove-if stale-p (mevedel-tools--ctx-deferred-set ctx)))
+          (setq matches (cl-remove-if stale-p matches)))))
     (funcall callback
-             (if matches
-                 (format "Found %d tool(s):\n%s%s"
-                         (length matches) result
-                         (if load "\n\nTools loaded. They are available now; call them in your next tool call."
-                           "\n\nCall ToolSearch again with load=true to activate these tools. Search by exact tool name when known (for example XrefReferences or Imenu), or by capability group such as xref, imenu, treesitter, elisp, or web."))
-               result))))
+             (mevedel-tools--tool-search-report
+              matches (nreverse unresolved) load))))
 
 
 ;;
