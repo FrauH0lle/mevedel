@@ -33,7 +33,8 @@
    (mevedel-tool-media-normalize-items
     '((:mime "image/png" :kind image :data "")))))
 
-(mevedel-deftest mevedel-tool-media-attach-result ()
+(mevedel-deftest mevedel-tool-media-attach-result
+    (:vars ((mevedel-tool-media--store nil)))
   ,test
   (test)
   :doc "stores captured bytes behind an opaque transcript reference"
@@ -88,9 +89,51 @@
                              (cadr published)))
     (should (string-search ":tool-use-id \"toolu_remote\""
                            (nth 2 published)))
-    (should (eq 'utf-8-unix (nth 3 published)))))
+    (should (eq 'utf-8-unix (nth 3 published))))
+  :doc "bounds retained payload bytes and replays evicted durable records"
+  (let* ((dir (make-temp-file "mevedel-tool-media-bound-" t))
+         (mevedel-tool-media-cache-max-bytes 16)
+         (first-media '((:mime "image/png" :kind image :data "QUJDQUJD")))
+         (second-media '((:mime "image/png" :kind image :data "WFlaWFla")))
+         (third-media '((:mime "image/png" :kind image :data "MTIzNDU2")
+                        (:mime "image/png" :kind image :data "Nzg5MDEy")))
+         (first (substring-no-properties
+                 (mevedel-tool-media-attach-result
+                  "one" first-media dir "toolu_1"))))
+    (unwind-protect
+        (progn
+          (mevedel-tool-media-attach-result
+           "two" second-media dir "toolu_2")
+          (should (= 2 (length mevedel-tool-media--store)))
+          (mevedel-tool-media-attach-result
+           "three" third-media dir "toolu_3")
+          (should (= 1 (length mevedel-tool-media--store)))
+          (should (equal first-media
+                         (cdr (mevedel-tool-media-extract
+                               first dir "toolu_1")))))
+      (delete-directory dir t)))
+  :doc "keeps a record whose payload alone exceeds the bound"
+  (let* ((mevedel-tool-media-cache-max-bytes 4)
+         (media '((:mime "image/png" :kind image :data "QUJDQUJD")))
+         (stored (substring-no-properties
+                  (mevedel-tool-media-attach-result
+                   "one" media nil "toolu_1"))))
+    (should (= 1 (length mevedel-tool-media--store)))
+    (should (equal media
+                   (cdr (mevedel-tool-media-extract stored nil "toolu_1")))))
+  :doc "drops evicted ephemeral media that has no durable record"
+  (let* ((mevedel-tool-media-cache-max-bytes 8)
+         (first (substring-no-properties
+                 (mevedel-tool-media-attach-result
+                  "one" '((:mime "image/png" :kind image :data "QUJDQUJD"))
+                  nil "toolu_1"))))
+    (mevedel-tool-media-attach-result
+     "two" '((:mime "image/png" :kind image :data "WFlaWFla")) nil "toolu_2")
+    (should (= 1 (length mevedel-tool-media--store)))
+    (should-not (cdr (mevedel-tool-media-extract first nil "toolu_1")))))
 
-(mevedel-deftest mevedel-tool-media-extract ()
+(mevedel-deftest mevedel-tool-media-extract
+    (:vars ((mevedel-tool-media--store nil)))
   ,test
   (test)
   :doc "restores persisted media after transcript properties are lost"
@@ -156,7 +199,7 @@
                       :artifacts
                       (list (list logical :published published
                                   :sha256 (secure-hash 'sha256 bytes)))))
-          (clrhash mevedel-tool-media--store)
+          (setq mevedel-tool-media--store nil)
           (should (equal logical (file-relative-name fixed save-path)))
           (should
            (equal bytes
@@ -184,7 +227,8 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
-(mevedel-deftest mevedel-tool-media-prepare-tool-result ()
+(mevedel-deftest mevedel-tool-media-prepare-tool-result
+    (:vars ((mevedel-tool-media--store nil)))
   ,test
   (test)
   :doc "keeps provider-independent model text free of captured base64"

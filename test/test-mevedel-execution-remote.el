@@ -1312,7 +1312,8 @@ connection charges for, so the program path is proved here too."
   (with-current-buffer buffer
     (insert "Remote publication transcript\n")
     (should (mevedel-session-artifacts-save session buffer)))
-  (let* ((save-path (mevedel-session-save-path session))
+  (let* ((mevedel-tool-media--store nil)
+         (save-path (mevedel-session-save-path session))
          (publication
           (mevedel-session-publication-read save-path))
          (tool-results (file-name-concat save-path "tool-results"))
@@ -1330,7 +1331,7 @@ connection charges for, so the program path is proved here too."
                      (plist-get (plist-get entry :summary) :session-id))))
     (with-current-buffer buffer
       (should (mevedel-session-artifacts-save session buffer t)))
-    (clrhash mevedel-tool-media--store)
+    (setq mevedel-tool-media--store nil)
     (let ((restored
            (mevedel-tool-media-extract
             attached tool-results "toolu_remote" nil session)))

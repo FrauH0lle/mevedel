@@ -52,7 +52,11 @@ and gptel parse steps; it does not construct provider-specific media blocks.
 The transcript reference contains only an opaque record id and its owning tool
 use id. Replay never rereads the original filesystem path. Remote records are
 published and replayed through the session artifact manifest; a fixed-path
-cache is never an authority fallback.
+cache is never an authority fallback. In-memory retention is bounded by
+`mevedel-tool-media-cache-max-bytes` (default 25 MiB): the oldest records are
+dropped first and the newest is always kept. Durable records are reread from
+their published copy after eviction; media captured without durable storage is
+unavailable once evicted.
 
 `mevedel-tool-render-data.el` owns render-data serialization, provider
 scrubbing, transcript mutation, and stale execution reconciliation. The
