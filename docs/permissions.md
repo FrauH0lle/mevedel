@@ -186,7 +186,8 @@ never broaden the child sandbox.
 `mevedel-protected-paths` is an alist from glob to `read-only` or
 `inaccessible`. The default `.git` glob is read-only; the default SSH, GnuPG,
 AWS, Azure, Google Cloud, and Kubernetes credential globs are inaccessible. On
-a remote session, leading `~` uses the target user's probed home; a
+a trailing `/**`, policy covers both the directory and its descendants. On a
+remote session, leading `~` uses the target user's probed home; a
 client-absolute custom pattern stays in the client path domain and therefore
 does not become a remote protection rule.
 String-only entries are invalid by design.

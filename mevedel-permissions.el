@@ -608,38 +608,33 @@ Returns non-nil if PATH matches PATTERN."
            (directory-glob-root
             (when (string-suffix-p "/**" expanded)
               (substring expanded 0 -3)))
+           (match-pattern (or directory-glob-root expanded))
            (i 0)
-           (len (length expanded))
+           (len (length match-pattern))
            (parts (list "\\`")))
-      (or (and directory-glob-root
-               (string= (directory-file-name expanded-path)
-                        (directory-file-name
-                         (expand-file-name directory-glob-root))))
-          (progn
-            (while (< i len)
-              (let ((ch (aref expanded i)))
-                (cond
-                 ;; ** globstar - matches across directories
-                 ((and (eq ch ?*)
-                       (< (1+ i) len)
-                       (eq (aref expanded (1+ i)) ?*))
-                  (push ".*" parts)
-                  (setq i (+ i 2)))
-                 ;; * - matches within a single directory
-                 ((eq ch ?*)
-                  (push "[^/]*" parts)
-                  (setq i (1+ i)))
-                 ;; ? - matches single character
-                 ((eq ch ??)
-                  (push "." parts)
-                  (setq i (1+ i)))
-                 ;; Literal character
-                 (t
-                  (push (regexp-quote (char-to-string ch)) parts)
-                  (setq i (1+ i))))))
-            (push "\\'" parts)
-            (string-match-p (apply #'concat (nreverse parts))
-                            expanded-path))))))
+      (while (< i len)
+        (let ((ch (aref match-pattern i)))
+          (cond
+           ;; ** globstar - matches across directories
+           ((and (eq ch ?*)
+                 (< (1+ i) len)
+                 (eq (aref match-pattern (1+ i)) ?*))
+            (push ".*" parts)
+            (setq i (+ i 2)))
+           ;; * - matches within a single directory
+           ((eq ch ?*)
+            (push "[^/]*" parts)
+            (setq i (1+ i)))
+           ;; ? - matches single character
+           ((eq ch ??)
+            (push "." parts)
+            (setq i (1+ i)))
+           ;; Literal character
+           (t
+            (push (regexp-quote (char-to-string ch)) parts)
+            (setq i (1+ i))))))
+      (push (if directory-glob-root "\\(?:/.*\\)?\\'" "\\'") parts)
+      (string-match-p (apply #'concat (nreverse parts)) expanded-path))))
 
 (defconst mevedel-permission--specifier-keys
   '(:path :pattern :domain :name)
