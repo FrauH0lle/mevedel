@@ -1181,6 +1181,37 @@ function returning the states entered by test handlers."
                    (gptel-tool-name
                     (car (mevedel-session-deferred-pending session))))))
 
+  :doc "reports an unresolvable tool as unavailable and drops it"
+  (let* ((session (mevedel-tools-test--make-session))
+         (mevedel--session session)
+         (result nil))
+    (setf (mevedel-session-deferred-set session)
+          '((("mevedel" "Ghost") . "A tool whose registration went away")))
+    (mevedel-tools--tool-search (lambda (s) (setq result s)) "ghost" t)
+    (should-not (string-match-p "available now" result))
+    (should (string-match-p "Ghost" result))
+    (should-not (mevedel-session-deferred-pending session))
+    ;; Left in the deferred set it would keep being advertised by the roster
+    ;; and by the unknown-tool guidance, which sends the model back here.
+    (should-not (mevedel-session-deferred-set session)))
+
+  :doc "reports only the resolvable half of a mixed match"
+  (let* ((session (mevedel-tools-test--make-session))
+         (mevedel--session session)
+         (result nil))
+    (setf (mevedel-session-deferred-set session)
+          '((("mevedel" "Edit") . "Replace text in a file")
+            (("mevedel" "Ghost") . "Replace text in a vanished file")))
+    (mevedel-tools--tool-search (lambda (s) (setq result s)) "replace" t)
+    (should (string-match-p "available now" result))
+    (should (= 1 (length (mevedel-session-deferred-pending session))))
+    (should (equal "Edit"
+                   (gptel-tool-name
+                    (car (mevedel-session-deferred-pending session)))))
+    (should (string-match-p "Ghost" result))
+    (should (equal '((("mevedel" "Edit") . "Replace text in a file"))
+                   (mevedel-session-deferred-set session))))
+
   :doc "loads deferred tools when the query matches their registered group"
   (let* ((session (mevedel-tools-test--make-session))
          (mevedel--session session)

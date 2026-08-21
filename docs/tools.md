@@ -233,9 +233,14 @@ specs without redefining the preset/agent.
 
 `ToolSearch(load=true)` queues matching deferred tools for the next tool
 payload update and reports them as available now so the model calls the
-newly loaded tool in its next tool call. Search terms can be exact tool
-names (`XrefReferences`, `Imenu`, `function_source`) or capability
-families (`xref`, `imenu`, `treesitter`, `elisp`, `web`).
+newly loaded tool in its next tool call. Only entries the registry
+resolves are reported that way; a match it cannot resolve is reported
+unavailable and dropped from the deferred set for the rest of the
+request, so the roster and the unknown-tool guidance stop sending the
+model back to load it. The next request re-seeds the set from the
+preset. Search terms can be exact tool names (`XrefReferences`,
+`Imenu`, `function_source`) or capability families (`xref`, `imenu`,
+`treesitter`, `elisp`, `web`).
 
 ### Interaction tool ownership
 
