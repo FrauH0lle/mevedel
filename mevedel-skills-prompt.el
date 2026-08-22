@@ -31,6 +31,8 @@
 (defvar mevedel-reminders--current-chat-buffer)
 
 ;; `mevedel-skills-invoke'
+(declare-function mevedel-skills-request-model-policy
+                  "mevedel-skills-invoke" ())
 (declare-function mevedel-skills--current-invocation
                   "mevedel-skills-invoke" ())
 (declare-function mevedel-skills--entry-base
@@ -97,10 +99,14 @@ on long sessions."
 
 (defun mevedel-skills--listing-budget-chars ()
   "Return the character budget for the model-facing skills roster.
-Derived from `mevedel-skills-listing-budget' and the context window the
-active model is budgeted against; assumes ~4 characters per token."
+Derived from `mevedel-skills-listing-budget' and the context window of
+the model the pending request resolves to -- a Plan workload's or a
+leading skill's override included, since gptel sizes the system prompt
+before the transforms apply either; assumes ~4 characters per token."
   (require 'mevedel-models)
-  (let ((limit (mevedel-model-effective-context-window)))
+  (require 'mevedel-skills-invoke)
+  (let ((limit (mevedel-model-effective-context-window
+                (plist-get (mevedel-skills-request-model-policy) :model))))
     (max 0 (floor (* mevedel-skills-listing-budget limit 4)))))
 
 (defun mevedel-skills--format-listing-result (skills)
