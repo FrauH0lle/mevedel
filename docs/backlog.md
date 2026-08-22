@@ -512,30 +512,6 @@ become implemented, obsolete, or unjustified.
 - **Blast radius:** Bedrock sessions cannot use deferred-tool loading
   correctly.
 
-### Restore bounded Buddy context expansion
-
-- **Source:** B24-3 and `7745fe8` deleted Buddy's unrestricted `read_buffer`
-  tool because an unattended review could read an entire changed buffer beyond
-  its bounded diff payload. The broad authority was wrong, but removing all
-  context expansion also removed the intended inspect-then-annotate workflow.
-- **What's owed:** Add a bounded `read_around`-style Buddy tool anchored to a
-  live line marker already shown in the current review. Return only a fixed
-  local window, register markers for the newly exposed live lines so they may
-  receive notes, and retain generation and review-scope checks. Do not permit
-  arbitrary ranges, omitted bounds that mean the whole buffer, or reads from
-  buffers outside the running review. Restore prompt guidance and test both the
-  successful read-then-annotate flow and every authority boundary.
-- **Why deferred:** Real usage should determine the useful window and whether
-  one expansion per anchor is enough; those choices do not justify restoring
-  the old whole-buffer reader meanwhile.
-- **Status check:** Automatic Buddy currently receives six context lines on
-  either side of each change and must stay silent whenever that payload is
-  insufficient. It has no way to inspect a nearby definition or surrounding
-  block before deciding whether a note is justified.
-- **Blast radius:** Buddy can miss real defects that need slightly more local
-  context, while an over-broad replacement would again expand unattended
-  provider access beyond what the user was shown.
-
 ### Split the side-conversation test suite into per-function deftests
 
 - **Source:** `test/test-mevedel-side-conversation.el`

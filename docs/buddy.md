@@ -108,9 +108,17 @@ touched. The payload carries six lines of context either side of each change,
 and every numbered line in it can carry a note — so a bug sitting next to an
 edit gets named even though you did not introduce it this round.
 
-It does not go further than that. If the bounded payload is insufficient, the
-automatic channel stays silent instead of reading untouched parts of a changed
-buffer.
+It does not stop there. `read_buffer` returns a bounded range of a buffer
+already in the review, for a question the diff raised but cannot settle — a
+signature to check, a declaration further up. Both bounds are required and one
+call returns at most `mevedel-buddy-note-read-limit` lines. An unbounded read
+would ship a whole file to the provider on an idle timer, for a one-line edit,
+through a tool that takes no permission step.
+
+Lines read back are annotatable, so a fault the read exposes gets its note where
+the fault is rather than described from the diff. That widens where notes may
+appear; if it turns noisy, the narrower rule is to gate `add_note` back to diff
+lines.
 
 Borderline material is handled by **severity, not silence**. Something a linter
 or the byte compiler would also report is not off limits; it is just rarely
@@ -143,11 +151,15 @@ visited — would have their offsets replayed against unrelated content.
 
 ## Scope is an allowlist, and empty means nothing
 
-While a review runs, `mevedel-buddy-note--scope-buffers` holds exactly the
-buffers its note tools may touch, and `add_note`, `update_note`, and
-`remove_note` all check it. The note set described to the model is filtered the
-same way, so a review of one project never sees another's buffer names, line
-numbers, or note text.
+While a review runs, `mevedel-buddy-note--scope-buffers` maps each allowed name
+to the exact live buffer the review may touch, and every tool — `read_buffer`,
+`add_note`, `update_note`, `remove_note` — checks it. The note set described to
+the model is filtered the same way, so a review of one project never sees
+another's buffer names, line numbers, or note text.
+
+Names are only model-facing addresses. Killing an allowed buffer and creating
+another under the same name does not transfer the old review's authority to
+the replacement.
 
 An empty scope denies everything. That matters because a tool call can still
 arrive after a review is abandoned or times out, and "no review is running"
@@ -203,6 +215,24 @@ deleted, nonpositive, out-of-range, and already released line numbers are
 rejected rather than falling back to current raw line counting. A note on the
 wrong line is worse than no note, so this is not an optional refinement.
 
+`read_buffer` registers markers for the lines it returns, which is what makes
+them annotatable. A line already marked keeps its original markers: recapturing
+one would move an existing note's anchor to wherever that number points now,
+which is the failure markers exist to prevent.
+
+After the initial payload markers are captured, reads do not grow the set past
+`mevedel-buddy-note--marker-ceiling`. A review may issue several reads per round
+and several rounds, and without a ceiling the marker set would grow with what
+the model asked for rather than with what the user edited. A read stops before
+the first line whose marker would exceed the ceiling, so every line it returns
+remains annotatable. Initial diff and guidance markers are not truncated; they
+are the authority the request started with rather than model-requested growth.
+
+If editing moves an older marker so that its numeric key now names different
+text, a later read stops before reusing that ambiguous number. The next review
+supplies fresh line numbers. Preserving the older marker keeps a note about the
+original diff line correct; returning new text under the same number would not.
+
 ## Model selection
 
 Buddy resolves the `buddy` entry in `mevedel-model-workloads`, defaulting to the
@@ -223,7 +253,7 @@ depth, and your source goes out on every idle timer.
 Buddy is a port of [llm-buddy](https://github.com/ahyatt/llm-buddy) by Andrew
 Hyatt. The package itself is not a dependency — it requires the `llm` library
 and mevedel is gptel-coupled, so avoiding a second provider abstraction is the
-reason this port exists. Three divergences are deliberate:
+reason this port exists. Four divergences are deliberate:
 
 - **No `end` tool and no forced tool choice.** llm-buddy forces a tool call
   every turn, which means the model can never stop, so it must be handed an
@@ -237,6 +267,12 @@ reason this port exists. Three divergences are deliberate:
   outside a Buddy request can call them.
 - **Scope is the mevedel workspace**, not a `project.el` project, and it is
   derived from `default-directory` rather than requiring a visited file.
+- **Reads and notes are bounded.** llm-buddy's `read_buffer` takes optional
+  bounds that mean the whole buffer, applies no line cap, and checks no buffer
+  allowlist; its `add_note` resolves a line number by counting from `point-min`
+  when the tool call arrives. mevedel requires both bounds, caps the span,
+  restricts reads to buffers in the running review, and resolves every line
+  through markers captured when that line was shown.
 
 llm-buddy's `replace_content` auto-fix path is not ported. mevedel already has
 patch proposals, patch review, and the permission chain for edits; a second
@@ -254,6 +290,7 @@ route that modifies a buffer unprompted is at odds with that. Notes only.
 | `mevedel-buddy-max-iterations` | `8` | Tool rounds before a review is abandoned |
 | `mevedel-buddy-timeout` | `120` | Seconds before a review that never settles is abandoned |
 | `mevedel-buddy-note-serialize-limit` | `40` | Notes described to the model per request |
+| `mevedel-buddy-note-read-limit` | `200` | Lines one `read_buffer` call returns |
 | `mevedel-buddy-note-width` | `72` | Column budget for laying a note out |
 | `mevedel-buddy-note-current-line-style` | `below` | Style for the line at point |
 | `mevedel-buddy-note-other-lines-style` | `eol` | Style for every other line |

@@ -52,4 +52,9 @@ reviews. Maintain them: `update_note` when the wording no longer fits,
 `remove_note` when the user has addressed it or it no longer applies. Never
 raise a point the user already dismissed.
 
+`read_buffer` reads numbered lines from a buffer in this request when you need
+to see more of it than you were sent. Both `begin` and `end` are required, and
+one call returns a bounded number of lines. The lines you read back can carry
+notes.
+
 Annotate only buffers that appear in this request.

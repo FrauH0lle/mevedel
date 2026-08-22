@@ -70,6 +70,18 @@ per-request cost grow all session.  The newest notes are kept."
   :type 'natnum
   :group 'mevedel-buddy)
 
+(defcustom mevedel-buddy-note-read-limit 200
+  "Positive maximum number of lines one `read_buffer' call returns.
+
+Both bounds of a read are required, so this only caps how much one call
+may ask for.  A background feature that fires on an idle timer must not
+have its per-request cost scale with file size rather than edit size."
+  :type '(restricted-sexp
+          :tag "Positive integer"
+          :match-alternatives
+          ((lambda (value) (and (integerp value) (> value 0)))))
+  :group 'mevedel-buddy)
+
 (defface mevedel-buddy-note-face
   '((t :slant italic))
   "Base face for Buddy note overlays."
@@ -107,7 +119,7 @@ Each note is a plist with `:id', `:buffer', `:line', `:note',
   "Start position of the line this buffer's notes were last laid out for.")
 
 (defvar mevedel-buddy-note--scope-buffers nil
-  "Buffer names the running review may touch.
+  "Alist of buffer names and exact buffers the running review may touch.
 
 Nil means no review is running, and denies everything.  A tool call can
 still arrive after a review is abandoned or times out, and no scope
@@ -120,9 +132,29 @@ Each buffer entry maps a shown line number to advancing start and
 non-advancing end markers.  The boundaries distinguish insertion and
 replacement from deletion.")
 
+(defconst mevedel-buddy-note--marker-ceiling 2000
+  "Marker count above which reads add no new annotatable lines.
+
+Emacs walks a buffer marker list on every insertion, and the user is
+typing throughout.  Initial diff and guidance markers are not
+truncated, but a review may issue several `read_buffer' calls per round
+and several rounds.  Without a ceiling the marker set grows with what
+the model asks for rather than with what the user edited.")
+
 (defun mevedel-buddy-note--severities ()
   "Return the accepted severity names, least to most severe."
   '("trivial" "significant" "critical"))
+
+(defun mevedel-buddy-note--integer (value)
+  "Return VALUE as an integer, or nil when it does not name one.
+
+A line number arrives as a tool argument, and the model behind Buddy is
+often a local one, which sends a JSON number as a string often enough
+that refusing the string would refuse real notes."
+  (cond ((integerp value) value)
+        ((and (stringp value)
+              (string-match-p "\\`-?[0-9]+\\'" (string-trim value)))
+         (string-to-number (string-trim value)))))
 
 (defun mevedel-buddy-note--face (severity)
   "Return the overlay face for SEVERITY."
@@ -191,6 +223,67 @@ make typing lag for as long as the request runs."
       (set-marker (nth 1 pair) nil)
       (set-marker (nth 2 pair) nil)))
   (setq mevedel-buddy-note--markers nil))
+
+(defun mevedel-buddy-note--mark-range (buffer from to)
+  "Capture markers for lines FROM through TO of BUFFER.
+
+Lines a read exposed can carry notes, so they need the boundaries the
+diff's lines were given.  A line already held keeps its original
+markers: recapturing one would move an existing note's anchor to
+wherever that number points now, which is the failure markers exist to
+prevent.
+
+Stop before a line whose numeric key already names different text or
+whose marker would exceed `mevedel-buddy-note--marker-ceiling'.  Return
+a cons of the last safely marked line and the stop reason, either nil,
+`changed', or `ceiling'.  Walk forward once instead of counting from
+`point-min' for every line."
+  (let* ((name (buffer-name buffer))
+         (entry (assoc name mevedel-buddy-note--markers))
+         (room (- mevedel-buddy-note--marker-ceiling
+                  (apply #'+ (mapcar (lambda (each) (length (cdr each)))
+                                     mevedel-buddy-note--markers))))
+         (last (1- from))
+         (reason nil)
+         (new nil))
+    (with-current-buffer buffer
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (forward-line (1- (max 1 from)))
+          (cl-loop for line from (max 1 from) to to
+                   until (eobp)
+                   for held = (assq line (cdr entry))
+                   for held-position = (and held
+                                            (mevedel-buddy-note--position
+                                             buffer line))
+                   do (cond
+                       ((and held
+                             (or (not held-position)
+                                 (/= line
+                                     (line-number-at-pos held-position))))
+                        (setq reason 'changed)
+                        (cl-return))
+                       (held
+                        (setq last line))
+                       ((<= room 0)
+                        (setq reason 'ceiling)
+                        (cl-return))
+                       (t
+                        (push (list line
+                                    (copy-marker (point) t)
+                                    (copy-marker (line-beginning-position 2)))
+                              new)
+                        (setq room (1- room)
+                              last line)))
+                   (forward-line 1)))))
+    (when new
+      (setq new (nreverse new))
+      (if entry
+          (setcdr entry (append (cdr entry) new))
+        (push (cons name new) mevedel-buddy-note--markers)))
+    (cons last reason)))
 
 (defun mevedel-buddy-note--position (buffer line)
   "Return the position in BUFFER for LINE as the model saw it.
@@ -356,34 +449,38 @@ not leave records behind that name it."
 ;;
 ;;; Tool operations
 
+(defun mevedel-buddy-note--scope-buffer (buffer-name)
+  "Return the exact review buffer recorded for BUFFER-NAME."
+  (cdr (assoc buffer-name mevedel-buddy-note--scope-buffers)))
+
 (defun mevedel-buddy-note--in-scope-p (buffer-name)
   "Return non-nil when BUFFER-NAME may be touched by the running review."
-  (and mevedel-buddy-note--scope-buffers
-       (member buffer-name mevedel-buddy-note--scope-buffers)
-       t))
+  (when-let* ((review-buffer (mevedel-buddy-note--scope-buffer buffer-name)))
+    (eq review-buffer (get-buffer buffer-name))))
 
 (defun mevedel-buddy-note-add (buffer-name line note severity)
   "Attach NOTE to LINE of BUFFER-NAME at SEVERITY.
 
 Return the new note id, or an explanatory string the model can act on."
-  (let ((buffer (get-buffer buffer-name)))
+  (let ((buffer (get-buffer buffer-name))
+        (number (mevedel-buddy-note--integer line)))
     (cond
      ((not (mevedel-buddy-note--in-scope-p buffer-name))
       (format "Buffer %s is not in the review scope" buffer-name))
      ((not (buffer-live-p buffer))
       (format "Unknown buffer: %s" buffer-name))
-     ((not (mevedel-buddy-note--position buffer line))
+     ((not (mevedel-buddy-note--position buffer number))
       (format "Line %s was not shown in this review" line))
      ((not (member severity (mevedel-buddy-note--severities)))
       (format "Unknown severity: %s" severity))
      (t
       (let* ((id mevedel-buddy-note--next-id)
              (overlay (mevedel-buddy-note--make-overlay
-                       buffer line note severity)))
+                       buffer number note severity)))
         (setq mevedel-buddy-note--next-id (1+ id))
         (push (list :id id
                     :buffer buffer-name
-                    :line line
+                    :line number
                     :note note
                     :severity severity
                     :status 'active
@@ -520,6 +617,93 @@ raising it again."
         notes
         "\n")))))
 
+
+;;
+;;; Buffer reading
+
+(defun mevedel-buddy-note-read-buffer (buffer-name begin end)
+  "Return lines BEGIN through END of BUFFER-NAME, numbered.
+
+Both bounds are required.  An omitted bound that meant the whole buffer
+would send a whole file to the provider on an idle timer, for an edit of
+one line, through a tool that takes no permission step.
+
+A span longer than `mevedel-buddy-note-read-limit' is truncated rather
+than refused: an over-long request then costs the model a shorter answer
+instead of a wasted tool round.
+
+The returned lines may carry notes.  Markers are captured for them the
+same way the diff's lines were, so a note placed on one still lands on
+the text it was written about.  Stop before returning a line whose
+marker cannot be retained or whose number already names older review
+text."
+  (let ((buffer (get-buffer buffer-name))
+        (review-buffer (mevedel-buddy-note--scope-buffer buffer-name))
+        (from (mevedel-buddy-note--integer begin))
+        (to (mevedel-buddy-note--integer end)))
+    (cond
+     ((not review-buffer)
+      (format "Buffer %s is not in the review scope" buffer-name))
+     ((not (buffer-live-p buffer))
+      (format "Unknown buffer: %s" buffer-name))
+     ((not (eq buffer review-buffer))
+      (format "Buffer %s is not in the review scope" buffer-name))
+     ((not (and from to))
+      "Both begin and end are required, as line numbers")
+     ((<= mevedel-buddy-note-read-limit 0)
+      "The read line limit must be positive")
+     ((> from to)
+      (format "Line %s comes after line %s" begin end))
+     (t
+      (with-current-buffer buffer
+        (save-excursion
+          (save-restriction
+            (widen)
+            (let ((last (line-number-at-pos (point-max))))
+              (if (> (max 1 from) last)
+                  (format "Buffer %s has only %d lines" buffer-name last)
+                (let* ((first (max 1 from))
+                       (wanted (min to last))
+                       (limited (min wanted
+                                     (+ first mevedel-buddy-note-read-limit -1)))
+                       (marked (mevedel-buddy-note--mark-range
+                                buffer first limited))
+                       (final (car marked))
+                       (reason (cdr marked))
+                       (lines nil))
+                  (if (< final first)
+                      (pcase reason
+                        ('changed
+                         (format (concat "Line %d no longer names the text "
+                                         "shown earlier in this review")
+                                 first))
+                        (_ "This review cannot retain more annotatable lines"))
+                    (goto-char (point-min))
+                    (forward-line (1- first))
+                    (cl-loop for line from first to final
+                             do (push (format "%6d  %s" line
+                                              (buffer-substring-no-properties
+                                               (line-beginning-position)
+                                               (line-end-position)))
+                                      lines)
+                             (forward-line 1))
+                    (concat
+                     (string-join (nreverse lines) "\n")
+                     (pcase reason
+                       ('changed
+                        (format (concat "\n\n[Stopped before line %d because "
+                                        "its number names older review text.]")
+                                (1+ final)))
+                       ('ceiling
+                        "\n\n[Stopped at the review's annotatable-line limit.]")
+                       (_
+                        (when (< limited wanted)
+                          (format (concat "\n\n[Stopped at the %d line limit."
+                                          "  Read again from line %d for more.]")
+                                  mevedel-buddy-note-read-limit
+                                  (1+ final)))))))))))))))))
+
+
 ;;
 ;;; Model-facing tools
 
@@ -547,6 +731,22 @@ persistence, and nothing outside a Buddy review may call them."
   (require 'gptel)
   (list
    (gptel-make-tool
+    :name "read_buffer"
+    :function (mevedel-buddy-note--live-tool
+               currentp #'mevedel-buddy-note-read-buffer)
+    :description
+    (concat "Read numbered lines from a buffer in the current review. "
+            "Use it when the diff does not give you enough context to be "
+            "certain about a problem. Both bounds are required. The lines "
+            "you read back can carry notes, like the ones in the diff.")
+    :args '((:name "buffer_name" :type string
+             :description "Name of the buffer to read.")
+            (:name "begin" :type integer
+             :description "First line to read.")
+            (:name "end" :type integer
+             :description "Last line to read."))
+    :category "buddy")
+   (gptel-make-tool
     :name "add_note"
     :function (mevedel-buddy-note--live-tool currentp #'mevedel-buddy-note-add)
     :description
@@ -556,7 +756,7 @@ persistence, and nothing outside a Buddy review may call them."
     :args '((:name "buffer" :type string
              :description "Name of the buffer to annotate.")
             (:name "line_number" :type integer
-             :description "Line to annotate, as numbered in the diff.")
+             :description "Line to annotate, from the diff or from a read.")
             (:name "note" :type string
              :description "The remark.  One sentence.")
             (:name "severity" :type string

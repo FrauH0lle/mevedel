@@ -26,7 +26,7 @@
   (let ((buf (generate-new-buffer name)))
     (push buf mevedel-test--note-buffers)
     (with-current-buffer buf (insert content))
-    (push name mevedel-buddy-note--scope-buffers)
+    (push (cons name buf) mevedel-buddy-note--scope-buffers)
     buf))
 
 (defun mevedel-test--note-cleanup ()
@@ -84,7 +84,8 @@
 
   :doc "`mevedel-buddy-note-add' refuses a buffer outside the scope"
   (let ((buf (mevedel-test--note-buffer "note-scope" "one\n")))
-    (let ((mevedel-buddy-note--scope-buffers (list "other-buffer")))
+    (let ((mevedel-buddy-note--scope-buffers
+           (list (cons "other-buffer" (current-buffer)))))
       (should (string-match-p
                "not in the review scope"
                (mevedel-buddy-note-add (buffer-name buf) 1 "nope" "trivial")))
@@ -119,6 +120,21 @@
                (mevedel-buddy-note-add
                 (buffer-name buf) line "wrong line" "significant"))))
     (should-not (mevedel-test--note-overlays buf)))
+
+  :doc "`mevedel-buddy-note-add' accepts a line number sent as a string"
+  ;; The buddy workload commonly resolves to a local model, and those send
+  ;; a JSON number as a string often enough that refusing one would refuse
+  ;; real notes.
+  (let ((buf (mevedel-test--note-buffer "note-stringy" "one\ntwo\n")))
+    (mevedel-buddy-note-capture-markers '(("note-stringy" . (2))))
+    (let ((id (mevedel-buddy-note-add
+               (buffer-name buf) "2" "about two" "significant")))
+      (should (integerp id))
+      (should (= 2 (plist-get (mevedel-buddy-note--find id) :line)))
+      (with-current-buffer buf
+        (should (= 2 (line-number-at-pos
+                      (overlay-start
+                       (car (mevedel-test--note-overlays buf)))))))))
 
   :doc "`mevedel-buddy-note-add' refuses a released marker"
   (let ((buf (mevedel-test--note-buffer "note-released" "one\n")))
@@ -367,7 +383,8 @@
   :doc "`mevedel-buddy-note-update' refuses a note outside the scope"
   (let* ((buf (mevedel-test--note-buffer "scope-update" "one\n"))
          (id (mevedel-test--add-note buf 1 "original")))
-    (let ((mevedel-buddy-note--scope-buffers (list "elsewhere")))
+    (let ((mevedel-buddy-note--scope-buffers
+           (list (cons "elsewhere" (current-buffer)))))
       (should (string-match-p "not in the review scope"
                               (mevedel-buddy-note-update id "rewritten"))))
     (should (equal "original" (plist-get (mevedel-buddy-note--find id) :note))))
@@ -375,7 +392,8 @@
   :doc "`mevedel-buddy-note-remove' refuses a note outside the scope"
   (let* ((buf (mevedel-test--note-buffer "scope-remove" "one\n"))
          (id (mevedel-test--add-note buf 1 "keep me")))
-    (let ((mevedel-buddy-note--scope-buffers (list "elsewhere")))
+    (let ((mevedel-buddy-note--scope-buffers
+           (list (cons "elsewhere" (current-buffer)))))
       (should (string-match-p "not in the review scope"
                               (mevedel-buddy-note-remove id))))
     (should (mevedel-buddy-note--find id)))
@@ -385,7 +403,8 @@
         (elsewhere (mevedel-test--note-buffer "scope-elsewhere" "one\n")))
     (mevedel-test--add-note here 1 "mine")
     (mevedel-test--add-note elsewhere 1 "other project")
-    (let* ((mevedel-buddy-note--scope-buffers (list "scope-here"))
+    (let* ((mevedel-buddy-note--scope-buffers
+            (list (cons "scope-here" here)))
            (text (mevedel-buddy-note-serialize)))
       (should (string-match-p "mine" text))
       (should-not (string-match-p "other project" text)))))
@@ -476,6 +495,197 @@
       (should (seq-every-p (lambda (m) (null (marker-buffer m))) markers)))))
 
 ;;
+;;; Buffer reading
+
+(mevedel-deftest mevedel-buddy-note-read-buffer
+  (:after-each (mevedel-test--note-cleanup))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy-note-read-buffer' numbers the lines it returns"
+  (let ((_buf (mevedel-test--note-buffer "read-plain" "one\ntwo\nthree\n")))
+    (let ((out (mevedel-buddy-note-read-buffer "read-plain" 2 3)))
+      (should (string-match-p "^ +2  two$" out))
+      (should (string-match-p "^ +3  three$" out))
+      (should-not (string-match-p "one" out))))
+
+  :doc "`mevedel-buddy-note-read-buffer' refuses a buffer outside the scope"
+  (let ((_buf (mevedel-test--note-buffer "read-scope" "one\n")))
+    (let ((mevedel-buddy-note--scope-buffers
+           (list (cons "other-buffer" (current-buffer)))))
+      (should (string-match-p
+               "not in the review scope"
+               (mevedel-buddy-note-read-buffer "read-scope" 1 1)))))
+
+  :doc "`mevedel-buddy-note-read-buffer' refuses everything with no review"
+  (let ((_buf (mevedel-test--note-buffer "read-noscope" "one\n")))
+    (let ((mevedel-buddy-note--scope-buffers nil))
+      (should (string-match-p
+               "not in the review scope"
+               (mevedel-buddy-note-read-buffer "read-noscope" 1 1)))))
+
+  :doc "`mevedel-buddy-note-read-buffer' refuses a buffer that is not live"
+  (let ((dead (generate-new-buffer "read-dead")))
+    (kill-buffer dead)
+    (let ((mevedel-buddy-note--scope-buffers (list (cons "read-dead" dead))))
+      (should (string-match-p
+               "Unknown buffer"
+               (mevedel-buddy-note-read-buffer "read-dead" 1 1)))))
+
+  :doc "`mevedel-buddy-note-read-buffer' rejects a replacement with the same name"
+  (let ((original (mevedel-test--note-buffer "read-reused" "original\n")))
+    (kill-buffer original)
+    (let ((replacement (generate-new-buffer "read-reused")))
+      (push replacement mevedel-test--note-buffers)
+      (with-current-buffer replacement (insert "replacement\n"))
+      (should (string-match-p
+               "not in the review scope"
+               (mevedel-buddy-note-read-buffer "read-reused" 1 1)))))
+
+  :doc "`mevedel-buddy-note-read-buffer' requires both bounds"
+  (let ((_buf (mevedel-test--note-buffer "read-bounds" "one\ntwo\n")))
+    (dolist (bounds '((nil 2) (1 nil) (nil nil)))
+      (should (string-match-p
+               "required"
+               (mevedel-buddy-note-read-buffer
+                "read-bounds" (car bounds) (cadr bounds))))))
+
+  :doc "`mevedel-buddy-note-read-buffer' accepts bounds sent as strings"
+  ;; The buddy workload commonly resolves to a local model, and those
+  ;; send a JSON number as a string often enough to matter.
+  (let ((_buf (mevedel-test--note-buffer "read-strings" "one\ntwo\nthree\n")))
+    (should (string-match-p
+             "^ +2  two$"
+             (mevedel-buddy-note-read-buffer "read-strings" "2" "2"))))
+
+  :doc "`mevedel-buddy-note-read-buffer' refuses a reversed range"
+  (let ((_buf (mevedel-test--note-buffer "read-reversed" "one\ntwo\n")))
+    (should (string-match-p
+             "comes after"
+             (mevedel-buddy-note-read-buffer "read-reversed" 2 1))))
+
+  :doc "`mevedel-buddy-note-read-buffer' clamps an end past the last line"
+  (let ((_buf (mevedel-test--note-buffer "read-clamp" "one\ntwo")))
+    (let ((out (mevedel-buddy-note-read-buffer "read-clamp" 1 999)))
+      (should (string-match-p "^ +1  one$" out))
+      (should (string-match-p "^ +2  two$" out))
+      (should-not (string-match-p "^ +3" out))))
+
+  :doc "`mevedel-buddy-note-read-buffer' reports a begin past the last line"
+  (let ((_buf (mevedel-test--note-buffer "read-past" "one\ntwo")))
+    (should (string-match-p
+             "only 2 lines"
+             (mevedel-buddy-note-read-buffer "read-past" 50 60))))
+
+  :doc "`mevedel-buddy-note-read-buffer' stops at the read limit"
+  (let* ((content (mapconcat (lambda (n) (format "line %d" n))
+                             (number-sequence 1 30) "\n"))
+         (_buf (mevedel-test--note-buffer "read-limit" content))
+         (mevedel-buddy-note-read-limit 5)
+         (out (mevedel-buddy-note-read-buffer "read-limit" 1 30)))
+    (should (string-match-p "^ +1  line 1$" out))
+    (should (string-match-p "^ +5  line 5$" out))
+    (should-not (string-match-p "^ +6  line 6$" out))
+    (should (string-match-p "Read again from line 6" out)))
+
+  :doc "`mevedel-buddy-note-read-buffer' refuses a nonpositive read limit"
+  (let ((_buf (mevedel-test--note-buffer "read-zero-limit" "one\ntwo\n"))
+        (mevedel-buddy-note-read-limit 0))
+    (should (string-match-p
+             "limit must be positive"
+             (mevedel-buddy-note-read-buffer "read-zero-limit" 1 2))))
+
+  :doc "`mevedel-buddy-note-read-buffer' makes the lines it returns annotatable"
+  (let ((buf (mevedel-test--note-buffer
+              "read-annotate" "one\ntwo\nthree\nfour\nfive\n")))
+    (mevedel-buddy-note-capture-markers '(("read-annotate" . (5))))
+    ;; Line 2 was not in the diff, so it cannot carry a note yet.
+    (should (string-match-p
+             "not shown"
+             (mevedel-buddy-note-add "read-annotate" 2 "early" "significant")))
+    (mevedel-buddy-note-read-buffer "read-annotate" 1 3)
+    (let ((id (mevedel-buddy-note-add
+               "read-annotate" 2 "about two" "significant")))
+      (should (integerp id))
+      (with-current-buffer buf
+        (should (= 2 (line-number-at-pos
+                      (overlay-start
+                       (car (mevedel-test--note-overlays buf)))))))))
+
+  :doc "a note on a read line follows its text when lines move above it"
+  (let ((buf (mevedel-test--note-buffer
+              "read-follow" "one\ntwo\nthree\nfour\n")))
+    (mevedel-buddy-note-capture-markers '(("read-follow" . (4))))
+    (mevedel-buddy-note-read-buffer "read-follow" 1 3)
+    (mevedel-buddy-note-add "read-follow" 3 "about three" "significant")
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (insert "zero\n")
+      (should (= 4 (line-number-at-pos
+                    (overlay-start
+                     (car (mevedel-test--note-overlays buf))))))))
+
+  :doc "`mevedel-buddy-note-read-buffer' keeps the markers a line already has"
+  ;; Recapturing would move an existing note's anchor to wherever that
+  ;; number points now, which is what markers exist to prevent.
+  (let ((_buf (mevedel-test--note-buffer "read-remark" "one\ntwo\nthree\n")))
+    (mevedel-buddy-note-capture-markers '(("read-remark" . (2))))
+    (let ((before (assq 2 (cdr (assoc "read-remark"
+                                      mevedel-buddy-note--markers)))))
+      (mevedel-buddy-note-read-buffer "read-remark" 1 3)
+      (let* ((entry (cdr (assoc "read-remark" mevedel-buddy-note--markers)))
+             (after (assq 2 entry)))
+        (should (= 3 (length entry)))
+        (should (eq (nth 1 before) (nth 1 after))))))
+
+  :doc "`mevedel-buddy-note-read-buffer' stops before a stale numeric marker"
+  (let ((buf (mevedel-test--note-buffer
+              "read-shifted" "one\ntwo\nthree\n")))
+    (mevedel-buddy-note-capture-markers '(("read-shifted" . (2))))
+    (with-current-buffer buf
+      (goto-char (point-min))
+      (insert "zero\n"))
+    (let ((out (mevedel-buddy-note-read-buffer "read-shifted" 2 2)))
+      (should (string-match-p "no longer names" out))
+      (should-not (string-match-p "^ +2  one$" out)))
+    (let ((id (mevedel-buddy-note-add
+               "read-shifted" 2 "about two" "significant")))
+      (should (integerp id))
+      (with-current-buffer buf
+        (should (= 3 (line-number-at-pos
+                      (overlay-start
+                       (car (mevedel-test--note-overlays buf)))))))))
+
+  :doc "`mevedel-buddy-note-read-buffer' returns only lines marked before the ceiling"
+  ;; Emacs walks a buffer marker list on every insertion and the user is
+  ;; typing throughout, so the marker set must grow with what was edited,
+  ;; not with what the model asked to read.
+  (let* ((content (mapconcat (lambda (n) (format "line %d" n))
+                             (number-sequence 1 20) "\n"))
+         (_buf (mevedel-test--note-buffer "read-ceiling" content))
+         (mevedel-buddy-note--marker-ceiling 3)
+         (out (mevedel-buddy-note-read-buffer "read-ceiling" 1 20)))
+    (should (string-match-p "^ +3  line 3$" out))
+    (should-not (string-match-p "^ +4  line 4$" out))
+    (should (string-match-p "annotatable-line limit" out))
+    (should (= 3 (length (cdr (assoc "read-ceiling"
+                                     mevedel-buddy-note--markers)))))
+    (dolist (line '(1 2 3))
+      (should (integerp (mevedel-buddy-note-add
+                         "read-ceiling" line "annotatable" "significant")))))
+
+  :doc "`mevedel-buddy-note-read-buffer' refuses once its review is over"
+  (let* ((_buf (mevedel-test--note-buffer "read-stale" "one\ntwo\n"))
+         (stale (mevedel-buddy-note-tools (lambda () nil)))
+         (read (seq-find (lambda (tool)
+                           (equal "read_buffer" (gptel-tool-name tool)))
+                         stale)))
+    (should (string-match-p
+             "review has ended"
+             (funcall (gptel-tool-function read) "read-stale" 1 2)))))
+
+
+;;
 ;;; Tool schemas
 
 (mevedel-deftest mevedel-buddy-note-tools
@@ -486,7 +696,7 @@
   :doc "every tool is built and named"
   (let ((names (mapcar #'gptel-tool-name
                        (mevedel-buddy-note-tools (lambda () t)))))
-    (should (equal '("add_note" "update_note" "remove_note")
+    (should (equal '("read_buffer" "add_note" "update_note" "remove_note")
                    names)))
 
   :doc "no argument carries `:required'"

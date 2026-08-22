@@ -684,7 +684,12 @@ started by the idle timer, which an explicit request may preempt."
     (setq mevedel-buddy--running scope-key
           mevedel-buddy--running-automatic automatic
           mevedel-buddy--request-buffer request-buffer
-          mevedel-buddy-note--scope-buffers buffer-names)
+          mevedel-buddy-note--scope-buffers
+          (delq nil
+                (mapcar (lambda (name)
+                          (when-let* ((buffer (get-buffer name)))
+                            (cons name buffer)))
+                        buffer-names)))
     (mevedel-buddy-note-capture-markers
      (mevedel-buddy--payload-lines payload))
     (mevedel-buddy--telemetry 'buddy-review-started
