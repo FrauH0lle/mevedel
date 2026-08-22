@@ -166,11 +166,12 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
                  (questions-list (append questions nil)) ; Convert vector to list
                  (answers (make-vector (length questions-list) nil))
                  (chat-buffer
-                  (if (fboundp 'mevedel-view--interaction-target-buffer)
-                      (mevedel-view--interaction-target-buffer
-                       (with-current-buffer source-buffer
-                         (mevedel--prompt--data-buffer)))
-                    (error "No live view for Ask prompt")))
+                  (progn
+                    (require 'mevedel-view-interaction)
+                    (or (mevedel-view--interaction-target-buffer
+                         (with-current-buffer source-buffer
+                           (mevedel--prompt--data-buffer)))
+                        (error "No live view for Ask prompt"))))
                  (interaction-id (list :ask (gensym "ask-")))
                  (overlay nil)
                  (current-index 0))
@@ -335,7 +336,11 @@ When CONFIRM is non-nil, bind submit/edit commands for the review screen."
                           :priority 150
                           :keymap keymap
                           :help-echo "Ask prompt")))
-             (overlay-put overlay 'mevedel-user-request t)
+             ;; Deliberately NOT `mevedel-user-request': that property
+             ;; is the generic approve/deny/feedback surface, and those
+             ;; are outcomes this questionnaire never offered.  Abort
+             ;; teardown settles through `mevedel--prompt-overlays'
+             ;; membership, which is independent of it.
              (overlay-put overlay 'mevedel--callback callback)
              ;; The remote surface gets the whole questionnaire and
              ;; answers it atomically; announcing on every screen render
@@ -496,7 +501,15 @@ CALLBACK receives the formatted answers.  ARGS is a plist with :questions."
       (error "Parameter questions is required"))
     (mevedel-tools--ask-user
      (lambda (value)
-       (funcall callback (list :result value)))
+       (funcall callback
+                (if (stringp value)
+                    (list :result value)
+                  ;; Cancellation settles with a bare symbol; passing it
+                  ;; through would record the call as a success with no
+                  ;; renderable result.
+                  (list :result
+                        "Error: The questionnaire was cancelled before an answer was submitted"
+                        :status 'error))))
      questions)))
 
 

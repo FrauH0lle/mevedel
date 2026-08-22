@@ -13,6 +13,7 @@
 (require 'mevedel-skills-ui)
 (require 'mevedel-tools)
 (require 'mevedel-view)
+(require 'mevedel-view-interaction)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -89,6 +90,20 @@
        '(:questions [(:question "Proceed?" :options ["Yes" "No"])])))
     (should (equal '(:result "answers") delivered)))
 
+  :doc "a cancelled questionnaire reports an error result, not success"
+  ;; Quit settles with the bare symbol `aborted'; passed through, the
+  ;; pipeline recorded the call as a success the renderer showed as
+  ;; nothing.
+  (let (delivered)
+    (cl-letf (((symbol-function 'mevedel-tools--ask-user)
+               (lambda (callback _questions)
+                 (funcall callback 'aborted))))
+      (mevedel-tool-ask--ask
+       (lambda (value) (setq delivered value))
+       '(:questions [(:question "Proceed?" :options ["Yes" "No"])])))
+    (should (eq 'error (plist-get delivered :status)))
+    (should (string-prefix-p "Error:" (plist-get delivered :result))))
+
   :doc "rejects a missing questions argument"
   (should-error (mevedel-tool-ask--ask #'ignore nil) :type 'error))
 
@@ -142,6 +157,7 @@
         (choices '("Yes" "No"))
         rendered-body
         rendered-keymap
+        registered-overlay
         result)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--prompt--data-buffer)
@@ -152,8 +168,9 @@
                    (lambda (descriptor)
                      (setq rendered-body (plist-get descriptor :body))
                      (setq rendered-keymap (plist-get descriptor :keymap))
-                     (make-overlay (point-min) (point-min)
-                                   (current-buffer) nil t)))
+                     (setq registered-overlay
+                           (make-overlay (point-min) (point-min)
+                                         (current-buffer) nil t))))
                   ((symbol-function 'mevedel--prompt--register-canceller)
                    #'ignore)
                   ((symbol-function 'completing-read)
@@ -173,6 +190,12 @@
           (call-interactively (lookup-key rendered-keymap (kbd "RET")))
           (should (string-match-p "Q1: Use cache\\?" result))
           (should (string-match-p "A1: Yes" result))
+          ;; The generic approve/deny/feedback surface keys off
+          ;; `mevedel-user-request'; the questionnaire must not carry
+          ;; it, or point inside the Ask settles it with an outcome the
+          ;; questions never offered.
+          (should-not (overlay-get registered-overlay
+                                   'mevedel-user-request))
           (should (string-match-p "Q2: Run tests\\?" result))
           (should (string-match-p "A2: No" result)))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
