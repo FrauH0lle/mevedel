@@ -212,6 +212,7 @@ only when a frozen agent template must survive a cold session resume."
      mevedel-reminders-make-verifier-read-only no-args)
     (reviewer-read-only mevedel-reminders-make-reviewer-read-only no-args)
     (task-nudge mevedel-reminders-make-task-nudge interval)
+    (user-revised-patch mevedel-reminders-make-user-revised-patch text)
     (verification-suggestion
      mevedel-reminders-make-verification-suggestion no-args))
   "Trusted constructor and argument contracts for durable reminder recipes.")
@@ -234,6 +235,9 @@ only when a frozen agent template must survive a cold session resume."
       (and (= (length arguments) 1)
            (integerp (car arguments))
            (>= (car arguments) 0)))
+     ('text
+      (and (= (length arguments) 1)
+           (stringp (car arguments))))
      ('token-usage
       (and (= (length arguments) 2)
            (numberp (car arguments))
@@ -740,6 +744,23 @@ sparsely while that mode remains active."
               (not (eq (mevedel-reminders--session-mode session) 'full-auto)))
    :content (lambda (_session)
               "Full-auto mode has been turned off. Normal permission checks are active again.")
+   :interval 'one-shot))
+
+(defun mevedel-reminders-make-user-revised-patch (summary)
+  "Create the one-shot `user-revised-patch' reminder for SUMMARY.
+SUMMARY names the changes the user revised during an ApplyPatch review."
+  (mevedel-reminder-create
+   :type 'user-revised-patch
+   :recipe (list 'user-revised-patch summary)
+   :trigger (lambda (_session) t)
+   :content
+   (lambda (_session)
+     (format
+      "During the last ApplyPatch review the user revised the proposal \
+before approving it: %s. Those revisions are deliberate user decisions \
+and the applied content is authoritative. Do not revert them or reapply \
+your original version of those changes unless the user asks."
+      summary))
    :interval 'one-shot))
 
 (defun mevedel-reminders--plan-path (session)

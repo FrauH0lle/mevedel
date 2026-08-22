@@ -139,6 +139,13 @@ guidance in the rejection reminder.
 - **Recovery reconciliation:** cold resume and abort of a live root request
   queue one warning that processes or tool effects may be partial. Interrupted
   retained-agent results carry the equivalent warning directly.
+- **User-revised patch:** submitting an ApplyPatch review in which the user
+  edited a hunk or an Add file's content queues the one-shot
+  `user-revised-patch` reminder (`mevedel-reminders-make-user-revised-patch`),
+  naming the revised changes and telling the model the applied content is
+  authoritative and must not be reverted. The tool result carries the same
+  per-change directive; the reminder is the belt-and-suspenders repeat for
+  the following turn.
 
 - **Date-change:** `mevedel-reminders-make-date-change` compares the
   current date to the session's `last-observed-date` slot and updates

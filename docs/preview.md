@@ -43,7 +43,11 @@ Every file starts folded. Keys, active anywhere in the review body:
 - `TAB` folds a file, or a single hunk on a hunk row
 - `SPC` toggles selection; on an Update file row it toggles every hunk
 - `RET` visits the affected file, at the hunk's baseline location
-- `e` replaces the staged hunk in a temporary `diff-mode` buffer
+- `e` edits the staged change before it is applied: an Update or Move hunk
+  opens in a temporary `diff-mode` buffer, an Add file's proposed content
+  opens in a buffer with the target's major mode (`C-c C-c` commits the
+  revision after re-validation, `C-c C-k` discards it). A Delete and a
+  pure rename have no content to edit and say so
 - `f` attaches multiline feedback (`✎`): on a hunk, on a file row the whole
   file, anywhere else the whole patch
 - `n` / `p` move between file and hunk rows
@@ -63,6 +67,14 @@ path writes nothing and leaves the review open with a conflict message plus
 a recovery hint (deselect the stale file, or reject so the model re-reads).
 An incomplete rollback instead shows sanitized authored paths and tells the
 user to inspect them before retrying.
+
+A user-revised change is marked `· edited` in the review, and the tool
+result the model receives marks each one `User edited during review
+(authoritative)` with an explicit do-not-revert directive, plus a
+`(N revised by the user during review)` suffix on the applied-patch
+header. Submitting a revised patch also queues the one-shot
+`user-revised-patch` system reminder for the next turn, so the model does
+not treat the divergence from its own proposal as an anomaly to fix.
 Once submission starts, the review becomes an inert progress row on both the
 Emacs and collaboration surfaces until diagnostics finish.  Review teardown
 may still abort it, and whichever terminal result wins settles the tool once.

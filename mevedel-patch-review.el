@@ -25,11 +25,20 @@
                   "mevedel-interaction-prompt" (overlay))
 (defvar mevedel--prompt-overlays)
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-make-user-revised-patch
+                  "mevedel-reminders" (summary))
+(declare-function mevedel-session-ensure-reminder
+                  "mevedel-reminders" (session reminder))
+
 ;; `mevedel-side-conversation'
 (declare-function mevedel-side-conversation-mutation-warning
                   "mevedel-side-conversation" (record effect))
 (declare-function mevedel-side-conversation-mutation-warning-pending-p
                   "mevedel-side-conversation" (record))
+
+;; `mevedel-structs'
+(defvar mevedel--session)
 
 ;; `mevedel-tool-patch'
 (declare-function mevedel-tool-patch-annotate-line-numbers
@@ -123,6 +132,7 @@ diffs with foreground colors only."
 Feedback anywhere outside a file or hunk targets the whole patch."
   "n" #'mevedel-patch-review-next-row
   "p" #'mevedel-patch-review-previous-row
+  "e" #'mevedel-patch-review-edit
   "f" #'mevedel-patch-review-feedback
   "C-c C-c" #'mevedel-patch-review-submit
   "C-c C-k" #'mevedel-patch-review-reject)
@@ -141,8 +151,7 @@ Feedback anywhere outside a file or hunk targets the whole patch."
   "TAB" #'mevedel-patch-review-toggle-fold
   "RET" #'mevedel-patch-review-visit
   "<return>" #'mevedel-patch-review-visit
-  "SPC" #'mevedel-patch-review-toggle-selection
-  "e" #'mevedel-patch-review-edit-hunk)
+  "SPC" #'mevedel-patch-review-toggle-selection)
 
 (defvar-keymap mevedel-patch-review-submit-map
   :doc "Keymap for the primary ApplyPatch review action."
@@ -424,6 +433,9 @@ OPERATION owns TARGET and is retained as interaction metadata."
                      (concat (if expanded "▼" "▶") " "
                              (sel-glyph state) " " letter " " label
                              (or counts "")
+                             (and (plist-get operation :modified)
+                                  (propertize " · edited"
+                                              'font-lock-face 'shadow))
                              (and (plist-get operation :feedback)
                                   (concat " " (propertize "✎" 'font-lock-face 'warning))))
                      'mouse-face 'highlight
@@ -505,8 +517,10 @@ OPERATION owns TARGET and is retained as interaction metadata."
                                                   (if dim-p 'shadow
                                                     'diff-hunk-header))
                                       "\n")
+                              'mevedel-patch-edit-hunk hunk
                               content-props))
-                     (apply #'hunk-lines hunk dim-p content-props)))
+                     (apply #'hunk-lines hunk dim-p
+                            'mevedel-patch-edit-hunk hunk content-props)))
                   ('add
                    (cl-loop for line in (mevedel-tool-patch-content-lines
                                          (plist-get operation :content))
@@ -874,46 +888,98 @@ on Update files and patch-level feedback leave selection untouched."
     (mevedel-patch-review--clear-feedback-markers target)
     (mevedel-patch-review--render proposal)))
 
-(defun mevedel-patch-review-edit-hunk ()
-  "Open the Update hunk at point in a temporary diff buffer."
+(defun mevedel-patch-review-edit ()
+  "Edit the proposed change at point before it is applied.
+On an Update or Move hunk this opens the hunk in a diff buffer; on an
+Add file it opens the proposed content in the target's major mode.
+Commit the revision with \\`C-c C-c' or discard it with \\`C-c C-k'."
   (interactive)
   (let ((proposal (mevedel-patch-review--target-at-point
                    'mevedel-patch-proposal))
         (operation (mevedel-patch-review--target-at-point
                     'mevedel-patch-operation))
-        (hunk (mevedel-patch-review--target-at-point
-               'mevedel-patch-hunk)))
-    (unless (and proposal hunk
-                 (eq (plist-get operation :kind) 'update))
-      (user-error "Only Update hunks can be edited"))
-    (when (and (plist-get hunk :feedback)
-               (not (yes-or-no-p "Edit and clear its feedback? ")))
-      (user-error "Hunk edit cancelled"))
-    (plist-put hunk :feedback nil)
-    (let ((buffer (generate-new-buffer "*mevedel patch hunk*")))
-      (with-current-buffer buffer
-        (insert (if-let* ((context (plist-get hunk :context)))
-                    (format "@@ %s\n" context)
-                  "@@\n"))
-        (insert (string-join (plist-get hunk :diff-lines) "\n") "\n")
-        (require 'diff-mode)
-        (diff-mode)
-        (use-local-map
-         (make-composed-keymap mevedel-patch-review-edit-map
-                               (current-local-map)))
-        (setq-local mevedel-patch-review--edit-proposal proposal
-                    mevedel-patch-review--edit-operation operation
-                    mevedel-patch-review--edit-hunk hunk))
-      (pop-to-buffer buffer)
-      buffer)))
+        (hunk (or (mevedel-patch-review--target-at-point
+                   'mevedel-patch-hunk)
+                  (mevedel-patch-review--target-at-point
+                   'mevedel-patch-edit-hunk))))
+    (unless (and proposal operation)
+      (user-error "No patch operation at point"))
+    (pcase (plist-get operation :kind)
+      ((or 'update 'move)
+       (cond
+        (hunk (mevedel-patch-review--edit-hunk proposal operation hunk))
+        ((plist-get operation :hunks)
+         (user-error "Move point onto a hunk to edit it"))
+        (t (user-error "A pure rename has no content to edit"))))
+      ('add (mevedel-patch-review--edit-content proposal operation))
+      ('delete (user-error "A Delete proposes no content to edit")))))
+
+(defun mevedel-patch-review--confirm-feedback-clear (target)
+  "Signal unless TARGET's pending feedback may be cleared for an edit."
+  (when (and (plist-get target :feedback)
+             (not (yes-or-no-p "Edit and clear its feedback? ")))
+    (user-error "Edit cancelled"))
+  (plist-put target :feedback nil))
+
+(defun mevedel-patch-review--edit-setup (proposal operation hunk)
+  "Bind the current edit buffer to PROPOSAL, OPERATION, and HUNK.
+Must run after the buffer's major mode is set: the mode call kills
+local variables."
+  (use-local-map
+   (make-composed-keymap mevedel-patch-review-edit-map
+                         (current-local-map)))
+  (setq-local mevedel-patch-review--edit-proposal proposal
+              mevedel-patch-review--edit-operation operation
+              mevedel-patch-review--edit-hunk hunk))
+
+(defun mevedel-patch-review--edit-hunk (proposal operation hunk)
+  "Open OPERATION's HUNK from PROPOSAL in a temporary diff buffer."
+  (mevedel-patch-review--confirm-feedback-clear hunk)
+  (let ((buffer (generate-new-buffer "*mevedel patch hunk*")))
+    (with-current-buffer buffer
+      (insert (if-let* ((context (plist-get hunk :context)))
+                  (format "@@ %s\n" context)
+                "@@\n"))
+      (insert (string-join (plist-get hunk :diff-lines) "\n") "\n")
+      (require 'diff-mode)
+      (diff-mode)
+      (mevedel-patch-review--edit-setup proposal operation hunk))
+    (pop-to-buffer buffer)
+    buffer))
+
+(defun mevedel-patch-review--edit-content (proposal operation)
+  "Open Add OPERATION's proposed content from PROPOSAL for editing."
+  (mevedel-patch-review--confirm-feedback-clear operation)
+  (let ((buffer (generate-new-buffer "*mevedel patch content*")))
+    (with-current-buffer buffer
+      (insert (plist-get operation :content))
+      (goto-char (point-min))
+      (let ((buffer-file-name (plist-get operation :path)))
+        (delay-mode-hooks (set-auto-mode)))
+      (mevedel-patch-review--edit-setup proposal operation nil))
+    (pop-to-buffer buffer)
+    buffer))
 
 (defun mevedel-patch-review-edit-commit ()
-  "Replace the staged hunk with the contents of the current edit buffer."
+  "Replace the staged change with the contents of the current edit buffer."
   (interactive)
   (unless (and mevedel-patch-review--edit-proposal
-               mevedel-patch-review--edit-operation
-               mevedel-patch-review--edit-hunk)
-    (user-error "This is not a patch hunk edit buffer"))
+               mevedel-patch-review--edit-operation)
+    (user-error "This is not a patch edit buffer"))
+  (if mevedel-patch-review--edit-hunk
+      (mevedel-patch-review--edit-commit-hunk)
+    (mevedel-patch-review--edit-commit-content)))
+
+(defun mevedel-patch-review--edit-settle (proposal)
+  "Kill the edit buffer and redraw PROPOSAL's review."
+  (mevedel-tool-patch-annotate-line-numbers proposal)
+  (let ((view (plist-get proposal :view-buffer)))
+    (kill-buffer (current-buffer))
+    (with-current-buffer view
+      (mevedel-patch-review--render proposal))))
+
+(defun mevedel-patch-review--edit-commit-hunk ()
+  "Replace the staged hunk with the current edit buffer's diff."
   (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
          (lines (split-string (string-trim-right text "\n+") "\n" nil))
          (hunks (mevedel-tool-patch-parse-update-lines lines 1)))
@@ -937,16 +1003,66 @@ on Update files and patch-level feedback leave selection untouched."
                               (if (eq hunk replacement) original hunk))
                             (plist-get operation :hunks)))
          (signal (car err) (cdr err))))
-      (mevedel-tool-patch-annotate-line-numbers proposal)
-      (let ((view (plist-get proposal :view-buffer)))
-        (kill-buffer (current-buffer))
-        (with-current-buffer view
-          (mevedel-patch-review--render proposal))))))
+      (mevedel-patch-review--edit-settle proposal))))
+
+(defun mevedel-patch-review--edit-commit-content ()
+  "Replace the staged Add content with the current edit buffer's text."
+  (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
+         (content (if (string-suffix-p "\n" text) text (concat text "\n")))
+         (proposal mevedel-patch-review--edit-proposal)
+         (operation mevedel-patch-review--edit-operation)
+         (original (plist-get operation :content)))
+    (when (string-empty-p (string-trim content))
+      (user-error "An added file needs content; reject the file instead"))
+    (plist-put operation :content content)
+    (condition-case err
+        (mevedel-tool-patch-planned-changes proposal)
+      (error
+       (plist-put operation :content original)
+       (signal (car err) (cdr err))))
+    (plist-put operation :modified t)
+    (plist-put operation :selected t)
+    (mevedel-patch-review--edit-settle proposal)))
 
 (defun mevedel-patch-review-edit-cancel ()
   "Discard the current patch hunk edit buffer."
   (interactive)
   (kill-buffer (current-buffer)))
+
+(defun mevedel-patch-review--revised-summary (proposal)
+  "Return a summary of PROPOSAL's applied user-revised changes, or nil."
+  (let (parts)
+    (dolist (operation (plist-get proposal :operations))
+      (let ((path (plist-get operation :rel-path)))
+        (pcase (plist-get operation :kind)
+          ('update
+           (cl-loop for hunk in (plist-get operation :hunks)
+                    for number from 1
+                    when (and (plist-get hunk :modified)
+                              (plist-get hunk :selected))
+                    do (push (format "%s hunk %d" path number) parts)))
+          ('move
+           (when (plist-get operation :selected)
+             (cl-loop for hunk in (plist-get operation :hunks)
+                      for number from 1
+                      when (plist-get hunk :modified)
+                      do (push (format "%s hunk %d" path number) parts))))
+          ('add
+           (when (and (plist-get operation :selected)
+                      (plist-get operation :modified))
+             (push (format "%s (new file content)" path) parts))))))
+    (when parts
+      (string-join (nreverse parts) ", "))))
+
+(defun mevedel-patch-review--remind-of-revisions (proposal)
+  "Queue a one-shot reminder about PROPOSAL's user-revised changes."
+  (when-let* ((summary (mevedel-patch-review--revised-summary proposal))
+              (data-buffer (plist-get proposal :data-buffer))
+              ((buffer-live-p data-buffer))
+              (session (buffer-local-value 'mevedel--session data-buffer)))
+    (require 'mevedel-reminders)
+    (mevedel-session-ensure-reminder
+     session (mevedel-reminders-make-user-revised-patch summary))))
 
 (defun mevedel-patch-review--submit (proposal)
   "Apply PROPOSAL's selected changes and settle its review."
@@ -975,6 +1091,8 @@ on Update files and patch-level feedback leave selection untouched."
                            :body-kind "text"))
             (mevedel-patch-review--render proposal)
             (mevedel--prompt-announce overlay)
+            (when changes
+              (mevedel-patch-review--remind-of-revisions proposal))
             (if changes
                 (mevedel-tool-patch-apply
                  (plist-get proposal :data-buffer) changes
