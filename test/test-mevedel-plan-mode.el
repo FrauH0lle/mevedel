@@ -797,10 +797,10 @@
             (should (eq 'draft (plist-get metadata :status)))
             (should-not (plist-member metadata :selection))))))))
 
-(mevedel-deftest mevedel-plan-mode--feedback-draft
-  (:doc "replaces the composer with an editable replacement-plan request")
+(mevedel-deftest mevedel-plan-mode--feedback-draft ()
   ,test
   (test)
+  :doc "replaces the composer with an editable replacement-plan request"
   (mevedel-view-test--with-buffers
     (let ((session
            (mevedel-session--create
@@ -820,6 +820,44 @@
           (should (string-match-p "local://plans/current.md" draft))
           (should-not (string-match-p "local/plans/current.md" draft))
           (should-not (string-match-p "old draft" draft)))))))
+
+  :doc "stashes a pre-existing draft into the input history, with a note"
+  (mevedel-view-test--with-buffers
+    (let ((session
+           (mevedel-session--create
+            :authority-mode 'pid-lock
+            :name "test" :plan-mode t
+            :plan-metadata '(:status draft :path "plans/current.md")))
+          captured)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view-test--insert-composer-draft "precious unsent draft"))
+      (mevedel-test--with-captured-messages captured
+        (mevedel-plan-mode--feedback-draft data-buf))
+      (should (string-match-p "stashed in input history" captured))
+      (with-current-buffer view-buf
+        (should (member "precious unsent draft"
+                        (mevedel-view-history--entries)))))
+
+  :doc "an empty composer stashes nothing and stays quiet"
+  (mevedel-view-test--with-buffers
+    (let ((session
+           (mevedel-session--create
+            :authority-mode 'pid-lock
+            :name "test" :plan-mode t
+            :plan-metadata '(:status draft :path "plans/current.md")))
+          captured)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (mevedel-test--with-captured-messages captured
+        (mevedel-plan-mode--feedback-draft data-buf))
+      (should-not (string-match-p "stashed" (or captured "")))
+      (with-current-buffer view-buf
+        (should-not (member "" (mevedel-view-history--entries)))))))
 
 (mevedel-deftest mevedel-plan-mode--read-worktree-branch
   (:doc "collects the generated default and validates before acceptance")

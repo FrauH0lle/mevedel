@@ -123,6 +123,9 @@
 (declare-function mevedel-view--input-start "mevedel-view-composer"
 		  nil)
 
+;; `mevedel-view-history'
+(declare-function mevedel-view-history-add "mevedel-view-history" (input))
+
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
 		  "mevedel-view-interaction" (descriptor))
@@ -316,9 +319,21 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
      session chat-buffer selection accepted)))
 
 (defun mevedel-plan-mode--feedback-draft (chat-buffer)
-  "Insert an editable replacement-plan request for CHAT-BUFFER."
+  "Insert an editable replacement-plan request for CHAT-BUFFER.
+A draft already in the composer is stashed into the input history
+before the template replaces it, and the user is told how to recall
+it -- the feedback template must not silently destroy unsubmitted
+text."
+  (require 'mevedel-view-history)
   (let ((target (mevedel-view--interaction-target-buffer chat-buffer)))
     (with-current-buffer target
+      (let ((draft (string-trim
+                    (buffer-substring-no-properties
+                     (mevedel-view--input-start) (point-max)))))
+        (unless (string-empty-p draft)
+          (mevedel-view-history-add draft)
+          (message
+           "mevedel: composer draft stashed in input history, not deleted; M-p recalls it")))
       (mevedel-view--clear-input)
       (goto-char (mevedel-view--input-start))
       (let ((start (point)))
