@@ -914,6 +914,38 @@ Signals an error when the query is malformed."
 
 
 
+(defun mevedel--write-file-atomically (path content &optional coding mode)
+  "Replace PATH with string CONTENT through a same-directory rename.
+
+The temp file is created in PATH's own directory so the final
+`rename-file' stays on one filesystem -- and, for a remote PATH, on one
+host -- which is what makes the replacement atomic: a reader sees the
+old complete file or the new complete file, never a truncated one.
+
+CODING is the coding system to write with; nil means `utf-8-unix', and
+`no-conversion' writes CONTENT as literal bytes.  MODE non-nil sets the
+result's file modes; nil applies `default-file-modes', matching what an
+ordinary write would have produced (`make-temp-file' creates 0600,
+which must not leak into the destination).  PATH's parent directory is
+created when missing."
+  (let ((directory (file-name-directory (expand-file-name path))))
+    (make-directory directory t)
+    (let ((temporary (make-temp-file
+                      (file-name-concat directory ".mevedel-write-"))))
+      (unwind-protect
+          (progn
+            (with-temp-buffer
+              (when (eq coding 'no-conversion)
+                (set-buffer-multibyte nil))
+              (insert content)
+              (let ((coding-system-for-write (or coding 'utf-8-unix)))
+                (write-region (point-min) (point-max) temporary
+                              nil 'silent)))
+            (set-file-modes temporary (or mode (default-file-modes)))
+            (rename-file temporary path t))
+        (when (file-exists-p temporary)
+          (delete-file temporary))))))
+
 (provide 'mevedel-utilities)
 
 ;;; mevedel-utilities.el ends here.

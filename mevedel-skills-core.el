@@ -45,6 +45,10 @@
 (declare-function mevedel-plugins-skill-dirs "mevedel-plugins"
                   (&optional workspace))
 
+;; `mevedel-utilities'
+(declare-function mevedel--write-file-atomically
+                  "mevedel-utilities" (path content &optional coding mode))
+
 ;; `subr'
 (defvar read-eval)
 
@@ -181,31 +185,18 @@ skills."
                 file (error-message-string err)))))))
 
 (defun mevedel-skills--write-state (state)
-  "Write global skill STATE plist."
-  (let* ((file (mevedel-skills--state-file))
-         (dir (file-name-directory file)))
-    (unless (file-directory-p dir)
-      (make-directory dir t))
-    ;; Replace through a same-directory rename.  This file is global rather
-    ;; than per-workspace, and the reader signals on malformed content, so a
-    ;; write that died in place would break every enablement check in every
-    ;; session until someone repaired it by hand.
-    (let ((tmp (make-temp-file (expand-file-name ".mevedel-skills-" dir)))
-          (content (with-temp-buffer
-                     (insert ";; Mevedel skill state\n")
-                     (insert ";; Auto-generated, safe to edit\n\n")
-                     (pp state (current-buffer))
-                     (buffer-string))))
-      (unwind-protect
-          (progn
-            ;; `make-temp-file' creates 0600, which would otherwise become
-            ;; the state file's mode.
-            (set-file-modes tmp (default-file-modes))
-            (let ((coding-system-for-write 'utf-8-unix))
-              (write-region content nil tmp nil 'silent))
-            (rename-file tmp file t))
-        (when (file-exists-p tmp)
-          (delete-file tmp))))))
+  "Write global skill STATE plist.
+This file is global rather than per-workspace, and the reader signals
+on malformed content, so a write that died in place would break every
+enablement check in every session until someone repaired it by hand."
+  (require 'mevedel-utilities)
+  (mevedel--write-file-atomically
+   (mevedel-skills--state-file)
+   (with-temp-buffer
+     (insert ";; Mevedel skill state\n")
+     (insert ";; Auto-generated, safe to edit\n\n")
+     (pp state (current-buffer))
+     (buffer-string))))
 
 (defun mevedel-skills--disabled-keys ()
   "Return persisted disabled stable skill keys."

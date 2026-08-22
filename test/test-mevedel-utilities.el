@@ -680,5 +680,63 @@ rejects trailing binary operators"
      (equal "@@ -1 +1 @@\n-old\n+new\n \n"
             (mevedel-generate-diff "old\n\n" "new\n\n" "file.el")))))
 
+(mevedel-deftest mevedel--write-file-atomically ()
+  ,test
+  (test)
+
+  :doc "writes content with ordinary file modes, creating the parent"
+  (let* ((root (make-temp-file "mevedel-atomic-" t))
+         (path (file-name-concat root "deep" "state.eld")))
+    (unwind-protect
+        (progn
+          (mevedel--write-file-atomically path "(:answer 42)\n")
+          (should (equal "(:answer 42)\n"
+                         (with-temp-buffer
+                           (insert-file-contents path)
+                           (buffer-string))))
+          (should (= (file-modes path) (default-file-modes)))
+          (should-not (directory-files (file-name-directory path) nil
+                                       "mevedel-write")))
+      (delete-directory root t)))
+
+  :doc "no-conversion writes literal bytes"
+  (let* ((root (make-temp-file "mevedel-atomic-" t))
+         (path (file-name-concat root "blob"))
+         (bytes (unibyte-string 0 255 10 128)))
+    (unwind-protect
+        (progn
+          (mevedel--write-file-atomically path bytes 'no-conversion)
+          (should (equal bytes
+                         (with-temp-buffer
+                           (set-buffer-multibyte nil)
+                           (insert-file-contents-literally path)
+                           (buffer-string)))))
+      (delete-directory root t)))
+
+  :doc "a mode argument overrides the default"
+  (let* ((root (make-temp-file "mevedel-atomic-" t))
+         (path (file-name-concat root "script.sh")))
+    (unwind-protect
+        (progn
+          (mevedel--write-file-atomically path "#!/bin/sh\n" nil #o755)
+          (should (= (file-modes path) #o755)))
+      (delete-directory root t)))
+
+  :doc "a write that dies leaves the previous content and no staging file"
+  (let* ((root (make-temp-file "mevedel-atomic-" t))
+         (path (file-name-concat root "state.eld")))
+    (unwind-protect
+        (progn
+          (mevedel--write-file-atomically path "previous\n")
+          (cl-letf (((symbol-function 'write-region)
+                     (lambda (&rest _) (error "Disk full"))))
+            (should-error (mevedel--write-file-atomically path "next\n")))
+          (should (equal "previous\n"
+                         (with-temp-buffer
+                           (insert-file-contents path)
+                           (buffer-string))))
+          (should-not (directory-files root nil "mevedel-write")))
+      (delete-directory root t))))
+
 (provide 'test-mevedel-utilities)
 ;;; test-mevedel-utilities.el ends here
