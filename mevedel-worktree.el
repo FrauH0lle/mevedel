@@ -77,6 +77,10 @@
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
 
+;; `mevedel-resource'
+(declare-function mevedel-resource-within-root-p
+                  "mevedel-resource" (path root))
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-save
                   "mevedel-session-artifacts"
@@ -970,21 +974,15 @@ branch-name grammar before any mutating Git command runs."
     (unless (equal parent worktrees-directory)
       (user-error "Worktree destination is outside the workspace .worktrees directory: %s"
                   directory))
-    (when (or (file-symlink-p
-               (directory-file-name worktrees-directory))
-              (file-symlink-p (directory-file-name directory)))
-      (user-error "Worktree destination must not use a symbolic link: %s"
+    ;; Containment is an authorization answer; the shared owner scans
+    ;; every component for symlinks, proves truename containment, and
+    ;; refuses to answer from a stale TRAMP cache -- the hand-rolled
+    ;; check here did neither of the last two reliably.
+    (require 'mevedel-resource)
+    (unless (mevedel-resource-within-root-p
+             (directory-file-name directory) workspace-root)
+      (user-error "Worktree destination resolves outside the workspace: %s"
                   directory))
-    (let ((resolved-root
-           (file-name-as-directory (file-truename workspace-root)))
-          (resolved-parent
-           (file-name-as-directory (file-truename worktrees-directory)))
-          (resolved-directory
-           (file-name-as-directory (file-truename directory))))
-      (unless (and (file-in-directory-p resolved-parent resolved-root)
-                   (file-in-directory-p resolved-directory resolved-root))
-        (user-error "Worktree destination resolves outside the workspace: %s"
-                    directory)))
     directory))
 
 (defun mevedel-worktree-fork-preflight (session)

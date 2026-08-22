@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(defvar remote-file-name-inhibit-cache)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'subr-x))
@@ -1099,9 +1101,13 @@ the union index read, which already tolerates missing roots."
                  (list "Unknown resource provider"))))))
 
 (defun mevedel-resource-within-root-p (path root)
-  "Return non-nil when PATH resolves beneath ROOT, including ROOT itself."
+  "Return non-nil when PATH resolves beneath ROOT, including ROOT itself.
+This is an authorization answer, so on a remote target every symlink
+and truename probe bypasses the TRAMP attribute cache: a stale cached
+answer must not admit a path that has since been swapped."
   (when (and (stringp path) (stringp root))
-    (let* ((root (file-name-as-directory (expand-file-name root)))
+    (let* ((remote-file-name-inhibit-cache t)
+           (root (file-name-as-directory (expand-file-name root)))
            (path (expand-file-name path))
            (relative (file-relative-name path root))
            (cursor root)
