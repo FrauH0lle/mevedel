@@ -135,6 +135,7 @@
 (require 'mevedel-menu)
 (require 'mevedel-hooks)
 (require 'mevedel-chat)
+(require 'mevedel-directive-request)
 (require 'mevedel-collaboration-projection)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration)
@@ -155,23 +156,23 @@
 (declare-function mevedel--active-chat-buffer
                   "mevedel-chat" (&optional workspace))
 (declare-function mevedel--attach-directive-skills
-                  "mevedel-chat" (prompt record chat-buffer))
+                  "mevedel-directive-request" (prompt record chat-buffer))
 (declare-function mevedel--directive-bound-session-buffer
-                  "mevedel-chat" (record workspace))
-(declare-function mevedel--discuss-directive-prompt "mevedel-chat" (content))
+                  "mevedel-directive-request" (record workspace))
+(declare-function mevedel--discuss-directive-prompt "mevedel-directive-request" (content))
 (declare-function mevedel--display-chat-buffer "mevedel-chat" (chat-buffer))
 (declare-function mevedel--dispatch-directive-implementation
-                  "mevedel-chat"
+                  "mevedel-directive-request"
                   (directive record action prompt-fn callback))
-(declare-function mevedel--implement-directive-prompt "mevedel-chat" (content))
-(declare-function mevedel--implement-discussion "mevedel-chat"
+(declare-function mevedel--implement-directive-prompt "mevedel-directive-request" (content))
+(declare-function mevedel--implement-discussion "mevedel-directive-request"
                   (directive &optional callback))
-(declare-function mevedel--implement-discussion-prompt "mevedel-chat"
+(declare-function mevedel--implement-discussion-prompt "mevedel-directive-request"
                   (content directive))
 (declare-function mevedel--normalize-session-directory
                   "mevedel-chat" (directory workspace))
 (declare-function mevedel--process-directive
-                  "mevedel-chat"
+                  "mevedel-directive-request"
                   (directive preset prompt-fn callback &optional options))
 (declare-function mevedel--read-session-directory "mevedel-chat" (workspace))
 (declare-function mevedel--start-chat

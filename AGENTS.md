@@ -167,6 +167,7 @@ Data model
 
 Chat / view
   mevedel-chat.el             session lifecycle
+  mevedel-directive-request.el  directive prompts, dispatch, and settlement
   mevedel-side-conversation.el  ephemeral /btw conversation lifecycle
   mevedel-directive-activity.el  read-only workspace directive inspector
   mevedel-directive-frame.el  directive-anchored child frame and transcript filter

@@ -388,5 +388,95 @@
           (should (eq mevedel-permission-mode 'full-auto)))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(mevedel-deftest mevedel--implementation-permission-mode-apply
+             (:doc "temporarily applies and restores implementation permission mode")
+             ,test
+             (test)
+
+             :doc "temporarily applies and restores implementation permission mode"
+             (let* ((session (mevedel-session--create
+                              :name "test"
+                              :workspace nil
+                              :permission-mode 'ask
+                              :permission-rules nil
+                              :permission-queue nil
+                              :pending-plan-approval nil))
+                    (buffer (generate-new-buffer " *mev-chat-mode*"))
+                    (refreshed 0))
+               (unwind-protect
+                   (cl-letf (((symbol-function 'mevedel-view-refresh-associated-input-prompt)
+                              (lambda () (cl-incf refreshed))))
+                     (with-current-buffer buffer
+                       (setq-local mevedel--session session)
+                       (mevedel--implementation-permission-mode-apply 'edits)
+                       (should (eq 'edits
+                                   (mevedel-session-permission-mode session)))
+                       (should (equal '(ask)
+                                      mevedel--implementation-permission-mode-restore))
+                       (mevedel--implementation-permission-mode-restore)
+                       (should (eq 'ask
+                                   (mevedel-session-permission-mode session)))
+                       (should-not mevedel--implementation-permission-mode-restore)
+                       (should (= 2 refreshed))))
+                 (when (buffer-live-p buffer) (kill-buffer buffer))))
+
+             :doc "temporarily applies explicit ask mode over restored full-auto mode"
+             (let* ((session (mevedel-session--create
+                              :name "test"
+                              :workspace nil
+                              :permission-mode 'full-auto
+                              :permission-rules nil
+                              :permission-queue nil
+                              :pending-plan-approval nil))
+                    (buffer (generate-new-buffer " *mev-chat-mode*"))
+                    (refreshed 0))
+               (unwind-protect
+                   (cl-letf (((symbol-function 'mevedel-view-refresh-associated-input-prompt)
+                              (lambda () (cl-incf refreshed))))
+                     (with-current-buffer buffer
+                       (setq-local mevedel--session session)
+                       (mevedel--implementation-permission-mode-apply 'ask)
+                       (should (eq 'ask
+                                   (mevedel-session-permission-mode session)))
+                       (should (equal '(full-auto)
+                                      mevedel--implementation-permission-mode-restore))
+                       (mevedel--implementation-permission-mode-restore)
+                       (should (eq 'full-auto
+                                   (mevedel-session-permission-mode session)))
+                       (should-not mevedel--implementation-permission-mode-restore)
+                       (should (= 2 refreshed))))
+                 (when (buffer-live-p buffer) (kill-buffer buffer))))
+
+             :doc "restores inherited global permission mode as nil session override"
+             (let* ((session (mevedel-session--create
+                              :name "test"
+                              :workspace nil
+                              :permission-mode nil
+                              :permission-rules nil
+                              :permission-queue nil
+                              :pending-plan-approval nil))
+                    (buffer (generate-new-buffer " *mev-chat-mode*"))
+                    (mevedel-permission-mode 'ask)
+                    (refreshed 0))
+               (unwind-protect
+                   (cl-letf (((symbol-function 'mevedel-view-refresh-associated-input-prompt)
+                              (lambda () (cl-incf refreshed))))
+                     (with-current-buffer buffer
+                       (setq-local mevedel--session session)
+                       (setq-local mevedel-permission-mode nil)
+                       (mevedel--implementation-permission-mode-apply 'full-auto)
+                       (should (eq 'full-auto
+                                   (mevedel-session-permission-mode session)))
+                       (should (equal '(nil)
+                                      mevedel--implementation-permission-mode-restore))
+                       (mevedel--implementation-permission-mode-restore)
+                       (should-not (mevedel-session-permission-mode session))
+                       (should-not (local-variable-p 'mevedel-permission-mode
+                                                     buffer))
+                       (should (eq 'ask mevedel-permission-mode))
+                       (should-not mevedel--implementation-permission-mode-restore)
+                       (should (= 2 refreshed))))
+                 (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
 (provide 'test-mevedel-permission-mode)
 ;;; test-mevedel-permission-mode.el ends here

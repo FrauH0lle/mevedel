@@ -36,14 +36,14 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel--directive-session-buffer
-                  "mevedel-chat" (directive workspace))
+                  "mevedel-directive-request" (directive workspace))
 (declare-function mevedel--discuss-directive-turn
-                  "mevedel-chat"
+                  "mevedel-directive-request"
                   (directive message &optional attempt-index callback))
 (declare-function mevedel--request-directive-changes
-                  "mevedel-chat" (directive feedback &optional callback))
+                  "mevedel-directive-request" (directive feedback &optional callback))
 (declare-function mevedel--retry-directive
-                  "mevedel-chat" (directive guidance &optional callback))
+                  "mevedel-directive-request" (directive guidance &optional callback))
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 (defvar mevedel--pending-model-input)
 

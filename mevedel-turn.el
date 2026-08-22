@@ -29,7 +29,7 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel--implementation-permission-mode-restore
-                  "mevedel-chat" ())
+                  "mevedel-permission-mode" ())
 
 ;; `mevedel-compact-estimation'
 (declare-function mevedel-compact-estimation-record-token-baseline

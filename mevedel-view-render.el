@@ -39,7 +39,7 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel--implement-discussion
-                  "mevedel-chat" (directive &optional callback))
+                  "mevedel-directive-request" (directive &optional callback))
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch))
 
 ;; `mevedel-directive'

@@ -20,10 +20,10 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel--implement-discussion
-                  "mevedel-chat" (directive &optional callback))
+                  "mevedel-directive-request" (directive &optional callback))
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch))
 (declare-function mevedel--start-directive-discussion
-                  "mevedel-chat" (directive &optional callback))
+                  "mevedel-directive-request" (directive &optional callback))
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
 
 ;; `mevedel-directive'

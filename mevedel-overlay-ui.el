@@ -22,9 +22,9 @@
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
 (declare-function mevedel--directive-bound-session-buffer
-                  "mevedel-chat" (record workspace))
+                  "mevedel-directive-request" (record workspace))
 (declare-function mevedel--directive-session-buffer
-                  "mevedel-chat" (directive workspace))
+                  "mevedel-directive-request" (directive workspace))
 (declare-function mevedel--patch-buffer
                   "mevedel-chat" (&optional create workspace))
 (declare-function mevedel--replace-patch-buffer
