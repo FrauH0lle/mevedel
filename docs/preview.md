@@ -47,7 +47,8 @@ Every file starts folded. Keys, active anywhere in the review body:
   opens in a temporary `diff-mode` buffer, an Add file's proposed content
   opens in a buffer with the target's major mode (`C-c C-c` commits the
   revision after re-validation, `C-c C-k` discards it). A Delete and a
-  pure rename have no content to edit and say so
+  pure rename have no content to edit; their refusal points at `SPC`,
+  which deselects the operation and so keeps the file (or its path)
 - `f` attaches multiline feedback (`✎`): on a hunk, on a file row the whole
   file, anywhere else the whole patch
 - `n` / `p` move between file and hunk rows

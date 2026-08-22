@@ -910,9 +910,12 @@ Commit the revision with \\`C-c C-c' or discard it with \\`C-c C-k'."
         (hunk (mevedel-patch-review--edit-hunk proposal operation hunk))
         ((plist-get operation :hunks)
          (user-error "Move point onto a hunk to edit it"))
-        (t (user-error "A pure rename has no content to edit"))))
+        (t (user-error
+            "A pure rename has no content to edit; SPC keeps the current path"))))
       ('add (mevedel-patch-review--edit-content proposal operation))
-      ('delete (user-error "A Delete proposes no content to edit")))))
+      ('delete
+       (user-error
+        "A Delete proposes no content to edit; SPC keeps the file")))))
 
 (defun mevedel-patch-review--confirm-feedback-clear (target)
   "Signal unless TARGET's pending feedback may be cleared for an edit."
