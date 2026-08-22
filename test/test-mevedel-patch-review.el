@@ -17,8 +17,37 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
             "helpers"))
 (require 'mevedel-session-persistence)
+(require 'ediff)
 
 (defvar mevedel-session--read-only-mode nil)
+
+(defun mevedel-patch-review-test--edit-quit (view-buffer adopt)
+  "Quit VIEW-BUFFER's side-by-side edit, answering ADOPT to its prompt.
+ediff's own quit confirmation is always accepted; only the adopt prompt
+follows ADOPT, so a declined revision still closes the session."
+  (with-current-buffer
+      (buffer-local-value 'mevedel-patch-review--edit-session view-buffer)
+    (cl-letf (((symbol-function 'y-or-n-p)
+               (lambda (prompt &rest _)
+                 (if (string-prefix-p "Adopt" prompt) adopt t))))
+      (ediff-quit nil))))
+
+(defun mevedel-patch-review-test--edit (view-buffer search text &optional keep)
+  "Edit the change at SEARCH in VIEW-BUFFER, replacing its result with TEXT.
+TEXT nil leaves the editable buffer untouched.  KEEP non-nil declines the
+adopt prompt.  Returns the messages the session produced."
+  (let (captured)
+    (mevedel-test--with-captured-diagnostics captured
+      (let ((editable (with-current-buffer view-buffer
+                        (goto-char (point-min))
+                        (search-forward search)
+                        (mevedel-patch-review-edit))))
+        (when text
+          (with-current-buffer editable
+            (erase-buffer)
+            (insert text)))
+        (mevedel-patch-review-test--edit-quit view-buffer (not keep))))
+    captured))
 
 (mevedel-deftest mevedel-patch-review-start
   (:doc "One hierarchical review stages hunk selection before aggregate apply")
@@ -205,12 +234,6 @@
               (insert "Keep the old public behavior.\nIt is documented.")
               (mevedel-patch-review-confirm-feedback)
               (goto-char (point-min))
-              (search-forward "@@ first")
-              (cl-letf (((symbol-function 'yes-or-no-p)
-                         (lambda (&rest _) nil)))
-                (should-error (mevedel-patch-review-edit)
-                              :type 'user-error))
-              (goto-char (point-min))
               (search-forward "@@ second")
               (mevedel-patch-review-feedback)
               (insert "Use the newer API instead.")
@@ -393,7 +416,7 @@
         (when (file-directory-p root) (delete-directory root t))))))
 
 (mevedel-deftest mevedel-patch-review-edit
-  (:doc "Editing one hunk replaces and marks the staged model proposal")
+  (:doc "Editing an Update re-derives its hunks from the edited result")
   ,test
   (test)
   (mevedel-view-test--with-buffers
@@ -412,7 +435,7 @@
                      "+model"
                      "*** End Patch")
                    "\n"))
-           result edit-buffer)
+           result)
       (unwind-protect
           (progn
             (with-temp-file path (insert "old\n"))
@@ -426,14 +449,9 @@
             (with-current-buffer view-buf
               (goto-char (point-min))
               (search-forward "M one.txt")
-              (mevedel-patch-review-toggle-fold)
-              (goto-char (point-min))
-              (search-forward "@@ old")
-              (setq edit-buffer (mevedel-patch-review-edit)))
-            (with-current-buffer edit-buffer
-              (erase-buffer)
-              (insert "@@\n-old\n+user edited\n")
-              (mevedel-patch-review-edit-commit))
+              (mevedel-patch-review-toggle-fold))
+            (mevedel-patch-review-test--edit
+             view-buf "@@ old" "user edited\n")
             (with-current-buffer view-buf
               (let ((text (buffer-substring-no-properties
                            (point-min) mevedel-view--input-marker)))
@@ -447,12 +465,241 @@
                              (insert-file-contents path)
                              (buffer-string))))
             (should (string-search
-                     "User edited during review (authoritative): one.txt hunk 1"
+                     (concat "User edited during review (authoritative):"
+                             " one.txt (whole file revised)")
                      (plist-get result :result)))
             (should (string-search "do not revert" (plist-get result :result)))
             (should (string-search "(1 revised by the user during review)"
                                    (plist-get result :result))))
-        (when (buffer-live-p edit-buffer) (kill-buffer edit-buffer))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "Quitting an untouched session stages nothing"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-edit-noop-" t)))
+           (path (file-name-concat root "one.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "noop"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "noop" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Update File: one.txt"
+                     "@@"
+                     "-old"
+                     "+model"
+                     "*** End Patch")
+                   "\n"))
+           result)
+      (unwind-protect
+          (progn
+            (with-temp-file path (insert "old\n"))
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            (mevedel-patch-review-test--edit view-buf "M one.txt" nil)
+            (should-not mevedel-patch-review--edit-session)
+            (with-current-buffer view-buf
+              (should-not
+               (string-search "· edited"
+                              (buffer-substring-no-properties
+                               (point-min) mevedel-view--input-marker)))
+              (goto-char (point-min))
+              (search-forward "ApplyPatch ·")
+              (mevedel-patch-review-submit))
+            (should (equal "model\n"
+                           (with-temp-buffer
+                             (insert-file-contents path)
+                             (buffer-string))))
+            (should-not (string-search "revised by the user"
+                                       (plist-get result :result))))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "Declining the adopt prompt discards the edits"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-edit-decline-" t)))
+           (path (file-name-concat root "one.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "decline"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "decline" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Update File: one.txt"
+                     "@@"
+                     "-old"
+                     "+model"
+                     "*** End Patch")
+                   "\n"))
+           result)
+      (unwind-protect
+          (progn
+            (with-temp-file path (insert "old\n"))
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            (mevedel-patch-review-test--edit
+             view-buf "M one.txt" "discarded\n" t)
+            (should-not mevedel-patch-review--edit-session)
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "ApplyPatch ·")
+              (mevedel-patch-review-submit))
+            (should (equal "model\n"
+                           (with-temp-buffer
+                             (insert-file-contents path)
+                             (buffer-string))))
+            (should-not (string-search "revised by the user"
+                                       (plist-get result :result))))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "A deselected hunk survives an edit and stays reselectable"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-edit-keep-" t)))
+           (path (file-name-concat root "two.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "keep"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "keep" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Update File: two.txt"
+                     "@@"
+                     " head"
+                     "-first"
+                     "+FIRST"
+                     "@@"
+                     " tail"
+                     "-second"
+                     "+SECOND"
+                     "*** End Patch")
+                   "\n"))
+           result)
+      (unwind-protect
+          (progn
+            (with-temp-file path
+              (insert "head\nfirst\nmiddle\nmiddle\nmiddle\n"
+                      "tail\nsecond\nend\n"))
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            ;; Deselect the second hunk, then rewrite the file around it.
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "M two.txt")
+              (mevedel-patch-review-toggle-fold)
+              (goto-char (point-min))
+              (search-forward "@@ tail")
+              (mevedel-patch-review-toggle-selection))
+            (mevedel-patch-review-test--edit
+             view-buf "@@ head"
+             (concat "head\nEDITED\nmiddle\nmiddle\nmiddle\n"
+                     "tail\nsecond\nend\n"))
+            (let* ((proposal (with-current-buffer view-buf
+                               (goto-char (point-min))
+                               (search-forward "M two.txt")
+                               (get-text-property (point)
+                                                  'mevedel-patch-proposal)))
+                   (hunks (plist-get (car (plist-get proposal :operations))
+                                     :hunks)))
+              ;; The rejected hunk is still there, still deselected, and
+              ;; still in file order behind the derived one.
+              (should (= 2 (length hunks)))
+              (should (plist-get (nth 0 hunks) :selected))
+              (should (plist-get (nth 0 hunks) :modified))
+              (should-not (plist-get (nth 1 hunks) :selected))
+              (should-not (plist-get (nth 1 hunks) :modified))
+              (should (member "+SECOND" (plist-get (nth 1 hunks) :diff-lines)))
+              ;; Reselecting it applies on top of the edited result.
+              (plist-put (nth 1 hunks) :selected t))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "ApplyPatch ·")
+              (mevedel-patch-review-submit))
+            (should (equal (concat "head\nEDITED\nmiddle\nmiddle\nmiddle\n"
+                                   "tail\nSECOND\nend\n")
+                           (with-temp-buffer
+                             (insert-file-contents path)
+                             (buffer-string))))
+            (should (string-search "two.txt (whole file revised)"
+                                   (plist-get result :result))))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "Feedback on a deselected hunk survives an edit of its file"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-edit-fb-" t)))
+           (path (file-name-concat root "two.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "edit-fb"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "edit-fb" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Update File: two.txt"
+                     "@@"
+                     " head"
+                     "-first"
+                     "+FIRST"
+                     "@@"
+                     " tail"
+                     "-second"
+                     "+SECOND"
+                     "*** End Patch")
+                   "\n"))
+           result)
+      (unwind-protect
+          (progn
+            (with-temp-file path
+              (insert "head\nfirst\nmiddle\nmiddle\nmiddle\n"
+                      "tail\nsecond\nend\n"))
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "M two.txt")
+              (mevedel-patch-review-toggle-fold)
+              ;; Hunk feedback deselects its hunk, so that hunk is the
+              ;; one an edit carries across untouched.
+              (goto-char (point-min))
+              (search-forward "@@ tail")
+              (mevedel-patch-review-feedback)
+              (insert "Leave the second one alone.")
+              (mevedel-patch-review-confirm-feedback))
+            (mevedel-patch-review-test--edit
+             view-buf "@@ head"
+             (concat "head\nEDITED\nmiddle\nmiddle\nmiddle\n"
+                     "tail\nsecond\nend\n"))
+            (let* ((proposal (with-current-buffer view-buf
+                               (goto-char (point-min))
+                               (search-forward "M two.txt")
+                               (get-text-property (point)
+                                                  'mevedel-patch-proposal)))
+                   (hunks (plist-get (car (plist-get proposal :operations))
+                                     :hunks)))
+              (should (= 2 (length hunks)))
+              (should-not (plist-get (nth 1 hunks) :selected))
+              (should (equal "Leave the second one alone."
+                             (plist-get (nth 1 hunks) :feedback)))))
         (when (file-directory-p root) (delete-directory root t)))))
 
   :doc "Editing an Add rewrites its content and queues the revision reminder"
@@ -470,7 +717,7 @@
                      "+model content"
                      "*** End Patch")
                    "\n"))
-           result edit-buffer)
+           result)
       (unwind-protect
           (progn
             (with-current-buffer data-buf
@@ -480,18 +727,12 @@
               (mevedel-tool-patch-handler
                (lambda (value) (setq result value))
                (list :patch patch)))
+            (mevedel-patch-review-test--edit
+             view-buf "A fresh.txt" "user content\n")
             (with-current-buffer view-buf
               (goto-char (point-min))
               (search-forward "A fresh.txt")
               (mevedel-patch-review-toggle-fold)
-              (goto-char (point-min))
-              (search-forward "model content")
-              (setq edit-buffer (mevedel-patch-review-edit)))
-            (with-current-buffer edit-buffer
-              (erase-buffer)
-              (insert "user content\n")
-              (mevedel-patch-review-edit-commit))
-            (with-current-buffer view-buf
               (let ((text (buffer-substring-no-properties
                            (point-min) mevedel-view--input-marker)))
                 (should (string-search "+ │ user content" text))
@@ -511,7 +752,135 @@
             (let ((reminders (mevedel-session-reminders session)))
               (should (memq 'user-revised-patch
                             (mapcar #'mevedel-reminder-type reminders)))))
-        (when (buffer-live-p edit-buffer) (kill-buffer edit-buffer))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "Adopting an Add clears the feedback that deselected it"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-edit-fbclear-" t)))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "fb-clear"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "fb-clear" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Add File: fresh.txt"
+                     "+model content"
+                     "*** End Patch")
+                   "\n"))
+           result)
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "A fresh.txt")
+              (mevedel-patch-review-feedback)
+              (insert "Put this in the other file.")
+              (mevedel-patch-review-confirm-feedback))
+            (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+              (mevedel-patch-review-test--edit
+               view-buf "A fresh.txt" "other content\n"))
+            (let* ((proposal (with-current-buffer view-buf
+                               (goto-char (point-min))
+                               (search-forward "A fresh.txt")
+                               (get-text-property (point)
+                                                  'mevedel-patch-proposal)))
+                   (operation (car (plist-get proposal :operations))))
+              (should-not (plist-get operation :feedback))
+              (should (plist-get operation :selected))
+              (should (equal "other content\n"
+                             (plist-get operation :content)))))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "An emptied Add is refused and leaves its content staged"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-edit-empty-" t)))
+           (path (file-name-concat root "fresh.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "empty-add"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "empty-add" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Add File: fresh.txt"
+                     "+model content"
+                     "*** End Patch")
+                   "\n"))
+           result)
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            (should (string-search
+                     "An added file needs content"
+                     (mevedel-patch-review-test--edit
+                      view-buf "A fresh.txt" "")))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "ApplyPatch ·")
+              (mevedel-patch-review-submit))
+            (should (equal "model content\n"
+                           (with-temp-buffer
+                             (insert-file-contents path)
+                             (buffer-string))))
+            (should-not (string-search "revised by the user"
+                                       (plist-get result :result))))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "A revision that cannot be staged is reported and rolled back"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-edit-stale-" t)))
+           (path (file-name-concat root "fresh.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "stale-add"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "stale-add" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Add File: fresh.txt"
+                     "+model content"
+                     "*** End Patch")
+                   "\n"))
+           result)
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            ;; The file appears underneath the review, so validating the
+            ;; revision fails and the staged content must survive intact.
+            (with-temp-file path (insert "someone else\n"))
+            (should (string-search
+                     "Cannot add existing file"
+                     (mevedel-patch-review-test--edit
+                      view-buf "A fresh.txt" "user content\n")))
+            (let* ((proposal (with-current-buffer view-buf
+                               (goto-char (point-min))
+                               (search-forward "A fresh.txt")
+                               (get-text-property (point)
+                                                  'mevedel-patch-proposal)))
+                   (operation (car (plist-get proposal :operations))))
+              (should (equal "model content\n"
+                             (plist-get operation :content)))
+              (should-not (plist-get operation :modified))))
         (when (file-directory-p root) (delete-directory root t)))))
 
   :doc "Editing a Delete keeps the file with the content the user writes"
@@ -528,10 +897,260 @@
                      "*** Delete File: gone.txt"
                      "*** End Patch")
                    "\n"))
-           result edit-buffer)
+           result)
       (unwind-protect
           (progn
-            (with-temp-file path (insert "obsolete\n"))
+            (with-temp-file path (insert "keep me\nobsolete\n"))
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            ;; An emptied right-hand side keeps the Delete as proposed.
+            (should (string-search
+                     "Empty content keeps nothing"
+                     (mevedel-patch-review-test--edit
+                      view-buf "D gone.txt" "\n")))
+            (mevedel-patch-review-test--edit
+             view-buf "D gone.txt" "keep me\n")
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "M gone.txt")
+              (mevedel-patch-review-toggle-fold)
+              (let ((text (buffer-substring-no-properties
+                           (point-min) mevedel-view--input-marker)))
+                (should (string-search "M gone.txt" text))
+                (should (string-search "- │ obsolete" text))
+                (should (string-search "· edited" text)))
+              (goto-char (point-min))
+              (search-forward "ApplyPatch ·")
+              (mevedel-patch-review-submit))
+            (should (equal "keep me\n"
+                           (with-temp-buffer
+                             (insert-file-contents path)
+                             (buffer-string))))
+            (should (string-search
+                     (concat "User edited during review (authoritative):"
+                             " gone.txt (whole file revised)")
+                     (plist-get result :result)))
+            (should (memq 'user-revised-patch
+                          (mapcar #'mevedel-reminder-type
+                                  (mevedel-session-reminders session)))))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "Keeping a Delete's whole content is refused as no change at all"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-edit-whole-" t)))
+           (path (file-name-concat root "gone.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "whole-del"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "whole-del" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Delete File: gone.txt"
+                     "*** End Patch")
+                   "\n"))
+           result)
+      (unwind-protect
+          (progn
+            (with-temp-file path (insert "every line\nstays\n"))
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            (should (string-search
+                     "keeps the file unchanged"
+                     (mevedel-patch-review-test--edit
+                      view-buf "D gone.txt" "every line\nstays\n")))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (should (search-forward "D gone.txt" nil t)))
+            (ignore result))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "A deselected indivisible operation has nothing to compare"
+  (mevedel-view-test--with-buffers
+    (let ((proposal (list :view-buffer view-buf)))
+      (dolist (operation
+               '((:kind add :rel-path "new.txt" :content "new\n"
+                  :selected nil)
+                 (:kind delete :rel-path "old.txt"
+                  :baseline-content "old\n" :selected nil)
+                 (:kind move :rel-path "from.txt" :move-rel-path "to.txt"
+                  :path "/tmp/from.txt" :baseline-content "old\n"
+                  :selected nil
+                  :hunks ((:selected t :old-lines ("old")
+                           :new-lines ("new")
+                           :diff-lines ("-old" "+new"))))))
+        (with-current-buffer view-buf
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert (propertize
+                     "change"
+                     'mevedel-patch-proposal proposal
+                     'mevedel-patch-operation operation)))
+          (goto-char (point-min))
+          (should-error (mevedel-patch-review-edit) :type 'user-error)))))
+
+  :doc "Refuses a second session, an identical result, and a pure rename"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-edit-refuse-" t)))
+           (path (file-name-concat root "one.txt"))
+           (renamed (file-name-concat root "old.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "refuse"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "refuse" workspace root))
+           (other-view (generate-new-buffer " *other-patch-view*"))
+           (other-control (generate-new-buffer " *other-ediff-control*"))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Update File: one.txt"
+                     "@@"
+                     "-old"
+                     "+model"
+                     "*** Update File: old.txt"
+                     "*** Move to: new.txt"
+                     "*** End Patch")
+                   "\n"))
+           result)
+      (unwind-protect
+          (progn
+            (with-temp-file path (insert "old\n"))
+            (with-temp-file renamed (insert "unchanged\n"))
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            ;; A live editor owned by another session view does not block this
+            ;; review; the same view is still limited to one editor below.
+            (with-current-buffer other-view
+              (setq-local mevedel-patch-review--edit-session other-control))
+            (with-current-buffer view-buf
+              ;; A pure rename has no content to compare.
+              (goto-char (point-min))
+              (search-forward "old.txt")
+              (should-error (mevedel-patch-review-edit) :type 'user-error)
+              ;; Deselecting every hunk leaves the two sides equal.
+              (goto-char (point-min))
+              (search-forward "M one.txt")
+              (mevedel-patch-review-toggle-selection)
+              (goto-char (point-min))
+              (search-forward "M one.txt")
+              (should-error (mevedel-patch-review-edit) :type 'user-error)
+              (goto-char (point-min))
+              (search-forward "M one.txt")
+              (mevedel-patch-review-toggle-selection))
+            (mevedel-test--with-captured-diagnostics nil
+              (let ((editable (with-current-buffer view-buf
+                                (goto-char (point-min))
+                                (search-forward "M one.txt")
+                                (mevedel-patch-review-edit))))
+                (should (buffer-live-p editable))
+                (with-current-buffer view-buf
+                  (goto-char (point-min))
+                  (search-forward "M one.txt")
+                  (should-error (mevedel-patch-review-edit)
+                                :type 'user-error))
+                (mevedel-patch-review-test--edit-quit view-buf nil)
+                (should-not (buffer-live-p editable))))
+            (should-not
+             (buffer-local-value
+              'mevedel-patch-review--edit-session view-buf))
+            (ignore result))
+        (when (buffer-live-p other-view) (kill-buffer other-view))
+        (when (buffer-live-p other-control) (kill-buffer other-control))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "A settled review discards a revision instead of staging it"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-edit-settled-" t)))
+           (path (file-name-concat root "one.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "settled"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "settled" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Update File: one.txt"
+                     "@@"
+                     "-old"
+                     "+model"
+                     "*** End Patch")
+                   "\n"))
+           result captured)
+      (unwind-protect
+          (progn
+            (with-temp-file path (insert "old\n"))
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            (mevedel-test--with-captured-diagnostics captured
+              (let ((editable (with-current-buffer view-buf
+                                (goto-char (point-min))
+                                (search-forward "M one.txt")
+                                (mevedel-patch-review-edit))))
+                (with-current-buffer view-buf
+                  (goto-char (point-min))
+                  (search-forward "ApplyPatch ·")
+                  (mevedel-patch-review-submit))
+                (with-current-buffer editable
+                  (erase-buffer)
+                  (insert "too late\n"))
+                (mevedel-patch-review-test--edit-quit view-buf t)))
+            (should (string-search "already settled" captured))
+            (should (equal "model\n"
+                           (with-temp-buffer
+                             (insert-file-contents path)
+                             (buffer-string))))
+            (should-not (string-search "revised by the user"
+                                       (plist-get result :result))))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "A selection changed while the editor was open discards the revision"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-edit-race-" t)))
+           (path (file-name-concat root "two.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "race"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "race" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Update File: two.txt"
+                     "@@"
+                     " head"
+                     "-first"
+                     "+FIRST"
+                     "@@"
+                     " tail"
+                     "-second"
+                     "+SECOND"
+                     "*** End Patch")
+                   "\n"))
+           result captured)
+      (unwind-protect
+          (progn
+            (with-temp-file path
+              (insert "head\nfirst\nmiddle\nmiddle\nmiddle\n"
+                      "tail\nsecond\nend\n"))
             (with-current-buffer data-buf
               (setq-local default-directory root
                           mevedel--workspace workspace
@@ -541,37 +1160,82 @@
                (list :patch patch)))
             (with-current-buffer view-buf
               (goto-char (point-min))
-              (search-forward "D gone.txt")
-              (setq edit-buffer (mevedel-patch-review-edit)))
-            (with-current-buffer edit-buffer
-              (should (string-empty-p (buffer-string)))
-              (should-error (mevedel-patch-review-edit-commit)
-                            :type 'user-error)
-              (insert "kept after all\n")
-              (mevedel-patch-review-edit-commit))
+              (search-forward "M two.txt")
+              (mevedel-patch-review-toggle-fold))
+            (mevedel-test--with-captured-diagnostics captured
+              (let ((editable (with-current-buffer view-buf
+                                (goto-char (point-min))
+                                (search-forward "@@ head")
+                                (mevedel-patch-review-edit))))
+                ;; The review stays interactive while a session is live.
+                (with-current-buffer view-buf
+                  (goto-char (point-min))
+                  (search-forward "@@ tail")
+                  (mevedel-patch-review-toggle-selection))
+                (with-current-buffer editable
+                  (erase-buffer)
+                  (insert "head\nEDITED\nmiddle\nmiddle\nmiddle\n"
+                          "tail\nSECOND\nend\n"))
+                (mevedel-patch-review-test--edit-quit view-buf t)))
+            (should (string-search "selection changed" captured))
+            (let* ((proposal (with-current-buffer view-buf
+                               (goto-char (point-min))
+                               (search-forward "M two.txt")
+                               (get-text-property (point)
+                                                  'mevedel-patch-proposal)))
+                   (hunks (plist-get (car (plist-get proposal :operations))
+                                     :hunks)))
+              ;; The rejected hunk stays rejected and nothing is revised.
+              (should (= 2 (length hunks)))
+              (should-not (plist-get (nth 1 hunks) :selected))
+              (should-not (cl-some (lambda (hunk) (plist-get hunk :modified))
+                                   hunks))))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "Declining the adoption keeps an Add's feedback"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-edit-fbkeep-" t)))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "fb-keep"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "fb-keep" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Add File: fresh.txt"
+                     "+model content"
+                     "*** End Patch")
+                   "\n"))
+           result)
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
             (with-current-buffer view-buf
               (goto-char (point-min))
-              (search-forward "M gone.txt")
-              (mevedel-patch-review-toggle-fold)
-              (let ((text (buffer-substring-no-properties
-                           (point-min) mevedel-view--input-marker)))
-                (should (string-search "M gone.txt" text))
-                (should (string-search "+ │ kept after all" text))
-                (should (string-search "· edited" text)))
-              (goto-char (point-min))
-              (search-forward "ApplyPatch ·")
-              (mevedel-patch-review-submit))
-            (should (equal "kept after all\n"
-                           (with-temp-buffer
-                             (insert-file-contents path)
-                             (buffer-string))))
-            (should (string-search
-                     "User edited during review (authoritative): gone.txt hunk 1"
-                     (plist-get result :result)))
-            (should (memq 'user-revised-patch
-                          (mapcar #'mevedel-reminder-type
-                                  (mevedel-session-reminders session)))))
-        (when (buffer-live-p edit-buffer) (kill-buffer edit-buffer))
+              (search-forward "A fresh.txt")
+              (mevedel-patch-review-feedback)
+              (insert "Put this in the other file.")
+              (mevedel-patch-review-confirm-feedback))
+            (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+              (mevedel-patch-review-test--edit
+               view-buf "A fresh.txt" "other content\n" t))
+            (let* ((proposal (with-current-buffer view-buf
+                               (goto-char (point-min))
+                               (search-forward "A fresh.txt")
+                               (get-text-property (point)
+                                                  'mevedel-patch-proposal)))
+                   (operation (car (plist-get proposal :operations))))
+              (should (equal "Put this in the other file."
+                             (plist-get operation :feedback)))
+              (should (equal "model content\n"
+                             (plist-get operation :content)))
+              (should-not (plist-get operation :selected))))
         (when (file-directory-p root) (delete-directory root t)))))
 
   :doc "An unedited Delete still applies and queues no reminder"
@@ -1245,6 +1909,44 @@
       (with-current-buffer view-buf
         (should (overlayp (mevedel-patch-review--render proposal)))))))
 
+(mevedel-deftest mevedel-patch-review--edit-start
+  (:doc "An ediff setup error releases its lock and temporary buffers")
+  ,test
+  (test)
+  (mevedel-view-test--with-buffers
+    (let* ((path (make-temp-file "mevedel-patch-edit-setup-"))
+           (proposal (list :view-buffer view-buf))
+           (operation (list :kind 'add :rel-path "setup.txt" :path path)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'ediff-buffers)
+                     (lambda (_buffer-a _buffer-b hooks &rest _)
+                       (let ((control
+                              (generate-new-buffer
+                               " *mevedel failing ediff control*")))
+                         (unwind-protect
+                             (with-current-buffer control
+                               (mapc #'funcall hooks)
+                               (should
+                                (eq control
+                                    (buffer-local-value
+                                     'mevedel-patch-review--edit-session
+                                     view-buf)))
+                               (error "Ediff setup failed"))
+                           (kill-buffer control)))))
+                    ((symbol-function
+                      'mevedel-patch-review--edit-goto-difference)
+                     #'ignore))
+            (should-error
+             (mevedel-patch-review--edit-start
+              proposal operation "" "new\n" nil)
+             :type 'error)
+            (should-not (get-buffer "*mevedel baseline: setup.txt*"))
+            (should-not (get-buffer "*mevedel result: setup.txt*"))
+            (should-not
+             (buffer-local-value
+              'mevedel-patch-review--edit-session view-buf)))
+        (when (file-exists-p path) (delete-file path))))))
+
 (mevedel-deftest mevedel-patch-review-toggle-fold
   (:doc "Is an interactive review command") ,test (test)
   (should (commandp #'mevedel-patch-review-toggle-fold)))
@@ -1275,16 +1977,6 @@
 (mevedel-deftest mevedel-patch-review-cancel-feedback
   (:doc "Is an interactive review command") ,test (test)
   (should (commandp #'mevedel-patch-review-cancel-feedback)))
-
-(mevedel-deftest mevedel-patch-review-edit-commit
-  (:doc "Is an interactive review command") ,test (test)
-  (should (commandp #'mevedel-patch-review-edit-commit)))
-
-(mevedel-deftest mevedel-patch-review-edit-cancel
-  (:doc "Kills the active hunk edit buffer") ,test (test)
-  (let ((buffer (generate-new-buffer " *patch-edit-cancel*")))
-    (with-current-buffer buffer (mevedel-patch-review-edit-cancel))
-    (should-not (buffer-live-p buffer))))
 
 (provide 'test-mevedel-patch-review)
 ;;; test-mevedel-patch-review.el ends here

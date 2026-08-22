@@ -361,6 +361,103 @@
                     "keep \u2013 this\n  old\ntail\n"
                     (list hunk) "file.txt")))))
 
+(mevedel-deftest mevedel-tool-patch-hunks-from-content ()
+  ,test
+  (test)
+  :doc "Returns nil for identical contents"
+  (should-not (mevedel-tool-patch-hunks-from-content "a\nb\n" "a\nb\n"))
+
+  :doc "Derives one hunk per changed region, each with its own context"
+  (let* ((baseline (concat (string-join
+                            (list "one" "two" "three" "four" "five" "six"
+                                  "seven" "eight" "nine" "ten" "eleven"
+                                  "twelve")
+                            "\n")
+                           "\n"))
+         (content (replace-regexp-in-string
+                   "^two$" "TWO"
+                   (replace-regexp-in-string "^eleven$" "ELEVEN" baseline)))
+         (hunks (mevedel-tool-patch-hunks-from-content baseline content)))
+    (should (= 2 (length hunks)))
+    (should (member "-two" (plist-get (nth 0 hunks) :diff-lines)))
+    (should (member "+TWO" (plist-get (nth 0 hunks) :diff-lines)))
+    (should (member "+ELEVEN" (plist-get (nth 1 hunks) :diff-lines)))
+    (should (plist-get (nth 0 hunks) :selected))
+    ;; Three lines of context on each side, so neither hunk claims the
+    ;; whole file and both stay independently selectable.
+    (should (member " five" (plist-get (nth 0 hunks) :diff-lines)))
+    (should-not (member " eleven" (plist-get (nth 0 hunks) :diff-lines)))
+    (should (equal content
+                   (mevedel-tool-patch-apply-hunks
+                    baseline hunks "file.txt"))))
+
+  :doc "Derives a change on the first line"
+  (let ((hunks (mevedel-tool-patch-hunks-from-content
+                "first\nsecond\n" "FIRST\nsecond\n")))
+    (should (= 1 (length hunks)))
+    (should (equal '("first" "second")
+                   (plist-get (car hunks) :old-lines)))
+    (should (equal '("FIRST" "second")
+                   (plist-get (car hunks) :new-lines))))
+
+  :doc "Derives an appended trailing line"
+  (let ((hunks (mevedel-tool-patch-hunks-from-content
+                "first\n" "first\nsecond\n")))
+    (should (= 1 (length hunks)))
+    (should (equal '("first") (plist-get (car hunks) :old-lines)))
+    (should (equal '("first" "second") (plist-get (car hunks) :new-lines))))
+
+  :doc "Derives a deleted trailing line without a no-newline marker"
+  (let ((hunks (mevedel-tool-patch-hunks-from-content
+                "first\nsecond\n" "first\n")))
+    (should (= 1 (length hunks)))
+    (should (equal '("first" "second") (plist-get (car hunks) :old-lines)))
+    (should (equal '("first") (plist-get (car hunks) :new-lines))))
+
+  :doc "Derived hunks reproduce the content they were derived from"
+  (let* ((baseline (string-join
+                    (list "alpha" "beta" "gamma" "delta" "epsilon" "zeta"
+                          "eta" "theta" "iota" "kappa")
+                    "\n"))
+         (content (string-join
+                   (list "ALPHA" "beta" "gamma" "delta" "epsilon" "zeta"
+                         "eta" "theta" "iota" "KAPPA" "extra")
+                   "\n"))
+         (hunks (mevedel-tool-patch-hunks-from-content
+                 (concat baseline "\n") (concat content "\n"))))
+    (should (equal (concat content "\n")
+                   (mevedel-tool-patch-apply-hunks
+                    (concat baseline "\n") hunks "file.txt"))))
+
+  :doc "Normalizes CRLF input and reapplies with CRLF preserved"
+  (let ((hunks (mevedel-tool-patch-hunks-from-content
+                "one\r\ntwo\r\n" "one\r\nTWO\r\n")))
+    (should (= 1 (length hunks)))
+    (should (equal '("one" "two") (plist-get (car hunks) :old-lines)))
+    (should (equal "one\r\nTWO\r\n"
+                   (mevedel-tool-patch-apply-hunks
+                    "one\r\ntwo\r\n" hunks "file.txt"))))
+
+  :doc "Ignores a trailing-newline-only difference in either direction"
+  (should-not (mevedel-tool-patch-hunks-from-content "a\nb\n" "a\nb"))
+  (should-not (mevedel-tool-patch-hunks-from-content "a\nb" "a\nb\n"))
+
+  :doc "Derives no phantom last-line hunk from an unterminated baseline"
+  (let* ((baseline (string-join
+                    (list "l1" "l2" "l3" "l4" "l5" "l6" "l7" "l8" "l9" "l10")
+                    "\n"))
+         (content (replace-regexp-in-string "\\`l1$" "L1" baseline))
+         (hunks (mevedel-tool-patch-hunks-from-content baseline content)))
+    (should (= 1 (length hunks)))
+    (should-not (member "-l10" (plist-get (car hunks) :diff-lines))))
+
+  :doc "Derives a whole-file replacement"
+  (let ((hunks (mevedel-tool-patch-hunks-from-content "old\n" "new\n")))
+    (should (= 1 (length hunks)))
+    (should (equal "new\n"
+                   (mevedel-tool-patch-apply-hunks
+                    "old\n" hunks "file.txt")))))
+
 (mevedel-deftest mevedel-tool-patch--assert-buffers-unmodified
   (:doc "Refuses to overwrite an affected buffer with unsaved edits")
   ,test
@@ -1064,7 +1161,22 @@
              (plist-get result :result)))
     (should (member
              "Fuzzy: a hunk 1 matched while ignoring surrounding whitespace"
-             (plist-get (plist-get result :render-data) :notes)))))
+             (plist-get (plist-get result :render-data) :notes))))
+
+  :doc "Reports only selected edited hunks as authoritative applied content"
+  (let ((text
+         (plist-get
+          (mevedel-tool-patch-result
+           '(:operations
+             ((:kind update :rel-path "a"
+               :hunks ((:selected t :modified t
+                        :diff-lines ("-applied" "+chosen"))
+                       (:selected nil :modified t
+                        :diff-lines ("-rejected" "+discarded"))))))
+           '((:action write)))
+          :result)))
+    (should (string-search "+chosen" text))
+    (should-not (string-search "+discarded" text))))
 
 (mevedel-deftest mevedel-tool-patch-hunk-counts
   (:doc "Counts added and deleted diff lines in one hunk") ,test (test)

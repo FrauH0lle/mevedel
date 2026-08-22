@@ -70,7 +70,8 @@ recommends those elements while leaving Codex room to choose the next action.
     model is still generating, like Codex's `StreamingPatchParser` +
     `PatchApplyUpdated` events.
   - Cumulative turn/session diff view aggregating all applied patches,
-    like Codex's `SharedTurnDiffTracker`; could reuse the ediff glue.
+    like Codex's `SharedTurnDiffTracker`; could reuse
+    `mevedel-tool-patch-hunks-from-content` and the side-by-side edit glue.
 
 - Add a memory-verification slash command or skill that consolidates project
   memories and checks whether they are still accurate; explore whether a
@@ -511,37 +512,3 @@ become implemented, obsolete, or unjustified.
   path.
 - **Blast radius:** Bedrock sessions cannot use deferred-tool loading
   correctly.
-
-### Split the side-conversation test suite into per-function deftests
-
-- **Source:** `test/test-mevedel-side-conversation.el`
-- **What's owed:** The whole module is covered by one ~1,800-line
-  `mevedel-deftest mevedel-view-send/btw` named after a
-  `mevedel-view-composer` function.  Split into per-entry-point deftests
-  (`mevedel-side-conversation-open`, `-send`, `--snapshot`,
-  `--copy-context-sources`) with the module's own names.
-- **Why deferred:** Pure test-file reorganization; every `:doc` case maps
-  to an ADR 0093 clause and all 26 cases pass, so the churn carries risk
-  without behavior gain right now.
-- **Status check:** Still one deftest covering the module.
-- **Blast radius:** Failures report under a misleading test name; pure
-  helpers are only exercised through the full view integration path.
-
-## Two test files still depend on suite load order
-
-- **What's owed:** `test/test-mevedel-overlays-source.el`
-  (`mevedel-directive-activity-archive`) and
-  `test/test-mevedel-interaction-prompt.el` (`mevedel--prompt--settle` case 3)
-  pass in a full run and fail when their file is run alone, which is the
-  documented single-file workflow.
-- **Why deferred:** the overlays-source failure is an eager macro-expansion
-  cycle in product requires -- `mevedel-session-persistence` ->
-  `mevedel-agents` -> `mevedel-tool-registry` -> `mevedel-pipeline` ->
-  `mevedel-permissions` -> `mevedel-session-persistence` -- that only closes
-  when the modules load from source in that order. Breaking it means moving
-  requires in product code, which is a wider change than test hygiene.
-- **Status check:** every other test file was made to run standalone by
-  adding the `require` it was borrowing from a sibling file; these two are
-  not missing a require.
-- **Blast radius:** a developer running one file sees failures that are not
-  theirs, and learns to distrust single-file runs.

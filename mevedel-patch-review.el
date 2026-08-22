@@ -4,7 +4,7 @@
 
 ;; Interactive staged review for ApplyPatch proposals: fold and
 ;; selection state per file and hunk, inline diff rendering with a
-;; line-number gutter, per-hunk editing, feedback at hunk, file, and
+;; line-number gutter, side-by-side editing, feedback at hunk, file, and
 ;; patch scope, and final settlement through the patch engine in
 ;; `mevedel-tool-patch'.  Nothing touches the filesystem before the
 ;; final action.
@@ -14,6 +14,20 @@
 (eval-when-compile
   (require 'cl-lib)
   (require 'subr-x))
+
+;; `ediff'
+(declare-function ediff-buffers "ediff"
+                  (buffer-A buffer-B &optional startup-hooks job-name))
+
+;; `ediff-util'
+(declare-function ediff-diff-at-point "ediff-util"
+                  (buf-type &optional pos which-diff))
+(declare-function ediff-jump-to-difference "ediff-util" (difference-number))
+(declare-function ediff-next-difference "ediff-util" (&optional arg))
+(defvar ediff-buffer-A)
+(defvar ediff-buffer-B)
+(defvar ediff-keep-variants)
+(defvar ediff-number-of-differences)
 
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--register-canceller
@@ -45,20 +59,22 @@
                   "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch-apply
                   "mevedel-tool-patch" (data-buffer changes continuation))
+(declare-function mevedel-tool-patch-apply-hunks
+                  "mevedel-tool-patch" (content hunks path))
 (declare-function mevedel-tool-patch-assert-baseline
                   "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch-content-lines
                   "mevedel-tool-patch" (content))
 (declare-function mevedel-tool-patch-hunk-counts
                   "mevedel-tool-patch" (hunk))
+(declare-function mevedel-tool-patch-hunks-from-content
+                  "mevedel-tool-patch" (baseline content))
 (declare-function mevedel-tool-patch-kind-face
                   "mevedel-tool-patch" (kind))
 (declare-function mevedel-tool-patch-match-pass-description
                   "mevedel-tool-patch" (pass))
 (declare-function mevedel-tool-patch-operation-stats
                   "mevedel-tool-patch" (operation))
-(declare-function mevedel-tool-patch-parse-update-lines
-                  "mevedel-tool-patch" (lines first-line))
 (declare-function mevedel-tool-patch-physical-path
                   "mevedel-tool-patch" (operation))
 (declare-function mevedel-tool-patch-planned-changes
@@ -170,14 +186,11 @@ Feedback anywhere outside a file or hunk targets the whole patch."
   "C-c C-c" #'mevedel-patch-review-confirm-feedback
   "C-c C-k" #'mevedel-patch-review-cancel-feedback)
 
-(defvar-keymap mevedel-patch-review-edit-map
-  :doc "Keymap for an ApplyPatch hunk edit buffer."
-  "C-c C-c" #'mevedel-patch-review-edit-commit
-  "C-c C-k" #'mevedel-patch-review-edit-cancel)
+(defvar-local mevedel-patch-review--edit-session nil
+  "Control buffer of this view's live side-by-side edit session, or nil.
+One editor per session: two in the same view could stage conflicting
+revisions, while independent session views do not share proposal state.")
 
-(defvar-local mevedel-patch-review--edit-proposal nil)
-(defvar-local mevedel-patch-review--edit-operation nil)
-(defvar-local mevedel-patch-review--edit-hunk nil)
 
 (defun mevedel-patch-review--target-at-point (property)
   "Return PROPERTY at point or immediately before point."
@@ -661,7 +674,8 @@ DATA-BUFFER is the tool-calling buffer whose view owns the interaction."
                      (mevedel-patch-review--settle proposal outcome)))
       ;; The remote surface gets the two whole-call decisions: apply the
       ;; staged selection, or request a revision with whole-patch
-      ;; feedback.  Hunk editing and per-hunk feedback stay in Emacs.
+      ;; feedback.  Side-by-side editing and per-hunk feedback stay in
+      ;; Emacs.
       (let ((remote
              (list :body
                    (let ((patch (or (plist-get proposal :patch) "")))
@@ -889,10 +903,13 @@ on Update files and patch-level feedback leave selection untouched."
     (mevedel-patch-review--render proposal)))
 
 (defun mevedel-patch-review-edit ()
-  "Edit the proposed change at point before it is applied.
-On an Update or Move hunk this opens the hunk in a diff buffer; on an
-Add file it opens the proposed content in the target's major mode.
-Commit the revision with \\`C-c C-c' or discard it with \\`C-c C-k'."
+  "Edit the proposed change at point side by side before it is applied.
+The captured baseline opens on the left, read-only, and the result the
+patch would produce opens on the right.  Edit the right buffer as
+ordinary file text; quitting ediff offers to adopt those edits into the
+staged proposal.  An Update or Move has its hunks re-derived from the
+edited result, an Add has its proposed content replaced, and a Delete
+becomes keeping the file whenever anything is left on the right."
   (interactive)
   (let ((proposal (mevedel-patch-review--target-at-point
                    'mevedel-patch-proposal))
@@ -904,171 +921,291 @@ Commit the revision with \\`C-c C-c' or discard it with \\`C-c C-k'."
                    'mevedel-patch-edit-hunk))))
     (unless (and proposal operation)
       (user-error "No patch operation at point"))
-    (pcase (plist-get operation :kind)
-      ((or 'update 'move)
-       (cond
-        (hunk (mevedel-patch-review--edit-hunk proposal operation hunk))
-        ((plist-get operation :hunks)
-         (user-error "Move point onto a hunk to edit it"))
-        (t (user-error
-            "A pure rename has no content to edit; SPC keeps the current path"))))
-      ((or 'add 'delete)
-       (mevedel-patch-review--edit-content proposal operation)))))
-
-(defun mevedel-patch-review--confirm-feedback-clear (target)
-  "Signal unless TARGET's pending feedback may be cleared for an edit."
-  (when (and (plist-get target :feedback)
-             (not (yes-or-no-p "Edit and clear its feedback? ")))
-    (user-error "Edit cancelled"))
-  (plist-put target :feedback nil))
-
-(defun mevedel-patch-review--edit-setup (proposal operation hunk)
-  "Bind the current edit buffer to PROPOSAL, OPERATION, and HUNK.
-Must run after the buffer's major mode is set: the mode call kills
-local variables."
-  (use-local-map
-   (make-composed-keymap mevedel-patch-review-edit-map
-                         (current-local-map)))
-  (setq-local mevedel-patch-review--edit-proposal proposal
-              mevedel-patch-review--edit-operation operation
-              mevedel-patch-review--edit-hunk hunk))
-
-(defun mevedel-patch-review--edit-hunk (proposal operation hunk)
-  "Open OPERATION's HUNK from PROPOSAL in a temporary diff buffer."
-  (mevedel-patch-review--confirm-feedback-clear hunk)
-  (let ((buffer (generate-new-buffer "*mevedel patch hunk*")))
-    (with-current-buffer buffer
-      (insert (if-let* ((context (plist-get hunk :context)))
-                  (format "@@ %s\n" context)
-                "@@\n"))
-      (insert (string-join (plist-get hunk :diff-lines) "\n") "\n")
-      (require 'diff-mode)
-      (diff-mode)
-      (mevedel-patch-review--edit-setup proposal operation hunk))
-    (pop-to-buffer buffer)
-    buffer))
-
-(defun mevedel-patch-review--edit-content (proposal operation)
-  "Open OPERATION's proposed content from PROPOSAL for editing.
-An Add starts from its proposed content; a Delete starts empty, and
-committing content converts it into keeping the file with that
-content."
-  (mevedel-patch-review--confirm-feedback-clear operation)
-  (let ((buffer (generate-new-buffer "*mevedel patch content*")))
-    (with-current-buffer buffer
-      (insert (or (plist-get operation :content) ""))
-      (goto-char (point-min))
-      (let ((buffer-file-name (plist-get operation :path)))
-        (delay-mode-hooks (set-auto-mode)))
-      (mevedel-patch-review--edit-setup proposal operation nil))
-    (pop-to-buffer buffer)
-    buffer))
-
-(defun mevedel-patch-review-edit-commit ()
-  "Replace the staged change with the contents of the current edit buffer."
-  (interactive)
-  (unless (and mevedel-patch-review--edit-proposal
-               mevedel-patch-review--edit-operation)
-    (user-error "This is not a patch edit buffer"))
-  (if mevedel-patch-review--edit-hunk
-      (mevedel-patch-review--edit-commit-hunk)
-    (mevedel-patch-review--edit-commit-content)))
-
-(defun mevedel-patch-review--edit-settle (proposal)
-  "Kill the edit buffer and redraw PROPOSAL's review."
-  (mevedel-tool-patch-annotate-line-numbers proposal)
-  (let ((view (plist-get proposal :view-buffer)))
-    (kill-buffer (current-buffer))
-    (with-current-buffer view
-      (mevedel-patch-review--render proposal))))
-
-(defun mevedel-patch-review--edit-commit-hunk ()
-  "Replace the staged hunk with the current edit buffer's diff."
-  (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
-         (lines (split-string (string-trim-right text "\n+") "\n" nil))
-         (hunks (mevedel-tool-patch-parse-update-lines lines 1)))
-    (unless (= (length hunks) 1)
-      (user-error "An edited hunk must contain exactly one @@ section"))
-    (let ((replacement (car hunks))
-          (proposal mevedel-patch-review--edit-proposal)
-          (operation mevedel-patch-review--edit-operation)
-          (original mevedel-patch-review--edit-hunk))
-      (plist-put replacement :modified t)
-      (plist-put replacement :selected t)
-      (plist-put operation :hunks
-                 (mapcar (lambda (hunk)
-                           (if (eq hunk original) replacement hunk))
-                         (plist-get operation :hunks)))
-      (condition-case err
-          (mevedel-tool-patch-planned-changes proposal)
-        (error
-         (plist-put operation :hunks
-                    (mapcar (lambda (hunk)
-                              (if (eq hunk replacement) original hunk))
-                            (plist-get operation :hunks)))
-         (signal (car err) (cdr err))))
-      (mevedel-patch-review--edit-settle proposal))))
-
-(defun mevedel-patch-review--edit-commit-content ()
-  "Replace the staged content with the current edit buffer's text.
-On an Add this rewrites the proposed file; on a Delete it converts the
-operation into a whole-file replacement, keeping the file with the
-buffer's content."
-  (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
-         (content (if (string-suffix-p "\n" text) text (concat text "\n")))
-         (proposal mevedel-patch-review--edit-proposal)
-         (operation mevedel-patch-review--edit-operation)
-         (delete-p (eq (plist-get operation :kind) 'delete)))
-    (when (string-empty-p (string-trim content))
+    (when (buffer-live-p mevedel-patch-review--edit-session)
+      (user-error "Another patch edit session is already open"))
+    (when (and (memq (plist-get operation :kind) '(update move))
+               (null (plist-get operation :hunks)))
       (user-error
-       (if delete-p
-           "Empty content keeps nothing; C-c C-k keeps the Delete as proposed"
-         "An added file needs content; reject the file instead")))
-    (if delete-p
-        (mevedel-patch-review--edit-convert-delete
-         proposal operation content)
-      (let ((original (plist-get operation :content)))
-        (plist-put operation :content content)
-        (condition-case err
-            (mevedel-tool-patch-planned-changes proposal)
-          (error
-           (plist-put operation :content original)
-           (signal (car err) (cdr err))))
-        (plist-put operation :modified t)
-        (plist-put operation :selected t)))
-    (mevedel-patch-review--edit-settle proposal)))
+       "A pure rename has no content to edit; SPC keeps the current path"))
+    (pcase-let ((`(,baseline . ,planned)
+                 (mevedel-patch-review--edit-sides operation)))
+      ;; Compare logical lines: applying hunks renormalizes line endings,
+      ;; so a mixed-ending file differs from its own baseline even with
+      ;; every hunk deselected, and that is not a change to edit.
+      (when (equal (mevedel-tool-patch-content-lines baseline)
+                   (mevedel-tool-patch-content-lines planned))
+        (user-error "Nothing to compare; select a change in this file first"))
+      ;; Adopting an Add or a Delete selects the operation, and a
+      ;; selected operation carries no feedback.  An Update or Move
+      ;; needs no such confirmation: hunk feedback deselects its hunk,
+      ;; and a deselected hunk survives the edit untouched.
+      (when (memq (plist-get operation :kind) '(add delete))
+        (mevedel-patch-review--confirm-feedback-loss operation))
+      (mevedel-patch-review--edit-start proposal operation
+                                       baseline planned hunk))))
 
-(defun mevedel-patch-review--edit-convert-delete
-    (proposal operation content)
+(defun mevedel-patch-review--confirm-feedback-loss (target)
+  "Signal unless an adopted edit of TARGET may clear its pending feedback.
+The feedback itself is cleared only when a revision is adopted, so
+declining the adoption costs nothing."
+  (when (and (plist-get target :feedback)
+             (not (yes-or-no-p "Edit and clear its feedback if adopted? ")))
+    (user-error "Edit cancelled")))
+
+(defun mevedel-patch-review--edit-sides (operation)
+  "Return OPERATION's baseline content and planned result as a cons.
+The planned result is what applying the operation's selected hunks
+produces, so a hunk the user deselected is absent from the right-hand
+side of an edit session and from the hunks derived out of it.  A
+deselected indivisible operation has no planned change, so both sides
+are its baseline, except for Add/Delete feedback whose confirmed edit
+path may replace the feedback with an adopted revision."
+  (let ((baseline (or (plist-get operation :baseline-content) ""))
+        (kind (plist-get operation :kind)))
+    (if (and (not (eq kind 'update))
+             (not (plist-get operation :selected))
+             ;; Add/Delete feedback deselects the operation, but the
+             ;; confirmed edit path intentionally adopts it as selected.
+             (not (and (memq kind '(add delete))
+                       (plist-get operation :feedback))))
+        (cons baseline baseline)
+      (pcase kind
+        ('add (cons "" (or (plist-get operation :content) "")))
+        ('delete (cons baseline ""))
+        (_ (cons baseline
+                 (mevedel-tool-patch-apply-hunks
+                  baseline (plist-get operation :hunks)
+                  (mevedel-tool-patch-physical-path operation))))))))
+
+(defun mevedel-patch-review--edit-buffer (name content path)
+  "Return a new buffer NAME holding CONTENT in PATH's major mode."
+  (let ((buffer (generate-new-buffer name)))
+    (with-current-buffer buffer
+      (insert content)
+      (goto-char (point-min))
+      (let ((buffer-file-name path))
+        (delay-mode-hooks (set-auto-mode))))
+    buffer))
+
+(defun mevedel-patch-review--edit-start
+    (proposal operation baseline planned hunk)
+  "Open a side-by-side edit session for OPERATION in PROPOSAL.
+BASELINE and PLANNED are the two sides.  HUNK, when non-nil, positions
+the session at the difference nearest that hunk.  Returns the editable
+buffer."
+  (require 'ediff)
+  (let* ((path (mevedel-tool-patch-physical-path operation))
+         (label (plist-get operation :rel-path))
+         (view (plist-get proposal :view-buffer))
+         (line (and hunk (plist-get hunk :old-start)))
+         buffer-a buffer-b handed-off)
+    (unwind-protect
+        (progn
+          (setq buffer-a
+                (mevedel-patch-review--edit-buffer
+                 (format "*mevedel baseline: %s*" label) baseline path)
+                buffer-b
+                (mevedel-patch-review--edit-buffer
+                 (format "*mevedel result: %s*" label) planned path))
+          (with-current-buffer buffer-a
+            (setq buffer-read-only t))
+          (ediff-buffers
+           buffer-a buffer-b
+           (list (lambda ()
+                   (let ((control (current-buffer)))
+                     (with-current-buffer view
+                       (setq mevedel-patch-review--edit-session control)))
+                   ;; ediff's own janitor would otherwise offer to kill both
+                   ;; sides before the quit hook has read them.  These are
+                   ;; temporaries the user never opened; disposing of them is
+                   ;; this module's job, not a question to answer.
+                   (setq-local ediff-keep-variants t)
+                   ;; Depth 90 puts this after `ediff-cleanup-mess', which ends
+                   ;; by clearing the echo area: an adoption failure reported
+                   ;; from an earlier hook would be wiped before it is read.
+                   ;; The state comes from this closure rather than from
+                   ;; control-buffer locals, because that buffer is gone by
+                   ;; then.
+                   (add-hook 'ediff-quit-hook
+                             (lambda ()
+                               (mevedel-patch-review--edit-quit
+                                proposal operation planned buffer-a buffer-b))
+                             90 t)
+                   (mevedel-patch-review--edit-goto-difference line))))
+          (setq handed-off t)
+          buffer-b)
+      (unless handed-off
+        (when (buffer-live-p view)
+          (with-current-buffer view
+            (setq mevedel-patch-review--edit-session nil)))
+        (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
+        (when (buffer-live-p buffer-b) (kill-buffer buffer-b))))))
+
+(defun mevedel-patch-review--edit-goto-difference (line)
+  "Select the difference nearest LINE in the baseline buffer.
+LINE is a one-based line in the captured baseline, or nil to start at
+the first difference.  The baseline side is the one whose line numbers
+are exact: a hunk's new-file position counts every matched hunk, while
+the editable buffer holds only the selected ones."
+  (when (> ediff-number-of-differences 0)
+    (if-let* ((position
+               (and line
+                    (with-current-buffer ediff-buffer-A
+                      (save-excursion
+                        (goto-char (point-min))
+                        (forward-line (1- line))
+                        (point))))))
+        (ediff-jump-to-difference
+         ;; 0 means "before the first difference", which selects nothing.
+         (max 1 (min (ediff-diff-at-point 'A position)
+                     ediff-number-of-differences)))
+      (ediff-next-difference))))
+
+(defun mevedel-patch-review--edit-quit
+    (proposal operation planned buffer-a buffer-b)
+  "Offer to adopt BUFFER-B as OPERATION's revision, then dispose of the session.
+PROPOSAL owns OPERATION, PLANNED is the result the session opened with,
+and BUFFER-A is the baseline side.  Nothing is asked when BUFFER-B still
+holds PLANNED."
+  (when-let* ((view (plist-get proposal :view-buffer))
+              ((buffer-live-p view)))
+    (with-current-buffer view
+      (setq mevedel-patch-review--edit-session nil)))
+  (unwind-protect
+      (when-let* (((buffer-live-p buffer-b))
+                  (content (with-current-buffer buffer-b
+                             (buffer-substring-no-properties
+                              (point-min) (point-max))))
+                  ((not (equal content planned)))
+                  ;; A quit here must not escape: ediff restores the
+                  ;; window configuration after this hook returns.
+                  ((with-local-quit
+                     (y-or-n-p "Adopt your edits into the staged patch? "))))
+        (mevedel-patch-review--edit-adopt
+         proposal operation planned content))
+    (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
+    (when (buffer-live-p buffer-b) (kill-buffer buffer-b))))
+
+(defun mevedel-patch-review--edit-adopt (proposal operation planned content)
+  "Adopt CONTENT as OPERATION's revised change in PROPOSAL.
+PLANNED is the result the edit session opened with; the review stays
+interactive while a session is live, so a selection changed underneath
+it would silently reinstate a hunk the user had just rejected.
+Reports rather than signals: an ediff quit hook must not fail, and a
+revision that cannot be staged leaves the proposal exactly as it was."
+  (let ((view (plist-get proposal :view-buffer)))
+    (cond
+     ((memq (plist-get proposal :state) '(submitting settled))
+      (message "mevedel: patch review already settled, revision discarded"))
+     ((not (buffer-live-p view))
+      (message "mevedel: patch review is gone, revision discarded"))
+     ((not (equal planned
+                  (ignore-errors
+                    (cdr (mevedel-patch-review--edit-sides operation)))))
+      (message (concat "mevedel: this file's selection changed while the"
+                       " editor was open, revision discarded")))
+     (t
+      (condition-case err
+          (progn
+            (pcase (plist-get operation :kind)
+              ('add (mevedel-patch-review--adopt-content
+                     proposal operation content))
+              ('delete (mevedel-patch-review--adopt-delete
+                        proposal operation content))
+              (_ (mevedel-patch-review--adopt-hunks
+                  proposal operation content)))
+            (mevedel-tool-patch-annotate-line-numbers proposal)
+            (with-current-buffer view
+              (mevedel-patch-review--render proposal)))
+        (error
+         ;; A rolled-back revision leaves the restored hunks carrying
+         ;; positions computed for the hunk set that was rejected.
+         (mevedel-tool-patch-annotate-line-numbers proposal)
+         (message "mevedel: revision not adopted, %s"
+                  (mevedel-tool-patch-sanitize-error
+                   (error-message-string err) proposal))))))))
+
+(defun mevedel-patch-review--adopt-content (proposal operation content)
+  "Replace Add OPERATION's proposed content in PROPOSAL with CONTENT."
+  (when (string-empty-p (string-trim content))
+    (user-error "An added file needs content; reject the file instead"))
+  (let ((original (plist-get operation :content)))
+    (plist-put operation :content
+               (if (string-suffix-p "\n" content)
+                   content
+                 (concat content "\n")))
+    (condition-case err
+        (mevedel-tool-patch-planned-changes proposal)
+      (error
+       (plist-put operation :content original)
+       (signal (car err) (cdr err))))
+    (plist-put operation :modified t)
+    (plist-put operation :selected t)
+    ;; A selected operation carries no feedback; the prompt at session
+    ;; open said adopting would clear it.
+    (plist-put operation :feedback nil)))
+
+(defun mevedel-patch-review--adopt-delete (proposal operation content)
   "Convert Delete OPERATION in PROPOSAL into keeping CONTENT.
-The operation becomes an Update whose single hunk replaces the whole
-baseline with CONTENT, so the ordinary validation, application, and
-user-revision reporting cover it."
+The operation becomes an Update whose hunks are derived from the edited
+result, so ordinary validation, application, selection, and revision
+reporting cover it."
+  (when (string-empty-p (string-trim content))
+    (user-error "Empty content keeps nothing; the Delete stands as proposed"))
   (let* ((baseline (or (plist-get operation :baseline-content) ""))
-         (lines
-          (cons "@@"
-                (append
-                 (mapcar (lambda (line) (concat "-" line))
-                         (mevedel-tool-patch-content-lines baseline))
-                 (mapcar (lambda (line) (concat "+" line))
-                         (mevedel-tool-patch-content-lines content)))))
-         (hunk (car (mevedel-tool-patch-parse-update-lines lines 1)))
-         (original-hunks (plist-get operation :hunks)))
-    (plist-put hunk :modified t)
-    (plist-put hunk :selected t)
+         (hunks (mevedel-tool-patch-hunks-from-content baseline content))
+         (original (plist-get operation :hunks)))
+    (unless hunks
+      (user-error "That keeps the file unchanged; deselect the Delete instead"))
+    (dolist (hunk hunks)
+      (plist-put hunk :modified t)
+      (plist-put hunk :selected t))
     (plist-put operation :kind 'update)
-    (plist-put operation :hunks (list hunk))
+    (plist-put operation :hunks hunks)
     (condition-case err
         (mevedel-tool-patch-planned-changes proposal)
       (error
        (plist-put operation :kind 'delete)
-       (plist-put operation :hunks original-hunks)
-       (signal (car err) (cdr err))))))
+       (plist-put operation :hunks original)
+       (signal (car err) (cdr err))))
+    (plist-put operation :feedback nil)))
 
-(defun mevedel-patch-review-edit-cancel ()
-  "Discard the current patch hunk edit buffer."
-  (interactive)
-  (kill-buffer (current-buffer)))
+(defun mevedel-patch-review--adopt-hunks (proposal operation content)
+  "Replace OPERATION's selected hunks in PROPOSAL with ones from CONTENT.
+Deselected hunks are carried across untouched and merged back in
+baseline file order, so a change the user rejected stays rejected and
+stays reselectable.  Reselecting one later fails the ordinary way when
+the edit moved the region it matches."
+  (let* ((baseline (or (plist-get operation :baseline-content) ""))
+         (derived (mevedel-tool-patch-hunks-from-content
+                   baseline content))
+         (original (plist-get operation :hunks))
+         (preserved (cl-remove-if (lambda (hunk) (plist-get hunk :selected))
+                                  original)))
+    (unless derived
+      (user-error
+       "That leaves the file unchanged; deselect its hunks instead"))
+    (dolist (hunk derived)
+      (plist-put hunk :modified t)
+      (plist-put hunk :selected t))
+    (plist-put operation :hunks (append derived preserved))
+    ;; Position every hunk against the unchanged baseline, then order the
+    ;; merged set by that position: hunks are matched in file order, and
+    ;; the review reads in file order too.
+    (mevedel-tool-patch-annotate-line-numbers proposal)
+    (plist-put operation :hunks
+               (sort (plist-get operation :hunks)
+                     ;; Not in place: the merged list shares cells with
+                     ;; the original one this rolls back to.
+                     :in-place nil
+                     :key (lambda (hunk)
+                            (or (plist-get hunk :old-start)
+                                most-positive-fixnum))))
+    (condition-case err
+        (mevedel-tool-patch-planned-changes proposal)
+      (error
+       (plist-put operation :hunks original)
+       (signal (car err) (cdr err))))))
 
 (defun mevedel-patch-review--revised-summary (proposal)
   "Return a summary of PROPOSAL's applied user-revised changes, or nil."
@@ -1076,18 +1213,20 @@ user-revision reporting cover it."
     (dolist (operation (plist-get proposal :operations))
       (let ((path (plist-get operation :rel-path)))
         (pcase (plist-get operation :kind)
+          ;; A revision replaces the file's whole derived hunk set, so
+          ;; hunk indices no longer correspond to anything the model
+          ;; wrote.  Report the file once instead.
           ('update
-           (cl-loop for hunk in (plist-get operation :hunks)
-                    for number from 1
-                    when (and (plist-get hunk :modified)
-                              (plist-get hunk :selected))
-                    do (push (format "%s hunk %d" path number) parts)))
+           (when (cl-some (lambda (hunk)
+                            (and (plist-get hunk :modified)
+                                 (plist-get hunk :selected)))
+                          (plist-get operation :hunks))
+             (push (format "%s (whole file revised)" path) parts)))
           ('move
-           (when (plist-get operation :selected)
-             (cl-loop for hunk in (plist-get operation :hunks)
-                      for number from 1
-                      when (plist-get hunk :modified)
-                      do (push (format "%s hunk %d" path number) parts))))
+           (when (and (plist-get operation :selected)
+                      (cl-some (lambda (hunk) (plist-get hunk :modified))
+                               (plist-get operation :hunks)))
+             (push (format "%s (whole file revised)" path) parts)))
           ('add
            (when (and (plist-get operation :selected)
                       (plist-get operation :modified))
