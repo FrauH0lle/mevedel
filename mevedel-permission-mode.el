@@ -149,6 +149,40 @@ SESSION defaults to the current data buffer's session."
           (mevedel-session-ensure-reminder
            session (mevedel-reminders-make-full-auto-mode-exit))))))))
 
+;;
+;;; Goal implementation override
+
+(defvar-local mevedel--implementation-permission-mode-restore nil
+  "Wrapped permission mode to restore after Goal implementation.")
+
+(defun mevedel--implementation-permission-mode-apply (mode)
+  "Temporarily apply implementation permission MODE for this request."
+  (when (and (memq mode '(ask edits full-auto))
+             (bound-and-true-p mevedel--session))
+    (setq mevedel--implementation-permission-mode-restore
+          (list (mevedel-session-permission-mode mevedel--session)))
+    (mevedel-permission-mode-set-raw mode)
+    (mevedel-view-refresh-associated-input-prompt)))
+
+(defun mevedel--implementation-permission-mode-restore ()
+  "Restore permission mode after a temporary Goal implementation override."
+  (when (and mevedel--implementation-permission-mode-restore
+             (bound-and-true-p mevedel--session))
+    (let ((restore (car mevedel--implementation-permission-mode-restore)))
+      (setq mevedel--implementation-permission-mode-restore nil)
+      (setf (mevedel-session-permission-mode mevedel--session) restore)
+      (if restore
+          (setq-local mevedel-permission-mode restore)
+        (kill-local-variable 'mevedel-permission-mode))
+      (when (and (boundp 'mevedel--view-buffer)
+                 (buffer-live-p mevedel--view-buffer))
+        (with-current-buffer mevedel--view-buffer
+          (if restore
+              (setq-local mevedel-permission-mode restore)
+            (kill-local-variable 'mevedel-permission-mode))))
+      (mevedel-view-refresh-associated-input-prompt))))
+
+
 (defun mevedel-permission-mode-transition (mode)
   "Transition the current session to permission MODE.
 Runs mode-specific lifecycle hooks."

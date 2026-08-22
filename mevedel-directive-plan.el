@@ -23,9 +23,9 @@
 (declare-function mevedel--directive-action-context
                   "mevedel-chat" (directive workspace))
 (declare-function mevedel--directive-model-policy
-                  "mevedel-chat" (directive))
+                  "mevedel-directive-request" (directive))
 (declare-function mevedel--process-directive
-                  "mevedel-chat"
+                  "mevedel-directive-request"
                   (directive preset prompt-fn callback &optional options))
 
 ;; `mevedel-directive-source'
