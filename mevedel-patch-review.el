@@ -32,37 +32,37 @@
                   "mevedel-side-conversation" (record))
 
 ;; `mevedel-tool-patch'
-(declare-function mevedel-tool-patch--annotate-line-numbers
+(declare-function mevedel-tool-patch-annotate-line-numbers
                   "mevedel-tool-patch" (proposal))
-(declare-function mevedel-tool-patch--apply
+(declare-function mevedel-tool-patch-apply
                   "mevedel-tool-patch" (data-buffer changes continuation))
-(declare-function mevedel-tool-patch--assert-baseline
+(declare-function mevedel-tool-patch-assert-baseline
                   "mevedel-tool-patch" (proposal))
-(declare-function mevedel-tool-patch--content-lines
+(declare-function mevedel-tool-patch-content-lines
                   "mevedel-tool-patch" (content))
-(declare-function mevedel-tool-patch--hunk-counts
+(declare-function mevedel-tool-patch-hunk-counts
                   "mevedel-tool-patch" (hunk))
-(declare-function mevedel-tool-patch--kind-face
+(declare-function mevedel-tool-patch-kind-face
                   "mevedel-tool-patch" (kind))
-(declare-function mevedel-tool-patch--match-pass-description
+(declare-function mevedel-tool-patch-match-pass-description
                   "mevedel-tool-patch" (pass))
-(declare-function mevedel-tool-patch--operation-stats
+(declare-function mevedel-tool-patch-operation-stats
                   "mevedel-tool-patch" (operation))
-(declare-function mevedel-tool-patch--parse-update-lines
+(declare-function mevedel-tool-patch-parse-update-lines
                   "mevedel-tool-patch" (lines first-line))
-(declare-function mevedel-tool-patch--physical-path
+(declare-function mevedel-tool-patch-physical-path
                   "mevedel-tool-patch" (operation))
-(declare-function mevedel-tool-patch--planned-changes
+(declare-function mevedel-tool-patch-planned-changes
                   "mevedel-tool-patch" (proposal))
-(declare-function mevedel-tool-patch--proposal-stats
+(declare-function mevedel-tool-patch-proposal-stats
                   "mevedel-tool-patch" (proposal))
-(declare-function mevedel-tool-patch--resource-address-p
+(declare-function mevedel-tool-patch-resource-address-p
                   "mevedel-tool-patch" (value))
-(declare-function mevedel-tool-patch--result
+(declare-function mevedel-tool-patch-result
                   "mevedel-tool-patch" (proposal changes))
-(declare-function mevedel-tool-patch--sanitize-error
+(declare-function mevedel-tool-patch-sanitize-error
                   "mevedel-tool-patch" (message proposal))
-(declare-function mevedel-tool-patch--status
+(declare-function mevedel-tool-patch-status
                   "mevedel-tool-patch" (operation))
 
 ;; `mevedel-view-interaction'
@@ -71,7 +71,7 @@
 (declare-function mevedel-view--interaction-target-buffer
                   "mevedel-view-interaction" (&optional data-buffer))
 
-(defvar mevedel-tool-patch--review-counter 0
+(defvar mevedel-patch-review--counter 0
   "Monotonic id counter for patch review interactions.")
 
 (defface mevedel-patch-review-added
@@ -184,7 +184,7 @@ Feedback anywhere outside a file or hunk targets the whole patch."
 
 (defun mevedel-patch-review--primary-label (proposal)
   "Return the primary action label for PROPOSAL's staged state."
-  (let* ((stats (mevedel-tool-patch--proposal-stats proposal))
+  (let* ((stats (mevedel-tool-patch-proposal-stats proposal))
          (selected (plist-get stats :selected))
          (files (plist-get stats :files-selected))
          (comments (plist-get stats :comments)))
@@ -247,7 +247,7 @@ OPERATION owns TARGET and is retained as interaction metadata."
 
 (defun mevedel-patch-review--body (proposal)
   "Return the hierarchical interaction body for PROPOSAL."
-  (let* ((stats (mevedel-tool-patch--proposal-stats proposal))
+  (let* ((stats (mevedel-tool-patch-proposal-stats proposal))
          (operations (plist-get proposal :operations))
          (file-count (length operations))
          (comments (plist-get stats :comments)))
@@ -276,7 +276,7 @@ OPERATION owns TARGET and is retained as interaction metadata."
                              'mevedel-view-tool-diff-removed)))
              (sep () (propertize " · " 'font-lock-face 'shadow))
              (disp (path)
-               (if (or (mevedel-tool-patch--resource-address-p path)
+               (if (or (mevedel-tool-patch-resource-address-p path)
                        (not (file-name-absolute-p path)))
                    path
                  (if-let* ((root (plist-get proposal :root)))
@@ -362,7 +362,7 @@ OPERATION owns TARGET and is retained as interaction metadata."
           (ins "\n")
           (dolist (operation operations)
             (let* ((kind (plist-get operation :kind))
-                   (ostats (mevedel-tool-patch--operation-stats operation))
+                   (ostats (mevedel-tool-patch-operation-stats operation))
                    (osel (plist-get ostats :selected))
                    (ototal (plist-get ostats :total))
                    (state (cond ((zerop osel) 'none)
@@ -381,9 +381,9 @@ OPERATION owns TARGET and is retained as interaction metadata."
                    (content-props (list 'keymap mevedel-patch-review-file-map
                                         'mevedel-patch-operation operation))
                    (letter
-                    (propertize (mevedel-tool-patch--status operation)
+                    (propertize (mevedel-tool-patch-status operation)
                                 'font-lock-face
-                                (mevedel-tool-patch--kind-face kind)))
+                                (mevedel-tool-patch-kind-face kind)))
                    (source (or (plist-get operation :rel-path)
                                (plist-get operation :path)))
                    (label
@@ -445,7 +445,7 @@ OPERATION owns TARGET and is retained as interaction metadata."
                                      ((plist-get hunk :old-start)
                                       (format "~%d"
                                               (plist-get hunk :old-start)))))
-                              (hcounts (mevedel-tool-patch--hunk-counts
+                              (hcounts (mevedel-tool-patch-hunk-counts
                                         hunk))
                               (hunk-props
                                (list 'keymap mevedel-patch-review-hunk-map
@@ -470,7 +470,7 @@ OPERATION owns TARGET and is retained as interaction metadata."
                                        'font-lock-face 'warning
                                        'help-echo
                                        (format "Matched %s"
-                                               (mevedel-tool-patch--match-pass-description
+                                               (mevedel-tool-patch-match-pass-description
                                                 (plist-get hunk :match-pass)))))
                                  (propertize
                                   (concat (and (plist-get hunk :modified)
@@ -508,13 +508,13 @@ OPERATION owns TARGET and is retained as interaction metadata."
                               content-props))
                      (apply #'hunk-lines hunk dim-p content-props)))
                   ('add
-                   (cl-loop for line in (mevedel-tool-patch--content-lines
+                   (cl-loop for line in (mevedel-tool-patch-content-lines
                                          (plist-get operation :content))
                             for number from 1
                             do (apply #'diff-line ?+ number line dim-p
                                       content-props)))
                   ('delete
-                   (cl-loop for line in (mevedel-tool-patch--content-lines
+                   (cl-loop for line in (mevedel-tool-patch-content-lines
                                          (or (plist-get operation
                                                         :baseline-content)
                                              ""))
@@ -630,9 +630,9 @@ The whole patch, each operation, and each Update hunk."
   "Stage PROPOSAL for review and settle it through CALLBACK.
 DATA-BUFFER is the tool-calling buffer whose view owns the interaction."
   (require 'mevedel-side-conversation)
-  (mevedel-tool-patch--annotate-line-numbers proposal)
+  (mevedel-tool-patch-annotate-line-numbers proposal)
   (plist-put proposal :id
-             (list 'patch-review (cl-incf mevedel-tool-patch--review-counter)))
+             (list 'patch-review (cl-incf mevedel-patch-review--counter)))
   (plist-put proposal :callback callback)
   (plist-put proposal :data-buffer data-buffer)
   (plist-put proposal :view-buffer
@@ -741,7 +741,7 @@ On an Update file row this toggles every hunk in the file at once."
       (user-error "No patch change at point"))
     (when (eq (plist-get operation :kind) 'add)
       (user-error "File is not created until the patch is applied"))
-    (let ((path (mevedel-tool-patch--physical-path operation)))
+    (let ((path (mevedel-tool-patch-physical-path operation)))
       (unless (file-exists-p path)
         (user-error "File does not exist: %s" path))
       (find-file-other-window path)
@@ -916,7 +916,7 @@ on Update files and patch-level feedback leave selection untouched."
     (user-error "This is not a patch hunk edit buffer"))
   (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
          (lines (split-string (string-trim-right text "\n+") "\n" nil))
-         (hunks (mevedel-tool-patch--parse-update-lines lines 1)))
+         (hunks (mevedel-tool-patch-parse-update-lines lines 1)))
     (unless (= (length hunks) 1)
       (user-error "An edited hunk must contain exactly one @@ section"))
     (let ((replacement (car hunks))
@@ -930,14 +930,14 @@ on Update files and patch-level feedback leave selection untouched."
                            (if (eq hunk original) replacement hunk))
                          (plist-get operation :hunks)))
       (condition-case err
-          (mevedel-tool-patch--planned-changes proposal)
+          (mevedel-tool-patch-planned-changes proposal)
         (error
          (plist-put operation :hunks
                     (mapcar (lambda (hunk)
                               (if (eq hunk replacement) original hunk))
                             (plist-get operation :hunks)))
          (signal (car err) (cdr err))))
-      (mevedel-tool-patch--annotate-line-numbers proposal)
+      (mevedel-tool-patch-annotate-line-numbers proposal)
       (let ((view (plist-get proposal :view-buffer)))
         (kill-buffer (current-buffer))
         (with-current-buffer view
@@ -958,16 +958,16 @@ on Update files and patch-level feedback leave selection untouched."
     (plist-put proposal :state 'submitting)
     (condition-case err
         (progn
-          (mevedel-tool-patch--assert-baseline proposal)
-          (let* ((changes (mevedel-tool-patch--planned-changes proposal))
+          (mevedel-tool-patch-assert-baseline proposal)
+          (let* ((changes (mevedel-tool-patch-planned-changes proposal))
                  (feedback-p (> (plist-get
-                                 (mevedel-tool-patch--proposal-stats
+                                 (mevedel-tool-patch-proposal-stats
                                   proposal)
                                  :comments)
                                 0))
                  (result
                   (if (or changes feedback-p)
-                      (mevedel-tool-patch--result proposal changes)
+                      (mevedel-tool-patch-result proposal changes)
                     (list :result "Error: Patch rejected" :status 'error)))
                  (overlay (plist-get proposal :overlay)))
             (overlay-put overlay 'mevedel--remote
@@ -976,7 +976,7 @@ on Update files and patch-level feedback leave selection untouched."
             (mevedel-patch-review--render proposal)
             (mevedel--prompt-announce overlay)
             (if changes
-                (mevedel-tool-patch--apply
+                (mevedel-tool-patch-apply
                  (plist-get proposal :data-buffer) changes
                  (lambda () (mevedel--prompt--settle overlay result)))
               (mevedel--prompt--settle overlay result))))
@@ -985,7 +985,7 @@ on Update files and patch-level feedback leave selection untouched."
        (overlay-put (plist-get proposal :overlay) 'mevedel--remote
                     (plist-get proposal :remote))
        (plist-put proposal :conflict
-                  (mevedel-tool-patch--sanitize-error
+                  (mevedel-tool-patch-sanitize-error
                    (error-message-string err) proposal))
        (plist-put proposal :rollback-incomplete
                   (eq (car err) 'mevedel-tool-patch-partial-rollback))

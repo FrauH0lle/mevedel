@@ -2488,25 +2488,11 @@ Return the new data-buffer end position."
              (mevedel-view--strip-review-action-blocks text)))))))
 
 (defun mevedel-view--strip-review-action-blocks (text)
-  "Return TEXT without synthetic review `<user_action>' blocks."
-  (if (fboundp 'mevedel-review-strip-user-action-blocks)
-      (mevedel-review-strip-user-action-blocks text)
-    (with-temp-buffer
-      (insert text)
-      (goto-char (point-min))
-      (while (search-forward "<user_action>" nil t)
-        (let ((start (match-beginning 0)))
-          (if (search-forward "</user_action>" nil t)
-              (let ((end (point))
-                    (block (buffer-substring-no-properties start (point))))
-                (when (string-match-p "<action>review</action>" block)
-                  (when (and (< end (point-max))
-                             (eq (char-after end) ?\n))
-                    (cl-incf end))
-                  (delete-region start end)
-                  (goto-char start)))
-            (goto-char (point-max)))))
-      (string-trim (buffer-string)))))
+  "Return TEXT without synthetic review `<user_action>' blocks.
+The review module is always loaded with mevedel, so its stripper is the
+one implementation; a second copy here had already started to drift."
+  (require 'mevedel-review)
+  (mevedel-review-strip-user-action-blocks text))
 
 (defun mevedel-view--thinking-summary (data-buf seg-start seg-end)
   "Generate a summary for a thinking/reasoning block.

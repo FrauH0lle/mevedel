@@ -412,7 +412,7 @@
   (let* ((raw "{\"findings\":[],\"overall_correctness\":\"patch is correct\",\"overall_explanation\":\"No issues.\",\"overall_confidence_score\":0.9}")
          (outcome (mevedel-review-transform-outcome
                    "review"
-                   (mevedel-review--mark-command-outcome
+                   (mevedel-review-mark-command-outcome
                     `(:status ok :kind fork
                       :result ,raw :agent-id "reviewer--1")))))
     (should (equal "No issues." (plist-get outcome :result)))

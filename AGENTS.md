@@ -264,13 +264,13 @@ Tools (each dispatches through mevedel-pipeline)
 Support
   mevedel-file-state.el       LRU file cache
   mevedel-diff-apply.el       transactional unified diff staging/application
-  mevedel-utilities.el        package version + shared tinting/ediff/env helpers
+  mevedel-utilities.el        package version + shared tinting/env helpers
   mevedel-init.el             repository guidance bootstrap command
 ```
 
 ## External dependencies
 
-- **gptel**, **gptel-agent**, **websocket**, **Emacs >=30.2**, **ediff**, **org-mode**
+- **gptel**, **gptel-agent**, **websocket**, **Emacs >=30.2**, **org-mode**
 
 Eask dependency installs can get stale. 
 Run `npx @emacs-eask/cli upgrade PACKAGE` to update. For example:
@@ -351,7 +351,7 @@ warnings.
 - `mevedel-take-control` / `mevedel-release-control` /
   `mevedel-toggle-follow` / `mevedel-refresh-session`
 - `mevedel-process-directives`, `mevedel-next/previous-instruction`
-- `mevedel-diff-apply-buffer` / `mevedel-ediff-patch`
+- `mevedel-diff-apply-buffer`
 - `mevedel-compact`
 - `mevedel-review` / `mevedel-verify`
 - `/plan` / `/plan PROMPT` / `mevedel-retry-plan-implementation`

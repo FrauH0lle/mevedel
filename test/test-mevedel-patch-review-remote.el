@@ -30,9 +30,9 @@
 
 (defun mevedel-test--remote-review-overlay ()
   "Stage a review for the fixture patch and return (OVERLAY . PROPOSAL)."
-  (let ((proposal (mevedel-tool-patch--parse mevedel-test--remote-patch))
+  (let ((proposal (mevedel-tool-patch-parse mevedel-test--remote-patch))
         overlay)
-    (cl-letf (((symbol-function 'mevedel-tool-patch--annotate-line-numbers)
+    (cl-letf (((symbol-function 'mevedel-tool-patch-annotate-line-numbers)
                #'ignore)
               ((symbol-function 'mevedel-view--interaction-target-buffer)
                (lambda (&optional _) (current-buffer)))
@@ -48,7 +48,7 @@
 
 (mevedel-deftest mevedel-patch-review--deselect-all
   (:doc "deselects every operation and hunk")
-  (let* ((proposal (mevedel-tool-patch--parse mevedel-test--remote-patch))
+  (let* ((proposal (mevedel-tool-patch-parse mevedel-test--remote-patch))
          (operation (car (plist-get proposal :operations))))
     (plist-put operation :selected t)
     (dolist (hunk (plist-get operation :hunks))

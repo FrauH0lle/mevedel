@@ -83,7 +83,7 @@
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
-(defvar mevedel-tool-patch--prepared-proposal nil)
+(defvar mevedel-tool-patch-prepared-proposal nil)
 
 (define-error 'mevedel-tool-patch-partial-rollback
   "Patch rollback incomplete")
@@ -97,13 +97,13 @@
 (defconst mevedel-tool-patch--eof "*** End of File")
 
 
-(defun mevedel-tool-patch--resource-address-p (value)
+(defun mevedel-tool-patch-resource-address-p (value)
   "Return non-nil when VALUE is a resource-address-shaped operand."
   (and (stringp value)
        (require 'mevedel-resource)
        (mevedel-resource-address-like-p value)))
 
-(defun mevedel-tool-patch--physical-path (operation)
+(defun mevedel-tool-patch-physical-path (operation)
   "Return the resolved filesystem path for OPERATION's source."
   (or (plist-get operation :physical-path)
       (plist-get operation :path)))
@@ -121,7 +121,7 @@
   "Return non-nil when OPERATION's destination is session-local."
   (plist-get operation :local-move-path-p))
 
-(defun mevedel-tool-patch--sanitize-error (message proposal)
+(defun mevedel-tool-patch-sanitize-error (message proposal)
   "Replace private local paths in MESSAGE with authored operands.
 PROPOSAL is the prepared proposal whose physical fields are private."
   (dolist (operation (and proposal (plist-get proposal :operations)) message)
@@ -154,7 +154,7 @@ PROPOSAL is the prepared proposal whose physical fields are private."
      (file-name-concat (mevedel-session-save-path session) "local") t)
     session))
 
-(defun mevedel-tool-patch--prepare-resources (proposal &optional materialize)
+(defun mevedel-tool-patch-prepare-resources (proposal &optional materialize)
   "Prepare resource operands in PROPOSAL once.
 
 The authored operands stay in the regular operation fields.  Resolved
@@ -176,7 +176,7 @@ local sessions untouched until permission and plan checks have completed."
                                        :resource-attempt-move-path
                                        :local-move-path-p)))
         (let ((address (plist-get operation (nth 0 entry))))
-          (when (mevedel-tool-patch--resource-address-p address)
+          (when (mevedel-tool-patch-resource-address-p address)
             (when (string-prefix-p "local://" address)
               (setq local-p t))
             (push (list operation address (nth 1 entry) (nth 2 entry)
@@ -249,7 +249,7 @@ local sessions untouched until permission and plan checks have completed."
       (error "Invalid patch at line %d: Missing file path" line-number))
     path))
 
-(defun mevedel-tool-patch--parse-update-lines (lines first-line)
+(defun mevedel-tool-patch-parse-update-lines (lines first-line)
   "Parse update payload LINES beginning at FIRST-LINE into hunks."
   (let (hunks current changed-p)
     (cl-labels
@@ -318,7 +318,7 @@ local sessions untouched until permission and plan checks have completed."
       (finish-current))
     (nreverse hunks)))
 
-(defun mevedel-tool-patch--parse (patch &optional root)
+(defun mevedel-tool-patch-parse (patch &optional root)
   "Parse PATCH relative to ROOT and return a patch proposal plist.
 Like Codex, structural markers are matched after trimming surrounding
 whitespace, one `*** Environment ID:' line after the opening marker is
@@ -334,7 +334,7 @@ tolerated, and content lines are kept raw."
               (mevedel-execution-target-create root)))
          (resolve
           (lambda (path)
-            (if (mevedel-tool-patch--resource-address-p path)
+            (if (mevedel-tool-patch-resource-address-p path)
                 path
               (mevedel-pipeline-canonical-path
                (mevedel-execution-target-expand-path target path root)))))
@@ -421,7 +421,7 @@ tolerated, and content lines are kept raw."
                           :move-path (and move-rel (funcall resolve move-rel))
                           :move-rel-path move-rel
                           :hunks (and payload
-                                      (mevedel-tool-patch--parse-update-lines
+                                      (mevedel-tool-patch-parse-update-lines
                                        payload payload-first-line))
                           :selected t)
                     operations))))
@@ -450,7 +450,7 @@ When WITH-CODING is non-nil, return (CONTENTS . CODING-SYSTEM)."
   "Return TEXT as LF-normalized lines, retaining a final empty line."
   (split-string (replace-regexp-in-string "\r\n?" "\n" text) "\n" nil))
 
-(defun mevedel-tool-patch--content-lines (content)
+(defun mevedel-tool-patch-content-lines (content)
   "Return logical diff lines for complete file CONTENT."
   (unless (string-empty-p content)
     (let ((normalized (replace-regexp-in-string "\r\n?" "\n" content)))
@@ -492,7 +492,7 @@ quotes, and exotic spaces to a plain space, mirroring Codex.")
 The label nil marks an exact match; fuzzy labels are recorded on the
 hunk and surfaced in the review and the tool result.")
 
-(defun mevedel-tool-patch--match-pass-description (pass)
+(defun mevedel-tool-patch-match-pass-description (pass)
   "Return the human-readable description of fuzzy match PASS."
   (pcase pass
     ('trailing-whitespace "ignoring trailing whitespace")
@@ -574,7 +574,7 @@ first character is not whitespace or a closing bracket."
                      (not (memq (aref line 0) '(?\s ?\t ?\) ?\] ?\}))))
            return (truncate-string-to-width line 48 nil nil "…")))
 
-(defun mevedel-tool-patch--annotate-line-numbers (proposal)
+(defun mevedel-tool-patch-annotate-line-numbers (proposal)
   "Attach display start lines and section labels to hunks in PROPOSAL.
 Old and new file positions are computed against the captured baseline
 content.  A hunk that no longer matches uniquely keeps nil positions
@@ -590,7 +590,7 @@ and renders without gutter numbers."
                             (ignore-errors
                               (mevedel-tool-patch--match-start
                                lines hunk
-                               (mevedel-tool-patch--physical-path operation)
+                               (mevedel-tool-patch-physical-path operation)
                                after)))))
             (plist-put hunk :old-start (and start (1+ start)))
             (plist-put hunk :new-start (and start (+ start 1 offset)))
@@ -619,7 +619,7 @@ come from the patch."
         (?+ (push (substring line 1) replacement))))
     (nreverse replacement)))
 
-(defun mevedel-tool-patch--apply-hunks (content hunks path)
+(defun mevedel-tool-patch-apply-hunks (content hunks path)
   "Return CONTENT with selected HUNKS applied for PATH.
 The file's line-ending style is preserved: content containing CRLF
 line endings is written back with CRLF.  Deselected hunks still
@@ -648,7 +648,7 @@ hunk that previewed cleanly stays unambiguous after a deselection."
 
 (defun mevedel-tool-patch--affected-paths (operation)
   "Return all filesystem paths touched by OPERATION."
-  (delq nil (list (mevedel-tool-patch--physical-path operation)
+  (delq nil (list (mevedel-tool-patch-physical-path operation)
                   (mevedel-tool-patch--physical-move-path operation))))
 
 (defun mevedel-tool-patch--path-state (path)
@@ -671,7 +671,7 @@ hunk that previewed cleanly stays unambiguous after a deselection."
          (lambda (path rel-path)
            (let ((state (mevedel-tool-patch--path-state path)))
              (when (and (equal path
-                              (mevedel-tool-patch--physical-path operation))
+                              (mevedel-tool-patch-physical-path operation))
                         (eq (car state) 'file))
                (plist-put operation :baseline-content (cadr state)))
              (push (list :path path :rel-path rel-path :state state)
@@ -691,7 +691,7 @@ hunk that previewed cleanly stays unambiguous after a deselection."
                             (mevedel-tool-patch--affected-paths operation)))))
     paths))
 
-(defun mevedel-tool-patch--assert-baseline (proposal)
+(defun mevedel-tool-patch-assert-baseline (proposal)
   "Signal when a selected path in PROPOSAL changed since review began."
   (dolist (path (mevedel-tool-patch--selected-paths proposal))
     (let ((entry (seq-find (lambda (item)
@@ -714,7 +714,7 @@ hunk that previewed cleanly stays unambiguous after a deselection."
           (error "Patch touches path more than once: %s" path))
         (puthash path t seen)))))
 
-(defun mevedel-tool-patch--planned-changes (proposal)
+(defun mevedel-tool-patch-planned-changes (proposal)
   "Validate PROPOSAL and return its selected filesystem changes."
   (let ((operations (plist-get proposal :operations))
         changes)
@@ -722,7 +722,7 @@ hunk that previewed cleanly stays unambiguous after a deselection."
     (dolist (operation operations)
       (pcase (plist-get operation :kind)
         ('add
-         (let ((path (mevedel-tool-patch--physical-path operation)))
+         (let ((path (mevedel-tool-patch-physical-path operation)))
            (when (plist-get operation :selected)
              (when (file-exists-p path)
                (error "Cannot add existing file: %s" path))
@@ -733,7 +733,7 @@ hunk that previewed cleanly stays unambiguous after a deselection."
                            (list :content (plist-get operation :content)))
                    changes))))
         ('delete
-         (let ((path (mevedel-tool-patch--physical-path operation)))
+         (let ((path (mevedel-tool-patch-physical-path operation)))
            (when (plist-get operation :selected)
              (mevedel-tool-patch--read-file path)
              (push (append (list :action 'delete :path path)
@@ -742,16 +742,16 @@ hunk that previewed cleanly stays unambiguous after a deselection."
                                 '(:local-p t)))
                    changes))))
         ('update
-         (let ((path (mevedel-tool-patch--physical-path operation))
+         (let ((path (mevedel-tool-patch-physical-path operation))
                (hunks (plist-get operation :hunks)))
            ;; Pass every hunk: deselected ones advance the ordering
-           ;; cursor inside `mevedel-tool-patch--apply-hunks' so the
+           ;; cursor inside `mevedel-tool-patch-apply-hunks' so the
            ;; apply-time disambiguation window matches the preview's.
            (when (cl-some (lambda (hunk) (plist-get hunk :selected)) hunks)
              (pcase-let* ((`(,content . ,coding)
                            (mevedel-tool-patch--read-file path t))
                           (updated
-                           (mevedel-tool-patch--apply-hunks
+                           (mevedel-tool-patch-apply-hunks
                             content hunks path)))
                (push (append (list :action 'write :path path)
                              (and (mevedel-tool-patch--local-source-p
@@ -762,7 +762,7 @@ hunk that previewed cleanly stays unambiguous after a deselection."
                                    (encode-coding-string updated coding)))
                      changes)))))
         ('move
-         (let ((path (mevedel-tool-patch--physical-path operation))
+         (let ((path (mevedel-tool-patch-physical-path operation))
                (destination
                 (mevedel-tool-patch--physical-move-path operation)))
            (when (plist-get operation :selected)
@@ -782,7 +782,7 @@ hunk that previewed cleanly stays unambiguous after a deselection."
                              (let ((updated
                                     (if-let* ((hunks
                                                (plist-get operation :hunks)))
-                                        (mevedel-tool-patch--apply-hunks
+                                        (mevedel-tool-patch-apply-hunks
                                          content hunks path)
                                       content)))
                                (list :mode (file-modes path)
@@ -835,7 +835,7 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
               (when (file-exists-p path) (delete-file path)))
           (error (push (cons path err) failures)))))))
 
-(defun mevedel-tool-patch--missing-parent-directories (path)
+(defun mevedel-tool-patch-missing-parent-directories (path)
   "Return missing parent directories for PATH, outermost first."
   (let ((directory (file-name-directory path)) missing)
     (while (and directory (not (file-exists-p directory)))
@@ -844,7 +844,7 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
             (file-name-directory (directory-file-name directory))))
     missing))
 
-(defun mevedel-tool-patch--commit (changes)
+(defun mevedel-tool-patch-commit (changes)
   "Commit CHANGES as one filesystem and visited-buffer transaction."
   (require 'mevedel-directive)
   (require 'mevedel-overlays)
@@ -944,7 +944,7 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
              (cl-mapcan
               (lambda (change)
                 (when (eq (plist-get change :action) 'write)
-                  (mevedel-tool-patch--missing-parent-directories
+                  (mevedel-tool-patch-missing-parent-directories
                    (plist-get change :path))))
               changes)))
            (buffer-snapshots
@@ -1035,7 +1035,7 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
       (error "File has unsaved buffer changes: %s"
              (plist-get change :path)))))
 
-(defun mevedel-tool-patch--apply (data-buffer changes continuation)
+(defun mevedel-tool-patch-apply (data-buffer changes continuation)
   "Apply CHANGES for DATA-BUFFER, then call CONTINUATION.
 Refresh file tracking immediately and diagnostics before continuation."
   (require 'mevedel-file-state)
@@ -1045,7 +1045,7 @@ Refresh file tracking immediately and diagnostics before continuation."
     (unless (plist-get change :local-p)
       (mevedel-edit-diagnostics-before-edit
        data-buffer (plist-get change :path))))
-  (mevedel-tool-patch--commit changes)
+  (mevedel-tool-patch-commit changes)
   (when-let* ((session (and (buffer-live-p data-buffer)
                             (buffer-local-value 'mevedel--session
                                                 data-buffer))))
@@ -1093,11 +1093,11 @@ Refresh file tracking immediately and diagnostics before continuation."
             (pcase kind
               ('add
                (mapcar (lambda (line) (concat "+" line))
-                       (mevedel-tool-patch--content-lines
+                       (mevedel-tool-patch-content-lines
                         (plist-get operation :content))))
               ('delete
                (mapcar (lambda (line) (concat "-" line))
-                       (mevedel-tool-patch--content-lines
+                       (mevedel-tool-patch-content-lines
                         (plist-get operation :baseline-content))))
               ((or 'update 'move)
                (cl-mapcan
@@ -1116,7 +1116,7 @@ Refresh file tracking immediately and diagnostics before continuation."
                                   lines)
             :diff (string-join lines "\n")))))
 
-(defun mevedel-tool-patch--result (proposal changes)
+(defun mevedel-tool-patch-result (proposal changes)
   "Return the aggregate handler result for PROPOSAL and CHANGES.
 Rejected and feedback detail lines double as render-data notes so the
 settled transcript badge stays expandable without applied diffs."
@@ -1144,7 +1144,7 @@ settled transcript badge stays expandable without applied diffs."
                        (when-let* ((pass (plist-get hunk :match-pass)))
                          (note (format "Fuzzy: %s hunk %d matched while %s"
                                        (plist-get operation :rel-path) number
-                                       (mevedel-tool-patch--match-pass-description
+                                       (mevedel-tool-patch-match-pass-description
                                         pass)))))
                      (unless (plist-get hunk :selected)
                        (note (format "Rejected: %s hunk %d"
@@ -1169,13 +1169,13 @@ settled transcript badge stays expandable without applied diffs."
                                    (plist-get operation :hunks))))
                   (note (format "Fuzzy: %s matched while %s"
                                 (plist-get operation :rel-path)
-                                (mevedel-tool-patch--match-pass-description
+                                (mevedel-tool-patch-match-pass-description
                                  pass)))))
             (note (format "Rejected: %s" (plist-get operation :rel-path)))))
         (when-let* ((feedback (plist-get operation :feedback)))
           (note (format "Feedback: %s: %s"
                         (plist-get operation :rel-path) feedback)))))
-    (let ((stats (mevedel-tool-patch--proposal-stats proposal)))
+    (let ((stats (mevedel-tool-patch-proposal-stats proposal)))
       (list :result (string-join
                      (cons (if changes
                                (format "Applied patch: %d changes"
@@ -1195,7 +1195,7 @@ settled transcript badge stays expandable without applied diffs."
                         (mapcar #'mevedel-tool-patch--selected-file-data
                                 (plist-get proposal :operations))))))))
 
-(defun mevedel-tool-patch--hunk-counts (hunk)
+(defun mevedel-tool-patch-hunk-counts (hunk)
   "Return (ADDED . DELETED) line counts for HUNK."
   (let ((added 0) (deleted 0))
     (dolist (line (plist-get hunk :diff-lines))
@@ -1204,7 +1204,7 @@ settled transcript badge stays expandable without applied diffs."
         (?- (cl-incf deleted))))
     (cons added deleted)))
 
-(defun mevedel-tool-patch--operation-stats (operation)
+(defun mevedel-tool-patch-operation-stats (operation)
   "Return selection and line-count stats for OPERATION.
 The plist carries :selected and :total change counts plus :added and
 :deleted line counts.  Update line counts cover selected hunks only;
@@ -1213,19 +1213,19 @@ whole-operation kinds always report their full size."
     (pcase (plist-get operation :kind)
       ('add
        (list :selected selected-p :total 1
-             :added (length (mevedel-tool-patch--content-lines
+             :added (length (mevedel-tool-patch-content-lines
                              (plist-get operation :content)))
              :deleted 0))
       ('delete
        (list :selected selected-p :total 1
              :added 0
-             :deleted (length (mevedel-tool-patch--content-lines
+             :deleted (length (mevedel-tool-patch-content-lines
                                (or (plist-get operation :baseline-content)
                                    "")))))
       ('move
        (let ((added 0) (deleted 0))
          (dolist (hunk (plist-get operation :hunks))
-           (pcase-let ((`(,a . ,d) (mevedel-tool-patch--hunk-counts hunk)))
+           (pcase-let ((`(,a . ,d) (mevedel-tool-patch-hunk-counts hunk)))
              (cl-incf added a)
              (cl-incf deleted d)))
          (list :selected selected-p :total 1 :added added :deleted deleted)))
@@ -1235,13 +1235,13 @@ whole-operation kinds always report their full size."
            (cl-incf total)
            (when (plist-get hunk :selected)
              (cl-incf selected)
-             (pcase-let ((`(,a . ,d) (mevedel-tool-patch--hunk-counts hunk)))
+             (pcase-let ((`(,a . ,d) (mevedel-tool-patch-hunk-counts hunk)))
                (cl-incf added a)
                (cl-incf deleted d))))
          (list :selected selected :total total
                :added added :deleted deleted))))))
 
-(defun mevedel-tool-patch--proposal-stats (proposal)
+(defun mevedel-tool-patch-proposal-stats (proposal)
   "Return aggregate selection stats for PROPOSAL.
 Line counts include selected changes only.  The plist carries
 :selected, :total, :added, :deleted, :files-selected, and :comments."
@@ -1249,7 +1249,7 @@ Line counts include selected changes only.  The plist carries
         (files-selected 0)
         (comments (if (plist-get proposal :feedback) 1 0)))
     (dolist (operation (plist-get proposal :operations))
-      (let* ((stats (mevedel-tool-patch--operation-stats operation))
+      (let* ((stats (mevedel-tool-patch-operation-stats operation))
              (op-selected (plist-get stats :selected)))
         (cl-incf selected op-selected)
         (cl-incf total (plist-get stats :total))
@@ -1264,7 +1264,7 @@ Line counts include selected changes only.  The plist carries
     (list :selected selected :total total :added added :deleted deleted
           :files-selected files-selected :comments comments)))
 
-(defun mevedel-tool-patch--status (operation)
+(defun mevedel-tool-patch-status (operation)
   "Return the display status character for OPERATION."
   (pcase (plist-get operation :kind)
     ('add "A")
@@ -1272,7 +1272,7 @@ Line counts include selected changes only.  The plist carries
     ('move "R")
     (_ "M")))
 
-(defun mevedel-tool-patch--kind-face (kind)
+(defun mevedel-tool-patch-kind-face (kind)
   "Return the status-letter face for operation KIND."
   (pcase kind
     ('add 'success)
@@ -1318,23 +1318,23 @@ file buttons, rewritten links, or inline images."
   "Handle an ApplyPatch call with CALLBACK and ARGS."
   (let (proposal)
     (condition-case err
-        (let* ((prepared mevedel-tool-patch--prepared-proposal)
+        (let* ((prepared mevedel-tool-patch-prepared-proposal)
                (_ (setq proposal
                         (or prepared
-                            (mevedel-tool-patch--parse
+                            (mevedel-tool-patch-parse
                              (plist-get args :patch)))))
              (_resources (if prepared
                              (mevedel-tool-patch--materialize-resources
                               proposal)
-                           (mevedel-tool-patch--prepare-resources
+                           (mevedel-tool-patch-prepare-resources
                             proposal t)))
              (_baseline (mevedel-tool-patch--capture-baseline proposal))
-             (changes (mevedel-tool-patch--planned-changes proposal)))
-        (mevedel-tool-patch--assert-baseline proposal)
+             (changes (mevedel-tool-patch-planned-changes proposal)))
+        (mevedel-tool-patch-assert-baseline proposal)
         (if (memq (mevedel-tool-patch--effective-mode) '(edits full-auto))
             (let ((data-buffer (current-buffer))
-                  (result (mevedel-tool-patch--result proposal changes)))
-              (mevedel-tool-patch--apply
+                  (result (mevedel-tool-patch-result proposal changes)))
+              (mevedel-tool-patch-apply
                data-buffer changes (lambda () (funcall callback result))))
           (require 'mevedel-patch-review)
           (mevedel-patch-review-start proposal callback (current-buffer))))
@@ -1342,16 +1342,16 @@ file buttons, rewritten links, or inline images."
        (funcall callback
                 (list :result
                       (format "Error: %s"
-                              (mevedel-tool-patch--sanitize-error
+                              (mevedel-tool-patch-sanitize-error
                                (error-message-string err) proposal))
                       :status 'error))))))
 
 (defun mevedel-tool-patch--get-paths (args)
   "Return every path affected by the patch in ARGS."
-  (mevedel-tool-patch--get-paths-from-proposal
-   (mevedel-tool-patch--parse (plist-get args :patch))))
+  (mevedel-tool-patch-get-paths-from-proposal
+   (mevedel-tool-patch-parse (plist-get args :patch))))
 
-(defun mevedel-tool-patch--get-paths-from-proposal (proposal)
+(defun mevedel-tool-patch-get-paths-from-proposal (proposal)
   "Return ordinary filesystem paths affected by prepared PROPOSAL.
 
 Authored resource operands are deliberately excluded even when preparation
@@ -1362,11 +1362,11 @@ has added private physical paths to their operation records."
       (delq nil
             (cl-mapcar
              (lambda (address path)
-               (unless (mevedel-tool-patch--resource-address-p address)
+               (unless (mevedel-tool-patch-resource-address-p address)
                  path))
              (list (plist-get operation :rel-path)
                    (plist-get operation :move-rel-path))
-             (list (mevedel-tool-patch--physical-path operation)
+             (list (mevedel-tool-patch-physical-path operation)
                    (mevedel-tool-patch--physical-move-path operation)))))
     (plist-get proposal :operations))))
 
@@ -1418,9 +1418,9 @@ has added private physical paths to their operation records."
                                      (list
                                       (concat
                                        (propertize
-                                        (mevedel-tool-patch--status file)
+                                        (mevedel-tool-patch-status file)
                                         'font-lock-face
-                                        (mevedel-tool-patch--kind-face
+                                        (mevedel-tool-patch-kind-face
                                          (plist-get file :kind)))
                                        " " path " · "
                                        (propertize
@@ -1463,7 +1463,7 @@ has added private physical paths to their operation records."
     :display-arg (lambda (args)
                    (let ((proposal
                           (ignore-errors
-                            (mevedel-tool-patch--parse
+                            (mevedel-tool-patch-parse
                              (plist-get args :patch)))))
                      (when proposal
                        (let ((count (length (plist-get proposal :operations))))

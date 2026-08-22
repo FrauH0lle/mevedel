@@ -238,11 +238,11 @@
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (when (file-directory-p root) (delete-directory root t)))))
 
-(mevedel-deftest mevedel-tool-patch--annotate-line-numbers
+(mevedel-deftest mevedel-tool-patch-annotate-line-numbers
   (:doc "Computes old and new start lines against the captured baseline")
   ,test
   (test)
-  (let* ((proposal (mevedel-tool-patch--parse
+  (let* ((proposal (mevedel-tool-patch-parse
                     (string-join
                      '("*** Begin Patch"
                        "*** Update File: one.txt"
@@ -258,7 +258,7 @@
                     "/tmp/mevedel-annotate"))
          (operation (car (plist-get proposal :operations))))
     (plist-put operation :baseline-content "a\nold1\nc\nd\nold2\n")
-    (mevedel-tool-patch--annotate-line-numbers proposal)
+    (mevedel-tool-patch-annotate-line-numbers proposal)
     (let ((hunks (plist-get operation :hunks)))
       (should (equal 2 (plist-get (car hunks) :old-start)))
       (should (equal 2 (plist-get (car hunks) :new-start)))
@@ -267,7 +267,7 @@
       (should (equal 6 (plist-get (cadr hunks) :new-start)))))
 
   :doc "Later hunks annotate after earlier ones, resolving repeats"
-  (let* ((proposal (mevedel-tool-patch--parse
+  (let* ((proposal (mevedel-tool-patch-parse
                     (string-join
                      '("*** Begin Patch"
                        "*** Update File: one.txt"
@@ -282,14 +282,14 @@
                     "/tmp/mevedel-annotate"))
          (operation (car (plist-get proposal :operations))))
     (plist-put operation :baseline-content "x\na\nx\nb\n")
-    (mevedel-tool-patch--annotate-line-numbers proposal)
+    (mevedel-tool-patch-annotate-line-numbers proposal)
     (should (equal 2 (plist-get (car (plist-get operation :hunks))
                                 :old-start)))
     (should (equal 3 (plist-get (cadr (plist-get operation :hunks))
                                 :old-start))))
 
   :doc "A hunk that no longer matches keeps nil display positions"
-  (let* ((proposal (mevedel-tool-patch--parse
+  (let* ((proposal (mevedel-tool-patch-parse
                     (string-join
                      '("*** Begin Patch"
                        "*** Update File: one.txt"
@@ -301,27 +301,27 @@
                     "/tmp/mevedel-annotate"))
          (operation (car (plist-get proposal :operations))))
     (plist-put operation :baseline-content "other\n")
-    (mevedel-tool-patch--annotate-line-numbers proposal)
+    (mevedel-tool-patch-annotate-line-numbers proposal)
     (let ((hunk (car (plist-get operation :hunks))))
       (should-not (plist-get hunk :old-start))
       (should-not (plist-get hunk :new-start))
       (should-not (plist-get hunk :section)))))
 
-(mevedel-deftest mevedel-tool-patch--apply-hunks ()
+(mevedel-deftest mevedel-tool-patch-apply-hunks ()
   ,test
   (test)
   :doc "Falls back to trailing-whitespace matching"
   (let ((hunk '(:old-lines ("old") :new-lines ("new") :selected t
                 :diff-lines ("-old" "+new"))))
     (should (equal "before  \nnew\n"
-                   (mevedel-tool-patch--apply-hunks
+                   (mevedel-tool-patch-apply-hunks
                     "before  \nold  \n" (list hunk) "file.txt"))))
 
   :doc "Rejects ambiguous matches"
   (let ((hunk '(:old-lines ("same") :new-lines ("new") :selected t
                 :diff-lines ("-same" "+new"))))
     (should-error
-     (mevedel-tool-patch--apply-hunks
+     (mevedel-tool-patch-apply-hunks
       "same\nmiddle\nsame\n" (list hunk) "file.txt")
      :type 'error))
 
@@ -331,7 +331,7 @@
                  (:old-lines ("x") :selected t
                   :diff-lines ("-x" "+X")))))
     (should (equal "x\nA\nX\nb\n"
-                   (mevedel-tool-patch--apply-hunks
+                   (mevedel-tool-patch-apply-hunks
                     "x\na\nx\nb\n" hunks "file.txt"))))
 
   :doc "A deselected hunk still advances the disambiguation cursor"
@@ -340,14 +340,14 @@
                  (:old-lines ("x") :selected t
                   :diff-lines ("-x" "+X")))))
     (should (equal "x\na\nX\nb\n"
-                   (mevedel-tool-patch--apply-hunks
+                   (mevedel-tool-patch-apply-hunks
                     "x\na\nx\nb\n" hunks "file.txt"))))
 
   :doc "Preserves CRLF line endings"
   (let ((hunk '(:old-lines ("old") :new-lines ("new") :selected t
                 :diff-lines ("-old" "+new"))))
     (should (equal "a\r\nnew\r\nb\r\n"
-                   (mevedel-tool-patch--apply-hunks
+                   (mevedel-tool-patch-apply-hunks
                     "a\r\nold\r\nb\r\n" (list hunk) "file.txt"))))
 
   :doc "Preserves the file's context lines under fuzzy matching"
@@ -357,7 +357,7 @@
   (let ((hunk '(:old-lines ("keep - this" "old") :selected t
                 :diff-lines (" keep - this" "-old" "+new"))))
     (should (equal "keep \u2013 this\nnew\ntail\n"
-                   (mevedel-tool-patch--apply-hunks
+                   (mevedel-tool-patch-apply-hunks
                     "keep \u2013 this\n  old\ntail\n"
                     (list hunk) "file.txt")))))
 
@@ -380,7 +380,7 @@
             (goto-char (point-max))
             (insert "unsaved\n"))
           (should-error
-           (mevedel-tool-patch--apply
+           (mevedel-tool-patch-apply
             nil (list (list :action 'write :path path :content "patch\n"))
             (lambda () (setq continued t)))
            :type 'error)
@@ -397,7 +397,7 @@
         (kill-buffer buffer))
       (when (file-directory-p root) (delete-directory root t)))))
 
-(mevedel-deftest mevedel-tool-patch--commit ()
+(mevedel-deftest mevedel-tool-patch-commit ()
   ,test
   (test)
   :doc "Rolls back files and newly-created directories after an I/O failure"
@@ -410,7 +410,7 @@
         (progn
           (with-temp-file blocker (insert "not a directory"))
           (should-error
-           (mevedel-tool-patch--commit
+           (mevedel-tool-patch-commit
             (list (list :action 'write :path first :content "first\n")
                   (list :action 'write :path second :content "second\n")))
            :type 'error)
@@ -438,12 +438,12 @@
                              '("-old: \u00e4" "+new: \u00e4")))
                  (change
                   (car
-                   (mevedel-tool-patch--planned-changes
+                   (mevedel-tool-patch-planned-changes
                     (list :operations
                           (list (list :kind 'update :path path
                                       :hunks (list hunk))))))))
             (should-error
-             (mevedel-tool-patch--commit
+             (mevedel-tool-patch-commit
               (list change
                     (list :action 'write :path failure :content "fail\n")))
              :type 'error))
@@ -466,7 +466,7 @@
           (with-temp-file target (insert "old\n"))
           (make-symbolic-link target alias)
           (setq buffer (find-file-noselect alias))
-          (mevedel-tool-patch--commit
+          (mevedel-tool-patch-commit
            (list (list :action 'write :path target :content "new\n")))
           (should (equal "new\n" (with-current-buffer buffer
                                     (buffer-string))))
@@ -501,7 +501,7 @@
                       nil t))
           (let* ((failure
                   (should-error
-                   (mevedel-tool-patch--commit
+                   (mevedel-tool-patch-commit
                     (list (list :action 'write :path first
                                 :content "new one\n")
                           (list :action 'write :path second
@@ -563,30 +563,30 @@
   (should-error (mevedel-tool-patch--marker-path
                  "*** Add File: " "*** Add File: " 1)))
 
-(mevedel-deftest mevedel-tool-patch--parse-update-lines
+(mevedel-deftest mevedel-tool-patch-parse-update-lines
   (:doc "Parses selected update hunks") ,test (test)
-  (let ((hunk (car (mevedel-tool-patch--parse-update-lines
+  (let ((hunk (car (mevedel-tool-patch-parse-update-lines
                     '("@@ here" "-old" "+new") 2))))
     (should (equal '("old") (plist-get hunk :old-lines)))
     (should (equal '("new") (plist-get hunk :new-lines)))
     (should (plist-get hunk :selected)))
 
   :doc "treats a bare empty line as an empty context line"
-  (let ((hunk (car (mevedel-tool-patch--parse-update-lines
+  (let ((hunk (car (mevedel-tool-patch-parse-update-lines
                     '("@@" "-old" "" "+new") 2))))
     (should (equal '("old" "") (plist-get hunk :old-lines)))
     (should (equal '("" "new") (plist-get hunk :new-lines)))
     (should (equal '("-old" " " "+new") (plist-get hunk :diff-lines))))
 
   :doc "matches @@ and End of File markers despite trailing whitespace"
-  (let ((hunk (car (mevedel-tool-patch--parse-update-lines
+  (let ((hunk (car (mevedel-tool-patch-parse-update-lines
                     '("@@ here  " "-old" "+new" "*** End of File  ") 2))))
     (should (equal "here" (plist-get hunk :context)))
     (should (plist-get hunk :eof))))
 
-(mevedel-deftest mevedel-tool-patch--parse
+(mevedel-deftest mevedel-tool-patch-parse
   (:doc "Parses a complete multi-operation envelope") ,test (test)
-  (let ((proposal (mevedel-tool-patch--parse
+  (let ((proposal (mevedel-tool-patch-parse
                    "*** Begin Patch\n*** Add File: a\n+x\n*** Delete File: b\n*** End Patch"
                    "/tmp/")))
     (should (equal '(add delete)
@@ -594,7 +594,7 @@
                            (plist-get proposal :operations)))))
 
   :doc "tolerates whitespace around markers and an Environment ID line"
-  (let ((proposal (mevedel-tool-patch--parse
+  (let ((proposal (mevedel-tool-patch-parse
                    (concat "  *** Begin Patch  \n"
                            "*** Environment ID: env-42\n"
                            "  *** Update File: a  \n"
@@ -610,7 +610,7 @@
                                   :rel-path))))
 
   :doc "an indented header inside an update body stays a context line"
-  (let* ((proposal (mevedel-tool-patch--parse
+  (let* ((proposal (mevedel-tool-patch-parse
                     (concat "*** Begin Patch\n"
                             "*** Update File: a\n"
                             "@@\n"
@@ -626,7 +626,7 @@
 
   :doc "interprets absolute patch paths in the remote target domain"
   (let* ((proposal
-          (mevedel-tool-patch--parse
+          (mevedel-tool-patch-parse
            (concat "*** Begin Patch\n"
                    "*** Update File: /etc/app.conf\n"
                    "*** Move to: /var/lib/app.conf\n"
@@ -641,7 +641,7 @@
 
   :doc "rejects patch paths that explicitly name another target"
   (should-error
-   (mevedel-tool-patch--parse
+   (mevedel-tool-patch-parse
     (concat "*** Begin Patch\n"
             "*** Add File: /ssh:user@other:/tmp/a\n"
             "+x\n"
@@ -661,13 +661,13 @@
   (:doc "Normalizes CRLF while retaining the final line") ,test (test)
   (should (equal '("a" "") (mevedel-tool-patch--lines "a\r\n"))))
 
-(mevedel-deftest mevedel-tool-patch--content-lines
+(mevedel-deftest mevedel-tool-patch-content-lines
   (:doc "Removes one file terminator while retaining trailing blank lines")
   ,test (test)
   (should (equal '("a" "")
-                 (mevedel-tool-patch--content-lines "a\n\n")))
+                 (mevedel-tool-patch-content-lines "a\n\n")))
   :doc "Represents an empty file with no changed lines"
-  (should-not (mevedel-tool-patch--content-lines "")))
+  (should-not (mevedel-tool-patch-content-lines "")))
 
 (mevedel-deftest mevedel-tool-patch--hunk-replacement
   (:doc "Takes context from the file and additions from the patch")
@@ -690,17 +690,17 @@
   (should (= 48 (length (mevedel-tool-patch--section-label
                          (list (make-string 80 ?y)) 0)))))
 
-(mevedel-deftest mevedel-tool-patch--match-pass-description
+(mevedel-deftest mevedel-tool-patch-match-pass-description
   (:doc "Describes fuzzy passes and stays nil for exact matches")
   ,test (test)
   (should (equal "ignoring surrounding whitespace"
-                 (mevedel-tool-patch--match-pass-description 'whitespace)))
+                 (mevedel-tool-patch-match-pass-description 'whitespace)))
   (should (equal "ignoring trailing whitespace"
-                 (mevedel-tool-patch--match-pass-description
+                 (mevedel-tool-patch-match-pass-description
                   'trailing-whitespace)))
   (should (equal "normalizing typographic punctuation"
-                 (mevedel-tool-patch--match-pass-description 'punctuation)))
-  (should-not (mevedel-tool-patch--match-pass-description nil)))
+                 (mevedel-tool-patch-match-pass-description 'punctuation)))
+  (should-not (mevedel-tool-patch-match-pass-description nil)))
 
 (mevedel-deftest mevedel-tool-patch--fontify-diff
   (:doc "Fontifies diff lines whole-line and marks them linkify-exempt")
@@ -721,15 +721,15 @@
     (should (get-text-property (string-search " z" body)
                                'mevedel-view-no-linkify body))))
 
-(mevedel-deftest mevedel-tool-patch--kind-face
+(mevedel-deftest mevedel-tool-patch-kind-face
   (:doc "Maps operation kinds to status-letter faces")
   ,test (test)
-  (should (eq 'success (mevedel-tool-patch--kind-face 'add)))
-  (should (eq 'error (mevedel-tool-patch--kind-face 'delete)))
+  (should (eq 'success (mevedel-tool-patch-kind-face 'add)))
+  (should (eq 'error (mevedel-tool-patch-kind-face 'delete)))
   (should (eq 'font-lock-keyword-face
-              (mevedel-tool-patch--kind-face 'move)))
+              (mevedel-tool-patch-kind-face 'move)))
   (should (eq 'font-lock-function-name-face
-              (mevedel-tool-patch--kind-face 'update))))
+              (mevedel-tool-patch-kind-face 'update))))
 
 (mevedel-deftest mevedel-tool-patch--sequence-match-p
   (:doc "Matches sequences under the given line normalizer") ,test (test)
@@ -823,7 +823,7 @@
                   '(:operations ((:kind add :path "a" :selected t)
                                  (:kind delete :path "b" :selected nil)))))))
 
-(mevedel-deftest mevedel-tool-patch--assert-baseline
+(mevedel-deftest mevedel-tool-patch-assert-baseline
   (:doc "Accepts an unchanged selected baseline") ,test (test)
   (let ((path (make-temp-file "mevedel-patch-assert-")))
     (unwind-protect
@@ -833,7 +833,7 @@
                                 (list (list :kind 'delete :path path
                                             :rel-path "x" :selected t)))))
             (mevedel-tool-patch--capture-baseline proposal)
-            (should-not (mevedel-tool-patch--assert-baseline proposal))))
+            (should-not (mevedel-tool-patch-assert-baseline proposal))))
       (delete-file path))))
 
 (mevedel-deftest mevedel-tool-patch--validate-distinct-paths
@@ -842,12 +842,12 @@
    (mevedel-tool-patch--validate-distinct-paths
     '((:path "a") (:path "a")))))
 
-(mevedel-deftest mevedel-tool-patch--planned-changes
+(mevedel-deftest mevedel-tool-patch-planned-changes
   (:doc "Plans selected Add writes without touching disk") ,test (test)
   (let ((path (make-temp-name
                (expand-file-name "mevedel-patch-plan-" temporary-file-directory))))
     (should (equal (list (list :action 'write :path path :content "x\n"))
-                   (mevedel-tool-patch--planned-changes
+                   (mevedel-tool-patch-planned-changes
                     (list :operations
                           (list (list :kind 'add :path path :content "x\n"
                                       :selected t)))))))
@@ -869,9 +869,9 @@
                  (operation (list :kind 'update :path path
                                   :hunks (list hunk)))
                  (changes
-                  (mevedel-tool-patch--planned-changes
+                  (mevedel-tool-patch-planned-changes
                    (list :operations (list operation)))))
-            (mevedel-tool-patch--commit changes)
+            (mevedel-tool-patch-commit changes)
             (should
              (equal (encode-coding-string expected 'iso-latin-1)
                     (with-temp-buffer
@@ -879,11 +879,11 @@
                       (insert-file-contents-literally path)
                       (buffer-string)))))
             (setq changes
-                  (mevedel-tool-patch--planned-changes
+                  (mevedel-tool-patch-planned-changes
                    (list :operations
                          (list (list :kind 'move :path path
                                      :move-path destination :selected t)))))
-            (mevedel-tool-patch--commit changes)
+            (mevedel-tool-patch-commit changes)
             (should-not (file-exists-p path))
             (should
              (equal (encode-coding-string expected 'iso-latin-1)
@@ -978,21 +978,21 @@
           (set-file-modes directory #o700)))
       (when (file-directory-p root) (delete-directory root t)))))
 
-(mevedel-deftest mevedel-tool-patch--missing-parent-directories
+(mevedel-deftest mevedel-tool-patch-missing-parent-directories
   (:doc "Lists absent parent directories below an existing root") ,test (test)
   (let* ((root (make-temp-file "mevedel-patch-parents-" t))
          (path (file-name-concat root "a" "b" "x")))
     (unwind-protect
         (should (= 2 (length
-                      (mevedel-tool-patch--missing-parent-directories path))))
+                      (mevedel-tool-patch-missing-parent-directories path))))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-tool-patch--apply
+(mevedel-deftest mevedel-tool-patch-apply
   (:doc "Commits changes before invoking its continuation") ,test (test)
   (let ((path (make-temp-file "mevedel-patch-apply-")) called)
     (unwind-protect
         (progn
-          (mevedel-tool-patch--apply
+          (mevedel-tool-patch-apply
            nil (list (list :action 'write :path path :content "x"))
            (lambda () (setq called t)))
           (should called)
@@ -1040,10 +1040,10 @@
     (should (= 0 (plist-get file :deleted)))
     (should (string-empty-p (plist-get file :diff)))))
 
-(mevedel-deftest mevedel-tool-patch--result
+(mevedel-deftest mevedel-tool-patch-result
   (:doc "Reports applied and rejected choices") ,test (test)
   (let ((text (plist-get
-               (mevedel-tool-patch--result
+               (mevedel-tool-patch-result
                 '(:operations ((:kind update :rel-path "a"
                                 :hunks ((:selected t :diff-lines ("-x" "+y"))
                                         (:selected nil :diff-lines ("-z" "+q"))))))
@@ -1053,7 +1053,7 @@
     (should (string-search "Rejected: a hunk 2" text)))
 
   :doc "Reports fuzzy matches for applied hunks as result notes"
-  (let ((result (mevedel-tool-patch--result
+  (let ((result (mevedel-tool-patch-result
                  '(:operations
                    ((:kind update :rel-path "a"
                      :hunks ((:selected t :match-pass whitespace
@@ -1066,36 +1066,36 @@
              "Fuzzy: a hunk 1 matched while ignoring surrounding whitespace"
              (plist-get (plist-get result :render-data) :notes)))))
 
-(mevedel-deftest mevedel-tool-patch--hunk-counts
+(mevedel-deftest mevedel-tool-patch-hunk-counts
   (:doc "Counts added and deleted diff lines in one hunk") ,test (test)
   (should (equal '(1 . 2)
-                 (mevedel-tool-patch--hunk-counts
+                 (mevedel-tool-patch-hunk-counts
                   '(:diff-lines ("-x" " keep" "-y" "+z"))))))
 
-(mevedel-deftest mevedel-tool-patch--operation-stats
+(mevedel-deftest mevedel-tool-patch-operation-stats
   (:doc "Counts selected Update hunks and their lines only") ,test (test)
   (should (equal '(:selected 1 :total 2 :added 1 :deleted 1)
-                 (mevedel-tool-patch--operation-stats
+                 (mevedel-tool-patch-operation-stats
                   '(:kind update
                     :hunks ((:selected t :diff-lines ("-x" "+y"))
                             (:selected nil :diff-lines ("-a" "+b")))))))
   :doc "Reports the full size of whole-operation kinds"
   (should (equal '(:selected 0 :total 1 :added 2 :deleted 0)
-                 (mevedel-tool-patch--operation-stats
+                 (mevedel-tool-patch-operation-stats
                   '(:kind add :selected nil :content "new\n\n"))))
   (should (equal '(:selected 1 :total 1 :added 0 :deleted 2)
-                 (mevedel-tool-patch--operation-stats
+                 (mevedel-tool-patch-operation-stats
                   '(:kind delete :selected t :baseline-content "old\n\n"))))
   (should (equal '(:selected 1 :total 1 :added 1 :deleted 1)
-                 (mevedel-tool-patch--operation-stats
+                 (mevedel-tool-patch-operation-stats
                   '(:kind move :selected t
                     :hunks ((:diff-lines ("-x" "+y"))))))))
 
-(mevedel-deftest mevedel-tool-patch--proposal-stats
+(mevedel-deftest mevedel-tool-patch-proposal-stats
   (:doc "Aggregates selected changes, files, and comments") ,test (test)
   (should (equal '(:selected 2 :total 4 :added 2 :deleted 1
                    :files-selected 2 :comments 2)
-                 (mevedel-tool-patch--proposal-stats
+                 (mevedel-tool-patch-proposal-stats
                   '(:operations
                     ((:kind update
                       :hunks ((:selected t :diff-lines ("-x" "+y"))
@@ -1107,12 +1107,12 @@
   :doc "Counts whole-patch feedback as one comment"
   (should (equal '(:selected 0 :total 0 :added 0 :deleted 0
                    :files-selected 0 :comments 1)
-                 (mevedel-tool-patch--proposal-stats
+                 (mevedel-tool-patch-proposal-stats
                   '(:feedback "split it" :operations nil)))))
 
-(mevedel-deftest mevedel-tool-patch--status
+(mevedel-deftest mevedel-tool-patch-status
   (:doc "Maps operation kinds to display status") ,test (test)
-  (should (equal "R" (mevedel-tool-patch--status '(:kind move)))))
+  (should (equal "R" (mevedel-tool-patch-status '(:kind move)))))
 
 (mevedel-deftest mevedel-tool-patch--effective-mode
   (:doc "Direct edit authority overrides the ambient mode") ,test (test)
