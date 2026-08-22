@@ -246,6 +246,7 @@ memory roots, the configured plans directory, and manually configured roots.
 |-----------------------------------|-----------------------------------------------------------------------|
 | `mevedel-create-reference`        | Create or resize a reference instruction within a region.             |
 | `mevedel-create-directive`        | Create or resize a directive instruction at point or within a region. |
+| `mevedel-convert-instructions`    | Convert instructions between reference and directive type at point or within a region. |
 | `mevedel-delete-instructions`     | Remove instructions either at point or within the selected region.    |
 | `mevedel-delete-all-instructions` | Delete all mevedel instructions across all buffers.                   |
 | `mevedel`                         | Start or switch to a chat session; prefix arg prompts for directory/session. |

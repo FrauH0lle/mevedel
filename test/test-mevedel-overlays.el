@@ -12,6 +12,7 @@
 (require 'mevedel-overlay-ui)
 (require 'mevedel-persistence)
 (require 'mevedel-chat)
+(require 'mevedel-directive-request)
 (require 'mevedel-structs)
 (require 'mevedel-directive)
 (require 'helpers
@@ -128,6 +129,86 @@
     (insert "source text")
     (should-error (mevedel--create-instruction 'directive)
                   :type 'user-error)))
+
+(mevedel-deftest mevedel-convert-instructions
+  (:quiet t
+   :vars
+   ((mevedel--instruction-states (make-hash-table :test #'equal))
+    (mevedel--instruction-current-state-key :global)))
+  ,test
+  (test)
+
+  :doc "converting a directive away gives up its workspace record"
+  (let* ((fixture (mevedel-instruction-test--source-fixture))
+         (workspace (nth 1 fixture))
+         (buffer (nth 3 fixture))
+         (overlay (nth 4 fixture))
+         (start (overlay-start overlay))
+         (end (overlay-end overlay)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (goto-char (1+ start))
+          (mevedel-convert-instructions)
+          (should-not (mevedel-workspace-directives workspace))
+          (let ((converted (car (mevedel--instructions-at (point)))))
+            (should converted)
+            (should (mevedel--referencep converted))
+            (should (= start (overlay-start converted)))
+            (should (= end (overlay-end converted)))))
+      (mevedel-instruction-test--discard-source fixture)))
+
+  :doc "converting a reference creates a durable directive record"
+  (let* ((fixture (mevedel-instruction-test--source-fixture))
+         (workspace (nth 1 fixture))
+         (buffer (nth 3 fixture))
+         (overlay (nth 4 fixture)))
+    (unwind-protect
+        (with-current-buffer buffer
+          ;; Turn the fixture directive into a reference first, then
+          ;; convert it back and expect a fresh record.
+          (goto-char (1+ (overlay-start overlay)))
+          (mevedel-convert-instructions)
+          (should-not (mevedel-workspace-directives workspace))
+          (mevedel-convert-instructions)
+          (let ((converted (car (mevedel--instructions-at (point)))))
+            (should converted)
+            (should (mevedel--directivep converted))
+            (should (mevedel--directive-record converted))
+            (should (= 1 (length (mevedel-workspace-directives workspace))))))
+      (mevedel-instruction-test--discard-source fixture)))
+
+  :doc "a directive with recorded activity is skipped, not converted"
+  (let* ((fixture (mevedel-instruction-test--source-fixture))
+         (workspace (nth 1 fixture))
+         (buffer (nth 3 fixture))
+         (overlay (nth 4 fixture))
+         (record (nth 5 fixture)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setf (mevedel-directive-attempts record)
+                (list (mevedel-instruction-test--attempt)))
+          (goto-char (1+ (overlay-start overlay)))
+          (mevedel-convert-instructions)
+          (let ((instruction (car (mevedel--instructions-at (point)))))
+            (should (eq instruction overlay))
+            (should (mevedel--directivep instruction)))
+          (should (= 1 (length (mevedel-workspace-directives workspace)))))
+      (mevedel-instruction-test--discard-source fixture)))
+
+  :doc "refuses reference conversion in a buffer visiting no file"
+  (with-temp-buffer
+    (insert "source text")
+    (setq-local mevedel--workspace
+                (mevedel-workspace--create
+                 :type 'file :id "convert-nofile" :root "/tmp"
+                 :name "convert-nofile"))
+    (let ((reference (mevedel--create-reference-in
+                      (current-buffer) (point-min) (point-max))))
+      (goto-char (1+ (point-min)))
+      (should-error (mevedel-convert-instructions) :type 'user-error)
+      (should (mevedel--referencep
+               (car (mevedel--instructions-at (point)))))
+      (mevedel--delete-instruction reference))))
 
 (mevedel-deftest mevedel--filter-references
   (:vars
