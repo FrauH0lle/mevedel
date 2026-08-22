@@ -512,27 +512,6 @@ become implemented, obsolete, or unjustified.
 - **Blast radius:** Bedrock sessions cannot use deferred-tool loading
   correctly.
 
-### Restore must-work real-world diff overlay tests
-
-- **Source:** The real-world Shiny/R overlay fixture removed by `907fc38` from
-  `test/test-mevedel-diff-apply.el` while replacing the custom geometry engine
-  with `replace-buffer-contents` and canonical edit hooks.
-- **What's owed:** Restore the real-world diff examples as public
-  `mevedel-diff-apply-buffer` acceptance tests using registered directives and
-  references. Add an explicit note beside them that these are must-work user
-  cases and must not be deleted when the implementation changes; change their
-  expected behavior only when the product requirement itself changes.
-- **Why deferred:** The original Shiny/R example still passes when replayed
-  against the native replacement path, but the broader behavior should be
-  observed before deciding which additional real-world fixtures belong in the
-  permanent set.
-- **Status check:** The focused suite has final-byte and lifecycle coverage,
-  but no retained real-world example; deleting the old fixture made the green
-  suite unable to prove this use case.
-- **Blast radius:** A later edit can regress semantic overlay tracking during
-  realistic multi-location changes while synthetic transaction tests remain
-  green.
-
 ### Restore bounded Buddy context expansion
 
 - **Source:** B24-3 and `7745fe8` deleted Buddy's unrestricted `read_buffer`
