@@ -370,7 +370,8 @@
 
   :doc "`mevedel-buddy--settle' clears the annotatable buffer list"
   (progn
-    (setq mevedel-buddy-note--scope-buffers '("some-buffer")
+    (setq mevedel-buddy-note--scope-buffers
+          (list (cons "some-buffer" (current-buffer)))
           mevedel-buddy--running "scope")
     (mevedel-buddy--settle "scope" nil)
     (should-not mevedel-buddy-note--scope-buffers)))
