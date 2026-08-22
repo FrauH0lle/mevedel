@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'mevedel)
+(require 'mevedel-diff-apply)
 (require 'mevedel-structs)
 (require 'helpers
          (file-name-concat

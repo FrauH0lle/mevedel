@@ -179,7 +179,7 @@
 (declare-function mevedel-resource-capf "mevedel-resource-capf" ())
 
 ;; `mevedel-review'
-(declare-function mevedel-review--mark-command-outcome
+(declare-function mevedel-review-mark-command-outcome
 		  "mevedel-review" (outcome))
 (declare-function mevedel-review-command-skill-p "mevedel-review"
 		  (skill))
@@ -1599,8 +1599,8 @@ when the submission started."
              (buffer-live-p data-buffer))
     (when (and (fboundp 'mevedel-review-command-skill-p)
                (mevedel-review-command-skill-p skill)
-               (fboundp 'mevedel-review--mark-command-outcome))
-      (setq outcome (mevedel-review--mark-command-outcome outcome)))
+               (fboundp 'mevedel-review-mark-command-outcome))
+      (setq outcome (mevedel-review-mark-command-outcome outcome)))
     (when (fboundp 'mevedel-review-transform-outcome)
       (setq outcome (mevedel-review-transform-outcome name outcome)))
     (pcase (plist-get outcome :status)

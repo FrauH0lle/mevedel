@@ -1565,7 +1565,7 @@ cover, so the permission step's warning about it is captured here."
                    "+created"
                    "*** End Patch")
                  "\n"))
-         (original-parse (symbol-function 'mevedel-tool-patch--parse))
+         (original-parse (symbol-function 'mevedel-tool-patch-parse))
          (tool (mevedel-tool--create
                 :name "ApplyPatch"
                 :handler (lambda (_args) '(:result "prepared"))
@@ -1579,7 +1579,7 @@ cover, so the permission step's warning about it is captured here."
       (setq-local default-directory root
                   mevedel--workspace workspace
                   mevedel--session session)
-      (cl-letf (((symbol-function 'mevedel-tool-patch--parse)
+      (cl-letf (((symbol-function 'mevedel-tool-patch-parse)
                  (lambda (&rest args)
                    (setq parse-count (1+ parse-count))
                    (setq parsed-proposal (apply original-parse args)))))
@@ -1618,16 +1618,16 @@ cover, so the permission step's warning about it is captured here."
                    "*** End Patch")
                  "\n"))
          (tool (mevedel-tool-ensure "ApplyPatch"))
-         (original-parse (symbol-function 'mevedel-tool-patch--parse))
+         (original-parse (symbol-function 'mevedel-tool-patch-parse))
          (original-prepare
-          (symbol-function 'mevedel-tool-patch--prepare-resources))
+          (symbol-function 'mevedel-tool-patch-prepare-resources))
          (original-materialize
           (symbol-function 'mevedel-tool-patch--materialize-resources)))
-    (cl-letf (((symbol-function 'mevedel-tool-patch--parse)
+    (cl-letf (((symbol-function 'mevedel-tool-patch-parse)
                (lambda (&rest args)
                  (setq parse-count (1+ parse-count))
                  (apply original-parse args)))
-              ((symbol-function 'mevedel-tool-patch--prepare-resources)
+              ((symbol-function 'mevedel-tool-patch-prepare-resources)
                (lambda (proposal &optional materialize)
                  (setq prepare-count (1+ prepare-count)
                        prepared proposal)

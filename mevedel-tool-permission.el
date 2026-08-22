@@ -97,7 +97,7 @@
                   "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-tool-patch'
-(declare-function mevedel-tool-patch--get-paths-from-proposal
+(declare-function mevedel-tool-patch-get-paths-from-proposal
                   "mevedel-tool-patch" (proposal))
 
 ;; `mevedel-tool-registry'
@@ -491,7 +491,7 @@ existing path extraction behavior."
               (if proposal
                   (progn
                     (require 'mevedel-tool-patch)
-                    (mevedel-tool-patch--get-paths-from-proposal proposal))
+                    (mevedel-tool-patch-get-paths-from-proposal proposal))
                 (cond
                  ((mevedel-tool-get-paths tool)
                   (funcall (mevedel-tool-get-paths tool) args))

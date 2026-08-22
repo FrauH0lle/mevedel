@@ -858,7 +858,7 @@ schema validation fails."
        (equal "reviewer" (mevedel-skill-agent skill))
        (eq 'bundled (mevedel-skill-source skill))))
 
-(defun mevedel-review--mark-command-outcome (outcome)
+(defun mevedel-review-mark-command-outcome (outcome)
   "Return a copy of OUTCOME marked as owned by `/review' dispatch."
   (plist-put (copy-sequence outcome) :mevedel-review-command t))
 
@@ -1205,7 +1205,7 @@ parent request has accepted the review turn."
   "Transform validation OUTCOME for COMMAND before parent insertion."
   (if (eq (or command 'review) 'review)
       (mevedel-review-transform-outcome
-       "review" (mevedel-review--mark-command-outcome outcome))
+       "review" (mevedel-review-mark-command-outcome outcome))
     outcome))
 
 (defun mevedel-review--handle-direct-outcome (outcome data-buffer &optional command)

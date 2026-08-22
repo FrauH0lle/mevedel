@@ -114,11 +114,11 @@
                   "mevedel-tool-media" (result media))
 
 ;; `mevedel-tool-patch'
-(declare-function mevedel-tool-patch--parse
+(declare-function mevedel-tool-patch-parse
                   "mevedel-tool-patch" (patch &optional root))
-(declare-function mevedel-tool-patch--prepare-resources
+(declare-function mevedel-tool-patch-prepare-resources
                   "mevedel-tool-patch" (proposal))
-(defvar mevedel-tool-patch--prepared-proposal)
+(defvar mevedel-tool-patch-prepared-proposal)
 
 ;; `mevedel-tool-permission'
 (declare-function mevedel-tool-permission-deny
@@ -713,7 +713,7 @@ target path signals for the pipeline runner to handle."
               ;; symlink swapped during patch review cannot redirect an
               ;; already authorized destination.
               (let ((proposal
-                     (mevedel-tool-patch--parse
+                     (mevedel-tool-patch-parse
                       (plist-get (plist-get normalized-context :args) :patch)
                       directory)))
                 (dolist (operation (plist-get proposal :operations))
@@ -768,9 +768,9 @@ permission or handler work begins."
         (let ((mevedel-resource-attempts-cell
                (plist-get context :resource-attempts-cell)))
           (setq patch-proposal
-                (mevedel-tool-patch--prepare-resources
+                (mevedel-tool-patch-prepare-resources
                  (or (plist-get context :patch-parse)
-                     (mevedel-tool-patch--parse
+                     (mevedel-tool-patch-parse
                       (plist-get args :patch)
                       (plist-get context :default-directory))))))
       (when operation
@@ -1168,7 +1168,7 @@ buffer."
                    (plist-get context :auto-apply-edit-p))
                   (mevedel-resource-current-attempts
                    (plist-get context :resource-attempts))
-                  (mevedel-tool-patch--prepared-proposal
+                  (mevedel-tool-patch-prepared-proposal
                    (plist-get context :patch-proposal))
                   (mevedel-pipeline--canonical-path-map
                    (plist-get context :canonical-path-map))

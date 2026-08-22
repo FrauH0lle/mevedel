@@ -16,8 +16,8 @@
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tool-patch'
-(declare-function mevedel-tool-patch--commit "mevedel-tool-patch" (changes))
-(declare-function mevedel-tool-patch--missing-parent-directories
+(declare-function mevedel-tool-patch-commit "mevedel-tool-patch" (changes))
+(declare-function mevedel-tool-patch-missing-parent-directories
                   "mevedel-tool-patch" (path))
 
 ;; `mevedel-workspace'
@@ -73,6 +73,7 @@
           (insert (car (plist-get edit :dst)))))
       (buffer-string))))
 
+;;;###autoload
 (defun mevedel-diff-apply-buffer (&optional no-prompt)
   "Apply every diff hunk in one rollback transaction.
 
@@ -124,7 +125,7 @@ repair heuristically instead of prompting or modifying the diff."
             (unless (file-exists-p file)
               (setq created-directories
                     (nconc
-                     (mevedel-tool-patch--missing-parent-directories file)
+                     (mevedel-tool-patch-missing-parent-directories file)
                      created-directories))
               (when-let* ((buffer (find-buffer-visiting file)))
                 (push buffer preexisting-buffers)
@@ -204,7 +205,7 @@ repair heuristically instead of prompting or modifying the diff."
                                     (equal file (plist-get change :path)))
                                   changes)
                   (push (list :path file :action 'delete) changes)))
-              (mevedel-tool-patch--commit (nreverse changes))
+              (mevedel-tool-patch-commit (nreverse changes))
               (setq applied t)
               (message "Saved %d buffers" (length buffer-order)))))
       (unless applied

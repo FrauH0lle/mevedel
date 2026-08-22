@@ -463,7 +463,6 @@ Currently, linking is only relevant for references.
 | `mevedel-open-directive-activity`  | Open the current directive's read-only durable inspector.                    |
 | `mevedel-list-directives`          | Choose a workspace directive for inspection or further action.               |
 | `mevedel-diff-apply-buffer`        | Apply the diff in the patch buffer with overlay preservation.                |
-| `mevedel-ediff-patch`              | Launch an ediff session on the patch buffer for manual editing.              |
 | `mevedel-clear-patch-buffer`       | Clear the contents of the patch buffer for the current workspace.            |
 
 | Custom Variable                     | Variable Description                                       |
@@ -503,8 +502,7 @@ after the first failure or abort. Nested directives are submitted only as part
 of their parent.
 
 Commands are also available via overlay actions. For example, you can preview
-the patch before applying it or running an `ediff` session with the patch and
-modify it to your liking.
+the patch before applying it.
 
 ### Navigation
 
