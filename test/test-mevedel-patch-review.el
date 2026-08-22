@@ -542,7 +542,10 @@
             (with-current-buffer view-buf
               (goto-char (point-min))
               (search-forward "D gone.txt")
-              (should-error (mevedel-patch-review-edit) :type 'user-error)
+              (let ((err (should-error (mevedel-patch-review-edit)
+                                       :type 'user-error)))
+                (should (string-search "SPC keeps the file"
+                                       (cadr err))))
               (goto-char (point-min))
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))
