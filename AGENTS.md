@@ -343,7 +343,8 @@ Keep the byte compiler silent: no free-variable or unknown-function
 warnings.
 
 ### Key interactive commands
-- `mevedel-create-reference` / `mevedel-create-directive`
+- `mevedel-create-reference` / `mevedel-create-directive` /
+  `mevedel-convert-instructions`
 - `mevedel-save-instructions` / `mevedel-load-instructions`
 - `mevedel-implement-directive` / `mevedel-discuss-directive` /
   `mevedel-request-directive-changes` / `mevedel-retry-directive`

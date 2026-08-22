@@ -60,6 +60,10 @@
                   "mevedel-directive-request"
                   (content &optional directive message attempt-index))
 
+;; `mevedel-directive'
+(declare-function mevedel-directive-has-activity-p
+                  "mevedel-directive" (directive))
+
 ;; `mevedel-directive-source'
 (declare-function mevedel--create-directive-in
                   "mevedel-directive-source"
@@ -102,12 +106,16 @@
                   "mevedel-instruction-registry" (buffer))
 (declare-function mevedel--instruction-id
                   "mevedel-instruction-registry" (instruction))
+(declare-function mevedel--instruction-inlinks
+                  "mevedel-instruction-registry" (instruction))
 (declare-function mevedel--instruction-operation-state-key
                   "mevedel-instruction-registry" ())
 (declare-function mevedel--instruction-outlinks
                   "mevedel-instruction-registry" (instruction))
 (declare-function mevedel--instruction-state
                   "mevedel-instruction-registry" (&optional key))
+(declare-function mevedel-link-instructions
+                  "mevedel-instruction-registry" (from-list to-list))
 (declare-function mevedel--instruction-with-id
                   "mevedel-instruction-registry"
                   (target-id &optional workspace))
@@ -977,6 +985,88 @@ or `mevedel-create-directive' for details on how the resizing works."
     (when (eq type 'directive)
       (prog1 (mevedel--create-directive-in (current-buffer) (point) (point) t)
         (deactivate-mark)))))
+
+;;;###autoload
+(defun mevedel-convert-instructions ()
+  "Convert instructions between reference and directive type.
+
+If a region is selected, convert every instruction inside it; otherwise
+convert the highest-priority instruction at point.
+
+Conversion recreates the instruction through the canonical creation and
+deletion lifecycles: a new directive gains its durable workspace record,
+and a directive converted away gives its record up, exactly as deletion
+would.  Links to and from the instruction survive under the new
+identity.  Skipped rather than converted: a directive with recorded
+activity (archive it instead), a directive containing nested directives
+(convert those first), and a bodyless directive (a reference cannot be
+empty)."
+  (interactive)
+  (require 'mevedel-directive)
+  (require 'mevedel-directive-source)
+  (require 'mevedel-instruction-registry)
+  (let ((instructions
+         (if (use-region-p)
+             (mevedel--instructions-in (region-beginning) (region-end))
+           (when-let* ((instruction
+                        (mevedel--highest-priority-instruction
+                         (mevedel--instructions-at (point)) t)))
+             (list instruction))))
+        (to-reference 0)
+        (to-directive 0)
+        (skipped nil))
+    (unless instructions
+      (user-error "No instructions to convert"))
+    (when (and (cl-some #'mevedel--referencep instructions)
+               (not (buffer-file-name)))
+      (user-error "Cannot create a directive in a buffer visiting no file"))
+    (deactivate-mark)
+    (dolist (instruction instructions)
+      (let ((buffer (overlay-buffer instruction))
+            (start (overlay-start instruction))
+            (end (overlay-end instruction))
+            (outlinks (mevedel--instruction-outlinks instruction))
+            (inlinks (mevedel--instruction-inlinks instruction))
+            (id (mevedel--instruction-id instruction)))
+        (cl-flet ((relink (new)
+                    (let ((new-id (mevedel--instruction-id new)))
+                      (when outlinks
+                        (mevedel-link-instructions (list new-id) outlinks))
+                      (when inlinks
+                        (mevedel-link-instructions inlinks (list new-id))))
+                    new))
+          (cond
+           ((mevedel--directivep instruction)
+            (cond
+             ((mevedel--bodyless-instruction-p instruction)
+              (push (format "#%d is bodyless" id) skipped))
+             ((when-let* ((record (mevedel--directive-record instruction)))
+                (mevedel-directive-has-activity-p record))
+              (push (format "#%d has activity; archive it instead" id)
+                    skipped))
+             ((mevedel--nested-directives instruction)
+              (push (format "#%d contains nested directives" id) skipped))
+             (t
+              (mevedel--delete-instruction instruction)
+              (relink (mevedel--create-reference-in buffer start end))
+              (cl-incf to-reference))))
+           ((mevedel--referencep instruction)
+            (mevedel--delete-instruction instruction)
+            (relink (mevedel--create-directive-in buffer start end nil ""))
+            (cl-incf to-directive))))))
+    (let ((conversions
+           (delq nil
+                 (list (when (> to-directive 0)
+                         (format "%d to directive%s" to-directive
+                                 (if (= to-directive 1) "" "s")))
+                       (when (> to-reference 0)
+                         (format "%d to reference%s" to-reference
+                                 (if (= to-reference 1) "" "s")))))))
+      (message "mevedel: converted %s%s"
+               (if conversions (string-join conversions ", ") "nothing")
+               (if skipped
+                   (format "; skipped %s" (string-join (nreverse skipped) ", "))
+                 "")))))
 
 (defun mevedel--referencep (instruction)
   "Return non-nil if INSTRUCTION is a reference."
