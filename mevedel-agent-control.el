@@ -27,7 +27,7 @@
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime-dispatch
                   "mevedel-agent-runtime" t t)
-(declare-function mevedel-agent-runtime-dispatch--abandon-persistence
+(declare-function mevedel-agent-runtime-abandon-persistence
                   "mevedel-agent-runtime" (invocation))
 (declare-function mevedel-agent-runtime-interrupt
                   "mevedel-agent-runtime" (invocation reason))
@@ -206,7 +206,7 @@ Return the normalized payload stored in the record."
           (mevedel-agent-record-settled-outcome record) outcome)
     payload))
 
-(defun mevedel-agent-control--commit-session (session)
+(defun mevedel-agent-control-commit-session (session)
   "Commit SESSION's materialized agent state or signal an error."
   (unless mevedel-agent-control-suppress-persistence
     (when (mevedel-session-save-path session)
@@ -220,7 +220,7 @@ Return the normalized payload stored in the record."
   (unless mevedel-agent-control-suppress-persistence
     (when (mevedel-session-save-path session)
       (condition-case nil
-          (mevedel-agent-control--commit-session session)
+          (mevedel-agent-control-commit-session session)
         (error nil)))))
 
 (defun mevedel-agent-control-block-turn (session path activity)
@@ -498,7 +498,7 @@ Return the caller path when suspended, and nil after an immediate release."
      session recipient (cons record previous))
     (condition-case err
         (progn
-          (mevedel-agent-control--commit-session session)
+          (mevedel-agent-control-commit-session session)
           (setq committed t)
           (unless mevedel-agent-control-suppress-persistence
             (mevedel-agent-control--wake
@@ -727,7 +727,7 @@ positive decimal strings, or \"summary\"."
    (assoc-delete-all (mevedel-agent-record-path record)
                      (mevedel-session-agent-reservations session)))
   (when-let* ((invocation (mevedel-agent-record-invocation record)))
-    (mevedel-agent-runtime-dispatch--abandon-persistence invocation)
+    (mevedel-agent-runtime-abandon-persistence invocation)
     (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
                 ((buffer-live-p buffer)))
       (with-current-buffer buffer
@@ -770,7 +770,7 @@ already committed RESULT."
         (mevedel-agent-control--set-mailbox-queue
          session recipient (cons result previous))
         (condition-case err
-            (mevedel-agent-control--commit-session session)
+            (mevedel-agent-control-commit-session session)
           (error
            (mevedel-agent-control--set-mailbox-queue
             session recipient previous)
@@ -782,7 +782,7 @@ already committed RESULT."
         (mevedel-agent-control--set-mailbox-queue
          session recipient (delq result (copy-sequence queued)))
         (condition-case err
-            (mevedel-agent-control--commit-session session)
+            (mevedel-agent-control-commit-session session)
           (error
            (mevedel-agent-control--set-mailbox-queue
             session recipient queued)
@@ -796,7 +796,7 @@ already committed RESULT."
             session recipient
             (cons result
                   (mevedel-agent-control--mailbox-queue session recipient)))
-           (mevedel-agent-control--commit-session session)
+           (mevedel-agent-control-commit-session session)
            (setf (mevedel-agent-record-result-handler record) nil)
            (display-warning
             'mevedel
@@ -915,7 +915,7 @@ Return rollback and post-commit delivery closures for INVOCATION."
       (mevedel-session--set-agent-registry
        session (cons (cons path record) previous-registry)))
     (condition-case err
-        (mevedel-agent-control--commit-session session)
+        (mevedel-agent-control-commit-session session)
       (error
        (mevedel-session--set-agent-reservations
         session previous-reservations)
