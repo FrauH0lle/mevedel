@@ -202,6 +202,8 @@
                   "mevedel-view-segments" ())
 
 ;; `mevedel-view-stream'
+(declare-function mevedel-view--stop-spinner-timer
+                  "mevedel-view-stream" ())
 (declare-function mevedel-view--ensure-request-progress
                   "mevedel-view-stream" (&optional data-buf status))
 (declare-function mevedel-view--render-stream-update
@@ -800,6 +802,17 @@ performs no second abort even when the first one signals."
 Clears `mevedel--view-buffer' on the associated data buffer and kills
 it.  The reference is cleared before killing so the data buffer's own
 kill hook sees nil and exits without re-entering this function."
+  ;; Per-view timers must die with the view on every kill path, the
+  ;; agent-transcript branch and the hookless fallback's survivor
+  ;; included: a live timer holding a killed buffer is exactly the
+  ;; leaked state the test isolation rule forbids, and outside tests it
+  ;; is a needless wakeup.
+  (require 'mevedel-view-stream)
+  (mevedel-view--stop-spinner-timer)
+  (when (and (boundp 'mevedel-view--control-transfer-timer)
+             (timerp mevedel-view--control-transfer-timer))
+    (cancel-timer mevedel-view--control-transfer-timer)
+    (setq mevedel-view--control-transfer-timer nil))
   (unless (mevedel-view-agent-handle-view-kill)
     (let ((view-buffer (current-buffer)))
       (require 'mevedel-view-control-transfer)

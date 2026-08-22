@@ -16,6 +16,8 @@
 (require 'mevedel-view)
 (require 'mevedel-resource)
 (require 'mevedel-workspace)
+(require 'mevedel-file-state)
+(require 'mevedel-agent-control)
 (require 'helpers
          (file-name-concat
           (file-name-directory

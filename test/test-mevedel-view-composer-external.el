@@ -19,6 +19,9 @@
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-mentions)
+(require 'mevedel-workspace)
+(require 'mevedel-pending-inputs)
+(require 'mevedel-view-input-files)
 
 (mevedel-deftest mevedel-view-enqueue-external-follow-up
   (:doc "queues attributed, granted, skill-inert input through the real session queue")

@@ -153,6 +153,12 @@ as it settles."
 (defvar-local mevedel-view--control-transfer-timer nil
   "Timer polling cooperative lease-transfer records for this view.")
 
+(defvar-local mevedel-view--control-transfer-torn-down-p nil
+  "Non-nil once this view's transfer machinery has been torn down.
+Teardown runs from the kill hook while the buffer is still live, and a
+session event delivered during it must not re-arm the poll timer: that
+timer would outlive the buffer as a stray wakeup holding a dead view.")
+
 (defvar-local mevedel-view--control-transfer-drain-session nil
   "Session owning this view's registered control-transfer drain.")
 
@@ -182,16 +188,17 @@ transfer in flight wants a cadence the idle session does not."
     (with-current-buffer view
       (when (timerp mevedel-view--control-transfer-timer)
         (cancel-timer mevedel-view--control-transfer-timer))
-      (let ((interval
-             (mevedel-view--control-transfer-poll-seconds
-              (and (boundp 'mevedel--data-buffer)
-                   (buffer-live-p mevedel--data-buffer)
-                   (buffer-local-value 'mevedel--session
-                                       mevedel--data-buffer)))))
-        (setq-local mevedel-view--control-transfer-timer
-                    (run-at-time interval nil
-                                 #'mevedel-view--control-transfer-refresh
-                                 view))))))
+      (unless mevedel-view--control-transfer-torn-down-p
+        (let ((interval
+               (mevedel-view--control-transfer-poll-seconds
+                (and (boundp 'mevedel--data-buffer)
+                     (buffer-live-p mevedel--data-buffer)
+                     (buffer-local-value 'mevedel--session
+                                         mevedel--data-buffer)))))
+          (setq-local mevedel-view--control-transfer-timer
+                      (run-at-time interval nil
+                                   #'mevedel-view--control-transfer-refresh
+                                   view)))))))
 
 (defun mevedel-view-control-transfer--session-event (view event &rest args)
   "Apply semantic session EVENT to VIEW, when it remains live."
@@ -476,12 +483,15 @@ this view follows."
   (when (timerp mevedel-view--control-transfer-timer)
     (cancel-timer mevedel-view--control-transfer-timer)
     (setq mevedel-view--control-transfer-timer nil))
+  (setq mevedel-view--control-transfer-torn-down-p t)
   (setq mevedel-view--control-transfer-rebuild-function nil))
 
 (defun mevedel-view-control-transfer-initialize (rebuild-function drain-predicate)
   "Initialize transfer UI using REBUILD-FUNCTION and DRAIN-PREDICATE."
   (require 'mevedel-session-control-transfer)
   (mevedel-view-control-transfer-teardown)
+  ;; Initialization is the one legitimate re-arm after a teardown.
+  (setq-local mevedel-view--control-transfer-torn-down-p nil)
   (setq-local mevedel-view--control-transfer-rebuild-function rebuild-function)
   (when (and (boundp 'mevedel--data-buffer)
              (buffer-live-p mevedel--data-buffer)

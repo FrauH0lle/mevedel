@@ -38,6 +38,7 @@
 (require 'mevedel-workspace)
 (require 'mevedel-worktree)
 (require 'tabulated-list)
+(require 'mevedel-view-composer)
 
 (defvar mevedel-plugin-extra-roots)
 (declare-function mevedel-session-artifacts-sidecar-path

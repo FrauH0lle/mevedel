@@ -20,6 +20,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-permission)
+(require 'mevedel-turn)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -667,7 +668,8 @@
          (target 'remote-target)
          (session
           (mevedel-session--create
-           :name "main" :execution-target target :save-path save-path))
+           :name "main" :execution-target target :save-path save-path
+           :authority-mode 'pid-lock))
          (invocation (mevedel-agent-runtime-test--invocation child))
          events)
     (unwind-protect

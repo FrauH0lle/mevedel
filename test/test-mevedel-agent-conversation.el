@@ -22,6 +22,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-workspace)
+(require 'mevedel-session-artifacts)
 (require 'helpers
          (file-name-concat
           (file-name-directory

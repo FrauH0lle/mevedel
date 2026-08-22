@@ -8,6 +8,8 @@
 
 (require 'mevedel)
 (require 'mevedel-turn)
+(require 'mevedel-queue)
+(require 'mevedel-workspace-identity)
 (require 'helpers
          (file-name-concat
           (file-name-directory

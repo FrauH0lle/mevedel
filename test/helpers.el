@@ -292,10 +292,16 @@ A surviving timer performs target I/O from wherever the main loop is waiting
 during later tests, which floods their output and can wedge a shared TRAMP
 connection."
   (dolist (timer (append timer-list timer-idle-list))
-    (when (memq (timer--function timer)
-                '(mevedel-session-durability-lease-renew
-                  mevedel-transport-run-when-idle
-                  mevedel-transport--retry))
+    (when (or (memq (timer--function timer)
+                    '(mevedel-session-durability-lease-renew
+                      mevedel-transport-run-when-idle
+                      mevedel-transport--retry))
+              ;; A view poll timer whose buffer died through a hookless
+              ;; kill is a stray wakeup holding a dead view.
+              (and (eq (timer--function timer)
+                       'mevedel-view--control-transfer-refresh)
+                   (let ((view (car (timer--args timer))))
+                     (and (bufferp view) (not (buffer-live-p view))))))
       (cancel-timer timer)))
   (when (fboundp 'mevedel-transport-cancel-pending)
     (mevedel-transport-cancel-pending)))
