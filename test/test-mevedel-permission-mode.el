@@ -388,8 +388,7 @@
           (should (eq mevedel-permission-mode 'full-auto)))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
-(mevedel-deftest mevedel--implementation-permission-mode-apply
-             (:doc "temporarily applies and restores implementation permission mode")
+(mevedel-deftest mevedel--implementation-permission-mode-apply ()
              ,test
              (test)
 
@@ -412,11 +411,11 @@
                        (should (eq 'edits
                                    (mevedel-session-permission-mode session)))
                        (should (equal '(ask)
-                                      mevedel--implementation-permission-mode-restore))
+                                      mevedel--implementation-permission-mode-saved))
                        (mevedel--implementation-permission-mode-restore)
                        (should (eq 'ask
                                    (mevedel-session-permission-mode session)))
-                       (should-not mevedel--implementation-permission-mode-restore)
+                       (should-not mevedel--implementation-permission-mode-saved)
                        (should (= 2 refreshed))))
                  (when (buffer-live-p buffer) (kill-buffer buffer))))
 
@@ -439,11 +438,11 @@
                        (should (eq 'ask
                                    (mevedel-session-permission-mode session)))
                        (should (equal '(full-auto)
-                                      mevedel--implementation-permission-mode-restore))
+                                      mevedel--implementation-permission-mode-saved))
                        (mevedel--implementation-permission-mode-restore)
                        (should (eq 'full-auto
                                    (mevedel-session-permission-mode session)))
-                       (should-not mevedel--implementation-permission-mode-restore)
+                       (should-not mevedel--implementation-permission-mode-saved)
                        (should (= 2 refreshed))))
                  (when (buffer-live-p buffer) (kill-buffer buffer))))
 
@@ -468,13 +467,13 @@
                        (should (eq 'full-auto
                                    (mevedel-session-permission-mode session)))
                        (should (equal '(nil)
-                                      mevedel--implementation-permission-mode-restore))
+                                      mevedel--implementation-permission-mode-saved))
                        (mevedel--implementation-permission-mode-restore)
                        (should-not (mevedel-session-permission-mode session))
                        (should-not (local-variable-p 'mevedel-permission-mode
                                                      buffer))
                        (should (eq 'ask mevedel-permission-mode))
-                       (should-not mevedel--implementation-permission-mode-restore)
+                       (should-not mevedel--implementation-permission-mode-saved)
                        (should (= 2 refreshed))))
                  (when (buffer-live-p buffer) (kill-buffer buffer)))))
 

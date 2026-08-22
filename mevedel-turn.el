@@ -27,10 +27,6 @@
                   "mevedel-agents" (invocation))
 (defvar mevedel--agent-invocation)
 
-;; `mevedel-chat'
-(declare-function mevedel--implementation-permission-mode-restore
-                  "mevedel-permission-mode" ())
-
 ;; `mevedel-compact-estimation'
 (declare-function mevedel-compact-estimation-record-token-baseline
                   "mevedel-compact-estimation" (fsm))
@@ -67,6 +63,10 @@
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view--schedule-follow-up-drain
                   "mevedel-pending-inputs" (fsm))
+
+;; `mevedel-permission-mode'
+(declare-function mevedel--implementation-permission-mode-restore
+                  "mevedel-permission-mode" ())
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-sweep-request

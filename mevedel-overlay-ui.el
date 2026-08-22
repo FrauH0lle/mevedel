@@ -21,10 +21,6 @@
 (declare-function mevedel--chat-buffer
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
-(declare-function mevedel--directive-bound-session-buffer
-                  "mevedel-directive-request" (record workspace))
-(declare-function mevedel--directive-session-buffer
-                  "mevedel-directive-request" (directive workspace))
 (declare-function mevedel--patch-buffer
                   "mevedel-chat" (&optional create workspace))
 (declare-function mevedel--replace-patch-buffer
@@ -46,6 +42,12 @@
 (declare-function mevedel-directive-frame-display
                   "mevedel-directive-frame"
                   (directive view-buffer &optional focus))
+
+;; `mevedel-directive-request'
+(declare-function mevedel--directive-bound-session-buffer
+                  "mevedel-directive-request" (record workspace))
+(declare-function mevedel--directive-session-buffer
+                  "mevedel-directive-request" (directive workspace))
 
 ;; `mevedel-directive-source'
 (declare-function mevedel--delete-instruction

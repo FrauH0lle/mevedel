@@ -442,7 +442,7 @@
                ((symbol-function 'mevedel-skills-input-prepare-user-input)
                 (lambda (input _) input))
                ((symbol-function
-                 'mevedel-plan-handoff--validate-skill-bindings)
+                 'mevedel-plan-handoff-validate-skill-bindings)
                 #'ignore)
                ((symbol-function 'mevedel-directive-plan--persist)
                 #'ignore)

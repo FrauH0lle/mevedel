@@ -38,8 +38,6 @@
 		  "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-chat'
-(declare-function mevedel--implement-discussion
-                  "mevedel-directive-request" (directive &optional callback))
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch))
 
 ;; `mevedel-directive'
@@ -53,6 +51,10 @@
 ;; `mevedel-directive-frame'
 (declare-function mevedel-directive-frame-refresh-filter
                   "mevedel-directive-frame" ())
+
+;; `mevedel-directive-request'
+(declare-function mevedel--implement-discussion
+                  "mevedel-directive-request" (directive &optional callback))
 
 ;; `mevedel-execution-telemetry'
 (declare-function mevedel-execution-telemetry-sandbox-summary-class
@@ -190,15 +192,13 @@
 		  (start end))
 
 ;; `mevedel-transcript-audit'
-
-
-(autoload 'mevedel--strip-hook-audit-blocks "mevedel-transcript-audit")
 (declare-function mevedel-transcript-audit-guest-prompts
                   "mevedel-transcript-audit" ())
 (declare-function mevedel-transcript-audit-only-p
                   "mevedel-transcript-audit" (text))
 (declare-function mevedel-transcript-buffer-directive-ranges
                   "mevedel-transcript-audit" (&optional allow-open))
+(autoload 'mevedel--strip-hook-audit-blocks "mevedel-transcript-audit")
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties

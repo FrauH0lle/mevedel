@@ -40,6 +40,15 @@
 (defvar gptel-response-separator)
 (defvar gptel-stream)
 
+;; `mevedel'
+(defvar mevedel-show-chat-buffer)
+
+;; `mevedel-chat'
+(declare-function mevedel--chat-buffer
+                  "mevedel-chat"
+                  (session-name &optional create workspace working-directory))
+(declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
+
 ;; `mevedel-directive'
 (declare-function mevedel-directive-actions "mevedel-directive" (directive))
 (declare-function mevedel-directive-next-activity-sequence
@@ -104,10 +113,16 @@
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction &optional of-type pred))
 
+;; `mevedel-permission-mode'
+(declare-function mevedel--implementation-permission-mode-apply
+                  "mevedel-permission-mode" (mode))
+(declare-function mevedel--implementation-permission-mode-restore
+                  "mevedel-permission-mode" ())
+
 ;; `mevedel-plan-handoff'
-(declare-function mevedel-plan-handoff--append-implementation-input
+(declare-function mevedel-plan-handoff-append-implementation-input
                   "mevedel-plan-handoff" (prompt selection))
-(declare-function mevedel-plan-handoff--validate-skill-bindings
+(declare-function mevedel-plan-handoff-validate-skill-bindings
                   "mevedel-plan-handoff" (prompt session))
 
 ;; `mevedel-presets'
@@ -116,9 +131,6 @@
 (defvar mevedel--directive-read-only-request-p)
 (defvar mevedel-action-preset-alist)
 (defvar mevedel-default-chat-preset)
-
-;; `mevedel-reminders'
-(defvar mevedel--session)
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
@@ -174,6 +186,7 @@
 (declare-function mevedel-subdirective-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-subdirective-request "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
+(defvar mevedel--session)
 
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-strip
@@ -212,6 +225,7 @@
 
 ;; `org-src'
 (declare-function org-escape-code-in-string "ext:org-src" (s))
+
 
 ;;
 ;;; Prompt generation
@@ -338,11 +352,11 @@ disabled, or malformed selection signals before any request starts."
       (with-current-buffer chat-buffer
         (require 'mevedel-plan-handoff)
         (require 'mevedel-skills-input)
-        (let ((result (mevedel-plan-handoff--append-implementation-input
+        (let ((result (mevedel-plan-handoff-append-implementation-input
                        prompt (list :skills skills))))
           (setq result (mevedel-skills-input-prepare-user-input
                         result mevedel--session))
-          (mevedel-plan-handoff--validate-skill-bindings
+          (mevedel-plan-handoff-validate-skill-bindings
            result mevedel--session)
           result))
     prompt))

@@ -11,6 +11,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+
 ;; `color'
 (declare-function color-name-to-rgb "color" (color &optional frame))
 (declare-function color-rgb-to-hex "color" (red green blue &optional digits))
@@ -40,14 +41,12 @@
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
-;; `mevedel-tool-fs'
-
-;; `mevedel-turn'
-(declare-function mevedel-current-origin "mevedel-turn" ())
-
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-restore-ignored-properties
                   "mevedel-transcript" (start end))
+
+;; `mevedel-turn'
+(declare-function mevedel-current-origin "mevedel-turn" ())
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))

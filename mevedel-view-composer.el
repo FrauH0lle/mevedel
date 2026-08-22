@@ -35,15 +35,6 @@
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 
 ;; `mevedel-chat'
-(declare-function mevedel--directive-session-buffer
-                  "mevedel-directive-request" (directive workspace))
-(declare-function mevedel--discuss-directive-turn
-                  "mevedel-directive-request"
-                  (directive message &optional attempt-index callback))
-(declare-function mevedel--request-directive-changes
-                  "mevedel-directive-request" (directive feedback &optional callback))
-(declare-function mevedel--retry-directive
-                  "mevedel-directive-request" (directive guidance &optional callback))
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 (defvar mevedel--pending-model-input)
 
@@ -62,6 +53,17 @@
                   "mevedel-directive-frame"
                   (directive view-buffer &optional focus))
 
+;; `mevedel-directive-request'
+(declare-function mevedel--directive-session-buffer
+                  "mevedel-directive-request" (directive workspace))
+(declare-function mevedel--discuss-directive-turn
+                  "mevedel-directive-request"
+                  (directive message &optional attempt-index callback))
+(declare-function mevedel--request-directive-changes
+                  "mevedel-directive-request" (directive feedback &optional callback))
+(declare-function mevedel--retry-directive
+                  "mevedel-directive-request" (directive guidance &optional callback))
+
 ;; `mevedel-directive-source'
 (declare-function mevedel--directive-record
                   "mevedel-directive-source" (directive))
@@ -73,8 +75,6 @@
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string
 		  "mevedel-hooks" (decision &optional event))
-(declare-function mevedel-hooks-sanitize-final-decision
-                  "mevedel-hooks" (event decision))
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
 		  (event &optional session workspace &rest extra))
 (declare-function mevedel-hooks-format-context "mevedel-hooks"
@@ -84,6 +84,8 @@
 (declare-function mevedel-hooks-run-event "mevedel-hooks"
 		  (event event-plist callback &optional session
 			 workspace request invocation))
+(declare-function mevedel-hooks-sanitize-final-decision
+                  "mevedel-hooks" (event decision))
 
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-buffer-workspace
@@ -149,11 +151,11 @@
 		  "mevedel-plan-mode" (&optional session))
 
 ;; `mevedel-prompt-submission'
-(declare-function mevedel-prompt-submission-audits
-		  "mevedel-prompt-submission" (cl-x) t)
 (declare-function mevedel-prompt-submission-accept
 		  "mevedel-prompt-submission"
 		  (submission input context audits context-entries))
+(declare-function mevedel-prompt-submission-audits
+		  "mevedel-prompt-submission" (cl-x) t)
 (declare-function mevedel-prompt-submission-cancel
 		  "mevedel-prompt-submission" (submission))
 (declare-function mevedel-prompt-submission-commit
@@ -179,10 +181,10 @@
 (declare-function mevedel-resource-capf "mevedel-resource-capf" ())
 
 ;; `mevedel-review'
-(declare-function mevedel-review-mark-command-outcome
-		  "mevedel-review" (outcome))
 (declare-function mevedel-review-command-skill-p "mevedel-review"
 		  (skill))
+(declare-function mevedel-review-mark-command-outcome
+		  "mevedel-review" (outcome))
 (declare-function mevedel-review-transform-outcome "mevedel-review"
 		  (skill-name outcome))
 
@@ -246,16 +248,16 @@
 		  (text session))
 
 ;; `mevedel-skills-ui'
+(declare-function mevedel-skills-install-font-lock "mevedel-skills-ui"
+                  (&optional origin-function))
+(declare-function mevedel-skills-local-command-active-request-p
+		  "mevedel-skills-ui" (name args))
 (declare-function mevedel-skills-parse-slash-line "mevedel-skills-ui"
 		  (text))
 (declare-function mevedel-skills-remaining-argument-hint
 		  "mevedel-skills-ui" (skill arguments))
 (declare-function mevedel-skills-slash-capf "mevedel-skills-ui"
 		  (buffer session local-commands &optional input-start))
-(declare-function mevedel-skills-install-font-lock "mevedel-skills-ui"
-                  (&optional origin-function))
-(declare-function mevedel-skills-local-command-active-request-p
-		  "mevedel-skills-ui" (name args))
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-structs'
@@ -342,6 +344,10 @@
 		  "mevedel-view-audit"
 		  (event original submitted decision))
 
+;; `mevedel-view-disclosure'
+(declare-function mevedel-view-disclosure-source-range
+                  "mevedel-view-disclosure" (data-buffer start end))
+
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add "mevedel-view-history"
 		  (input))
@@ -355,10 +361,6 @@
 (declare-function mevedel-view-history-next "mevedel-view-history" ())
 (declare-function mevedel-view-history-previous "mevedel-view-history" ())
 (declare-function mevedel-view-history-search "mevedel-view-history" ())
-
-;; `mevedel-view-disclosure'
-(declare-function mevedel-view-disclosure-source-range
-                  "mevedel-view-disclosure" (data-buffer start end))
 
 ;; `mevedel-view-input-files'
 (declare-function mevedel-view--activate-dropped-file-grants
