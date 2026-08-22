@@ -514,7 +514,7 @@
         (when (buffer-live-p edit-buffer) (kill-buffer edit-buffer))
         (when (file-directory-p root) (delete-directory root t)))))
 
-  :doc "A Delete refuses editing and an unrevised apply queues no reminder"
+  :doc "Editing a Delete keeps the file with the content the user writes"
   (mevedel-view-test--with-buffers
     (let* ((root (file-name-as-directory
                   (make-temp-file "mevedel-patch-edit-del-" t)))
@@ -523,6 +523,66 @@
                        :type 'file :id root :root root :name "edit-del"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session-create "edit-del" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Delete File: gone.txt"
+                     "*** End Patch")
+                   "\n"))
+           result edit-buffer)
+      (unwind-protect
+          (progn
+            (with-temp-file path (insert "obsolete\n"))
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler
+               (lambda (value) (setq result value))
+               (list :patch patch)))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "D gone.txt")
+              (setq edit-buffer (mevedel-patch-review-edit)))
+            (with-current-buffer edit-buffer
+              (should (string-empty-p (buffer-string)))
+              (should-error (mevedel-patch-review-edit-commit)
+                            :type 'user-error)
+              (insert "kept after all\n")
+              (mevedel-patch-review-edit-commit))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "M gone.txt")
+              (mevedel-patch-review-toggle-fold)
+              (let ((text (buffer-substring-no-properties
+                           (point-min) mevedel-view--input-marker)))
+                (should (string-search "M gone.txt" text))
+                (should (string-search "+ │ kept after all" text))
+                (should (string-search "· edited" text)))
+              (goto-char (point-min))
+              (search-forward "ApplyPatch ·")
+              (mevedel-patch-review-submit))
+            (should (equal "kept after all\n"
+                           (with-temp-buffer
+                             (insert-file-contents path)
+                             (buffer-string))))
+            (should (string-search
+                     "User edited during review (authoritative): gone.txt hunk 1"
+                     (plist-get result :result)))
+            (should (memq 'user-revised-patch
+                          (mapcar #'mevedel-reminder-type
+                                  (mevedel-session-reminders session)))))
+        (when (buffer-live-p edit-buffer) (kill-buffer edit-buffer))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "An unedited Delete still applies and queues no reminder"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-plain-del-" t)))
+           (path (file-name-concat root "gone.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "plain-del"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create "plain-del" workspace root))
            (patch (string-join
                    '("*** Begin Patch"
                      "*** Delete File: gone.txt"
@@ -540,12 +600,6 @@
                (lambda (value) (setq result value))
                (list :patch patch)))
             (with-current-buffer view-buf
-              (goto-char (point-min))
-              (search-forward "D gone.txt")
-              (let ((err (should-error (mevedel-patch-review-edit)
-                                       :type 'user-error)))
-                (should (string-search "SPC keeps the file"
-                                       (cadr err))))
               (goto-char (point-min))
               (search-forward "ApplyPatch ·")
               (mevedel-patch-review-submit))

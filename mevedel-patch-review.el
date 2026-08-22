@@ -912,10 +912,8 @@ Commit the revision with \\`C-c C-c' or discard it with \\`C-c C-k'."
          (user-error "Move point onto a hunk to edit it"))
         (t (user-error
             "A pure rename has no content to edit; SPC keeps the current path"))))
-      ('add (mevedel-patch-review--edit-content proposal operation))
-      ('delete
-       (user-error
-        "A Delete proposes no content to edit; SPC keeps the file")))))
+      ((or 'add 'delete)
+       (mevedel-patch-review--edit-content proposal operation)))))
 
 (defun mevedel-patch-review--confirm-feedback-clear (target)
   "Signal unless TARGET's pending feedback may be cleared for an edit."
@@ -951,11 +949,14 @@ local variables."
     buffer))
 
 (defun mevedel-patch-review--edit-content (proposal operation)
-  "Open Add OPERATION's proposed content from PROPOSAL for editing."
+  "Open OPERATION's proposed content from PROPOSAL for editing.
+An Add starts from its proposed content; a Delete starts empty, and
+committing content converts it into keeping the file with that
+content."
   (mevedel-patch-review--confirm-feedback-clear operation)
   (let ((buffer (generate-new-buffer "*mevedel patch content*")))
     (with-current-buffer buffer
-      (insert (plist-get operation :content))
+      (insert (or (plist-get operation :content) ""))
       (goto-char (point-min))
       (let ((buffer-file-name (plist-get operation :path)))
         (delay-mode-hooks (set-auto-mode)))
@@ -1009,23 +1010,60 @@ local variables."
       (mevedel-patch-review--edit-settle proposal))))
 
 (defun mevedel-patch-review--edit-commit-content ()
-  "Replace the staged Add content with the current edit buffer's text."
+  "Replace the staged content with the current edit buffer's text.
+On an Add this rewrites the proposed file; on a Delete it converts the
+operation into a whole-file replacement, keeping the file with the
+buffer's content."
   (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
          (content (if (string-suffix-p "\n" text) text (concat text "\n")))
          (proposal mevedel-patch-review--edit-proposal)
          (operation mevedel-patch-review--edit-operation)
-         (original (plist-get operation :content)))
+         (delete-p (eq (plist-get operation :kind) 'delete)))
     (when (string-empty-p (string-trim content))
-      (user-error "An added file needs content; reject the file instead"))
-    (plist-put operation :content content)
+      (user-error
+       (if delete-p
+           "Empty content keeps nothing; C-c C-k keeps the Delete as proposed"
+         "An added file needs content; reject the file instead")))
+    (if delete-p
+        (mevedel-patch-review--edit-convert-delete
+         proposal operation content)
+      (let ((original (plist-get operation :content)))
+        (plist-put operation :content content)
+        (condition-case err
+            (mevedel-tool-patch-planned-changes proposal)
+          (error
+           (plist-put operation :content original)
+           (signal (car err) (cdr err))))
+        (plist-put operation :modified t)
+        (plist-put operation :selected t)))
+    (mevedel-patch-review--edit-settle proposal)))
+
+(defun mevedel-patch-review--edit-convert-delete
+    (proposal operation content)
+  "Convert Delete OPERATION in PROPOSAL into keeping CONTENT.
+The operation becomes an Update whose single hunk replaces the whole
+baseline with CONTENT, so the ordinary validation, application, and
+user-revision reporting cover it."
+  (let* ((baseline (or (plist-get operation :baseline-content) ""))
+         (lines
+          (cons "@@"
+                (append
+                 (mapcar (lambda (line) (concat "-" line))
+                         (mevedel-tool-patch-content-lines baseline))
+                 (mapcar (lambda (line) (concat "+" line))
+                         (mevedel-tool-patch-content-lines content)))))
+         (hunk (car (mevedel-tool-patch-parse-update-lines lines 1)))
+         (original-hunks (plist-get operation :hunks)))
+    (plist-put hunk :modified t)
+    (plist-put hunk :selected t)
+    (plist-put operation :kind 'update)
+    (plist-put operation :hunks (list hunk))
     (condition-case err
         (mevedel-tool-patch-planned-changes proposal)
       (error
-       (plist-put operation :content original)
-       (signal (car err) (cdr err))))
-    (plist-put operation :modified t)
-    (plist-put operation :selected t)
-    (mevedel-patch-review--edit-settle proposal)))
+       (plist-put operation :kind 'delete)
+       (plist-put operation :hunks original-hunks)
+       (signal (car err) (cdr err))))))
 
 (defun mevedel-patch-review-edit-cancel ()
   "Discard the current patch hunk edit buffer."
