@@ -812,7 +812,8 @@
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (mevedel-view-test--insert-composer-draft "old draft"))
-      (mevedel-plan-mode--feedback-draft data-buf)
+      (mevedel-test--with-captured-messages nil
+        (mevedel-plan-mode--feedback-draft data-buf))
       (with-current-buffer view-buf
         (let ((draft (mevedel-view--input-text)))
           (should (string-match-p "Plan feedback:" draft))

@@ -9,11 +9,13 @@
 
 ;;; Code:
 
-(defvar remote-file-name-inhibit-cache)
 
 (eval-when-compile
   (require 'cl-lib)
   (require 'subr-x))
+
+;; `files'
+(defvar remote-file-name-inhibit-cache)
 
 ;; `cl-lib'
 (declare-function cl-find-if "cl-lib" (predicate sequence &rest args))
