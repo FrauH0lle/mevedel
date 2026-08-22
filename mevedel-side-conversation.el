@@ -53,7 +53,7 @@
                   (&optional session workspace request invocation))
 (declare-function mevedel-hooks-normalize-rules
                   "mevedel-hooks" (rules &optional scope))
-(defvar mevedel-hooks--context-frozen-p)
+(defvar mevedel-hooks-context-frozen-p)
 (defvar mevedel-hooks-tool-events)
 
 ;; `mevedel-mentions'
@@ -741,7 +741,7 @@ FROZEN-CONTEXT is the materialized gptel context plist."
                 mevedel--workspace (plist-get frozen :workspace)
                 mevedel-side-conversation--frozen-request-denies
                 (plist-get frozen :request-denies)
-                mevedel-hooks--context-frozen-p t
+                mevedel-hooks-context-frozen-p t
                 mevedel-workspace-additional-roots
                 (plist-get frozen :additional-roots)
                 mevedel-memory-dirs (plist-get frozen :memory-dirs)

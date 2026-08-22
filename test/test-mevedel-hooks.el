@@ -463,7 +463,7 @@
 				   "}\n"))
 			 (should
 			  (equal
-			   (mevedel-hooks--read-config-file file)
+			   (mevedel-hooks-read-config-file file)
 			   '((PreToolUse
 			      (:matcher "Bash"
 					:hooks ((:type command
@@ -481,7 +481,7 @@
 			   (insert "#.(progn "
 				   "(setq mevedel-hooks-test--read-eval-ran t) "
 				   "nil)"))
-			 (should-not (mevedel-hooks--read-config-file file))
+			 (should-not (mevedel-hooks-read-config-file file))
 			 (should-not mevedel-hooks-test--read-eval-ran))
 		     (delete-file file))))
 
