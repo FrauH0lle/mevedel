@@ -19,6 +19,7 @@
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-tool-patch)
 (require 'mevedel-patch-review)
+(require 'mevedel-pending-inputs)
 (require 'mevedel-plan-mode)
 
 ;; `mevedel-collaboration'

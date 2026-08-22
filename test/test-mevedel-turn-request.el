@@ -8,6 +8,8 @@
 
 (require 'mevedel)
 (require 'mevedel-turn)
+(require 'mevedel-permission-queue)
+(require 'mevedel-plan-mode)
 (require 'mevedel-queue)
 (require 'mevedel-workspace-identity)
 (require 'helpers

@@ -7,8 +7,8 @@
 ;;; Code:
 
 (require 'gptel-request)
-(require 'mevedel-tool-fs-read)
 (require 'mevedel-structs)
+(require 'mevedel-tool-fs-read)
 (require 'mevedel-agents)
 (require 'mevedel-execution)
 (require 'mevedel-reminders)
