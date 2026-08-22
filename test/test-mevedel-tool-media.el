@@ -246,6 +246,45 @@
            nil)))
     (should (string-search "media omitted" (car prepared)))
     (should-not (string-search "QUJD" (car prepared)))
+    (should-not (cdr prepared)))
+
+  :doc "an owned unresolvable reference is stripped with an honest note"
+  ;; The store is empty and no durable record exists, so the reference
+  ;; cannot resolve.  The model used to keep both the internal block and
+  ;; the now-false "native media block attached" note.
+  (let* ((media '((:mime "image/png" :kind image :data "QUJD")))
+         (raw (mevedel-tool-media-attach-result
+               (concat "<media-file>\n"
+                       "mime_type: image/png\n"
+                       "encoding: base64\n"
+                       "data:\nQUJD\n</media-file>")
+               media nil "toolu_gone"))
+         (mevedel-tool-media--store nil)
+         (prepared
+          (mevedel-tool-media-prepare-tool-result
+           'unknown-backend
+           (list :id "toolu_gone" :name "Read" :result raw)
+           nil)))
+    (should-not (string-search "mevedel-media-data" (car prepared)))
+    (should (string-search "<media no longer available>" (car prepared)))
+    (should-not (string-search "native media block attached" (car prepared)))
+    (should-not (cdr prepared)))
+
+  :doc "a foreign-id reference block stays literal even when unresolvable"
+  (let* ((media '((:mime "image/png" :kind image :data "QUJD")))
+         (raw (mevedel-tool-media-attach-result
+               (concat "<media-file>\n"
+                       "mime_type: image/png\n"
+                       "encoding: base64\n"
+                       "data:\nQUJD\n</media-file>")
+               media nil "toolu_original"))
+         (mevedel-tool-media--store nil)
+         (prepared
+          (mevedel-tool-media-prepare-tool-result
+           'unknown-backend
+           (list :id "toolu_other" :name "Read" :result raw)
+           nil)))
+    (should (string-search "mevedel-media-data" (car prepared)))
     (should-not (cdr prepared))))
 
 (mevedel-deftest mevedel-tool-media--provider-blocks ()
