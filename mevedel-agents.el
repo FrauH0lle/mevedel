@@ -627,20 +627,23 @@ BUFFER defaults to the current buffer."
 (defun mevedel-agents--setup-for-request (&optional preset-name)
   "Set up agents for the current request.
 
-If PRESET-NAME is non-nil and has an `:agents' entry in
-`mevedel-preset--registry', only those agents are registered.  Otherwise
-all agents in `mevedel-agent--registry' are registered.
+If PRESET-NAME is non-nil and declares an `:agents' entry in
+`mevedel-preset--registry', only those agents are registered -- an
+explicit empty declaration registers none, which is what a preset like
+`mevedel-discuss' means by `:agents ()'.  A preset with no `:agents'
+key at all registers the whole registry.
 
 Populates the request-local role roster and updates the Agent tool's role and
 model enums.  Must be called in the chat buffer."
   (let* ((meta (and preset-name
                     (mevedel-preset--resolved-metadata preset-name)))
-         (allowed (plist-get meta :agents))
-         (allowed-names (and allowed (mapcar #'symbol-name allowed)))
+         (declared (plist-member meta :agents))
+         (allowed-names (and declared
+                             (mapcar #'symbol-name (cadr declared))))
          (mevedel-specs
           (mapcar (lambda (entry)
                     (mevedel-agent-to-gptel-spec (cdr entry)))
-                  (if allowed-names
+                  (if declared
                       (cl-remove-if-not
                        (lambda (entry) (member (car entry) allowed-names))
                        mevedel-agent--registry)

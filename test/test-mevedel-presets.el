@@ -306,6 +306,20 @@
         (should-not
          (mevedel-permission-rules-action rules "Read")))))
 
+  :doc "an explicit empty :agents declaration registers no agents"
+  ;; `plist-get' on the declared-empty list is nil, and nil used to mean
+  ;; "no filter": `mevedel-discuss' declared none and installed all.
+  (let ((mevedel-preset--registry nil)
+        (gptel--known-presets nil))
+    (mevedel-tools-register)
+    (mevedel--define-presets)
+    (with-temp-buffer
+      (mevedel-agents--setup-for-request 'mevedel-discuss)
+      (should-not (mevedel-agents-specs)))
+    (with-temp-buffer
+      (mevedel-agents--setup-for-request 'mevedel-implement)
+      (should (mevedel-agents-specs))))
+
   :doc "makes every built-in role available to model-facing Agent calls"
   (let ((mevedel-preset--registry nil)
         (gptel--known-presets nil))

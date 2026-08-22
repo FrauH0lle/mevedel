@@ -415,8 +415,10 @@
 (defun mevedel-agent-runtime--finalize (invocation status)
   "Persist terminal STATUS and lifecycle effects for INVOCATION."
   (require 'mevedel-turn)
+  ;; `incomplete' is terminal like the other three: finalizing over it
+  ;; would run terminal lifecycle effects twice for a hydrated agent.
   (unless (memq (mevedel-agent-invocation-transcript-status invocation)
-                '(completed error aborted))
+                '(completed error aborted incomplete))
     (let ((buffer (mevedel-agent-invocation-buffer invocation))
           (session (mevedel-agent-invocation-parent-session invocation))
           (parent-buffer
