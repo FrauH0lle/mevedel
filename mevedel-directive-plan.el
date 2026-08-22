@@ -39,14 +39,14 @@
 (declare-function mevedel-model-validate-effort
                   "mevedel-models" (model effort))
 
-;; `mevedel-overlays'
-(declare-function mevedel--directive-action-context
-                  "mevedel-overlays" (record workspace))
-
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlay-ui"
                   (instruction &optional update-children))
+
+;; `mevedel-overlays'
+(declare-function mevedel--directive-action-context
+                  "mevedel-overlays" (record workspace))
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view--schedule-late-follow-up-drain

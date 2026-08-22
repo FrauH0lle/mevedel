@@ -176,8 +176,10 @@
 
 (defvar-local mevedel-directive-activity--directive nil
   "Workspace directive rendered in the current inspector.")
+
 (defvar-local mevedel-directive-activity--transcript-buffer nil
   "Synthetic record transcript rendered by the shared view machinery.")
+
 (defvar-keymap mevedel-directive-activity-mode-map
   :doc "Keymap for `mevedel-directive-activity-mode'."
   :parent special-mode-map
