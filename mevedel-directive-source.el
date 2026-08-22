@@ -552,11 +552,18 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
   (let ((pending (prog1 mevedel--pending-directive-detachments
                    (setq mevedel--pending-directive-detachments nil))))
     (dolist (entry pending)
-      (if (plist-get entry :record)
-          (mevedel--detach-directive entry)
-        (mevedel--remove-directive-presentation
-         (plist-get entry :overlay)
-         (plist-get entry :buffer)))))
+      ;; A captured range is not proof of deletion: `replace-buffer-contents'
+      ;; signals one change over the whole replaced region while editing only
+      ;; the parts that differ.  The directive is gone only when its overlay
+      ;; evaporated or collapsed to zero width.
+      (let ((overlay (plist-get entry :overlay)))
+        (when (or (null (overlay-buffer overlay))
+                  (= (overlay-start overlay) (overlay-end overlay)))
+          (if (plist-get entry :record)
+              (mevedel--detach-directive entry)
+            (mevedel--remove-directive-presentation
+             overlay
+             (plist-get entry :buffer)))))))
   (let ((beg (max (point-min) (1- beg)))
         (end (min (point-max) (1+ end))))
     (dolist (instruction (mevedel--instructions-in beg end))

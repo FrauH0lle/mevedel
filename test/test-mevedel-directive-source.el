@@ -431,6 +431,45 @@
               (should (keymapp (overlay-get detached 'keymap)))))
         (mevedel-instruction-test--discard cell))))
 
+  :doc "a whole-region replacement that rewrites the text keeps the directive"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'file :id "replace-attached" :root "/tmp"
+                     :name "replace-attached"))
+         (file (make-temp-file "mevedel-directive-" nil ".txt"
+                               "before\ndirective body\nafter\n"))
+         (buffer (find-file-noselect file))
+         directive record)
+    (unwind-protect
+        (with-current-buffer buffer
+          (fundamental-mode)
+          (setq-local mevedel--workspace workspace)
+          (set-buffer-modified-p nil)
+          (goto-char (point-min))
+          (re-search-forward "^directive body$")
+          (setq directive (mevedel--create-directive-in
+                           buffer (line-beginning-position)
+                           (line-beginning-position 2)
+                           nil "Keep me attached")
+                record (mevedel--directive-record directive))
+          ;; `replace-buffer-contents' reports one change over the whole
+          ;; region it replaces, so the captured range covers the directive
+          ;; even though the directive's text survives.
+          (let ((source (generate-new-buffer " *replacement*")))
+            (unwind-protect
+                (progn
+                  (with-current-buffer source
+                    (insert "before\ndirective BODY\nafter\n"))
+                  (replace-buffer-contents source))
+              (kill-buffer source)))
+          (should (eq buffer (overlay-buffer directive)))
+          (should (equal "directive BODY\n"
+                         (buffer-substring-no-properties
+                          (overlay-start directive)
+                          (overlay-end directive))))
+          (should (eq 'attached
+                      (plist-get (mevedel-directive-anchor record) :state))))
+      (mevedel-instruction-test--discard (cons buffer directive))))
+
   :doc "detached parents retain nested prompt and submission details"
   (let* ((workspace (mevedel-workspace--create
                      :type 'file :id "detach-nested" :root "/tmp"

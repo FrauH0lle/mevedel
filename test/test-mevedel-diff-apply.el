@@ -82,6 +82,26 @@
       (read-only-mode +1))
     result))
 
+(defun mevedel-test--overlay-on-text (buffer text type)
+  "Register a TYPE instruction overlay on TEXT in BUFFER.
+TYPE is `reference' or `directive'."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char (point-min))
+      (unless (re-search-forward (regexp-quote text) nil t)
+        (error "Fixture text not found in %s" (buffer-name)))
+      (if (eq type 'reference)
+          (mevedel--create-reference-in
+           buffer (match-beginning 0) (match-end 0))
+        (mevedel--create-directive-in
+         buffer (match-beginning 0) (match-end 0) nil "rename outputs")))))
+
+(defun mevedel-test--overlay-text (overlay)
+  "Return the text OVERLAY currently covers."
+  (with-current-buffer (overlay-buffer overlay)
+    (buffer-substring-no-properties
+     (overlay-start overlay) (overlay-end overlay))))
+
 (defun mevedel-test--apply-diff (diff-buffer workspace-file)
   "Apply DIFF-BUFFER in a temporary workspace identified by WORKSPACE-FILE."
   (cl-letf (((symbol-function #'mevedel-workspace)
@@ -150,6 +170,166 @@
    (mevedel-workspace-clear-registry))
   ,test
   (test)
+
+  ;; MUST-WORK USER CASE.  This fixture is a real change a user made in an
+  ;; R/Shiny module: three renamed `renderUI' outputs across separate hunks,
+  ;; with one registered directive spanning the layout block and one reference
+  ;; on each renamed definition line.  Do not delete this case when the diff
+  ;; application implementation changes -- port it.  Change what it expects
+  ;; only when the product requirement itself changes.
+  :doc "keeps a directive and its references on their text across a real-world multi-hunk rename"
+  (let* ((buffer-text "
+      # plots is to high too display on one page and thus, it makes sense to
+      # have a division between multiple pages.
+      shiny$div(
+        # Dynamic layout - columns adjust based on which cards are visible
+        shiny$uiOutput(ns(\"dynamic_layout_ui\"))
+      ),
+      shiny$div(
+        style = \"margin-top: 3px;\",
+        shiny$uiOutput(ns(\"dynamic_layout_ui_pt2\"))
+      ),
+      shiny$div(
+        style = \"margin-top: 3px;\",
+        shiny$uiOutput(ns(\"dynamic_layout_ui_pt3\"))
+      )
+    )
+  )
+
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+
+
+    # Create entire layout dynamically based on checkbox states
+    output$dynamic_layout_ui <- shiny$renderUI({
+      ns <- session$ns
+
+
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+
+
+    ### Intervention costs -----------------------------------------------------
+
+    output$dynamic_layout_ui_pt2 <- shiny$renderUI({
+      ns <- session$ns
+
+      if (input$show_costs) {
+        costs$ui(id = ns(\"costs\"))
+      }
+    })
+
+    ### Impact maps ------------------------------------------------------------
+
+    output$dynamic_layout_ui_pt3 <- shiny$renderUI({
+      ns <- session$ns
+
+
+")
+         (directive-text "      shiny$div(\n        # Dynamic layout - columns adjust based on which cards are visible\n        shiny$uiOutput(ns(\"dynamic_layout_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"dynamic_layout_ui_pt2\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"dynamic_layout_ui_pt3\"))\n      )\n")
+         (reference-1-text "    output$dynamic_layout_ui <- shiny$renderUI({\n")
+         (reference-2-text "    output$dynamic_layout_ui_pt2 <- shiny$renderUI({\n")
+         (reference-3-text "    output$dynamic_layout_ui_pt3 <- shiny$renderUI({\n")
+         (new-text "
+      # plots is to high too display on one page and thus, it makes sense to
+      # have a division between multiple pages.
+      shiny$div(
+        # Main plots and maps layout
+        shiny$uiOutput(ns(\"main_plots_maps_ui\"))
+      ),
+      shiny$div(
+        style = \"margin-top: 3px;\",
+        shiny$uiOutput(ns(\"costs_analysis_ui\"))
+      ),
+      shiny$div(
+        style = \"margin-top: 3px;\",
+        shiny$uiOutput(ns(\"impact_maps_ui\"))
+      )
+    )
+  )
+
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+
+
+    # Create main plots and maps layout dynamically based on checkbox states
+    output$main_plots_maps_ui <- shiny$renderUI({
+      ns <- session$ns
+
+
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+Lorem ipsum dolor sit amet, consetetur
+
+
+    ### Intervention costs -----------------------------------------------------
+
+    output$costs_analysis_ui <- shiny$renderUI({
+      ns <- session$ns
+
+      if (input$show_costs) {
+        costs$ui(id = ns(\"costs\"))
+      }
+    })
+
+    ### Impact maps ------------------------------------------------------------
+
+    output$impact_maps_ui <- shiny$renderUI({
+      ns <- session$ns
+
+
+")
+         (expected-directive "      shiny$div(\n        # Main plots and maps layout\n        shiny$uiOutput(ns(\"main_plots_maps_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"costs_analysis_ui\"))\n      ),\n      shiny$div(\n        style = \"margin-top: 3px;\",\n        shiny$uiOutput(ns(\"impact_maps_ui\"))\n      )\n")
+         (expected-ref1 "    output$main_plots_maps_ui <- shiny$renderUI({\n")
+         (expected-ref2 "    output$costs_analysis_ui <- shiny$renderUI({\n")
+         (expected-ref3 "    output$impact_maps_ui <- shiny$renderUI({\n")
+         (file (make-temp-file "mevedel-test-real-world-" nil ".R" buffer-text))
+         (file-buffer (find-file-noselect file))
+         directive reference-1 reference-2 reference-3 diff-buffer)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function #'mevedel-workspace)
+                     (lambda (&rest _)
+                       (mevedel-workspace-get-or-create
+                        'file file (file-name-directory file)
+                        (file-name-nondirectory file)))))
+            (setq directive (mevedel-test--overlay-on-text
+                             file-buffer directive-text 'directive)
+                  reference-1 (mevedel-test--overlay-on-text
+                               file-buffer reference-1-text 'reference)
+                  reference-2 (mevedel-test--overlay-on-text
+                               file-buffer reference-2-text 'reference)
+                  reference-3 (mevedel-test--overlay-on-text
+                               file-buffer reference-3-text 'reference)
+                  diff-buffer (mevedel-test--create-diff-buffer
+                               new-text file-buffer))
+            (with-current-buffer diff-buffer
+              (goto-char (point-min))
+              (should (< 1 (how-many "^@@"))))
+            (with-current-buffer diff-buffer
+              (let ((default-directory temporary-file-directory)
+                    (inhibit-message t))
+                (mevedel-diff-apply-buffer))))
+          (with-current-buffer file-buffer
+            (should (equal new-text (buffer-string)))
+            (should (equal expected-directive
+                           (mevedel-test--overlay-text directive)))
+            (should (equal expected-ref1
+                           (mevedel-test--overlay-text reference-1)))
+            (should (equal expected-ref2
+                           (mevedel-test--overlay-text reference-2)))
+            (should (equal expected-ref3
+                           (mevedel-test--overlay-text reference-3))))
+          (should (equal new-text
+                         (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string)))))
+      (when (buffer-live-p diff-buffer) (kill-buffer diff-buffer))
+      (kill-buffer file-buffer)
+      (delete-file file)))
   :doc "rejects ambiguous hunks without changing the diff or target"
   (let* ((original "alpha\nold\nomega\n")
          (file (make-temp-file "mevedel-test-ambiguous-" nil ".txt" original))
