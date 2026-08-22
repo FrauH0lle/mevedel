@@ -21,8 +21,8 @@
 (require 'mevedel-utilities)
 
 ;; `gptel'
-(defvar gptel-display-buffer-action)
 (defvar gptel--fsm-last)
+(defvar gptel-display-buffer-action)
 
 ;; `gptel-request'
 (declare-function gptel--model-name "ext:gptel-request" (model))
@@ -35,15 +35,6 @@
 (declare-function mevedel--chat-buffer
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
-(declare-function mevedel--directive-bound-session-buffer
-                  "mevedel-directive-request" (record workspace))
-(declare-function mevedel--directive-implementation-prompt
-                  "mevedel-directive-request" (content directive &optional feedback))
-(declare-function mevedel--directive-session-buffer
-                  "mevedel-directive-request" (directive workspace))
-(declare-function mevedel--discuss-directive-prompt
-                  "mevedel-directive-request"
-                  (content &optional directive message attempt-index))
 (declare-function mevedel--patch-buffer "mevedel-chat" (&optional create workspace))
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
 (defvar mevedel--view-buffer)
@@ -57,6 +48,17 @@
 (declare-function mevedel-directive-plan--planning-prompt
                   "mevedel-directive-plan"
                   (implementation-prompt &optional feedback proposal))
+
+;; `mevedel-directive-request'
+(declare-function mevedel--directive-bound-session-buffer
+                  "mevedel-directive-request" (record workspace))
+(declare-function mevedel--directive-implementation-prompt
+                  "mevedel-directive-request" (content directive &optional feedback))
+(declare-function mevedel--directive-session-buffer
+                  "mevedel-directive-request" (directive workspace))
+(declare-function mevedel--discuss-directive-prompt
+                  "mevedel-directive-request"
+                  (content &optional directive message attempt-index))
 
 ;; `mevedel-directive-source'
 (declare-function mevedel--create-directive-in
@@ -131,7 +133,7 @@
 (declare-function mevedel--setup-buffer-hooks "mevedel-persistence" (buffer))
 
 ;; `mevedel-plan-handoff'
-(declare-function mevedel-plan-handoff--append-implementation-input
+(declare-function mevedel-plan-handoff-append-implementation-input
                   "mevedel-plan-handoff" (prompt selection))
 
 ;; `mevedel-skills-core'
@@ -473,7 +475,7 @@ This command is useful to see what is actually being sent to the model."
                   (skills (mevedel-directive-skills record)))
         (require 'mevedel-plan-handoff)
         (setq request-string
-              (mevedel-plan-handoff--append-implementation-input
+              (mevedel-plan-handoff-append-implementation-input
                request-string (list :skills skills))))
       (when (and (eq action 'implement)
                  (mevedel-directive-planning-enabled record))

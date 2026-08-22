@@ -819,14 +819,14 @@ memo."
                              (mevedel-workspace-root workspace)))))))
          (puthash key rules mevedel-hooks--config-rules-cache))))))
 
-;;;###autoload
 (defun mevedel-hooks-invalidate-config ()
   "Forget every memoized hook configuration so the next event re-reads it."
   (clrhash mevedel-hooks--config-rules-cache)
   (clrhash mevedel-hooks--reported-bad-matchers))
 
+;;;###autoload
 (defun mevedel-hooks-reload ()
-  "Forget every memoized hook configuration so the next event re-reads it."
+  "Re-read hook configuration on the next event and say so."
   (interactive)
   (mevedel-hooks-invalidate-config)
   (message "mevedel: hook configuration will be re-read"))

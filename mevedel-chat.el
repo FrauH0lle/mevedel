@@ -102,6 +102,12 @@
 (declare-function mevedel-model-apply-session-policy
                   "mevedel-models" (session &optional buffer))
 
+;; `mevedel-permission-mode'
+(declare-function mevedel--implementation-permission-mode-apply
+                  "mevedel-permission-mode" (mode))
+(declare-function mevedel--implementation-permission-mode-restore
+                  "mevedel-permission-mode" ())
+
 ;; `mevedel-permission-persistence'
 (declare-function mevedel-permission-validate-persistent-stores
                   "mevedel-permission-persistence" (workspace))
@@ -141,7 +147,6 @@
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-install-defaults
 		  "mevedel-reminders" (session))
-(defvar mevedel--session)
 
 ;; `mevedel-session-artifacts'
 (declare-function
@@ -196,10 +201,19 @@
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
+(defvar mevedel--session)
 
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-format
                   "mevedel-tool-render-data" (render-data &optional tool-use-id))
+
+;; `mevedel-tool-repair'
+(declare-function mevedel-tool-repair-clear-ledger
+                  "mevedel-tool-repair" (&rest _))
+(declare-function mevedel-tool-repair-post-tool-call
+                  "mevedel-tool-repair" (info))
+(declare-function mevedel-tool-repair-pre-tool-call
+                  "mevedel-tool-repair" (info))
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-drain-cancellers "mevedel-turn"

@@ -19,17 +19,19 @@
 (defvar gptel-response-separator)
 
 ;; `mevedel-chat'
-(declare-function mevedel--implement-discussion
-                  "mevedel-directive-request" (directive &optional callback))
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch))
-(declare-function mevedel--start-directive-discussion
-                  "mevedel-directive-request" (directive &optional callback))
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
 
 ;; `mevedel-directive'
 (declare-function mevedel-directive-actions "mevedel-directive" (directive))
 (declare-function mevedel-directive-request-changed-p
                   "mevedel-directive" (directive))
+
+;; `mevedel-directive-request'
+(declare-function mevedel--implement-discussion
+                  "mevedel-directive-request" (directive &optional callback))
+(declare-function mevedel--start-directive-discussion
+                  "mevedel-directive-request" (directive &optional callback))
 
 ;; `mevedel-directive-source'
 (declare-function mevedel--directive-record
@@ -174,10 +176,8 @@
 
 (defvar-local mevedel-directive-activity--directive nil
   "Workspace directive rendered in the current inspector.")
-
 (defvar-local mevedel-directive-activity--transcript-buffer nil
   "Synthetic record transcript rendered by the shared view machinery.")
-
 (defvar-keymap mevedel-directive-activity-mode-map
   :doc "Keymap for `mevedel-directive-activity-mode'."
   :parent special-mode-map

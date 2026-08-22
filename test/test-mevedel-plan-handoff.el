@@ -965,7 +965,7 @@
                ((symbol-function 'mevedel-skills-input-prepare-user-input)
                 (lambda (input _) input))
                ((symbol-function
-                 'mevedel-plan-handoff--validate-skill-bindings)
+                 'mevedel-plan-handoff-validate-skill-bindings)
                 #'ignore)
                ((symbol-function 'mevedel-view--submit-planned-input)
                 (lambda (input _before _blocked dispatch &optional _after)
@@ -985,7 +985,7 @@
       (kill-buffer view-buffer)
       (kill-buffer data-buffer))))
 
-(mevedel-deftest mevedel-plan-handoff--validate-skill-bindings
+(mevedel-deftest mevedel-plan-handoff-validate-skill-bindings
   (:doc "accepts available canonical skills and rejects missing targets")
   ,test
   (test)
@@ -1002,10 +1002,10 @@
      (list :kind 'skill :token "$alpha" :source-file source)
      prompt)
     (should-not
-     (mevedel-plan-handoff--validate-skill-bindings prompt session))
+     (mevedel-plan-handoff-validate-skill-bindings prompt session))
     (setf (mevedel-session-skills session) nil)
     (should-error
-     (mevedel-plan-handoff--validate-skill-bindings prompt session))))
+     (mevedel-plan-handoff-validate-skill-bindings prompt session))))
 
 (provide 'test-mevedel-plan-handoff)
 ;;; test-mevedel-plan-handoff.el ends here

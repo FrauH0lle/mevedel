@@ -232,7 +232,7 @@ reservation while its prepared kickoff has not started."
               (or (null provider) (stringp provider))
               (or (null effort) (symbolp effort))))))
 
-(defun mevedel-plan-handoff--append-implementation-input
+(defun mevedel-plan-handoff-append-implementation-input
     (prompt selection)
   "Append SELECTION's skills and instructions to PROMPT."
   (let ((result prompt))
@@ -262,7 +262,7 @@ reservation while its prepared kickoff has not started."
 
 The accepted artifact is named by its canonical address, so the prompt
 needs no session."
-  (mevedel-plan-handoff--append-implementation-input
+  (mevedel-plan-handoff-append-implementation-input
    (format
     "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nImplementation instructions:\nImplement the accepted plan against the current repository state. Preserve its stated outcomes and acceptance criteria while using repository evidence to choose the safest effective mechanics."
     (mevedel-plan-resource-address
@@ -276,7 +276,7 @@ needs no session."
 
 The accepted artifact is named by its canonical address, so the kickoff
 needs no session."
-  (mevedel-plan-handoff--append-implementation-input
+  (mevedel-plan-handoff-append-implementation-input
    (format
     "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nGoal kickoff:\nBegin the active Goal. Read the accepted plan supplied above before acting."
     (mevedel-plan-resource-address
@@ -301,7 +301,7 @@ needs no session."
     (mevedel-model-set-session-effort
      session (plist-get selection :reasoning-effort) buffer)))
 
-(defun mevedel-plan-handoff--validate-skill-bindings (prompt session)
+(defun mevedel-plan-handoff-validate-skill-bindings (prompt session)
   "Signal when an explicit skill binding in PROMPT is unavailable in SESSION."
   (require 'mevedel-mention-bindings)
   (require 'mevedel-skills-core)
@@ -902,7 +902,7 @@ the durable retry was retained"
         (require 'mevedel-skills-input)
         (setq prompt
               (mevedel-skills-input-prepare-user-input prompt target-session))
-        (mevedel-plan-handoff--validate-skill-bindings
+        (mevedel-plan-handoff-validate-skill-bindings
          prompt target-session))
       (with-current-buffer view-buffer
         (mevedel-view--submit-planned-input

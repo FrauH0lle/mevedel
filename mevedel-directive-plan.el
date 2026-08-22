@@ -19,9 +19,7 @@
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request")
 
-;; `mevedel-chat'
-(declare-function mevedel--directive-action-context
-                  "mevedel-chat" (directive workspace))
+;; `mevedel-directive-request'
 (declare-function mevedel--directive-model-policy
                   "mevedel-directive-request" (directive))
 (declare-function mevedel--process-directive
@@ -41,6 +39,10 @@
 (declare-function mevedel-model-validate-effort
                   "mevedel-models" (model effort))
 
+;; `mevedel-overlays'
+(declare-function mevedel--directive-action-context
+                  "mevedel-overlays" (record workspace))
+
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlay-ui"
@@ -54,9 +56,9 @@
 (declare-function mevedel-plan-extract-proposed "mevedel-plan" (text))
 
 ;; `mevedel-plan-handoff'
-(declare-function mevedel-plan-handoff--append-implementation-input
+(declare-function mevedel-plan-handoff-append-implementation-input
                   "mevedel-plan-handoff" (prompt selection))
-(declare-function mevedel-plan-handoff--validate-skill-bindings
+(declare-function mevedel-plan-handoff-validate-skill-bindings
                   "mevedel-plan-handoff" (prompt session))
 
 ;; `mevedel-plan-mode'
@@ -194,7 +196,7 @@ card's selection stays authoritative once retained."
   "Return PLAN's accepted directive prompt with SELECTION additions."
   (require 'mevedel-plan-handoff)
   (or (plist-get plan :accepted-prompt)
-      (mevedel-plan-handoff--append-implementation-input
+      (mevedel-plan-handoff-append-implementation-input
        (format
         "%s\n\n### ACCEPTED DIRECTIVE PLAN:\n\n%s\n\nImplement the directive request according to this accepted plan. Preserve its stated outcomes and acceptance criteria; any implementation instructions below supplement the accepted plan and never replace its outcomes or accepted constraints."
         (plist-get plan :implementation-prompt)
@@ -225,7 +227,7 @@ card's selection stays authoritative once retained."
       (require 'mevedel-skills-input)
       (setq implementation-input
             (mevedel-skills-input-prepare-user-input implementation-input session))
-      (mevedel-plan-handoff--validate-skill-bindings
+      (mevedel-plan-handoff-validate-skill-bindings
        implementation-input session))
     (plist-put plan :status 'accepted)
     (plist-put plan :selection (copy-tree selection))
