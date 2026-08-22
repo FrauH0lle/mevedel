@@ -140,9 +140,9 @@
 (declare-function mevedel-transcript-restore-properties "mevedel-transcript-restore" (&optional only-if-missing))
 
 ;; `mevedel-utilities'
+(declare-function mevedel--forget-place "mevedel-utilities" nil)
 (declare-function mevedel--write-file-atomically
                   "mevedel-utilities" (path content &optional coding mode))
-(declare-function mevedel--forget-place "mevedel-utilities" nil)
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
 
 ;; `mevedel-workspace'
@@ -1874,7 +1874,10 @@ must materialize a snapshot rather than record a change."
         (push (list :path dest :content content)
               mevedel-session-artifacts--critical-artifacts)
       (require 'mevedel-utilities)
-      (mevedel--write-file-atomically dest content 'no-conversion))))
+      ;; Backups are verbatim copies of the user's files inside session
+      ;; storage; keep them owner-only rather than inheriting the
+      ;; default modes an ordinary artifact gets.
+      (mevedel--write-file-atomically dest content 'no-conversion #o600))))
 
 (defun mevedel-session-artifacts--file-history-maybe-snapshot (session path pre-content)
   "Return SESSION's pre-turn checkpoint entry for changed PATH.

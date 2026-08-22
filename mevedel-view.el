@@ -202,10 +202,10 @@
                   "mevedel-view-segments" ())
 
 ;; `mevedel-view-stream'
-(declare-function mevedel-view--stop-spinner-timer
-                  "mevedel-view-stream" ())
 (declare-function mevedel-view--ensure-request-progress
                   "mevedel-view-stream" (&optional data-buf status))
+(declare-function mevedel-view--stop-spinner-timer
+                  "mevedel-view-stream" ())
 (declare-function mevedel-view--render-stream-update
                   "mevedel-view-stream" (data-buf))
 
@@ -813,6 +813,10 @@ kill hook sees nil and exits without re-entering this function."
              (timerp mevedel-view--control-transfer-timer))
     (cancel-timer mevedel-view--control-transfer-timer)
     (setq mevedel-view--control-transfer-timer nil))
+  ;; The latch keeps a session event delivered later in this teardown
+  ;; from re-arming the poll on the dying view.
+  (when (boundp 'mevedel-view--control-transfer-torn-down-p)
+    (setq mevedel-view--control-transfer-torn-down-p t))
   (unless (mevedel-view-agent-handle-view-kill)
     (let ((view-buffer (current-buffer)))
       (require 'mevedel-view-control-transfer)

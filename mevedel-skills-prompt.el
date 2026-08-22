@@ -31,8 +31,6 @@
 (defvar mevedel-reminders--current-chat-buffer)
 
 ;; `mevedel-skills-invoke'
-(declare-function mevedel-skills-request-model-policy
-                  "mevedel-skills-invoke" ())
 (declare-function mevedel-skills--current-invocation
                   "mevedel-skills-invoke" ())
 (declare-function mevedel-skills--entry-base
@@ -47,6 +45,8 @@
                   "mevedel-skills-invoke" (skill &optional active-only))
 (declare-function mevedel-skills--truncate-text
                   "mevedel-skills-invoke" (text limit))
+(declare-function mevedel-skills-request-model-policy
+                  "mevedel-skills-invoke" ())
 
 ;; `mevedel-structs'
 (defvar mevedel--session)
@@ -62,6 +62,7 @@
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get
                   "mevedel-tool-registry" (name &optional category))
+
 
 
 ;;
