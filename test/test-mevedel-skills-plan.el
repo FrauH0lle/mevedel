@@ -18,6 +18,11 @@
 (require 'mevedel-skills-plan)
 (require 'mevedel-structs)
 
+;; `gptel'
+(defvar gptel-backend)
+(defvar gptel-model)
+(defvar gptel-reasoning-effort)
+
 
 ;;
 ;;; Helpers

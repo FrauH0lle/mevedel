@@ -7,6 +7,9 @@
 ;;; Code:
 
 (require 'gptel-request)
+(require 'mevedel-compact-evidence)
+(require 'mevedel-compact-run)
+(require 'mevedel-compact-target)
 (require 'mevedel-context-summary)
 (require 'mevedel-plan)
 (require 'mevedel-plan-handoff)
@@ -15,7 +18,9 @@
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-pending-inputs)
 (require 'mevedel-permissions)
+(require 'mevedel-chat)
 (require 'mevedel-prompt-submission)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-view)

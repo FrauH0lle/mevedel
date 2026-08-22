@@ -16,6 +16,7 @@
 (require 'mevedel-permission-queue)
 (require 'mevedel-pipeline)
 (require 'mevedel-sandbox)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-tool-task)
