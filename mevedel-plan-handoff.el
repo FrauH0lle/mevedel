@@ -286,9 +286,7 @@ needs no session."
 
 (defun mevedel-plan-handoff--persist (session chat-buffer)
   "Persist SESSION from CHAT-BUFFER."
-(require 'mevedel-session-persistence)
-(require 'mevedel-session-codec)
-(require 'mevedel-session-artifacts)
+  (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-save session chat-buffer))
 
 (defun mevedel-plan-handoff--apply-model-policy
@@ -415,8 +413,6 @@ needs no session."
 (defun mevedel-plan-handoff--prepare-worktree-target
     (session chat-buffer record)
   "Prepare RECORD's target artifact, settings, and Mode for SESSION."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
   (let* ((selection (plist-get record :selection))
          (mode (plist-get selection :mode))
@@ -779,8 +775,6 @@ the durable retry was retained"
 
 (defun mevedel-plan-handoff--prepare-context (session chat-buffer record)
   "Rotate CHAT-BUFFER once and return RECORD advanced to submission."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
   (let ((prepared (plist-put record :step 'submit)))
     ;; The segment transaction persists the advanced retry step, so recovery

@@ -17,8 +17,10 @@
 ;;
 ;;; Helpers
 
-(defun mevedel-test--create-diff-buffer (modified file-buffer)
-  "Return a unified diff buffer from FILE-BUFFER to MODIFIED."
+(defun mevedel-test--create-diff-buffer
+    (modified file-buffer &optional workspace-root)
+  "Return a unified diff buffer from FILE-BUFFER to MODIFIED.
+Resolve labels relative to WORKSPACE-ROOT when non-nil."
   (let* ((original-file (buffer-file-name file-buffer))
          (original
           (if (file-exists-p original-file)
@@ -33,7 +35,8 @@
          (modified-file
           (make-temp-file "mevedel-test-modified-" nil ".txt"))
          (relative
-          (file-relative-name original-file temporary-file-directory))
+          (file-relative-name original-file
+                              (or workspace-root temporary-file-directory)))
          (buffer (generate-new-buffer " *mevedel-test-diff*")))
     (unwind-protect
         (progn
@@ -68,11 +71,13 @@
         (delete-file source-file)))
     buffer))
 
-(defun mevedel-test--create-multi-diff-buffer (entries)
-  "Return one diff buffer for ENTRIES of (MODIFIED FILE-BUFFER)."
+(defun mevedel-test--create-multi-diff-buffer (entries &optional workspace-root)
+  "Return one diff buffer for ENTRIES of (MODIFIED FILE-BUFFER).
+Resolve labels relative to WORKSPACE-ROOT when non-nil."
   (let ((result (generate-new-buffer " *mevedel-test-multi-diff*")))
     (dolist (entry entries)
-      (let ((part (mevedel-test--create-diff-buffer (car entry) (cadr entry))))
+      (let ((part (mevedel-test--create-diff-buffer
+                   (car entry) (cadr entry) workspace-root)))
         (unwind-protect
             (with-current-buffer result
               (insert-buffer-substring part))
@@ -102,18 +107,20 @@ TYPE is `reference' or `directive'."
     (buffer-substring-no-properties
      (overlay-start overlay) (overlay-end overlay))))
 
-(defun mevedel-test--apply-diff (diff-buffer workspace-file)
-  "Apply DIFF-BUFFER in a temporary workspace identified by WORKSPACE-FILE."
-  (cl-letf (((symbol-function #'mevedel-workspace)
-             (lambda (&rest _)
-               (mevedel-workspace-get-or-create
-                'file workspace-file
-                temporary-file-directory
-                (file-name-nondirectory workspace-file)))))
-    (with-current-buffer diff-buffer
-      (let ((default-directory temporary-file-directory)
-            (inhibit-message t))
-        (mevedel-diff-apply-buffer)))))
+(defun mevedel-test--apply-diff
+    (diff-buffer workspace-file &optional workspace-root)
+  "Apply DIFF-BUFFER in a temporary workspace identified by WORKSPACE-FILE.
+Use WORKSPACE-ROOT as its root when non-nil."
+  (let ((workspace-root (or workspace-root temporary-file-directory)))
+    (cl-letf (((symbol-function #'mevedel-workspace)
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file workspace-file workspace-root
+                  (file-name-nondirectory workspace-file)))))
+      (with-current-buffer diff-buffer
+        (let ((default-directory workspace-root)
+              (inhibit-message t))
+          (mevedel-diff-apply-buffer))))))
 
 
 ;;
@@ -528,7 +535,8 @@ Lorem ipsum dolor sit amet, consetetur
          (first (file-name-concat first-dir "one.txt"))
          (sibling (file-name-concat sibling-dir "sibling.txt"))
          (second (file-name-concat second-dir "two.txt"))
-         first-buffer sibling-buffer second-buffer diff-buffer first-modtime)
+         first-buffer sibling-buffer second-buffer diff-buffer first-modtime
+         prompted)
     (unwind-protect
         (progn
           (make-directory second-dir)
@@ -542,9 +550,16 @@ Lorem ipsum dolor sit amet, consetetur
                 (mevedel-test--create-multi-diff-buffer
                  `(("ONE\n" ,first-buffer)
                    ("SIBLING\n" ,sibling-buffer)
-                   ("TWO\n" ,second-buffer))))
+                   ("TWO\n" ,second-buffer))
+                 root))
+          (mevedel-workspace-clear-registry)
           (set-file-modes second-dir #o500)
-          (should-error (mevedel-test--apply-diff diff-buffer first))
+          (cl-letf (((symbol-function 'read-file-name)
+                     (lambda (&rest _)
+                       (setq prompted t)
+                       first)))
+            (should-error (mevedel-test--apply-diff diff-buffer first root)))
+          (should-not prompted)
           (should-not (file-exists-p first))
           (should-not (file-exists-p sibling))
           (should-not (file-exists-p (file-name-concat root "created")))

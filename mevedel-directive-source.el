@@ -493,7 +493,7 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
     new))
 
 (defun mevedel--instruction-before-change (beg end)
-  "Capture attached directive trees wholly deleted between BEG and END."
+  "Capture attached directive trees wholly covered between BEG and END."
   (setq mevedel--pending-directive-detachments nil)
   (when (< beg end)
     (dolist (directive (mevedel--instructions-in beg end 'directive))
