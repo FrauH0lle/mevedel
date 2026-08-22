@@ -70,7 +70,7 @@
     (let (committed)
       (condition-case err
           (progn
-            (mevedel-agent-control--commit-session session)
+            (mevedel-agent-control-commit-session session)
             (setq committed t)
             (funcall (cdr transaction)))
         (error
@@ -394,7 +394,7 @@
     (should-not
      (mevedel-agent-control-list-agents session "/root/missing"))))
 
-(mevedel-deftest mevedel-agent-control--commit-session ()
+(mevedel-deftest mevedel-agent-control-commit-session ()
   ,test
   (test)
   :doc "requires a successful materialized persistence commit"
@@ -404,18 +404,18 @@
     (cl-letf (((symbol-function
                 'mevedel-session-persistence-save-agent-state)
                (lambda (value) (setq seen value) t)))
-      (should (mevedel-agent-control--commit-session session)))
+      (should (mevedel-agent-control-commit-session session)))
     (should (eq session seen))
     (cl-letf (((symbol-function
                 'mevedel-session-persistence-save-agent-state)
                (lambda (_value) nil)))
-      (should-error (mevedel-agent-control--commit-session session))))
+      (should-error (mevedel-agent-control-commit-session session))))
   :doc "accepts unmaterialized or explicitly staged state"
   (let ((session (mevedel-agent-control-test--session)))
-    (should (mevedel-agent-control--commit-session session))
+    (should (mevedel-agent-control-commit-session session))
     (setf (mevedel-session-save-path session) temporary-file-directory)
     (let ((mevedel-agent-control-suppress-persistence t))
-      (should (mevedel-agent-control--commit-session session)))))
+      (should (mevedel-agent-control-commit-session session)))))
 
 (mevedel-deftest mevedel-agent-control--persist-session ()
   ,test
@@ -423,7 +423,7 @@
   :doc "keeps observational persistence best effort"
   (let ((session (mevedel-agent-control-test--session)))
     (setf (mevedel-session-save-path session) temporary-file-directory)
-    (cl-letf (((symbol-function 'mevedel-agent-control--commit-session)
+    (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
                (lambda (_session) (error "Commit unavailable"))))
       (should-not (mevedel-agent-control--persist-session session))))
   :doc "does nothing before session materialization or while suppressed"
@@ -650,7 +650,7 @@
              (setq queued-during-handler
                    (memq value (mevedel-session-messages session)))))))
     (setf (mevedel-session-save-path session) temporary-file-directory)
-    (cl-letf (((symbol-function 'mevedel-agent-control--commit-session)
+    (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
                (lambda (_session) (cl-incf persisted))))
       (mevedel-agent-control--publish-result session record result))
     (should (eq result seen))
@@ -692,7 +692,7 @@
           (mevedel-agent-record--create
            :path "/root/review" :parent-path "/root"
            :result-handler (lambda (_value) (cl-incf calls)))))
-    (cl-letf (((symbol-function 'mevedel-agent-control--commit-session)
+    (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
                (lambda (_session)
                  (cl-incf commits)
                  (when (= commits 2)
@@ -1538,7 +1538,7 @@
                        (lambda (_delay _repeat function &rest args)
                          (setq scheduled (cons function args))
                          'fake-terminal-retry))
-                      ((symbol-function 'mevedel-agent-control--commit-session)
+                      ((symbol-function 'mevedel-agent-control-commit-session)
                        (lambda (_session)
                          (cl-incf commits)
                          (when (= commits 2)

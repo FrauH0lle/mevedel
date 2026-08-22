@@ -714,7 +714,7 @@
                        (push 'publication events)
                        t))
                     ((symbol-function
-                      'mevedel-agent-control--commit-session)
+                      'mevedel-agent-control-commit-session)
                      (lambda (_session)
                        (push 'commit events)
                        t)))

@@ -21,7 +21,7 @@
 (defvar gptel--request-alist)
 
 ;; `mevedel-agent-control'
-(declare-function mevedel-agent-control--commit-session
+(declare-function mevedel-agent-control-commit-session
                   "mevedel-agent-control" (session))
 (defvar mevedel-agent-control-suppress-persistence)
 
@@ -209,7 +209,7 @@
 ;;
 ;;; Transcript persistence
 
-(defun mevedel-agent-runtime-dispatch--abandon-persistence (invocation)
+(defun mevedel-agent-runtime-abandon-persistence (invocation)
   "Drop incomplete persistence state for INVOCATION."
   (let ((session (mevedel-agent-invocation-parent-session invocation))
         (agent-id (mevedel-agent-invocation-agent-id invocation))
@@ -566,7 +566,7 @@
                     (mevedel-session-artifacts-publish-agent-terminal-state
                      invocation))
                 (when (consp transaction)
-                  (mevedel-agent-control--commit-session session)))
+                  (mevedel-agent-control-commit-session session)))
             (error
              (when (functionp (car-safe transaction))
                (funcall (car transaction)))
@@ -950,7 +950,7 @@ HOOK-AUDITS are hidden transcript records associated with this user turn."
                 (delete-region start (point-max))
                 (set-buffer-modified-p was-modified)
                 (error "Retained agent conversation could not be persisted"))
-            (mevedel-agent-runtime-dispatch--abandon-persistence
+            (mevedel-agent-runtime-abandon-persistence
              invocation)))))))
 
 (cl-defun mevedel-agent-runtime-dispatch
@@ -1105,7 +1105,7 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                (setf (mevedel-agent-invocation-runtime-settled-p invocation) t
                      (mevedel-agent-invocation-runtime-fsm invocation) nil))
              (unless retained-p
-               (mevedel-agent-runtime-dispatch--abandon-persistence invocation)
+               (mevedel-agent-runtime-abandon-persistence invocation)
                (when (buffer-live-p buffer)
                  (kill-buffer buffer))))
            (signal (car err) (cdr err))))))))

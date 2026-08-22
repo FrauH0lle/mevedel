@@ -70,10 +70,6 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 
-;; `mevedel-tool-ui'
-(declare-function mevedel-tool-ui--render-agent
-                  "mevedel-tool-ui" (name args result render-data))
-
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-segments "mevedel-transcript" (start end))
 
