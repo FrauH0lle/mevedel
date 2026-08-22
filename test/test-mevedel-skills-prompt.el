@@ -51,7 +51,26 @@
     (let ((gptel-model model)
           (mevedel-model-context-limit 200000)
           (mevedel-skills-listing-budget 0.02))
-      (should (= 640 (mevedel-skills--listing-budget-chars))))))
+      (should (= 640 (mevedel-skills--listing-budget-chars)))))
+
+  :doc "budgets against a pending skill model override, not the buffer model"
+  ;; gptel funcalls the system prompt before the transforms apply a
+  ;; leading skill's :model, so reading the buffer's `gptel-model'
+  ;; sized the roster for the wrong window.
+  (let ((buffer-model (make-symbol "mevedel-test-big"))
+        (override-model (make-symbol "mevedel-test-small")))
+    (put buffer-model :context-window 200)
+    (put override-model :context-window 8)
+    (with-temp-buffer
+      (setq-local gptel-model buffer-model)
+      (setq-local mevedel-skills--pending-request-context
+                  (list :model override-model))
+      (cl-letf (((symbol-function 'mevedel-model-resolve-selector)
+                 (lambda (selector)
+                   (list :backend 'stub :model selector))))
+        (let ((mevedel-model-context-limit 200000)
+              (mevedel-skills-listing-budget 0.02))
+          (should (= 640 (mevedel-skills--listing-budget-chars))))))))
 
 (mevedel-deftest mevedel-skills--format-listing ()
   ,test

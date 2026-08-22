@@ -211,6 +211,24 @@ The stash plist keys map onto request/session state:
       (mevedel-skills-commit-invoked-records session skills))
     (setq-local mevedel-skills--pending-request-context nil)))
 
+(defun mevedel-skills-request-model-policy ()
+  "Resolve the model policy the current buffer's pending request will use.
+Root Plan requests use the `planning' workload; a leading user skill
+may override model or effort through the pending request context.
+gptel funcalls the function-valued system prompt before the prompt
+transforms apply this policy to the temp buffer, so any request-time
+consumer of the effective model -- the roster budget included -- must
+resolve through this one seam rather than read the buffer's
+`gptel-model' directly."
+  (require 'mevedel-models)
+  (mevedel-model-resolve-workload
+   (and (bound-and-true-p mevedel--session)
+        (not (bound-and-true-p mevedel--agent-invocation))
+        (mevedel-session-plan-mode mevedel--session)
+        'planning)
+   (plist-get mevedel-skills--pending-request-context :model)
+   (plist-get mevedel-skills--pending-request-context :effort)))
+
 (defun mevedel-skills--transform-apply-request-model-policy (fsm)
   "Pre-realize transform: apply the root request policy to prompt locals.
 
@@ -226,13 +244,7 @@ Policy never changes after this realization boundary."
     (when (and chat-buffer (buffer-live-p chat-buffer))
       (let ((policy
              (with-current-buffer chat-buffer
-               (mevedel-model-resolve-workload
-                (and mevedel--session
-                     (not (bound-and-true-p mevedel--agent-invocation))
-                     (mevedel-session-plan-mode mevedel--session)
-                     'planning)
-                (plist-get mevedel-skills--pending-request-context :model)
-                (plist-get mevedel-skills--pending-request-context :effort)))))
+               (mevedel-skills-request-model-policy))))
         (setq-local gptel-backend (plist-get policy :backend))
         (setq-local gptel-model (plist-get policy :model))
         (setq-local gptel-reasoning-effort (plist-get policy :effort))
