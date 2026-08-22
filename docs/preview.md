@@ -31,7 +31,7 @@ context, falling back to a diff-style section heuristic (the closest
 unindented baseline line at or above the hunk), then `~N`, the baseline
 match line. Diff lines carry a gutter — old-file line numbers for context
 and `-` lines, new-file numbers for `+` lines, computed per review by
-`mevedel-tool-patch--annotate-line-numbers` against the captured baseline —
+`mevedel-tool-patch-annotate-line-numbers` against the captured baseline —
 plus whole-line background tints (`mevedel-patch-review-added/-removed`,
 which inherit `diff-added`/`diff-removed`, or magit's diff faces once
 `magit-diff` is loaded). Deselected changes render dimmed without tint.
