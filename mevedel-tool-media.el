@@ -217,11 +217,29 @@ SESSION owns durable publication when non-nil."
                media tool-results-dir tool-use-id session))
     result))
 
-(defun mevedel-tool-media-strip-blocks (string)
+(defun mevedel-tool-media--block-owned-p (string open close expected)
+  "Return non-nil when STRING's block in [OPEN, CLOSE) belongs to EXPECTED.
+The payload between the delimiters is a printed reference plist; a
+block whose `:tool-use-id' differs from EXPECTED stays literal, which
+is the trust contract for propertized references copied under another
+tool id."
+  (condition-case nil
+      (let* ((read-eval nil)
+             (payload (substring-no-properties
+                       string
+                       (+ open (length mevedel-tool-media--data-open))
+                       close))
+             (reference (read payload)))
+        (equal expected (plist-get reference :tool-use-id)))
+    (error nil)))
+
+(defun mevedel-tool-media-strip-blocks (string &optional expected-tool-use-id)
   "Return STRING with generated media side-channel blocks removed.
 Literal delimiter text is left intact; only blocks carrying the
 pipeline-owned `mevedel-media-data' text property are treated as hidden
-side-channel data."
+side-channel data.  When EXPECTED-TOOL-USE-ID is non-nil, only blocks
+whose payload names that owning call are removed: a propertized
+reference copied under another tool id stays literal."
   (if (not (stringp string))
       string
     (let ((last 0)
@@ -234,7 +252,10 @@ side-channel data."
             (setq search (+ open (length mevedel-tool-media--data-open)))
           (let ((close (string-search mevedel-tool-media--data-close
                                       string open)))
-            (if (null close)
+            (if (or (null close)
+                    (and expected-tool-use-id
+                         (not (mevedel-tool-media--block-owned-p
+                               string open close expected-tool-use-id))))
                 (setq search (+ open (length mevedel-tool-media--data-open)))
               (let* ((strip-start
                       (if (and (> open 0)
@@ -587,7 +608,19 @@ records.  Return
          (without-media
           (and (stringp original)
                (if (and read-p tool-use-id)
-                   (car (or extracted (cons original nil)))
+                   ;; The extract already strips blocks it resolved.  A
+                   ;; reference it could NOT resolve -- evicted store,
+                   ;; cold process, missing durable record -- must still
+                   ;; be stripped when this call owns it, or the model
+                   ;; keeps both the internal block and a now-false
+                   ;; attachment note; foreign-id blocks stay literal.
+                   (let* ((kept (car (or extracted (cons original nil))))
+                          (stripped (mevedel-tool-media-strip-blocks
+                                     kept tool-use-id)))
+                     (if (and (null media) (not (equal stripped kept)))
+                         (mevedel-tool-media--envelope-summary
+                          stripped "<media no longer available>")
+                       stripped))
                  (mevedel-tool-media-strip-blocks original))))
          (model-result
           (mevedel-tool-media--result-for-model without-media media backend))
