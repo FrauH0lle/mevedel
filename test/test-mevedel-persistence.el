@@ -336,5 +336,29 @@
           (kill-buffer buffer)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-persistence--write-save-file ()
+  ,test
+  (test)
+  :doc "a save that dies mid-write leaves the previous snapshot readable"
+  ;; The file is the durable record of every workspace instruction; the
+  ;; old in-place `with-temp-file' truncated it before writing, so a
+  ;; crash lost all instructions at once.
+  (let* ((root (make-temp-file "mevedel-save-atomic-" t))
+         (path (file-name-concat root "instructions.eld")))
+    (unwind-protect
+        (progn
+          (mevedel-persistence--write-save-file path '(:version 1 :files (a)))
+          (cl-letf (((symbol-function 'write-region)
+                     (lambda (&rest _) (error "Disk full"))))
+            (should-error
+             (mevedel-persistence--write-save-file
+              path '(:version 2 :files (b)))))
+          (should (equal '(:version 1 :files (a))
+                         (with-temp-buffer
+                           (insert-file-contents path)
+                           (read (current-buffer)))))
+          (should-not (directory-files root nil "mevedel-write")))
+      (delete-directory root t))))
+
 (provide 'test-mevedel-persistence)
 ;;; test-mevedel-persistence.el ends here

@@ -33,6 +33,10 @@
 (defvar mevedel--session)
 (defvar mevedel-user-dir)
 
+;; `mevedel-utilities'
+(declare-function mevedel--write-file-atomically
+                  "mevedel-utilities" (path content &optional coding mode))
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-state-dir
                   "mevedel-workspace" (workspace))
@@ -437,24 +441,12 @@ Items include usable plugin manifests and visible metadata errors."
                             "Remote plugin state requires its live session"))))
           (mevedel-session-artifacts-publish-text
            session file content 'utf-8-unix))
-      (make-directory (file-name-directory file) t)
-      ;; Replace the file through a same-directory rename.  It is the whole
-      ;; record of every plugin's activation and hook consent, and
-      ;; `mevedel-plugins--read-state' reads a truncated file as nil, so a
-      ;; write that died in place would silently disable everything.
-      (let ((tmp (make-temp-file
-                  (expand-file-name ".mevedel-plugins-"
-                                    (file-name-directory file)))))
-        (unwind-protect
-            (progn
-              ;; `make-temp-file' creates 0600, which would become the state
-              ;; file's mode; keep what an ordinary write would have produced.
-              (set-file-modes tmp (default-file-modes))
-              (let ((coding-system-for-write 'utf-8-unix))
-                (write-region content nil tmp nil 'silent))
-              (rename-file tmp file t))
-          (when (file-exists-p tmp)
-            (delete-file tmp)))))))
+      ;; The file is the whole record of every plugin's activation and
+      ;; hook consent, and `mevedel-plugins--read-state' reads a
+      ;; truncated file as nil, so a write that died in place would
+      ;; silently disable everything.
+      (require 'mevedel-utilities)
+      (mevedel--write-file-atomically file content))))
 
 (defun mevedel-plugins--state-plist (name &optional workspace)
   "Return persisted state plist for plugin NAME in WORKSPACE."

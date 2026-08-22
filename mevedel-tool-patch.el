@@ -83,6 +83,10 @@
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
+;; `mevedel-utilities'
+(declare-function mevedel--write-file-atomically
+                  "mevedel-utilities" (path content &optional coding mode))
+
 (defvar mevedel-tool-patch-prepared-proposal nil)
 
 (define-error 'mevedel-tool-patch-partial-rollback
@@ -806,22 +810,9 @@ hunk that previewed cleanly stays unambiguous after a deselection."
 (defun mevedel-tool-patch--write-file (path content &optional mode literal-p)
   "Replace PATH with CONTENT and restore MODE when non-nil.
 When LITERAL-P is non-nil, write CONTENT as literal bytes."
-  (let ((directory (file-name-directory path)))
-    (make-directory directory t)
-    (let ((temporary (make-temp-file
-                      (file-name-concat directory ".mevedel-patch-") nil)))
-      (unwind-protect
-          (progn
-            (with-temp-buffer
-              (when literal-p (set-buffer-multibyte nil))
-              (insert content)
-              (let ((coding-system-for-write
-                     (and literal-p 'no-conversion)))
-                (write-region (point-min) (point-max) temporary nil 'silent)))
-            (when mode (set-file-modes temporary mode))
-            (rename-file temporary path t))
-        (when (file-exists-p temporary)
-          (delete-file temporary))))))
+  (require 'mevedel-utilities)
+  (mevedel--write-file-atomically
+   path content (and literal-p 'no-conversion) mode))
 
 (defun mevedel-tool-patch--restore-snapshots (snapshots)
   "Restore filesystem SNAPSHOTS and return failed path/error pairs."

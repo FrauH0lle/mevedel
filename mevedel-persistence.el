@@ -181,6 +181,18 @@ contents for position patching if the file changes before restore."
           :files file-alist)))
 
 
+(defun mevedel-persistence--write-save-file (path save-file)
+  "Atomically replace PATH with the printed SAVE-FILE form.
+The file is the durable record of every workspace instruction, and the
+reader rejects a truncated form, so an in-place write that died midway
+would lose all of them at once."
+  (mevedel--write-file-atomically
+   path
+   (let ((print-length nil)
+         (print-level nil)
+         (print-circle nil))
+     (prin1-to-string save-file))))
+
 (defun mevedel--write-instructions-file
     (path &optional base-directory write-empty quiet include-original-content)
   "Write current workspace instruction snapshot to PATH.
@@ -197,8 +209,8 @@ Returns the number of saved instructions."
          (saved-instruction-count
           (mevedel--instructions-saved-count file-alist)))
     (if (not (zerop saved-instruction-count))
-        (with-temp-file path
-          (prin1 save-file (current-buffer))
+        (progn
+          (mevedel-persistence--write-save-file path save-file)
           (unless quiet
             (let ((file-count (length file-alist)))
               (message "Wrote %d mevedel instruction%s from %d file%s to %s"
@@ -208,8 +220,7 @@ Returns the number of saved instructions."
                        (if (= 1 file-count) "" "s")
                        path))))
       (when write-empty
-        (with-temp-file path
-          (prin1 save-file (current-buffer))))
+        (mevedel-persistence--write-save-file path save-file))
       (when (and (not quiet) (called-interactively-p 'any))
         (message "No mevedel instructions to save")))
     saved-instruction-count))

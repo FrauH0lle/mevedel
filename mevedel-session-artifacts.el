@@ -140,6 +140,8 @@
 (declare-function mevedel-transcript-restore-properties "mevedel-transcript-restore" (&optional only-if-missing))
 
 ;; `mevedel-utilities'
+(declare-function mevedel--write-file-atomically
+                  "mevedel-utilities" (path content &optional coding mode))
 (declare-function mevedel--forget-place "mevedel-utilities" nil)
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
 
@@ -1871,17 +1873,8 @@ must materialize a snapshot rather than record a change."
     (if mevedel-session-artifacts--collecting-critical-artifacts-p
         (push (list :path dest :content content)
               mevedel-session-artifacts--critical-artifacts)
-      (unless (file-directory-p dir)
-        (make-directory dir t))
-      ;; Create the temp file in the destination's own directory so
-      ;; `rename-file' stays on one filesystem and remains atomic.
-      (let ((tmp (make-temp-file (expand-file-name ".mevedel-fh-" dir))))
-        (unwind-protect
-            (progn
-              (let ((coding-system-for-write 'no-conversion))
-                (write-region content nil tmp nil 'silent))
-              (rename-file tmp dest t))
-          (when (file-exists-p tmp) (delete-file tmp)))))))
+      (require 'mevedel-utilities)
+      (mevedel--write-file-atomically dest content 'no-conversion))))
 
 (defun mevedel-session-artifacts--file-history-maybe-snapshot (session path pre-content)
   "Return SESSION's pre-turn checkpoint entry for changed PATH.
