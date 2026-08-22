@@ -597,10 +597,10 @@ frames — generic requests (approve/deny/feedback), permission prompts
 authority is never mintable remotely), plan approval (accept with the
 host-configured axes; Worktree acceptance and feedback drafts stay in
 Emacs), ApplyPatch review (apply the staged selection or request a
-revision with whole-patch feedback; hunk editing stays in Emacs), and Ask
-questionnaires (the frame carries questions, options, and current answers;
-the guest answers atomically) — and the first answer, from Emacs or any
-guest, settles everywhere.
+revision with whole-patch feedback; side-by-side editing stays in
+Emacs), and Ask questionnaires (the frame carries questions, options, and
+current answers; the guest answers atomically) — and the first answer,
+from Emacs or any guest, settles everywhere.
 `mevedel-collaboration-remote-interactions` gates that surface. Lease
 transfer, save, rewind, fork, publication, and execution-target changes are
 impossible from the browser regardless of link strength.

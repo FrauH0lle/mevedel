@@ -43,14 +43,41 @@ Every file starts folded. Keys, active anywhere in the review body:
 - `TAB` folds a file, or a single hunk on a hunk row
 - `SPC` toggles selection; on an Update file row it toggles every hunk
 - `RET` visits the affected file, at the hunk's baseline location
-- `e` edits the staged change before it is applied: an Update or Move hunk
-  opens in a temporary `diff-mode` buffer; an Add file's proposed content
-  opens in a buffer with the target's major mode; a Delete opens the same
-  content buffer empty, and committing content converts the operation into
-  keeping the file with that content (a whole-file replacement Update).
-  `C-c C-c` commits the revision after re-validation, `C-c C-k` discards
-  it. A pure rename has no content to edit; its refusal points at `SPC`,
-  which deselects the operation and keeps the current path
+- `e` edits the staged change side by side before it is applied, in one
+  ediff session per operation: the captured baseline on the left,
+  read-only, and the result the patch would produce on the right, both in
+  the target's major mode. The right buffer is edited as ordinary file
+  text — there are no diff markers to write. An Update or Move compares
+  the baseline against its hunk-applied result, an Add compares an empty
+  buffer against its proposed content, and a Delete compares the baseline
+  against an empty buffer, so ediff's copy-difference commands (`a`) keep
+  chosen regions of a file the model wants deleted. Quitting ediff offers
+  to adopt the edits once, and only when the right buffer actually
+  changed; declining, or an untouched buffer, stages nothing. Adopting
+  re-derives an Update or Move's hunks from the edited result with
+  `mevedel-tool-patch-hunks-from-content` (a three-line-context diff
+  against the baseline, parsed by the engine's own payload parser), so a
+  derived hunk matches by construction and its context is never
+  hand-written. An Add's proposed content is replaced; a Delete with
+  anything left on the right becomes an Update that keeps the file. One
+  session at a time. `e` refuses a pure rename and a file whose two sides
+  hold the same lines, which covers a file with nothing selected.
+  Adopting reports and discards instead of staging when the review
+  settled meanwhile, or when that file's selection changed while the
+  session was open — the review stays interactive, and a result computed
+  from the older selection would reinstate a hunk just rejected. A
+  revision that fails validation is rolled back and reported without
+  signalling, and quitting the adopt prompt with `C-g` declines it: an
+  ediff quit hook must not fail, or ediff never restores the window
+  configuration
+- Hunks a revision derives are marked selected and revised, while
+  deselected hunks are carried across untouched and merged back in
+  baseline file order: a rejected change stays rejected, keeps its
+  feedback, and stays reselectable. Only an Add or a Delete confirms
+  feedback loss, because only their adoption selects the operation, and
+  the feedback is cleared when a revision is actually adopted rather than
+  when the session opens. Reselecting one after an edit that moved the
+  region it matches fails at submission the ordinary way
 - `f` attaches multiline feedback (`✎`): on a hunk, on a file row the whole
   file, anywhere else the whole patch
 - `n` / `p` move between file and hunk rows
@@ -73,7 +100,11 @@ user to inspect them before retrying.
 
 A user-revised change is marked `· edited` in the review, and the tool
 result the model receives marks each one `User edited during review
-(authoritative)` with an explicit do-not-revert directive, plus a
+(authoritative)` with an explicit do-not-revert directive. A revised
+Update or Move is reported once for the file, as
+`PATH (whole file revised)` followed by the revised hunks' diffs: a
+revision replaces the file's whole derived hunk set, so hunk indices
+would no longer refer to anything the model wrote. There is also a
 `(N revised by the user during review)` suffix on the applied-patch
 header. Submitting a revised patch also queues the one-shot
 `user-revised-patch` system reminder for the next turn, so the model does

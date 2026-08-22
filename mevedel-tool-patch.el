@@ -14,6 +14,10 @@
   (require 'mevedel-tool-registry)
   (require 'subr-x))
 
+;; `diff'
+(declare-function diff-no-select "diff"
+                  (old new &optional switches no-async buf))
+
 ;; `mevedel-directive'
 (declare-function mevedel-directive-set-anchor
                   "mevedel-directive" (directive anchor))
@@ -650,6 +654,68 @@ hunk that previewed cleanly stays unambiguous after a deselection."
           (setq after (+ start (length (plist-get hunk :old-lines)))))))
     (string-join lines eol)))
 
+(defun mevedel-tool-patch--diff-update-lines (buffer)
+  "Return BUFFER's unified diff output as update payload lines.
+Unified headers become the bare `@@' this engine matches by context,
+and diff's file headers and no-newline notices are dropped.  Content
+lines always carry a marker in column zero, so a payload line that
+begins a header can only be a header."
+  (with-current-buffer buffer
+    (goto-char (point-min))
+    (let (lines)
+      (when (re-search-forward "^@@" nil t)
+        (beginning-of-line)
+        (while (and (not (eobp))
+                    (not (looking-at-p "^Diff finished")))
+          (let ((line (buffer-substring-no-properties
+                       (line-beginning-position) (line-end-position))))
+            (cond
+             ((string-prefix-p "@@" line) (push "@@" lines))
+             ((string-prefix-p "\\" line))
+             (t (push line lines))))
+          (forward-line 1)))
+      ;; `diff-no-select' separates the hunks from its completion notice
+      ;; with a blank line, which the payload parser would otherwise read
+      ;; as an empty context line.
+      (while (and lines (string-empty-p (car lines)))
+        (pop lines))
+      (nreverse lines))))
+
+(defun mevedel-tool-patch--diff-side (text)
+  "Return TEXT as the exact bytes to diff for hunk derivation.
+Both sides are reduced to their logical lines and given one final
+newline, because a hunk cannot represent whether a file ends with one:
+without this, a trailing-newline difference alone would derive a hunk
+whose replacement re-joins to the text it claims to change."
+  (if-let* ((lines (mevedel-tool-patch-content-lines text)))
+      (concat (string-join lines "\n") "\n")
+    ""))
+
+(defun mevedel-tool-patch-hunks-from-content (baseline content)
+  "Return update hunks that turn BASELINE into CONTENT.
+Both contents are reduced to logical lines and diffed with three lines
+of context, then parsed into this engine's hunk shape.  A derived hunk
+therefore matches BASELINE by construction, and its context is
+well-formed without anyone having written diff markers by hand.
+Returns nil when the two contents hold the same lines."
+  (require 'diff)
+  (let ((baseline-buffer (generate-new-buffer " *mevedel-patch-baseline*"))
+        (content-buffer (generate-new-buffer " *mevedel-patch-content*"))
+        (diff-buffer (generate-new-buffer " *mevedel-patch-diff*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer baseline-buffer
+            (insert (mevedel-tool-patch--diff-side baseline)))
+          (with-current-buffer content-buffer
+            (insert (mevedel-tool-patch--diff-side content)))
+          (diff-no-select baseline-buffer content-buffer "-U3" t diff-buffer)
+          (when-let* ((lines (mevedel-tool-patch--diff-update-lines
+                              diff-buffer)))
+            (mevedel-tool-patch-parse-update-lines lines 1)))
+      (kill-buffer baseline-buffer)
+      (kill-buffer content-buffer)
+      (kill-buffer diff-buffer))))
+
 (defun mevedel-tool-patch--affected-paths (operation)
   "Return all filesystem paths touched by OPERATION."
   (delq nil (list (mevedel-tool-patch-physical-path operation)
@@ -1134,43 +1200,58 @@ settled transcript badge stays expandable without applied diffs."
   (let (details notes)
     (cl-flet ((note (line)
                 (push line details)
-                (push line notes)))
+                (push line notes))
+              ;; A user revision replaces the file's whole derived hunk
+              ;; set, so it is reported once for the file: hunk indices
+              ;; would not refer to anything the model wrote.
+              (revision (operation)
+                (when-let* ((revised
+                             (cl-remove-if-not
+                              (lambda (hunk)
+                                (and (plist-get hunk :modified)
+                                     (plist-get hunk :selected)))
+                              (plist-get operation :hunks))))
+                  (push (format
+                         (concat
+                          "User edited during review (authoritative):"
+                          " %s (whole file revised)\nThe user rewrote this"
+                          " file's change before approving it; the applied"
+                          " content below is what they chose.  Treat it as"
+                          " intentional -- do not revert or"
+                          " \"correct\" it.\n%s")
+                         (plist-get operation :rel-path)
+                         (string-join
+                          (mapcar (lambda (hunk)
+                                    (string-join
+                                     (plist-get hunk :diff-lines) "\n"))
+                                  revised)
+                          "\n"))
+                        details))))
       (when-let* ((feedback (plist-get proposal :feedback)))
         (note (format "Feedback (whole patch): %s" feedback)))
       (dolist (operation (plist-get proposal :operations))
         (if (eq (plist-get operation :kind) 'update)
-            (cl-loop for hunk in (plist-get operation :hunks)
-                     for number from 1
-                     do
-                     (when (plist-get hunk :modified)
-                       (push (format
-                              (concat
-                               "User edited during review (authoritative):"
-                               " %s hunk %d\nThe user revised this hunk"
-                               " before approving it; the applied content"
-                               " below is what they chose.  Treat it as"
-                               " intentional -- do not revert or"
-                               " \"correct\" it.\n%s")
-                              (plist-get operation :rel-path) number
-                              (string-join
-                               (plist-get hunk :diff-lines) "\n"))
-                             details))
-                     (when (plist-get hunk :selected)
-                       (push (format "Applied: %s hunk %d"
-                                     (plist-get operation :rel-path) number)
-                             details)
-                       (when-let* ((pass (plist-get hunk :match-pass)))
-                         (note (format "Fuzzy: %s hunk %d matched while %s"
+            (progn
+              (revision operation)
+              (cl-loop for hunk in (plist-get operation :hunks)
+                       for number from 1
+                       do
+                       (when (plist-get hunk :selected)
+                         (push (format "Applied: %s hunk %d"
+                                       (plist-get operation :rel-path) number)
+                               details)
+                         (when-let* ((pass (plist-get hunk :match-pass)))
+                           (note (format "Fuzzy: %s hunk %d matched while %s"
+                                         (plist-get operation :rel-path) number
+                                         (mevedel-tool-patch-match-pass-description
+                                          pass)))))
+                       (unless (plist-get hunk :selected)
+                         (note (format "Rejected: %s hunk %d"
+                                       (plist-get operation :rel-path) number)))
+                       (when-let* ((feedback (plist-get hunk :feedback)))
+                         (note (format "Feedback: %s hunk %d: %s"
                                        (plist-get operation :rel-path) number
-                                       (mevedel-tool-patch-match-pass-description
-                                        pass)))))
-                     (unless (plist-get hunk :selected)
-                       (note (format "Rejected: %s hunk %d"
-                                     (plist-get operation :rel-path) number)))
-                     (when-let* ((feedback (plist-get hunk :feedback)))
-                       (note (format "Feedback: %s hunk %d: %s"
-                                     (plist-get operation :rel-path) number
-                                     feedback))))
+                                       feedback)))))
           (if (plist-get operation :selected)
               (progn
                 (when (plist-get operation :modified)
@@ -1183,22 +1264,7 @@ settled transcript badge stays expandable without applied diffs."
                           " do not revert or \"correct\" it.")
                          (plist-get operation :rel-path))
                         details))
-                (cl-loop
-                 for hunk in (plist-get operation :hunks)
-                 for number from 1
-                 when (plist-get hunk :modified)
-                 do (push (format
-                           (concat
-                            "User edited during review (authoritative):"
-                            " %s hunk %d\nThe user revised this hunk"
-                            " before approving it; the applied content"
-                            " below is what they chose.  Treat it as"
-                            " intentional -- do not revert or"
-                            " \"correct\" it.\n%s")
-                           (plist-get operation :rel-path) number
-                           (string-join
-                            (plist-get hunk :diff-lines) "\n"))
-                          details))
+                (revision operation)
                 (push (format "Applied: %s%s"
                               (plist-get operation :rel-path)
                               (if-let* ((destination
