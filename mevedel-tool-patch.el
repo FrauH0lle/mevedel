@@ -1116,6 +1116,26 @@ Refresh file tracking immediately and diagnostics before continuation."
                                   lines)
             :diff (string-join lines "\n")))))
 
+(defun mevedel-tool-patch-revised-count (proposal)
+  "Return how many of PROPOSAL's applied changes the user revised."
+  (let ((count 0))
+    (dolist (operation (plist-get proposal :operations) count)
+      (pcase (plist-get operation :kind)
+        ('update
+         (dolist (hunk (plist-get operation :hunks))
+           (when (and (plist-get hunk :modified)
+                      (plist-get hunk :selected))
+             (cl-incf count))))
+        ('move
+         (when (plist-get operation :selected)
+           (dolist (hunk (plist-get operation :hunks))
+             (when (plist-get hunk :modified)
+               (cl-incf count)))))
+        ('add
+         (when (and (plist-get operation :selected)
+                    (plist-get operation :modified))
+           (cl-incf count)))))))
+
 (defun mevedel-tool-patch-result (proposal changes)
   "Return the aggregate handler result for PROPOSAL and CHANGES.
 Rejected and feedback detail lines double as render-data notes so the
@@ -1132,10 +1152,17 @@ settled transcript badge stays expandable without applied diffs."
                      for number from 1
                      do
                      (when (plist-get hunk :modified)
-                       (push (format "Modified (authoritative): %s hunk %d\n%s"
-                                     (plist-get operation :rel-path) number
-                                     (string-join
-                                      (plist-get hunk :diff-lines) "\n"))
+                       (push (format
+                              (concat
+                               "User edited during review (authoritative):"
+                               " %s hunk %d\nThe user revised this hunk"
+                               " before approving it; the applied content"
+                               " below is what they chose.  Treat it as"
+                               " intentional -- do not revert or"
+                               " \"correct\" it.\n%s")
+                              (plist-get operation :rel-path) number
+                              (string-join
+                               (plist-get hunk :diff-lines) "\n"))
                              details))
                      (when (plist-get hunk :selected)
                        (push (format "Applied: %s hunk %d"
@@ -1155,6 +1182,32 @@ settled transcript badge stays expandable without applied diffs."
                                      feedback))))
           (if (plist-get operation :selected)
               (progn
+                (when (plist-get operation :modified)
+                  (push (format
+                         (concat
+                          "User edited during review (authoritative):"
+                          " %s\nThe user revised this new file's content"
+                          " before approving it; the applied content is"
+                          " what they chose.  Treat it as intentional --"
+                          " do not revert or \"correct\" it.")
+                         (plist-get operation :rel-path))
+                        details))
+                (cl-loop
+                 for hunk in (plist-get operation :hunks)
+                 for number from 1
+                 when (plist-get hunk :modified)
+                 do (push (format
+                           (concat
+                            "User edited during review (authoritative):"
+                            " %s hunk %d\nThe user revised this hunk"
+                            " before approving it; the applied content"
+                            " below is what they chose.  Treat it as"
+                            " intentional -- do not revert or"
+                            " \"correct\" it.\n%s")
+                           (plist-get operation :rel-path) number
+                           (string-join
+                            (plist-get hunk :diff-lines) "\n"))
+                          details))
                 (push (format "Applied: %s%s"
                               (plist-get operation :rel-path)
                               (if-let* ((destination
@@ -1178,9 +1231,15 @@ settled transcript badge stays expandable without applied diffs."
     (let ((stats (mevedel-tool-patch-proposal-stats proposal)))
       (list :result (string-join
                      (cons (if changes
-                               (format "Applied patch: %d changes"
-                                       (mevedel-tool-patch--selected-count
-                                        proposal))
+                               (let ((revised (mevedel-tool-patch-revised-count
+                                               proposal)))
+                                 (format "Applied patch: %d changes%s"
+                                         (mevedel-tool-patch--selected-count
+                                          proposal)
+                                         (if (> revised 0)
+                                             (format " (%d revised by the user during review)"
+                                                     revised)
+                                           "")))
                              "Patch revision requested")
                            (nreverse details))
                      "\n")

@@ -1133,6 +1133,29 @@ this collapses both shapes to the delivered text."
                             (funcall (mevedel-reminder-content r) session)))))
 
 
+(mevedel-deftest mevedel-reminders-make-user-revised-patch
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "fires once, names the revised changes, and round-trips its recipe"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project "/tmp/urp/" "/tmp/urp/" "urp"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-user-revised-patch
+             "one.txt hunk 2, fresh.el (new file content)")))
+    (should (mevedel-reminders--should-fire-p r 0 session))
+    (let ((content (funcall (mevedel-reminder-content r) session)))
+      (should (string-search "one.txt hunk 2" content))
+      (should (string-search "Do not revert" content)))
+    (setf (mevedel-reminder-last-fired r) 0)
+    (should-not (mevedel-reminders--should-fire-p r 1 session))
+    (let* ((recipe (mevedel-reminder-recipe r))
+           (restored (car (mevedel-reminders-restore-agent-templates
+                           (list recipe)))))
+      (should (eq (mevedel-reminder-type restored) 'user-revised-patch))
+      (should (equal recipe (mevedel-reminder-recipe restored))))))
+
+
 (mevedel-deftest mevedel-reminders-make-plan-reference
   (:after-each (mevedel-workspace-clear-registry))
   ,test
