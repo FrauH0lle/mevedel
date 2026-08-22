@@ -8,6 +8,7 @@
 (require 'mevedel-specialist-nudges)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
+(require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory

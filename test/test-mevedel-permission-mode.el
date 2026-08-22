@@ -11,6 +11,7 @@
 (require 'mevedel-plan-mode)
 (require 'mevedel-reminders)
 (require 'mevedel-structs)
+(require 'mevedel-view-composer)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -327,7 +328,32 @@
          (lambda (s v) (push (cons s v) calls))))
       (should-not calls)
       (should (eq (default-toplevel-value 'mevedel-permission-mode)
-                  'edits)))))
+                  'edits))))
+
+  :doc "an unbound symbol gains its global default even inside a session"
+  ;; The defcustom's initial evaluation runs the setter with the
+  ;; standard value; when the owning file first loads from a session
+  ;; buffer, routing the value only into the session slot left the
+  ;; symbol void for the rest of the process -- `mevedel-sandbox-mode'
+  ;; stayed unbound after a hooks test loaded the sandbox through an
+  ;; execution helper.
+  (let ((sym (intern "mevedel-test--scoped-unbound-var"))
+        (data-buf (generate-new-buffer " *mev-test-data*")))
+    (unwind-protect
+        (let ((session (mevedel-session--create
+                        :name "test" :permission-mode 'ask))
+              slot)
+          (makunbound sym)
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (mevedel-permission-mode-set-session-scoped
+             sym 'best-effort
+             (lambda (_s v) (setq slot v))))
+          (should (eq slot 'best-effort))
+          (should (default-boundp sym))
+          (should (eq (default-toplevel-value sym) 'best-effort)))
+      (makunbound sym)
+      (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
 (mevedel-deftest mevedel-permission-mode--get ()
   ,test

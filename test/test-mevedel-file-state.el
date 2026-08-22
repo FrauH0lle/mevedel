@@ -6,6 +6,7 @@
 
 (require 'mevedel-structs)
 (require 'mevedel-file-state)
+(require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory

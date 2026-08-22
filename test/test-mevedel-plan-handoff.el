@@ -31,6 +31,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-compact)
+(require 'mevedel-session-control-transfer)
 
 (defconst test-mevedel-plan-handoff--summary
   "## Scope
@@ -395,7 +396,9 @@
   (:doc "delegates session saving to the canonical persistence writer")
   ,test
   (test)
-  (let ((session (mevedel-session--create :name "main")) seen)
+  (let ((session (mevedel-session--create :name "main"
+                                          :authority-mode 'pid-lock))
+        seen)
     (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
                (lambda (saved-session buffer)
                  (setq seen (list saved-session buffer)))))

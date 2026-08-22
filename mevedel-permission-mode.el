@@ -210,6 +210,14 @@ Fires on `setopt', `customize-set-variable', `custom-set-variables',
   (let* ((data-buf (mevedel-permission-mode-data-buffer))
          (session (and data-buf
                        (buffer-local-value 'mevedel--session data-buf))))
+    ;; The defcustom's initial evaluation runs this setter with the
+    ;; standard value, and the owning file may first load from inside a
+    ;; session buffer -- an execution helper is one such path.  The
+    ;; symbol must gain its global default regardless of scope, or it
+    ;; stays void for the rest of the process everywhere outside that
+    ;; one session.
+    (unless (default-boundp sym)
+      (set-default-toplevel-value sym val))
     (if session
         (progn
           (funcall slot-setter session val)

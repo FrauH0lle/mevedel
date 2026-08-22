@@ -16,6 +16,7 @@
 (require 'mevedel-view-composer)
 (require 'mevedel-view-input-files)
 (require 'mevedel-workspace)
+(require 'mevedel-session-persistence)
 
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
