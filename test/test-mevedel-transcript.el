@@ -876,6 +876,49 @@
         (should (= second-prompt-end (caddr (cadr segs))))))))
 
 
+(mevedel-deftest mevedel-transcript--org-block-depth-before ()
+  ,test
+  (test)
+  :doc "counts genuine tool markers, indented ones included"
+  ;; Pins the whitespace-tolerant form: gptel's own org support accepts
+  ;; an indented marker, and the in-span walk already tolerated one, so
+  ;; the prefix scan must agree.
+  (with-temp-buffer
+    (insert "  #+begin_tool call
+(:name \"Read\" :args nil)
+")
+    (should (= 1 (mevedel-transcript--org-block-depth-before (point-max) "tool\\|reasoning")))
+    (insert "  #+end_tool
+")
+    (should (= 0 (mevedel-transcript--org-block-depth-before (point-max) "tool\\|reasoning"))))
+
+  :doc "a propertized marker counts without the serialized plist body"
+  (with-temp-buffer
+    (let ((start (point)))
+      (insert "#+begin_tool call
+prose result
+")
+      (put-text-property start (point) 'gptel 'response))
+    (should (= 1 (mevedel-transcript--org-block-depth-before (point-max) "tool\\|reasoning"))))
+
+  :doc "literal begin_tool inside plain user text is not structural"
+  ;; An unbalanced marker a user typed used to open a phantom block that
+  ;; swallowed every later prompt from the index and from compaction
+  ;; turn boundaries.
+  (with-temp-buffer
+    (insert "look at this snippet:
+#+begin_tool oops
+more of my prompt
+")
+    (should (= 0 (mevedel-transcript--org-block-depth-before (point-max) "tool\\|reasoning"))))
+
+  :doc "a stray end_tool in user text stays harmless at depth zero"
+  (with-temp-buffer
+    (insert "#+end_tool
+still my prompt
+")
+    (should (= 0 (mevedel-transcript--org-block-depth-before (point-max) "tool\\|reasoning")))))
+
 (mevedel-deftest mevedel-transcript--skip-leading-properties-drawer ()
   ,test
   (test)
