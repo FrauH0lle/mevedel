@@ -324,12 +324,17 @@ stopped command's outcome."
                     (unless (string-empty-p with-sandbox) "\n\n")
                     (mevedel-tool-exec--execution-facts-xml facts))))
          (status
-          (if (or force-success-p
-                  (not (eq (plist-get facts :state) 'completed))
-                  (memq (plist-get facts :outcome)
-                        '(success no-match different false)))
-              'success
-            'error)))
+          (cond
+           (force-success-p 'success)
+           ;; A start failure has no completed state to judge by; facts
+           ;; alone would report the command successful with a "Failed
+           ;; to start process" body.
+           (error-data 'error)
+           ((or (not (eq (plist-get facts :state) 'completed))
+                (memq (plist-get facts :outcome)
+                      '(success no-match different false)))
+            'success)
+           (t 'error))))
     (list :result result
           :status status
           :render-data
