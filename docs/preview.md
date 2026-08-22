@@ -44,11 +44,13 @@ Every file starts folded. Keys, active anywhere in the review body:
 - `SPC` toggles selection; on an Update file row it toggles every hunk
 - `RET` visits the affected file, at the hunk's baseline location
 - `e` edits the staged change before it is applied: an Update or Move hunk
-  opens in a temporary `diff-mode` buffer, an Add file's proposed content
-  opens in a buffer with the target's major mode (`C-c C-c` commits the
-  revision after re-validation, `C-c C-k` discards it). A Delete and a
-  pure rename have no content to edit; their refusal points at `SPC`,
-  which deselects the operation and so keeps the file (or its path)
+  opens in a temporary `diff-mode` buffer; an Add file's proposed content
+  opens in a buffer with the target's major mode; a Delete opens the same
+  content buffer empty, and committing content converts the operation into
+  keeping the file with that content (a whole-file replacement Update).
+  `C-c C-c` commits the revision after re-validation, `C-c C-k` discards
+  it. A pure rename has no content to edit; its refusal points at `SPC`,
+  which deselects the operation and keeps the current path
 - `f` attaches multiline feedback (`✎`): on a hunk, on a file row the whole
   file, anywhere else the whole patch
 - `n` / `p` move between file and hunk rows
