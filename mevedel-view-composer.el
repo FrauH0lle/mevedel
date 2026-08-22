@@ -2509,16 +2509,24 @@ asynchronous preparation ran is left alone instead of cleared."
             ;; only place that can settle it.  The summary is recorded first
             ;; because it reads the request's elapsed time, which ending the
             ;; request clears; the UI stops before that teardown so it never
-            ;; outlives the request it describes.
+            ;; outlives the request it describes.  C-g is the user's own
+            ;; cancellation, not a provider failure, so it settles as
+            ;; aborted like every other cancellation; and the interrupted
+            ;; start left gptel's mode-line at " Waiting" for a request
+            ;; that no longer exists.
             (require 'mevedel-view-render)
-            (mevedel-view--append-request-summary
-             (current-buffer) data-turn-start
-             (list :outcome 'error
-                   :backend (or (ignore-errors
-                                  (gptel-backend-name gptel-backend))
-                                "Provider")
-                   :message (error-message-string err)
-                   :retry 'manual))
+            (let ((quit-p (eq (car err) 'quit)))
+              (mevedel-view--append-request-summary
+               (current-buffer) data-turn-start
+               (list :outcome (if quit-p 'aborted 'error)
+                     :backend (or (ignore-errors
+                                    (gptel-backend-name gptel-backend))
+                                  "Provider")
+                     :message (if quit-p
+                                  "Interrupted before the provider replied"
+                                (error-message-string err))
+                     :retry 'manual)))
+            (gptel--update-status " Ready" 'success)
             (when (buffer-live-p mevedel--view-buffer)
               (with-current-buffer mevedel--view-buffer
                 (mevedel-view-stream-stop)))

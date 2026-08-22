@@ -1739,6 +1739,42 @@
         (should (string-match-p "\\$PATH is relevant"
                                 (buffer-string))))))
 
+  :doc "C-g during the synchronous start settles as aborted, not error"
+  ;; A quit is the user's own cancellation: recording it as a provider
+  ;; error polluted failure accounting, and the interrupted start left
+  ;; gptel's mode-line at " Waiting" for a request that no longer
+  ;; existed.
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'file :id "vq" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           summary statuses)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (signal 'quit nil)))
+                ((symbol-function 'mevedel-view--append-request-summary)
+                 (lambda (_buffer _position plist) (setq summary plist)))
+                ((symbol-function 'gptel--update-status)
+                 (lambda (msg &rest _) (push msg statuses))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "please do the thing")
+          ;; `should-error' handles only `error' conditions; the
+          ;; re-signalled quit needs its own handler.
+          (should (eq 'caught
+                      (condition-case nil
+                          (progn (mevedel-view-send) nil)
+                        (quit 'caught))))))
+      (should (eq 'aborted (plist-get summary :outcome)))
+      (should (string-match-p "Interrupted" (plist-get summary :message)))
+      (should (member " Ready" statuses))
+      (with-current-buffer data-buf
+        (should-not mevedel--current-request))))
+
   :doc "history write failure warns without cancelling a valid view send"
   (let ((root (make-temp-file "mevedel-history-send-" t))
         warning
