@@ -27,7 +27,8 @@
         (progn
           (copy-file (file-name-concat root owner)
                      (file-name-concat compiled-root owner))
-          (let ((byte-compile-verbose nil))
+          (let ((byte-compile-verbose nil)
+                (byte-compile-warnings nil))
             (byte-compile-file (file-name-concat compiled-root owner)))
           (with-temp-buffer
             (should

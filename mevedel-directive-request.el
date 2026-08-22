@@ -40,14 +40,12 @@
 (defvar gptel-response-separator)
 (defvar gptel-stream)
 
-;; `mevedel'
-(defvar mevedel-show-chat-buffer)
-
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
+(defvar mevedel-show-chat-buffer)
 
 ;; `mevedel-directive'
 (declare-function mevedel-directive-actions "mevedel-directive" (directive))
