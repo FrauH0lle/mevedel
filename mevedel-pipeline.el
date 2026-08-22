@@ -860,7 +860,7 @@ EVENT labels generated hook event blocks."
   "Return a permission audit record for hook EVENT and OUTCOME."
   (append
    (list :type 'tool-permission
-         :event (mevedel-hooks--event-display-name event)
+         :event (mevedel-hooks-event-display-name event)
          :outcome (format "%s" outcome))
    (when-let* ((reason (or reason
                            (mevedel-hooks-decision-reason decision))))
@@ -871,7 +871,7 @@ EVENT labels generated hook event blocks."
   "Return a tool input rewrite audit record for hook EVENT."
   (append
    (list :type 'tool-input-rewrite
-         :event (mevedel-hooks--event-display-name event)
+         :event (mevedel-hooks-event-display-name event)
          :original-input original
          :updated-input updated)
    (when-let* ((reason (mevedel-hooks-decision-reason decision)))
@@ -882,7 +882,7 @@ EVENT labels generated hook event blocks."
   "Return a result rewrite audit record for hook EVENT."
   (append
    (list :type 'tool-result-rewrite
-         :event (mevedel-hooks--event-display-name event)
+         :event (mevedel-hooks-event-display-name event)
          :original-result (or original "")
          :updated-result (or updated ""))
    (when-let* ((reason (mevedel-hooks-decision-reason decision)))

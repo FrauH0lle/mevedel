@@ -153,7 +153,7 @@ Nil keeps all entries."
                  (const :tag "Unlimited" nil))
   :group 'mevedel)
 
-(defvar-local mevedel-hooks--context-frozen-p nil
+(defvar-local mevedel-hooks-context-frozen-p nil
   "Non-nil when this buffer's session hook rules are the complete rule set.")
 
 (defcustom mevedel-hooks-persist-log t
@@ -546,7 +546,7 @@ treated as `SubagentStop'."
         :null-object nil
         :false-object :json-false)))))
 
-(defun mevedel-hooks--read-config-file (file &optional content)
+(defun mevedel-hooks-read-config-file (file &optional content)
   "Read and normalize hook config FILE or snapshotted CONTENT."
   (condition-case err
       (let ((mevedel-hooks--normalizing-source file))
@@ -756,7 +756,7 @@ Plugin runtime data is scoped to WORKSPACE when provided."
               ((plist-get entry :file)
                (let ((file (plist-get entry :file)))
                  (mevedel-hooks-annotate-rules-source
-                  (mevedel-hooks--read-config-file file)
+                  (mevedel-hooks-read-config-file file)
                   'plugin file (mevedel-plugin-root plugin))))))))))
 
 (defun mevedel-hooks--plugin-config-rules (&optional workspace)
@@ -801,7 +801,7 @@ memo."
            (setq rules
                  (append rules
                          (mevedel-hooks-annotate-rules-source
-                          (mevedel-hooks--read-config-file file)
+                          (mevedel-hooks-read-config-file file)
                           'user-file file (file-name-directory file)))))
          (setq rules
                (append rules
@@ -812,7 +812,7 @@ memo."
              (setq rules
                    (append rules
                            (mevedel-hooks-annotate-rules-source
-                            (mevedel-hooks--read-config-file
+                            (mevedel-hooks-read-config-file
                              file (plist-get snapshot :content))
                             'project-file file
                             (file-name-as-directory
@@ -820,17 +820,21 @@ memo."
          (puthash key rules mevedel-hooks--config-rules-cache))))))
 
 ;;;###autoload
+(defun mevedel-hooks-invalidate-config ()
+  "Forget every memoized hook configuration so the next event re-reads it."
+  (clrhash mevedel-hooks--config-rules-cache)
+  (clrhash mevedel-hooks--reported-bad-matchers))
+
 (defun mevedel-hooks-reload ()
   "Forget every memoized hook configuration so the next event re-reads it."
   (interactive)
-  (clrhash mevedel-hooks--config-rules-cache)
-  (clrhash mevedel-hooks--reported-bad-matchers)
+  (mevedel-hooks-invalidate-config)
   (message "mevedel: hook configuration will be re-read"))
 
 (defun mevedel-hooks-effective-rules
     (&optional session workspace request invocation)
   "Return effective hook rules for SESSION, WORKSPACE, REQUEST, and INVOCATION."
-  (if mevedel-hooks--context-frozen-p
+  (if mevedel-hooks-context-frozen-p
       (copy-tree (and session (mevedel-session-hook-rules session)))
     (let* ((workspace (or workspace
                           (and session (mevedel-session-workspace session))))
@@ -1037,7 +1041,7 @@ stubs or user code, so the boundary stays defensive at one owner."
     (display-warning
      'mevedel
      (format "Ignoring malformed %s hook decision: %S"
-             (mevedel-hooks--event-display-name event)
+             (mevedel-hooks-event-display-name event)
              decision)
      :warning)
     nil))
@@ -1152,7 +1156,7 @@ stubs or user code, so the boundary stays defensive at one owner."
         (and (memq event '(PreToolUse PermissionRequest))
              (eq (plist-get decision :permission-decision) 'deny)))))
 
-(defun mevedel-hooks--event-display-name (event)
+(defun mevedel-hooks-event-display-name (event)
   "Return a human-readable display name for hook EVENT."
   (if (symbolp event) (symbol-name event) (format "%s" event)))
 
@@ -1165,7 +1169,7 @@ stubs or user code, so the boundary stays defensive at one owner."
                     (when (and item
                                (not (and (listp item)
                                          (keywordp (car-safe item)))))
-                      (list :event (mevedel-hooks--event-display-name event)
+                      (list :event (mevedel-hooks-event-display-name event)
                             :body (format "%s" item))))
                   additional))))
 
@@ -1532,7 +1536,7 @@ record only that context was added, without duplicating the body."
                                  mevedel-hooks--context-handler-table)))
       (list
        (list :type type
-             :event (mevedel-hooks--event-display-name event)
+             :event (mevedel-hooks-event-display-name event)
              :handlers
              (mapcar
               (lambda (contribution)
@@ -1561,13 +1565,13 @@ record only that context was added, without duplicating the body."
            (mevedel-hooks--decision-blocking-p decision))
       (mevedel-hooks--surface
        (format "%s hook blocked: %s"
-               (mevedel-hooks--event-display-name event)
+               (mevedel-hooks-event-display-name event)
                (or (mevedel-hooks-decision-reason decision)
                    "no reason provided"))))
      ((plist-get decision :system-message)
       (mevedel-hooks--surface
        (format "%s hook: %s"
-               (mevedel-hooks--event-display-name event)
+               (mevedel-hooks-event-display-name event)
                (plist-get decision :system-message)))))))
 
 
@@ -2194,7 +2198,7 @@ decision plist."
                          (when slow-echoed
                            (mevedel-hooks--surface
                             (format "%s hook finished"
-                                    (mevedel-hooks--event-display-name
+                                    (mevedel-hooks-event-display-name
                                      event))))
                          (when slow-surfaced
                            (let ((restored
@@ -2225,11 +2229,11 @@ decision plist."
                        (setq slow-echoed t)
                        (mevedel-hooks--surface
                         (format "%s hook still running..."
-                                (mevedel-hooks--event-display-name event)))
+                                (mevedel-hooks-event-display-name event)))
                        (when (mevedel-hooks--claim-progress
                               progress-lease
                               (format "Running %s hook..."
-                                      (mevedel-hooks--event-display-name
+                                      (mevedel-hooks-event-display-name
                                        event))
                               progress-owner)
                          (setq slow-surfaced t)

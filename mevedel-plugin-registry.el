@@ -18,9 +18,9 @@
                   "mevedel-cockpit" ())
 
 ;; `mevedel-hooks'
-(declare-function mevedel-hooks--read-config-file
+(declare-function mevedel-hooks-invalidate-config "mevedel-hooks" ())
+(declare-function mevedel-hooks-read-config-file
                   "mevedel-hooks" (file &optional content))
-(defvar mevedel-hooks--config-rules-cache)
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-publish-text
@@ -502,7 +502,7 @@ Relative identities are requalified through the live WORKSPACE root."
   "Return normalized hook rules from FILE."
   (when (and (file-readable-p file)
              (require 'mevedel-hooks nil t))
-    (mevedel-hooks--read-config-file file)))
+    (mevedel-hooks-read-config-file file)))
 
 (defun mevedel-plugins--hook-rules-from-hooks (hooks)
   "Return normalized hook rules declared by HOOKS."
@@ -600,8 +600,8 @@ Relative identities are requalified through the live WORKSPACE root."
     ;; Enablement decides which plugin hooks resolve, so the memoized
     ;; hook configuration is stale from here.  Guarded rather than
     ;; required: hooks depends on plugins, not the other way around.
-    (when (boundp 'mevedel-hooks--config-rules-cache)
-      (clrhash mevedel-hooks--config-rules-cache))))
+    (when (fboundp 'mevedel-hooks-invalidate-config)
+      (mevedel-hooks-invalidate-config))))
 
 (defun mevedel-plugins-remove-state-for-source
     (name root &optional workspace)

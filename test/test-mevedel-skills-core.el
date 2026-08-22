@@ -978,7 +978,7 @@ hooks:
            (mevedel-skill-hooks
             (car (mevedel-skills-scan
                   root '(".mevedel/skills") workspace)))))
-      (clrhash mevedel-hooks--config-rules-cache)
+      (mevedel-hooks-invalidate-config)
       (delete-directory root t)
       (delete-directory user-dir t)))
 
