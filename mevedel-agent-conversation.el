@@ -562,8 +562,12 @@ payload remains authoritative."
 
 (defun mevedel-agent-conversation--render-activity (invocation)
   "Return activity metadata appropriate for INVOCATION's current status."
+  ;; `incomplete' is terminal to the view
+  ;; (`mevedel-view--agent-terminal-status-p'), so the closed list here
+  ;; must agree or a hydrated incomplete agent would render live
+  ;; activity for a settled transcript.
   (if (memq (mevedel-agent-invocation-transcript-status invocation)
-            '(completed error aborted))
+            '(completed error aborted incomplete))
       (mevedel-agent-conversation-final-activity invocation)
     (mevedel-agent-conversation--activity-snapshot
      invocation mevedel-agent-conversation--live-activity-limit)))
