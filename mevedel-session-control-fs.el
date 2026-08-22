@@ -402,8 +402,9 @@ The binding constraint is not the target's `ARG_MAX' -- that is megabytes.  It
 is one physical line of the command TRAMP writes to the connection process:
 that process talks over a pty, and a pty in canonical mode truncates past
 `N_TTY_BUF_SIZE', 4 KiB.  Exceeding it does not fail cleanly.
-`process-send-string' blocks inside the write, which no timer interrupts and
-no timeout unwinds, so the connection is wedged for the life of the process.
+`process-send-string' blocks inside the write -- timers still run while it
+blocks, but nothing unwinds the write itself -- so the connection is wedged
+for the life of the process.
 
 Lines are what is budgeted, not fields: payload fields arrive as wrapped
 base64, so a large payload crosses the pty as many short lines the way the

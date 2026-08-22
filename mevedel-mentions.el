@@ -777,6 +777,12 @@ to the user."
            (not (file-readable-p expanded)))
       (funcall deny-placeholder "unreadable"))
      ((and (not artifact-logical)
+           (file-directory-p expanded)
+           (or start-line end-line))
+      ;; A line range claims lines over what is actually a listing; the
+      ;; label would lie about what the model received.
+      (funcall deny-placeholder "is a directory; a line range does not apply"))
+     ((and (not artifact-logical)
            (file-directory-p expanded))
       (condition-case err
           (let* ((listing (mevedel-tool-fs-read-list-directory

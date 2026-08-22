@@ -815,7 +815,9 @@ Returns:
                          ;; user sends next.
                          (mevedel-skills-input-clear-pending)
                          (message
-                          "mevedel: skill draft changed during preparation, not sent"))))
+                          (if (eq (plist-get outcome :kind) 'fork)
+                              "mevedel: skill draft changed during preparation; the fork agent's result was discarded"
+                            "mevedel: skill draft changed during preparation, not sent")))))
                  (set-marker delete-start nil)
                  (set-marker region-end nil)))
              :origin 'user)
