@@ -504,7 +504,12 @@ group and sorting agent-owned groups by owner label."
   "Format TASK as a single display line (propertized)."
   (let* ((status (mevedel-task-status task))
          (id (mevedel-task-id task))
-         (subject (mevedel-task-subject task))
+         ;; A very long single-line subject soft-wraps past the status
+         ;; fragment's row budget; bound it the way the activity summary
+         ;; already is.
+         (subject (truncate-string-to-width
+                   (string-clean-whitespace (mevedel-task-subject task))
+                   72 nil nil t))
          (blocked-by (mevedel-task-blocked-by task))
          (activity (mevedel-tool-task--activity-summary task))
          (icon (pcase status

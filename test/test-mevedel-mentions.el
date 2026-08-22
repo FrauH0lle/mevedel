@@ -664,6 +664,23 @@ Returns (buffer . overlay)."
                            (plist-get result :key)))))
       (delete-directory dir t)))
 
+  :doc "a line range on a directory mention is refused, not mislabeled"
+  ;; The placeholder used to claim "lines 1-3 of" a listing.
+  (let ((dir (make-temp-file "mevedel-mention-dir-range-" t)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "alpha.txt" dir) (insert "a"))
+          (let ((result (mevedel--handle-file-mention
+                         (list :match-text (concat "@file:" dir "#L1-3")
+                               :capture dir
+                               :captures (list dir nil "1" "3")
+                               :workspace-root temporary-file-directory))))
+            (should (string-match-p "is a directory"
+                                    (plist-get result :placeholder)))
+            (should-not (string-match-p "listing attached"
+                                        (plist-get result :placeholder)))))
+      (delete-directory dir t)))
+
   :doc "directory listing is truncated when it exceeds the max cap"
   (let* ((dir (make-temp-file "mevedel-dir-" t))
          (mevedel-file-mention-directory-max-entries 3))

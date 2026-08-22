@@ -269,8 +269,11 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
             (setq policy
                   (with-current-buffer
                       (mevedel-context-summary--policy-buffer session)
-                    (append '(:max-tokens nil :request-params nil)
-                            (mevedel-model-resolve-workload 'summarization)))))
+                    ;; Resolver keys must win: `plist-get' returns the
+                    ;; first occurrence, so leading defaults would shadow
+                    ;; a resolved :max-tokens or :request-params.
+                    (append (mevedel-model-resolve-workload 'summarization)
+                            '(:max-tokens nil :request-params nil)))))
           (setq span
                 (and session
                      (fboundp 'mevedel-telemetry-start)

@@ -712,6 +712,15 @@
                "○ #2 verify overlay · blocked by #1, #7" text))
       (should-not (string-match-p "@explorer" text))))
 
+  :doc "bounds a very long single-line subject like the activity summary"
+  (let* ((subject (make-string 300 ?x))
+         (line (substring-no-properties
+                (mevedel-tool-task--format-one
+                 (mevedel-task--create
+                  :id 9 :subject subject :status 'pending)))))
+    (should (< (length line) 90))
+    (should (string-match-p "…" line)))
+
   :doc "uses requested status glyphs and task faces"
   (let* ((done (mevedel-task--create
                 :id 1 :subject "done" :status 'completed))
