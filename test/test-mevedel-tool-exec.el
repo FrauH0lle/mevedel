@@ -170,6 +170,18 @@
                 (plist-get (plist-get envelope :render-data) :state)))
     (should (= 7 (plist-get (plist-get envelope :render-data)
                             :exit-code))))
+  :doc "a process that never started is an error, not a success"
+  ;; Status came from facts alone: with no completed state to judge,
+  ;; a start failure was reported successful with a "Failed to start
+  ;; process" body.
+  (let ((envelope
+         (mevedel-tool-exec--observation-envelope
+          '(:error "spawning child process: no such file"
+                   :facts (:state failed)))))
+    (should (eq 'error (plist-get envelope :status)))
+    (should (string-prefix-p "Failed to start process"
+                             (plist-get envelope :result))))
+
   :doc "keeps trusted injection output clean while retaining hidden facts"
   (let ((envelope
          (mevedel-tool-exec--observation-envelope
