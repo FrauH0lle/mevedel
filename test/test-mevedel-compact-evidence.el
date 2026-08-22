@@ -258,6 +258,30 @@
         (insert "u2\n")
         (should (equal (mevedel-compact-evidence-turn-starts-before limit)
                        (list u1-start))))))
+  :doc "a literal begin_tool in a user prompt hides no later prompts"
+  ;; User text is not structural control: an unbalanced marker typed in
+  ;; a prompt used to open a phantom block, collapsing three turns into
+  ;; one for the prompt index and compaction boundaries.
+  (with-temp-buffer
+    (let ((u1-start (point)))
+      (insert "u1\n")
+      (let ((a1-start (point)))
+        (insert "a1\n")
+        (put-text-property a1-start (point) 'gptel 'response))
+      (let ((u2-start (point)))
+        (insert "u2 look:\n#+begin_tool oops\nstill my prompt\n")
+        (let ((a2-start (point)))
+          (insert "a2\n")
+          (put-text-property a2-start (point) 'gptel 'response))
+        (let ((u3-start (point)))
+          (insert "u3\n")
+          (let ((a3-start (point)))
+            (insert "a3\n")
+            (put-text-property a3-start (point) 'gptel 'response))
+          (should (equal (mevedel-compact-evidence-turn-starts-before
+                          (point-max))
+                         (list u1-start u2-start u3-start)))))))
+
   :doc "skips unpropertized reasoning and tool scaffolding before prompt"
   (with-temp-buffer
     (let ((u1-start (point)))

@@ -139,6 +139,16 @@ uses this to avoid treating restored org marker gaps as assistant prose."
         (or (null text)
             (mevedel-transcript--org-scaffolding-only-text-p text))))))
 
+(defun mevedel-transcript--counted-tool-marker-p (marker-pos)
+  "Return non-nil when the `#+begin_tool' at MARKER-POS is structural.
+A genuine tool block's marker either carries a `gptel' text property (a
+live response or a normalized transcript) or is followed by the
+serialized `(:name ...)' tool plist.  Literal `#+begin_tool' typed
+inside a user prompt has neither; counting it would hide every later
+user prompt from the prompt index and from compaction turn boundaries."
+  (or (get-text-property marker-pos 'gptel)
+      (mevedel-transcript--org-tool-block-start-p marker-pos)))
+
 (defun mevedel-transcript--org-block-depth-before
     (pos block-re &optional start depth)
   "Return nesting depth before POS for org blocks matching BLOCK-RE.
@@ -155,13 +165,17 @@ support accepts."
     (save-restriction
       (widen)
       (let ((depth (or depth 0))
-            (regexp (format "^[ \t]*#\\+\\(begin\\|end\\)_\\(?:%s\\)\\b"
+            (regexp (format "^[ \t]*#\\+\\(begin\\|end\\)_\\(%s\\)\\b"
                             block-re)))
         (goto-char (or start (point-min)))
         (while (re-search-forward regexp pos t)
-          (if (equal (match-string 1) "begin")
-              (cl-incf depth)
-            (setq depth (max 0 (1- depth)))))
+          (cond
+           ((equal (match-string 1) "end")
+            (setq depth (max 0 (1- depth))))
+           ((or (not (equal (match-string 2) "tool"))
+                (mevedel-transcript--counted-tool-marker-p
+                 (match-beginning 0)))
+            (cl-incf depth))))
         depth))))
 
 (defun mevedel-transcript-prompt-scan-state ()
@@ -206,10 +220,13 @@ beginning of the buffer."
                      (line (buffer-substring-no-properties
                             line-start line-end)))
                 (cond
-                 ((string-match-p
-                   "\\`[ \t]*#\\+begin_\\(?:tool\\|reasoning\\)\\b"
+                 ((string-match
+                   "\\`[ \t]*#\\+begin_\\(tool\\|reasoning\\)\\b"
                    line)
-                  (cl-incf tool-depth))
+                  (when (or (not (equal (match-string 1 line) "tool"))
+                            (mevedel-transcript--counted-tool-marker-p
+                             line-start))
+                    (cl-incf tool-depth)))
                  ((string-match-p
                    "\\`[ \t]*#\\+end_\\(?:tool\\|reasoning\\)\\b"
                    line)
