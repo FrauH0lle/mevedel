@@ -259,6 +259,15 @@ composer. Registering or rebuilding an interaction must not auto-focus the
 prompt or move point out of the composer.
 Use `:body-properties-owned` only when the producer supplies complete per-span
 `read-only` and stickiness properties, as ApplyPatch does for inline feedback.
+A descriptor whose UI holds live editable state supplies `:body` as a
+function returning fresh text and recreates its buffer markers in
+`:after-render`; a registration-time snapshot would be redrawn verbatim by
+foreign rebuilds (the control-transfer poll, queue events) and destroy what
+the user typed. `mevedel-view--interaction-rebuild` drops and re-registers
+queue-backed descriptors without rendering the intermediate states: one
+final render reconciles the zone, and a descriptor re-registered under the
+same id reuses its overlay object, so an unchanged rebuild is a no-op that
+leaves zone text, point, and held overlay references untouched.
 Interaction keybindings are active only when point is on the interaction text;
 composer input must never settle or cycle interaction prompts.
 

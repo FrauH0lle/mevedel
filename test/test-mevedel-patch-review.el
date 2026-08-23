@@ -203,6 +203,31 @@ adopt prompt.  Returns the messages the session produced."
                        "unfinished draft"
                        (buffer-substring-no-properties
                         (point-min) mevedel-view--input-marker)))
+              ;; A foreign zone re-render and a queue rebuild (the
+              ;; control-transfer poll path) draw the live draft through
+              ;; the descriptor body function instead of a registration
+              ;; snapshot, and typing continues where it left off.
+              (goto-char (point-min))
+              (search-forward "unfinished draft")
+              (mevedel-view--interaction-render)
+              (should (string-search
+                       "unfinished draft"
+                       (buffer-substring-no-properties
+                        (point-min) mevedel-view--input-marker)))
+              (mevedel-view--interaction-rebuild)
+              (should (string-search
+                       "unfinished draft"
+                       (buffer-substring-no-properties
+                        (point-min) mevedel-view--input-marker)))
+              (goto-char (point-min))
+              (search-forward "unfinished draft")
+              (dolist (c (string-to-list " extended"))
+                (insert-and-inherit c))
+              (mevedel-view--interaction-rebuild)
+              (should (string-search
+                       "unfinished draft extended"
+                       (buffer-substring-no-properties
+                        (point-min) mevedel-view--input-marker)))
               ;; Folding the file must keep the live feedback editor
               ;; rendered so its draft and markers survive redraws.
               (goto-char (point-min))
@@ -1908,6 +1933,49 @@ adopt prompt.  Returns the messages the session produced."
       (plist-put proposal :view-buffer view-buf)
       (with-current-buffer view-buf
         (should (overlayp (mevedel-patch-review--render proposal)))))))
+
+(mevedel-deftest mevedel-patch-review--sync-drafts
+  (:doc "Captures live feedback drafts from field markers") ,test (test)
+  (with-temp-buffer
+    (insert "      note\n")
+    (let* ((target (list :feedback-editing t
+                         :feedback-start (copy-marker 7)
+                         :feedback-end (copy-marker 11 t)))
+           (proposal (list :operations
+                           (list (list :hunks (list target))))))
+      (mevedel-patch-review--sync-drafts proposal)
+      (should (equal "note" (plist-get target :feedback-draft))))))
+
+(mevedel-deftest mevedel-patch-review--refresh-feedback-markers ()
+  ,test
+  (test)
+  :doc "Recreates field markers from the rendered feedback field"
+  (with-temp-buffer
+    (let* ((target (list :feedback-editing t))
+           (proposal (list :operations
+                           (list (list :hunks (list target))))))
+      (insert "      draft\n")
+      (add-text-properties (point-min) (point-max)
+                           (list 'mevedel-patch-feedback-input target))
+      (mevedel-patch-review--refresh-feedback-markers proposal)
+      (should (= 7 (marker-position (plist-get target :feedback-start))))
+      (should (= 12 (marker-position (plist-get target :feedback-end))))))
+
+  :doc "Cancels an edit whose field vanished from the rendering"
+  (with-temp-buffer
+    (let* ((target (list :feedback-editing t
+                         :feedback "typed"
+                         :feedback-original nil
+                         :feedback-draft "typed"
+                         :selected nil
+                         :selected-original t))
+           (proposal (list :operations
+                           (list (list :hunks (list target))))))
+      (mevedel-patch-review--refresh-feedback-markers proposal)
+      (should-not (plist-get target :feedback-editing))
+      (should-not (plist-get target :feedback-draft))
+      (should-not (plist-get target :feedback))
+      (should (plist-get target :selected)))))
 
 (mevedel-deftest mevedel-patch-review--edit-start
   (:doc "An ediff setup error releases its lock and temporary buffers")

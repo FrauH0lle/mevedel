@@ -122,6 +122,14 @@
 (defvar-local mevedel-view--interaction-telemetry-opened nil
   "Hash table of interaction lifecycle metadata retained across redraws.")
 
+(defvar mevedel-view--interaction-render-suppressed nil
+  "Non-nil while a rebuild batches interaction re-registrations.
+`mevedel-view--interaction-render' becomes a no-op so the zone is
+reconciled once by the rebuild's final render.  Rendering the
+intermediate cleared state would delete and reinsert unchanged prompt
+text on every rebuild tick, throwing point out of the fragment the user
+is reading or typing in.")
+
 (defvar-keymap mevedel-view--pending-plan-map
   :doc "Keymap on the pending Plan segment in the interaction counter."
   "RET" #'mevedel-view--show-pending-plan
@@ -372,10 +380,14 @@ clear/teardown paths still remove them."
 
 (defun mevedel-view--interaction-body (descriptor overlay)
   "Return DESCRIPTOR's body with standard interaction text properties.
-OVERLAY is stored on the text as the descriptor's callback handle."
-  (let* ((body (copy-sequence
+OVERLAY is stored on the text as the descriptor's callback handle.
+A function `:body' is called with no arguments at every render so a
+producer with live editable state can supply fresh text instead of a
+snapshot taken at registration."
+  (let* ((raw (plist-get descriptor :body))
+         (body (copy-sequence
                 (mevedel--normalize-message-text
-                 (or (plist-get descriptor :body) ""))))
+                 (or (if (functionp raw) (funcall raw) raw) ""))))
          (map (mevedel-view--display-fragment-keymap
                (plist-get descriptor :keymap)))
          (help (plist-get descriptor :help-echo))
@@ -557,7 +569,14 @@ OVERLAY is stored on the text as the descriptor's callback handle."
                     (gethash id mevedel-view--interaction-descriptors))
          (mevedel-view--interaction-delete-overlay overlay)
          (remhash id mevedel-view--interaction-overlays)))
-     mevedel-view--interaction-overlays)))
+     mevedel-view--interaction-overlays))
+  (when (and (boundp 'mevedel--prompt-overlays)
+             (listp mevedel--prompt-overlays))
+    (setq mevedel--prompt-overlays
+          (seq-filter (lambda (overlay)
+                        (and (overlayp overlay)
+                             (overlay-buffer overlay)))
+                      mevedel--prompt-overlays))))
 
 (defun mevedel-view--interaction-sync-overlays (pairs)
   "Move descriptor callback overlays for PAIRS to fragment bounds."
@@ -578,61 +597,70 @@ OVERLAY is stored on the text as the descriptor's callback handle."
 (defun mevedel-view--interaction-render ()
   "Render interaction-zone fragments and descriptor callback overlays."
   (require 'mevedel-view-zone)
-  (let* ((label (mevedel-view--interaction-count-label))
-         (pairs (mevedel-view--interaction-descriptor-pairs))
-         (render-p (or label pairs
-                       (mevedel-view-zone-region 'interaction))))
-    (mevedel-view--interaction-delete-stale-overlays)
-    (when render-p
-      (let* ((start (mevedel-view--interaction-anchor))
-             (end (max start (mevedel-view--interaction-region-end)))
-             (fragments
-              (append
-               (when label
-                 (list (mevedel-view--interaction-separator-fragment label)))
-               (mapcar
-                (lambda (pair)
-                  (pcase-let ((`(,id . ,descriptor) pair))
-                    (mevedel-view--interaction-fragment id descriptor)))
-                pairs))))
-        (mevedel-view-zone-reconcile 'interaction start end fragments)
-        (mevedel-view--interaction-sync-overlays pairs)))))
+  (unless mevedel-view--interaction-render-suppressed
+    (let* ((label (mevedel-view--interaction-count-label))
+           (pairs (mevedel-view--interaction-descriptor-pairs))
+           (render-p (or label pairs
+                         (mevedel-view-zone-region 'interaction))))
+      (mevedel-view--interaction-delete-stale-overlays)
+      (when render-p
+        (let* ((start (mevedel-view--interaction-anchor))
+               (end (max start (mevedel-view--interaction-region-end)))
+               (fragments
+                (append
+                 (when label
+                   (list (mevedel-view--interaction-separator-fragment label)))
+                 (mapcar
+                  (lambda (pair)
+                    (pcase-let ((`(,id . ,descriptor) pair))
+                      (mevedel-view--interaction-fragment id descriptor)))
+                  pairs))))
+          (mevedel-view-zone-reconcile 'interaction start end fragments)
+          (mevedel-view--interaction-sync-overlays pairs)
+          (dolist (pair pairs)
+            (when-let* ((after (plist-get (cdr pair) :after-render)))
+              (funcall after))))))))
 
 (defun mevedel-view--interaction-rebuild ()
   "Rebuild interaction-zone descriptors from live preview and queue state.
-This deletes only interaction UI overlays and never settles callbacks."
+Descriptors are dropped and re-registered without rendering the
+intermediate states; the single final render reconciles the zone once.
+A descriptor that comes back under the same id reuses its overlay
+object, so an unchanged rebuild leaves the zone text, point, and held
+overlay references untouched.  Callbacks are never settled here."
   (unless mevedel-view--agent-transcript-p
     (require 'mevedel-view-control-transfer)
     (unwind-protect
         (progn
-          (mevedel-view--interaction-clear-for-rebuild)
-          (when-let* ((session (mevedel-view--session)))
-            (when-let ((descriptor
-                        (mevedel-view-control-transfer-current-descriptor)))
-              (mevedel-view--interaction-register descriptor))
-            (when (mevedel-session-pending-plan-approval session)
-              (require 'mevedel-plan-mode)
-              (mevedel-plan-approval-render session))
-            (when (mevedel-session-permission-queue session)
-              (require 'mevedel-permission-queue)
-              (mevedel-permission-queue--render-head session))
-            (when (or (mevedel-session-pending-steering session)
-                      (mevedel-session-pending-follow-ups session)
-                      (mevedel-session-pending-input-failure-paused session))
-              (require 'mevedel-pending-inputs)
-              (mevedel-view--pending-inputs-render session)))
-          (when (hash-table-p mevedel-view--interaction-telemetry-opened)
-            (let (closed)
-              (maphash
-               (lambda (id _metadata)
-                 (unless
-                     (and (hash-table-p
-                           mevedel-view--interaction-descriptors)
-                          (gethash id mevedel-view--interaction-descriptors))
-                   (push id closed)))
-               mevedel-view--interaction-telemetry-opened)
-              (dolist (id closed)
-                (mevedel-view--interaction-telemetry-close id))))
+          (let ((mevedel-view--interaction-render-suppressed t))
+            (mevedel-view--interaction-clear-for-rebuild)
+            (when-let* ((session (mevedel-view--session)))
+              (when-let ((descriptor
+                          (mevedel-view-control-transfer-current-descriptor)))
+                (mevedel-view--interaction-register descriptor))
+              (when (mevedel-session-pending-plan-approval session)
+                (require 'mevedel-plan-mode)
+                (mevedel-plan-approval-render session))
+              (when (mevedel-session-permission-queue session)
+                (require 'mevedel-permission-queue)
+                (mevedel-permission-queue--render-head session))
+              (when (or (mevedel-session-pending-steering session)
+                        (mevedel-session-pending-follow-ups session)
+                        (mevedel-session-pending-input-failure-paused session))
+                (require 'mevedel-pending-inputs)
+                (mevedel-view--pending-inputs-render session)))
+            (when (hash-table-p mevedel-view--interaction-telemetry-opened)
+              (let (closed)
+                (maphash
+                 (lambda (id _metadata)
+                   (unless
+                       (and (hash-table-p
+                             mevedel-view--interaction-descriptors)
+                            (gethash id mevedel-view--interaction-descriptors))
+                     (push id closed)))
+                 mevedel-view--interaction-telemetry-opened)
+                (dolist (id closed)
+                  (mevedel-view--interaction-telemetry-close id)))))
           (mevedel-view--interaction-render))
       (mevedel-view--interaction-sync-active-work-pause))))
 
@@ -724,42 +752,21 @@ This deletes only interaction UI overlays and never settles callbacks."
     (mevedel-view--interaction-render)))
 
 (defun mevedel-view--interaction-clear-for-rebuild ()
-  "Delete rebuild-owned interaction UI while preserving direct prompt UI."
-  (let (remove-ids)
-    (when (hash-table-p mevedel-view--interaction-descriptors)
+  "Drop rebuild-owned interaction descriptors, preserving direct prompt UI.
+Overlays stay registered so a producer that re-registers the same
+interaction id reuses the identical overlay object; held references and
+activity tokens survive an unchanged rebuild.  The next unsuppressed
+render deletes the overlays whose descriptors did not come back and
+prunes them from `mevedel--prompt-overlays'."
+  (when (hash-table-p mevedel-view--interaction-descriptors)
+    (let (remove-ids)
       (maphash
        (lambda (id descriptor)
          (unless (mevedel-view--interaction-preserve-on-rebuild-p descriptor)
            (push id remove-ids)))
-       mevedel-view--interaction-descriptors))
-    (dolist (id remove-ids)
-      (when (hash-table-p mevedel-view--interaction-overlays)
-        (when-let* ((overlay (gethash id
-                                      mevedel-view--interaction-overlays)))
-          (mevedel-view--interaction-delete-overlay overlay))
-        (remhash id mevedel-view--interaction-overlays))
-      (when (hash-table-p mevedel-view--interaction-descriptors)
+       mevedel-view--interaction-descriptors)
+      (dolist (id remove-ids)
         (remhash id mevedel-view--interaction-descriptors))))
-  (when (and (boundp 'mevedel--prompt-overlays)
-             (listp mevedel--prompt-overlays))
-    (let (live)
-      (dolist (ov mevedel--prompt-overlays)
-        (let* ((id (and (overlayp ov)
-                        (overlay-get ov 'mevedel-view-interaction-id)))
-               (descriptor
-                (and id
-                     (hash-table-p mevedel-view--interaction-descriptors)
-                     (gethash id mevedel-view--interaction-descriptors))))
-          (cond
-           ((not (and (overlayp ov) (overlay-buffer ov))))
-           ((and (eq (overlay-buffer ov) (current-buffer))
-                 id
-                 (not (mevedel-view--interaction-preserve-on-rebuild-p
-                       descriptor)))
-            (mevedel-view--interaction-delete-overlay ov))
-           (t
-            (push ov live)))))
-      (setq mevedel--prompt-overlays (nreverse live))))
   (mevedel-view--interaction-render))
 
 (defun mevedel-view--interaction-clear ()

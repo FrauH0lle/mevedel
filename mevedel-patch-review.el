@@ -591,58 +591,72 @@ The whole patch, each operation, and each Update hunk."
                            (copy-sequence (plist-get operation :hunks))))
                    (plist-get proposal :operations))))
 
+(defun mevedel-patch-review--sync-drafts (proposal)
+  "Capture live feedback drafts from their field markers into PROPOSAL."
+  (dolist (target (mevedel-patch-review--feedback-targets proposal))
+    (when-let* (((plist-get target :feedback-editing))
+                (start (plist-get target :feedback-start))
+                (end (plist-get target :feedback-end))
+                ((markerp start))
+                ((markerp end))
+                ((marker-buffer start))
+                ((marker-buffer end)))
+      (plist-put target :feedback-draft
+                 (buffer-substring-no-properties start end)))))
+
+(defun mevedel-patch-review--refresh-feedback-markers (proposal)
+  "Recreate PROPOSAL's feedback field markers from the rendered text."
+  (dolist (target (mevedel-patch-review--feedback-targets proposal))
+    (when (plist-get target :feedback-editing)
+      (let* ((position (text-property-any
+                        (point-min) (point-max)
+                        'mevedel-patch-feedback-input target))
+             (end (and position
+                       (next-single-property-change
+                        position 'mevedel-patch-feedback-input
+                        nil (point-max)))))
+        (mevedel-patch-review--clear-feedback-markers target)
+        (if position
+            (progn
+              (plist-put target :feedback-start
+                         (copy-marker (+ position 6)))
+              (plist-put target :feedback-end
+                         (copy-marker (1- end) t)))
+          ;; The field vanished from the rendering; cancel the edit
+          ;; rather than let stale markers capture garbage drafts.
+          (plist-put target :feedback
+                     (plist-get target :feedback-original))
+          (plist-put target :selected
+                     (plist-get target :selected-original))
+          (plist-put target :feedback-editing nil)
+          (plist-put target :feedback-draft nil))))))
+
 (defun mevedel-patch-review--render (proposal)
-  "Render or redraw PROPOSAL in its view buffer."
+  "Render or redraw PROPOSAL in its view buffer.
+The interaction body is a function so every zone render -- including
+foreign rebuilds such as the control-transfer poll -- draws the live
+review state instead of a stale snapshot that would destroy an active
+feedback draft.  Marker upkeep rides the `:after-render' hook for the
+same reason."
   (with-current-buffer (plist-get proposal :view-buffer)
-    (dolist (target (mevedel-patch-review--feedback-targets proposal))
-      (when-let* (((plist-get target :feedback-editing))
-                  (start (plist-get target :feedback-start))
-                  (end (plist-get target :feedback-end))
-                  ((markerp start))
-                  ((markerp end))
-                  ((marker-buffer start))
-                  ((marker-buffer end)))
-        (plist-put target :feedback-draft
-                   (buffer-substring-no-properties start end))))
-    (let ((overlay
-           (mevedel-view--interaction-register
-            (list :kind 'preview
-                  :id (plist-get proposal :id)
-                  :count 1
-                  :body
-                  (if (eq (plist-get proposal :state) 'submitting)
-                      (propertize
-                       "\nApplyPatch · Applying patch and refreshing diagnostics...\n"
-                       'font-lock-face 'shadow)
-                    (mevedel-patch-review--body proposal))
-                  :priority 300
-                  :read-only (eq (plist-get proposal :state) 'submitting)
-                  :body-properties-owned t))))
-      (dolist (target (mevedel-patch-review--feedback-targets proposal))
-        (when (plist-get target :feedback-editing)
-          (let* ((position (text-property-any
-                            (point-min) (point-max)
-                            'mevedel-patch-feedback-input target))
-                 (end (and position
-                           (next-single-property-change
-                            position 'mevedel-patch-feedback-input
-                            nil (point-max)))))
-            (mevedel-patch-review--clear-feedback-markers target)
-            (if position
-                (progn
-                  (plist-put target :feedback-start
-                             (copy-marker (+ position 6)))
-                  (plist-put target :feedback-end
-                             (copy-marker (1- end) t)))
-              ;; The field vanished from the rendering; cancel the edit
-              ;; rather than let stale markers capture garbage drafts.
-              (plist-put target :feedback
-                         (plist-get target :feedback-original))
-              (plist-put target :selected
-                         (plist-get target :selected-original))
-              (plist-put target :feedback-editing nil)
-              (plist-put target :feedback-draft nil)))))
-      overlay)))
+    (mevedel-view--interaction-register
+     (list :kind 'preview
+           :id (plist-get proposal :id)
+           :count 1
+           :body
+           (lambda ()
+             (mevedel-patch-review--sync-drafts proposal)
+             (if (eq (plist-get proposal :state) 'submitting)
+                 (propertize
+                  "\nApplyPatch · Applying patch and refreshing diagnostics...\n"
+                  'font-lock-face 'shadow)
+               (mevedel-patch-review--body proposal)))
+           :after-render
+           (lambda ()
+             (mevedel-patch-review--refresh-feedback-markers proposal))
+           :priority 300
+           :read-only (eq (plist-get proposal :state) 'submitting)
+           :body-properties-owned t))))
 
 (defun mevedel-patch-review--settle (proposal outcome)
   "Settle PROPOSAL exactly once with OUTCOME."

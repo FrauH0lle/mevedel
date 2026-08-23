@@ -87,8 +87,12 @@ Hunk feedback and feedback on indivisible Add/Delete/Move operations
 deselect their target; file-level feedback on Update files and whole-patch
 feedback leave selection untouched, so comments can ride along with an
 apply. An active feedback editor stays rendered while its file or hunk is
-folded. Add, Delete, and Move operations remain indivisible selection
-units. The primary action states its effect — `Apply N changes in M files`,
+folded, and survives foreign interaction-zone redraws: the review registers
+its body as a function that syncs live drafts from the field markers before
+every render, and recreates those markers in the descriptor's
+`:after-render` hook, so a queue rebuild or control-transfer poll redraw
+never reverts the field to a stale snapshot. Add, Delete, and Move
+operations remain indivisible selection units. The primary action states its effect — `Apply N changes in M files`,
 plus `· send K comments` when feedback is staged, `Request revision · K
 comments` when only feedback is staged, or `Reject patch`. Re-selecting a
 change with feedback asks before clearing that feedback. Selected changes
