@@ -1369,7 +1369,37 @@
                 ((symbol-function 'mevedel-view--interaction-render)
                  #'ignore))
         (mevedel-view--interaction-rebuild)))
-    (should (equal descriptor registered))))
+    (should (equal descriptor registered)))
+
+  :doc "an unchanged rebuild leaves zone text, point, and overlays untouched"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "rebuild-noop"))
+          (descriptor '(:kind permission :id transfer-prompt :origin "/root"
+                        :body "Grant control transfer?"))
+          (draft "> quoted\nsecond line"))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view-test--insert-composer-draft draft 4)
+        (cl-letf (((symbol-function
+                    'mevedel-view-control-transfer-current-descriptor)
+                   (lambda () descriptor)))
+          (mevedel-view--interaction-rebuild)
+          (goto-char (point-min))
+          (search-forward "Grant control")
+          (let ((position (point))
+                (tick (buffer-chars-modified-tick))
+                (overlay (gethash 'transfer-prompt
+                                  mevedel-view--interaction-overlays)))
+            (should (overlayp overlay))
+            (mevedel-view--interaction-rebuild)
+            (mevedel-view--interaction-rebuild)
+            (should (= position (point)))
+            (should (= tick (buffer-chars-modified-tick)))
+            (should (eq overlay (gethash 'transfer-prompt
+                                         mevedel-view--interaction-overlays)))
+            (should (equal draft (mevedel-view--input-text)))))))))
 
 (provide 'test-mevedel-view-interaction)
 ;;; test-mevedel-view-interaction.el ends here
