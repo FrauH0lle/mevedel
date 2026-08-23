@@ -355,11 +355,9 @@ without a cycle check of its own."
             (set (make-local-variable symbol) value)))))
 
 (defun mevedel-preset-restore-session (session &optional buffer)
-  "Rebuild SESSION's selected mevedel preset settings in BUFFER."
-  (with-current-buffer (or buffer (current-buffer))
-    (when-let* ((name (mevedel-session-preset-name session)))
-      (dolist (setting (mevedel-preset-resolve-settings name))
-        (set (make-local-variable (car setting)) (cdr setting))))))
+  "Reapply SESSION's selected preset in BUFFER."
+  (when-let* ((name (mevedel-session-preset-name session)))
+    (mevedel-preset-apply name buffer)))
 
 (defmacro mevedel-with-preset (name &rest body)
   "Run BODY with mevedel preset NAME applied for this request only."

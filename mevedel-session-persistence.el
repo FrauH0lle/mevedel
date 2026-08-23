@@ -69,9 +69,6 @@
 (defvar gptel-display-buffer-action)
 (defvar gptel-system-prompt)
 
-;; `gptel-org'
-(declare-function gptel-org--restore-state "ext:gptel-org" nil)
-
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-active-turn-p "mevedel-agent-control" (session))
 
@@ -1129,7 +1126,7 @@ failures and read-only mode when active."
   "Return a buffer visiting persisted mevedel FILE without `so-long'.
 
 Persisted chat and agent transcript files may contain very long org
-property lines, especially GPTEL_SYSTEM.  Those lines are expected
+property lines, especially GPTEL_BOUNDS.  Those lines are expected
 data, and letting `so-long' replace `org-mode' breaks gptel/org state
 restoration and reveal timers."
   (let* ((so-long-predicate (lambda () nil))
@@ -1279,7 +1276,7 @@ found.  Returns nil; signals `user-error' to abort the restore."
     (buf session workspace segment-path acquired additional-roots
          lifecycle-source &optional artifact-callback)
   "Hydrate fresh restore buffer BUF and return its agent repair count.
-SESSION and WORKSPACE are planted before gptel restores persisted state.
+SESSION and WORKSPACE are planted before mevedel restores persisted state.
 SEGMENT-PATH is reconciled when ACQUIRED owns the session lock.  Additional
 workspace roots and LIFECYCLE-SOURCE restore the saved session environment.
 ARTIFACT-CALLBACK collects remote transcript replacements for one batch."
@@ -1416,9 +1413,9 @@ root for the client doing the restore."
 Loads the sidecar (or, locally, synthesizes a minimal session when the sidecar
 is missing/unreadable), opens the live segment file in a buffer named
 per `mevedel-session-buffer-name', enables `org-mode' and
-`gptel-mode' (the latter triggers gptel's restore of text-property
-bounds and config), hydrates the session struct on the buffer, then
-runs `mevedel--chat-buffer-init-common'.
+`gptel-mode' without gptel's Org-state restore, restores text-property
+bounds through mevedel's transcript path, hydrates the session struct on
+the buffer, then runs `mevedel--chat-buffer-init-common'.
 
 Returns the chat buffer.  If a buffer for this session is already
 alive (matched by session-id), switches to it instead of re-loading.

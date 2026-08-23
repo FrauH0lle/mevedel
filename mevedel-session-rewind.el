@@ -14,9 +14,6 @@
 ;; `diff'
 (declare-function diff "diff" (old new &optional switches no-async))
 
-;; `gptel-org'
-(declare-function gptel-org--restore-state "ext:gptel-org" nil)
-
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-active-turn-p "mevedel-agent-control" (session))
 
@@ -56,6 +53,7 @@
 (declare-function mevedel-session-artifacts-segment-path "mevedel-session-artifacts" (save-path n))
 (declare-function mevedel-session-artifacts-sidecar-path "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds "mevedel-session-artifacts" nil)
+(declare-function mevedel-session-artifacts-strip-gptel-config-properties "mevedel-session-artifacts" nil)
 (declare-function mevedel-session-artifacts-update-prompt-index "mevedel-session-artifacts" (session buffer))
 
 ;; `mevedel-session-codec'
@@ -115,7 +113,6 @@
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties "mevedel-transcript-restore" (&optional only-if-missing))
-(declare-function mevedel-transcript-restore-sanitize-bounds "mevedel-transcript-restore" nil)
 
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
@@ -618,11 +615,12 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
           (when (derived-mode-p 'org-mode)
             (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
               (mevedel--chat-buffer-disable-org-element-cache))
-            ;; Force re-restoration of GPTEL_BOUNDS from the org property.
-            (when (fboundp 'gptel-org--restore-state)
-              (require 'mevedel-transcript-restore)
-              (mevedel-transcript-restore-sanitize-bounds)
-              (gptel-org--restore-state))))
+            ;; Restore GPTEL_BOUNDS text properties so fork-point spans
+            ;; below are locatable.  Only the transcript text matters in
+            ;; this scratch buffer, so gptel's org config restore is
+            ;; deliberately not involved.
+            (require 'mevedel-transcript-restore)
+            (mevedel-transcript-restore-properties)))
         (let* ((id (plist-get target :fork-point-id))
                (fork-point
                 (cl-find id
@@ -639,6 +637,7 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
           (when (< cutoff (point-max))
             (delete-region cutoff (point-max))))
         (mevedel-transcript-restore-properties t)
+        (mevedel-session-artifacts-strip-gptel-config-properties)
         (mevedel-session-artifacts-stabilize-gptel-bounds))
       (setq buffer-file-name nil)
       (set-buffer-modified-p nil))))

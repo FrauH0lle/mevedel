@@ -14,11 +14,9 @@
 ;; `gptel'
 (declare-function gptel--get-buffer-bounds "ext:gptel" nil)
 (declare-function gptel--save-state "ext:gptel" nil)
-(declare-function gptel-get-preset "ext:gptel" (name))
 (declare-function gptel-markdown-cycle-block "ext:gptel" ())
 (declare-function gptel-mode "ext:gptel" (&optional arg))
 (defvar gptel--markdown-block-map)
-(defvar gptel--preset)
 (defvar gptel-system-prompt)
 
 ;; `mevedel-agent-persistence'
@@ -1155,6 +1153,37 @@ END is the position just after the `:END:' line."
           (forward-line 1)
           (insert (format ":%s: %s\n" property value)))))))
 
+(defun mevedel-session-artifacts-strip-gptel-config-properties ()
+  "Delete gptel's request-config Org properties from the current buffer.
+
+Strips every top-level `GPTEL_*' property except `GPTEL_BOUNDS', which
+carries the transcript span classification mevedel itself consumes.
+Mevedel restores model, effort, preset, system prompt, and tools from
+the session sidecar and agent registry, never from Org properties.
+Leaving gptel's copies in the drawer is worse than redundant: gptel's
+send advice (`gptel-org--send-with-props') prefers them over the live
+buffer-locals, so a stale drawer silently overrides a model the user
+changed mid-session.  Matching by prefix instead of by name keeps this
+correct when gptel grows new config properties."
+  (when-let* ((region (mevedel-session-artifacts--property-drawer-region)))
+    (let ((case-fold-search t)
+          names)
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (car region))
+          (while (re-search-forward
+                  "^[ \t]*:\\(GPTEL_\\S-+\\):\\(?:[ \t]+.*\\)?$"
+                  (cdr region) t)
+            (let* ((raw-name (upcase (match-string-no-properties 1)))
+                   (name (if (string-suffix-p "+" raw-name)
+                             (substring raw-name 0 -1)
+                           raw-name)))
+              (unless (equal name "GPTEL_BOUNDS")
+                (push name names))))))
+      (dolist (name (delete-dups names))
+        (mevedel-session-artifacts-property-delete-direct name)))))
+
 (defun mevedel-session-artifacts--with-fast-property-writes (fn)
   "Call FN while routing top-level Org property writes through text helpers."
   (let ((orig-put (symbol-function 'org-entry-put))
@@ -1172,25 +1201,6 @@ END is the position just after the `:END:' line."
                       property)
                    (funcall orig-delete pom property)))))
       (funcall fn))))
-
-
-(defun mevedel-session-artifacts--dynamic-system-preset-p ()
-  "Return non-nil if the current gptel preset can recreate the system prompt.
-
-gptel can use function-valued or dynamic-spec `:system' entries at
-runtime, but its Org persistence evaluates them into a frozen
-`GPTEL_SYSTEM' string.  Mevedel session files should keep the preset
-reference and drop that frozen override only when the preset can
-recreate the system prompt on restore."
-  (when (and (boundp 'gptel--preset)
-             gptel--preset
-             (fboundp 'gptel-get-preset))
-    (when-let* ((preset-spec (gptel-get-preset gptel--preset))
-                ((plist-member preset-spec :system)))
-      (let ((system (plist-get preset-spec :system)))
-        (or (functionp system)
-            (and (consp system)
-                 (keywordp (car system))))))))
 
 (defun mevedel-session-artifacts-stabilize-gptel-bounds ()
   "Rewrite `GPTEL_BOUNDS' until Org property drawer offsets settle.
@@ -1229,39 +1239,34 @@ bounds no longer change."
                  "GPTEL_BOUNDS" serialized))))))))))
 
 (defun mevedel-session-artifacts--save-gptel-state-around (orig-fun &rest args)
-  "Call ORIG-FUN with ARGS without freezing dynamic system prompt values.
+  "Call ORIG-FUN with ARGS, persisting bounds but no request config.
 
 This is an around-advice for `gptel--save-state'.  For non-mevedel
-buffers and static prompts it delegates unchanged.  For retained agents
-and mevedel chat buffers using presets with dynamic `:system' values, it
-removes any existing `GPTEL_SYSTEM' first and dynamically binds
-`gptel-system-prompt' to nil while gptel writes its Org metadata.
-After delegation, it rewrites `GPTEL_BOUNDS' until the saved absolute
+buffers it delegates unchanged.  For retained agents and mevedel chat
+buffers, it dynamically binds `gptel-system-prompt' to nil while gptel
+writes its Org metadata, then strips gptel's request-config properties.
+The sidecar and agent registry are the durable config sources, and stale
+drawer copies would override live buffer-locals through gptel's send
+advice.  Finally it rewrites `GPTEL_BOUNDS' until the saved absolute
 positions match the post-drawer-update buffer.  If the metadata changed
-the buffer size, it shifts the bound view's source coordinates by the same
-amount so disclosures continue to address the intended transcript segments."
+the buffer size, it shifts the bound view's source coordinates by the
+same amount so disclosures continue to address the intended transcript
+segments.  Cleanup also runs when gptel's save fails, so a partial write
+cannot leave stale request configuration behind."
   (require 'mevedel-session-persistence)
   (let ((size-before (buffer-size))
         (mevedel-org-buffer-p
          (and (bound-and-true-p mevedel--session)
               (derived-mode-p 'org-mode))))
-    (prog1
+    (unwind-protect
         (if mevedel-org-buffer-p
             (mevedel-session-artifacts--with-fast-property-writes
              (lambda ()
-               (if (and (or (bound-and-true-p mevedel--agent-invocation)
-                            (mevedel-session-artifacts--dynamic-system-preset-p))
-                        (require 'org nil t))
-                   (save-excursion
-                     (save-restriction
-                       (widen)
-                       (mevedel-session-artifacts-property-delete-direct
-                        "GPTEL_SYSTEM")
-                       (let ((gptel-system-prompt nil))
-                         (apply orig-fun args))))
+               (let ((gptel-system-prompt nil))
                  (apply orig-fun args))))
           (apply orig-fun args))
       (when mevedel-org-buffer-p
+        (mevedel-session-artifacts-strip-gptel-config-properties)
         (mevedel-session-artifacts-stabilize-gptel-bounds)
         (let ((delta (- (buffer-size) size-before)))
           (when (/= delta 0)
@@ -1269,7 +1274,7 @@ amount so disclosures continue to address the intended transcript segments."
              mevedel--session 'rebase-data-sources delta)))))))
 
 (defun mevedel-session-artifacts-install-gptel-save-state-advice ()
-  "Install mevedel's dynamic-system preservation advice for gptel save operations."
+  "Install mevedel's gptel state persistence advice."
   (unless (advice-member-p
            #'mevedel-session-artifacts--save-gptel-state-around
            'gptel--save-state)

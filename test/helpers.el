@@ -63,12 +63,7 @@
     (setq-default gptel-model 'mevedel-test-model)))
 
 (defconst mevedel-test--muted-message-regexps
-  '("\\`gptel chat restored\\.\\'"
-    "\\`Type q to \\(?:restore previous buffer\\|delete help window\\)"
-    ;; gptel reports an unconfigured backend on every send path a test
-    ;; exercises without one.  The suite's default backend covers the cases
-    ;; that need one; the rest are testing something else entirely.
-    "\\`Could not activate gptel backend "
+  '("\\`Type q to \\(?:restore previous buffer\\|delete help window\\)"
     ;; TRAMP narrates its own connection attempts, including the ones a
     ;; mock-method test means to fail.
     "\\`Tramp: "

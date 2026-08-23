@@ -503,7 +503,8 @@ policy, staleness rules, and `$remember` review workflow.
 ## Chat buffer formatting
 
 The data buffer is normally org-mode so gptel can persist
-`GPTEL_BOUNDS` and related state. Tool results containing
+`GPTEL_BOUNDS` (gptel's other config properties are stripped; the
+sidecar owns request configuration). Tool results containing
 `:PROPERTIES:` are escaped with `,` in the data buffer to prevent
 nested-drawer confusion; the rendered view strips those storage
 artifacts where appropriate.

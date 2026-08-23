@@ -640,9 +640,15 @@
             (should (= 0 (mevedel-session-turn-count session)))
             (should-not
              (cdr (assoc 1 (mevedel-session-prompt-index session))))
+            ;; The sidecar owns request config; the rewound transcript
+            ;; must carry no gptel config properties.  Whether an empty
+            ;; drawer or GPTEL_BOUNDS remains after the cutoff is not
+            ;; part of the contract -- the next save recomputes both.
             (with-current-buffer data-buf
-              (should
-               (mevedel-session-artifacts--property-drawer-region)))
+              (should-not
+               (string-match-p
+                ":GPTEL_\\(?:BACKEND\\|MODEL\\|PRESET\\|SYSTEM\\|TOOLS\\):"
+                (buffer-string))))
             (let ((sidecar
                    (mevedel-session-codec-read
                     (mevedel-session-artifacts-sidecar-path

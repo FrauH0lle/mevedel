@@ -106,13 +106,13 @@
 (declare-function mevedel-session-artifacts-find-artifact-noselect
                   "mevedel-session-artifacts"
                   (session logical &optional inspection))
-(declare-function mevedel-session-artifacts-property-delete-direct
-                  "mevedel-session-artifacts" (property))
 (declare-function mevedel-session-artifacts-publish-text
                   "mevedel-session-artifacts"
                   (session path content &optional coding))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds
                   "mevedel-session-artifacts" ())
+(declare-function mevedel-session-artifacts-strip-gptel-config-properties
+                  "mevedel-session-artifacts" nil)
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-update-transcript-entry
@@ -167,6 +167,8 @@
                   "mevedel-transcript" (start end))
 
 ;; `mevedel-transcript-restore'
+(declare-function mevedel-transcript-enable-gptel-mode
+                  "mevedel-transcript-restore" ())
 (declare-function mevedel-transcript-restore-gptel-state
                   "mevedel-transcript-restore" ())
 
@@ -285,8 +287,9 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
       (unless (require 'gptel nil t)
         (kill-buffer buffer)
         (error "Could not load gptel for sub-agent"))
+      (require 'mevedel-transcript-restore)
       (condition-case err
-          (gptel-mode +1)
+          (mevedel-transcript-enable-gptel-mode)
         (error
          (kill-buffer buffer)
          (signal (car err) (cdr err))))
@@ -391,8 +394,7 @@ Return the hydrated conversation buffer."
                 (mevedel-transcript-restore-gptel-state)
                 (mevedel-transcript-normalize-properties)
                 (mevedel-agent-conversation-configure invocation)
-                (mevedel-session-artifacts-property-delete-direct
-                 "GPTEL_SYSTEM")
+                (mevedel-session-artifacts-strip-gptel-config-properties)
                 (mevedel-session-artifacts-stabilize-gptel-bounds)
                 (set-buffer-modified-p nil)))
             buffer)

@@ -316,9 +316,9 @@ turn with no recorded outcome reads as incomplete rather than complete.
 The canonical path is the only model-facing address; storage identities never
 enter collaboration tools or resource addresses. The mailbox remains a
 bounded delivery preview rather than the source of truth for an agent result.
-The frozen configuration is authoritative for the agent's system prompt, so
-agent transcripts omit gptel's redundant expanded `GPTEL_SYSTEM` property
-while retaining `GPTEL_BOUNDS` and the remaining conversation metadata.
+The frozen configuration is authoritative for the agent's request setup, so
+agent transcripts omit all of gptel's request-config Org properties
+while retaining `GPTEL_BOUNDS`.
 Generated task background is ordinary persisted conversation context with its
 own structural type. Follow-ups and agent compaction therefore absorb it
 naturally without replaying or regenerating it.

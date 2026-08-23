@@ -143,14 +143,26 @@ still runs whenever transcript properties are present."
              scan-start (point-max))
         (mevedel-transcript-normalize-properties)))))
 
+(defun mevedel-transcript-enable-gptel-mode ()
+  "Enable `gptel-mode' with gptel's own state restoration disabled.
+
+Mevedel transcripts restore their bounds through
+`mevedel-transcript-restore-properties', and request configuration
+comes from the session sidecar and agent registry, never from Org
+properties -- whose top-level persisted copies mevedel strips.  Letting
+gptel's restore run on a file-visiting transcript would only duplicate
+bounds restoration and complain about the missing backend."
+  (unless (bound-and-true-p gptel-mode)
+    (cl-letf (((symbol-function 'gptel--restore-state) #'ignore))
+      (gptel-mode +1))))
+
 (defun mevedel-transcript-restore-gptel-state ()
   "Restore gptel state without dirtying the current transcript buffer."
   (let ((was-modified (buffer-modified-p)))
     (unwind-protect
         (progn
           (mevedel-transcript-restore-sanitize-bounds)
-          (unless (bound-and-true-p gptel-mode)
-            (gptel-mode +1))
+          (mevedel-transcript-enable-gptel-mode)
           (mevedel-transcript-restore-properties t))
       (set-buffer-modified-p was-modified))))
 

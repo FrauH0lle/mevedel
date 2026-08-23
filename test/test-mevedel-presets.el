@@ -836,20 +836,32 @@
                   (mevedel-session-preset-name mevedel--session))))))
 
 (mevedel-deftest mevedel-preset-restore-session
-  (:doc "rebuilds trusted preset settings without installing persisted keys")
+  (:doc "reapplies trusted gptel and mevedel preset settings from its name")
   ,test
   (test)
   (let ((mevedel-preset--registry nil)
         (gptel--known-presets (copy-tree gptel--known-presets)))
-    (mevedel-define-preset test-preset :test-setting 'registered)
+    (mevedel-define-preset test-preset
+      :system "Trusted system prompt"
+      :temperature 0.25
+      :test-setting 'registered)
     (with-temp-buffer
       (let ((session
              (mevedel-session--create
               :name "test"
               :preset-name 'test-preset)))
-        (mevedel-preset-restore-session session)
+        (cl-letf (((symbol-function 'mevedel-agents--setup-for-request)
+                   #'ignore)
+                  ((symbol-function 'mevedel-preset--setup-deferred)
+                   #'ignore)
+                  ((symbol-function 'mevedel-preset--setup-extras)
+                   #'ignore))
+          (mevedel-preset-restore-session session))
         (should (local-variable-p 'mevedel-test-setting))
         (should (eq 'registered mevedel-test-setting))
+        (should (eq 'test-preset gptel--preset))
+        (should (equal "Trusted system prompt" gptel-system-prompt))
+        (should (= 0.25 gptel-temperature))
         (should-not (local-variable-p 'kill-buffer-hook))))))
 
 (mevedel-deftest mevedel-with-preset

@@ -155,6 +155,8 @@
 (declare-function mevedel-session-artifacts-save
                   "mevedel-session-artifacts"
                   (session buffer &optional settled force))
+(declare-function mevedel-session-artifacts-strip-gptel-config-properties
+                  "mevedel-session-artifacts" nil)
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-release-on-kill
@@ -214,6 +216,10 @@
                   "mevedel-tool-repair" (info))
 (declare-function mevedel-tool-repair-pre-tool-call
                   "mevedel-tool-repair" (info))
+
+;; `mevedel-transcript-restore'
+(declare-function mevedel-transcript-enable-gptel-mode
+                  "mevedel-transcript-restore" ())
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-drain-cancellers "mevedel-turn"
@@ -348,7 +354,8 @@ wiped unless permanent-local."
   (setq-local gptel-org-convert-response nil)
   (setq-local gptel-org-branching-context nil)
   (require 'gptel)
-  (gptel-mode +1))
+  (require 'mevedel-transcript-restore)
+  (mevedel-transcript-enable-gptel-mode))
 
 (defun mevedel-chat-install-request-hooks ()
   "Install buffer-local tool-repair and view-stream request hooks.
@@ -585,6 +592,11 @@ mutation lease."
       (mevedel--chat-buffer-disable-org-element-cache))
     (setq-local gptel-org-convert-response nil)
     (setq-local gptel-org-branching-context nil)
+    ;; A restored segment may still carry gptel's request-config Org
+    ;; properties; gptel's send advice would prefer them over the live
+    ;; buffer-locals set below.  The sidecar is the config source, so
+    ;; delete them on sight.  Fresh buffers have no drawer: no-op.
+    (mevedel-session-artifacts-strip-gptel-config-properties)
     (mevedel-preset-restore-session mevedel--session buf)
     (require 'mevedel-models)
     (mevedel-model-apply-session-policy mevedel--session buf)
@@ -629,8 +641,7 @@ mutation lease."
     ;; ensures handlers can reach the save function.
     (require 'mevedel-view-stream)
     ;; gptel owns its `before-save-hook'; mevedel advises the save
-    ;; function so dynamic preset system prompts are not serialized as
-    ;; frozen `GPTEL_SYSTEM' strings.
+    ;; function so request configuration is kept out of the transcript.
     (mevedel-session-artifacts-install-gptel-save-state-advice)
     ;; Release the session lock when the chat buffer is killed.
     (add-hook 'kill-buffer-hook
