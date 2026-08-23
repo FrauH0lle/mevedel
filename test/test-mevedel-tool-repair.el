@@ -141,6 +141,31 @@
              (mevedel-tool-repair-validate
               tool '(:values (:one 1) :options [1 2]))))))
 
+  :doc "flags numbers outside declared minimum/maximum bounds"
+  (let ((tool
+         (mevedel-tool--create
+          :name "Wait"
+          :args '((timeout_ms integer :optional "Timeout"
+                              :minimum 10000 :maximum 3600000)
+                  (count integer :optional "Count")))))
+    (should-not (mevedel-tool-repair-validate tool '(:timeout_ms 10000)))
+    (should-not (mevedel-tool-repair-validate tool '(:timeout_ms 3600000)))
+    (should-not (mevedel-tool-repair-validate tool '(:count -5)))
+    (should
+     (equal
+      '((:path (timeout_ms) :kind below-minimum :expected 10000
+         :actual integer
+         :schema (:type integer :mevedel-optional t
+                  :minimum 10000 :maximum 3600000)))
+      (mevedel-tool-repair-validate tool '(:timeout_ms 9999))))
+    (let ((issues (mevedel-tool-repair-validate tool '(:timeout_ms 3600001))))
+      (should (equal '(above-maximum)
+                     (mapcar (lambda (issue) (plist-get issue :kind))
+                             issues)))
+      (should (string-match-p
+               "value must be at most 3600000"
+               (mevedel-tool-repair-format-issues tool issues)))))
+
   :doc "fails closed for unsupported schema types"
   (let ((tool
          (mevedel-tool--create
@@ -440,6 +465,48 @@
     (should
      (eq 'empty-array-placeholder
          (plist-get (car (plist-get outcome :repairs)) :rule))))
+
+  :doc "clamps numbers to the declared range and reports the repair"
+  (let* ((tool
+          (mevedel-tool--create
+           :name "Wait"
+           :args '((timeout_ms integer :optional "Timeout"
+                               :minimum 10000 :maximum 3600000))))
+         (input (list :timeout_ms 5000))
+         (outcome (mevedel-tool-repair-attempt tool input)))
+    (should (eq 'repaired (plist-get outcome :status)))
+    (should (equal '(:timeout_ms 10000) (plist-get outcome :args)))
+    (should
+     (equal 'clamp-range
+            (plist-get (car (plist-get outcome :repairs)) :rule)))
+    (should (string-match-p
+             "declared minimum 10000"
+             (plist-get (car (plist-get outcome :repairs)) :summary)))
+    (should (equal '(:timeout_ms 5000) input))
+    (let ((outcome (mevedel-tool-repair-attempt tool '(:timeout_ms 9999999))))
+      (should (equal '(:timeout_ms 3600000) (plist-get outcome :args)))
+      (should (string-match-p
+               "declared maximum 3600000"
+               (plist-get (car (plist-get outcome :repairs)) :summary))))
+    (should (eq 'valid
+                (plist-get (mevedel-tool-repair-attempt
+                            tool '(:timeout_ms 30000))
+                           :status))))
+
+  :doc "parses a numeric string and then clamps it in the same pass"
+  (let* ((tool
+          (mevedel-tool--create
+           :name "Bash"
+           :args '((yield_time_ms integer :optional "Yield"
+                                  :minimum 250 :maximum 30000))))
+         (outcome
+          (mevedel-tool-repair-attempt tool '(:yield_time_ms "999999"))))
+    (should (eq 'repaired (plist-get outcome :status)))
+    (should (equal '(:yield_time_ms 30000) (plist-get outcome :args)))
+    (should
+     (equal '(parse-json-value clamp-range)
+            (mapcar (lambda (record) (plist-get record :rule))
+                    (plist-get outcome :repairs)))))
 
   :doc "abandons all tentative changes when final validation fails"
   (let* ((tool

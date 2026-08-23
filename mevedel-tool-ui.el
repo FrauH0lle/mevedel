@@ -461,7 +461,8 @@
     :prompt-file "tools/waitagent.md"
     :handler #'mevedel-tool-ui--wait-agent
     :args ((timeout_ms integer :optional
-                       "Timeout in milliseconds, clamped to 10000-3600000; omitted or invalid values default to 30000."))
+                       "Timeout in milliseconds; omitted values default to 30000, out-of-range numeric values clamp to 10000-3600000, and unrepairable values are rejected."
+                       :minimum 10000 :maximum 3600000))
     :async-p t
     :read-only-p t
     :groups (util)

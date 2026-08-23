@@ -111,11 +111,20 @@ The generic repair catalogue is deliberately small and ordered:
 4. replace an empty object placeholder with an empty array only for optional
    arrays that permit zero items;
 5. unwrap an exact Markdown HTTP(S) auto-link in the final component of a
-   semantic filesystem path.
+   semantic filesystem path;
+6. clamp a number to the `:minimum`/`:maximum` bounds its argument declares
+   in the tool arg DSL (the same bounds the provider schema advertises).
 
 Repairs never invent required values and do not coerce arbitrary strings to
 numbers or booleans: the JSON parser must consume the exact input and the
-result must validate. Required `null` and required empty-object placeholders
+result must validate, tolerating only range issues the clamp rule fixes in a
+later step of the same pass. Clamping is not invention: the bound is declared
+schema data, the repair is deterministic, and it is always reported in the
+corrective note and telemetry. This replaces Bash and WaitAgent's silent
+static clamps. WriteStdin advertises the union of its input and poll ranges;
+its `chars`-dependent bounds remain handler policy and requested-versus-
+effective telemetry.
+Required `null` and required empty-object placeholders
 therefore remain invalid. Generic repairs run as one bounded, ordered pass.
 The entire candidate is committed only when final validation succeeds;
 otherwise the model gets bounded, value-free retry guidance and no tentative
@@ -609,8 +618,9 @@ followed by KILL to the whole group. On Windows it terminates the direct child.
 The result includes partial combined stdout/stderr and structured termination
 facts.
 
-Bash waits up to `yield_time_ms` (10 seconds by default, clamped to
-250-30000ms; malformed values fall back to the default). A command
+Bash waits up to `yield_time_ms` (10 seconds by default; the declared
+250-30000ms schema range is enforced by the input-repair clamp with a
+corrective note, and a non-numeric value is rejected by validation). A command
 that finishes first returns normally and discards its temporary spool when all
 output fits inline. A command still running at the boundary returns its unread
 output and an opaque owner-scoped execution ID. Local sessions retain a session
@@ -630,8 +640,10 @@ PTY and Interrupt requests there; Stop remains available for the direct child.
 If the managed spool cannot be written, mevedel records the file error,
 settles with `output-write-failed`, and starts the same bounded TERM/KILL path;
 unwritten chunks never advance output counters or previews.
-Empty `WriteStdin` polls default to 5000ms and clamp positive shorter waits to
-5000ms; the maximum is 300000ms. `WriteStdin` sends ordinary input only to
+WriteStdin advertises a static 250-300000ms union range. Empty polls default
+to 5000ms and use 5000-300000ms; input writes default to 250ms and use
+250-30000ms. These mode-dependent bounds remain handler policy because they
+depend on `chars`. `WriteStdin` sends ordinary input only to
 PTYs. Unconfined Ctrl-C is
 written through PTYs or signals pipe-mode process groups; confined Ctrl-C
 instead signals the foreground process group once across Bubblewrap's session

@@ -61,15 +61,6 @@ recommends those elements while leaving Codex room to choose the next action.
 
 ## Inbox
 
-- ApplyPatch follow-up (deferred while landing the tracer bullet): teach the
-  repair pipeline numeric ranges: `:minimum`/`:maximum` in the tool arg DSL
-  plus a clamp-range repair rule, so range clamping (Bash `yield_time_ms`,
-  WaitAgent `timeout_ms`) becomes model-visible and telemetry'd instead of
-  silent handler policy. (Dropped from this list 2026-08-23: live streaming
-  patch preview — review happens after generation anyway; cumulative
-  turn/session diff view — magit on the session worktree already is the
-  turn diff.)
-
 - Add a memory-verification slash command or skill that consolidates project
   memories and checks whether they are still accurate; explore whether a
   weekly automated check is useful. See also "/learn" command
