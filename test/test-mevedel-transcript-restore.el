@@ -174,5 +174,31 @@
       (should (eq (get-text-property (match-beginning 0) 'gptel)
                   'response)))))
 
+(mevedel-deftest mevedel-transcript-enable-gptel-mode ()
+  ,test
+  (test)
+  :doc "enables gptel-mode without gptel restoring config from the drawer"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n"
+            ":GPTEL_BACKEND: stale-backend\n"
+            ":GPTEL_MODEL: stale-model\n"
+            ":GPTEL_BOUNDS: ((response (2 3)))\n"
+            ":END:\n"
+            "Body\n")
+    ;; gptel only restores state for file-visiting buffers; fake a name
+    ;; without ever writing it so the suppression path is exercised.
+    (setq buffer-file-name
+          (file-name-concat temporary-file-directory
+                            "mevedel-test-restore.chat.org"))
+    (set-buffer-modified-p nil)
+    (let (restore-reached)
+      (cl-letf (((symbol-function 'gptel--restore-state)
+                 (lambda () (setq restore-reached t))))
+        (mevedel-test--with-captured-diagnostics nil
+          (mevedel-transcript-restore-gptel-state)))
+      (should (bound-and-true-p gptel-mode))
+      (should-not restore-reached))))
+
 (provide 'test-mevedel-transcript-restore)
 ;;; test-mevedel-transcript-restore.el ends here

@@ -148,7 +148,8 @@ to `v0.5.3`; older sessions are intentionally rejected rather than migrated.
 A Session Fork also copies the source session's permission mode,
 sandbox mode, session permission rules, and exact resource grants at the fork
 point. Parent and child then diverge independently.
-gptel's other buffer-local settings continue to use its Org persistence.
+Other gptel buffer-local settings are request-time state only; mevedel does
+not persist them as Org properties.
 An Agent `summary` selection is persisted only in the child transcript as a
 labelled `<task-background>` block before the authoritative Agent Task. The
 parent sidecar and tool result retain only provider/model/effort metadata, not
@@ -761,7 +762,7 @@ rather than recounted from the start of the buffer per turn, which matters
 because the rebuild runs on every settled save and a live segment is
 bounded only by the compaction threshold.
 
-After gptel restores persisted bounds, session restoration calls
+After mevedel restores persisted bounds, session restoration calls
 `mevedel-transcript-normalize-properties`. The transcript module reapplies
 properties from its canonical structural ranges; persistence does not parse
 transcript control forms itself.
@@ -783,10 +784,17 @@ Portable project hook and repair appends share the session publication serialize
 replace their target logs atomically, while failed diagnostic staging is
 discarded and the in-memory entries remain queued.
 
-For mevedel chat buffers with dynamic preset system prompts, save-time
-advice around `gptel--save-state` removes frozen `GPTEL_SYSTEM`
-metadata. Restored sessions keep the preset reference and rebuild the
-system prompt dynamically.
+For mevedel chat buffers, save-time advice around `gptel--save-state`
+strips every gptel request-config Org property (`GPTEL_BACKEND`,
+`GPTEL_MODEL`, `GPTEL_PRESET`, `GPTEL_SYSTEM`, effort, tools, and the
+rest), keeping only `GPTEL_BOUNDS`. The sidecar is the sole durable
+source of session request configuration; a stale drawer copy would
+otherwise override live buffer-locals through gptel's send advice
+(`gptel-org--send-with-props`), silently undoing a mid-session model
+change. The same strip runs at chat-buffer init and agent hydration so
+segments persisted with the old format are cleaned on sight. Restored
+sessions rebuild model, effort, and preset from the sidecar
+(`mevedel-model-apply-session-policy`, `mevedel-preset-restore-session`).
 
 ### Resume contract
 

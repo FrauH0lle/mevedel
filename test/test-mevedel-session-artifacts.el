@@ -1218,36 +1218,10 @@
         (mevedel-workspace-clear-registry)))))
 
 
-(mevedel-deftest mevedel-session-artifacts--dynamic-system-preset-p ()
-  ,test
-  (test)
-  :doc "detects function-valued system presets"
-  (let ((gptel--preset 'mevedel-test-dynamic))
-    (cl-letf (((symbol-function 'gptel-get-preset)
-               (lambda (preset)
-                 (when (eq preset 'mevedel-test-dynamic)
-                   `(:system ,(lambda () "Dynamic prompt"))))))
-      (should (mevedel-session-artifacts--dynamic-system-preset-p))))
-  :doc "detects dynamic-spec system presets"
-  (let ((gptel--preset 'mevedel-test-dynamic-spec))
-    (cl-letf (((symbol-function 'gptel-get-preset)
-               (lambda (preset)
-                 (when (eq preset 'mevedel-test-dynamic-spec)
-                   '(:system (:eval (mevedel-system-build-prompt)))))))
-      (should (mevedel-session-artifacts--dynamic-system-preset-p))))
-  :doc "ignores static string system presets"
-  (let ((gptel--preset 'mevedel-test-static))
-    (cl-letf (((symbol-function 'gptel-get-preset)
-               (lambda (preset)
-                 (when (eq preset 'mevedel-test-static)
-                   '(:system "Static prompt")))))
-      (should-not (mevedel-session-artifacts--dynamic-system-preset-p)))))
-
-
 (mevedel-deftest mevedel-session-artifacts--save-gptel-state-around ()
   ,test
   (test)
-  :doc "removes frozen GPTEL_SYSTEM before delegated save for dynamic presets"
+  :doc "hides the system prompt from the delegated save and strips its metadata"
   (let ((root (make-temp-file "mevedel-test-proj-" t)))
     (unwind-protect
         (with-temp-buffer
@@ -1258,22 +1232,15 @@
                        (test-mevedel-session-persistence--make-workspace root)))
           (let ((gptel-system-prompt "Frozen prompt")
                 delegated-system
-                system-present-at-delegate
                 orig-fun)
             (setq orig-fun
                   (lambda ()
                     (setq delegated-system gptel-system-prompt)
-                    (setq system-present-at-delegate
-                          (org-entry-get (point-min) "GPTEL_SYSTEM"))
                     (org-entry-put (point-min) "GPTEL_BOUNDS"
                                    "((response (42 55)))")))
             (org-entry-put (point-min) "GPTEL_SYSTEM" "Frozen prompt")
-            (cl-letf (((symbol-function
-                        'mevedel-session-artifacts--dynamic-system-preset-p)
-                       (lambda () t)))
-              (mevedel-session-artifacts--save-gptel-state-around orig-fun))
+            (mevedel-session-artifacts--save-gptel-state-around orig-fun)
             (should-not delegated-system)
-            (should-not system-present-at-delegate)
             (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
             (should-not (org-entry-get (point-min) "GPTEL_BOUNDS"))))
       (when (file-directory-p root)
@@ -1288,17 +1255,11 @@
                       (mevedel-session-create
                        "main"
                        (test-mevedel-session-persistence--make-workspace root)))
-          (let ((gptel-system-prompt "Frozen prompt")
-                seen-system)
-            (cl-letf (((symbol-function
-                          'mevedel-session-artifacts--dynamic-system-preset-p)
-                         (lambda () t))
-                        ((symbol-function 'gptel--get-buffer-bounds)
+          (let ((gptel-system-prompt "Frozen prompt"))
+            (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
                          (lambda () nil)))
               (mevedel-session-artifacts--save-gptel-state-around
-               (lambda ()
-                 (setq seen-system (org-entry-get (point-min) "GPTEL_SYSTEM")))))
-            (should-not seen-system)
+               (lambda () nil)))
             (let ((text (buffer-substring-no-properties
                          (point-min) (point-max))))
               (should-not (string-match-p "GPTEL_SYSTEM" text))
@@ -1320,10 +1281,7 @@
                        "main"
                        (test-mevedel-session-persistence--make-workspace root)))
           (let ((gptel-system-prompt "Frozen prompt"))
-            (cl-letf (((symbol-function
-                          'mevedel-session-artifacts--dynamic-system-preset-p)
-                         (lambda () t))
-                        ((symbol-function 'gptel--get-buffer-bounds)
+            (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
                          (lambda () nil)))
               (mevedel-session-artifacts--save-gptel-state-around
                (lambda () nil))))
@@ -1354,10 +1312,7 @@
                    (lambda ()
                      (org-entry-put (point-min) "GPTEL_MODEL" "fake-model")
                      (org-entry-delete (point-min) "GPTEL_SYSTEM"))))
-              (cl-letf (((symbol-function
-                          'mevedel-session-artifacts--dynamic-system-preset-p)
-                         (lambda () nil))
-                        ((symbol-function 'gptel--get-buffer-bounds)
+              (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
                          (lambda () `((response (,start ,end)))))
                         ((symbol-function 'org-entry-put)
                          (lambda (&rest _)
@@ -1369,8 +1324,11 @@
                  orig-fun)))
             (let ((text (buffer-substring-no-properties
                          (point-min) (point-max))))
-              (should (string-match-p ":GPTEL_MODEL: fake-model" text))
+              ;; The routed GPTEL_MODEL write succeeded (the slow Org
+              ;; stubs would have signaled), and cleanup then
+              ;; stripped it as request config.
               (should (string-match-p ":GPTEL_BOUNDS: " text))
+              (should-not (string-match-p ":GPTEL_MODEL:" text))
               (should-not (string-match-p ":GPTEL_SYSTEM:" text)))))
       (when (file-directory-p root)
         (delete-directory root t))))
@@ -1394,17 +1352,14 @@
                   (lambda ()
                     (org-entry-put (point-min) "GPTEL_BOUNDS"
                                    "((response (1 2)))")))
-            (cl-letf (((symbol-function
-                        'mevedel-session-artifacts--dynamic-system-preset-p)
-                       (lambda () nil)))
-              (mevedel-session-artifacts--save-gptel-state-around orig-fun))
+            (mevedel-session-artifacts--save-gptel-state-around orig-fun)
             (pcase-let ((`((response (,beg ,stored-end)))
                          (read (org-entry-get (point-min) "GPTEL_BOUNDS"))))
               (should (= beg (marker-position start)))
               (should (= stored-end (marker-position end))))))
       (when (file-directory-p root)
         (delete-directory root t))))
-  :doc "delegates unchanged for non-dynamic presets"
+  :doc "hides static system prompts while delegating, then strips gptel config"
   (let ((root (make-temp-file "mevedel-test-proj-" t)))
     (unwind-protect
         (with-temp-buffer
@@ -1423,14 +1378,10 @@
                     (setq system-present-at-delegate
                           (org-entry-get (point-min) "GPTEL_SYSTEM"))))
             (org-entry-put (point-min) "GPTEL_SYSTEM" "Frozen prompt")
-            (cl-letf (((symbol-function
-                        'mevedel-session-artifacts--dynamic-system-preset-p)
-                       (lambda () nil)))
-              (mevedel-session-artifacts--save-gptel-state-around orig-fun))
-            (should (equal "Custom prompt" delegated-system))
+            (mevedel-session-artifacts--save-gptel-state-around orig-fun)
+            (should-not delegated-system)
             (should (equal "Frozen prompt" system-present-at-delegate))
-            (should (equal "Frozen prompt"
-                           (org-entry-get (point-min) "GPTEL_SYSTEM")))))
+            (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))))
       (when (file-directory-p root)
         (delete-directory root t))))
   :doc "rebases a live view when gptel metadata shifts transcript positions"
@@ -1455,20 +1406,106 @@
                   (progn
                     (insert "Transcript body\n")
                     (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
-                               (lambda () nil))
+                               (lambda () '((response (1 2)))))
                               ((symbol-function
                                 'mevedel-view--rebase-data-sources)
                                (lambda (delta) (push delta deltas))))
                       (mevedel-session-artifacts--save-gptel-state-around
                        (lambda ()
-                         (org-entry-put (point-min) "GPTEL_MODEL"
-                                        "fake-model"))))
+                         (org-entry-put (point-min) "GPTEL_BOUNDS"
+                                        "((response (1 2)))"))))
                     (should (= 1 (length deltas)))
                     (should-not (= 0 (car deltas))))
                 (mevedel-session-control-transfer-unregister-observer
                  t observer)))))
       (when (buffer-live-p view)
-        (kill-buffer view)))))
+        (kill-buffer view))))
+  :doc "strips gptel request-config properties after delegation, keeping bounds"
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (setq-local mevedel--session
+                      (mevedel-session-create
+                       "main"
+                       (test-mevedel-session-persistence--make-workspace root)))
+          (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
+                     (lambda () '((response (1 2))))))
+            (mevedel-session-artifacts--save-gptel-state-around
+             (lambda ()
+               ;; Mimic `gptel-org-set-properties' + bounds.
+               (org-entry-put (point-min) "GPTEL_BACKEND" "Codex")
+               (org-entry-put (point-min) "GPTEL_MODEL" "gpt-5.6-sol")
+               (org-entry-put (point-min) "GPTEL_REASONING_EFFORT" "max")
+               (org-entry-put (point-min) "GPTEL_PRESET" "mevedel-implement")
+               (org-entry-put (point-min) "GPTEL_TOOLS" "Read Bash")
+               (org-entry-put (point-min) "GPTEL_BOUNDS"
+                              "((response (1 2)))"))))
+          (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+            (should (string-match-p ":GPTEL_BOUNDS: " text))
+            (should-not (string-match-p ":GPTEL_BACKEND:" text))
+            (should-not (string-match-p ":GPTEL_MODEL:" text))
+            (should-not (string-match-p ":GPTEL_REASONING_EFFORT:" text))
+            (should-not (string-match-p ":GPTEL_PRESET:" text))
+            (should-not (string-match-p ":GPTEL_TOOLS:" text))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "strips partial config writes when the delegated save fails"
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (setq-local mevedel--session
+                      (mevedel-session-create
+                       "main"
+                       (test-mevedel-session-persistence--make-workspace root)))
+          (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
+                     (lambda () nil)))
+            (should-error
+             (mevedel-session-artifacts--save-gptel-state-around
+              (lambda ()
+                (org-entry-put (point-min) "GPTEL_MODEL" "stale-model")
+                (error "Delegated save failed")))
+             :type 'error))
+          (should-not (string-match-p ":GPTEL_MODEL:" (buffer-string))))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
+(mevedel-deftest mevedel-session-artifacts-strip-gptel-config-properties ()
+  ,test
+  (test)
+  :doc "deletes every gptel config property while keeping GPTEL_BOUNDS"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n"
+            ":GPTEL_BACKEND: Codex\n"
+            ":GPTEL_MODEL: gpt-5.6-sol\n"
+            ":GPTEL_REASONING_EFFORT: max\n"
+            ":GPTEL_PRESET: mevedel-implement\n"
+            ":GPTEL_SYSTEM: Frozen prompt\n"
+            ":GPTEL_TEMPERATURE: 0.7\n"
+            ":GPTEL_MAX_TOKENS: 4096\n"
+            ":GPTEL_NUM_MESSAGES_TO_SEND: 4\n"
+            ":GPTEL_TOOLS: Read Bash\n"
+            ":GPTEL_FUTURE2: x\n"
+            ":GPTEL_FUTURE-V3: y\n"
+            ":GPTEL_FUTURE+V4: z\n"
+            ":GPTEL_BOUNDS:EXTRA: w\n"
+            ":GPTEL_BOUNDS: ((response (1 2)))\n"
+            ":END:\n"
+            "Body\n")
+    (mevedel-session-artifacts-strip-gptel-config-properties)
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p ":GPTEL_BOUNDS: ((response (1 2)))" text))
+      (should (string-match-p "Body" text))
+      (should-not (string-match-p ":GPTEL_\\(?:BACKEND\\|MODEL\\|REASONING_EFFORT\\|PRESET\\|SYSTEM\\|TEMPERATURE\\|MAX_TOKENS\\|NUM_MESSAGES_TO_SEND\\|TOOLS\\|FUTURE2\\|FUTURE-V3\\|FUTURE\\+V4\\|BOUNDS:EXTRA\\):" text))))
+  :doc "no-ops in a buffer without a property drawer"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Body\n")
+    (mevedel-session-artifacts-strip-gptel-config-properties)
+    (should (equal "Body\n"
+                   (buffer-substring-no-properties (point-min) (point-max))))))
 
 
 (mevedel-deftest mevedel-session-artifacts--file-history-path-hash ()

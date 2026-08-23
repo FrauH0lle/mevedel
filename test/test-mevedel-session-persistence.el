@@ -6,6 +6,9 @@
 
 ;;; Code:
 
+;; `gptel'
+(defvar gptel--known-presets)
+
 (require 'mevedel-session-test-support
          (file-name-concat
           (file-name-directory
@@ -4051,7 +4054,10 @@
                                (setq displayed buffer)
                                buffer)))
                     (let ((mevedel-preset--registry
-                           '((test-preset :parents nil :settings nil))))
+                           '((test-preset :parents nil :settings nil)))
+                          (gptel--known-presets
+                           (cons '(test-preset :description "Test")
+                                 gptel--known-presets)))
                       (mevedel))))
                 (should (buffer-live-p displayed))
                 (setq restored
