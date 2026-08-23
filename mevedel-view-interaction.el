@@ -631,38 +631,38 @@ overlay references untouched.  Callbacks are never settled here."
   (unless mevedel-view--agent-transcript-p
     (require 'mevedel-view-control-transfer)
     (unwind-protect
-        (progn
-          (let ((mevedel-view--interaction-render-suppressed t))
-            (mevedel-view--interaction-clear-for-rebuild)
-            (when-let* ((session (mevedel-view--session)))
-              (when-let ((descriptor
-                          (mevedel-view-control-transfer-current-descriptor)))
-                (mevedel-view--interaction-register descriptor))
-              (when (mevedel-session-pending-plan-approval session)
-                (require 'mevedel-plan-mode)
-                (mevedel-plan-approval-render session))
-              (when (mevedel-session-permission-queue session)
-                (require 'mevedel-permission-queue)
-                (mevedel-permission-queue--render-head session))
-              (when (or (mevedel-session-pending-steering session)
-                        (mevedel-session-pending-follow-ups session)
-                        (mevedel-session-pending-input-failure-paused session))
-                (require 'mevedel-pending-inputs)
-                (mevedel-view--pending-inputs-render session)))
-            (when (hash-table-p mevedel-view--interaction-telemetry-opened)
-              (let (closed)
-                (maphash
-                 (lambda (id _metadata)
-                   (unless
-                       (and (hash-table-p
-                             mevedel-view--interaction-descriptors)
-                            (gethash id mevedel-view--interaction-descriptors))
-                     (push id closed)))
-                 mevedel-view--interaction-telemetry-opened)
-                (dolist (id closed)
-                  (mevedel-view--interaction-telemetry-close id)))))
-          (mevedel-view--interaction-render))
-      (mevedel-view--interaction-sync-active-work-pause))))
+        (let ((mevedel-view--interaction-render-suppressed t))
+          (mevedel-view--interaction-clear-for-rebuild)
+          (when-let* ((session (mevedel-view--session)))
+            (when-let ((descriptor
+                        (mevedel-view-control-transfer-current-descriptor)))
+              (mevedel-view--interaction-register descriptor))
+            (when (mevedel-session-pending-plan-approval session)
+              (require 'mevedel-plan-mode)
+              (mevedel-plan-approval-render session))
+            (when (mevedel-session-permission-queue session)
+              (require 'mevedel-permission-queue)
+              (mevedel-permission-queue--render-head session))
+            (when (or (mevedel-session-pending-steering session)
+                      (mevedel-session-pending-follow-ups session)
+                      (mevedel-session-pending-input-failure-paused session))
+              (require 'mevedel-pending-inputs)
+              (mevedel-view--pending-inputs-render session)))
+          (when (hash-table-p mevedel-view--interaction-telemetry-opened)
+            (let (closed)
+              (maphash
+               (lambda (id _metadata)
+                 (unless
+                     (and (hash-table-p
+                           mevedel-view--interaction-descriptors)
+                          (gethash id mevedel-view--interaction-descriptors))
+                   (push id closed)))
+               mevedel-view--interaction-telemetry-opened)
+              (dolist (id closed)
+                (mevedel-view--interaction-telemetry-close id)))))
+      (unwind-protect
+          (mevedel-view--interaction-render)
+        (mevedel-view--interaction-sync-active-work-pause)))))
 
 (defun mevedel-view--interaction-register (descriptor)
   "Register DESCRIPTOR in the interaction zone and return its overlay."
@@ -726,7 +726,8 @@ overlay references untouched.  Callbacks are never settled here."
     (puthash id descriptor mevedel-view--interaction-descriptors)
     (puthash id overlay mevedel-view--interaction-overlays)
     (mevedel-view--interaction-apply-overlay-properties overlay descriptor)
-    (mevedel-view--interaction-sync-active-work-pause)
+    (unless mevedel-view--interaction-render-suppressed
+      (mevedel-view--interaction-sync-active-work-pause))
     (mevedel-view--interaction-render)
     (mevedel-view--debug-log
      'interaction-register-end

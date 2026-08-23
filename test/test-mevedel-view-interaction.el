@@ -1399,7 +1399,73 @@
             (should (= tick (buffer-chars-modified-tick)))
             (should (eq overlay (gethash 'transfer-prompt
                                          mevedel-view--interaction-overlays)))
-            (should (equal draft (mevedel-view--input-text)))))))))
+            (should (equal draft (mevedel-view--input-text))))))))
+
+  :doc "a queue rebuild does not toggle active progress through transfer UI"
+  (let ((mevedel-view-spinner-animate nil))
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-session--create
+                       :name "rebuild-progress"
+                       :permission-mode 'ask))
+             (request (mevedel-request--create
+                       :session session :started-at (current-time)))
+             (entry (list :kind 'generic
+                          :tool-name "Read"
+                          :specifier-value "/tmp/file.txt"
+                          :include-always nil
+                          :origin "/root"
+                          :session session
+                          :callback #'ignore)))
+        (setf (mevedel-session-permission-queue session) (list entry))
+        (with-current-buffer data-buf
+          (setq-local mevedel--session session
+                      mevedel--current-request request))
+        (with-current-buffer view-buf
+          (setq-local mevedel--session session)
+          (mevedel-view--start-spinner "Working...")
+          (cl-letf (((symbol-function
+                      'mevedel-view-control-transfer-current-descriptor)
+                     (lambda ()
+                       '(:kind control-transfer :id control-transfer
+                         :body "Transfer status")))
+                    ((symbol-function 'mevedel-view--spinner-elapsed-label)
+                     (lambda () nil)))
+            (mevedel-view--interaction-rebuild)
+            (goto-char (point-min))
+            (search-forward "Permission Request")
+            (let ((position (point))
+                  (tick (buffer-chars-modified-tick))
+                  (pause-started
+                   (mevedel-request-active-work-pause-started-at request)))
+              (should pause-started)
+              (mevedel-view--interaction-rebuild)
+              (should (= position (point)))
+              (should (= tick (buffer-chars-modified-tick)))
+              (should (equal
+                       pause-started
+                       (mevedel-request-active-work-pause-started-at
+                        request)))))))))
+
+  :doc "a producer error still reconciles the partially rebuilt zone"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "rebuild-error")))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--interaction-register
+         '(:kind permission :id stale :body "stale permission"))
+        (cl-letf (((symbol-function
+                    'mevedel-view-control-transfer-current-descriptor)
+                   (lambda () (error "Producer failed"))))
+          (should-error (mevedel-view--interaction-rebuild)
+                        :type 'error))
+        (should-not (gethash 'stale mevedel-view--interaction-descriptors))
+        (should-not (gethash 'stale mevedel-view--interaction-overlays))
+        (should-not (string-search
+                     "stale permission"
+                     (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker)))))))
 
 (provide 'test-mevedel-view-interaction)
 ;;; test-mevedel-view-interaction.el ends here
