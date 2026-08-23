@@ -231,8 +231,14 @@
 A positive integer is a fixed pixel width.  A float in (0, 1] sizes
 each image to that fraction of the displaying window's pixel width
 and re-scales it when the window changes."
-  :type '(choice (natnum :tag "Fixed pixels")
-                 (float :tag "Window-width fraction"))
+  :type '(restricted-sexp
+          :tag "Positive pixels or window-width fraction"
+          :match-alternatives
+          ((lambda (value)
+             (or (and (integerp value) (> value 0))
+                 (and (floatp value)
+                      (< 0.0 value)
+                      (<= value 1.0))))))
   :group 'mevedel)
 
 (defvar-local mevedel-view--side-conversation-p nil

@@ -751,15 +751,15 @@ Markdown rendering adds small view-only affordances:
   authoritative fixed logical file.
   `mevedel-view-inline-image-max-width` takes a fixed pixel width
   (default 600) or a float in (0, 1] meaning a fraction of the
-  displaying window's pixel width; ratio-sized images retain their path
-  and measured width and are re-scaled by the realignment job below;
+  displaying window's pixel width; ratio-sized images retain their path,
+  ratio, and measured width and are re-scaled by the realignment job below;
 - canonical pipe tables (two or more consecutive `|...|` rows outside
   fenced blocks and linkify-exempt text) are rendered by
   `mevedel-view-table.el` as aligned box-drawing rows after the link and
   path passes, so buttons and faces inside cells survive. Columns wider
   than 90% of the usable window width (window columns minus any
-  `line-prefix` inset) shrink proportionally toward their longest-word
-  minima and wrap their cells; plain ASCII is measured by
+  `line-prefix` or `wrap-prefix` inset) shrink proportionally toward their
+  longest-word minima and wrap their cells; plain ASCII is measured by
   `string-width`, faced or non-ASCII content pixel-measured against the
   displaying window. The rendered region retains the canonical Markdown
   source and the layout's window pixel width as text properties and
