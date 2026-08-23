@@ -61,47 +61,41 @@ recommends those elements while leaving Codex room to choose the next action.
 
 ## Inbox
 
-- ApplyPatch follow-ups (deferred while landing the tracer bullet):
-  - Teach the repair pipeline numeric ranges: `:minimum`/`:maximum` in the
-    tool arg DSL plus a clamp-range repair rule, so range clamping (Bash
-    `yield_time_ms`, WaitAgent `timeout_ms`) becomes model-visible and
-    telemetry'd instead of silent handler policy.
-  - Live streaming patch preview: render the review incrementally while the
-    model is still generating, like Codex's `StreamingPatchParser` +
-    `PatchApplyUpdated` events.
-  - Cumulative turn/session diff view aggregating all applied patches,
-    like Codex's `SharedTurnDiffTracker`; could reuse
-    `mevedel-tool-patch-hunks-from-content` and the side-by-side edit glue.
+- ApplyPatch follow-up (deferred while landing the tracer bullet): teach the
+  repair pipeline numeric ranges: `:minimum`/`:maximum` in the tool arg DSL
+  plus a clamp-range repair rule, so range clamping (Bash `yield_time_ms`,
+  WaitAgent `timeout_ms`) becomes model-visible and telemetry'd instead of
+  silent handler policy. (Dropped from this list 2026-08-23: live streaming
+  patch preview — review happens after generation anyway; cumulative
+  turn/session diff view — magit on the session worktree already is the
+  turn diff.)
 
 - Add a memory-verification slash command or skill that consolidates project
   memories and checks whether they are still accurate; explore whether a
   weekly automated check is useful. See also "/learn" command
-
-- Warnings in Emacs are quite intrusive. Consider making warnings in mevedel target
-  the messages buffer ([mevedel] Something happened, can be colored, see corfu)
-  and display the warning also in the view buffer (but not permanent via the data
-  buffer).
 
 - Consider making mevedel's data buffers hidden
 
 - Find a better folder for the tool description markdown files
 - Ensure all tools have the examples and their descriptions in markdown files
 
-- Batch file-notify defect: already reported as Emacs bug#79777 and fixed on
-  `emacs-31` by commit 28f0658d8f5e. Emacs 30.x
-  still starves process sentinels after a notification. Emacs 31 restores
-  sentinel delivery, but ordinary batch execution still has no command loop
-  to dispatch file-notify callbacks, so keep the unconditional
-  `noninteractive` guards in `mevedel-skills--ensure-watcher` and
-  `mevedel-skills--filenotify-supported-p`. No Emacs-version branch is
-  useful; revisit only if batch Emacs gains callback delivery.
-- Cursor jumps on permission promtp back to composer, seems to follow a certain tick rate
-- ApplyPatch persisted diff not rendered nicely/highlighted
 - investigate and test address to resources, preferably in mevedel itself
-  - are the hashes necessary? Don't prohibit the model from calling the correct address?
+  - are the hashes necessary? Don't they prohibit the model from calling the correct address?
   - The local:// scratchpad should be clearly promoted in the instructions
   -
-  
+- Allow activation and deactivation of skills per project
+- Allow activation and deactivation of plugins per project
+- In Ask mode, ApplyPatch should expand the first one or two hunks
+- Residual watch after the 2026-08-23 interaction rebuild fix (cursor jumps
+  at tick rate + garbled ApplyPatch feedback both traced to the 5s
+  control-transfer poll rebuilding the interaction zone through an
+  intermediate empty render, with new overlay objects and stale preview
+  body snapshots): non-composer point and window positions are still
+  preserved as raw integers in `mevedel-view-zone--restore-view-state` and
+  `mevedel-view--call-preserving-window-state`. If cursor drift reappears
+  during heavy history-live streaming with point on interaction text,
+  convert those captures to markers.
+
 ## Entry format
 
 Each entry records its source, owed change, reason for deferral, current
@@ -128,61 +122,6 @@ become implemented, obsolete, or unjustified.
   whether it is disposable.
 
 ## Remote workspaces and collaboration
-
-### Accepted remote-workspace roadmap: landed
-
-- **Source:** Remote-workspace review and use-case discussion on 2026-08-12;
-  the accepted product roadmap is
-  `.scratch/tramp-support/FUTURE-SCOPE-PACKAGES.md`, and its completion ledger
-  is `.scratch/tramp-support/ACCEPTANCE-MATRIX.md`.
-- **What landed:** All ten desired use cases are accepted with real-transport
-  evidence (`test/run-remote-acceptance.sh` against a containerized `sshd`,
-  the Docker-compatible selector, and native Podman): SSH and container
-  workspaces with minimal setup, Desktop-to-Laptop handoff over one portable
-  authority profile (`docs/adr/0100-portable-project-session-authority.md`,
-  which also removes the Desktop-becomes-target hazard the roadmap flagged),
-  discovery and read-only inspection, cooperative transfer with rejection,
-  timeout and expired takeover, alias-independent workspace identity,
-  container replacement over a persistent volume, crash and connection-loss
-  recovery, and target-native worktrees and forks. Live collaboration went
-  past the roadmap's read-only first slice to the sealed relay in `relay/`
-  with steering and remote interaction answering. Mounted remote storage is
-  documented as ordinary local operation in `docs/architecture.md`, and the
-  readiness diagnostic now prints the install command for missing target
-  programs -- the pre-bootstrap step the roadmap called the lazy version.
-- **Still deferred by design:** real harness bootstrap (only when a target
-  that cannot be provisioned appears), Remote Mevedel, and Managed Workspace.
-  Those are separate products, not remainders of this roadmap.
-- **Evidence that cannot be claimed here:** genuine Docker Engine, a second
-  physical host on a distinct network route, an external access-controlled
-  HTTPS tunnel with an automatable isolated browser, and rendered-UI keypress
-  automation. These stay open external gates rather than inferred success.
-
-### Browser-relay ui-request surface: landed
-
-- **Source:** `.scratch/browser-relay/PRD.md`, implementation decision
-  "Remote interaction answering". The full surface has landed: generic
-  request prompts (approve/deny/feedback), permission prompts (one-shot
-  allow-once/deny-once/feedback -- durable authority stays Emacs-only),
-  plan approval (accept with host-configured axes and remote feedback
-  that queues the templated revision request; Worktree proposals offer
-  feedback only, and axis editing stays in Emacs), ApplyPatch review
-  (apply the staged
-  selection or request a revision with whole-patch feedback), and Ask
-  questionnaires (the frame carries the questions, options, and current
-  answers structurally; the guest answers atomically and the host adopts
-  them through the wizard's own submit path; host navigation re-announces
-  so guests stay in sync). Gated by
-  `mevedel-collaboration-remote-interactions`. Guest attribution is
-  durable via hidden `guest-prompt` transcript audit records and renders
-  as the turn heading in both surfaces. Guests can attach photos to
-  prompts (downscaled client-side, saved under the session media
-  directory, @file-mentioned with read grants), and guest input is
-  skill-inert: `$skill` tokens stay literal text at submission.
-- **Blast radius:** Execution-target identity, readiness and bootstrap,
-  durability and leases, session discovery and control transfer, worktree
-  workflows, live session projection, browser rendering, transport, and
-  bearer-capability security.
 
 ### Revisit the browser viewer
 
@@ -424,10 +363,26 @@ become implemented, obsolete, or unjustified.
   and `history://root/PATH` corpora for the existing `Grep` tool. Prefer the
   resource-address seam over a separate SearchHistory tool; use regex search,
   not semantic/PageRank retrieval.
-- **Repeated tool-result cost:** Profile pre-compaction prompts for repeated
-  result bodies. If material, investigate request-time elision only when both
-  the normalized call and result are identical. A repeated call signature is
-  insufficient because repository state may have changed between calls.
+- **Repeated tool-result cost (resolved 2026-08-21: do not build):** Measured
+  over 43 retained chat contexts (417 completed tool results): 14 exact
+  call+result duplicates totaling roughly 64 tokens of potential saving.
+  `Read` had 0 exact duplicates -- the source-level read dedup already removes
+  the dominant repeat class -- and 3 repeated `Read` calls whose results had
+  changed, confirming that a call-signature key alone (macher-agent's design)
+  would serve stale results. Artifacts and scanner under
+  `.scratch/macher-agent/` (`tool-result-dedup-measurement.md`,
+  `measure-tool-result-dedup.el`, `tool-result-dedup-data.json`). Revisit only
+  if a future profile shows material duplicate volume; the correct design is
+  then request-time elision keyed on identical call AND result, eliding the
+  newest occurrence to keep the provider prompt-cache prefix stable, with
+  compaction invalidating any elision whose original body left the retained
+  tail.
+- **Tool-call ID ambiguity:** The dedup measurement found 5 duplicate results
+  whose persisted call IDs were reused because gptel associates parallel
+  same-name tool calls with one ID. A tool-call ID is therefore not a unique
+  referent. Audit any mevedel feature that assumes ID uniqueness (transcript
+  audit records, render-data association, compaction evidence) and consider an
+  upstream gptel fix.
 - **Verify unapplied patches:** Investigate running checks against a selected
   ApplyPatch proposal in a disposable projected worktree. Reuse session fork,
   patch, execution, and cleanup machinery where it actually fits, but account
