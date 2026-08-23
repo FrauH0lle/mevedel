@@ -120,6 +120,10 @@
 ;; `mevedel-structs'
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 ;; `tabulated-list'
 (declare-function tabulated-list-get-id "tabulated-list" ())
 (declare-function tabulated-list-mode "tabulated-list" ())
@@ -140,12 +144,15 @@
             (string-join (mapcar #'mevedel-plugin-name pending) ", "))))
 
 (defun mevedel-plugins-notify-pending-consent (&optional workspace)
-  "Warn when WORKSPACE has enabled plugins with pending hook consent."
+  "Warn when WORKSPACE has enabled plugins with pending hook consent.
+The warning is raised once per workspace and message; later session
+starts log it quietly to *Messages*."
   (when-let* ((message (mevedel-plugins-pending-consent-message workspace)))
-    (display-warning 'mevedel
-                     (concat "Mevedel " message ".")
-                     :warning)
-    (message "mevedel: %s" message)
+    (mevedel--warn-once
+     (list 'plugin-pending-consent
+           (and workspace (mevedel-workspace-root workspace))
+           message)
+     "%s" message)
     t))
 
 (defun mevedel-plugins--reload (&optional context)

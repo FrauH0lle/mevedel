@@ -109,6 +109,8 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--clamped-integer
                   "mevedel-utilities" (value default minimum maximum))
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
 
 ;; `mevedel-workspace'
 (declare-function mevedel--all-allowed-roots
@@ -208,11 +210,10 @@ operation rather than a successful or semantic non-error result."
       (when (and (eq (plist-get facts :filesystem) 'unrestricted)
                  (not (eq (plist-get facts :sandbox) 'unavailable)))
         (require 'mevedel-sandbox)
-        (display-warning
-         'mevedel
-         (concat "Skill shell expansion ran without confinement: "
-                 (mevedel-sandbox-status-text facts))
-         :warning))
+        (mevedel--warn-once
+         'exec-skill-unconfined
+         "Skill shell expansion ran without confinement: %s"
+         (mevedel-sandbox-status-text facts)))
       text)
      (t
       (require 'mevedel-sandbox)

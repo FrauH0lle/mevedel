@@ -908,6 +908,8 @@ See also:
                         (unwind-protect
                             (progn ,@test-body)
                           (mevedel-test--cancel-stray-lease-timers)
+                          (when (boundp 'mevedel--warn-once-table)
+                            (clrhash mevedel--warn-once-table))
                           (when mevedel-test--release-leaked-state-p
                             (mevedel-test--release-leaked-state))
                           (mevedel-test--assert-worktree-controls-unchanged

@@ -116,6 +116,8 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text "mevedel-utilities"
 		  (text))
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer"
@@ -900,8 +902,8 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
                 (mevedel-session-pending-follow-ups session)))
       (user-error "Resolve pending planning follow-ups before implementing"))
     (if (not (eq entry pending))
-        (display-warning 'mevedel
-                         "Plan approval: stale settlement ignored" :warning)
+        (mevedel--warn-once 'plan-approval-stale
+                            "Plan approval: stale settlement ignored")
       (setf (mevedel-session-pending-plan-approval session) nil)
       (unless (mevedel-plan-approval--deliver entry outcome "settle" t)
         (unless (mevedel-session-pending-plan-approval session)

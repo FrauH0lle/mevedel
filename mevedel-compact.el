@@ -123,6 +123,10 @@
 (declare-function mevedel-tools--handle-steering-inject
                   "mevedel-tools" (fsm &optional skip-compaction-gate))
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--assert-live-tip
                   "mevedel-view-composer" (&optional allow-armed-fork))
@@ -174,9 +178,6 @@
 (defvar-local mevedel--compact-auto-disabled nil
   "Non-nil when auto-compaction is disabled for this session.")
 
-(defvar-local mevedel--compact-auto-ineligible-warning-shown nil
-  "Non-nil after warning that auto-compaction cannot run here.")
-
 
 (defun mevedel--compact-auto-eligible-p ()
   "Return non-nil when automatic compaction may run in this buffer."
@@ -219,15 +220,12 @@
           (cond
            ((not admission) nil)
            (eligible admission)
-           ((not mevedel--compact-auto-ineligible-warning-shown)
-            (setq mevedel--compact-auto-ineligible-warning-shown t)
-            (display-warning
-             'mevedel
-             (format "Auto-compaction skipped: %s"
-                     (or ineligible-reason "session is not eligible"))
-             :warning)
-            nil)
-           (t nil))))
+           (t
+            (mevedel--warn-once
+             (list 'compact-auto-ineligible (buffer-name))
+             "Auto-compaction skipped: %s"
+             (or ineligible-reason "session is not eligible"))
+            nil))))
     (when (and (bound-and-true-p mevedel--session)
                (fboundp 'mevedel-telemetry-record))
       (apply #'mevedel-telemetry-record

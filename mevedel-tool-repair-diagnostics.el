@@ -51,6 +51,10 @@
 (declare-function mevedel--format-hook-audit-record
                   "mevedel-transcript-audit" (record))
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 (defun mevedel-tool-repair--audit-identifier-p (value)
   "Return non-nil when VALUE is a bounded value-free identifier."
   (and (symbolp value)
@@ -121,8 +125,8 @@
         "")
     (error
      (ignore-errors
-       (display-warning 'mevedel "Tool input repair audit formatting failed"
-                        :warning))
+       (mevedel--warn-once 'repair-audit-formatting
+                           "Tool input repair audit formatting failed"))
      "")))
 
 (defun mevedel-tool-repair--current-session ()
@@ -256,8 +260,8 @@
             (write-region content nil file t 'silent)
             t))
       (error
-       (display-warning 'mevedel "Repair telemetry persistence failed"
-                        :warning)
+       (mevedel--warn-once 'repair-telemetry-persistence
+                           "Repair telemetry persistence failed")
        nil))))
 
 (defun mevedel-tool-repair--persist-event (session event)
@@ -325,7 +329,8 @@
         t)
     (error
      (ignore-errors
-       (display-warning 'mevedel "Repair telemetry logging failed" :warning))
+       (mevedel--warn-once 'repair-telemetry-logging
+                           "Repair telemetry logging failed"))
      t)))
 
 (defun mevedel-tool-repair--entry-paths (entry)
@@ -392,7 +397,8 @@
     (error
      (ignore-errors (mevedel-tool-repair--release-entry entry))
      (ignore-errors
-       (display-warning 'mevedel "Repair telemetry logging failed" :warning))
+       (mevedel--warn-once 'repair-telemetry-logging
+                           "Repair telemetry logging failed"))
      nil)))
 
 (defun mevedel-tool-repair-mark-executed (entry)

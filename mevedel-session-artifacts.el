@@ -139,6 +139,8 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--forget-place "mevedel-utilities" nil)
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
 (declare-function mevedel--write-file-atomically
                   "mevedel-utilities" (path content &optional coding mode))
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
@@ -1594,11 +1596,10 @@ continues to wait for the root turn's completed-turn publication boundary."
                 (set-buffer-modified-p nil)
                 (run-hooks 'after-save-hook))
             (error
-             (display-warning
-              'mevedel
-              (format "Agent transcript post-save cleanup failed: %s"
-                      (error-message-string err))
-              :warning))))
+             (mevedel--warn-once
+              'artifacts-agent-post-save
+              "Agent transcript post-save cleanup failed: %s"
+              (error-message-string err)))))
         (setf (mevedel-agent-invocation-sidecar-dirty invocation) nil)
         t))))
 
@@ -1701,11 +1702,10 @@ calling this serializer."
                     (set-visited-file-modtime)
                     (set-buffer-modified-p nil))
                 (error
-                 (display-warning
-                  'mevedel
-                  (format "Session post-save cleanup failed: %s"
-                          (error-message-string err))
-                  :warning)))))
+                 (mevedel--warn-once
+                  'artifacts-session-post-save
+                  "Session post-save cleanup failed: %s"
+                  (error-message-string err))))))
         (setf (mevedel-session-updated-at session)
               (format-time-string "%FT%H-%M-%S"))
         (let ((publication
@@ -1725,11 +1725,10 @@ calling this serializer."
                   (set-buffer-modified-p nil)
                   (run-hooks 'after-save-hook))
               (error
-               (display-warning
-                'mevedel
-                (format "Session post-save cleanup failed: %s"
-                        (error-message-string err))
-                :warning)))))))
+               (mevedel--warn-once
+                'artifacts-session-post-save
+                "Session post-save cleanup failed: %s"
+                (error-message-string err))))))))
     ;; Input history is diagnostic UI state: warn/retry independently and
     ;; never turn it into critical publication.
     (mevedel-session-persistence-notify-session-event

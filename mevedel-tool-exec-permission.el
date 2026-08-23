@@ -147,6 +147,10 @@
 (declare-function mevedel-request-push-canceller
                   "mevedel-turn" (request canceller))
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 
 ;;
 ;;; Permission queue helpers
@@ -1108,10 +1112,8 @@ PRESERVE-UI describe the requested execution scope."
                                'font-lock-face 'font-lock-string-face))))
     (if (fboundp 'mevedel-permission--prompt-async-eval)
         (mevedel-permission--prompt-async-eval content callback count entry)
-      (display-warning
-       'mevedel
-       "Eval permission UI unavailable"
-       :warning)
+      (mevedel--warn-once 'eval-permission-ui
+                          "Eval permission UI unavailable")
       (funcall callback 'aborted))))
 
 

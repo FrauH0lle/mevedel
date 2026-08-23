@@ -56,6 +56,10 @@
 (declare-function mevedel-transcript-restore-properties
                   "mevedel-transcript-restore" (&optional only-if-missing))
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 ;; `org'
 (declare-function org-mode "org" (&optional arg))
 (defvar org-agenda-file-menu-enabled)
@@ -341,10 +345,9 @@ RENDER-DATA is retained in the hidden transcript audit record."
                    table)
           (when evicted
             (remhash evicted table)
-            (display-warning
-             'mevedel
-             (format "Discarding stale render-data update for tool %s" evicted)
-             :warning))))
+            (mevedel--warn-once
+             'execution-transcript-eviction
+             "Discarding stale render-data update for tool %s" evicted))))
       (puthash tool-use-id
                (list :event event :render-data render-data)
                table))))

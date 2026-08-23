@@ -42,6 +42,10 @@
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 ;; `mevedel-view'
 (declare-function mevedel-view--cancel-scheduled-render "mevedel-view" ())
 (declare-function mevedel-view--schedule-render
@@ -750,11 +754,10 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
         (atomic-change-group
           (mevedel-view--render-incremental data-buf))
       (error
-       (display-warning
-        'mevedel
-        (format "Live agent transcript render failed: %s"
-                (error-message-string err))
-        :warning)))))
+       (mevedel--warn-once
+        'view-stream-agent-render
+        "Live agent transcript render failed: %s"
+        (error-message-string err))))))
 
 (defun mevedel-view--schedule-tool-boundary-render (data-buf)
   "Schedule a coalesced incremental render for DATA-BUF."
@@ -1039,11 +1042,10 @@ When NO-PROGRESS is non-nil, record no active progress state."
                ;; The fallback rerender is debounced by
                ;; `mevedel-view-rerender-debounce', so it normally runs
                ;; after the release below.
-               (display-warning
-                'mevedel
-                (format "Terminal response render failed: %s"
-                        (error-message-string err))
-                :warning)
+               (mevedel--warn-once
+                'view-stream-terminal-render
+                "Terminal response render failed: %s"
+                (error-message-string err))
                (mevedel-view-rerender view-buf)))
           (setq mevedel-view--pending-tool-calls nil)
           (mevedel-view--stop-spinner-timer)

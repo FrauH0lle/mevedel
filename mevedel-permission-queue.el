@@ -83,6 +83,10 @@
                   (expression callback &optional origin count entry
                               mode preserve-ui))
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 ;; `mevedel-workspace'
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
@@ -140,10 +144,9 @@ Return non-nil when this call delivered or consumed the outcome."
               (when-let* ((callback (plist-get entry :callback)))
                 (funcall callback outcome))
             (error
-             (display-warning
-              'mevedel
-              (format "permission-queue: %s callback error: %S" phase err)
-              :warning)))
+             (mevedel--warn-once
+              (list 'permission-queue-callback phase)
+              "permission-queue: %s callback error: %S" phase err)))
         (mevedel-queue--unregister-entry-interaction entry))
       t)))
 
@@ -264,8 +267,9 @@ ENTRY plist keys:
       (condition-case err
           (if (not session)
               (progn
-                (display-warning
-                 'mevedel "permission-queue: enqueue with no session" :warning)
+                (mevedel--warn-once
+                 'permission-queue-no-session
+                 "permission-queue: enqueue with no session")
                 (mevedel-permission-queue--safe-settle
                  entry 'aborted "no-session"))
             (setq entry (plist-put entry :session session))
@@ -289,11 +293,10 @@ Used by the permission queue's head renderer."
     ('eval (mevedel-permission-queue--render-eval entry))
     ('sandbox (mevedel-permission-queue--render-sandbox entry))
     (_
-     (display-warning
-      'mevedel
-      (format "permission-queue: unknown :kind %S, dropping"
-              (plist-get entry :kind))
-      :warning)
+     (mevedel--warn-once
+      'permission-queue-unknown-kind
+      "permission-queue: unknown :kind %S, dropping"
+      (plist-get entry :kind))
      (let ((cb (plist-get entry :callback)))
        (when (functionp cb)
          (condition-case _ (funcall cb 'aborted) (error nil)))))))
@@ -307,10 +310,9 @@ Dispatches on entry's `:kind' via `--render-entry'."
     (condition-case err
         (mevedel-permission-queue--render-entry head)
       (error
-       (display-warning
-        'mevedel
-        (format "permission-queue: render error: %S" err)
-        :warning)
+       (mevedel--warn-once
+        'permission-queue-render
+        "permission-queue: render error: %S" err)
        (mevedel-permission-queue--pop
         head
         (pcase (plist-get head :kind)
@@ -329,10 +331,9 @@ Dispatches on entry's `:kind' via `--render-entry'."
      ((not (or (eq entry head)
                (mevedel-permission-queue--same-interaction-entry-p
                 entry head)))
-      (display-warning
-       'mevedel
-       "permission-queue: stale queue entry settlement ignored"
-       :warning))
+      (mevedel--warn-once
+       'permission-queue-stale-settlement
+       "permission-queue: stale queue entry settlement ignored"))
      (t
       (setq entry head)
       (mevedel-permission-queue--set (cdr queue) session)
@@ -341,10 +342,9 @@ Dispatches on entry's `:kind' via `--render-entry'."
           (condition-case err
               (mevedel-permission-queue--coalesce outcome session)
             (error
-             (display-warning
-              'mevedel
-              (format "permission-queue: coalesce error: %S" err)
-              :warning))))
+             (mevedel--warn-once
+              'permission-queue-coalesce
+              "permission-queue: coalesce error: %S" err))))
         (mevedel-permission-queue--render-head session))))))
 
 (defun mevedel-permission-queue--render-generic (entry)

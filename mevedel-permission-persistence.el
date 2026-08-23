@@ -52,6 +52,10 @@
 (defvar mevedel--session)
 (defvar mevedel-user-dir)
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-state-dir
                   "mevedel-workspace" (workspace))
@@ -59,10 +63,6 @@
 
 ;;
 ;;; Persistent rule storage
-
-(defvar mevedel-permission--warned-store-versions
-  (make-hash-table :test #'equal)
-  "Permission store versions already reported as invalid.")
 
 (defun mevedel-permission-persistence-file (workspace)
   "Return the path to WORKSPACE's persistent permission rules file."
@@ -335,22 +335,12 @@ TARGET restores portable target paths when non-nil."
       (let* ((file (car entry))
              (result (mevedel-permission--store-file-status file (cdr entry)))
            (status (plist-get result :status)))
-        (if (eq status 'invalid)
-            (let ((version (mevedel-permission--store-version file))
-                  (unseen (make-symbol "unseen")))
-              (unless (equal version
-                             (gethash file
-                                      mevedel-permission--warned-store-versions
-                                      unseen))
-                (puthash file version
-                         mevedel-permission--warned-store-versions)
-                (display-warning
-                 'mevedel
-                 (format
-                  "Invalid permission store %s (%s); expected (:rules (...) :resource-grants (...)). Authority from this file is disabled until fixed"
-                  file (plist-get result :reason))
-                 :warning)))
-          (remhash file mevedel-permission--warned-store-versions))))))
+        (when (eq status 'invalid)
+          (mevedel--warn-once
+           (list 'permission-store-invalid file
+                 (mevedel-permission--store-version file))
+           "Invalid permission store %s (%s); expected (:rules (...) :resource-grants (...)). Authority from this file is disabled until fixed"
+           file (plist-get result :reason)))))))
 
 (defun mevedel-permission-persistence-write-store (file store &optional target)
   "Write permission STORE plist to FILE."

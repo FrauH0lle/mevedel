@@ -206,6 +206,8 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
 (defvar mevedel--hook-audit-close)
 (defvar mevedel--hook-audit-open)
 
@@ -1009,11 +1011,10 @@ buffer's font-lock refontification cycles."
                        (condition-case err
                            (mevedel-view--fontify-as text mode)
                          (error
-                          (display-warning
-                           'mevedel
-                           (format "Could not fontify response as Markdown: %s"
-                                   (error-message-string err))
-                           :warning)
+                          (mevedel--warn-once
+                           'view-render-fontify
+                           "Could not fontify response as Markdown: %s"
+                           (error-message-string err))
                           text))
                      text)))
               (if key
@@ -1535,9 +1536,8 @@ functions.  Alist lookup tries STATUS first, then `default'."
 Return the rendering plist, or nil when no renderer is registered, the
 renderer returns nil (opt-out), the renderer signals an error, or the
 returned plist fails `mevedel-view--rendering-plist-p'.  Errors and
-malformed returns are surfaced once via `display-warning' under
-category `mevedel'; callers treat a nil return as \"use the generic
-tool renderer\".
+malformed returns are surfaced once per tool via `mevedel--warn-once';
+callers treat a nil return as \"use the generic tool renderer\".
 
 The renderer receives RENDER-DATA as-is (possibly nil): data-driven
 renderers like the ApplyPatch summary can check for their kind
@@ -1555,11 +1555,10 @@ straight off ARGS and RESULT without needing render-data."
         (cond
          ((not fn)
           (when (mevedel-view--renderer-malformed-p renderer status)
-            (display-warning
-             'mevedel
-             (format "Renderer for %s is not callable for status %s"
-                     tool-label status)
-             :warning))
+            (mevedel--warn-once
+             (list 'view-render-renderer-uncallable tool-label)
+             "Renderer for %s is not callable for status %s"
+             tool-label status))
           nil)
          (t
           (condition-case err
@@ -1572,18 +1571,16 @@ straight off ARGS and RESULT without needing render-data."
                                  :status status)
                     plist))
                  (t
-                  (display-warning
-                   'mevedel
-                   (format "Renderer for %s returned malformed plist: %S"
-                           tool-label plist)
-                   :warning)
+                  (mevedel--warn-once
+                   (list 'view-render-renderer-malformed tool-label)
+                   "Renderer for %s returned malformed plist: %S"
+                   tool-label plist)
                   nil)))
             (error
-             (display-warning
-              'mevedel
-              (format "Renderer for %s failed: %s"
-                      tool-label (error-message-string err))
-              :warning)
+             (mevedel--warn-once
+              (list 'view-render-renderer-failed tool-label)
+              "Renderer for %s failed: %s"
+              tool-label (error-message-string err))
              nil))))))))
 
 (defun mevedel-view--tool-result-line-count (result)

@@ -19,6 +19,10 @@
 (declare-function mevedel-request-push-canceller
                   "mevedel-turn" (request canceller))
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
                   "mevedel-view-interaction" (descriptor))
@@ -146,10 +150,8 @@ the stored callback."
           (end (overlay-end overlay)))
       (unless (buffer-live-p buf)
         (setq cb nil)
-        (display-warning
-         'mevedel
-         "Stale interaction prompt activation ignored"
-         :warning))
+        (mevedel--warn-once 'interaction-prompt-stale
+                            "Stale interaction prompt activation ignored"))
       (when (and interaction-id
                  (boundp 'mevedel-view--interaction-overlays)
                  (hash-table-p mevedel-view--interaction-overlays)
@@ -157,10 +159,8 @@ the stored callback."
                           (gethash interaction-id
                                    mevedel-view--interaction-overlays))))
         (setq cb nil)
-        (display-warning
-         'mevedel
-         "Stale interaction prompt activation ignored"
-         :warning))
+        (mevedel--warn-once 'interaction-prompt-stale
+                            "Stale interaction prompt activation ignored"))
       (when (buffer-live-p buf)
         (with-current-buffer buf
           (setq mevedel--prompt-overlays

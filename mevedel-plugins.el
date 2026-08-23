@@ -27,6 +27,10 @@
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 (defun mevedel-plugins-current-workspace ()
   "Return the current chat workspace, if available."
   (require 'mevedel-structs)
@@ -52,10 +56,9 @@ Without CONTEXT, refresh the session owned by the current buffer."
       (user-error nil)
       (error
        (let ((message (error-message-string err)))
-         (display-warning
-          'mevedel
-          (format "Plugin registry refresh failed: %s" message)
-          :warning)
+         (mevedel--warn-once
+          'plugin-registry-refresh
+          "Plugin registry refresh failed: %s" message)
          message)))))
 
 (defun mevedel-plugins-skill-dirs (&optional workspace)

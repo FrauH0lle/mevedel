@@ -401,8 +401,7 @@
 
 (mevedel-deftest mevedel-hooks-normalize-rules/invalid-matcher
   (:doc "drops a group whose matcher is not a usable regexp")
-  (let ((mevedel-hooks--reported-bad-matchers
-         (make-hash-table :test #'equal))
+  (let ((mevedel--warn-once-table (make-hash-table :test #'equal))
         warning)
     (mevedel-test--with-captured-diagnostics warning
       (should-not
@@ -1332,8 +1331,7 @@
               (:matcher "Bash"
                :hooks ((:type elisp
                         :function mevedel-hooks-test--rewrite-fn)))))))
-         (mevedel-hooks--reported-bad-matchers
-          (make-hash-table :test #'equal))
+         (mevedel--warn-once-table (make-hash-table :test #'equal))
          warning)
     (unwind-protect
         (progn
@@ -1357,9 +1355,10 @@
           (should (string-match-p "matcher" warning))
           (should (string-match-p "mevedel-hook-rules" warning))
           ;; The live defcustom layer is re-normalized per event, so the
-          ;; report has to be remembered rather than repeated per call:
-          ;; splitting on the message leaves exactly two fragments.
-          (should (= 2 (length
+          ;; first dispatch warns and the second is demoted to a quiet
+          ;; *Messages* line: splitting on the message leaves exactly
+          ;; three fragments (one warning plus one demoted repeat).
+          (should (= 3 (length
                         (split-string warning "not a valid regexp")))))
       (delete-directory root t))))
 

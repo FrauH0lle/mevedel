@@ -417,35 +417,26 @@ Returns a plist or nil when HANDLER is invalid."
 Bound around normalization so an unusable matcher can be reported with
 the file or layer that configured it.")
 
-(defvar mevedel-hooks--reported-bad-matchers (make-hash-table :test #'equal)
-  "Unusable matchers already reported, keyed by source, event, and matcher.
-The live defcustom and programmatic layers are re-normalized on every
-lifecycle event, so without this the same typo would be reported on every
-tool call for the life of the process.")
-
 (defun mevedel-hooks--usable-matcher-p (matcher event)
   "Return non-nil when MATCHER can be matched, reporting it for EVENT if not.
 Only a regexp matcher can fail; symbols are compared literally, and every
-string in the exact-name grammar is also a valid regexp.  Each unusable
-matcher is reported once per source."
+string in the exact-name grammar is also a valid regexp.  The live
+defcustom and programmatic layers are re-normalized on every lifecycle
+event, so each unusable matcher is warned once per source and demoted
+to a *Messages* line after that."
   (or (not (stringp matcher))
       (condition-case err
           (progn (string-match-p matcher "") t)
         (invalid-regexp
-         (let ((key (list mevedel-hooks--normalizing-source event matcher)))
-           (unless (gethash key mevedel-hooks--reported-bad-matchers)
-             (puthash key t mevedel-hooks--reported-bad-matchers)
-             (display-warning
-              'mevedel
-              (format "Ignoring %s hook group%s: matcher %S is not a valid \
-regexp: %s"
-                      event
-                      (if mevedel-hooks--normalizing-source
-                          (format " from %s"
-                                  mevedel-hooks--normalizing-source)
-                        "")
-                      matcher (error-message-string err))
-              :warning)))
+         (mevedel--warn-once
+          (list 'hooks-bad-matcher
+                mevedel-hooks--normalizing-source event matcher)
+          "Ignoring %s hook group%s: matcher %S is not a valid regexp: %s"
+          event
+          (if mevedel-hooks--normalizing-source
+              (format " from %s" mevedel-hooks--normalizing-source)
+            "")
+          matcher (error-message-string err))
          nil))))
 
 (defun mevedel-hooks--normalize-group (group event)
@@ -557,11 +548,10 @@ treated as `SubagentStop'."
                    (mevedel-hooks--read-json-file file content)))
           (_ nil)))
     (error
-     (display-warning
-      'mevedel
-      (format "Could not read hook config %s: %s"
-              file (error-message-string err))
-     :warning)
+     (mevedel--warn-once
+      (list 'hooks-config-unreadable file)
+      "Could not read hook config %s: %s"
+      file (error-message-string err))
      nil)))
 
 (defun mevedel-hooks--config-files-in-dir (dir)
@@ -665,10 +655,9 @@ The returned plist includes `:path', `:hash', `:content', and
                    (mevedel-hooks--project-snapshot-trusted-p
                     workspace snapshot))
               (push snapshot snapshots)
-            (display-warning
-             'mevedel
-             (format "Project hook config %s is not trusted; ignoring" file)
-             :warning)))))))
+            (mevedel--warn-once
+             (list 'hooks-config-untrusted file)
+             "Project hook config %s is not trusted; ignoring" file)))))))
 
 (defun mevedel-hooks--user-config-files ()
   "Return user hook config files."
@@ -822,7 +811,7 @@ memo."
 (defun mevedel-hooks-invalidate-config ()
   "Forget every memoized hook configuration so the next event re-reads it."
   (clrhash mevedel-hooks--config-rules-cache)
-  (clrhash mevedel-hooks--reported-bad-matchers))
+  (mevedel--warn-once-reset-site 'hooks-bad-matcher))
 
 ;;;###autoload
 (defun mevedel-hooks-reload ()
@@ -1038,12 +1027,11 @@ consumers read hook results synchronously and can be handed values from
 stubs or user code, so the boundary stays defensive at one owner."
   (if (mevedel-hooks--decision-plist-p decision)
       decision
-    (display-warning
-     'mevedel
-     (format "Ignoring malformed %s hook decision: %S"
-             (mevedel-hooks-event-display-name event)
-             decision)
-     :warning)
+    (mevedel--warn-once
+     (list 'hooks-malformed-decision event)
+     "Ignoring malformed %s hook decision: %S"
+     (mevedel-hooks-event-display-name event)
+     decision)
     nil))
 
 (defun mevedel-hooks--decision-from-json-alist (alist)
@@ -1371,11 +1359,10 @@ EVENT labels each generated hook event block."
             (write-region content nil file t 'silent)
             t))
       (error
-       (display-warning
-        'mevedel
-        (format "Hook log persistence failed: %s"
-                (error-message-string err))
-        :warning)
+       (mevedel--warn-once
+        'hooks-log-persistence
+        "Hook log persistence failed: %s"
+        (error-message-string err))
        nil))))
 
 (defun mevedel-hooks--persist-log-entry (session entry)

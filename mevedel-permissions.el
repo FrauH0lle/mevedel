@@ -122,6 +122,10 @@
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 ;; `mevedel-workspace'
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
@@ -286,16 +290,15 @@ it enters the shared queue."
          request one-shot-mutations-p)
         mode (or mode (and session (mevedel-session-permission-mode session))))
   (when (and warn-no-session-p (not session))
-    (display-warning
-     'mevedel
-     (format "Permission step for %s ran with no session in \
+    (mevedel--warn-once
+     (list 'permission-no-session tool-name)
+     "Permission step for %s ran with no session in \
 context; falling back to defcustom defaults.  Session-scoped \
 rules and the active permission mode are not being consulted.  \
 This usually means the tool was dispatched from a buffer whose \
 `mevedel--session' was not set; in production that should not \
 happen for a non-read-only tool."
-             tool-name)
-     :warning))
+     tool-name))
   (let* ((context
           (mevedel-permission--preflight
            tool-name

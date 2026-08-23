@@ -120,6 +120,10 @@
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport" (key path thunk))
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 
@@ -477,9 +481,8 @@ Signal when the request is missing or its reservation is not the next turn."
                   (force-mode-line-update))
                 (setq saved t))
             (error
-             (display-warning 'mevedel
-                              (format "Session auto-save failed: %s" err)
-                              :warning)
+             (mevedel--warn-once 'turn-auto-save
+                                 "Session auto-save failed: %s" err)
              (setq-local mevedel-session--save-failed t)
              (force-mode-line-update)))
           (when (and saved (buffer-live-p mevedel--view-buffer))
@@ -658,12 +661,11 @@ also autosaves, and it reaches here from the same process sentinel."
     (condition-case err
         (funcall handler fsm)
       (error
-       (display-warning
-        'mevedel
-        (format "FSM handler %s failed: %s"
-                (mevedel--handler-name handler)
-                (error-message-string err))
-        :warning)
+       (mevedel--warn-once
+        (list 'turn-fsm-handler (mevedel--handler-name handler))
+        "FSM handler %s failed: %s"
+        (mevedel--handler-name handler)
+        (error-message-string err))
        nil))))
 
 
