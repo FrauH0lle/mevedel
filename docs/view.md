@@ -748,7 +748,23 @@ Markdown rendering adds small view-only affordances:
   images; remote portable session-artifact images are decoded only from
   resolver-verified committed publication bytes rather than owned staged
   writes or the mutable fixed-path cache, while PID-lock sessions read their
-  authoritative fixed logical file;
+  authoritative fixed logical file.
+  `mevedel-view-inline-image-max-width` takes a fixed pixel width
+  (default 600) or a float in (0, 1] meaning a fraction of the
+  displaying window's pixel width; ratio-sized images retain their path
+  and measured width and are re-scaled by the realignment job below;
+- canonical pipe tables (two or more consecutive `|...|` rows outside
+  fenced blocks and linkify-exempt text) are rendered by
+  `mevedel-view-table.el` as aligned box-drawing rows after the link and
+  path passes, so buttons and faces inside cells survive. Columns wider
+  than 90% of the usable window width (window columns minus any
+  `line-prefix` inset) shrink proportionally toward their longest-word
+  minima and wrap their cells; plain ASCII is measured by
+  `string-width`, faced or non-ASCII content pixel-measured against the
+  displaying window. The rendered region retains the canonical Markdown
+  source and the layout's window pixel width as text properties and
+  carries the view's own source/read-only/turn properties across the
+  rewrite;
 - rendered `@file` mentions, Markdown file links, and bare file paths
   are clickable open-file buttons, including `:LINE`, `:L<line>`,
   `:#L<line>`, comma-separated line lists, and `#L<line>` targets. A path
@@ -757,8 +773,31 @@ Markdown rendering adds small view-only affordances:
   that the artifact exists.
 
 Markdown links, local images, paths, and fenced source-panel projection are
-isolated in `mevedel-view-markdown.el`. Pipe tables remain raw fontified
-Markdown rather than undergoing a second parser and alignment pass.
+isolated in `mevedel-view-markdown.el`; the table engine lives in
+`mevedel-view-table.el`, adapted from agent-shell's renderer with
+attribution.
+
+Rendered tables and ratio-sized images stay aligned to their window:
+`mevedel-view-mode` installs buffer-local handlers on
+`window-size-change-functions` and `window-buffer-change-functions`
+that debounce onto one 0.15 s idle timer per buffer, cancelled when the
+buffer is killed. The deferred job — never the redisplay hooks
+themselves — rebuilds only the tables and images whose retained width
+no longer matches the displaying window, off the undo list, preserving
+point, the modified flag, the data buffer, and any composer draft. The
+changed window rides along to the deferred job, so its width is the
+one laid out for. A buffer shown simultaneously in windows of
+different widths holds one layout: the most recently realigned window
+wins. Staleness is keyed on window pixel width, so a glyph-width-only
+change such as `text-scale-adjust` does not trigger reflow until the
+next window change.
+
+Copying from a view is contract-bound to canonical Markdown:
+`mevedel-view-mode` sets `filter-buffer-substring-function` so any
+copied or killed region overlapping a rendered table yields the table's
+complete pipe-table source spliced into the surrounding text, never
+box-drawing glyphs. The fenced code-block copy button still copies the
+raw code body.
 Audit disclosure formatting and toggling live in `mevedel-view-audit.el`;
 `mevedel-view-disclosure.el` owns its shared source-backed toggle state, and
 `mevedel-view-render.el` retains the surrounding turn projection. Each

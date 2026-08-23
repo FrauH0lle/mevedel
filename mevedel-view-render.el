@@ -1931,6 +1931,13 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
                            mevedel-view-force-expanded
                            ,(and (plist-get rendering :force-expanded-p) t)
                            mevedel-view-rendered t))
+    ;; Stamp the body inset before decoration so a rendered table
+    ;; subtracts it from its usable width, then again afterwards so
+    ;; decoration-inserted text (panel labels, padding) is indented too.
+    (add-text-properties body-start (point)
+                         '(line-prefix "    "
+                           wrap-prefix "    "
+                           rear-nonsticky (line-prefix wrap-prefix)))
     (mevedel-view--decorate-markdown-in-range ins-start (point))
     (add-text-properties body-start (point)
                          '(line-prefix "    "

@@ -230,20 +230,35 @@
         (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-view--decorate-markdown-in-range
-  (:doc "`mevedel-view--decorate-markdown-in-range' leaves raw pipe tables visible")
+  (:doc "`mevedel-view--decorate-markdown-in-range' renders pipe tables")
   ,test
   (test)
+  :doc "renders pipe tables and preserves view-owned properties"
   (let ((text "| Name | Role |\n|---|---|\n| Ada | Developer |\n"))
     (with-temp-buffer
       (insert text)
       (add-text-properties (point-min) (point-max)
                            '(mevedel-view-source task-table))
       (mevedel-view--decorate-markdown-in-range (point-min) (point-max))
-      (should (equal text (buffer-substring-no-properties
-                           (point-min) (point-max))))
+      (let ((rendered (buffer-substring-no-properties
+                       (point-min) (point-max))))
+        (should (string-match-p "│ Name │ Role      │" rendered))
+        (should-not (string-match-p "^| Name" rendered)))
+      (should (equal (string-trim-right text "\n")
+                     (substring-no-properties
+                      (get-text-property (point-min)
+                                         'mevedel-view-table-source))))
       (should-not
        (text-property-not-all
-        (point-min) (point-max) 'mevedel-view-source 'task-table)))))
+        (point-min) (point-max) 'mevedel-view-source 'task-table))))
+
+  :doc "pipe rows inside fenced code blocks stay raw"
+  (with-temp-buffer
+    (insert "```\n| a | b |\n| c | d |\n```\n")
+    (mevedel-view--decorate-markdown-in-range (point-min) (point-max))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "| a | b |" text))
+      (should-not (string-match-p "│" text)))))
 
 
 (mevedel-deftest mevedel-view--linkify-paths-in-range ()
@@ -785,6 +800,218 @@
               (should (= 42 (button-get button 'mevedel-view-line)))
               (should-not (button-at (point))))))
       (delete-directory root t))))
+
+
+(mevedel-deftest mevedel-view--realign-markdown ()
+  ,test
+  (test)
+  :doc "re-lays out stale tables while leaving draft, point, undo, and flags"
+  (mevedel-test--with-displayed-buffer
+    (require 'mevedel-view-table)
+    (let ((cell (mapconcat #'identity (make-list 30 "word") " "))
+          (draft "> a multiline draft\n> whose text must survive\n"))
+      (insert "| A | B |\n|---|---|\n| " cell " | short |\n")
+      (mevedel-view-table-decorate (point-min) (point-max) nil)
+      (let ((table-end (next-single-property-change
+                        (point-min) 'mevedel-view-table-source
+                        nil (point-max))))
+        (put-text-property (point-min) table-end
+                           'mevedel-view-table-width nil))
+      (goto-char (point-max))
+      (insert draft)
+      (goto-char (point-max))
+      (search-backward "survive")
+      (set-buffer-modified-p nil)
+      (setq buffer-undo-list nil)
+      (mevedel-view--realign-markdown)
+      (should (eql (window-body-width (selected-window) t)
+                   (get-text-property (point-min)
+                                      'mevedel-view-table-width)))
+      (should (looking-at-p "survive"))
+      (should (string-suffix-p draft (buffer-substring-no-properties
+                                      (point-min) (point-max))))
+      (should-not (buffer-modified-p))
+      (should-not buffer-undo-list)))
+
+  :doc "is a no-op for an undisplayed buffer"
+  (with-temp-buffer
+    (require 'mevedel-view-table)
+    (insert "| a | b |\n|---|---|\n| 1 | 2 |\n")
+    (mevedel-view-table-decorate (point-min) (point-max) nil)
+    (let ((before (buffer-string)))
+      (mevedel-view--realign-markdown)
+      (should (equal before (buffer-string)))))
+
+  :doc "ignores a dead buffer"
+  (let ((buffer (generate-new-buffer " *mevedel-dead*")))
+    (kill-buffer buffer)
+    (mevedel-view--realign-markdown buffer))
+
+  :doc "lays out for the window whose change scheduled the job"
+  (mevedel-test--with-displayed-buffer
+    (require 'mevedel-view-table)
+    (let* ((cell (mapconcat #'identity (make-list 30 "word") " "))
+           (buffer (current-buffer))
+           ;; A side-by-side split gives the two windows different
+           ;; widths (divider column), so the assertion discriminates
+           ;; which window the realign actually targeted.
+           (other (split-window nil nil 'right)))
+      (unwind-protect
+          (progn
+            (set-window-buffer other buffer)
+            (insert "| A | B |\n|---|---|\n| " cell " | short |\n")
+            (mevedel-view-table-decorate (point-min) (point-max) nil)
+            (let ((table-end (next-single-property-change
+                              (point-min) 'mevedel-view-table-source
+                              nil (point-max))))
+              (put-text-property (point-min) table-end
+                                 'mevedel-view-table-width nil))
+            (should-not (eql (window-body-width other t)
+                             (window-body-width (selected-window) t)))
+            (mevedel-view--realign-markdown buffer other)
+            (should (eql (window-body-width other t)
+                         (get-text-property (point-min)
+                                            'mevedel-view-table-width))))
+        (when (window-live-p other)
+          (delete-window other))))))
+
+(mevedel-deftest mevedel-view--realign-on-window-change ()
+  ,test
+  (test)
+  :doc "debounces window changes onto one cancellable idle timer"
+  (mevedel-test--with-displayed-buffer
+    (mevedel-view--enable-markdown-realign)
+    (should (member #'mevedel-view--realign-on-window-change
+                    window-size-change-functions))
+    (should (member #'mevedel-view--realign-on-window-change
+                    window-buffer-change-functions))
+    (unwind-protect
+        (progn
+          (mevedel-view--realign-on-window-change (selected-window))
+          (should (timerp mevedel-view--realign-timer))
+          (let ((first mevedel-view--realign-timer))
+            (mevedel-view--realign-on-window-change (selected-window))
+            (should (timerp mevedel-view--realign-timer))
+            (should-not (memq first timer-idle-list))))
+      (mevedel-view--cancel-realign-timer))
+    (should-not mevedel-view--realign-timer)))
+
+(mevedel-deftest mevedel-view--image-sizing ()
+  ,test
+  (test)
+  :doc "a fixed pixel setting passes through unmeasured"
+  (let ((mevedel-view-inline-image-max-width 600))
+    (should (equal '(600 . nil)
+                   (mevedel-view--image-sizing (selected-window)))))
+
+  :doc "a ratio setting resolves against the window's pixel width"
+  (let ((mevedel-view-inline-image-max-width 0.5))
+    (let ((width (window-body-width (selected-window) t)))
+      (should (equal (cons (max 1 (floor (* 0.5 width))) width)
+                     (mevedel-view--image-sizing (selected-window))))))
+
+  :doc "a ratio without a live window falls back to the frame width"
+  (let ((mevedel-view-inline-image-max-width 0.5))
+    (let ((sizing (mevedel-view--image-sizing nil)))
+      (should (integerp (car sizing)))
+      (should-not (cdr sizing)))))
+
+(mevedel-deftest mevedel-view--rerender-images ()
+  ,test
+  (test)
+  :doc "recreates only stale ratio-sized images at the window width"
+  (let ((file (make-temp-file "mevedel-image-ratio-" nil ".png")))
+    (unwind-protect
+        (mevedel-test--with-displayed-buffer
+          (let ((mevedel-view-inline-image-max-width 0.5)
+                (width (window-body-width (selected-window) t)))
+            (insert (format "![shot](%s)\n" file))
+            (cl-letf (((symbol-function 'display-images-p)
+                       (lambda (&optional _display) t))
+                      ((symbol-function 'create-image)
+                       (lambda (path &rest args)
+                         (list 'image :file path
+                               :max-width (plist-get args :max-width)))))
+              (mevedel-view--decorate-local-images-in-range
+               (point-min) (point-max))
+              (goto-char (point-min))
+              (should (equal file (get-text-property
+                                   (point) 'mevedel-view-image-source)))
+              (should (eql width (get-text-property
+                                  (point) 'mevedel-view-image-width)))
+              (should (eql (max 1 (floor (* 0.5 width)))
+                           (plist-get (cdr (get-text-property
+                                            (point) 'display))
+                                      :max-width)))
+              ;; Stale stored width forces one recreation; a fresh one
+              ;; is left alone.
+              (put-text-property (point) (1+ (point))
+                                 'mevedel-view-image-width nil)
+              (mevedel-view--rerender-images)
+              (should (eql width (get-text-property
+                                  (point) 'mevedel-view-image-width))))))
+      (delete-file file)))
+
+  :doc "fixed pixel sizing never realigns"
+  (let ((file (make-temp-file "mevedel-image-fixed-" nil ".png")))
+    (unwind-protect
+        (mevedel-test--with-displayed-buffer
+          (let ((mevedel-view-inline-image-max-width 600))
+            (insert (format "![shot](%s)\n" file))
+            (cl-letf (((symbol-function 'display-images-p)
+                       (lambda (&optional _display) t))
+                      ((symbol-function 'create-image)
+                       (lambda (path &rest args)
+                         (list 'image :file path
+                               :max-width (plist-get args :max-width)))))
+              (mevedel-view--decorate-local-images-in-range
+               (point-min) (point-max))
+              (goto-char (point-min))
+              (should-not (get-text-property
+                           (point) 'mevedel-view-image-source))
+              (should (eql 600 (plist-get (cdr (get-text-property
+                                                (point) 'display))
+                                          :max-width)))
+              (mevedel-view--rerender-images))))
+      (delete-file file))))
+
+(mevedel-deftest mevedel-view--buffer-substring-filter ()
+  ,test
+  (test)
+  :doc "a region overlapping a rendered table yields canonical Markdown"
+  (with-temp-buffer
+    (require 'mevedel-view-table)
+    (let ((source "| a | b |\n|---|---|\n| 1 | 2 |"))
+      (insert "before\n" source "\nafter\n")
+      (mevedel-view-table-decorate (point-min) (point-max) nil)
+      (should (equal (concat "before\n" source "\nafter\n")
+                     (substring-no-properties
+                      (mevedel-view--buffer-substring-filter
+                       (point-min) (point-max)))))))
+
+  :doc "a partial table region yields the complete table source"
+  (with-temp-buffer
+    (require 'mevedel-view-table)
+    (let ((source "| a | b |\n|---|---|\n| 1 | 2 |"))
+      (insert source "\n")
+      (mevedel-view-table-decorate (point-min) (point-max) nil)
+      (goto-char (point-min))
+      (search-forward "│ 1 │")
+      (should (equal source
+                     (substring-no-properties
+                      (mevedel-view--buffer-substring-filter
+                       (match-beginning 0) (match-end 0)))))))
+
+  :doc "regions without tables copy verbatim and honor deletion"
+  (with-temp-buffer
+    (insert "plain text\n")
+    (should (equal "plain"
+                   (substring-no-properties
+                    (mevedel-view--buffer-substring-filter 1 6))))
+    (should (equal "plain"
+                   (substring-no-properties
+                    (mevedel-view--buffer-substring-filter 1 6 t))))
+    (should (equal " text\n" (buffer-string)))))
 
 
 (provide 'test-mevedel-view-markdown)

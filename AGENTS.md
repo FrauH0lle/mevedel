@@ -197,6 +197,7 @@ Chat / view
   mevedel-collaboration-projection.el canonical browser transcript projection
   mevedel-collaboration-transport.el sealed relay WebSocket client
   mevedel-view-markdown.el    Markdown links, images, paths, source panels
+  mevedel-view-table.el       rendered pipe tables and window realignment
   mevedel-cockpit.el          shared tabulated cockpit surface plumbing
   mevedel-menu.el             session cockpit transient and model selection
   mevedel-gptel-bridge.el     view-launched gptel menu and restoration
