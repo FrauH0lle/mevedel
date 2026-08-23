@@ -244,8 +244,8 @@ new mail releases it immediately, as does follow-up steering. New root user
 input becomes a separate user-role
 steering message in the same resumed request, so no intermediate model sample
 can run before the input is visible. The default timeout is 30,000 ms.
-Values clamp to the 10,000-3,600,000 ms range; malformed values fall back
-to the default, and timeout is a successful outcome. Its result
+Out-of-range numeric tool arguments clamp to 10,000-3,600,000 ms; unrepairable
+tool arguments are rejected, and timeout is a successful outcome. Its result
 contains only the wake reason. The view renders `Waiting for agents` while the
 tool is pending. Settled waits render `WaitAgent: agents (OUTCOME)`;
 consecutive calls coalesce into the final row with a count while every

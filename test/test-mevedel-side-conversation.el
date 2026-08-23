@@ -983,7 +983,7 @@
                  (shell-quote-argument
                   "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait")
                  (shell-quote-argument pid-file))
-                :yield-time_ms 30000)))
+                :yield_time_ms 30000)))
             (let* ((entry
                     (car (mevedel-session-permission-queue side-session)))
                    (interaction-id

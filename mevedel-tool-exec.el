@@ -126,18 +126,18 @@
 
 (defun mevedel-tool-exec--bash-yield-time-ms (input)
   "Return the Bash yield time in milliseconds from INPUT.
-Missing or non-numeric values fall back to the default; out-of-range
-values clamp instead of failing the tool call."
-  (mevedel--clamped-integer (plist-get input :yield-time_ms)
-                            10000 250 30000))
+The declared schema range is enforced by the input-repair pipeline
+before the handler runs, so only the omitted-argument default remains
+handler policy."
+  (or (plist-get input :yield_time_ms) 10000))
 
 (defun mevedel-tool-exec--write-wait-time-ms (input chars)
   "Return the observation wait from INPUT and CHARS.
-Input writes poll quickly, pure polls wait longer.  Missing or
-non-numeric values fall back to the default; out-of-range values clamp
-instead of failing the tool call."
+The input-repair pipeline enforces the declared union range.  The
+mode-dependent bounds stay here because they depend on CHARS: input
+writes use 250-30000ms and pure polls use 5000-300000ms."
   (let ((input-p (and (stringp chars) (not (string-empty-p chars)))))
-    (mevedel--clamped-integer (plist-get input :yield-time_ms)
+    (mevedel--clamped-integer (plist-get input :yield_time_ms)
                               (if input-p 250 5000)
                               (if input-p 250 5000)
                               (if input-p 30000 300000))))
@@ -435,7 +435,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
   (require 'mevedel-turn)
   (let* ((execution-id (plist-get args :execution_id))
          (chars (or (plist-get args :chars) ""))
-         (requested-yield-time-ms (plist-get args :yield-time_ms))
+         (requested-yield-time-ms (plist-get args :yield_time_ms))
          (session (mevedel-tool-exec-permission-session))
          (owner (mevedel-current-origin))
          (wait-ms (mevedel-tool-exec--write-wait-time-ms args chars)))
@@ -859,8 +859,9 @@ Header shows a truncated first line of the command; body fontifies as
    :handler #'mevedel-tool-exec--bash
    :args ((command string :required
                    "The Bash command to execute from the session working directory. Can include pipes and standard shell operators.")
-          (yield-time_ms integer :optional
-                         "Milliseconds to wait before yielding a still-running command. Defaults to 10000; range 250-30000.")
+          (yield_time_ms integer :optional
+                         "Milliseconds to wait before yielding a still-running command. Defaults to 10000; range 250-30000."
+                         :minimum 250 :maximum 30000)
           (tty boolean :optional
                "Allocate a PTY and retain stdin for prompts or REPL input. Defaults to false.")
           (sandbox_permissions string :optional
@@ -903,8 +904,9 @@ Header shows a truncated first line of the command; body fontifies as
                         "Opaque execution ID returned by Bash.")
           (chars string :optional
                  "Input to send. Omit or use an empty string to poll. Ordinary input requires a PTY; a single Ctrl-C character interrupts either mode.")
-          (yield-time_ms integer :optional
-                         "Wait before returning: polls default to 5000ms and clamp positive shorter waits to 5000ms (maximum 300000); input defaults to 250ms (250-30000)."))
+          (yield_time_ms integer :optional
+                         "Wait before returning: polls default to 5000ms and clamp positive shorter waits to 5000ms (maximum 300000); input defaults to 250ms (250-30000)."
+                         :minimum 250 :maximum 300000))
    :async-p t
    :max-result-size 30000
    :groups (eval)

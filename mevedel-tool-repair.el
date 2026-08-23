@@ -80,7 +80,8 @@
 
 (defconst mevedel-tool-repair--shape-identifiers
   '(absent array boolean defaulted empty integer markdown-link missing null
-    number object path placeholder present singleton string symbol unknown)
+    number object out-of-range path placeholder present singleton string
+    symbol unknown)
   "Value-free vocabulary permitted in repair before/after descriptors.")
 
 (defvar-local mevedel-tool-repair--ledger nil
@@ -296,6 +297,19 @@
         (push (mevedel-tool-repair--issue
                path 'path-autolink 'path 'string schema)
               issues))
+      (when (numberp value)
+        (let ((minimum (plist-get schema :minimum))
+              (maximum (plist-get schema :maximum)))
+          (when (and minimum (< value minimum))
+            (push (mevedel-tool-repair--issue
+                   path 'below-minimum minimum
+                   (mevedel-tool-repair--actual-type value) schema)
+                  issues))
+          (when (and maximum (> value maximum))
+            (push (mevedel-tool-repair--issue
+                   path 'above-maximum maximum
+                   (mevedel-tool-repair--actual-type value) schema)
+                  issues))))
       (setq issues (nreverse issues))
       (cond
        ((eq type 'array)
@@ -490,9 +504,16 @@ positional dispatch, which represents omitted optional arguments as nil."
           (let ((parsed
                  (mevedel-tool-repair--parse-json-value
                   (mevedel-tool-repair--value-at-path args path))))
+            ;; A parsed number that is merely out of the declared range
+            ;; is acceptable here: the clamp-range rule repairs it on a
+            ;; later pass of the same bounded loop.
             (when (and (not (eq parsed :mevedel-json-parse-failed))
-                       (null (mevedel-tool-repair--validate-schema
-                              schema parsed path)))
+                       (null (seq-remove
+                              (lambda (issue)
+                                (memq (plist-get issue :kind)
+                                      '(below-minimum above-maximum)))
+                              (mevedel-tool-repair--validate-schema
+                               schema parsed path))))
               (throw
                'applied
                (list
@@ -560,7 +581,22 @@ positional dispatch, which represents omitted optional arguments as nil."
               (mevedel-tool-repair--record
                rule path 'markdown-link 'path
                (format "Unwrapped the filesystem path at `%s`."
-                       (mevedel-tool-repair-format-path path))))))))))
+                       (mevedel-tool-repair-format-path path)))))))
+         ((and (eq rule 'clamp-range)
+               (memq kind '(below-minimum above-maximum))
+               (numberp expected)
+               (numberp (mevedel-tool-repair--value-at-path args path)))
+          (throw
+           'applied
+           (list
+            :args (mevedel-tool-repair--set-at-path args path expected)
+            :record
+            (mevedel-tool-repair--record
+             rule path 'out-of-range (plist-get schema :type)
+             (format "Clamped the value at `%s` to the declared %s %s."
+                     (mevedel-tool-repair-format-path path)
+                     (if (eq kind 'below-minimum) "minimum" "maximum")
+                     expected))))))))
     nil))
 
 (defun mevedel-tool-repair--generic-pass (tool args)
@@ -583,7 +619,9 @@ positional dispatch, which represents omitted optional arguments as nil."
                        (mevedel-tool-repair--apply-rule
                         tool candidate issues 'empty-array-placeholder)
                        (mevedel-tool-repair--apply-rule
-                        tool candidate issues 'unwrap-path-autolink)))))
+                        tool candidate issues 'unwrap-path-autolink)
+                       (mevedel-tool-repair--apply-rule
+                        tool candidate issues 'clamp-range)))))
         (if (null change)
             (setq done t)
           (let ((updated (plist-get change :args)))
@@ -901,6 +939,10 @@ with `Error:' so gptel settles the call without invoking its handler."
       ('too-many-items
        (format "`%s`: expected at most %d items; received %d."
                path expected actual))
+      ('below-minimum
+       (format "`%s`: value must be at least %s." path expected))
+      ('above-maximum
+       (format "`%s`: value must be at most %s." path expected))
       (_ (format "`%s`: value does not satisfy the tool contract." path)))))
 
 (defun mevedel-tool-repair-format-issues (tool issues)

@@ -346,6 +346,13 @@
     (should-not (eq (plist-get (car args) :enum)
                     (plist-get (car provider-args) :enum))))
 
+  :doc "passes through numeric :minimum/:maximum bounds"
+  (let ((result (mevedel-tool--args-to-gptel
+                 '((timeout_ms integer :optional "Timeout"
+                               :minimum 10000 :maximum 3600000)))))
+    (should (equal 10000 (plist-get (car result) :minimum)))
+    (should (equal 3600000 (plist-get (car result) :maximum))))
+
   :doc "passes through :properties for objects"
   (let ((result (mevedel-tool--args-to-gptel
                  '((config object :required "config"
