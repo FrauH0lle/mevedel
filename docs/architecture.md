@@ -266,7 +266,19 @@ project-owned identity in `mevedel-workspace-identity.el` lets equivalent
 client-specific TRAMP spellings reopen the same workspace.  SSH-family
 `ssh`/`scp`/`sshx`/`scpx`, Docker, and Podman targets are supported; a target
 without `HOME` is blocked during readiness rather than failing later path
-permission checks.
+permission checks.  A target missing `rg`, `bash`, or `setsid` is named in the
+readiness diagnostic together with the install command for whichever package
+manager the probe finds there, so the fix does not require guessing the
+target's distribution.  Mevedel never pushes binaries to a target.
+
+A remote project mounted into the local filesystem -- SSHFS, `rclone mount`,
+NFS, SMB -- is deliberately ordinary local operation, not a remote target.
+Mevedel sees a local path, so files, search, Bash, and sessions all work with
+no remote-specific support and no target dependencies at all.  The trade is
+that the mount's host runtime is unused: commands run against the local
+toolchain, compilers, and container environment rather than the storage host's.
+Choose a TRAMP target when the project's runtime matters, and a mount when only
+its files do.
 
 `mevedel-execution.el` owns managed admission, the per-session registry,
 observations, delivery, and the public execution facade. Its opaque child

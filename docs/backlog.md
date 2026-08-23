@@ -129,32 +129,34 @@ become implemented, obsolete, or unjustified.
 
 ## Remote workspaces and collaboration
 
-### Complete the accepted remote-workspace roadmap
+### Accepted remote-workspace roadmap: landed
 
 - **Source:** Remote-workspace review and use-case discussion on 2026-08-12;
   the accepted product roadmap is
-  `.scratch/tramp-support/FUTURE-SCOPE-PACKAGES.md`, and the focused first
-  browser-viewer spec is `.scratch/live-collaboration/PRD.md`.
-- **What's owed:** Make these user journeys work through focused feature PRDs:
-  ordinary SSH and already-running container workspaces with minimal setup;
-  target-side session handoff from Desktop to Laptop, including when Desktop
-  itself later becomes the SSH target; discovery, read-only inspection,
-  cooperative control transfer, rejection, timeout, and expired takeover;
-  identity across equivalent connection routes and persistent container
-  replacement; recovery after client or network loss; target-native worktrees
-  and forks; and link-based live collaboration for guests without project
-  access. Keep mounted remote storage as documented local operation, add
-  bootstrap only when target provisioning demonstrates a need, and treat
-  Remote Mevedel and Managed Workspace as separate future products.
-- **Why deferred:** The execution-target and Portable Workspace implementation
-  is still landing. Each remaining capability has a distinct authority,
-  security, dependency, and acceptance surface and should not expand that PRD.
-- **Status check:** The execution-target PRD covers the core remote workspace
-  and target-side portability foundation. The relay-based live collaboration
-  slice (`.scratch/browser-relay/PRD.md`) has landed: content-blind Go relay
-  in `relay/`, end-to-end sealed frames, two-tier bearer links, guest
-  prompting/interrupting, and the directive filter. Remote Mevedel and
-  managed provisioning remain later slices.
+  `.scratch/tramp-support/FUTURE-SCOPE-PACKAGES.md`, and its completion ledger
+  is `.scratch/tramp-support/ACCEPTANCE-MATRIX.md`.
+- **What landed:** All ten desired use cases are accepted with real-transport
+  evidence (`test/run-remote-acceptance.sh` against a containerized `sshd`,
+  the Docker-compatible selector, and native Podman): SSH and container
+  workspaces with minimal setup, Desktop-to-Laptop handoff over one portable
+  authority profile (`docs/adr/0100-portable-project-session-authority.md`,
+  which also removes the Desktop-becomes-target hazard the roadmap flagged),
+  discovery and read-only inspection, cooperative transfer with rejection,
+  timeout and expired takeover, alias-independent workspace identity,
+  container replacement over a persistent volume, crash and connection-loss
+  recovery, and target-native worktrees and forks. Live collaboration went
+  past the roadmap's read-only first slice to the sealed relay in `relay/`
+  with steering and remote interaction answering. Mounted remote storage is
+  documented as ordinary local operation in `docs/architecture.md`, and the
+  readiness diagnostic now prints the install command for missing target
+  programs -- the pre-bootstrap step the roadmap called the lazy version.
+- **Still deferred by design:** real harness bootstrap (only when a target
+  that cannot be provisioned appears), Remote Mevedel, and Managed Workspace.
+  Those are separate products, not remainders of this roadmap.
+- **Evidence that cannot be claimed here:** genuine Docker Engine, a second
+  physical host on a distinct network route, an external access-controlled
+  HTTPS tunnel with an automatable isolated browser, and rendered-UI keypress
+  automation. These stay open external gates rather than inferred success.
 
 ### Browser-relay ui-request surface: landed
 

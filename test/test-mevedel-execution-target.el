@@ -1083,6 +1083,39 @@
                      (mevedel-execution-target-observed-incarnation target)))
       (should (mevedel-execution-target-incarnation-changed-p target)))))
 
+(mevedel-deftest mevedel-execution-target--install-hint ()
+  ,test
+  (test)
+  :doc "names the packages supplying the missing programs"
+  (cl-letf (((symbol-function 'executable-find)
+             (lambda (program &optional _remote)
+               (and (equal program "apk") "/sbin/apk"))))
+    (let ((target (mevedel-execution-target-create "/srv/project/")))
+      (should (equal "apk add ripgrep util-linux"
+                     (mevedel-execution-target--install-hint
+                      target '(rg setsid))))))
+
+  :doc "prefers the first recognized package manager on the target"
+  (cl-letf (((symbol-function 'executable-find)
+             (lambda (program &optional _remote)
+               (and (member program '("dnf" "pacman"))
+                    (file-name-concat "/usr/bin" program)))))
+    (let ((target (mevedel-execution-target-create "/srv/project/")))
+      (should (equal "dnf install -y ripgrep"
+                     (mevedel-execution-target--install-hint target '(rg))))))
+
+  :doc "withholds a hint when no recognized package manager is present"
+  (cl-letf (((symbol-function 'executable-find)
+             (lambda (_program &optional _remote) nil)))
+    (let ((target (mevedel-execution-target-create "/srv/project/")))
+      (should-not (mevedel-execution-target--install-hint target '(rg)))))
+
+  :doc "withholds a hint when no missing program maps to a package"
+  (cl-letf (((symbol-function 'executable-find)
+             (lambda (_program &optional _remote) "/sbin/apk")))
+    (let ((target (mevedel-execution-target-create "/srv/project/")))
+      (should-not (mevedel-execution-target--install-hint target '(bwrap))))))
+
 (mevedel-deftest mevedel-execution-target-readiness-message ()
   ,test
   (test)
@@ -1094,6 +1127,19 @@
             :missing-dependencies (rg setsid)))
     (let ((message (mevedel-execution-target-readiness-message target)))
       (should (string-match-p "rg, setsid" message))
+      (should-not (string-match-p "install them with" message))
+      (should (string-match-p "mevedel-retry-target-readiness" message))))
+
+  :doc "offers the probed install command for missing dependencies"
+  (let ((target (mevedel-execution-target-create
+                 "/ssh:user@host:/srv/project/")))
+    (setf (mevedel-execution-target-readiness target)
+          '(:status blocked :reason missing-dependencies
+            :missing-dependencies (rg setsid)
+            :install-hint "apk add ripgrep util-linux"))
+    (let ((message (mevedel-execution-target-readiness-message target)))
+      (should (string-match-p "install them with: apk add ripgrep util-linux"
+                              message))
       (should (string-match-p "mevedel-retry-target-readiness" message))))
 
   :doc "reports an unsupported target operating system"
