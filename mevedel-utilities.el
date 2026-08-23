@@ -142,6 +142,38 @@ both sides use real `a/FILEPATH' and `b/FILEPATH' labels."
 
 
 ;;
+;;; Diagnostics
+
+(defvar mevedel--warn-once-table (make-hash-table :test #'equal)
+  "Keys already surfaced by `mevedel--warn-once'.")
+
+(defun mevedel--warn-once (key format &rest args)
+  "Emit a mevedel `display-warning' once per KEY; demote repeats.
+
+KEY is compared with `equal'.  The first call per KEY raises a
+`display-warning' under category `mevedel'; later calls log the
+formatted text to *Messages* with `inhibit-message' bound so the
+echo area stays untouched.  FORMAT and ARGS are as for `format'."
+  (let ((text (apply #'format format args)))
+    (if (gethash key mevedel--warn-once-table)
+        (let ((inhibit-message t))
+          (message "mevedel: %s" text))
+      (puthash key t mevedel--warn-once-table)
+      (display-warning 'mevedel text :warning))))
+
+(defun mevedel--warn-once-reset-site (site)
+  "Forget every plain or composite `mevedel--warn-once' key for SITE."
+  (let (stale)
+    (maphash (lambda (key _)
+               (when (or (eq key site)
+                         (eq (car-safe key) site))
+                 (push key stale)))
+             mevedel--warn-once-table)
+    (dolist (key stale)
+      (remhash key mevedel--warn-once-table))))
+
+
+;;
 ;;; Plain data
 
 (defun mevedel--plain-data-p (value)

@@ -144,6 +144,8 @@
 (declare-function mevedel--head-tail-preview-parts
                   "mevedel-utilities"
                   (head tail total-length &optional preview-size))
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
 
 ;;
 ;;; Configuration and private state
@@ -478,11 +480,10 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
             (condition-case err
                 (funcall function session data-buffer)
               (error
-               (display-warning
-                'mevedel
-                (format "Execution state consumer failed: %s"
-                        (error-message-string err))
-                :warning)))))))))
+               (mevedel--warn-once
+                'execution-state-consumer
+                "Execution state consumer failed: %s"
+                (error-message-string err))))))))))
 
 
 ;;
@@ -849,11 +850,10 @@ does not depend on the local spool the target never wrote to."
       (condition-case err
           (funcall function (mevedel-execution--copy-value event))
         (error
-         (display-warning
-          'mevedel
-          (format "Execution event consumer failed: %s"
-                  (error-message-string err))
-          :warning))))))
+         (mevedel--warn-once
+          'execution-event-consumer
+          "Execution event consumer failed: %s"
+          (error-message-string err)))))))
 
 (defun mevedel-execution--deliver-mailbox-event (record event)
   "Return non-nil after the mailbox sink secures RECORD's EVENT."
@@ -864,11 +864,10 @@ does not depend on the local spool the target never wrote to."
                  (mevedel-execution--origin-owner-context
                   (mevedel-execution--record-origin record)))
       (error
-       (display-warning
-        'mevedel
-        (format "Execution mailbox delivery failed: %s"
-                (error-message-string err))
-        :warning)
+       (mevedel--warn-once
+        'execution-mailbox-delivery
+        "Execution mailbox delivery failed: %s"
+        (error-message-string err))
        nil))))
 
 (defun mevedel-execution--whole-preview (record)
@@ -1097,11 +1096,10 @@ it briefly so repeated owner polls return the same result."
     (condition-case err
         (funcall callback (mevedel-execution--observation record))
       (error
-       (display-warning
-        'mevedel
-        (format "Execution poll callback failed: %s"
-                (error-message-string err))
-        :warning)))))
+       (mevedel--warn-once
+        'execution-poll-callback
+        "Execution poll callback failed: %s"
+        (error-message-string err))))))
 
 (defun mevedel-execution--poll-expired (record)
   "Deliver a running observation when RECORD's poll wait expires."

@@ -28,6 +28,10 @@
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 (defcustom mevedel-gptel-stream-bridge-insert-batch-delay 0.04
   "Seconds to batch consecutive string stream inserts in data buffers.
 
@@ -119,11 +123,10 @@ chunk when that stale transformer fails."
        (condition-case err
            (funcall transformer str)
          (error
-          (display-warning
-           'mevedel
-           (format "Ignoring stale gptel stream transformer: %s"
-                   (error-message-string err))
-           :warning)
+          (mevedel--warn-once
+           'stream-bridge-transformer
+           "Ignoring stale gptel stream transformer: %s"
+           (error-message-string err))
           str))))))
 
 (defun mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice
@@ -256,10 +259,9 @@ STATUS is passed through unchanged."
             (progn
               (process-put process 'mevedel-gptel-stream-bridge--pending-output nil)
               (process-put process 'mevedel-gptel-stream-bridge--filter-retries nil)
-              (display-warning
-               'mevedel
-               "Dropping gptel stream chunk without registered request FSM"
-               :warning))
+              (mevedel--warn-once
+               'stream-bridge-orphan-chunk
+               "Dropping gptel stream chunk without registered request FSM"))
           (process-put process 'mevedel-gptel-stream-bridge--filter-retries retries)
           (process-put
            process 'mevedel-gptel-stream-bridge--filter-timer

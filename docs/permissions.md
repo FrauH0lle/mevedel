@@ -685,10 +685,11 @@ user explicitly resolves it or interrupts that agent turn. Redraws use the
 ordinary interaction-zone lifecycle and preserve the active composer draft.
 
 If the permission step ever runs without a session in context,
-`mevedel-tool-permission-step` emits a `display-warning`
+`mevedel-tool-permission-step` emits a `display-warning` once per tool
 ("Permission step for ... ran with no session in context"); that
 fallback would silently consult only the defcustom-scoped global
-defaults, which is the actual hazard. The warning surfaces it.
+defaults, which is the actual hazard. Repeats are logged quietly to
+`*Messages*` without disturbing the echo area.
 
 `mevedel-tool-permission.el` owns permission-step path fan-out, decision
 logging, permission hook dispatch, and prompt orchestration. The Pipeline only

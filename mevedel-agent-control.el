@@ -119,6 +119,8 @@
 (declare-function mevedel--head-tail-preview-parts
                   "mevedel-utilities"
                   (head tail total-length &optional preview-size))
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
 
 (defconst mevedel-agent-control--result-limit (* 32 1024)
   "Maximum number of characters in an inline RESULT payload.")
@@ -1124,12 +1126,10 @@ idempotent cancellation thunk for the unpublished preparation transaction."
                               (condition-case err
                                   (funcall on-invocation invocation)
                                 (error
-                                 (display-warning
-                                  'mevedel
-                                  (format
-                                   "Agent invocation observer failed: %s"
-                                   (error-message-string err))
-                                  :warning)))))
+                                 (mevedel--warn-once
+                                  'agent-invocation-observer
+                                  "Agent invocation observer failed: %s"
+                                  (error-message-string err))))))
                           :on-settle
                           (apply-partially
                            #'mevedel-agent-control--settle session record))

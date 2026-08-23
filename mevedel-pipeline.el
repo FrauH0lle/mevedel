@@ -455,7 +455,7 @@ scheduled an async continuation it must not signal -- the outer
 
 Each step's NEXT and FAIL continuations are wrapped in a per-step
 **latch**: the first call settles the step; every later call is a no-op
-logged via `display-warning'.  This is defense-in-depth -- primitives
+logged via `mevedel--warn-once'.  This is defense-in-depth -- primitives
 may latch at the UI layer too -- but the runner latch is authoritative.
 
 CALLBACK must be the once-fire wrapper installed by
@@ -506,12 +506,11 @@ to CALLBACK."
               (if settled
                   (progn
                     (unless (eq settled 'cancel)
-                      (display-warning
-                       'mevedel
-                       (format "Pipeline step %s called %s after already %s; \
+                      (mevedel--warn-once
+                       (list 'pipeline-duplicate-outcome step-name)
+                       "Pipeline step %s called %s after already %s; \
 ignoring duplicate outcome"
-                               step-name which settled)
-                       :warning))
+                       step-name which settled))
                     nil)
                 (setq settled which)
                 t)))
@@ -1664,12 +1663,11 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
               ;; already fired CALLBACK with a success result.  That is
               ;; the bug-fix path; we drop the late error but flag it so
               ;; a recurring drop is diagnosable rather than silent.
-              (display-warning
-               'mevedel
-               (format "Pipeline callback fired twice; dropping late \
+              (mevedel--warn-once
+               'pipeline-late-callback
+               "Pipeline callback fired twice; dropping late \
 delivery: %S"
-                       result)
-               :warning))))))
+               result))))))
     (when (and session (not (mevedel-tool-read-only-p tool)))
       (mevedel-session-artifacts-assert-new-mutation-authority session))
     (when request

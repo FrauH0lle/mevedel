@@ -738,5 +738,56 @@ rejects trailing binary operators"
           (should-not (directory-files root nil "mevedel-write")))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel--warn-once ()
+  ,test
+  (test)
+  :doc "warns on the first call per key and demotes repeats to messages"
+  (let ((mevedel--warn-once-table (make-hash-table :test #'equal))
+        warnings messages)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (type text &rest _) (push (cons type text) warnings)))
+              ((symbol-function 'message)
+               (lambda (format &rest args)
+                 (push (apply #'format format args) messages))))
+      (mevedel--warn-once 'test-key "problem %d" 1)
+      (mevedel--warn-once 'test-key "problem %d" 2)
+      (mevedel--warn-once (list 'test-site "a") "subject a")
+      (mevedel--warn-once (list 'test-site "b") "subject b"))
+    (should (equal '((mevedel . "problem 1")
+                     (mevedel . "subject a")
+                     (mevedel . "subject b"))
+                   (nreverse warnings)))
+    (should (equal '("mevedel: problem 2") messages)))
+
+  :doc "repeats bind `inhibit-message' so the echo area stays untouched"
+  (let ((mevedel--warn-once-table (make-hash-table :test #'equal))
+        inhibited)
+    (cl-letf (((symbol-function 'display-warning) #'ignore)
+              ((symbol-function 'message)
+               (lambda (&rest _) (setq inhibited inhibit-message))))
+      (mevedel--warn-once 'test-key "problem")
+      (mevedel--warn-once 'test-key "problem"))
+    (should inhibited)))
+
+(mevedel-deftest mevedel--warn-once-reset-site ()
+  ,test
+  (test)
+  :doc "re-arms plain and composite keys only for the requested site"
+  (let ((mevedel--warn-once-table (make-hash-table :test #'equal))
+        warnings)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type text &rest _) (push text warnings)))
+              ((symbol-function 'message) #'ignore))
+      (mevedel--warn-once 'test-site "site")
+      (mevedel--warn-once (list 'test-site "a") "site a")
+      (mevedel--warn-once (list 'test-site "b") "site b")
+      (mevedel--warn-once (list 'other-site "c") "other c")
+      (mevedel--warn-once-reset-site 'test-site)
+      (mevedel--warn-once 'test-site "site")
+      (mevedel--warn-once (list 'test-site "a") "site a")
+      (mevedel--warn-once (list 'other-site "c") "other c"))
+    (should (equal '("site" "site a" "site b" "other c" "site" "site a")
+                   (nreverse warnings)))))
+
 (provide 'test-mevedel-utilities)
 ;;; test-mevedel-utilities.el ends here

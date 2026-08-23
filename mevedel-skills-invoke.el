@@ -118,11 +118,14 @@
                   "mevedel-transcript-audit"
                   (event original submitted &optional reason))
 
-
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
 (declare-function mevedel-request-begin "mevedel-turn"
                   (session &optional directive-uuid))
+
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
 
 ;;
 ;;; Request-scoped skill context
@@ -261,11 +264,10 @@ DISPLAY-CALLBACK may be nil; EVENT is a lifecycle event plist
     (condition-case err
         (funcall display-callback event)
       (error
-       (display-warning
-        'mevedel
-        (format "Skill display-callback error: %s"
-                (error-message-string err))
-        :warning)))))
+       (mevedel--warn-once
+        'skill-display-callback
+        "Skill display-callback error: %s"
+        (error-message-string err))))))
 
 (defun mevedel-skills--invoke-error (skill reason message
                                            callback display-callback)

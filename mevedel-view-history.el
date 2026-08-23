@@ -85,9 +85,6 @@
 (defvar-local mevedel-view-history--loaded-entries nil
   "Newest-first input history entries last loaded or saved in this view.")
 
-(defvar-local mevedel-view-history--load-warned nil
-  "Non-nil after warning about an input-history load failure.")
-
 
 ;;
 ;;; Ring helpers
@@ -290,13 +287,10 @@ to `.bad' and ignored."
         (unless problem
           (mevedel-view-history--set-entries entries)))
       (when problem
-        (unless mevedel-view-history--load-warned
-          (setq mevedel-view-history--load-warned t)
-          (display-warning
-           'mevedel
-           (format "Input history unreadable at %s: %s; starting empty"
-                   path (error-message-string problem))
-           :warning))
+        (mevedel--warn-once
+         (list 'view-history-load path)
+         "Input history unreadable at %s: %s; starting empty"
+         path (error-message-string problem))
         (when malformed-p
           (mevedel-view-history--rename-bad-file path))))))
 
@@ -342,11 +336,10 @@ to `.bad' and ignored."
                   (setq mevedel-view-history--save-failed nil)))
             (error
              (setq mevedel-view-history--save-failed t)
-             (display-warning
-              'mevedel
-              (format "Input history save failed at %s: %s"
-                      path (error-message-string err))
-              :warning))))))))
+             (mevedel--warn-once
+              (list 'view-history-save path)
+              "Input history save failed at %s: %s"
+              path (error-message-string err)))))))))
 
 
 ;;

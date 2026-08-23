@@ -46,6 +46,8 @@
                   (&optional workspace))
 
 ;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
 (declare-function mevedel--write-file-atomically
                   "mevedel-utilities" (path content &optional coding mode))
 
@@ -305,11 +307,10 @@ Body shell expansion always runs through the session Bash pipeline, so
 accepting a declared shell silently would run the skill under different
 semantics than its author wrote.  SOURCE-FILE identifies the skill."
   (when val
-    (display-warning
-     'mevedel
-     (format "Skill at %s declares shell %S; skills run bash"
-             source-file val)
-     :warning)))
+    (mevedel--warn-once
+     (list 'skill-declared-shell source-file)
+     "Skill at %s declares shell %S; skills run bash"
+     source-file val)))
 
 (defun mevedel-skills--parse-allowed-tool-rules (entries source-file)
   "Map each ENTRY through `mevedel-permission-rules-parse'.
@@ -424,11 +425,10 @@ YAML parsing fails."
                   (setq plist (plist-put plist :system body)))
                 plist))))
       (error
-       (display-warning
-        'mevedel
-        (format "Skill at %s has invalid YAML: %s; skipping"
-                skill-file (error-message-string err))
-        :warning)
+       (mevedel--warn-once
+        (list 'skill-invalid-yaml skill-file)
+        "Skill at %s has invalid YAML: %s; skipping"
+        skill-file (error-message-string err))
        nil))))
 
 (defun mevedel-skills--from-plist
@@ -616,13 +616,12 @@ description fallback from the body when frontmatter omits `description'."
                            dir-name)))
         (cond
          ((not (mevedel-skills--valid-name-p raw-name))
-          (display-warning
-           'mevedel
-           (format "Skill at %s has invalid name %S; skipping (must match %s, max %d chars)"
-                   skill-file raw-name
-                   mevedel-skills--name-regexp
-                   mevedel-skills--name-max-length)
-           :warning)
+          (mevedel--warn-once
+           (list 'skill-invalid-name skill-file)
+           "Skill at %s has invalid name %S; skipping (must match %s, max %d chars)"
+           skill-file raw-name
+           mevedel-skills--name-regexp
+           mevedel-skills--name-max-length)
           nil)
          (t
           ;; Description fallback uses the body from the same parse.
@@ -651,11 +650,10 @@ does not abort the whole scan."
                          (mevedel-skills--build-skill
                           skill-file source source-family workspace)
                        (error
-                        (display-warning
-                         'mevedel
-                         (format "Skill at %s failed to load: %s"
-                                 skill-file (error-message-string err))
-                         :warning)
+                        (mevedel--warn-once
+                         (list 'skill-load-failed skill-file)
+                         "Skill at %s failed to load: %s"
+                         skill-file (error-message-string err))
                         nil))))
           (when skill
             (push skill result))))
@@ -1214,11 +1212,10 @@ sentinel is silently dropped)."
                 (puthash dir desc mevedel-skills--watchers))
             (error
              (save-current-buffer
-               (display-warning
-                'mevedel
-                (format "Skill watcher failed for %s: %s"
-                        dir (error-message-string err))
-                :warning)))))))))
+               (mevedel--warn-once
+                (list 'skill-watcher dir)
+                "Skill watcher failed for %s: %s"
+                dir (error-message-string err))))))))))
 
 (defun mevedel-skills--remove-watcher-if-unused (dir)
   "Tear down the watcher for DIR when no buffer consumes it."

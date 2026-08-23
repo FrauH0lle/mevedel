@@ -473,8 +473,7 @@
               :type 'project :id "test" :root tmp-dir
               :name "test" :file-cache nil))
          (file (mevedel-permission-persistence-file ws))
-         (mevedel-permission--warned-store-versions
-          (make-hash-table :test #'equal))
+         (mevedel--warn-once-table (make-hash-table :test #'equal))
          warnings)
     (unwind-protect
         (cl-letf (((symbol-function 'display-warning)

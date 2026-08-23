@@ -720,7 +720,10 @@
                   ((symbol-function 'message)
                    (lambda (format-string &rest args)
                      (push (apply #'format format-string args) messages))))
+          ;; First notification warns; the repeat demotes to *Messages*.
+          (should (mevedel-plugins-notify-pending-consent workspace))
           (should (mevedel-plugins-notify-pending-consent workspace)))
+        (should (= 1 (length warnings)))
         (should (equal 'mevedel (caar warnings)))
         (should (string-match-p "plugin hook consent pending for demo"
                                 (cadar warnings)))

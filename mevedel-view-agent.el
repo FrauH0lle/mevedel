@@ -77,6 +77,10 @@
 (declare-function mevedel-transcript-restore-properties
                   "mevedel-transcript-restore" (&optional only-if-missing))
 
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+
 ;; `mevedel-view'
 (declare-function mevedel-view--display-fragment-keymap "mevedel-view" (&rest maps))
 (declare-function mevedel-view--ensure "mevedel-view" (data-buf &optional view-name options))
@@ -498,11 +502,10 @@ Also kill retained conversation data when KILL-RETAINED is non-nil."
                   (apply function args))))
             (force-mode-line-update t))
         (error
-         (display-warning
-          'mevedel
-          (format "Live agent transcript update failed: %s"
-                  (error-message-string err))
-          :warning)))))
+         (mevedel--warn-once
+          'view-agent-live-update
+          "Live agent transcript update failed: %s"
+          (error-message-string err))))))
   nil)
 
 (defun mevedel-view-agent-live-transcript-stream ()
@@ -586,11 +589,10 @@ buffer."
                   (atomic-change-group
                     (mevedel-view--full-rerender))))
             (error
-             (display-warning
-              'mevedel
-              (format "Final live agent transcript update failed: %s"
-                      (error-message-string err))
-              :warning)))))
+             (mevedel--warn-once
+              'view-agent-final-update
+              "Final live agent transcript update failed: %s"
+              (error-message-string err))))))
       views)))
 
 (defun mevedel-view-close-agent-transcript ()
