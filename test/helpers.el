@@ -988,5 +988,19 @@ CL-KEYS as in `cl-set-difference'.
 \n(fn EXPECTED ACTUAL [KEYWORD VALUE]...)"
   (null (apply #'cl-set-difference expected actual cl-keys)))
 
+(defmacro mevedel-test--with-displayed-buffer (&rest body)
+  "Run BODY in a temp buffer displayed in the selected window.
+Restores the window configuration and kills the buffer afterwards."
+  (declare (indent 0))
+  `(let ((config (current-window-configuration))
+         (buffer (generate-new-buffer " *mevedel-displayed-test*")))
+     (unwind-protect
+         (progn
+           (set-window-buffer (selected-window) buffer)
+           (with-current-buffer buffer
+             ,@body))
+       (set-window-configuration config)
+       (kill-buffer buffer))))
+
 (provide 'helpers)
 ;;; helpers.el ends here

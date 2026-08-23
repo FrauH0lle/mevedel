@@ -44,6 +44,14 @@
 ;; `mevedel-view-render'
 (declare-function mevedel-view--fontify-as "mevedel-view-render" (text mode))
 
+;; `mevedel-view-table'
+(declare-function mevedel-view-table-decorate "mevedel-view-table"
+                  (start end avoid-ranges))
+(declare-function mevedel-view-table-rerender "mevedel-view-table"
+                  (&optional window))
+
+(eval-when-compile (require 'text-property-search))
+
 (defun mevedel-view--normalize-local-file-uri-path (path)
   "Normalize local file URI PATH for Emacs file APIs."
   (let ((path (and path (subst-char-in-string ?\\ ?/ path))))
@@ -336,8 +344,28 @@ True for linkify-exempt text and for positions inside RANGES."
      (or (match-string-no-properties 1 url)
          (match-string-no-properties 2 url)))))
 
-(defun mevedel-view--image-display (path)
-  "Return an image display spec for PATH, or nil."
+(defun mevedel-view--image-sizing (window)
+  "Return inline-image sizing as a cons (MAX-WIDTH . MEASURED).
+MAX-WIDTH is the pixel width limit derived from
+`mevedel-view-inline-image-max-width'.  MEASURED is the window pixel
+width a ratio setting was resolved against, or nil for fixed-pixel
+sizing or when WINDOW is not live."
+  (let ((setting mevedel-view-inline-image-max-width))
+    (cond
+     ((not (floatp setting)) (cons setting nil))
+     ;; A float above 1 is not a ratio; treat it as pixels rather than
+     ;; multiplying it into an effectively unbounded width.
+     ((> setting 1.0) (cons (truncate setting) nil))
+     ((and window (window-live-p window))
+      (let ((width (window-body-width window t)))
+        (cons (max 1 (floor (* setting width))) width)))
+     (t (cons (max 1 (floor (* setting (frame-pixel-width)))) nil)))))
+
+(defun mevedel-view--image-display (path max-width)
+  "Return an image display spec for PATH capped at MAX-WIDTH pixels."
+  ;; ponytail: a remote artifact image re-reads its published bytes on
+  ;; every recreation; retain the decoded bytes alongside the source
+  ;; path if ratio-sized artifact images make TRAMP resizes slow.
   (when (and (display-images-p)
              (mevedel-view--image-file-p path))
     (when-let* ((target (mevedel-view--path-target path)))
@@ -346,19 +374,58 @@ True for linkify-exempt text and for positions inside RANGES."
               (create-image
                (mevedel-session-artifacts-read-artifact
                 (car target) (cdr target) t)
-               nil t :max-width mevedel-view-inline-image-max-width)
-            (create-image
-             path nil nil :max-width mevedel-view-inline-image-max-width))
+               nil t :max-width max-width)
+            (create-image path nil nil :max-width max-width))
         (error nil)))))
 
-(defun mevedel-view--put-image-display (start end path)
-  "Display PATH as an image over START..END when possible."
-  (when-let* ((image (mevedel-view--image-display path)))
-    (add-text-properties
-     start end
-     `(display ,image
-       help-echo ,(format "Image: %s" path)
-       rear-nonsticky (display help-echo)))))
+(defun mevedel-view--put-image-display (start end path &optional window)
+  "Display PATH as an image over START..END when possible.
+Under a ratio `mevedel-view-inline-image-max-width', the image region
+retains PATH and the measured width of WINDOW (defaulting to a window
+showing the buffer) so `mevedel-view--rerender-images' recreates only
+stale images."
+  (let* ((window (if (and window (window-live-p window))
+                     window
+                   (get-buffer-window (current-buffer) t)))
+         (sizing (mevedel-view--image-sizing window)))
+    (when-let* ((image (mevedel-view--image-display path (car sizing))))
+      (add-text-properties
+       start end
+       (if (cdr sizing)
+           `(display ,image
+             help-echo ,(format "Image: %s" path)
+             mevedel-view-image-source ,path
+             mevedel-view-image-width ,(cdr sizing)
+             rear-nonsticky (display help-echo mevedel-view-image-source
+                                     mevedel-view-image-width))
+         `(display ,image
+           help-echo ,(format "Image: %s" path)
+           rear-nonsticky (display help-echo)))))))
+
+(defun mevedel-view--rerender-images (&optional window)
+  "Recreate ratio-sized inline images stale for WINDOW.
+WINDOW defaults to a window showing the buffer.  A no-op when the
+buffer is undisplayed, the image setting is a fixed pixel width, or
+every image already matches the window.  Callers own undo and
+modified-flag discipline."
+  (require 'text-property-search)
+  (when-let* (((floatp mevedel-view-inline-image-max-width))
+              (window (if (and window (window-live-p window))
+                          window
+                        (get-buffer-window (current-buffer) t)))
+              (width (window-body-width window t)))
+    (save-excursion
+      (goto-char (point-min))
+      (let (match)
+        (while (setq match (text-property-search-forward
+                            'mevedel-view-image-source))
+          (let ((beg (prop-match-beginning match)))
+            (unless (eql width (get-text-property
+                                beg 'mevedel-view-image-width))
+              (mevedel-view--put-image-display
+               beg (prop-match-end match)
+               (prop-match-value match)
+               window))))))))
 
 (defun mevedel-view--decorate-local-images-in-range (start end)
   "Render local Markdown image links and bare image paths between START and END."
@@ -544,8 +611,17 @@ file.el#L12."
           (mevedel-view--decorate-code-blocks-in-range start end-marker)
           (mevedel-view--decorate-local-images-in-range start end-marker)
           (mevedel-view--render-markdown-url-links-in-range start end-marker)
-          (mevedel-view--linkify-paths-in-range start end-marker))
+          (mevedel-view--linkify-paths-in-range start end-marker)
+          (mevedel-view--decorate-tables-in-range start end-marker))
       (set-marker end-marker nil))))
+
+(defun mevedel-view--decorate-tables-in-range (start end)
+  "Render Markdown pipe tables between START and END.
+Runs after the link and path passes so buttons and faces inside cells
+carry into the rendered table."
+  (require 'mevedel-view-table)
+  (mevedel-view-table-decorate
+   start end (mevedel-view--src-block-body-ranges start end)))
 
 (defun mevedel-view--copy-code-block-button-action (button)
   "Copy BUTTON's fenced code block body."
@@ -712,6 +788,105 @@ file.el#L12."
         (set-marker body-start nil)
         (set-marker body-end nil)
         (set-marker content-end nil)))))
+
+
+
+;;
+;;; Window realignment
+
+(defvar-local mevedel-view--realign-timer nil
+  "Pending idle timer that re-lays out this view's tables and images.")
+;; A view rebuild re-invokes `mevedel-view-mode' on the live buffer;
+;; `kill-all-local-variables' must not orphan a scheduled timer.
+(put 'mevedel-view--realign-timer 'permanent-local t)
+
+(defun mevedel-view--realign-markdown (&optional buffer window)
+  "Re-lay out stale rendered tables and ratio images in BUFFER.
+WINDOW, when live and still showing BUFFER, is the window the layout
+targets -- the one whose change scheduled this job.  A pure re-layout:
+it stays off the undo list and leaves the modified flag, point, and
+the data buffer unchanged.  A no-op when BUFFER is not displayed in
+any window or nothing is stale."
+  (let ((buffer (or buffer (current-buffer))))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (setq mevedel-view--realign-timer nil)
+        (let ((window (and window
+                           (window-live-p window)
+                           (eq (window-buffer window) buffer)
+                           window))
+              (inhibit-read-only t)
+              (buffer-undo-list t)
+              (modified (buffer-modified-p)))
+          (unwind-protect
+              (progn
+                (require 'mevedel-view-table)
+                (mevedel-view-table-rerender window)
+                (mevedel-view--rerender-images window))
+            (restore-buffer-modified-p modified)))))))
+
+(defun mevedel-view--realign-on-window-change (window)
+  "Schedule a deferred re-layout for the buffer shown in WINDOW.
+Installed buffer-locally on `window-size-change-functions' and
+`window-buffer-change-functions'.  Mutating a buffer inside those
+redisplay hooks is unsafe, so the work is debounced onto one idle
+timer; the buffer-change hook also catches first display and content
+rendered while off-screen.  WINDOW rides along so the deferred job
+lays out for the window that actually changed, not an arbitrary one."
+  (when (window-live-p window)
+    (when (timerp mevedel-view--realign-timer)
+      (cancel-timer mevedel-view--realign-timer))
+    (setq mevedel-view--realign-timer
+          (run-with-idle-timer 0.15 nil #'mevedel-view--realign-markdown
+                               (current-buffer) window))))
+
+(defun mevedel-view--cancel-realign-timer ()
+  "Cancel any pending re-layout timer for the current buffer."
+  (when (timerp mevedel-view--realign-timer)
+    (cancel-timer mevedel-view--realign-timer))
+  (setq mevedel-view--realign-timer nil))
+
+(defun mevedel-view--enable-markdown-realign ()
+  "Keep the current buffer's rendered tables and images window-aligned.
+The handlers are buffer-local, so they run only for this buffer's
+windows and disappear with the buffer; the pending timer is cancelled
+on kill so no timer outlives its view."
+  (add-hook 'window-size-change-functions
+            #'mevedel-view--realign-on-window-change nil t)
+  (add-hook 'window-buffer-change-functions
+            #'mevedel-view--realign-on-window-change nil t)
+  (add-hook 'kill-buffer-hook #'mevedel-view--cancel-realign-timer nil t))
+
+
+;;
+;;; Copying rendered Markdown
+
+(defun mevedel-view--buffer-substring-filter (beg end &optional delete)
+  "Return BEG..END with rendered tables restored to canonical Markdown.
+A region overlapping a rendered table yields that table's complete
+pipe-table source, spliced into the surrounding copied text, so pastes
+stay valid Markdown.  With DELETE non-nil the region is also deleted,
+matching `buffer-substring--filter'."
+  (if (not (or (get-text-property beg 'mevedel-view-table-source)
+               (next-single-property-change beg 'mevedel-view-table-source
+                                            nil end)))
+      ;; No rendered table in the region: keep the stock filter's
+      ;; behavior for every ordinary copy and kill.
+      (buffer-substring--filter beg end delete)
+    (let ((parts nil)
+          (pos beg))
+      (while (< pos end)
+        (let ((source (get-text-property pos 'mevedel-view-table-source))
+              (next (or (next-single-property-change
+                         pos 'mevedel-view-table-source nil end)
+                        end)))
+          (push (if source
+                    (substring-no-properties source)
+                  (buffer-substring pos next))
+                parts)
+          (setq pos next)))
+      (prog1 (apply #'concat (nreverse parts))
+        (when delete (delete-region beg end))))))
 
 (provide 'mevedel-view-markdown)
 

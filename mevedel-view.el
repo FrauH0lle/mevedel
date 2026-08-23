@@ -178,6 +178,10 @@
                   "mevedel-view-interaction" ())
 
 ;; `mevedel-view-markdown'
+(declare-function mevedel-view--buffer-substring-filter
+                  "mevedel-view-markdown" (beg end &optional delete))
+(declare-function mevedel-view--enable-markdown-realign
+                  "mevedel-view-markdown" ())
 (autoload 'mevedel-view--normalize-local-file-uri-path
   "mevedel-view-markdown")
 
@@ -223,8 +227,12 @@
 ;;; Customization
 
 (defcustom mevedel-view-inline-image-max-width 600
-  "Maximum pixel width for inline images rendered in the view."
-  :type 'integer
+  "Maximum width for inline images rendered in the view.
+A positive integer is a fixed pixel width.  A float in (0, 1] sizes
+each image to that fraction of the displaying window's pixel width
+and re-scales it when the window changes."
+  :type '(choice (natnum :tag "Fixed pixels")
+                 (float :tag "Window-width fraction"))
   :group 'mevedel)
 
 (defvar-local mevedel-view--side-conversation-p nil
@@ -583,7 +591,14 @@ request progress row, and input zone.  The input zone starts at
 `mevedel-view--input-marker' with a read-only prompt prefix followed by
 the editable composer body.
 
-\\{mevedel-view-mode-map}")
+\\{mevedel-view-mode-map}"
+  (require 'mevedel-view-markdown)
+  ;; Copying a rendered table yields its canonical pipe Markdown.
+  (setq-local filter-buffer-substring-function
+              #'mevedel-view--buffer-substring-filter)
+  ;; Reflow rendered tables and ratio-sized images when a window
+  ;; showing this view changes size or first displays it.
+  (mevedel-view--enable-markdown-realign))
 
 
 ;;

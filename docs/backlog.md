@@ -274,62 +274,6 @@ become implemented, obsolete, or unjustified.
   parser/security tests. A loose origin or generated-text rule could let a
   model or untrusted input bypass a user-only skill restriction.
 
-## View rendering
-
-### Restore responsive Markdown tables and inline images
-
-- **Source:** B12-3 and `8f83a25` removed mevedel's table padder and declared
-  raw fontified pipe tables sufficient. That deletion removed a weak
-  implementation, not an unwanted feature. The reference behavior is
-  agent-shell's table reflow from
-  [`ff688fc`](https://github.com/xenodium/agent-shell/commit/ff688fcf49e465631134e3a01f0120404121708b)
-  and its shared table/image realignment in 0.73.
-- **What's owed:** Restore beautified tables as a view guarantee by adapting
-  the current agent-shell table renderer into a focused mevedel projection:
-  render canonical pipe-table Markdown into styled box-drawing rows, retain
-  the raw table source and measured window width, proportionally shrink and
-  wrap columns to the usable width (including any `line-prefix` inset), and
-  re-render only stale tables after window size or displayed-buffer changes.
-  Extend `mevedel-view-inline-image-max-width` to accept a window-width ratio
-  as well as fixed pixels; retain each responsive image's sizing input and
-  measured width so the same realignment job recreates only stale images.
-  Use buffer-local hooks and one debounced idle timer, never mutate from a
-  redisplay hook, and keep re-layout off the undo list without changing the
-  modified flag.
-- **Why deferred:** The view currently remains correct and reconstructable:
-  raw tables are readable and inline images use a fixed 600-pixel maximum.
-  The desired presentation needs a deliberate port of agent-shell's measured
-  renderer, not resurrection of mevedel's source-padding parser or a dependency
-  on agent-shell/md-mode. md-mode lacks auto-resize and its whole-document
-  renderer conflicts with mevedel's source panels, links, mentions, images,
-  and source mapping.
-- **Status check:** `mevedel-view--decorate-markdown-in-range` decorates code
-  blocks, images, links, and paths but leaves tables raw. In-flight streaming
-  already rebuilds the disposable view turn from the canonical data buffer,
-  so omit agent-shell's rendered-table row-refolding machinery. Preserve only
-  mevedel-owned source/read-only/turn properties across table replacement,
-  and exclude fenced source panels.
-- **Acceptance:** Resizing a frame, splitting a window, or first displaying an
-  off-screen view reflows tables and ratio-sized images after a debounce while
-  leaving the data buffer, point, window position, and active composer draft
-  unchanged. Cover a multiline draft beginning with `>`, tool-body indentation,
-  escaped pipes and backticks, links and faces inside cells, narrow hard wraps,
-  emoji/CJK width, fenced code exclusion, multiple tables, off-screen render,
-  and image resize. A table remains aligned under variable-pitch display.
-  Audit every copy path, choose and document whether it yields rendered box
-  characters or canonical Markdown, and test that contract before landing.
-- **Initial boundary:** Do not add md-mode or agent-shell as dependencies. Skip
-  cell-navigation keys, agent-shell streaming row extension, interactive image
-  `+`/`-`/`0` controls, image attributes, and glyph-height normalization until
-  usage demonstrates they are needed. Accept and document that one mutable
-  view buffer can hold only one layout when shown simultaneously in windows of
-  different widths.
-- **Blast radius:** Tables are frequent model output and currently lose useful
-  structure; fixed-width images waste space or overflow narrow views. A careless
-  resize implementation can corrupt source mapping, spread keymaps/faces, move
-  point, or damage the composer, so these are must-work view cases rather than
-  optional cosmetic tests.
-
 ## Request lifecycle
 
 ### Prevent system sleep during active requests
