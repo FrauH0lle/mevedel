@@ -32,6 +32,18 @@
   '(bwrap gio inotifywait)
   "Programs whose availability enables optional target workflows.")
 
+(defconst mevedel-execution-target--dependency-packages
+  '((rg . "ripgrep") (bash . "bash") (setsid . "util-linux"))
+  "Package supplying each required target program.")
+
+(defconst mevedel-execution-target--package-managers
+  '(("apt-get" . "apt-get install -y %s")
+    ("dnf" . "dnf install -y %s")
+    ("apk" . "apk add %s")
+    ("pacman" . "pacman -S --noconfirm %s")
+    ("zypper" . "zypper install -y %s"))
+  "Install command template for each recognized package manager.")
+
 (defconst mevedel-execution-target--probe-timeout 10
   "Maximum seconds spent in one readiness probe.")
 
@@ -514,6 +526,28 @@ sidecar publication commits."
               capabilities)))
     (nreverse capabilities)))
 
+(defun mevedel-execution-target--install-hint (target missing)
+  "Return the command installing MISSING programs on TARGET, or nil.
+Only a recognized package manager present on the target yields a hint;
+an unrecognized one leaves the readiness diagnostic naming the programs."
+  (let ((default-directory
+         (mevedel-execution-target-workspace-root target))
+        (remote (mevedel-execution-target-prefix target)))
+    (when-let* ((packages
+                 (delete-dups
+                  (delq nil
+                        (mapcar
+                         (lambda (name)
+                           (alist-get
+                            name
+                            mevedel-execution-target--dependency-packages))
+                         missing))))
+                (template
+                 (cdr (seq-find
+                       (lambda (entry) (executable-find (car entry) remote))
+                       mevedel-execution-target--package-managers))))
+      (format template (string-join packages " ")))))
+
 (defun mevedel-execution-target--probe-dependency-behavior
     (target capabilities)
   "Return CAPABILITIES that cannot satisfy TARGET's required behavior."
@@ -662,6 +696,10 @@ reconnect or non-nil REFRESH discards it and the matching Bubblewrap cache.
                             (incompatible
                              (mevedel-execution-target--probe-dependency-behavior
                               target capabilities))
+                            (install-hint
+                             (and missing
+                                  (mevedel-execution-target--install-hint
+                                   target missing)))
                             (home (cdr (assoc "HOME" environment)))
                             (missing-home
                              (or (null home) (string-empty-p home)))
@@ -712,6 +750,7 @@ reconnect or non-nil REFRESH discards it and the matching Bubblewrap cache.
                              :operating-system-version operating-system-version
                              :capabilities capabilities
                              :missing-dependencies missing
+                             :install-hint install-hint
                              :incompatible-dependencies incompatible
                              :incarnation incarnation))))
                  (error
@@ -756,7 +795,7 @@ reconnect or non-nil REFRESH discards it and the matching Bubblewrap cache.
          (_ "ready")))
       ('blocked
        (format
-        "%s; %s"
+        "%s%s; %s"
         (pcase reason
           ('missing-dependencies
            (concat
@@ -789,6 +828,9 @@ reconnect or non-nil REFRESH discards it and the matching Bubblewrap cache.
                    (or (plist-get readiness :sandbox-reason)
                        "unknown reason")))
           (_ "target readiness blocked"))
+        (if-let* ((hint (plist-get readiness :install-hint)))
+            (format "; install them with: %s" hint)
+          "")
         retry))
       (_ (format "not probed; %s" retry)))))
 
