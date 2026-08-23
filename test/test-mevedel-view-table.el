@@ -66,13 +66,13 @@
       (should (string-match-p "│ a | b" text))
       (should-not (string-match-p "\\\\|" text))))
 
-  :doc "backticks inside cells stay literal"
+  :doc "inline-code pipes, escapes, and backticks stay in one cell"
   (with-temp-buffer
-    (insert "| Fn | Doc |\n|---|---|\n| `car` | head |\n")
+    (insert "| Fn | Doc |\n|---|---|\n| `a|b` | `c\\|d` |\n")
     (mevedel-view-table-decorate (point-min) (point-max) nil)
-    (should (string-match-p "│ `car` │"
-                            (buffer-substring-no-properties
-                             (point-min) (point-max)))))
+    (should (string-search "│ `a|b` │ `c\\|d` │"
+                           (buffer-substring-no-properties
+                            (point-min) (point-max)))))
 
   :doc "multiple tables render independently"
   (with-temp-buffer
@@ -146,12 +146,38 @@
     (add-text-properties (match-beginning 0) (match-end 0)
                          '(display (image :file "pic.png")
                            mevedel-view-image-source "pic.png"
+                           mevedel-view-image-ratio 0.5
                            mevedel-view-image-width 400))
     (mevedel-view-table-decorate (point-min) (point-max) nil)
     (should-not (text-property-not-all (point-min) (point-max)
                                        'mevedel-view-image-source nil))
     (should-not (text-property-not-all (point-min) (point-max)
+                                       'mevedel-view-image-ratio nil))
+    (should-not (text-property-not-all (point-min) (point-max)
                                        'display nil)))
+
+  :doc "raw table fontification is stripped from cells and the trailing newline"
+  (with-temp-buffer
+    (insert "| Fn | Doc |\n|---|---|\n| lisp | head |\n")
+    (add-text-properties (point-min) (1- (point-max))
+                         '(font-lock-face markdown-table-face))
+    ;; The trailing newline is fontified as part of the raw table too.
+    (put-text-property (1- (point-max)) (point-max)
+                       'font-lock-face 'markdown-table-face)
+    ;; A cell mixing the table face with another face keeps the other.
+    (goto-char (point-min))
+    (search-forward "lisp")
+    (put-text-property (match-beginning 0) (match-end 0)
+                       'font-lock-face '(markdown-inline-code
+                                         markdown-table-face))
+    (mevedel-view-table-decorate (point-min) (point-max) nil)
+    (goto-char (point-min))
+    (search-forward "lisp")
+    (should (eq 'markdown-inline-code
+                (get-text-property (match-beginning 0) 'font-lock-face)))
+    (search-forward "head")
+    (should-not (get-text-property (match-beginning 0) 'font-lock-face))
+    (should-not (get-text-property (1- (point-max)) 'font-lock-face)))
 
   :doc "cells keep faces and button properties from earlier passes"
   (with-temp-buffer
@@ -185,6 +211,20 @@
                    (get-text-property (point-min)
                                       'mevedel-view-table-width)))))
 
+  :doc "variable-pitch ASCII uses the window pixel measurement path"
+  (mevedel-test--with-displayed-buffer
+    (let ((measurements 0))
+      (variable-pitch-mode 1)
+      (insert "| Name | Role |\n|---|---|\n| millie | reviewer |\n")
+      (cl-letf (((symbol-function 'display-graphic-p)
+                 (lambda (&optional _display) t))
+                ((symbol-function 'buffer-text-pixel-size)
+                 (lambda (&rest _)
+                   (cl-incf measurements)
+                   (cons (string-width (buffer-string)) 1))))
+        (mevedel-view-table-decorate (point-min) (point-max) nil))
+      (should (> measurements 0))))
+
   :doc "a line-prefix inset narrows the usable width"
   (mevedel-test--with-displayed-buffer
     (let ((cell (make-string 120 ?x)))
@@ -204,6 +244,20 @@
                                     (point-min) 'mevedel-view-table-source
                                     nil (point-max)))
                                'line-prefix))))))
+
+  :doc "a wider wrap-prefix narrows continuation rows"
+  (mevedel-test--with-displayed-buffer
+    (let ((cell (make-string 120 ?x)))
+      (insert "| A |\n|---|\n| " cell " |\n")
+      (add-text-properties (point-min) (point-max)
+                           '(line-prefix "  " wrap-prefix "      "))
+      (mevedel-view-table-decorate (point-min) (point-max) nil)
+      (let ((limit (floor (* (- (window-body-width (selected-window)) 6)
+                             0.9))))
+        (dolist (line (split-string (buffer-substring-no-properties
+                                     (point-min) (point-max))
+                                    "\n" t))
+          (should (<= (string-width line) limit))))))
 
   :doc "CJK cells count double-width characters"
   (with-temp-buffer
@@ -260,6 +314,25 @@
         (let ((before (buffer-string)))
           (mevedel-view-table-rerender)
           (should (equal before (buffer-string)))))))
+
+  :doc "re-renders multiple stale tables in one backward pass"
+  (mevedel-test--with-displayed-buffer
+    (insert "| a | b |\n|---|---|\n| 1 | 2 |\n\n"
+            "| x | y |\n|---|---|\n| 9 | 8 |\n")
+    (mevedel-view-table-decorate (point-min) (point-max) nil)
+    (put-text-property (point-min) (point-max)
+                       'mevedel-view-table-width nil)
+    (mevedel-view-table-rerender)
+    (goto-char (point-min))
+    (let ((count 0)
+          match)
+      (while (setq match (text-property-search-forward
+                          'mevedel-view-table-source))
+        (setq count (1+ count))
+        (should (eql (window-body-width (selected-window) t)
+                     (get-text-property (prop-match-beginning match)
+                                        'mevedel-view-table-width))))
+      (should (= 2 count))))
 
   :doc "a blanket display keymap at the table start never clobbers cell keymaps"
   (mevedel-test--with-displayed-buffer

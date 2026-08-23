@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Owns Markdown links, local images, paths, and fenced source panels in
-;; mevedel views.
+;; Owns Markdown links, local images, paths, fenced source panels, rendered
+;; table copying, and window-relative Markdown realignment in mevedel views.
 
 ;;; Code:
 
@@ -235,25 +235,46 @@ or committed; fixed session-cache existence is ignored."
                     (format "Visit %s:%d" path line)
                   (format "Visit %s" path)))))
 
-(defun mevedel-view--markdown-code-blocks (start end)
-  "Return fenced Markdown code blocks between START and END."
+(defun mevedel-view--markdown-code-blocks (start end &optional incomplete)
+  "Return fenced Markdown code blocks between START and END.
+When INCOMPLETE is non-nil, include an unclosed final block whose body
+ends at END."
   (let (blocks
         (case-fold-search nil))
     (save-excursion
       (goto-char start)
-      (while (re-search-forward "^[ \t]*```[^`\n]*\n" end t)
-        (let ((fence-start (match-beginning 0))
-              (fence-end (match-end 0))
-              (body-start (point)))
-          (if (re-search-forward "^[ \t]*```[ \t]*$" end t)
-              (push (list :fence-start fence-start
-                          :fence-end fence-end
-                          :body-start body-start
-                          :body-end (match-beginning 0)
-                          :end-fence-start (match-beginning 0)
-                          :end-fence-end (match-end 0))
-                    blocks)
-            (goto-char end)))))
+      (while (re-search-forward
+              "^[ \t]*\\(`\\{3,\\}\\|~\\{3,\\}\\)\\([^\n]*\\)\n" end t)
+        (let* ((fence (match-string-no-properties 1))
+               (delimiter (aref fence 0))
+               (info (match-string-no-properties 2))
+               (fence-start (match-beginning 0))
+               (fence-end (match-end 0))
+               (body-start (point))
+               (language (car (split-string info nil t)))
+               (closing-regexp
+                (concat "^[ \t]*" (regexp-quote fence)
+                        (regexp-quote (char-to-string delimiter))
+                        "*[ \t]*$")))
+          (unless (and (= delimiter ?`)
+                       (string-search "`" info))
+            (if (re-search-forward closing-regexp end t)
+                (push (list :fence-start fence-start
+                            :fence-end fence-end
+                            :language language
+                            :body-start body-start
+                            :body-end (match-beginning 0)
+                            :end-fence-start (match-beginning 0)
+                            :end-fence-end (match-end 0))
+                      blocks)
+              (when incomplete
+                (push (list :fence-start fence-start
+                            :fence-end fence-end
+                            :language language
+                            :body-start body-start
+                            :body-end end)
+                      blocks))
+              (goto-char end))))))
     (nreverse blocks)))
 
 (defun mevedel-view--src-block-body-ranges (start end)
@@ -268,7 +289,7 @@ or committed; fixed session-cache existence is ignored."
               (when (< body-start (match-beginning 0))
                 (push (cons body-start (match-beginning 0)) ranges))
             (goto-char end)))))
-    (dolist (block (mevedel-view--markdown-code-blocks start end))
+    (dolist (block (mevedel-view--markdown-code-blocks start end t))
       (when (< (plist-get block :body-start)
                (plist-get block :body-end))
         (push (cons (plist-get block :body-start)
@@ -352,10 +373,9 @@ width a ratio setting was resolved against, or nil for fixed-pixel
 sizing or when WINDOW is not live."
   (let ((setting mevedel-view-inline-image-max-width))
     (cond
-     ((not (floatp setting)) (cons setting nil))
-     ;; A float above 1 is not a ratio; treat it as pixels rather than
-     ;; multiplying it into an effectively unbounded width.
-     ((> setting 1.0) (cons (truncate setting) nil))
+     ((and (integerp setting) (> setting 0)) (cons setting nil))
+     ((not (and (floatp setting) (< 0.0 setting) (<= setting 1.0)))
+      (error "Invalid inline image maximum width: %S" setting))
      ((and window (window-live-p window))
       (let ((width (window-body-width window t)))
         (cons (max 1 (floor (* setting width))) width)))
@@ -381,9 +401,9 @@ sizing or when WINDOW is not live."
 (defun mevedel-view--put-image-display (start end path &optional window)
   "Display PATH as an image over START..END when possible.
 Under a ratio `mevedel-view-inline-image-max-width', the image region
-retains PATH and the measured width of WINDOW (defaulting to a window
-showing the buffer) so `mevedel-view--rerender-images' recreates only
-stale images."
+retains PATH, that ratio, and the measured width of WINDOW (defaulting
+to a window showing the buffer) so `mevedel-view--rerender-images'
+recreates only stale images."
   (let* ((window (if (and window (window-live-p window))
                      window
                    (get-buffer-window (current-buffer) t)))
@@ -391,12 +411,14 @@ stale images."
     (when-let* ((image (mevedel-view--image-display path (car sizing))))
       (add-text-properties
        start end
-       (if (cdr sizing)
+       (if (floatp mevedel-view-inline-image-max-width)
            `(display ,image
              help-echo ,(format "Image: %s" path)
              mevedel-view-image-source ,path
+             mevedel-view-image-ratio ,mevedel-view-inline-image-max-width
              mevedel-view-image-width ,(cdr sizing)
              rear-nonsticky (display help-echo mevedel-view-image-source
+                                     mevedel-view-image-ratio
                                      mevedel-view-image-width))
          `(display ,image
            help-echo ,(format "Image: %s" path)
@@ -404,13 +426,13 @@ stale images."
 
 (defun mevedel-view--rerender-images (&optional window)
   "Recreate ratio-sized inline images stale for WINDOW.
-WINDOW defaults to a window showing the buffer.  A no-op when the
-buffer is undisplayed, the image setting is a fixed pixel width, or
-every image already matches the window.  Callers own undo and
-modified-flag discipline."
+WINDOW defaults to a window showing the buffer.  Each image retains
+the ratio it was rendered with, independent of later configuration
+changes.  A no-op when the buffer is undisplayed or every tracked
+image already matches the window.  Callers own undo and modified-flag
+discipline."
   (require 'text-property-search)
-  (when-let* (((floatp mevedel-view-inline-image-max-width))
-              (window (if (and window (window-live-p window))
+  (when-let* ((window (if (and window (window-live-p window))
                           window
                         (get-buffer-window (current-buffer) t)))
               (width (window-body-width window t)))
@@ -418,14 +440,16 @@ modified-flag discipline."
       (goto-char (point-min))
       (let (match)
         (while (setq match (text-property-search-forward
-                            'mevedel-view-image-source))
-          (let ((beg (prop-match-beginning match)))
+                            'mevedel-view-image-ratio))
+          (let ((beg (prop-match-beginning match))
+                (ratio (prop-match-value match)))
             (unless (eql width (get-text-property
                                 beg 'mevedel-view-image-width))
-              (mevedel-view--put-image-display
-               beg (prop-match-end match)
-               (prop-match-value match)
-               window))))))))
+              (let ((mevedel-view-inline-image-max-width ratio))
+                (mevedel-view--put-image-display
+                 beg (prop-match-end match)
+                 (get-text-property beg 'mevedel-view-image-source)
+                 window)))))))))
 
 (defun mevedel-view--decorate-local-images-in-range (start end)
   "Render local Markdown image links and bare image paths between START and END."
@@ -533,6 +557,8 @@ modified-flag discipline."
                                 end t)
         (let* ((whole-start (match-beginning 0))
                (whole-end (match-end 0))
+               (source (buffer-substring-no-properties
+                        whole-start whole-end))
                (title (buffer-substring (match-beginning 1) (match-end 1)))
                (url (match-string-no-properties 2)))
           (unless (or (and (> whole-start (point-min))
@@ -551,7 +577,31 @@ modified-flag discipline."
              'follow-link t
              'face 'link
              'mouse-face 'highlight
-             'help-echo (format "Visit %s" url))))))))
+             'help-echo (format "Visit %s" url))
+            (put-text-property
+             whole-start (point) 'mevedel-view-markdown-source source)))))))
+
+(defun mevedel-view--markdown-source (start end)
+  "Return START..END with stripped Markdown constructs restored."
+  (let ((pos start)
+        parts)
+    (while (< pos end)
+      (let* ((source (get-text-property
+                      pos 'mevedel-view-markdown-source))
+             (run-end (next-single-property-change
+                       pos 'mevedel-view-markdown-source nil (point-max)))
+             (limit (min run-end end)))
+        (push (if (and source
+                       (<= run-end end)
+                       (>= (previous-single-property-change
+                            (min (1+ pos) (point-max))
+                            'mevedel-view-markdown-source nil (point-min))
+                           start))
+                  source
+                (buffer-substring pos limit))
+              parts)
+        (setq pos limit)))
+    (apply #'concat (nreverse parts))))
 
 (defun mevedel-view--linkify-path-reference
     (path-start path-end suffix-start suffix-end path)
@@ -612,16 +662,13 @@ file.el#L12."
           (mevedel-view--decorate-local-images-in-range start end-marker)
           (mevedel-view--render-markdown-url-links-in-range start end-marker)
           (mevedel-view--linkify-paths-in-range start end-marker)
-          (mevedel-view--decorate-tables-in-range start end-marker))
+          ;; Run after links and paths so their buttons and faces carry into
+          ;; rendered cells.
+          (require 'mevedel-view-table)
+          (mevedel-view-table-decorate
+           start end-marker
+           (mevedel-view--src-block-body-ranges start end-marker)))
       (set-marker end-marker nil))))
-
-(defun mevedel-view--decorate-tables-in-range (start end)
-  "Render Markdown pipe tables between START and END.
-Runs after the link and path passes so buttons and faces inside cells
-carry into the rendered table."
-  (require 'mevedel-view-table)
-  (mevedel-view-table-decorate
-   start end (mevedel-view--src-block-body-ranges start end)))
 
 (defun mevedel-view--copy-code-block-button-action (button)
   "Copy BUTTON's fenced code block body."
@@ -665,16 +712,6 @@ carry into the rendered table."
     ("sh" . sh-mode)
     ("shell" . sh-mode))
   "Best-effort major modes for common Markdown source block languages.")
-
-(defun mevedel-view--markdown-code-block-language (block)
-  "Return BLOCK's fenced language string, or nil."
-  (let ((fence (buffer-substring-no-properties
-                (plist-get block :fence-start)
-                (plist-get block :fence-end))))
-    (when (string-match "\\`[ \t]*```[ \t]*\\([^ \t\n`]*\\)" fence)
-      (let ((lang (string-trim (match-string 1 fence))))
-        (unless (string-empty-p lang)
-          lang)))))
 
 (defun mevedel-view--source-block-mode (language)
   "Return a major mode for source block LANGUAGE, or nil."
@@ -738,7 +775,7 @@ carry into the rendered table."
                        (eq (char-after end-fence-end) ?\n))
                   (1+ end-fence-end)
                 end-fence-end))
-             (language (mevedel-view--markdown-code-block-language block))
+             (language (plist-get block :language))
              (label (concat (or language "snippet") " ⧉"))
              (carried
               (mevedel-view--selected-text-properties
@@ -790,7 +827,6 @@ carry into the rendered table."
         (set-marker content-end nil)))))
 
 
-
 ;;
 ;;; Window realignment
 
@@ -834,8 +870,7 @@ timer; the buffer-change hook also catches first display and content
 rendered while off-screen.  WINDOW rides along so the deferred job
 lays out for the window that actually changed, not an arbitrary one."
   (when (window-live-p window)
-    (when (timerp mevedel-view--realign-timer)
-      (cancel-timer mevedel-view--realign-timer))
+    (mevedel-view--cancel-realign-timer)
     (setq mevedel-view--realign-timer
           (run-with-idle-timer 0.15 nil #'mevedel-view--realign-markdown
                                (current-buffer) window))))
@@ -867,26 +902,27 @@ A region overlapping a rendered table yields that table's complete
 pipe-table source, spliced into the surrounding copied text, so pastes
 stay valid Markdown.  With DELETE non-nil the region is also deleted,
 matching `buffer-substring--filter'."
-  (if (not (or (get-text-property beg 'mevedel-view-table-source)
-               (next-single-property-change beg 'mevedel-view-table-source
-                                            nil end)))
-      ;; No rendered table in the region: keep the stock filter's
-      ;; behavior for every ordinary copy and kill.
-      (buffer-substring--filter beg end delete)
-    (let ((parts nil)
-          (pos beg))
-      (while (< pos end)
-        (let ((source (get-text-property pos 'mevedel-view-table-source))
-              (next (or (next-single-property-change
-                         pos 'mevedel-view-table-source nil end)
-                        end)))
-          (push (if source
-                    (substring-no-properties source)
-                  (buffer-substring pos next))
-                parts)
-          (setq pos next)))
-      (prog1 (apply #'concat (nreverse parts))
-        (when delete (delete-region beg end))))))
+  (let ((start (min beg end))
+        (finish (max beg end)))
+    (if (not (text-property-not-all
+              start finish 'mevedel-view-table-source nil))
+        ;; No rendered table in the region: keep the stock filter's
+        ;; behavior for every ordinary copy and kill.
+        (buffer-substring--filter beg end delete)
+      (let ((parts nil)
+            (pos start))
+        (while (< pos finish)
+          (let ((source (get-text-property pos 'mevedel-view-table-source))
+                (next (or (next-single-property-change
+                           pos 'mevedel-view-table-source nil finish)
+                          finish)))
+            (push (if source
+                      (substring-no-properties source)
+                    (buffer-substring pos next))
+                  parts)
+            (setq pos next)))
+        (prog1 (apply #'concat (nreverse parts))
+          (when delete (delete-region start finish)))))))
 
 (provide 'mevedel-view-markdown)
 

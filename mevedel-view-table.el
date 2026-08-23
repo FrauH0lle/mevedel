@@ -21,8 +21,12 @@
 (eval-when-compile (require 'text-property-search))
 
 ;; `mevedel-view-markdown'
+(declare-function mevedel-view--markdown-source "mevedel-view-markdown"
+                  (start end))
 (declare-function mevedel-view--position-in-ranges-p "mevedel-view-markdown"
                   (position ranges))
+(declare-function mevedel-view--render-markdown-url-links-in-range
+                  "mevedel-view-markdown" (start end))
 (declare-function mevedel-view--selected-text-properties
                   "mevedel-view-markdown" (position properties))
 
@@ -74,13 +78,12 @@
 (defun mevedel-view-table--row-blocked-p (pos avoid-ranges)
   "Return non-nil when the table row at POS must stay raw."
   (or (get-text-property pos 'mevedel-view-no-linkify)
-      (get-text-property pos 'mevedel-view-table-source)
       (mevedel-view--position-in-ranges-p pos avoid-ranges)))
 
 (defun mevedel-view-table--find-tables (start end avoid-ranges)
   "Return pipe tables between START and END outside AVOID-RANGES.
-Each element is a plist with :start and :end covering two or more
-consecutive pipe rows, in buffer order."
+Each element is a (START . END) range covering two or more consecutive
+pipe rows, in reverse buffer order."
   (let ((tables nil)
         (inhibit-field-text-motion t))
     (save-excursion
@@ -101,33 +104,91 @@ consecutive pipe rows, in buffer order."
                       rows (1+ rows))
                 (forward-line 1))
               (when (and (>= rows 2) (<= table-end end))
-                (push (list :start table-start :end table-end) tables)))
+                (push (cons table-start table-end) tables)))
           (forward-line 1))))
-    (nreverse tables)))
+    tables))
 
 
 ;;
 ;;; Row parsing
 
+(defun mevedel-view-table--strip-table-faces (start end &optional object)
+  "Remove raw table fontification faces between START and END in OBJECT.
+OBJECT is a string or nil for the current buffer."
+  (dolist (prop '(face font-lock-face))
+    (let ((pos start))
+      (while (< pos end)
+        (let* ((next (or (next-single-property-change pos prop object end)
+                         end))
+               (value (get-text-property pos prop object))
+               (kept (cond
+                      ((null value) value)
+                      ((and (listp value) (not (keywordp (car value))))
+                       (remq 'markdown-table-face value))
+                      ((eq value 'markdown-table-face) nil)
+                      (t value))))
+          (unless (equal kept value)
+            (if kept
+                (put-text-property pos next prop
+                                   (if (and (listp kept) (null (cdr kept)))
+                                       (car kept)
+                                     kept)
+                                   object)
+              (remove-text-properties pos next (list prop nil) object)))
+          (setq pos next))))))
+
 (defun mevedel-view-table--unescape-cell (content)
-  "Return CONTENT with backslash-escaped pipes reduced to pipes.
-Other backslash sequences are left as written.  `display' properties
-are dropped so an inlined image inside a cell measures as its text,
-and the image realignment bookkeeping is dropped with them so the
-image pass never stamps a display spec into a rendered row."
-  (let ((result (string-replace "\\|" "|" content)))
+  "Return CONTENT with escaped pipes outside code reduced to pipes.
+Backslashes inside matched code spans and other backslash sequences
+are left as written.  `display' properties are dropped so an inlined
+image inside a cell measures as its text, and the image realignment
+bookkeeping is dropped with them so the image pass never stamps a
+display spec into a rendered row."
+  (let ((result
+         (with-temp-buffer
+           (let ((inhibit-read-only t))
+             (insert content)
+             (goto-char (point-min))
+             (while (re-search-forward "[\\\\`]" nil t)
+               (if (eq (char-before) ?`)
+                   (progn
+                     (goto-char (match-beginning 0))
+                     (mevedel-view-table--skip-code-span (point-max)))
+                 (if (eq (char-after) ?|)
+                     (delete-region (1- (point)) (point))
+                   (when (not (eobp))
+                     (forward-char 1))))))
+           (buffer-string))))
     (when (> (length result) 0)
       (remove-text-properties 0 (length result)
                               '(display nil
                                 mevedel-view-image-source nil
+                                mevedel-view-image-ratio nil
                                 mevedel-view-image-width nil)
-                              result))
+                              result)
+      (mevedel-view-table--strip-table-faces 0 (length result) result))
     result))
+
+(defun mevedel-view-table--skip-code-span (end)
+  "Move past a matching inline-code span starting at point before END.
+Return non-nil when a matching backtick run was found.  On failure,
+leave point after the opening run."
+  (let ((start (point)))
+    (skip-chars-forward "`" end)
+    (let ((ticks (- (point) start))
+          (after-open (point)))
+      (catch 'matched
+        (while (re-search-forward "`+" end t)
+          (when (= (- (match-end 0) (match-beginning 0)) ticks)
+            (throw 'matched t)))
+        (goto-char after-open)
+        nil))))
 
 (defun mevedel-view-table--parse-row (start end)
   "Parse the table row between START and END into trimmed cell strings.
 Cell strings keep the buffer text's properties.  A `|' preceded by a
-backslash is literal cell content, not a delimiter."
+backslash or inside a matched backtick span is literal cell content,
+not a delimiter."
   (let ((cells nil))
     (save-excursion
       (goto-char start)
@@ -135,7 +196,7 @@ backslash is literal cell content, not a delimiter."
         (goto-char (match-end 0)))
       (let ((cell-start (point)))
         (while (< (point) end)
-          (if (re-search-forward "[|\\]" end t)
+          (if (re-search-forward "[|\\\\`]" end t)
               (let ((ch (char-before))
                     (delim-pos (1- (point))))
                 (cond
@@ -144,10 +205,13 @@ backslash is literal cell content, not a delimiter."
                          (string-trim
                           (buffer-substring cell-start delim-pos)))
                         cells)
-                  (setq cell-start (point)))
+                 (setq cell-start (point)))
                  ((eq ch ?\\)
                   (when (< (point) end)
-                    (forward-char 1)))))
+                    (forward-char 1)))
+                 ((eq ch ?`)
+                  (goto-char delim-pos)
+                  (mevedel-view-table--skip-code-span end))))
             (goto-char end)))))
     (nreverse cells)))
 
@@ -170,11 +234,6 @@ Each row is a plist with :start, :end, :num, and :separator."
         (setq row-num (1+ row-num))
         (forward-line 1))
       (nreverse rows))))
-
-(defun mevedel-view-table--separator-row-num (rows)
-  "Return the index of the first separator row in ROWS, or nil."
-  (seq-position rows 'separator
-                (lambda (row _) (plist-get row :separator))))
 
 
 ;;
@@ -224,11 +283,17 @@ text scaling measures at its scaled width."
 
 (defun mevedel-view-table--string-faced-p (str)
   "Return non-nil when STR carries any face or font-lock-face property."
-  (and (> (length str) 0)
-       (or (get-text-property 0 'face str)
-           (get-text-property 0 'font-lock-face str)
-           (next-single-property-change 0 'face str)
-           (next-single-property-change 0 'font-lock-face str))))
+  (or (text-property-not-all 0 (length str) 'face nil str)
+      (text-property-not-all 0 (length str) 'font-lock-face nil str)))
+
+(defun mevedel-view-table--pixel-width-needed-p (str window)
+  "Return non-nil when STR needs pixel measurement in WINDOW."
+  (and (mevedel-view-table--pixel-capable-p window)
+       (or (assq 'default
+                 (buffer-local-value 'face-remapping-alist
+                                     (window-buffer window)))
+           (not (string-match-p "\\`[[:ascii:]]*\\'" str))
+           (mevedel-view-table--string-faced-p str))))
 
 (defun mevedel-view-table--display-width (str window)
   "Return the display width of STR in character columns.
@@ -236,9 +301,7 @@ Plain ASCII uses `string-width'.  Non-ASCII or faced content is
 pixel-measured against WINDOW when possible so columns line up under
 variable-pitch and mixed-glyph content; without a graphic WINDOW the
 `string-width' path is the complete fallback."
-  (if (and (mevedel-view-table--pixel-capable-p window)
-           (or (not (string-match-p "\\`[[:ascii:]]*\\'" str))
-               (mevedel-view-table--string-faced-p str)))
+  (if (mevedel-view-table--pixel-width-needed-p str window)
       (condition-case nil
           (let ((char-px (mevedel-view-table--char-pixel-width window))
                 (real-px (mevedel-view-table--measure-string str window)))
@@ -249,7 +312,7 @@ variable-pitch and mixed-glyph content; without a graphic WINDOW the
 (defun mevedel-view-table--longest-word (str window)
   "Return the display width of the longest unbreakable unit in STR.
 Line-breakable characters (CJK ideographs, kana, Hangul) can wrap
-anywhere, so each contributes only its own `char-width'."
+anywhere, so each contributes only its own display width."
   (if (or (null str) (string-empty-p str))
       0
     (let ((len (length str))
@@ -266,7 +329,11 @@ anywhere, so each contributes only its own `char-width'."
                                 (substring str word-start i) window)))
             (setq word-start nil))
           (cond
-           (breakable (setq longest (max longest (char-width ch))))
+           (breakable
+            (setq longest
+                  (max longest
+                       (mevedel-view-table--display-width
+                        (substring str i (1+ i)) window))))
            ((and (not separator) (not word-start))
             (setq word-start i)))))
       longest)))
@@ -303,21 +370,28 @@ and the cell wrapper hard-breaks long words."
 ;;
 ;;; Cell wrapping
 
-(defun mevedel-view-table--wrap-char-width (text pos)
+(defun mevedel-view-table--wrap-char-width (text pos &optional window)
   "Return the display width contribution of the char at POS in TEXT.
 U+FE0F VARIATION SELECTOR-16 counts as 1 so an emoji presentation
-sequence totals its rendered two cells."
-  ;; ponytail: wrap decisions use char-width only; a face pulling in a
-  ;; wider font can overflow a wrapped faced cell by a column.  Add
-  ;; agent-shell's per-face pixel-ratio scaling if that shows up.
+sequence totals its rendered two cells.  In a graphic WINDOW, faced
+text and a remapped default face use their actual pixel width."
   (let ((ch (aref text pos)))
-    (if (= ch #xFE0F) 1 (char-width ch))))
+    (cond
+     ((= ch #xFE0F) 1)
+     ((mevedel-view-table--pixel-width-needed-p
+       (substring text pos (1+ pos)) window)
+      (condition-case nil
+          (/ (float (mevedel-view-table--measure-string
+                     (substring text pos (1+ pos)) window))
+             (mevedel-view-table--char-pixel-width window))
+        (error (char-width ch))))
+     (t (char-width ch)))))
 
-(defun mevedel-view-table--wrap-string-width (text)
+(defun mevedel-view-table--wrap-string-width (text &optional window)
   "Return the VS-16-aware display width of TEXT in columns."
   (let ((sum 0))
     (dotimes (i (length text))
-      (setq sum (+ sum (mevedel-view-table--wrap-char-width text i))))
+      (setq sum (+ sum (mevedel-view-table--wrap-char-width text i window))))
     sum))
 
 (defun mevedel-view-table--break-after-p (text i)
@@ -328,14 +402,15 @@ attached."
   (and (aref (char-category-set (aref text i)) ?|)
        (> (char-width (aref text (1+ i))) 0)))
 
-(defun mevedel-view-table--wrap-text (text width)
+(defun mevedel-view-table--wrap-text (text width &optional window)
   "Wrap TEXT to fit WIDTH columns, returning a list of lines.
 Text properties are preserved across wrapped lines.  Breaks happen
 after whitespace or a line-breakable character; a run with no break
-point splits at the width limit."
+point splits at the width limit.  WINDOW supplies pixel metrics when
+the text or the buffer's default face needs them."
   (cond
    ((or (null text) (string-empty-p text)) (list ""))
-   ((<= (mevedel-view-table--wrap-string-width text)
+   ((<= (mevedel-view-table--wrap-string-width text window)
         (- width (seq-count (lambda (c) (= c #xFE0F)) text)))
     (list text))
    (t
@@ -348,11 +423,11 @@ point splits at the width limit."
           (while (and (< end-pos len)
                       (<= (+ line-width
                              (mevedel-view-table--wrap-char-width
-                              text end-pos))
+                              text end-pos window))
                           width))
             (setq line-width (+ line-width
                                 (mevedel-view-table--wrap-char-width
-                                 text end-pos)))
+                                 text end-pos window)))
             (setq end-pos (1+ end-pos)))
           (when (= end-pos pos)
             (setq end-pos (1+ pos)))
@@ -380,10 +455,7 @@ point splits at the width limit."
 
 (defun mevedel-view-table--pad-string-ascii (str width)
   "Pad STR with plain spaces to reach WIDTH columns."
-  (let ((current (string-width str)))
-    (if (>= current width)
-        str
-      (concat str (make-string (- width current) ?\s)))))
+  (concat str (make-string (max 0 (- width (string-width str))) ?\s)))
 
 (defun mevedel-view-table--pad-string (str width window &optional force-pixel)
   "Pad STR with spaces to reach WIDTH columns.
@@ -391,10 +463,9 @@ Non-ASCII or faced content is padded pixel-accurately against WINDOW
 so right borders align across rows; the trailing partial space uses a
 pixel `display' spec.  FORCE-PIXEL keeps all wrapped lines of one cell
 on the same padding path."
-  (if (and (mevedel-view-table--pixel-capable-p window)
-           (or force-pixel
-               (not (string-match-p "\\`[[:ascii:]]*\\'" str))
-               (mevedel-view-table--string-faced-p str)))
+  (if (or (and force-pixel
+               (mevedel-view-table--pixel-capable-p window))
+          (mevedel-view-table--pixel-width-needed-p str window))
       (condition-case nil
           (let* ((char-px (mevedel-view-table--char-pixel-width window))
                  (target-px (* width char-px))
@@ -440,13 +511,11 @@ on the same padding path."
 
 (defun mevedel-view-table--render-separator-row (col-widths)
   "Build the rendered separator line for COL-WIDTHS."
-  (concat
-   (mevedel-view-table--border "├")
-   (mapconcat (lambda (w)
-                (mevedel-view-table--border (make-string (+ w 2) ?─)))
-              col-widths
-              (mevedel-view-table--border "┼"))
-   (mevedel-view-table--border "┤")))
+  (mevedel-view-table--border
+   (concat "├"
+           (mapconcat (lambda (w) (make-string (+ w 2) ?─))
+                      col-widths "┼")
+           "┤")))
 
 (defun mevedel-view-table--render-data-row (cells col-widths row-face window)
   "Build the rendered string for data row CELLS, possibly multi-line.
@@ -455,12 +524,12 @@ non-nil, is layered under each cell's own faces.  WINDOW is used for
 pixel-accurate padding."
   (let* ((pipe (mevedel-view-table--border "│"))
          (wrapped (seq-mapn (lambda (cell width)
-                              (mevedel-view-table--wrap-text cell width))
+                              (mevedel-view-table--wrap-text
+                               cell width window))
                             cells col-widths))
          (force-pixel-flags
           (mapcar (lambda (cell)
-                    (or (not (string-match-p "\\`[[:ascii:]]*\\'" cell))
-                        (mevedel-view-table--string-faced-p cell)))
+                    (mevedel-view-table--pixel-width-needed-p cell window))
                   cells))
          (max-lines (apply #'max 1 (mapcar #'length wrapped)))
          (lines nil))
@@ -518,8 +587,12 @@ table's position."
   (with-temp-buffer
     (insert source)
     (setq-local inhibit-field-text-motion t)
+    (mevedel-view--render-markdown-url-links-in-range
+     (point-min) (point-max))
     (let* ((rows (mevedel-view-table--collect-rows))
-           (separator-row-num (mevedel-view-table--separator-row-num rows))
+           (separator-row-num
+            (seq-position rows 'separator
+                          (lambda (row _) (plist-get row :separator))))
            (parsed-rows
             (mapcar (lambda (row)
                       (cons row
@@ -581,9 +654,12 @@ table's position."
 
 (defun mevedel-view-table--inset-at (pos)
   "Return the display columns consumed by line prefixes at POS."
-  (let ((prefix (or (get-text-property pos 'line-prefix)
-                    (and (stringp line-prefix) line-prefix))))
-    (if (stringp prefix) (string-width prefix) 0)))
+  (let ((line (or (get-text-property pos 'line-prefix)
+                  (and (stringp line-prefix) line-prefix)))
+        (wrap (or (get-text-property pos 'wrap-prefix)
+                  (and (stringp wrap-prefix) wrap-prefix))))
+    (max (if (stringp line) (string-width line) 0)
+         (if (stringp wrap) (string-width wrap) 0))))
 
 (defun mevedel-view-table--rear-nonsticky (carried)
   "Return the rear-nonsticky value for a rendered table.
@@ -641,21 +717,26 @@ layout targets; otherwise a window showing the buffer is used."
                'mevedel-view-table-width width
                'mevedel-view-no-linkify t
                'rear-nonsticky (mevedel-view-table--rear-nonsticky
-                                carried)))))))
+                                carried)))
+        ;; The newline after the raw table kept its pipe-table
+        ;; fontification; a background face there paints a stray band
+        ;; to the window edge.
+        (when (eq (char-after rend) ?\n)
+          (mevedel-view-table--strip-table-faces rend (1+ rend)))))))
 
 (defun mevedel-view-table-decorate (start end avoid-ranges)
   "Render Markdown pipe tables between START and END.
-Tables overlapping AVOID-RANGES, linkify-exempt text, or an already
-rendered table are left raw."
+Tables overlapping AVOID-RANGES or linkify-exempt text stay raw;
+already rendered regions are ignored."
   (require 'mevedel-view-markdown)
   ;; Render back to front so earlier bounds stay valid as each
   ;; replacement shifts everything after it.
-  (dolist (table (nreverse
-                  (mevedel-view-table--find-tables start end avoid-ranges)))
+  (dolist (table (mevedel-view-table--find-tables start end avoid-ranges))
     (mevedel-view-table--render-region
-     (plist-get table :start)
-     (plist-get table :end)
-     (buffer-substring (plist-get table :start) (plist-get table :end)))))
+     (car table)
+     (cdr table)
+     (mevedel-view--markdown-source
+      (car table) (cdr table)))))
 
 (defun mevedel-view-table-rerender (&optional window)
   "Re-render tables whose stored width no longer matches WINDOW.
@@ -672,28 +753,17 @@ modified-flag discipline."
                           window
                         (get-buffer-window (current-buffer) t)))
               (width (window-body-width window t)))
-    (let ((regions nil))
-      (save-excursion
-        (goto-char (point-min))
-        (let (match)
-          (while (setq match (text-property-search-forward
-                              'mevedel-view-table-source))
-            (let ((beg (prop-match-beginning match)))
-              (unless (eql width (get-text-property
-                                  beg 'mevedel-view-table-width))
-                (push (list (copy-marker beg)
-                            (copy-marker (prop-match-end match))
-                            (prop-match-value match))
-                      regions))))))
-      (save-excursion
-        (dolist (region (nreverse regions))
-          (mevedel-view-table--render-region
-           (marker-position (nth 0 region))
-           (marker-position (nth 1 region))
-           (nth 2 region)
-           window)
-          (set-marker (nth 0 region) nil)
-          (set-marker (nth 1 region) nil))))))
+    (save-excursion
+      (goto-char (point-max))
+      (let (match)
+        (while (setq match (text-property-search-backward
+                            'mevedel-view-table-source))
+          (let ((beg (prop-match-beginning match)))
+            (unless (eql width (get-text-property
+                                beg 'mevedel-view-table-width))
+              (mevedel-view-table--render-region
+               beg (prop-match-end match) (prop-match-value match)
+               window))))))))
 
 (provide 'mevedel-view-table)
 
