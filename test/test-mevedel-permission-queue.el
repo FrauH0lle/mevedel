@@ -745,12 +745,34 @@
   (let* ((origin "/root/worker/verifier")
          (entry (list :origin origin)))
     (should (equal origin
-                   (mevedel-permission-queue--attribution-origin entry)))))
+                   (mevedel-permission-queue--attribution-origin entry))))
+
+  :doc "root ToolScript calls identify the envelope and child"
+  (should
+   (equal "ToolScript ptc-1 (child ptc-1/2)"
+          (mevedel-permission-queue--attribution-origin
+           '(:origin "/root" :call-source ptc
+             :tool-use-id "ptc-1/2" :parent-tool-use-id "ptc-1")))))
 
 (mevedel-deftest mevedel-permission-queue--render-generic
   (:quiet t :doc "renders generic permission queue entries")
   ,test
   (test)
+
+  :doc "ToolScript prompts show the envelope and child identity"
+  (let* ((session (test-pq--make-session))
+         (entry (list :kind 'generic :tool-name "Read"
+                      :origin "/root" :call-source 'ptc
+                      :tool-use-id "ptc-1/2"
+                      :parent-tool-use-id "ptc-1"
+                      :session session :callback #'ignore))
+         attribution)
+    (setf (mevedel-session-permission-queue session) (list entry))
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-attributed)
+               (lambda (_tool _path _always origin _cont _count _entry)
+                 (setq attribution origin))))
+      (mevedel-permission-queue--render-generic entry))
+    (should (equal "ToolScript ptc-1 (child ptc-1/2)" attribution)))
 
   :doc "no-workspace entries still render through the generic prompt adapter"
   (let* ((session (test-pq--make-session))

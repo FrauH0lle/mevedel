@@ -32,10 +32,16 @@
 ;; `mevedel-view-render'
 (declare-function mevedel-view-render-add-display-properties
                   "mevedel-view-render" (start end &optional default-vtype))
+(declare-function mevedel-view-render-child-calls-end
+                  "mevedel-view-render" (start limit))
 (declare-function mevedel-view-render-collapsed-disclosure
                   "mevedel-view-render" (data-buf source vtype))
 (declare-function mevedel-view-render-insert-expanded-disclosure
                   "mevedel-view-render" (data-buf source vtype header))
+(declare-function mevedel-view-render-section-body-end
+                  "mevedel-view-render" (start limit))
+(declare-function mevedel-view-render-toggle-child-call
+                  "mevedel-view-render" ())
 (declare-function mevedel-view-render-toggle-hook-context
                   "mevedel-view-render" ())
 (declare-function mevedel-view-render-toggle-turn
@@ -91,7 +97,7 @@
 
 (defvar mevedel-view-disclosure--collapsible-vtypes
   '(thinking-summary tool-summary response request-failure agent-handle
-    prompt-summary hook-context hook-audit
+    prompt-summary hook-context hook-audit tool-child
     system-reminder-summary)
   "View types that `mevedel-view-toggle-section' treats as section folds.
 Turn-level folds (`turn-header', `turn-summary') are handled
@@ -197,23 +203,34 @@ Preserve any discriminator from PREVIOUS-KEY while rebasing its source."
           (make-hash-table :test #'equal)))
   mevedel-view-disclosure--source-states)
 
+(defun mevedel-view-disclosure-record-state-for-key (key collapsed)
+  "Record COLLAPSED for disclosure KEY.
+Callers that discriminate several sections sharing one source range,
+such as the nested call rows of a compound tool, own their key."
+  (when key
+    (puthash key (and collapsed t)
+             (mevedel-view-disclosure--ensure-states))))
+
+(defun mevedel-view-disclosure-state-for-key (key)
+  "Return (KEY . COLLAPSED) for remembered KEY, or nil when unremembered."
+  (when (and key (hash-table-p mevedel-view-disclosure--source-states))
+    (let ((value (gethash key mevedel-view-disclosure--source-states
+                          mevedel-view-disclosure--missing-state)))
+      (unless (eq value mevedel-view-disclosure--missing-state)
+        (cons key value)))))
+
 (defun mevedel-view-disclosure-record-state (source vtype collapsed)
   "Record source-backed collapse state for SOURCE and VTYPE.
 COLLAPSED is stored as t for collapsed and nil for expanded."
-  (when-let* ((key (mevedel-view-disclosure-state-key source vtype)))
-    (puthash key (and collapsed t)
-             (mevedel-view-disclosure--ensure-states))))
+  (mevedel-view-disclosure-record-state-for-key
+   (mevedel-view-disclosure-state-key source vtype) collapsed))
 
 (defun mevedel-view-disclosure-state-entry (source vtype)
   "Return saved collapse state entry for SOURCE and VTYPE, or nil.
 The returned cons is (KEY . COLLAPSED), where COLLAPSED may be nil for
 an explicitly expanded section."
-  (when-let* ((key (mevedel-view-disclosure-state-key source vtype))
-              ((hash-table-p mevedel-view-disclosure--source-states)))
-    (let ((value (gethash key mevedel-view-disclosure--source-states
-                          mevedel-view-disclosure--missing-state)))
-      (unless (eq value mevedel-view-disclosure--missing-state)
-        (cons key value)))))
+  (mevedel-view-disclosure-state-for-key
+   (mevedel-view-disclosure-state-key source vtype)))
 
 (defun mevedel-view-disclosure-apply-rendering-state (rendering source)
   "Return RENDERING with saved collapse state from SOURCE applied.
@@ -385,6 +402,9 @@ a marker so toggles that change buffer length do not invalidate the walk."
                       (cond
                        ((eq vtype 'mailbox-delivery)
                         (mevedel-view-disclosure--toggle-mailbox))
+                       ((eq vtype 'tool-child)
+                        (require 'mevedel-view-render)
+                        (mevedel-view-render-toggle-child-call))
                        ((cdr entry)
                         (mevedel-view-disclosure--collapse-section source vtype))
                        (t
@@ -453,6 +473,9 @@ section only."
      ((eq vtype 'hook-audit)
       (require 'mevedel-view-audit)
       (mevedel-view-audit-toggle-hook-audit))
+     ((eq vtype 'tool-child)
+      (require 'mevedel-view-render)
+      (mevedel-view-render-toggle-child-call))
      ((and source (memq vtype mevedel-view-disclosure--collapsible-vtypes))
       (if collapsed
           (mevedel-view-disclosure--expand-section source vtype)
@@ -650,18 +673,21 @@ from signalling `args-out-of-range' on stale source coordinates."
                 (setq source
                       (mevedel-view-render-insert-expanded-disclosure
                        data-buf source vtype header))
-                (add-text-properties
-                 view-start (point)
-                 `(mevedel-view-source ,source
-                   mevedel-view-source-key
-                   ,(mevedel-view-disclosure-state-key
-                     source vtype source-key)
-                   mevedel-view-type ,vtype
-                   mevedel-view-collapsed nil))
-                (mevedel-view-disclosure-record-state source vtype nil)
-                (when turn-id
-                  (put-text-property
-                   view-start (point) 'mevedel-view-turn-id turn-id))
+                (let ((body-end
+                       (mevedel-view-render-section-body-end
+                        view-start (point))))
+                  (add-text-properties
+                   view-start body-end
+                   `(mevedel-view-source ,source
+                     mevedel-view-source-key
+                     ,(mevedel-view-disclosure-state-key
+                       source vtype source-key)
+                     mevedel-view-type ,vtype
+                     mevedel-view-collapsed nil))
+                  (mevedel-view-disclosure-record-state source vtype nil)
+                  (when turn-id
+                    (put-text-property
+                     view-start body-end 'mevedel-view-turn-id turn-id)))
                 (when in-flight-after-section-p
                   (mevedel-view-stream-set-in-flight-turn-start (point))))
             (set-marker-insertion-type mevedel-view--input-marker nil)))))))
@@ -682,7 +708,8 @@ from signalling `args-out-of-range' on stale source coordinates."
       (setq source (plist-get rendering :source))
       (let* ((inhibit-read-only t)
              (view-start (car bounds))
-             (view-end (cdr bounds))
+             (view-end (mevedel-view-render-child-calls-end
+                        (cdr bounds) (point-max)))
              (turn-id (get-text-property view-start 'mevedel-view-turn-id))
              (source-key
               (get-text-property view-start 'mevedel-view-source-key))

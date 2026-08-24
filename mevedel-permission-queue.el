@@ -151,16 +151,25 @@ Return non-nil when this call delivered or consumed the outcome."
       t)))
 
 (defun mevedel-permission-queue--attribution-origin (entry)
-  "Return ENTRY's non-root canonical path for prompt attribution."
-  (let ((origin (plist-get entry :origin)))
-    (and (not (equal origin "/root")) origin)))
+  "Return ENTRY's user-facing prompt attribution, or nil for root."
+  (let ((origin (plist-get entry :origin))
+        (source (plist-get entry :call-source)))
+    (cond
+     ((eq source 'ptc)
+      (let ((parent (plist-get entry :parent-tool-use-id))
+            (child (plist-get entry :tool-use-id)))
+        (format "ToolScript %s%s"
+                (or parent "script")
+                (if child (format " (child %s)" child) ""))))
+     ((not (equal origin "/root")) origin))))
 
 (defun mevedel-permission-queue--log-props (entry &rest props)
   "Return sanitized permission diagnostic properties for ENTRY plus PROPS."
   (let ((base nil))
     (dolist (key '(:kind :tool-name :specifier-key :specifier-value
                    :protected-path :resource-path :resource-access
-                   :origin :command-class
+                   :origin :tool-use-id :parent-tool-use-id :call-source
+                   :command-class
                    :mode :commands-summary :sandbox-permissions
                    :additional-permissions
                    :requested-additional-permissions
@@ -222,6 +231,9 @@ ENTRY plist keys:
   :include-always        -- boolean
   :workspace             -- workspace struct or nil
   :origin                -- canonical requesting agent path
+  :tool-use-id           -- nested or provider tool-call identity
+  :parent-tool-use-id    -- owning compound tool-call identity
+  :call-source           -- nested call source such as `ptc'
   :command               -- string (`bash' only)
   :analysis              -- normalized Bash analysis (`bash' only)
   :command-class         -- Bash command class (`bash' only)

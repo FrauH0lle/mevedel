@@ -105,6 +105,24 @@
       (should (eq 'deny-rule (plist-get decision :via)))
       (should (eq :session (plist-get decision :bucket)))))
 
+  :doc "allows read-only access to installed manuals without granting edits"
+  (let* ((mevedel-tool-registry--source-dir "/package/")
+         (path "/package/docs/ptc-dialect.md")
+         (read-context
+          (mevedel-permission--preflight
+           "Read"
+           :tool-struct (mevedel-tool--create :name "Read" :read-only-p t)
+           :path path :allowed-roots '("/project")))
+         (edit-context
+          (mevedel-permission--preflight
+           "Edit"
+           :tool-struct (mevedel-tool--create :name "Edit" :read-only-p nil)
+           :path path :allowed-roots '("/project"))))
+    (should-not (plist-get read-context :workspace-boundary-p))
+    (should (member "/package/" (plist-get read-context :allowed-roots)))
+    (should (plist-get edit-context :workspace-boundary-p))
+    (should-not (member "/package/" (plist-get edit-context :allowed-roots))))
+
   :doc "derives protected target-home facts from the owning session"
   (let* ((target (mevedel-execution-target-create
                   "/ssh:user@host:/srv/project/"))
@@ -1009,7 +1027,10 @@
                           :workspace workspace)))
             (should (equal path (plist-get context :path)))
             (should (equal root (plist-get context :workspace-root)))
-            (should (equal (list root)
+            (should (equal (list (file-name-as-directory
+                                  (expand-file-name
+                                   mevedel-tool-registry--source-dir))
+                                 root)
                            (plist-get context :allowed-roots)))
             (should (eq :path (plist-get context :specifier-key)))
             (should (equal path (plist-get context :specifier-value)))

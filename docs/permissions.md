@@ -250,6 +250,12 @@ target-native codec as workspace authority, while another client's global
 rules are recomputed locally on resume. Invocation-only authority is consumed
 by the approved call and is not stored.
 
+Read-only tools also receive mevedel's installed package source directory as
+an allowed root, so the model can read bundled manuals named by an absolute
+tool-description path. Mutation-capable tools do not receive this root; an
+installed package outside the active workspace therefore remains outside their
+automatic edit boundary.
+
 A conversation or worktree session fork copies the source session's permission
 mode, sandbox mode, session permission rules, and resource grants at the fork
 point. Subsequent authority changes are local to the source or fork unless they
@@ -299,15 +305,15 @@ permission chain.
 
 ## Prompt queues
 
-The root session owns one authority boundary for its complete agent tree.
-Every child uses the root session's permission mode, sandbox mode,
-user-authoritative permission rules, and resource grants. A child may exercise
-that existing authority but cannot broaden it independently. Permission
-prompts from the complete tree are therefore queued on the root session, not
-displayed as independent blocking overlays, and carry the requesting agent's
-canonical path for attribution.
-`mevedel-permission-queue.el` owns a
-heterogeneous FIFO with four entry kinds:
+The root session owns one authority boundary for its complete agent tree. Every
+child uses the root session's permission mode, sandbox mode, user-authoritative
+permission rules, and resource grants. A child may exercise that existing
+authority but cannot broaden it independently. Permission prompts from the
+complete tree are therefore queued on the root session, not displayed as
+independent blocking overlays, and carry the requesting agent's canonical path
+for attribution. Nested ToolScript asks instead show their envelope and child
+tool-use identities, including for root-owned requests.
+`mevedel-permission-queue.el` owns a heterogeneous FIFO with four entry kinds:
 
 - `generic` for pipeline permission asks
 - `bash` for Bash command confirmation

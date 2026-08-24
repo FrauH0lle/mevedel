@@ -335,6 +335,7 @@ function uses recorded extents and never scans TEXT."
         command-bodies
         instruction-reminders
         permission-rules
+        (ptc-primitives :unrestricted)
         hook-rules
         invoked-skills
         hook-contexts
@@ -358,6 +359,10 @@ function uses recorded extents and never scans TEXT."
               (setq permission-rules
                     (append permission-rules
                             (plist-get context :permission-rules))
+                    ptc-primitives
+                    (mevedel-skills-intersect-ptc-primitives
+                     ptc-primitives
+                     (plist-get context :ptc-primitives))
                     hook-rules
                     (append hook-rules (plist-get context :hook-rules)))
               (when (= command-count 1)
@@ -371,6 +376,7 @@ function uses recorded extents and never scans TEXT."
           :command-bodies (nreverse command-bodies)
           :instruction-reminders (nreverse instruction-reminders)
           :permission-rules permission-rules
+          :ptc-primitives ptc-primitives
           :hook-rules hook-rules
           :invoked-skills invoked-skills
           :hook-contexts hook-contexts
@@ -399,6 +405,7 @@ function uses recorded extents and never scans TEXT."
            "\n\n"))
          (request-context
           (list :permission-rules (plist-get aggregate :permission-rules)
+                :ptc-primitives (plist-get aggregate :ptc-primitives)
                 :hook-rules (plist-get aggregate :hook-rules)
                 :invoked-skills (plist-get aggregate :invoked-skills))))
     (when (= (plist-get aggregate :command-count) 1)

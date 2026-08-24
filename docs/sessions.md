@@ -125,35 +125,34 @@ lease or publication tree.  A session directory containing both control
 artifacts, or a persisted authority profile that disagrees with its workspace
 category, is rejected rather than guessed.
 
-The data buffer is locked to `org-mode` so `gptel-org--save-state`
-can round-trip text-property bounds via `GPTEL_BOUNDS`. The sidecar
-holds session-wide state that doesn't live in the buffer text:
-permission rules, exact session resource grants, tasks, prompt-index (driving
-the rewind picker and latest resume preview), `:file-snapshots` (per-turn
-pre-turn checkpoints of tracked files, including absent markers and known
-capture gaps; post-turn copies remain alongside them for historical Fork),
-workspace identity, `:working-directory`,
-fork lineage (`:fork-type`, `:forked-from-session-id`,
-`:forked-from-turn`, and `:forked-from-fork-point-id`), and
-Worktree Fork origin (`:worktree-source-root`, `:worktree-directory`,
-`:worktree-branch`, and `:worktree-base-commit`), and
-`:agent-transcripts` presentation metadata and the explicit `:agent-registry`
-containing retained paths, frozen configurations, activity, mailboxes, and
-conversation locations. It records only the selected `:preset-name`; resume
-rebuilds mevedel variables from that currently registered trusted preset, so
-sidecar data cannot name or populate buffer locals. It also records the
-session's exact `:model-provider` and explicit `:reasoning-effort`. This
-removal of persisted preset variable keys and values changes the sidecar format
-to `v0.5.3`; older sessions are intentionally rejected rather than migrated.
-A Session Fork also copies the source session's permission mode,
-sandbox mode, session permission rules, and exact resource grants at the fork
-point. Parent and child then diverge independently.
-Other gptel buffer-local settings are request-time state only; mevedel does
-not persist them as Org properties.
-An Agent `summary` selection is persisted only in the child transcript as a
-labelled `<task-background>` block before the authoritative Agent Task. The
-parent sidecar and tool result retain only provider/model/effort metadata, not
-the generated summary text.
+The data buffer is locked to `org-mode` so `gptel-org--save-state` can
+round-trip text-property bounds via `GPTEL_BOUNDS`. The sidecar holds
+session-wide state that doesn't live in the buffer text: permission rules,
+exact session resource grants, tasks, prompt-index (driving the rewind picker
+and latest resume preview), `:file-snapshots` (per-turn pre-turn checkpoints of
+tracked files, including absent markers and known capture gaps; post-turn
+copies remain alongside them for historical Fork), workspace identity,
+`:working-directory`, fork lineage (`:fork-type`, `:forked-from-session-id`,
+`:forked-from-turn`, and `:forked-from-fork-point-id`), and Worktree Fork
+origin (`:worktree-source-root`, `:worktree-directory`, `:worktree-branch`, and
+`:worktree-base-commit`), and `:agent-transcripts` presentation metadata and
+the explicit `:agent-registry` containing retained paths, frozen
+configurations, activity, mailboxes, and conversation locations. It records
+only the selected `:preset-name`; resume rebuilds mevedel variables from that
+currently registered trusted preset, so sidecar data cannot name or populate
+buffer locals. It also records the session's exact `:model-provider` and
+explicit `:reasoning-effort`. This removal of persisted preset variable keys
+and values and the durable ToolScript audit checkpoint change the sidecar
+format to `v0.5.4`; older sessions are intentionally rejected rather than
+migrated. The checkpoint contains the ToolScript call and bounded child audit,
+never an interpreter continuation. A Session Fork also copies the source
+session's permission mode, sandbox mode, session permission rules, and exact
+resource grants at the fork point. Parent and child then diverge independently.
+Other gptel buffer-local settings are request-time state only; mevedel does not
+persist them as Org properties. An Agent `summary` selection is persisted only
+in the child transcript as a labelled `<task-background>` block before the
+authoritative Agent Task. The parent sidecar and tool result retain only
+provider/model/effort metadata, not the generated summary text.
 
 ## Session-owned local state
 
@@ -199,7 +198,8 @@ grants, and additional roots.  The next save records the opened workspace's
 identity.  Superseded sidecar shapes are not migrated.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.3`.  The top-level `:authority-mode` and execution-target incarnation are
+`v0.5.4`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
+execution-target incarnation are
 required by that session format:
 project sessions persist `portable`, while file-workspace sessions
 persist `pid-lock`.  Portable project sessions always persist a non-empty
@@ -799,21 +799,25 @@ sessions rebuild model, effort, and preset from the sidecar
 ### Resume contract
 
 On-disk state normally reflects a completed turn boundary. Pending tool calls
-remain non-recoverable. Abort/error teardown is
-an explicit save boundary after prompts, agents, and the current request have
-been cleared, so resumed sessions do not resurrect aborted runtime state.
-Managed execution registries are likewise transient: resume never reattaches
-an operating-system process. After acquiring the session lock, resume
-queues a model-visible reconciliation reminder: prior commands may still run
-or have partial effects, so the next turn must inspect current state and prefer
-the newest user request. Aborting a live root request queues the same reminder
-before the explicit save boundary. Resume also atomically reconciles running
-Bash rows across the restored segment and its
-archived predecessors before rendering the view. The scan proceeds newest to
-oldest: a later `execution-archive` or `execution-completion` record marks an
-older copy as archived/superseded. Structured execution rows in later segments
-provide the same successor evidence, including rows retained in a compacted
-tail; a row with no successor becomes `lost`.
+remain non-recoverable. Abort/error teardown is an explicit save boundary after
+prompts, agents, and the current request have been cleared, so resumed sessions
+do not resurrect aborted runtime state. Managed execution registries are
+likewise transient: resume never reattaches an operating-system process. After
+acquiring the session lock, resume queues a model-visible reconciliation
+reminder: prior commands may still run or have partial effects, so the next
+turn must inspect current state and prefer the newest user request. Aborting a
+live root request queues the same reminder before the explicit save boundary.
+ToolScript is the narrow exception to the non-recoverable tool rule: its guest
+machine remains transient, but the sidecar stores the envelope and bounded
+child audit. Resume converts a surviving checkpoint to an interrupted
+ToolScript row, never resumes the script, and commits the repaired segment
+together with clearing the checkpoint. Resume also atomically reconciles
+running Bash rows across the restored segment and its archived predecessors
+before rendering the view. The scan proceeds newest to oldest: a later
+`execution-archive` or `execution-completion` record marks an older copy as
+archived/superseded. Structured execution rows in later segments provide the
+same successor evidence, including rows retained in a compacted tail; a row
+with no successor becomes `lost`.
 
 An active persisted Goal is restored `paused`, with an explicit session-resumed
 reason; opening a session never dispatches Goal work. `/goal resume` is required

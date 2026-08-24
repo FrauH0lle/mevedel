@@ -121,7 +121,9 @@ the model-facing skills roster respectively.  CONTEXT is `inline'
 execution; if omitted, the fork inherits from the immediate parent
 invocation.  ALLOWED-TOOLS holds the raw
   frontmatter strings; ALLOWED-TOOL-RULES holds the parsed mevedel
-  permission rules.  MODEL names a tier or BACKEND:MODEL provider for
+  permission rules.  PTC-PRIMITIVES narrows the nested tools available to a
+  request-owning command; `:unrestricted' means the field was omitted.  MODEL
+  names a tier or BACKEND:MODEL provider for
   a request-owning invocation.  EFFORT selects its reasoning effort.
 ARGUMENT-HINT annotates completion UI.  ARGUMENT-NAMES holds the
 parsed `arguments' frontmatter as a list of names with numeric-only
@@ -145,6 +147,7 @@ skills."
   agent
   allowed-tools
   allowed-tool-rules
+  (ptc-primitives :unrestricted)
   model
   effort
   argument-hint
@@ -300,6 +303,31 @@ entries are filtered out so they cannot shadow `$0'/`$1'/etc."
                     (or (string-empty-p n)
                         (string-match-p "\\`[0-9]+\\'" n)))
                   names)))
+
+(defun mevedel-skills--parse-ptc-primitives (plist source-file)
+  "Return PLIST's closed ToolScript primitive restriction for SOURCE-FILE."
+  (if (not (plist-member plist :ptc-primitives))
+      :unrestricted
+    (let ((value (plist-get plist :ptc-primitives)))
+      (unless (or (null value)
+                  (and (listp value)
+                       (cl-every (lambda (name)
+                                   (and (stringp name)
+                                        (not (string-blank-p name))))
+                                 value)))
+        (user-error
+         "Malformed ptc-primitives in %s: expected a list of tool names"
+         source-file))
+      (delete-dups (copy-sequence value)))))
+
+(defun mevedel-skills-intersect-ptc-primitives (left right)
+  "Intersect ToolScript primitive restrictions LEFT and RIGHT.
+The sentinel `:unrestricted' is the identity; nil is an explicit empty set."
+  (cond
+   ((eq left :unrestricted) right)
+   ((eq right :unrestricted) left)
+   ((or (null left) (null right)) nil)
+   (t (seq-filter (lambda (name) (member name right)) left))))
 
 (defun mevedel-skills--warn-shell (val source-file)
   "Warn about a frontmatter shell VAL, which skills do not support.
@@ -486,6 +514,7 @@ the fallback."
      :allowed-tool-rules
      (mevedel-skills--parse-allowed-tool-rules
       (mevedel-skills--coerce-list allowed-tools) source-file)
+     :ptc-primitives (mevedel-skills--parse-ptc-primitives plist source-file)
      :model (and model
                  (cond
                   ((stringp model) model)

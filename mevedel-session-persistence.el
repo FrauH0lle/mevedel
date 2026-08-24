@@ -12,7 +12,7 @@
 ;;
 ;; The codec-owned sidecar plist shape is:
 ;;
-;;   (:version "v0.5.3"
+;;   (:version "v0.5.4"
 ;;    :session-id "main-2026-04-23T14-30-a9f2"
 ;;    :session-name "main"
 ;;    :workspace (:type project :workspace-id ID
@@ -37,6 +37,8 @@
 ;;    :file-snapshots ((TURN-N . ((PATH . (:backup-name STR-OR-NIL
 ;;                                          :pre-backup-name STR-OR-NIL
 ;;                                          :version INT :gap STR-OR-NIL)) ...)) ...))
+;;    :ptc-checkpoints ((:id ID :args (:script SCRIPT) :state STATE
+;;                       :result RESULT :render-data DATA) ...))
 ;;
 ;; Hash-table-valued slots on the session struct (`touched-files',
 ;; `mentions-shown') are NOT persisted.  Workspace instruction hashes
@@ -132,6 +134,10 @@
 (declare-function mevedel--restore-preserved-directives "mevedel-persistence" (workspace))
 (declare-function mevedel--serialize-instructions "mevedel-persistence" (&optional base-directory include-original-content))
 (declare-function mevedel--write-instructions-file "mevedel-persistence" (path &optional base-directory write-empty quiet include-original-content))
+
+;; `mevedel-ptc-checkpoint'
+(declare-function mevedel-ptc-checkpoint-reconcile
+                  "mevedel-ptc-checkpoint" (session))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-clone-list "mevedel-reminders" (reminders))
@@ -1275,49 +1281,62 @@ found.  Returns nil; signals `user-error' to abort the restore."
 (defun mevedel-session-persistence--hydrate-restored-buffer
     (buf session workspace segment-path acquired additional-roots
          lifecycle-source &optional artifact-callback)
-  "Hydrate fresh restore buffer BUF and return its agent repair count.
+  "Hydrate fresh restore buffer BUF and return its durable repair count.
 SESSION and WORKSPACE are planted before mevedel restores persisted state.
 SEGMENT-PATH is reconciled when ACQUIRED owns the session lock.  Additional
 workspace roots and LIFECYCLE-SOURCE restore the saved session environment.
 ARTIFACT-CALLBACK collects remote transcript replacements for one batch."
   (require 'mevedel-session-artifacts)
-  (with-current-buffer buf
-    (unless (derived-mode-p 'org-mode)
-      (let ((org-agenda-file-menu-enabled nil))
-        (org-mode)))
-    (setq-local mevedel--session session)
-    (setq-local mevedel--workspace workspace)
-    (setq-local default-directory
-                (mevedel-session-working-directory session))
-    (when additional-roots
-      (setq-local mevedel-workspace-additional-roots additional-roots))
-    (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
-      (mevedel--chat-buffer-disable-org-element-cache))
-    (require 'mevedel-transcript-restore)
-    (mevedel-transcript-restore-gptel-state)
-    (when acquired
-      (mevedel-session-artifacts-check-target-incarnation session buf)
-      (require 'mevedel-tool-render-data)
-      (when (> (mevedel-tool-render-data-reconcile-lost-executions buf) 0)
-        (if artifact-callback
-            (funcall
-             artifact-callback
-             (list :path segment-path
-                   :content (buffer-string)
-                   :coding (or buffer-file-coding-system 'utf-8-unix)))
-          (mevedel-session-persistence-write-current-buffer-atomically
-           segment-path)
-          (set-visited-file-modtime))
-        (set-buffer-modified-p nil)))
-    (unless acquired
-      (mevedel-session-persistence-apply-read-only-mode buf))
-    (mevedel--chat-buffer-init-common
-     buf workspace (or lifecycle-source "resume") (not acquired))
-    (require 'mevedel-agent-persistence)
-    (prog1
-        (mevedel-agent-persistence-restore-tree
-         session buf (bound-and-true-p mevedel-session--read-only-mode))
-      (mevedel-session-artifacts-load-instructions session buf))))
+  (let ((ptc-insertions 0)
+        (ptc-consumptions 0))
+    (with-current-buffer buf
+      (unless (derived-mode-p 'org-mode)
+        (let ((org-agenda-file-menu-enabled nil))
+          (org-mode)))
+      (setq-local mevedel--session session)
+      (setq-local mevedel--workspace workspace)
+      (setq-local default-directory
+                  (mevedel-session-working-directory session))
+      (when additional-roots
+        (setq-local mevedel-workspace-additional-roots additional-roots))
+      (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
+        (mevedel--chat-buffer-disable-org-element-cache))
+      (require 'mevedel-transcript-restore)
+      (mevedel-transcript-restore-gptel-state)
+      (when acquired
+        (mevedel-session-artifacts-check-target-incarnation session buf)
+        (require 'mevedel-tool-render-data)
+        (require 'mevedel-ptc-checkpoint)
+        (pcase-let ((`(,inserted . ,consumed)
+                     (mevedel-ptc-checkpoint-reconcile session)))
+          (setq ptc-insertions inserted
+                ptc-consumptions consumed))
+        (let ((transcript-repairs
+               (+ ptc-insertions
+                  (mevedel-tool-render-data-reconcile-lost-executions buf))))
+          (when (> transcript-repairs 0)
+            (when (> ptc-insertions 0)
+              (gptel--save-state))
+            (if artifact-callback
+                (funcall
+                 artifact-callback
+                 (list :path segment-path
+                       :content (buffer-string)
+                       :coding (or buffer-file-coding-system 'utf-8-unix)))
+              (mevedel-session-persistence-write-current-buffer-atomically
+               segment-path)
+              (set-visited-file-modtime))
+            (set-buffer-modified-p nil))))
+      (unless acquired
+        (mevedel-session-persistence-apply-read-only-mode buf))
+      (mevedel--chat-buffer-init-common
+       buf workspace (or lifecycle-source "resume") (not acquired))
+      (require 'mevedel-agent-persistence)
+      (+ ptc-consumptions
+         (prog1
+             (mevedel-agent-persistence-restore-tree
+              session buf (bound-and-true-p mevedel-session--read-only-mode))
+           (mevedel-session-artifacts-load-instructions session buf))))))
 
 (defun mevedel-session-persistence--finish-restored-buffer
     (buf session live persist-repairs-p &optional repair-artifacts)

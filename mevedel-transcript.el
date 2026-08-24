@@ -288,7 +288,13 @@ beginning of the buffer."
                    (looking-at-p "(\\s-*:name\\_>"))
           (condition-case nil
               (progn
-                (forward-sexp 1)
+                ;; Scan the plist with Lisp syntax.  Org gives backslash
+                ;; symbol syntax rather than escape syntax, so an escaped
+                ;; quote inside a serialized argument would close the string
+                ;; early, desynchronize the scan, and make a well-formed tool
+                ;; block look malformed.
+                (with-syntax-table emacs-lisp-mode-syntax-table
+                  (forward-sexp 1))
                 (let ((sexp-end (point)))
                   (when (re-search-forward "^#\\+end_tool[^\n]*\n?" end t)
                     (let ((tool-end (match-beginning 0))

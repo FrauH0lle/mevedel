@@ -90,6 +90,8 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-hook-rules
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-ptc-primitives
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-agent-registry
@@ -152,7 +154,7 @@
 
 A plist of the form
   (:permission-rules RULES :model MODEL :effort EFFORT
-   :hook-rules HOOKS :invoked-skills SKILLS)
+   :hook-rules HOOKS :ptc-primitives NAMES :invoked-skills SKILLS)
 
 populated by user-dispatched skill invocation before `gptel-send'
 fires.  The prompt transform consumes MODEL and EFFORT before request
@@ -194,6 +196,7 @@ The stash plist keys map onto request/session state:
 - :permission-rules -> `mevedel-request-skill-permission-rules'
 - :model/:effort    -> consumed by the pre-realization prompt transform
 - :hook-rules       -> `mevedel-request-hook-rules'
+- :ptc-primitives   -> `mevedel-request-ptc-primitives'
 - :invoked-skills   -> user-origin records identify skill bodies already
                        attached to this request, and all records are appended
                        to `mevedel-session-invoked-skills'"
@@ -202,6 +205,9 @@ The stash plist keys map onto request/session state:
       (setf (mevedel-request-skill-permission-rules request) rules))
     (when-let* ((hooks (plist-get ctx :hook-rules)))
       (setf (mevedel-request-hook-rules request) hooks))
+    (when (plist-member ctx :ptc-primitives)
+      (setf (mevedel-request-ptc-primitives request)
+            (plist-get ctx :ptc-primitives)))
     (when-let* ((skills (plist-get ctx :invoked-skills))
                 (session mevedel--session))
       (setf (mevedel-request-attached-skill-records request)
@@ -326,7 +332,8 @@ DISPLAY-CALLBACK receives the lifecycle event when non-nil."
      (mevedel-hooks-decision-reason decision))))
 
 (cl-defun mevedel-skills-activate-context
-    (origin &key permission-rules model effort hook-rules invoked-skill)
+    (origin &key permission-rules model effort hook-rules
+            (ptc-primitives :unrestricted) invoked-skill)
   "Apply skill-scoped overrides to the active context.
 
 ORIGIN selects the install path:
@@ -342,7 +349,9 @@ ORIGIN selects the install path:
 
 PERMISSION-RULES is a list of parsed mevedel rules to append.
 MODEL is a selector plist or nil.  EFFORT is an opaque gptel value or nil.
-HOOK-RULES is a list of normalized hook rules.  INVOKED-SKILL
+HOOK-RULES is a list of normalized hook rules.  PTC-PRIMITIVES narrows the
+request's nested ToolScript roster; `:unrestricted' is the identity.
+INVOKED-SKILL
 is a `mevedel-skill-invocation-record' to record on the session for
 compaction/replay."
   (cond
@@ -362,6 +371,15 @@ compaction/replay."
               (plist-put existing :hook-rules
                          (append (plist-get existing :hook-rules)
                                  hook-rules))))
+      (unless (eq ptc-primitives :unrestricted)
+        (setq existing
+              (plist-put
+               existing :ptc-primitives
+               (mevedel-skills-intersect-ptc-primitives
+                (if (plist-member existing :ptc-primitives)
+                    (plist-get existing :ptc-primitives)
+                  :unrestricted)
+                ptc-primitives))))
       (when invoked-skill
         (setq existing
               (plist-put existing :invoked-skills
@@ -390,6 +408,11 @@ compaction/replay."
 	 (req
 	  (mevedel-skills--activate-request-context
 	   req nil hook-rules))))
+      (when (and req (not (eq ptc-primitives :unrestricted)))
+        (setf (mevedel-request-ptc-primitives req)
+              (mevedel-skills-intersect-ptc-primitives
+               (mevedel-request-ptc-primitives req)
+               ptc-primitives)))
       ;; Record on the session.
       (when invoked-skill
         (when-let* ((session (and (boundp 'mevedel--session) mevedel--session)))
@@ -412,6 +435,10 @@ lifecycle events from the canonical preparation pipeline."
           :model (plist-get context :model)
           :effort (plist-get context :effort)
           :hook-rules (plist-get context :hook-rules)
+          :ptc-primitives
+          (if (eq origin 'model)
+              :unrestricted
+            (plist-get context :ptc-primitives))
           :invoked-skill (car (plist-get context :invoked-skills)))))
      (funcall callback outcome))
    :role 'command
@@ -532,6 +559,7 @@ sanitized `UserPromptExpansion' hook decision."
                     :model (plist-get metadata :model)
                     :effort (plist-get metadata :effort)
                     :hook-rules (plist-get metadata :hooks)
+                    :ptc-primitives (mevedel-skill-ptc-primitives skill)
                     :invoked-skills (list record))
             (list :invoked-skills (list record))))
          (kind (cond

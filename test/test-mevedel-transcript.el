@@ -985,6 +985,37 @@ still my prompt
     ok))
 
 
+(mevedel-deftest mevedel-transcript--org-tool-block-parts ()
+  ,test
+  (test)
+
+  :doc "parses a tool block whose serialized argument contains escaped quotes"
+  ;; Org gives backslash symbol syntax rather than escape syntax, so scanning
+  ;; the plist with org's table closed the string at the first \" and made a
+  ;; well-formed block look malformed, which fell back to raw rendering.
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_tool (ToolScript ...)\n")
+    (insert "(:name \"ToolScript\" :args (:script \"(Grep :pattern \\\"^[(]defcustom\\\")\"))\n")
+    (insert "result\n")
+    (insert "#+end_tool\n")
+    (let ((parts (mevedel-transcript--org-tool-block-parts (point-min) (point-max))))
+      (should parts)
+      (should (< (plist-get parts :tool-start) (plist-get parts :tool-end)))
+      (should (string-match-p
+               "defcustom"
+               (buffer-substring-no-properties (plist-get parts :tool-start)
+                                               (plist-get parts :tool-end))))))
+
+  :doc "still parses a tool block with no escaped quotes"
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_tool (Read ...)\n")
+    (insert "(:name \"Read\" :args (:file_path \"/tmp/x\"))\n")
+    (insert "body\n")
+    (insert "#+end_tool\n")
+    (should (mevedel-transcript--org-tool-block-parts (point-min) (point-max)))))
+
 (defun mevedel-transcript-test--tool-block-props-p
     (start end tool-prop)
   "Return non-nil when org tool START..END has parseable TOOL-PROP.

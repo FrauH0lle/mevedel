@@ -268,7 +268,7 @@ become implemented, obsolete, or unjustified.
 
 ## Tools
 
-### Explore programmatic tool calling
+### Programmatic tool calling
 
 - **Source:** `elij/macher-agent` at commit
   [`f6ed4c3`](https://github.com/elij/macher-agent/tree/f6ed4c35296780f61b49316af95bea0c0f50f8c1),
@@ -280,24 +280,23 @@ become implemented, obsolete, or unjustified.
   match -> aggregate the results pays for another inference at every decision
   point. That adds latency and tokens and gives the model repeated chances to
   drift from deterministic orchestration.
-- **Candidate:** Add programmatic tool calling (PTC) as one model tool whose
-  input is an Emacs Lisp orchestration script evaluated by an isolated,
+- **Implemented:** Programmatic tool calling is one model tool, ToolScript,
+  whose input is an Emacs Lisp orchestration script evaluated by an isolated,
   yielding interpreter. Ordinary control flow and pure data transformations
   run inside the interpreter. Calling an active primitive yields a structured
   tool request; the driver suspends the script, executes that request through
-  `mevedel-pipeline-run-tool`, and resumes it with the canonical result. Async
+  `mevedel-pipeline-run-tool-outcome`, and resumes it with the canonical result. Async
   tools therefore look synchronous to the script while every call still uses
-  mevedel's validation, hooks, permission, resource, snapshot, persistence,
-  cancellation, and telemetry path.
-- **Skill integration:** Investigate a `ptc-primitives` SKILL.md frontmatter
-  field. It selects which canonical tools may become Lisp primitives for the
-  skill-owned request; it grants no authority, must intersect the request's
-  effective tool set, and must not bypass per-call permission. In mevedel,
-  `allowed-tools` is permission augmentation rather than tool selection, so
-  exposing the PTC executor itself must use the existing request/agent tool
-  selection machinery rather than copying Macher's frontmatter semantics.
-  Start with command- or fork-owned skill requests; do not let an instruction
-  attachment silently expand the parent request's execution surface.
+  mevedel's validation, hooks, permission, resource, snapshot, cancellation,
+  and telemetry path. Provider-only result persistence applies to the
+  ToolScript envelope rather than to each nested call.
+- **Skill integration:** Implemented `ptc-primitives` SKILL.md frontmatter for
+  request-owning command skills. It narrows which canonical tools may become
+  Lisp primitives for the owned request; it grants no authority, intersects
+  the request's effective tool set, and never bypasses per-call permission.
+  Instruction attachments and model-invoked skills cannot expand the parent
+  request's execution surface. Agent and coordination tools are not ToolScript
+  primitives.
 
   ```yaml
   ---
@@ -307,18 +306,16 @@ become implemented, obsolete, or unjustified.
     - Glob
     - Grep
     - Read
-    - Agent
-    - WaitAgent
   ---
   ```
 
-- **Interface sketch:** The model invokes one PTC tool with a `script` string.
+- **Interface sketch:** The model invokes ToolScript with a `script` string.
   The request-time prompt describes only the selected primitives, their
   argument contracts, the supported Lisp subset, and the returned value
   contract. The result should be the script's pure final value; nested calls
   remain inspectable through one owned audit/render record rather than
   pretending to be provider-origin tool calls.
-- **Required investigation:** Measure turns whose continuations only perform
+- **Acceptance follow-up:** Measure turns whose continuations only perform
   deterministic tool orchestration; choose one real data-dependent workflow
   as the acceptance case. Specify the safe Lisp subset, macro expansion,
   limits on steps/results/nesting, async suspension inside non-local exits,
@@ -326,17 +323,32 @@ become implemented, obsolete, or unjustified.
   transcript evidence, render-data ownership, failure propagation, and
   retained-agent behavior. Consult current gptel dispatch before fixing the
   design: gptel already runs multiple tool calls from one response in
-  parallel, so known fan-out alone does not justify PTC.
-- **Rejected shortcut:** Do not implement PTC as native `eval` plus a claimed
-  function whitelist. `Glob`, `Grep`, and the mevedel pipeline are
+  parallel, so known fan-out alone does not justify ToolScript.
+- **Rejected shortcut:** Do not implement ToolScript as native `eval` plus a
+  claimed function whitelist. `Glob`, `Grep`, and the mevedel pipeline are
   asynchronous, and safely constraining native Elisp requires an interpreter
   or an equivalently complex validator. Do not bypass the pipeline to make a
   read-only prototype appear smaller.
-- **Status check:** Mevedel has the async continuation pipeline and tool
-  registry needed by the driver, but `Eval` deliberately evaluates ordinary
-  Elisp and cannot call model tools. No nested tool-call identity or sandboxed
-  orchestration language exists. PTC is a strong adaptation candidate, not an
-  accepted design or implementation ticket yet.
+- **Do not port macher's sandbox boundary.** Its interpreter architecture is
+  worth adapting; its boundary is not, and the defects are still present
+  upstream as of `020830f`. It passes model-authored text through host
+  `macroexpand-all`, so any macro expander runs on that text --
+  `(eval-when-compile FORM)` executes FORM during expansion, which is
+  arbitrary host code from a script. Its primitive table is scraped by
+  `mapatoms` over the `pure`/`side-effect-free` properties, an open set that
+  includes host-state readers and shifts with whatever packages are loaded.
+  Its evaluator also evaluates an unknown operator's arguments before
+  rejecting the operator, so a forbidden wrapper around a real tool call runs
+  the tool first. Passing an ENVIRONMENT to `macroexpand-all` does not fix
+  the first defect: it shadows named macros but does not restrict expansion,
+  so an unlisted macro still expands from the global obarray. Guest
+  identifiers must not be interned into the host obarray either; plain `read`
+  leaks them permanently.
+- **Decision:** The durable design is recorded in
+  [`ADR 0111`](adr/0111-run-programmatic-tool-calls-in-a-closed-machine.md).
+  The explicit machine, structured nested outcome, generated request roster,
+  synthetic child identity, live aggregate row, value budgets, partial-work
+  settlement, and bounded `parallel`/`parallel-map` joins are implemented.
 - **Blast radius:** Tool registry and pipeline reentrancy, permissions and
   prompts, request cancellation, skills frontmatter and invocation ownership,
   prompt assembly, transcripts and audit records, render-data, telemetry,

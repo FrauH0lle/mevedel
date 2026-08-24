@@ -82,6 +82,10 @@
 (declare-function mevedel-plan-approval-abort
                   "mevedel-plan-mode" (&optional session outcome))
 
+;; `mevedel-ptc-checkpoint'
+(declare-function mevedel-ptc-checkpoint-clear-settled
+                  "mevedel-ptc-checkpoint" (session))
+
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-restore-reserved-context
                   "mevedel-reminders" (buffer))
@@ -105,6 +109,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-steering
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-ptc-checkpoints "mevedel-structs" (cl-x))
 (declare-function mevedel-session-set-pending-input-failure-paused
                   "mevedel-structs" (session paused))
 (declare-function mevedel-session-set-pending-inputs
@@ -471,16 +476,23 @@ Signal when the request is missing or its reservation is not the next turn."
     (with-current-buffer chat-buffer
       (when (and mevedel--session
                  (not (bound-and-true-p mevedel-session--read-only-mode)))
-        (let (saved)
+        (let ((ptc-checkpoints (mevedel-session-ptc-checkpoints
+                                mevedel--session))
+              saved)
           (condition-case err
               (progn
-                (mevedel-session-artifacts-save
-                 mevedel--session chat-buffer t)
+                (require 'mevedel-ptc-checkpoint)
+                (mevedel-ptc-checkpoint-clear-settled mevedel--session)
+                (unless (mevedel-session-artifacts-save
+                         mevedel--session chat-buffer t)
+                  (error "Session auto-save did not publish"))
                 (when (bound-and-true-p mevedel-session--save-failed)
                   (setq mevedel-session--save-failed nil)
                   (force-mode-line-update))
                 (setq saved t))
             (error
+             (setf (mevedel-session-ptc-checkpoints mevedel--session)
+                   ptc-checkpoints)
              (mevedel--warn-once 'turn-auto-save
                                  "Session auto-save failed: %s" err)
              (setq-local mevedel-session--save-failed t)

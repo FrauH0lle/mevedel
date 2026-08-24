@@ -58,6 +58,25 @@
   :doc "falls back to root without a scoped owner"
   (should (equal "/root" (mevedel-tool-permission--origin nil))))
 
+(mevedel-deftest mevedel-tool-permission-log-decision ()
+  ,test
+  (test)
+  :doc "carries nested identity and source into the permission log"
+  (let* ((mevedel-permission-log-enabled t)
+         (session (mevedel-session--create
+                   :name "permission-log" :permission-mode 'ask))
+         (tool (mevedel-tool--create :name "Child"))
+         (context (list :session session :tool tool
+                        :tool-use-id "parent/1"
+                        :parent-tool-use-id "parent"
+                        :call-source 'ptc)))
+    (mevedel-tool-permission-log-decision
+     context '(:outcome allow :raw-outcome allow :via test))
+    (let ((entry (car (mevedel-session-permission-log-pending session))))
+      (should (equal "parent/1" (plist-get entry :tool-use-id)))
+      (should (equal "parent" (plist-get entry :parent-tool-use-id)))
+      (should (eq 'ptc (plist-get entry :call-source))))))
+
 (mevedel-deftest mevedel-tool-permission--denial-outcome-p ()
   ,test
   (test)
@@ -93,17 +112,25 @@
   ,test
   (test)
   :doc "unresolved requests enter the queue and user denials retain provenance"
-  (let (queued settled-context settled-outcome)
+  (let (progress queued settled-context settled-outcome)
     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                (lambda (_event _payload callback &rest _)
                  (funcall callback nil)))
               ((symbol-function 'mevedel-permission--enqueue)
                (lambda (entry &optional _session) (setq queued entry))))
       (mevedel-tool-permission--request
-       nil '(:kind generic :callback ignore) nil
+       (list :progress-callback (lambda (event) (setq progress event))
+             :tool-use-id "ptc-1/2"
+             :parent-tool-use-id "ptc-1"
+             :call-source 'ptc)
+       '(:kind generic :callback ignore) nil
        (lambda (context outcome)
          (setq settled-context context settled-outcome outcome)))
       (should queued)
+      (should (eq 'permission-wait progress))
+      (should (equal "ptc-1/2" (plist-get queued :tool-use-id)))
+      (should (equal "ptc-1" (plist-get queued :parent-tool-use-id)))
+      (should (eq 'ptc (plist-get queued :call-source)))
       (funcall (plist-get queued :callback) 'deny-session)
       (should (eq 'deny-session settled-outcome))
       (should (eq 'user
@@ -261,7 +288,7 @@
           (mevedel-tool-permission-step
            (list :tool tool :args nil :session session)
            (lambda (_context) (setq next-called t))
-           (lambda (message) (setq failure message)))
+           (lambda (message &rest _) (setq failure message)))
           (should-not next-called)
           (should (string-match-p "Permission denied" failure)))
       (delete-directory dir t)))
@@ -308,10 +335,16 @@
          (mevedel-permission-rules '(("Edit" :action deny)))
          (mevedel-protected-paths nil)
          (mevedel-permission-mode 'ask)
-         fail-reason)
+         fail-reason fail-context fail-kind)
     (mevedel-tool-permission-step
-     ctx #'ignore (lambda (r) (setq fail-reason r)))
-    (should (equal fail-reason "Permission denied")))
+     ctx #'ignore
+     (lambda (reason context kind)
+       (setq fail-reason reason
+             fail-context context
+             fail-kind kind)))
+    (should (equal fail-reason "Permission denied"))
+    (should (equal fail-context ctx))
+    (should (eq fail-kind 'permission-denied)))
   :doc "allows when explicit allow rule matches"
   (let* ((tool (mevedel-tool--create
                 :name "Edit"
@@ -453,7 +486,7 @@
        (list :tool tool :args '(:command "rm file")
              :session session)
        (lambda (_context) (setq next-called t))
-       (lambda (reason) (setq fail-reason reason))))
+       (lambda (reason &rest _) (setq fail-reason reason))))
     (should (eq 'dangerous (plist-get guardian-context :class)))
     (should
      (equal facts
@@ -496,7 +529,7 @@
          (list :tool tool :args '(:command "rm file")
                :session session)
          (lambda (_context) (setq next-called t))
-         (lambda (reason) (setq fail-reason reason))))
+         (lambda (reason &rest _) (setq fail-reason reason))))
       (should entry)
       (should-not next-called)
       (should-not fail-reason)
@@ -532,7 +565,7 @@
          (list :tool tool :args '(:command "rm file")
                :session session)
          (lambda (_context) (setq next-called t))
-         (lambda (reason) (setq fail-reason reason))))
+         (lambda (reason &rest _) (setq fail-reason reason))))
       (if (eq mode 'full-auto)
           (should next-called)
         (should entry)
@@ -564,7 +597,7 @@
          (list :tool tool :args '(:command "rm file")
                :session session)
          (lambda (_context) (setq next-called t))
-         (lambda (reason) (setq fail-reason reason))))
+         (lambda (reason &rest _) (setq fail-reason reason))))
       (if guardian-result
           (progn
             (should-not next-called)
@@ -614,7 +647,7 @@
     ;; The dynamic mevedel--session has an allow rule but the step must
     ;; not look at it; only the missing :session in `ctx' applies.
     (mevedel-tool-permission-step
-     ctx #'ignore (lambda (r) (setq fail-reason r)))
+     ctx #'ignore (lambda (r &rest _) (setq fail-reason r)))
     (should (equal fail-reason "Permission denied")))
   :doc "sync slot signaling permission-denied surfaces REASON via fail"
   (let* ((tool (mevedel-tool--create
@@ -629,7 +662,7 @@
          (mevedel-permission-mode 'ask)
          fail-reason)
     (mevedel-tool-permission-step
-     ctx #'ignore (lambda (r) (setq fail-reason r)))
+     ctx #'ignore (lambda (r &rest _) (setq fail-reason r)))
     (should (equal fail-reason "Permission denied: user feedback X")))
   :doc "async slot returning 'allow advances to next"
   (let* ((tool (mevedel-tool--create
@@ -658,7 +691,7 @@
          (mevedel-permission-mode 'ask)
          fail-reason)
     (mevedel-tool-permission-step
-     ctx #'ignore (lambda (r) (setq fail-reason r)))
+     ctx #'ignore (lambda (r &rest _) (setq fail-reason r)))
     (should (equal fail-reason "Permission denied: Custom slot reason")))
   :doc "async slot returning (feedback . TEXT) maps to scoped denial with text"
   (let* ((tool (mevedel-tool--create
@@ -673,7 +706,7 @@
          (mevedel-permission-mode 'ask)
          fail-reason)
     (mevedel-tool-permission-step
-     ctx #'ignore (lambda (r) (setq fail-reason r)))
+     ctx #'ignore (lambda (r &rest _) (setq fail-reason r)))
     (should (equal fail-reason "Permission denied: user typed this")))
   :doc "async slot returning 'aborted surfaces as fail aborted"
   (let* ((tool (mevedel-tool--create
@@ -687,7 +720,7 @@
          (mevedel-permission-mode 'ask)
          fail-reason)
     (mevedel-tool-permission-step
-     ctx #'ignore (lambda (r) (setq fail-reason r)))
+     ctx #'ignore (lambda (r &rest _) (setq fail-reason r)))
     (should (equal fail-reason "aborted")))
   :doc "async slot returning nil falls through to chain"
   (let* ((tool (mevedel-tool--create
@@ -1044,7 +1077,7 @@
         (mevedel-tool-permission-step
          ctx
          (lambda (_c) (setq next-called t))
-         (lambda (r) (setq fail-reason r)))))
+         (lambda (r &rest _) (setq fail-reason r)))))
     (should-not next-called)
     (should (stringp fail-reason))
     (should (string-match-p "disk write failed" fail-reason)))
@@ -1056,7 +1089,7 @@
          (mevedel-permission-rules '(("Edit" :action ask)))
          (mevedel-protected-paths nil)
          (mevedel-permission-mode 'ask)
-         fail-reason
+         fail-reason fail-context
          next-called)
     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                (lambda (_event _payload callback &rest _)
@@ -1067,14 +1100,13 @@
       (mevedel-tool-permission-step
        ctx
        (lambda (_c) (setq next-called t))
-       (lambda (reason) (setq fail-reason reason))))
+       (lambda (reason context &rest _)
+         (setq fail-reason reason
+               fail-context context))))
     (should-not next-called)
-    (should (equal
-             (mevedel--strip-hook-audit-blocks
-              fail-reason)
-             "Permission denied: blocked by PermissionRequest: hook failed"))
-    (let ((record (car (mevedel-test--hook-audit-records
-                        fail-reason))))
+    (should (equal fail-reason
+                   "Permission denied: blocked by PermissionRequest: hook failed"))
+    (let ((record (car (plist-get fail-context :hook-audit-records))))
       (should (eq (plist-get record :type) 'tool-permission))
       (should (equal (plist-get record :event)
                      "PermissionRequest"))
@@ -1224,7 +1256,7 @@
                  (lambda (&rest _) (setq enqueued t))))
         (mevedel-tool-permission-step
          (list :tool tool :args args :session session)
-         #'ignore (lambda (reason) (setq failure reason))))
+         #'ignore (lambda (reason &rest _) (setq failure reason))))
       (should (equal '(PermissionRequest PermissionDenied)
                      (nreverse events)))
       (should (eq 'PermissionRequest provenance))

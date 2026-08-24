@@ -61,6 +61,8 @@ lazily — read them when planning work in the relevant area. The
   (validate → permission → snapshot → handler → persist), `:wrap` /
   `:groups`, renderers and render-data side channel, oversized result
   persistence
+- [`docs/ptc-dialect.md`](docs/ptc-dialect.md) — closed ToolScript language,
+  pure primitives, nested tools, parallel calls, limits, and security boundary
 - [`docs/permissions.md`](docs/permissions.md) — 8-step decision chain,
   bucket precedence, Bash/Eval specifics,
   sub-agent permission propagation, example config
@@ -139,6 +141,9 @@ Data model
   mevedel-permissions.el      permission preflight and 8-step decision facade
   mevedel-tool-permission.el permission-step orchestration, hooks, prompts, logging
   mevedel-pipeline.el         tool context, standard steps, sequencing, ordering
+  mevedel-ptc-checkpoint.el  durable ToolScript audit settlement across restart
+  mevedel-ptc-driver.el      ToolScript orchestration, nested calls, progress
+  mevedel-ptc-interpreter.el closed programmatic-tool-call evaluator and machine
   mevedel-resource.el         resource-address grammar and attempt lifecycle
   mevedel-resource-capf.el    resource-address completion
   mevedel-permission-log.el   durable permission decision log
@@ -243,6 +248,7 @@ Prompt / presets / agents
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
 Tools (each dispatches through mevedel-pipeline)
+  mevedel-tool-ptc.el        ToolScript roster, request adapter, registration
   mevedel-tool-fs.el          filesystem tool registration and shared path/resource primitives
   mevedel-tool-fs-read.el     Read text/media decoding and bounded output
   mevedel-tool-fs-search.el   Glob/Grep execution and resource-output privacy

@@ -912,6 +912,44 @@
       (should (equal "stock"
                      (mevedel-view--buffer-substring-filter 1 6)))))
 
+(mevedel-deftest mevedel-view--last-live-response-boundary ()
+  ,test
+  (test)
+  :doc "uses blank lines outside fenced code as stable response boundaries"
+  (with-temp-buffer
+    (insert "First.\n\n```elisp\n(code)\n\nstill code\n```\n\nTail")
+    (let ((boundary (mevedel-view--last-live-response-boundary
+                     (current-buffer) (point-min) (point-max))))
+      (should (equal "Tail" (buffer-substring-no-properties
+                             boundary (point-max))))))
+
+  :doc "keeps an incomplete fenced block in the mutable tail"
+  (with-temp-buffer
+    (insert "First.\n\n```elisp\n(code)\n\nstill code")
+    (let ((boundary (mevedel-view--last-live-response-boundary
+                     (current-buffer) (point-min) (point-max))))
+      (should (string-prefix-p
+               "```elisp" (buffer-substring-no-properties
+                            boundary (point-max))))))
+
+  :doc "does not close a long fence with a shorter delimiter plus text"
+  (with-temp-buffer
+    (insert
+     "First.\n\n````elisp\n```not a close\n\nstill code\n````\n\nTail")
+    (let ((boundary (mevedel-view--last-live-response-boundary
+                     (current-buffer) (point-min) (point-max))))
+      (should (equal "Tail" (buffer-substring-no-properties
+                             boundary (point-max))))))
+
+  :doc "does not treat a four-space-indented delimiter as a closing fence"
+  (with-temp-buffer
+    (insert
+     "First.\n\n```elisp\ncode\n    ```\n\nstill code\n```\n\nTail")
+    (let ((boundary (mevedel-view--last-live-response-boundary
+                     (current-buffer) (point-min) (point-max))))
+      (should (equal "Tail" (buffer-substring-no-properties
+                             boundary (point-max)))))))
+
 
 (provide 'test-mevedel-view-markdown)
 

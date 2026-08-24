@@ -330,7 +330,7 @@
             (mevedel-view--agent-transcript-start-streaming)
             (should (eq data-buffer
                         (marker-buffer mevedel-view--data-turn-start)))
-            (mevedel-view--render-incremental data-buffer)
+            (mevedel-view-render-live-update data-buffer)
             (should (= 1
                        (mevedel-view-test--count-substring
                         "Original prompt" (buffer-string))))))

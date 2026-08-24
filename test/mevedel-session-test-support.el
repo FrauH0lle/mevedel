@@ -336,6 +336,7 @@ publication."
                :tasks nil
                :prompt-index nil
                :file-snapshots nil
+               :ptc-checkpoints nil
                :workspace-instruction-hashes nil
                :agent-transcripts nil
                :agent-registry nil

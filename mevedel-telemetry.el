@@ -125,8 +125,8 @@ profile file larger and cost a little more per sample."
     :agent-id :agent-path :agent-type :aggressive :artifacts-directory
     :artifacts-local :backend :baseline-marker-position
     :baseline-request-id :blocked :boundary :bubblewrap-available :bucket
-    :budget-status :buffer-chars-model-visible :buffer-chars-total
-    :buffers :cache-identity :cached-tokens :captured-goal-id
+    :budget-kind :budget-status :buffer-chars-model-visible :buffer-chars-total
+    :buffers :cache-identity :cached-tokens :call-source :captured-goal-id
     :chosen-active-context-tokens :chosen-source :chunk-bytes
     :command-class :command-hash :context :context-chars
     :context-deduplicated :continuation :conversation-scope
@@ -143,10 +143,12 @@ profile file larger and cost a little more per sample."
     :ineligible-reason :input-p :input-tokens :interaction-id :issue-count
     :kind :lane :launch-failure-reason-class :launch-failure-stage
     :message-chars :message-hash :mode :model :model-context-window :modes
-    :native-resource-capture :native-resource-report-bytes :network
+    :native-resource-capture :native-resource-report-bytes :nested-call-count
+    :network
     :new-count :new-segment :old-segment :omitted-count :origin :outcome
     :output-bytes :output-limit :output-tokens :overlap-count :owner
-    :parent-turn :pending-count :permission-mode :permission-mode-base
+    :parent-tool-use-id :parent-turn :pending-count :permission-mode
+    :permission-mode-base
     :permission-mode-effective :preexisting-count :preparation-state
     :previous-owner :previous-status :proc :profile :profile-bytes-total
     :profile-file-names :prompt-chars :prompt-function :prompt-hash

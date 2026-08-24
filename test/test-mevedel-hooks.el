@@ -20,6 +20,7 @@
 (require 'mevedel-session-publication)
 (require 'mevedel-session-persistence)
 (require 'mevedel-telemetry)
+(require 'mevedel-tool-registry)
 (require 'mevedel-view)
 (require 'mevedel-view-stream)
 (require 'mevedel-workspace)
@@ -94,6 +95,20 @@
   (setq mevedel-hooks-test--elisp-origin
         (list :event event :default-directory default-directory))
   nil)
+
+(mevedel-deftest mevedel-hooks-tool-event-plist
+  (:doc "carries nested tool identity and source into hook payloads")
+  (let* ((tool (mevedel-tool--create :name "Child"))
+         (event
+          (mevedel-hooks-tool-event-plist
+           'PreToolUse
+           (list :tool tool :args '(:value "x")
+                 :tool-use-id "parent/1"
+                 :parent-tool-use-id "parent"
+                 :call-source 'ptc))))
+    (should (equal "parent/1" (plist-get event :tool-use-id)))
+    (should (equal "parent" (plist-get event :parent-tool-use-id)))
+    (should (eq 'ptc (plist-get event :call-source)))))
 
 (mevedel-deftest mevedel-hooks--telemetry-handler-id
   (:doc "is stable for one handler and changes with its executable identity")

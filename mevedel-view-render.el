@@ -273,6 +273,8 @@
                   "mevedel-view-disclosure" (delta))
 (declare-function mevedel-view-disclosure-record-state
                   "mevedel-view-disclosure" (source vtype collapsed))
+(declare-function mevedel-view-disclosure-record-state-for-key
+                  "mevedel-view-disclosure" (key collapsed))
 (declare-function mevedel-view-disclosure-reset-state
                   "mevedel-view-disclosure" ())
 (declare-function mevedel-view-disclosure-restore-state
@@ -285,6 +287,8 @@
                   "mevedel-view-disclosure" (source))
 (declare-function mevedel-view-disclosure-state-entry
                   "mevedel-view-disclosure" (source vtype))
+(declare-function mevedel-view-disclosure-state-for-key
+                  "mevedel-view-disclosure" (key))
 (declare-function mevedel-view-disclosure-state-key
                   "mevedel-view-disclosure"
                   (source vtype &optional previous-key))
@@ -294,6 +298,10 @@
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-rebuild
                   "mevedel-view-interaction" ())
+
+;; `mevedel-view-markdown'
+(declare-function mevedel-view--last-live-response-boundary
+                  "mevedel-view-markdown" (data-buf start end))
 
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-go-to-segment
@@ -605,10 +613,24 @@ assistant reply.  Tests that drive function
 send path) leave the flag nil and see user
 turns rendered as usual.")
 
+(defvar-local mevedel-view--live-data-tail-start nil
+  "Data-buffer marker where the mutable live render tail starts.")
+
+(defvar-local mevedel-view--live-view-tail-start nil
+  "View-buffer marker where the mutable live render tail starts.")
+
+(defvar-local mevedel-view--live-source-change-hook nil
+  "Change hook that invalidates this view's retained live prefix.")
+
 (defun mevedel-view-render-initialize ()
   "Initialize transcript-rendering state in the current view buffer."
+  (mevedel-view-render-invalidate-live-tail)
+  (require 'mevedel-tool-render-data)
+  (require 'mevedel-transcript)
+  (require 'mevedel-transcript-audit)
   (require 'mevedel-view-disclosure)
   (require 'mevedel-view-segments)
+  (require 'mevedel-view-zone)
   (setq-local mevedel-view--tool-rendering-cache
               (make-hash-table :test #'equal))
   (mevedel-view-disclosure-initialize)
@@ -619,7 +641,99 @@ turns rendered as usual.")
   (setq-local mevedel-view--render-cache-entries 0)
   (setq-local mevedel-view--response-cache-entries 0)
   (setq-local mevedel-view--user-pre-rendered nil)
+  (setq-local mevedel-view--live-data-tail-start nil)
+  (setq-local mevedel-view--live-view-tail-start nil)
+  (setq-local mevedel-view--live-source-change-hook nil)
   (mevedel-view-segments-initialize))
+
+(defun mevedel-view-render-invalidate-live-tail ()
+  "Forget the current view buffer's retained live-render tail."
+  (let ((data-marker mevedel-view--live-data-tail-start)
+        (view-marker mevedel-view--live-view-tail-start)
+        (change-hook mevedel-view--live-source-change-hook))
+    (when-let* (((markerp data-marker))
+                (data-buf (marker-buffer data-marker))
+                ((buffer-live-p data-buf))
+                ((functionp change-hook)))
+      (with-current-buffer data-buf
+        (remove-hook 'before-change-functions change-hook t)))
+    (setq mevedel-view--live-data-tail-start nil
+          mevedel-view--live-view-tail-start nil)
+    (when (markerp data-marker)
+      (set-marker data-marker nil))
+    (when (markerp view-marker)
+      (set-marker view-marker nil))))
+
+(defun mevedel-view--live-tail-valid-p (data-buf)
+  "Return non-nil when this view's retained tail belongs to DATA-BUF."
+  (and (markerp mevedel-view--live-data-tail-start)
+       (marker-position mevedel-view--live-data-tail-start)
+       (eq (marker-buffer mevedel-view--live-data-tail-start) data-buf)
+       (markerp mevedel-view--live-view-tail-start)
+       (marker-position mevedel-view--live-view-tail-start)
+       (eq (marker-buffer mevedel-view--live-view-tail-start)
+           (current-buffer))))
+
+(defun mevedel-view--mark-live-render-unit (start source-start)
+  "Mark START through point as one live unit backed by SOURCE-START."
+  (when (< start (point))
+    (put-text-property start (point)
+                       'mevedel-view-live-unit-source source-start)))
+
+(defun mevedel-view--note-source-change (view-buf data-buf beg _end)
+  "Invalidate VIEW-BUF when DATA-BUF changes before retained position BEG."
+  (when (buffer-live-p view-buf)
+    (with-current-buffer view-buf
+      (when (and (markerp mevedel-view--live-data-tail-start)
+                 (mevedel-view--live-tail-valid-p data-buf)
+                 (< beg (marker-position mevedel-view--live-data-tail-start)))
+        (mevedel-view-render-invalidate-live-tail)))))
+
+(defun mevedel-view--retain-last-live-render-unit (data-buf start end)
+  "Retain the last live render unit between START and END for DATA-BUF."
+  (let ((pos (1- end)) source)
+    (while (and (>= pos start) (null source))
+      (setq source (get-text-property pos 'mevedel-view-live-unit-source))
+      (unless source
+        (setq pos (1- pos))))
+    (if (not source)
+        (mevedel-view-render-invalidate-live-tail)
+      (let ((view-start pos))
+        (while (and (> view-start start)
+                    (equal source
+                           (get-text-property
+                            (1- view-start)
+                            'mevedel-view-live-unit-source)))
+          (setq view-start (1- view-start)))
+        (mevedel-view-render-invalidate-live-tail)
+        (unless mevedel-view--live-source-change-hook
+          (let ((view-buf (current-buffer)))
+            (setq mevedel-view--live-source-change-hook
+                  (lambda (beg end)
+                    (mevedel-view--note-source-change
+                     view-buf (current-buffer) beg end)))))
+        (let ((change-hook mevedel-view--live-source-change-hook))
+          (setq mevedel-view--live-data-tail-start
+                (with-current-buffer data-buf
+                  (add-hook 'before-change-functions change-hook nil t)
+                  (copy-marker source nil))))
+        (setq mevedel-view--live-view-tail-start
+              (copy-marker view-start nil))))))
+
+(defun mevedel-view--split-live-response-tail (segments data-buf)
+  "Split SEGMENTS at the last stable response block in DATA-BUF."
+  (let ((reversed (reverse segments)) done out)
+    (dolist (seg reversed out)
+      (if (or done (not (eq (car seg) 'response)))
+          (push seg out)
+        (setq done t)
+        (let ((boundary (mevedel-view--last-live-response-boundary
+                         data-buf (cadr seg) (caddr seg))))
+          (if boundary
+              (progn
+                (push (list 'response boundary (caddr seg)) out)
+                (push (list 'response (cadr seg) boundary) out))
+            (push seg out)))))))
 
 (defun mevedel-view--rebase-data-sources (delta)
   "Shift rendered data-buffer source coordinates by DELTA."
@@ -1259,7 +1373,6 @@ real user message."
   "Return non-nil when SEGMENT is directive boundary audit data."
   (and (eq (car segment) 'ignored)
        (with-current-buffer data-buf
-         (require 'mevedel-transcript-audit)
          (mevedel-transcript-audit-records
           (buffer-substring
            (cadr segment) (caddr segment))
@@ -1268,7 +1381,6 @@ real user message."
 (defun mevedel-view--directive-ranges (data-buf)
   "Return absolute directive transcript ranges in DATA-BUF."
   (with-current-buffer data-buf
-    (require 'mevedel-transcript-audit)
     (mapcar
      (lambda (range)
        (plist-put range :render-id
@@ -1380,7 +1492,15 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
 ;;    :expandable-p BOOL        ; nil means render as a compact event line
 ;;    :hidden-p BOOL            ; non-nil means insert nothing
 ;;    :coalesce-key STRING      ; adjacent equal keys keep only the last row
+;;    :child-calls LIST         ; nested calls rendered as their own rows
 ;;    :initially-collapsed-p BOOL)
+;;
+;; `:child-calls' belongs to compound tools that run other tools
+;; (ToolScript).  Each entry is a plist (:id ID :tool NAME :args PLIST :result STRING :status SYM
+;; :render-data DATA) and is rendered by that tool's own registered renderer,
+;; so a nested Grep row gets Grep's header and `grep-mode' body.  Rows are
+;; inserted only while the owning block is expanded, and each row is its own
+;; collapsible section.
 ;;
 ;; The interpreter below parses the tool segment in the data buffer, invokes the
 ;; renderer (with a condition-case fallback to the generic renderer on error),
@@ -1400,7 +1520,6 @@ tool marker on its own line with no `gptel' property, so a segment
 whose start drifted onto the marker (boundary expansion, patched
 render-data block) would otherwise fail to parse and force the
 renderer to fall back to the bare `Tool' one-liner."
-  (require 'mevedel-tool-render-data)
   (with-current-buffer data-buf
     (let* ((raw (or raw
                     (mevedel-view--tool-segment-text seg-start seg-end)))
@@ -1481,6 +1600,7 @@ Requires:
   `:expandable-p' (if present) -- must be a boolean.
   `:hidden-p' (if present) -- must be a boolean.
   `:coalesce-key' (if present) -- must be a string.
+  `:child-calls' (if present) -- must be a list of plists.
 Malformed plists are rejected here so the interpreter never tries to
 insert a non-string or `funcall' a non-symbol."
   (and (listp p)
@@ -1490,8 +1610,15 @@ insert a non-string or `funcall' a non-symbol."
              (status (plist-get p :status))
              (expandable (plist-get p :expandable-p))
              (hidden (plist-get p :hidden-p))
+             (children (plist-get p :child-calls))
              (coalesce-key (plist-get p :coalesce-key)))
          (and (or (null body) (stringp body))
+              (or (null children)
+                  (and (listp children)
+                       (seq-every-p (lambda (child)
+                                      (and (listp child)
+                                           (keywordp (car-safe child))))
+                                    children)))
               (or (null mode) (symbolp mode))
               (or (not (plist-member p :status)) (symbolp status))
               (or (not (plist-member p :expandable-p))
@@ -1883,6 +2010,26 @@ Return nil when HEADER is not a `Tool: argument' style line."
         (concat header "\n" sandbox)
       header)))
 
+(defvar mevedel-view--rendering-indent ""
+  "Line prefix applied to the rendering currently being inserted.
+Bound to a non-empty string while a nested call row is inserted so its
+header and body sit one level in from the block that ran it.")
+
+(defun mevedel-view--rendering-indent-blank ()
+  "Return the current rendering indent as plain spaces.
+A batch glyph belongs on the first line of a row only, so wrapped text
+and body lines are inset by the same width without repeating it."
+  (make-string (string-width mevedel-view--rendering-indent) ?\s))
+
+(defun mevedel-view--apply-rendering-indent (start end)
+  "Indent START..END by `mevedel-view--rendering-indent' when it is set."
+  (unless (string-empty-p mevedel-view--rendering-indent)
+    (add-text-properties
+     start end
+     `(line-prefix ,mevedel-view--rendering-indent
+       wrap-prefix ,(mevedel-view--rendering-indent-blank)
+       rear-nonsticky (line-prefix wrap-prefix)))))
+
 (defun mevedel-view--render-collapsed-header (rendering source)
   "Insert the collapsed header for RENDERING with SOURCE coordinates.
 RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
@@ -1899,7 +2046,8 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
        mevedel-view-rendered t))
     (when (eq vtype 'agent-handle)
       (mevedel-view--stamp-agent-handle ins-start (point) rendering))
-    (mevedel-view--decorate-markdown-in-range ins-start (point))))
+    (mevedel-view--decorate-markdown-in-range ins-start (point))
+    (mevedel-view--apply-rendering-indent ins-start (point))))
 
 (defun mevedel-view--render-expanded-body (rendering source)
   "Insert the expanded body for RENDERING with SOURCE coordinates."
@@ -1931,16 +2079,21 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
     ;; Stamp the body inset before decoration so a rendered table
     ;; subtracts it from its usable width, then again afterwards so
     ;; decoration-inserted text (panel labels, padding) is indented too.
-    (add-text-properties body-start (point)
-                         '(line-prefix "    "
-                           wrap-prefix "    "
-                           rear-nonsticky (line-prefix wrap-prefix)))
-    (mevedel-view--decorate-markdown-in-range ins-start (point))
-    (add-text-properties body-start (point)
-                         '(line-prefix "    "
-                           wrap-prefix "    "
-                           rear-nonsticky (line-prefix wrap-prefix)))
-    (set-marker body-start nil)))
+    (let ((inset (concat (mevedel-view--rendering-indent-blank) "    ")))
+      (add-text-properties body-start (point)
+                           `(line-prefix ,inset
+                             wrap-prefix ,inset
+                             rear-nonsticky (line-prefix wrap-prefix)))
+      (mevedel-view--decorate-markdown-in-range ins-start (point))
+      (add-text-properties body-start (point)
+                           `(line-prefix ,inset
+                             wrap-prefix ,inset
+                             rear-nonsticky (line-prefix wrap-prefix))))
+    (mevedel-view--apply-rendering-indent ins-start body-start)
+    (set-marker body-start nil)
+    ;; Nested call rows follow the body so a compound tool's children are
+    ;; visible exactly while the block that ran them is expanded.
+    (mevedel-view--insert-child-calls rendering source)))
 
 (defun mevedel-view--insert-rendered-tool (rendering source)
   "Insert a rendered tool block honouring RENDERING's initial state.
@@ -1980,6 +2133,175 @@ the raw tool segment.  When `:hidden-p' is non-nil, insert nothing."
           (mevedel-view-render-add-display-properties
            audit-start (point) 'hook-audit))))))
 
+(defconst mevedel-view--child-call-indent "  "
+  "Extra line prefix that sets a nested call row in from its own block.")
+
+(defun mevedel-view--child-call-rendering (child)
+  "Return the rendering plist for nested call CHILD, or nil.
+
+CHILD is one `:child-calls' entry.  The nested tool's own registered
+renderer produces the row, which is why a nested Grep gets Grep's header
+and `grep-mode' body without the compound tool formatting anything
+itself.  A failed row renders expanded: its output is the reason the
+reader opened the block.
+
+`:child-calls' is dropped from the result, so a nested compound call
+shows what it returned rather than opening a second level of rows."
+  (let* ((name (plist-get child :tool))
+         (args (plist-get child :args))
+         (result (plist-get child :result))
+         (render-data (plist-get child :render-data))
+         (failed (not (eq (plist-get child :status) 'success)))
+         (tool (and (stringp name) (mevedel-tool-get name)))
+         (rendering
+          (or (and tool
+                   (mevedel-view--invoke-renderer tool render-data args result))
+              (mevedel-view--generic-tool-rendering
+               name args result nil render-data))))
+    (when rendering
+      (setq rendering (copy-sequence rendering))
+      (dolist (cell (list (cons :vtype 'tool-child)
+                          (cons :hidden-p nil)
+                          (cons :expandable-p t)
+                          (cons :coalesce-key nil)
+                          (cons :child-calls nil)
+                          (cons :hook-audits nil)
+                          (cons :force-expanded-p nil)
+                          (cons :initially-collapsed-p (not failed))))
+        (setq rendering (plist-put rendering (car cell) (cdr cell))))
+      (when failed
+        (setq rendering (plist-put rendering :status 'error)))
+      (when-let* ((media (plist-get child :media)))
+        (setq rendering
+              (plist-put rendering :body
+                         (concat (or (plist-get rendering :body) "")
+                                 (format "\nMedia: %S" media)))))
+      rendering)))
+
+(defun mevedel-view--child-call-state-key (child source)
+  "Return the disclosure key for CHILD's row under SOURCE, or nil.
+The child id discriminates rows that share one block's coordinates."
+  (when-let* ((base (mevedel-view-disclosure-state-key source 'tool-child))
+              (id (plist-get child :id)))
+    (append base (list id))))
+
+(defun mevedel-view--child-call-prefixes (children)
+  "Return one line prefix per entry in CHILDREN, or nil.
+
+A `:batch' value marks the calls of one concurrent join.  When some call
+ran in a batch every row gets a two-column glyph gutter so the join is
+visible as a group and every marker still lines up; a block that ran
+everything in sequence pays no gutter at all."
+  (let ((batches (mapcar (lambda (child) (plist-get child :batch)) children)))
+    (when (delq nil (copy-sequence batches))
+      (cl-loop
+       for batch in batches
+       for index from 0
+       collect
+       (concat
+        mevedel-view--child-call-indent
+        (if (null batch)
+            "  "
+          (let ((first (or (zerop index)
+                           (not (equal batch (nth (1- index) batches)))))
+                (last (not (equal batch (nth (1+ index) batches)))))
+            (concat (cond ((and first last) "\u2500")
+                          (first "\u250c")
+                          (last "\u2514")
+                          (t "\u251c"))
+                    " "))))))))
+
+(defun mevedel-view--insert-child-call-block
+    (child source &optional collapsed indent)
+  "Insert the nested call row for CHILD under SOURCE.
+
+COLLAPSED is `derive' to use the remembered state, or a boolean to force
+one.  INDENT overrides the row's line prefix, which is how a concurrent
+batch keeps its glyph gutter across a toggle.  The row gets its own copy
+of SOURCE's coordinates because section bounds compare source identity
+with `eq', which is what separates one row from the next and from the
+body of the block that ran them."
+  (when-let* ((rendering (mevedel-view--child-call-rendering child))
+              (source (and (consp source) (cons (car source) (cdr source)))))
+    (let* ((key (mevedel-view--child-call-state-key child source))
+           (remembered (and (eq collapsed 'derive)
+                            (mevedel-view-disclosure-state-for-key key)))
+           (collapsed (cond
+                       (remembered (cdr remembered))
+                       ((eq collapsed 'derive)
+                        (plist-get rendering :initially-collapsed-p))
+                       (t collapsed)))
+           (indent (or indent mevedel-view--child-call-indent))
+           (mevedel-view--rendering-indent
+            (concat mevedel-view--rendering-indent indent))
+           (start (point)))
+      (if collapsed
+          (mevedel-view--render-collapsed-header rendering source)
+        (mevedel-view--render-expanded-body rendering source))
+      (add-text-properties start (point)
+                           `(mevedel-view-tool-child ,child
+                             mevedel-view-child-indent ,indent
+                             mevedel-view-source-key ,key))
+      (mevedel-view-render-add-display-properties start (point) 'tool-child)
+      (mevedel-view-disclosure-record-state-for-key key collapsed))))
+
+(defun mevedel-view--insert-child-calls (rendering source)
+  "Insert one row per nested call in RENDERING under SOURCE."
+  (let* ((children (plist-get rendering :child-calls))
+         (prefixes (mevedel-view--child-call-prefixes children)))
+    (cl-loop for child in children
+             for index from 0
+             do (mevedel-view--insert-child-call-block
+                 child source 'derive (nth index prefixes)))))
+
+(defun mevedel-view-render-child-calls-end (start limit)
+  "Return the end of the nested call rows that begin at START, before LIMIT.
+Return START when no row begins there.  Nested rows always follow the
+body of the block that ran them, so a run starting at START belongs to
+the section that ends there."
+  (let ((pos start))
+    (while (and (< pos limit)
+                (eq (get-text-property pos 'mevedel-view-type) 'tool-child))
+      (setq pos (or (next-single-property-change
+                     pos 'mevedel-view-type nil limit)
+                    limit)))
+    pos))
+
+(defun mevedel-view-render-section-body-end (start limit)
+  "Return the end of the section body in START..LIMIT.
+Stops before any nested call rows so re-stamping a re-rendered section
+does not overwrite the identity of the rows it owns."
+  (let ((pos start))
+    (while (and (< pos limit)
+                (not (eq (get-text-property pos 'mevedel-view-type)
+                         'tool-child)))
+      (setq pos (or (next-single-property-change
+                     pos 'mevedel-view-type nil limit)
+                    limit)))
+    pos))
+
+(defun mevedel-view-render-toggle-child-call ()
+  "Toggle the nested call row at point."
+  (require 'mevedel-view-disclosure)
+  (let* ((bounds (mevedel-view-disclosure-section-bounds))
+         (start (car-safe bounds))
+         (child (and start (get-text-property start 'mevedel-view-tool-child)))
+         (source (and start (get-text-property start 'mevedel-view-source)))
+         (collapsed (and start (get-text-property start 'mevedel-view-collapsed)))
+         (indent (and start (get-text-property start 'mevedel-view-child-indent)))
+         (turn-id (and start (get-text-property start 'mevedel-view-turn-id))))
+    (unless (and bounds child)
+      (user-error "No collapsible section at point"))
+    (let ((inhibit-read-only t))
+      (save-excursion
+        (goto-char start)
+        (delete-region start (cdr bounds))
+        (mevedel-view--insert-child-call-block
+         child source (not collapsed) indent)
+        (when turn-id
+          (put-text-property start (point) 'mevedel-view-turn-id turn-id))))))
+
+
 (defun mevedel-view--tool-cache-key
     (data-buf seg-start seg-end collapsed-only raw)
   "Return a cache key for DATA-BUF SEG-START..SEG-END rendering.
@@ -2002,9 +2324,12 @@ renderings, but changes to the segment text itself should."
            (plist-get rendering :initially-collapsed-p))))
 
 (defun mevedel-view--omit-rendering-body-for-cache (rendering)
-  "Return RENDERING with its body omitted for collapsed-header caching."
+  "Return RENDERING with its body omitted for collapsed-header caching.
+Nested call rows go with the body: a collapsed block shows neither, and
+retaining them would keep every child result in the header cache."
   (if (mevedel-view--collapsed-rendering-p rendering)
-      (plist-put (copy-sequence rendering) :body nil)
+      (plist-put (plist-put (copy-sequence rendering) :body nil)
+                 :child-calls nil)
     rendering))
 
 (defun mevedel-view--compute-segment-rendering
@@ -2019,8 +2344,7 @@ RAW is an optional precomputed expanded tool segment text."
            (args (plist-get call :args))
            (tool-use-id (plist-get call :tool-use-id))
            (event
-            (and (equal name "Bash")
-                 (bound-and-true-p mevedel-view--execution-events)
+            (and (bound-and-true-p mevedel-view--execution-events)
                  (hash-table-p mevedel-view--execution-events)
                  (gethash tool-use-id mevedel-view--execution-events)))
            (terminal-render-data
@@ -2138,7 +2462,6 @@ bodies for initially collapsed tools."
 (defun mevedel-view--tool-row-region (data-buffer tool-use-id)
   "Return the visible source-backed row for TOOL-USE-ID in DATA-BUFFER.
 The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
-  (require 'mevedel-tool-render-data)
   (when-let* ((bounds
                (with-current-buffer data-buffer
                  (mevedel-tool-render-data-segment-bounds tool-use-id))))
@@ -2260,7 +2583,6 @@ system reminder wrappers."
 
 (defun mevedel-view--strip-render-data-display-text (text)
   "Return TEXT without hidden render-data side-channel scaffolding."
-  (require 'mevedel-tool-render-data)
   (mevedel-tool-render-data-strip (or text "")))
 
 (defun mevedel-view--render-data-only-text-p (text)
@@ -2279,7 +2601,6 @@ system reminder wrappers."
 
 (defun mevedel-view--hook-audit-only-text-p (text)
   "Return non-nil if TEXT is only hook audit scaffolding."
-  (require 'mevedel-transcript-audit)
   (mevedel-transcript-audit-only-p text))
 
 (defun mevedel-view--hook-audit-only-segment-p (data-buf seg-start seg-end)
@@ -2376,7 +2697,6 @@ turn shows one bogus thinking summary per tool boundary."
 
 (defun mevedel-view--inline-skill-render-data-from-text (text)
   "Return inline-skill render-data from TEXT, or nil."
-  (require 'mevedel-tool-render-data)
   (let ((data (cdr (mevedel-tool-render-data-extract text))))
     (and (consp data)
          (eq (plist-get data :kind) 'inline-skill)
@@ -2384,7 +2704,6 @@ turn shows one bogus thinking summary per tool boundary."
 
 (defun mevedel-view--collaboration-event-from-text (text)
   "Return a canonical started collaboration event from TEXT, or nil."
-  (require 'mevedel-tool-render-data)
   (let ((data (cdr (mevedel-tool-render-data-extract text))))
     (and (consp data)
          (eq (plist-get data :kind) 'collaboration-event)
@@ -2393,7 +2712,6 @@ turn shows one bogus thinking summary per tool boundary."
 
 (defun mevedel-view--request-summary-render-data-from-text (text)
   "Return request-summary render-data from TEXT, or nil."
-  (require 'mevedel-tool-render-data)
   (let ((data (cdr (mevedel-tool-render-data-extract text))))
     (and (consp data)
          (eq (plist-get data :kind) 'request-summary)
@@ -2462,7 +2780,6 @@ turn shows one bogus thinking summary per tool boundary."
 SEARCH-START bounds duplicate detection to the current response tail.
 EXTRA is additional request metadata to persist.
 Return the new data-buffer end position."
-  (require 'mevedel-tool-render-data)
   (when-let* ((elapsed (mevedel-view--request-summary-elapsed-seconds
                         data-buf)))
     (with-current-buffer data-buf
@@ -2749,8 +3066,8 @@ from the data buffer should be filtered."
            (eq (get-text-property (1- (point)) 'mevedel-view-type)
                'user)))))
 
-(defun mevedel-view--render-incremental (data-buf &optional start end)
-  "Rebuild the in-flight assistant turn in the view from DATA-BUF.
+(defun mevedel-view--render-live-region (data-buf settle-p &optional start end)
+  "Render the in-flight turn from DATA-BUF, settling it when SETTLE-P.
 
 Call from the view buffer.  Deletes the region between variable
 `mevedel-view--in-flight-turn-start' and the history boundary (the
@@ -2785,21 +3102,37 @@ In that case the user turn must be rendered from the data buffer.
 Section-level collapse state (expanded thinking block, collapsed
 tool summary, …) is captured before the delete and re-applied after
 the render so user toggles survive streaming ticks."
-  (require 'mevedel-transcript)
-  (let* ((turn-from (and (markerp mevedel-view--data-turn-start)
+  (let* ((retained-p (and (not settle-p)
+                          (mevedel-view--live-tail-valid-p data-buf)))
+         (turn-from (and (markerp mevedel-view--data-turn-start)
                          (marker-position mevedel-view--data-turn-start)))
-         (data-from (cond
-                     ((and start turn-from) (min start turn-from))
-                     (start)
-                     (turn-from)))
+         (data-from
+          (if retained-p
+              (marker-position mevedel-view--live-data-tail-start)
+            (cond
+             ((and start turn-from) (min start turn-from))
+             (start)
+             (turn-from))))
          (data-to
           (or end
               (with-current-buffer data-buf (point-max))))
          (segments (when (and data-from data-to)
                      (with-current-buffer data-buf
-                       (mevedel-transcript-segments data-from data-to))))
+                       (if retained-p
+                           (save-restriction
+                             (narrow-to-region data-from data-to)
+                             (mevedel-transcript-segments
+                              (point-min) (point-max)))
+                         (mevedel-transcript-segments data-from data-to)))))
+         (segments (if settle-p
+                       segments
+                     (mevedel-view--split-live-response-tail
+                      segments data-buf)))
          (turns (mevedel-view--group-transcript-turns segments data-buf))
-         (in-flight-p (mevedel-view-stream-in-flight-turn-start-position))
+         (in-flight-p
+          (if retained-p
+              (marker-position mevedel-view--live-view-tail-start)
+            (mevedel-view-stream-in-flight-turn-start-position)))
          (pre-rendered-user-visible-p
           (mevedel-view--pre-rendered-user-visible-p))
          (pending mevedel-view--pending-tool-calls))
@@ -2882,7 +3215,8 @@ the render so user toggles survive streaming ticks."
                   (mevedel-view--recover-in-flight-turn-start
                    data-from history-start rebuild-end-pos))
                  (delete-start
-                  (or (and in-flight-p
+                  (or (and retained-p in-flight-p)
+                      (and in-flight-p
                            (>= in-flight-p history-start)
                            (<= in-flight-p rebuild-end-pos)
                            (not (and recovered-start
@@ -2924,14 +3258,23 @@ the render so user toggles survive streaming ticks."
             ;; The in-flight turn belongs to the history region.  Insert it
             ;; at the status boundary so any real-text status/interaction
             ;; UI below that boundary remains below the transcript.
-            (let ((mevedel-view--render-insertion-marker rebuild-end))
+            (let ((mevedel-view--render-insertion-marker rebuild-end)
+                  (render-start (marker-position rebuild-end))
+                  (continuation-p retained-p))
               (dolist (turn turns)
-                (mevedel-view--render-turn turn data-buf))
+                (mevedel-view--render-turn
+                 turn data-buf nil nil
+                 (prog1 continuation-p
+                   (setq continuation-p nil))))
               (mevedel-view--ensure-request-progress data-buf)
               (when pending
                 (let* ((cap mevedel-view-pending-tools-visible-max)
                        (visible (cl-subseq pending 0 (min cap (length pending)))))
-                  (mevedel-view--insert-pending-tool-lines visible))))
+                  (mevedel-view--insert-pending-tool-lines visible)))
+              (if settle-p
+                  (mevedel-view-render-invalidate-live-tail)
+                (mevedel-view--retain-last-live-render-unit
+                 data-buf render-start (marker-position rebuild-end))))
             (mevedel-view--debug-log
              'incremental-after-insert
              :state (mevedel-view--debug-state data-buf data-from data-to)))
@@ -2952,6 +3295,15 @@ the render so user toggles survive streaming ticks."
             (mevedel-view--interaction-rebuild)
             (when (fboundp 'mevedel-directive-frame-refresh-filter)
               (mevedel-directive-frame-refresh-filter))))))))))
+
+(defun mevedel-view-render-live-update (data-buf)
+  "Update the current in-flight turn from DATA-BUF's mutable tail."
+  (mevedel-view--render-live-region data-buf nil))
+
+(defun mevedel-view-render-settle (data-buf start end)
+  "Exactly reconcile DATA-BUF's completed response from START through END."
+  (mevedel-view-render-invalidate-live-tail)
+  (mevedel-view--render-live-region data-buf t start end))
 
 (defun mevedel-view--conversation-variant-button
     (data-buf source-start source-end &optional session)
@@ -3001,12 +3353,13 @@ SESSION supplies live session context when DATA-BUF is archived."
          (mevedel-view-switch-conversation-variant fork-point-id))))))
 
 (defun mevedel-view--render-turn
-    (turn data-buf &optional decorate-variants variant-session)
+    (turn data-buf &optional decorate-variants variant-session continuation-p)
   "Render a single TURN into the view buffer at the input marker.
 DATA-BUF is the gptel data buffer for reading source content.
 TURN is a plist with :role, :segments, :start, :end.
 DECORATE-VARIANTS adds conversation variant switches for settled history.
-VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
+VARIANT-SESSION supplies their live session context when DATA-BUF is archived.
+CONTINUATION-P appends an already-started assistant turn without a new header."
   (let ((role (plist-get turn :role))
         (segments (plist-get turn :segments))
         (turn-start (plist-get turn :start))
@@ -3045,7 +3398,7 @@ VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
                 (and decorate-variants
                      (mevedel-view--conversation-variant-button
                       data-buf turn-start turn-end variant-session))
-                directive)))
+                directive continuation-p)))
             ;; Blank line above the trailing separator so the rule doesn't
             ;; butt up against the last response line.
             (when (eq role 'assistant)
@@ -3101,7 +3454,11 @@ VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
             (add-text-properties
              insert-start (point)
              `(mevedel-view-turn-id
-               ,(or (plist-get turn :render-id)
+               ,(or (and continuation-p
+                         (> insert-start (point-min))
+                         (get-text-property
+                          (1- insert-start) 'mevedel-view-turn-id))
+                    (plist-get turn :render-id)
                     (cl-gensym "mevedel-view-turn-"))
                ,@(when directive
                    `(mevedel-view-directive ,directive
@@ -3109,7 +3466,6 @@ VARIANT-SESSION supplies their live session context when DATA-BUF is archived."
 
 (defun mevedel-view--user-turn-display-text (segments data-buf)
   "Return persisted view text from user SEGMENTS in DATA-BUF, or nil."
-  (require 'mevedel-tool-render-data)
   (with-current-buffer data-buf
     (cl-loop for seg in segments
              when (eq (car seg) 'render-data)
@@ -3206,6 +3562,8 @@ Empty string when the turn contains only whitespace or markers."
 (autoload 'mevedel-view--decorate-local-images-in-range
   "mevedel-view-markdown")
 (autoload 'mevedel-view--decorate-markdown-in-range
+  "mevedel-view-markdown")
+(autoload 'mevedel-view--last-live-response-boundary
   "mevedel-view-markdown")
 (autoload 'mevedel-view--linkify-paths-in-range "mevedel-view-markdown")
 
@@ -3780,7 +4138,6 @@ segment repair absorbed it, so the lookup covers the turn extent plus
 the contiguous run of audit blocks that follows it."
   (when (and segments (buffer-live-p data-buf))
     (with-current-buffer data-buf
-      (require 'mevedel-transcript-audit)
       (let* ((start (cadr (car segments)))
              (end (apply #'max (mapcar #'caddr segments)))
              (strip-end
@@ -3803,7 +4160,6 @@ the contiguous run of audit blocks that follows it."
 (defun mevedel-view--render-user-turn (segments data-buf &optional directive)
   "Render user SEGMENTS from DATA-BUF, with optional DIRECTIVE metadata."
   (require 'mevedel-overlay-ui)
-  (require 'mevedel-transcript)
   (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
          (prompt-drawers (mevedel-view--user-turn-prompt-drawers
                           segments data-buf))
@@ -4067,16 +4423,18 @@ Merges adjacent thinking/reasoning segments into a single summary."
            (summary (mevedel-view--thinking-summary
                      data-buf first-start last-end)))
       (unless (string-empty-p summary)
-        (mevedel-view--insert-activity-rule-after-response)
-        (mevedel-view--insert-summary-region
-         (mevedel-view--summary-with-face
-          summary 'mevedel-view-thinking-summary)
-         `(mevedel-view-type thinking-summary
-           mevedel-view-collapsed t
-           mevedel-view-source ,source
-           mevedel-view-source-key ,(mevedel-view-disclosure-state-key
-                                     source
-                                     'thinking-summary)))))))
+        (let ((unit-start (point)))
+          (mevedel-view--insert-activity-rule-after-response)
+          (mevedel-view--insert-summary-region
+           (mevedel-view--summary-with-face
+            summary 'mevedel-view-thinking-summary)
+           `(mevedel-view-type thinking-summary
+             mevedel-view-collapsed t
+             mevedel-view-source ,source
+             mevedel-view-source-key ,(mevedel-view-disclosure-state-key
+                                       source
+                                       'thinking-summary)))
+          (mevedel-view--mark-live-render-unit unit-start first-start))))))
 
 (defun mevedel-view--render-system-reminder-segment (seg data-buf)
   "Render system-reminder SEG from DATA-BUF as a control row."
@@ -4163,13 +4521,13 @@ added when the text before point does not already end with a blank line
                         'mevedel-view-collapsed nil))))
 
 (defun mevedel-view--render-assistant-turn
-    (segments data-buf &optional variant-button directive)
+    (segments data-buf &optional variant-button directive continuation-p)
   "Render assistant SEGMENTS from DATA-BUF.
 Response text is shown inline, tool calls as collapsed one-liners,
 reasoning blocks as collapsed summaries.  Adjacent thinking segments
 are merged into a single summary.  VARIANT-BUTTON, when non-nil, is
-inserted beside the header."
-  (unless directive
+inserted beside the header.  CONTINUATION-P suppresses that header."
+  (unless (or directive continuation-p)
     (let ((header-start (point)))
       (insert "Assistant")
       (when variant-button
@@ -4205,8 +4563,9 @@ inserted beside the header."
                  (setq text (mevedel-view--visible-response-text text))
                  (with-current-buffer view-buf
                    (unless (string-empty-p text)
-                     (mevedel-view--ensure-blank-line-before-response)
-                     (let ((start (point)))
+                     (let ((unit-start (point)))
+                       (mevedel-view--ensure-blank-line-before-response)
+                       (let ((start (point)))
                        (insert (mevedel-view--fontify-response text) "\n")
                        (let ((response-end (copy-marker (point) t)))
                          (add-text-properties
@@ -4224,7 +4583,9 @@ inserted beside the header."
                          (mevedel-view--decorate-markdown-in-range
                           start response-end)
                          (goto-char response-end)
-                         (set-marker response-end nil)))))))))
+                         (set-marker response-end nil)))
+                       (mevedel-view--mark-live-render-unit
+                        unit-start seg-start))))))))
           ('tool
            ;; Flush thinking group before tools
            (mevedel-view--flush-thinking-group thinking-group data-buf)
@@ -4378,7 +4739,9 @@ side-channel, falling back to the default one-liner otherwise.
 Adjacent visible renderings with equal `:coalesce-key' values keep
 only the final row and show the number of combined calls.  Hook audits
 from every combined call remain in source order."
-  (let* ((tool-segments
+  (let* ((unit-start (point))
+         (unit-source (cadr (car tool-segments)))
+         (tool-segments
           (mevedel-view--merge-tool-hook-audit-segments
            tool-segments data-buf))
          (entries
@@ -4479,7 +4842,8 @@ from every combined call remain in source order."
        :segments (length tool-segments)
        :rendered rendered
        :fallbacks fallbacks
-       :elapsed (- (float-time) start-time)))))
+       :elapsed (- (float-time) start-time)))
+    (mevedel-view--mark-live-render-unit unit-start unit-source)))
 
 (defun mevedel-view--tool-readable-text (raw)
   "Return RAW advanced to the readable tool call when possible.
@@ -4541,7 +4905,6 @@ Restored `GPTEL_BOUNDS' can drift into the `#+begin_tool' line or
 past `#+end_tool' when older transcripts are opened.  The org block
 markers remain structural anchors, so use them to recover the whole
 tool block before parsing the tool plist and render-data side channel."
-  (require 'mevedel-transcript)
   (mevedel-transcript--tool-block-bounds-for-run seg-start seg-end))
 
 (defun mevedel-view--tool-segment-text (seg-start seg-end)
@@ -5589,6 +5952,7 @@ SOURCE is the source range of the skipped summary in the data buffer."
   "Reset the current view before projecting DATA-BUF.
 SESSION-DATA-BUF supplies the live header.  HISTORICAL-P inserts the
 historical banner.  AGENT-TRANSCRIPT-P selects the headerless layout."
+  (mevedel-view-render-invalidate-live-tail)
   (if agent-transcript-p
       (progn
         (mevedel-view--debug-log
@@ -5840,7 +6204,6 @@ previously projected transcript into this render.
 Preserves the active composer, live window state, and an in-flight
 assistant anchor while rebuilding the transcript projection and live
 view chrome."
-  (require 'mevedel-transcript)
   (require 'mevedel-view-segments)
   (unless mevedel--data-buffer
     (error "No data buffer"))

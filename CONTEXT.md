@@ -130,6 +130,8 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
   not a separate transcript presentation or interaction surface.
 - **tool** — A model-callable operation routed through mevedel's validation, permission, execution, rendering, and persistence pipeline.
 - **tool attempt** — One validated model tool call passing through pre-use and permission gates. It receives one post-use outcome only when its handler runs; a model retry is a separate attempt.
+- **ToolScript** — The programmatic-tool-calling tool: one model-authored script evaluated by mevedel's closed orchestration machine. Internally namespaced `mevedel-ptc-*` after the original PTC acronym. It owns one provider-visible envelope and may suspend on permission-checked nested tool calls without exposing their intermediate results to the model.
+- **ToolScript child call** — One nested ordinary pipeline attempt with source `ptc` and identity derived from its envelope. It is audit-visible but is not a provider-authored transcript message.
 - **permission-denied hook** — The `PermissionDenied` hook emitted exactly once after any final denial of a valid tool attempt, including rejection by `PreToolUse`. Its payload preserves the event that originated the denial.
 - **permission-request hook** — The `PermissionRequest` hook emitted once when any tool's permission resolution produces `ask`, before the request enters the shared permission queue. Tool-specific cards, display, and queue re-evaluation do not create additional events.
 - **tool input repair** — A deterministic correction to a tool call that either responds to a specific contract violation or is explicitly requested by the tool. Ordinary default values are tool semantics, not repairs.

@@ -31,7 +31,19 @@
     '((:mime "text/plain" :kind document :data "QUJD"))))
   (should-not
    (mevedel-tool-media-normalize-items
-    '((:mime "image/png" :kind image :data "")))))
+   '((:mime "image/png" :kind image :data "")))))
+
+(mevedel-deftest mevedel-tool-media-reference-items ()
+  ,test
+  (test)
+  :doc "preserves media metadata without retaining payload bytes"
+  (let* ((items '((:mime "image/png" :kind image :data "QUJD"
+                  :path "/tmp/a.png" :page 2)))
+         (references (mevedel-tool-media-reference-items items)))
+    (should (equal '((:mime "image/png" :kind image
+                      :path "/tmp/a.png" :page 2))
+                   references))
+    (should (equal "QUJD" (plist-get (car items) :data)))))
 
 (mevedel-deftest mevedel-tool-media-attach-result
     (:vars ((mevedel-tool-media--store nil)))

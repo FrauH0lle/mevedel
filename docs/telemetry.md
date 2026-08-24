@@ -87,6 +87,8 @@ active elapsed time instead and exclude actionable user-input waits.
   queue transition, interaction lifetime,
   sandbox preparation/fallback, scheduler dwell, child start/first output/end,
   `WriteStdin` requested/effective wait, and result return;
+- every ToolScript script as one redacted span with outcome, budget category,
+  nested-call count, and duration, never script text, arguments, or results;
 - aggregate hook events with matching handlers, plus every hook handler and
   empty aggregate event during profiler/debug runs, including handler identity,
   process outcome, contributed-context size, and acquisition/release of

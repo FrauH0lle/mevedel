@@ -263,6 +263,7 @@ workspace."
   worktree-base-commit ; full HEAD commit used to create a Worktree Fork
   prompt-index      ; alist: (segment-number . list of prompt plists) for picker
   file-snapshots    ; alist: (turn-number . file-map alist) for file-history restore
+  ptc-checkpoints   ; durable unfinished/settled ToolScript envelopes; never guest state
   ;; Transient cache of the committed sidecar's `:first-user-message'.  The
   ;; field never changes once a session has a first turn, and reading it back
   ;; out of the published sidecar costs a target round trip plus a SHA-256
@@ -712,6 +713,8 @@ Created at request start, cleared in the termination handler."
   goal-plan-read-path
   ;; Rules accumulated by an owning skill die with the request struct.
   skill-permission-rules
+  ;; Closed nested-tool restriction accumulated from owning command skills.
+  (ptc-primitives :unrestricted)
   ;; User-attached `mevedel-skill-invocation-record' structs.
   attached-skill-records
   hook-rules)

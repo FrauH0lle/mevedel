@@ -18,6 +18,7 @@
        '("skills/remember" "skills/remember/SKILL.md")
        '("skills/review" "skills/review/SKILL.md")
        '("collaboration" "collaboration/*")
+       '("docs/ptc-dialect.md")
        '("tools" "tools/*.md"))
 
 (script "test" "echo \"Error: no test specified\" && exit 1")

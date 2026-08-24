@@ -1292,6 +1292,8 @@ slot unchanged and returns nil."
      base
      (list :tool-name (and tool (mevedel-tool-name tool))
            :tool-use-id (plist-get context :tool-use-id)
+           :parent-tool-use-id (plist-get context :parent-tool-use-id)
+           :call-source (plist-get context :call-source)
            :tool-input (plist-get context :args))
      extra)))
 

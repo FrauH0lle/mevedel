@@ -284,6 +284,24 @@
             (mevedel--turn-autosave fsm))
           (should (equal (list (list session chat-buf t)) saved)))
       (kill-buffer chat-buf)))
+  :doc "restores settled ToolScript checkpoints when the co-commit fails"
+  (let* ((session
+          (mevedel-session--create
+           :name "failed-save"
+           :ptc-checkpoints '((:id "ptc" :state settled))))
+         (chat-buf (generate-new-buffer " *mevedel-turn-failed-save*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
+                     (lambda (&rest _) (error "Disk failed"))))
+            (mevedel-test--with-captured-diagnostics nil
+              (mevedel--turn-autosave fsm)))
+          (should (equal '((:id "ptc" :state settled))
+                         (mevedel-session-ptc-checkpoints session))))
+      (kill-buffer chat-buf)))
   :doc "refreshes settled fork metadata without changing the composer draft"
   (let ((root (make-temp-file "mevedel-turn-fork-" t)))
     (unwind-protect

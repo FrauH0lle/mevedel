@@ -124,6 +124,50 @@
   (should-not (mevedel-agent--specs-contain-tool-p
                '((:tool "Read")) "Agent")))
 
+(mevedel-deftest mevedel-agent-filter-root-only-tools
+  (:before-each (test-mevedel-agents--restore-builtins))
+  ,test
+  (test)
+  :doc "removes ToolScript from both registry and provider tool lists"
+  (let* ((ptc (mevedel-tool-ensure "ToolScript"))
+         (read (mevedel-tool-ensure "Read")))
+    (should (equal (list read)
+                   (mevedel-agent-filter-root-only-tools
+                    (list ptc read))))
+    (should
+     (equal (list (mevedel-tool-gptel-tool read))
+            (mevedel-agent-filter-root-only-tools
+             (list (mevedel-tool-gptel-tool ptc)
+                   (mevedel-tool-gptel-tool read)))))))
+
+(mevedel-deftest mevedel-agent-invocation-create
+  (:before-each (test-mevedel-agents--restore-builtins))
+  ,test
+  (test)
+  :doc "does not advertise deferred ToolScript to retained agents"
+  (let* ((mevedel-agent-extra-tool-specs
+          '((explorer (:deferred (:tool "ToolScript")))))
+         (invocation
+          (mevedel-agent-invocation-create
+           (mevedel-agent-get "explorer"))))
+    (should-not
+     (cl-find "ToolScript" (mevedel-agent-invocation-deferred-set invocation)
+              :key (lambda (entry) (cadr (car entry))) :test #'equal))))
+
+(mevedel-deftest mevedel-agent-to-gptel-spec
+  (:before-each (test-mevedel-agents--restore-builtins))
+  ,test
+  (test)
+  :doc "does not expose active ToolScript to retained agents"
+  (let* ((mevedel-agent-extra-tool-specs
+          '((explorer (:tool "ToolScript"))))
+         (spec (mevedel-agent-to-gptel-spec
+                (mevedel-agent-get "explorer")))
+         (tool-function (cadr (plist-get (cdr spec) :tools)))
+         (tools (funcall tool-function nil)))
+    (should-not
+     (cl-find "ToolScript" tools :key #'gptel-tool-name :test #'equal))))
+
 (mevedel-deftest mevedel-agent--declared-specs/test
   (:before-each (test-mevedel-agents--restore-builtins))
   ,test

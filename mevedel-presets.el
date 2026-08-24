@@ -99,6 +99,10 @@
                   "mevedel-tool-registry" (specs))
 (declare-function mevedel-tool-summary "mevedel-tool-registry" (cl-x) t)
 
+;; `mevedel-tool-ptc'
+(declare-function mevedel-tool-ptc--handle-description
+                  "mevedel-tool-ptc" (fsm))
+
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-agent-roster-inject
                   "mevedel-tools" (fsm))
@@ -585,6 +589,7 @@ alist with mevedel-specific handlers added:
   1b.  Direct-child roster refresh (WAIT state handler)
   1c.  Inbound agent-message delivery (WAIT state handler)
   1d.  Deferred tool injection (WAIT state handler)
+  1e.  ToolScript effective-roster description (WAIT state handler)
   2.  Final patch generation (terminal state handler)
   3.  Request callback invocation (terminal state handler)
   4.  Canonical successful-turn transaction (DONE state handler only)
@@ -602,9 +607,10 @@ alist with mevedel-specific handlers added:
                      #'mevedel-tools--handle-agent-roster-inject
                      #'mevedel-tools--handle-message-inject
                      #'mevedel-tools--handle-deferred-inject
-                     #'mevedel-tools--handle-plan-tool-filter)
+                     #'mevedel-tools--handle-plan-tool-filter
+                     #'mevedel-tool-ptc--handle-description)
                (cdr wait-entry)))))
-  ;; 1e. Begin the mevedel-request on the first WAIT entry.  WAIT is
+  ;; 1f. Begin the mevedel-request on the first WAIT entry.  WAIT is
   ;; re-entered after each tool call loop, so the guard on
   ;; `:mevedel-request-begun' keeps request-begin idempotent per FSM.
   ;; After `mevedel-request-begin' creates the request, drain any buffer-local

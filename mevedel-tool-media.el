@@ -422,6 +422,14 @@ SESSION control trusted side-channel lookup."
   (when (mevedel-tool-media--valid-media-items-p items)
     (mevedel-tool-media--sanitize-media-items items)))
 
+(defun mevedel-tool-media-reference-items (items)
+  "Return media ITEMS without their payload bytes."
+  (mapcar (lambda (item)
+            (let ((reference (copy-sequence item)))
+              (cl-remf reference :data)
+              reference))
+          items))
+
 (defun mevedel-tool-media--envelope-summary (text &optional replacement)
   "Return TEXT with base64 media payload bodies replaced by REPLACEMENT."
   (let ((body-start-marker "data:\n")

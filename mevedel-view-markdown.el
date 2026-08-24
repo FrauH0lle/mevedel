@@ -115,9 +115,10 @@ buffer."
 An ordinary existing file returns t.  An artifact in the active remote
 session returns `(SESSION . LOGICAL)' only when that logical path is staged
 or committed; fixed session-cache existence is ignored."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-durability)
+  (require 'mevedel-session-persistence)
   (when (stringp path)
     (let* ((session (bound-and-true-p mevedel--session))
            (target (and session
@@ -132,7 +133,6 @@ or committed; fixed session-cache existence is ignored."
            (expanded (expand-file-name path)))
       (if (and root (string-prefix-p root expanded))
           (let ((logical (substring expanded (length root))))
-            (require 'mevedel-session-durability)
             (when (and (mevedel-session-publication-logical-path-p logical)
                        (mevedel-session-artifacts-artifact-present-p
                         session logical))
@@ -244,7 +244,7 @@ ends at END."
     (save-excursion
       (goto-char start)
       (while (re-search-forward
-              "^[ \t]*\\(`\\{3,\\}\\|~\\{3,\\}\\)\\([^\n]*\\)\n" end t)
+              "^ \\{0,3\\}\\(`\\{3,\\}\\|~\\{3,\\}\\)\\([^\n]*\\)\n" end t)
         (let* ((fence (match-string-no-properties 1))
                (delimiter (aref fence 0))
                (info (match-string-no-properties 2))
@@ -253,7 +253,7 @@ ends at END."
                (body-start (point))
                (language (car (split-string info nil t)))
                (closing-regexp
-                (concat "^[ \t]*" (regexp-quote fence)
+                (concat "^ \\{0,3\\}" (regexp-quote fence)
                         (regexp-quote (char-to-string delimiter))
                         "*[ \t]*$")))
           (unless (and (= delimiter ?`)
@@ -316,6 +316,30 @@ ends at END."
           (setq found t)))
       (setq ranges (cdr ranges)))
     found))
+
+(defun mevedel-view--last-live-response-boundary (data-buf start end)
+  "Return the last safe Markdown block boundary in DATA-BUF START..END."
+  (with-current-buffer data-buf
+    (let ((ranges
+           (mapcar
+            (lambda (block)
+              (cons (plist-get block :fence-start)
+                    (or (plist-get block :end-fence-end)
+                        (plist-get block :body-end))))
+            (mevedel-view--markdown-code-blocks start end t)))
+          boundary)
+      (save-excursion
+        (goto-char start)
+        (while (< (point) end)
+          (let ((line-start (point)))
+            (forward-line 1)
+            (when (and (save-excursion
+                         (goto-char line-start)
+                         (looking-at "[ \t]*$"))
+                       (not (mevedel-view--position-in-ranges-p
+                             line-start ranges)))
+              (setq boundary (min (point) end))))))
+      (and boundary (< boundary end) boundary))))
 
 (defun mevedel-view--linkify-exempt-p (position)
   "Return non-nil when POSITION opted out of Markdown decoration.
