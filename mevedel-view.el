@@ -199,6 +199,8 @@
 (declare-function mevedel-view-previous-display "mevedel-view-render" ())
 (declare-function mevedel-view-render-initialize
                   "mevedel-view-render" ())
+(declare-function mevedel-view-render-invalidate-live-tail
+                  "mevedel-view-render" ())
 (declare-function mevedel-view-toggle-transcript "mevedel-view-render" ())
 
 ;; `mevedel-view-segments'
@@ -641,6 +643,14 @@ view.  When `:preserve-data-view-buffer' is non-nil, leave DATA-BUF's
 existing `mevedel--view-buffer' binding untouched.  A
 `:side-conversation-p' view omits durable input history, and
 `:transcript-start' hides inherited model context from projection."
+  (require 'mevedel-execution-target)
+  (require 'mevedel-models)
+  (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-durability)
+  (require 'mevedel-session-persistence)
+  (require 'mevedel-tools)
+  (require 'mevedel-turn)
   (require 'mevedel-view-composer)
   (require 'mevedel-view-agent)
   (require 'mevedel-view-history)
@@ -830,6 +840,7 @@ kill hook sees nil and exits without re-entering this function."
   ;; is a needless wakeup.
   (require 'mevedel-view-stream)
   (mevedel-view--stop-spinner-timer)
+  (mevedel-view-render-invalidate-live-tail)
   (when (and (boundp 'mevedel-view--control-transfer-timer)
              (timerp mevedel-view--control-transfer-timer))
     (cancel-timer mevedel-view--control-transfer-timer)
@@ -922,11 +933,8 @@ Kills the associated view buffer."
 
 (defun mevedel-view--status-strip ()
   "Return a mevedel-owned clickable status strip for the view buffer."
-  (require 'mevedel-turn)
   (when (and (boundp 'mevedel--data-buffer)
              (buffer-live-p mevedel--data-buffer))
-    (require 'mevedel-models)
-    (require 'mevedel-tools)
     (let* ((data-buffer mevedel--data-buffer)
            (session (with-current-buffer data-buffer
                       (and (boundp 'mevedel--session) mevedel--session)))
@@ -934,15 +942,10 @@ Kills the associated view buffer."
            (target (and session
                         (mevedel-session-execution-target session)))
            (target-label
-            (and target
-                 (progn
-                   (require 'mevedel-execution-target)
-                   (mevedel-execution-target-label target))))
+            (and target (mevedel-execution-target-label target)))
            (durability
             (and session workspace
-                 (progn
-                   (require 'mevedel-session-durability)
-                   (mevedel-session-publication-status session))))
+                 (mevedel-session-publication-status session)))
            (pending-publication
             (plist-get durability :pending-publication))
            (lease-state (plist-get durability :lease-state))

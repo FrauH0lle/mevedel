@@ -1895,7 +1895,7 @@
           (should (search-forward "Second response"
                                   mevedel-view--input-marker t)))
         (mevedel-view-test--insert-data data-buf "More text.\n" 'response)
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (= 2 (cl-count-if (lambda (line) (string= line "Assistant"))
@@ -1932,7 +1932,7 @@
           (mevedel-view-toggle-section))
         (should (markerp mevedel-view--in-flight-turn-start))
         (mevedel-view-test--insert-data data-buf "More text.\n" 'response)
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (= 1 (cl-count-if (lambda (line) (string= line "Assistant"))
@@ -2372,7 +2372,7 @@
                 (point-min) mevedel-view--input-marker))))
     (mevedel-view-test--insert-data data-buf "Second response.\n" 'response)
     (with-current-buffer view-buf
-      (mevedel-view--render-incremental data-buf)
+      (mevedel-view-render-live-update data-buf)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "First response" text))
@@ -2468,9 +2468,10 @@
       (should (search-forward "Raw provider failure"
                               mevedel-view--input-marker t)))))
 
-(mevedel-deftest mevedel-view--render-incremental ()
+(mevedel-deftest mevedel-view-render-live-update ()
   ,test
   (test)
+
   :doc "preserves an active selection while rebuilding the assistant turn"
   (mevedel-view-test--with-buffers
     (let (assistant-start)
@@ -2492,11 +2493,196 @@
         (activate-mark))
       (mevedel-view-test--insert-data data-buf "Stream tail.\n" 'response)
       (with-current-buffer view-buf
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (should mark-active)
         (should (equal "selected text"
                        (buffer-substring-no-properties
-                        (region-beginning) (region-end))))))))
+                        (region-beginning) (region-end)))))))
+
+  :doc "keeps completed render units while extending the live tail"
+  (mevedel-view-test--with-buffers
+    (let ((fontify (symbol-function 'mevedel-view--fontify-response))
+          (stable-fontify-count 0)
+          assistant-start stable-marker stable-position)
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq assistant-start (copy-marker (point-max) nil)))
+      (mevedel-view-test--insert-data
+       data-buf "#+begin_reasoning\nold thought\n#+end_reasoning\n" 'ignore)
+      (mevedel-view-test--insert-data data-buf "First paragraph.\n\nTail" 'response)
+      (with-current-buffer view-buf
+        (setq mevedel-view--data-turn-start assistant-start)
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker nil))
+        (cl-letf (((symbol-function 'mevedel-view--fontify-response)
+                   (lambda (text)
+                     (when (string-search "First paragraph." text)
+                       (cl-incf stable-fontify-count))
+                     (funcall fontify text))))
+          (mevedel-view-render-live-update data-buf))
+        (goto-char (point-min))
+        (search-forward "Thinking...")
+        (setq stable-marker (copy-marker (match-beginning 0) nil)
+              stable-position (marker-position stable-marker)))
+      (mevedel-view-test--insert-data data-buf " grows." 'response)
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-view--fontify-response)
+                   (lambda (text)
+                     (when (string-search "First paragraph." text)
+                       (cl-incf stable-fontify-count))
+                     (funcall fontify text))))
+          (mevedel-view-render-live-update data-buf))
+        (should (= 1 stable-fontify-count))
+        (should (= stable-position (marker-position stable-marker)))
+        (goto-char stable-marker)
+        (should (looking-at-p "Thinking\\.\\.\\."))
+        (should (search-forward "Tail grows." mevedel-view--input-marker t)))
+      (with-current-buffer data-buf
+        (save-excursion
+          (goto-char (point-min))
+          (search-forward "First paragraph")
+          (subst-char-in-region (match-beginning 0) (match-end 0) ?F ?X)))
+      (with-current-buffer view-buf
+        (should-not mevedel-view--live-data-tail-start)
+        (mevedel-view-render-live-update data-buf)
+        (goto-char (point-min))
+        (should (search-forward "Xirst paragraph"
+                                mevedel-view--input-marker t))))))
+
+(mevedel-deftest mevedel-view-render-invalidate-live-tail ()
+  ,test
+  (test)
+  :doc "clears retained state and detaches both markers"
+  (with-temp-buffer
+    (let ((data-marker (copy-marker (point-min)))
+          (view-marker (copy-marker (point-min)))
+          (change-hook #'ignore))
+      (setq-local mevedel-view--live-data-tail-start data-marker)
+      (setq-local mevedel-view--live-view-tail-start view-marker)
+      (setq-local mevedel-view--live-source-change-hook change-hook)
+      (add-hook 'before-change-functions change-hook nil t)
+      (mevedel-view-render-invalidate-live-tail)
+      (should-not mevedel-view--live-data-tail-start)
+      (should-not mevedel-view--live-view-tail-start)
+      (should-not (memq change-hook before-change-functions))
+      (should-not (marker-buffer data-marker))
+      (should-not (marker-buffer view-marker)))))
+
+(mevedel-deftest mevedel-view-render-initialize ()
+  ,test
+  (test)
+  :doc "detaches an earlier source observer before resetting renderer state"
+  (let ((data-buf (generate-new-buffer " *test-render-init-data*"))
+        (view-buf (generate-new-buffer " *test-render-init-view*"))
+        (change-hook #'ignore))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (add-hook 'before-change-functions change-hook nil t))
+          (with-current-buffer view-buf
+            (setq-local mevedel-view--live-source-change-hook change-hook)
+            (setq-local mevedel-view--live-data-tail-start
+                        (with-current-buffer data-buf
+                          (copy-marker (point-min))))
+            (setq-local mevedel-view--live-view-tail-start
+                        (copy-marker (point-min)))
+            (mevedel-view-render-initialize)
+            (should-not mevedel-view--live-data-tail-start)
+            (should-not mevedel-view--live-view-tail-start)
+            (should-not mevedel-view--live-source-change-hook))
+          (with-current-buffer data-buf
+            (should-not (memq change-hook before-change-functions))))
+      (kill-buffer data-buf)
+      (kill-buffer view-buf))))
+
+(mevedel-deftest mevedel-view--live-tail-valid-p ()
+  ,test
+  (test)
+  :doc "accepts only attached markers owned by the supplied data and view"
+  (let ((data-buf (generate-new-buffer " *test-live-data*"))
+        (other-buf (generate-new-buffer " *test-live-other*"))
+        (view-buf (generate-new-buffer " *test-live-view*")))
+    (unwind-protect
+        (with-current-buffer view-buf
+          (setq-local mevedel-view--live-data-tail-start
+                      (with-current-buffer data-buf
+                        (copy-marker (point-min))))
+          (setq-local mevedel-view--live-view-tail-start
+                      (copy-marker (point-min)))
+          (should (mevedel-view--live-tail-valid-p data-buf))
+          (should-not (mevedel-view--live-tail-valid-p other-buf))
+          (set-marker mevedel-view--live-view-tail-start nil)
+          (should-not (mevedel-view--live-tail-valid-p data-buf)))
+      (kill-buffer data-buf)
+      (kill-buffer other-buf)
+      (kill-buffer view-buf))))
+
+(mevedel-deftest mevedel-view--note-source-change ()
+  ,test
+  (test)
+  :doc "invalidates the observing agent view instead of its retained parent"
+  (mevedel-view-test--with-buffers
+    (let ((parent-view (generate-new-buffer " *test-parent-view*"))
+          assistant-start)
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local mevedel--view-buffer parent-view))
+            (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+            (with-current-buffer data-buf
+              (setq assistant-start (copy-marker (point-max) nil)))
+            (mevedel-view-test--insert-data
+             data-buf "Stable paragraph.\n\nMutable tail" 'response)
+            (with-current-buffer view-buf
+              (setq mevedel-view--data-turn-start assistant-start
+                    mevedel-view--in-flight-turn-start
+                    (copy-marker mevedel-view--input-marker nil))
+              (mevedel-view-render-live-update data-buf)
+              (should mevedel-view--live-data-tail-start))
+            (with-current-buffer data-buf
+              (save-excursion
+                (goto-char (point-min))
+                (search-forward "Stable")
+                (subst-char-in-region
+                 (match-beginning 0) (match-end 0) ?S ?X)))
+            (with-current-buffer view-buf
+              (should-not mevedel-view--live-data-tail-start)))
+        (kill-buffer parent-view)))))
+
+(mevedel-deftest mevedel-view-render-settle ()
+  ,test
+  (test)
+  :doc "reconciles the complete turn once and releases retained-tail state"
+  (mevedel-view-test--with-buffers
+    (let (assistant-start stable-marker)
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq assistant-start (copy-marker (point-max) nil)))
+      (mevedel-view-test--insert-data
+       data-buf "Stable paragraph.\n\nMutable tail" 'response)
+      (with-current-buffer view-buf
+        (setq mevedel-view--data-turn-start assistant-start)
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker nil))
+        (mevedel-view-render-live-update data-buf)
+        (goto-char (point-min))
+        (search-forward "Stable paragraph.")
+        (setq stable-marker (copy-marker (match-beginning 0) nil)))
+      (mevedel-view-test--insert-data data-buf " complete." 'response)
+      (with-current-buffer view-buf
+        (mevedel-view-render-settle
+         data-buf assistant-start
+         (with-current-buffer data-buf (point-max)))
+        (should-not mevedel-view--live-data-tail-start)
+        (should-not mevedel-view--live-view-tail-start)
+        (goto-char stable-marker)
+        (should-not (looking-at-p "Stable paragraph\\."))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (= 1 (cl-count-if
+                        (lambda (line) (string= line "Assistant"))
+                        (split-string text "\n"))))
+          (should (string-match-p "Mutable tail complete\\." text)))))))
 
 (mevedel-deftest mevedel-view-collapse-state-survives-streaming ()
   ,test
@@ -2536,7 +2722,7 @@
                                 mevedel-view--input-marker t)))
       (mevedel-view-test--insert-data data-buf "Stream tail.\n" 'response)
       (with-current-buffer view-buf
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "expanded tool body" text))
@@ -2564,7 +2750,7 @@
                                 mevedel-view--input-marker t)))
       (mevedel-view-test--insert-data data-buf "more streamed thinking\n" 'ignore)
       (with-current-buffer view-buf
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "short thought" text))
@@ -2618,7 +2804,7 @@
                                 mevedel-view--input-marker t)))
       (mevedel-view-test--insert-data data-buf "Agent stream tail.\n" 'response)
       (with-current-buffer view-buf
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "agent body stays open" text))
@@ -2652,7 +2838,7 @@
           (should-not (get-text-property (match-beginning 0) 'invisible)))
         (mevedel-view-test--insert-data data-buf "Result stream tail.\n" 'response)
         (with-current-buffer view-buf
-          (mevedel-view--render-incremental data-buf)
+          (mevedel-view-render-live-update data-buf)
           (goto-char (point-min))
           (search-forward "line two")
           (should-not (get-text-property (match-beginning 0) 'invisible))
@@ -2697,7 +2883,7 @@
               (copy-marker view-assistant-start nil)))
       (mevedel-view-test--insert-data data-buf "Task stream tail.\n" 'response)
       (with-current-buffer view-buf
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "finished detail" text))
@@ -2727,7 +2913,7 @@
         (goto-char (mevedel-view--input-start))
         (insert draft)
         (goto-char (+ (mevedel-view--input-start) 4))
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (should (string= draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 4)))
         (should-not (get-text-property (mevedel-view--input-start)
@@ -2757,7 +2943,7 @@
               (with-selected-window second-window
                 (goto-char (+ (mevedel-view--input-start) 3)))
               (with-selected-window first-window
-                (mevedel-view--render-incremental data-buf)
+                (mevedel-view-render-live-update data-buf)
                 (should (= (window-point first-window)
                            (+ (mevedel-view--input-start) 2)))
                 (should (= (window-point second-window)
@@ -2819,7 +3005,8 @@
                  (mevedel-view-render-test--owner
                   'mevedel-view--group-into-turns)))
   :doc "owns incremental and full transcript rendering"
-  (dolist (symbol '(mevedel-view--render-incremental
+  (dolist (symbol '(mevedel-view-render-live-update
+                    mevedel-view-render-settle
                     mevedel-view--full-rerender))
     (should (equal "mevedel-view-render"
                    (mevedel-view-render-test--owner symbol))))
@@ -3879,6 +4066,210 @@
     (should (equal "    "
                    (get-text-property (match-beginning 0) 'line-prefix)))))
 
+(mevedel-deftest mevedel-view--child-call-rendering
+  (:before-each (mevedel-tool-clear-registry)
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+
+  :doc "renders a nested call through the nested tool's own renderer"
+  (progn
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "Grep"
+      :category "mevedel"
+      :renderer (lambda (name args result _data)
+                  (list :header (format "%s: %s (%d matches)"
+                                        name (plist-get args :pattern)
+                                        (length (split-string result "\n" t)))
+                        :body result
+                        :body-mode 'grep-mode
+                        :initially-collapsed-p t))))
+    (let ((rendering
+           (mevedel-view--child-call-rendering
+            '(:id "ptc/1" :tool "Grep" :status success
+              :args (:pattern "defcustom")
+              :result "a.el:1\nb.el:2\n"))))
+      (should (equal "Grep: defcustom (2 matches)"
+                     (plist-get rendering :header)))
+      (should (eq 'grep-mode (plist-get rendering :body-mode)))
+      (should (eq 'tool-child (plist-get rendering :vtype)))
+      (should (plist-get rendering :initially-collapsed-p))))
+
+  :doc "renders a failed nested call expanded and marked as an error"
+  (let ((rendering
+         (mevedel-view--child-call-rendering
+          '(:id "ptc/1" :tool "Bash" :status error
+            :args (:command "git status")
+            :result "Error: exit 128"))))
+    (should (eq 'error (plist-get rendering :status)))
+    (should-not (plist-get rendering :initially-collapsed-p)))
+
+  :doc "drops a nested compound call's own rows instead of nesting a level"
+  (progn
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "ToolScript"
+      :category "mevedel"
+      :renderer (lambda (_name _args result _data)
+                  (list :header "ToolScript: 1 call (completed)"
+                        :body result
+                        :child-calls '((:id "x" :tool "Read"))
+                        :coalesce-key "ptc"
+                        :initially-collapsed-p t))))
+    (let ((rendering
+           (mevedel-view--child-call-rendering
+            '(:id "ptc/1" :tool "ToolScript" :status success
+              :args (:script "(Read :file_path \"a\")")
+              :result "inner value"))))
+      (should-not (plist-get rendering :child-calls))
+      (should-not (plist-get rendering :coalesce-key))))
+
+  :doc "keeps media references on the row without payload bytes"
+  (let ((rendering
+         (mevedel-view--child-call-rendering
+          '(:id "ptc/1" :tool "Read" :status success
+            :args (:file_path "shot.png")
+            :result "image"
+            :media ((:mime "image/png" :kind image :path "shot.png"))))))
+    (should (string-match-p "Media:.*shot\\.png"
+                            (plist-get rendering :body)))))
+
+(mevedel-deftest mevedel-view--insert-child-calls ()
+  ,test
+  (test)
+
+  :doc "inserts one indented row per nested call, collapsed by default"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((inhibit-read-only t))
+      (mevedel-view--render-expanded-body
+       '(:header "ToolScript: 2 calls (completed)"
+         :body "Returned:\nfinal"
+         :child-calls ((:id "ptc/1" :tool "Read" :status success
+                        :args (:file_path "a.el") :result "first")
+                       (:id "ptc/2" :tool "Read" :status success
+                        :args (:file_path "b.el") :result "second")))
+       (cons 1 10)))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "ToolScript: 2 calls" text))
+      (should (string-match-p "Read: a\\.el" text))
+      (should (string-match-p "Read: b\\.el" text))
+      ;; Collapsed rows show headers only.
+      (should-not (string-match-p "first" text)))
+    (goto-char (point-min))
+    (search-forward "a.el")
+    (should (eq 'tool-child
+                (get-text-property (match-beginning 0) 'mevedel-view-type)))
+    (should (equal "  " (get-text-property (match-beginning 0) 'line-prefix)))
+    ;; Each row is its own section, so the two carry distinct state keys.
+    (let ((first-key (get-text-property (match-beginning 0)
+                                        'mevedel-view-source-key)))
+      (search-forward "b.el")
+      (should-not (equal first-key
+                         (get-text-property (match-beginning 0)
+                                            'mevedel-view-source-key)))))
+
+  :doc "expands one row without disturbing its siblings"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((inhibit-read-only t))
+      (mevedel-view--render-expanded-body
+       '(:header "ToolScript: 2 calls (completed)"
+         :body "Returned:\nfinal"
+         :child-calls ((:id "ptc/1" :tool "Read" :status success
+                        :args (:file_path "a.el") :result "first output")
+                       (:id "ptc/2" :tool "Read" :status success
+                        :args (:file_path "b.el") :result "second output")))
+       (cons 1 10)))
+    (goto-char (point-min))
+    (search-forward "a.el")
+    (goto-char (match-beginning 0))
+    (mevedel-view-toggle-section)
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "first output" text))
+      (should-not (string-match-p "second output" text))
+      (should (string-match-p "Read: b\\.el" text)))
+    ;; Collapsing it again leaves one header per row.
+    (goto-char (point-min))
+    (search-forward "first output")
+    (mevedel-view-toggle-section)
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should-not (string-match-p "first output" text))
+      (should (= 1 (mevedel-view-test--count-substring "Read: a.el" text)))))
+
+  :doc "a collapsed block shows no rows at all"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((inhibit-read-only t))
+      (mevedel-view--insert-rendered-tool
+       '(:header "ToolScript: 1 call (completed)"
+         :body "Returned:\nfinal"
+         :initially-collapsed-p t
+         :child-calls ((:id "ptc/1" :tool "Read" :status success
+                        :args (:file_path "a.el") :result "first")))
+       (cons 1 10)))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (string-match-p "ToolScript: 1 call" text))
+      (should-not (string-match-p "Read" text))))
+
+  :doc "draws a concurrent gutter and keeps it across a toggle"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((inhibit-read-only t))
+      (mevedel-view--render-expanded-body
+       '(:header "ToolScript: 3 calls (completed)"
+         :body "Returned:\nfinal"
+         :child-calls ((:id "ptc/1" :tool "Grep" :status success
+                        :args (:pattern "x") :result "hit")
+                       (:id "ptc/2" :tool "Read" :status success
+                        :batch 1 :args (:file_path "a.el") :result "first out")
+                       (:id "ptc/3" :tool "Read" :status success
+                        :batch 1 :args (:file_path "b.el") :result "second")))
+       (cons 1 10)))
+    (goto-char (point-min))
+    (search-forward "Grep")
+    (should (equal "    " (get-text-property (match-beginning 0) 'line-prefix)))
+    (search-forward "a.el")
+    (should (equal "  \u250c " (get-text-property (match-beginning 0) 'line-prefix)))
+    ;; The glyph belongs on the row's own line, not on text wrapped from it.
+    (should (equal "    " (get-text-property (match-beginning 0) 'wrap-prefix)))
+    (search-forward "b.el")
+    (should (equal "  \u2514 " (get-text-property (match-beginning 0) 'line-prefix)))
+    ;; Expanding a batched row keeps its glyph and insets its body plainly.
+    (goto-char (point-min))
+    (search-forward "a.el")
+    (goto-char (match-beginning 0))
+    (mevedel-view-toggle-section)
+    (goto-char (point-min))
+    (search-forward "a.el")
+    (should (equal "  \u250c " (get-text-property (match-beginning 0) 'line-prefix)))
+    (search-forward "first out")
+    (should (equal "        "
+                   (get-text-property (match-beginning 0) 'line-prefix)))))
+
+(mevedel-deftest mevedel-view--child-call-prefixes ()
+  ,test
+  (test)
+
+  :doc "gives a sequence-only block no glyph gutter"
+  (should-not (mevedel-view--child-call-prefixes
+               '((:id "a" :batch nil) (:id "b" :batch nil))))
+
+  :doc "brackets each concurrent join and aligns the rows around it"
+  (should (equal '("  \u250c " "  \u251c " "  \u2514 " "    " "  \u250c " "  \u2514 ")
+                 (mevedel-view--child-call-prefixes
+                  '((:id "1" :batch 1) (:id "2" :batch 1) (:id "3" :batch 1)
+                    (:id "4" :batch nil)
+                    (:id "5" :batch 2) (:id "6" :batch 2)))))
+
+  :doc "keeps every prefix the same width so markers stay in one column"
+  (let ((prefixes (mevedel-view--child-call-prefixes
+                   '((:id "1" :batch 1) (:id "2" :batch 1)
+                     (:id "3" :batch nil)))))
+    (should (= 1 (length (delete-dups
+                          (mapcar #'string-width prefixes)))))))
+
 (mevedel-deftest mevedel-view--insert-rendered-tool/non-expandable ()
   ,test
   (test)
@@ -4150,6 +4541,7 @@
                (require 'mevedel-transcript-audit)
                (require 'mevedel-utilities)
                (with-temp-buffer
+                 (mevedel-view-render-initialize)
                  (insert
                   "(:name \"Read\" :args (:file_path \"audit.el\"))\n\n"
                   (mevedel--format-hook-audit-record

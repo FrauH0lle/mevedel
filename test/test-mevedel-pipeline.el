@@ -91,7 +91,7 @@ cover, so the permission step's warning about it is captured here."
 ;;
 ;;; Pipeline runner
 
-(mevedel-deftest mevedel-pipeline--format-context-failure
+(mevedel-deftest mevedel-pipeline--provider-result
   ()
   ,test
   (test)
@@ -103,8 +103,10 @@ cover, so the permission step's warning about it is captured here."
            '((:rule wrap-array-singleton :source generic
                    :paths ((names)) :before string :after array))))
          (result
-          (mevedel-pipeline--format-context-failure
-           (list :hook-audit-records (list audit)) "handler failed")))
+          (mevedel-pipeline--provider-result
+           (mevedel-pipeline--settlement
+            (list :hook-audit-records (list audit))
+            'pipeline-error "handler failed"))))
     (should (string-prefix-p "Error: handler failed" result))
     (should (eq 'tool-input-repair
                 (plist-get
@@ -116,28 +118,31 @@ cover, so the permission step's warning about it is captured here."
     (cl-letf (((symbol-function 'mevedel-pipeline--append-hook-audit-records)
                (lambda (&rest _) (error "private audit sentinel")))
               ((symbol-function 'display-warning)
-               (lambda (_type message &rest _) (setq warning message))))
+              (lambda (_type message &rest _) (setq warning message))))
       (should
        (equal "Error: handler failed"
-              (mevedel-pipeline--format-context-failure
-               '(:hook-audit-records ((:bad t))) "handler failed"))))
+              (mevedel-pipeline--provider-result
+               (mevedel-pipeline--settlement
+                '(:hook-audit-records ((:bad t)))
+                'pipeline-error "handler failed")))))
     (should warning)
     (should-not (string-match-p "private\|sentinel" warning)))
 
-  :doc "does not duplicate audit records already embedded in the reason"
+  :doc "keeps structured failure results free of provider audit prose"
   (let* ((audit
           (mevedel-tool-repair-audit-record
            'committed
            '((:rule wrap-array-singleton :source generic
                    :paths ((names)) :before string :after array))))
-         (reason
-          (mevedel-pipeline--append-hook-audit-records
-           "Permission denied" (list audit)))
-         (result
-          (mevedel-pipeline--format-context-failure
-           (list :hook-audit-records (list audit)) reason)))
+         (outcome
+          (mevedel-pipeline--settlement
+           (list :hook-audit-records (list audit))
+           'permission-denied "Permission denied")))
+    (should-not (mevedel-test--hook-audit-records
+                 (plist-get outcome :result)))
     (should (= 1 (length
-                  (mevedel-test--hook-audit-records result)))))
+                  (mevedel-test--hook-audit-records
+                   (mevedel-pipeline--provider-result outcome))))))
 
   :doc "appends context audit records missing from an audited reason"
   (let* ((embedded
@@ -147,12 +152,11 @@ cover, so the permission step's warning about it is captured here."
            'committed
            '((:rule wrap-array-singleton :source generic
                    :paths ((names)) :before string :after array))))
-         (reason
-          (mevedel-pipeline--append-hook-audit-records
-           "Permission denied" (list embedded)))
          (result
-          (mevedel-pipeline--format-context-failure
-           (list :hook-audit-records (list embedded context-only)) reason)))
+          (mevedel-pipeline--provider-result
+           (mevedel-pipeline--settlement
+            (list :hook-audit-records (list embedded context-only))
+            'permission-denied "Permission denied"))))
     (should (equal (list embedded context-only)
                    (mevedel-test--hook-audit-records result)))))
 
@@ -164,7 +168,7 @@ cover, so the permission step's warning about it is captured here."
 		   (mevedel-pipeline--run nil
 					  (lambda (r) (setq called-with r))
 					  '(:result "done"))
-		   (should (equal called-with "done")))
+		   (should (equal (plist-get called-with :result) "done")))
 		 :doc "steps execute in order"
 		 (let ((order nil))
 		   (mevedel-pipeline--run
@@ -191,7 +195,7 @@ cover, so the permission step's warning about it is captured here."
 			  (lambda (ctx next _fail)
 			    (funcall next (plist-put ctx :result
 						     (plist-get ctx :count)))))
-		    (lambda (r) (setq result r))
+		    (lambda (r) (setq result (plist-get r :result)))
 		    nil)
 		   (should (equal result 2)))
 		 :doc "steps run under the context default-directory"
@@ -215,7 +219,7 @@ cover, so the permission step's warning about it is captured here."
 		   (mevedel-pipeline--run
 		    (list (lambda (_ctx _next _fail)
 			    (error "Something broke")))
-		    (lambda (r) (setq result r))
+		    (lambda (r) (setq result (plist-get r :result)))
 		    nil)
 		   (should (string-prefix-p "Error:" result)))
 		 :doc "validation error produces error callback"
@@ -223,7 +227,7 @@ cover, so the permission step's warning about it is captured here."
 		   (mevedel-pipeline--run
 		    (list (lambda (_ctx _next _fail)
 			    (signal 'mevedel-validation-error '("Bad input"))))
-		    (lambda (r) (setq result r))
+		    (lambda (r) (setq result (plist-get r :result)))
 		    nil)
 		   (should (string-match-p "Bad input" result)))
 		 :doc "permission denied produces error callback"
@@ -231,7 +235,7 @@ cover, so the permission step's warning about it is captured here."
 		   (mevedel-pipeline--run
 		    (list (lambda (_ctx _next _fail)
 			    (signal 'mevedel-permission-denied '("Not allowed"))))
-		    (lambda (r) (setq result r))
+		    (lambda (r) (setq result (plist-get r :result)))
 		    nil)
 		   (should (string-match-p "Permission denied" result))
 		   (should (string-match-p "Not allowed" result)))
@@ -243,7 +247,7 @@ cover, so the permission step's warning about it is captured here."
 			    (setq saved-next next saved-ctx ctx))
 			  (lambda (ctx next _fail)
 			    (funcall next (plist-put ctx :result "after-async"))))
-		    (lambda (r) (setq result r))
+		    (lambda (r) (setq result (plist-get r :result)))
 		    nil)
 		   ;; Not yet called
 		   (should-not result)
@@ -277,7 +281,7 @@ cover, so the permission step's warning about it is captured here."
 			    (setq saved-next next saved-ctx ctx))
 			  (lambda (_ctx _next _fail)
 			    (error "Async failure")))
-		    (lambda (r) (setq result r))
+		    (lambda (r) (setq result (plist-get r :result)))
 		    nil)
 		   (funcall saved-next saved-ctx)
 		   (should (string-prefix-p "Error:" result)))
@@ -286,7 +290,7 @@ cover, so the permission step's warning about it is captured here."
 		   (mevedel-pipeline--run
 		    (list (lambda (_ctx _next fail)
 			    (funcall fail "Something went wrong")))
-		    (lambda (r) (setq result r))
+		    (lambda (r) (setq result (plist-get r :result)))
 		    nil)
 		   (should (equal result "Error: Something went wrong")))
 		 :doc "second next on the same step is dropped"
@@ -296,7 +300,7 @@ cover, so the permission step's warning about it is captured here."
 			    (setq saved-next next saved-ctx ctx))
 			  (lambda (ctx next _fail)
 			    (funcall next (plist-put ctx :result "first"))))
-		    (lambda (r) (push r results))
+		    (lambda (r) (push (plist-get r :result) results))
 		    nil)
 		   (funcall saved-next saved-ctx)
 		   ;; Latch: a second invocation must not re-enter the chain.
@@ -310,7 +314,7 @@ cover, so the permission step's warning about it is captured here."
 			    (setq saved-next next saved-fail fail saved-ctx ctx))
 			  (lambda (ctx next _fail)
 			    (funcall next (plist-put ctx :result "ok"))))
-		    (lambda (r) (push r results))
+		    (lambda (r) (push (plist-get r :result) results))
 		    nil)
 		   (funcall saved-next saved-ctx)
 		   (mevedel-test--with-captured-diagnostics nil
@@ -854,95 +858,6 @@ cover, so the permission step's warning about it is captured here."
               (should-not (eq absent (gethash missing snapshots absent))))))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-pipeline--build-steps ()
-		 ,test
-		 (test)
-		 :doc "read-only tool includes pre/post hook steps"
-		 (let* ((tool (mevedel-tool--create
-			       :name "ReadTool"
-			       :read-only-p t))
-			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 14))
-		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
-		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
-		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-normalize-paths))
-		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-prepare-resources))
-                   (should (eq (nth 4 steps) #'mevedel-tool-permission-step))
-		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-capture-coverage))
-		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-handler))
-		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-repair-reminder))
-		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-render-transform))
-		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-specialist-nudges))
-		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-goal-budget-warning))
-		   (should (eq (nth 12 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 13 steps) #'mevedel-pipeline--step-attach-media-data)))
-		 :doc "write tool includes snapshot step"
-		 (let* ((tool (mevedel-tool--create
-			       :name "WriteTool"
-			       :read-only-p nil
-			       :snapshot-p t))
-			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 15))
-		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
-		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
-		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-normalize-paths))
-		   (should (eq (nth 3 steps) #'mevedel-pipeline--step-prepare-resources))
-                   (should (eq (nth 4 steps) #'mevedel-tool-permission-step))
-		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-capture-coverage))
-		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-snapshot))
-		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-handler))
-		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-repair-reminder))
-		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-render-transform))
-		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-specialist-nudges))
-		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 12 steps) #'mevedel-pipeline--step-goal-budget-warning))
-		   (should (eq (nth 13 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 14 steps) #'mevedel-pipeline--step-attach-media-data)))
-		 :doc "mutating tool without snapshot declaration skips snapshot step"
-		 (let* ((tool (mevedel-tool--create
-			       :name "MkDir"
-			       :read-only-p nil))
-			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 14))
-		   (should-not
-		    (memq #'mevedel-pipeline--step-snapshot steps)))
-		 :doc "includes persist step when max-result-size is set"
-		 (let* ((tool (mevedel-tool--create
-			       :name "WithPersist"
-			       :read-only-p t
-			       :max-result-size 1000))
-			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 16 (length steps)))
-		   (should (eq (nth 7 steps)
-			       #'mevedel-pipeline--step-repair-reminder))
-		   (should (eq (nth 8 steps)
-			       #'mevedel-pipeline--step-render-transform))
-		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-persist))
-		   (should (eq (nth 10 steps)
-			       #'mevedel-pipeline--step-specialist-nudges))
-		   (should (eq (nth 11 steps)
-			       #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 12 steps) #'mevedel-pipeline--step-persist))
-		   (should (eq (nth 13 steps)
-			       #'mevedel-pipeline--step-goal-budget-warning))
-		   (should (eq (nth 14 steps)
-			       #'mevedel-pipeline--step-attach-render-data))
-			   (should (eq (car (last steps))
-			       #'mevedel-pipeline--step-attach-media-data)))
-		 :doc "omits persist step when max-result-size is nil"
-		 (let* ((tool (mevedel-tool--create
-			       :name "NoPersist"
-			       :read-only-p t
-			       :max-result-size nil))
-			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 14 (length steps)))
-		   (should-not (memq #'mevedel-pipeline--step-persist steps))
-		   (should (memq #'mevedel-pipeline--step-specialist-nudges steps))
-		   (should (memq #'mevedel-pipeline--step-attach-render-data steps))
-		   (should (memq #'mevedel-pipeline--step-attach-media-data steps))
-		   (should (memq #'mevedel-pipeline--step-post-tool-hooks steps))))
-
 (mevedel-deftest mevedel-pipeline--step-goal-budget-warning ()
   ,test (test)
   :doc "appends a model-visible budget warning after the final persisted result"
@@ -973,6 +888,7 @@ cover, so the permission step's warning about it is captured here."
 				       :default-directory default-directory))
 			permission-denied-p
 			provenance
+			failure-context
 			result)
 		   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
 			      (lambda (event payload callback &rest _)
@@ -990,14 +906,13 @@ cover, so the permission step's warning about it is captured here."
 		     (mevedel-pipeline--step-pre-tool-hooks
 		      context
 		      (lambda (_ctx) (setq result "next"))
-		      (lambda (reason) (setq result reason))))
+		      (lambda (reason &optional ctx _kind)
+		        (setq result reason failure-context ctx))))
 		   (should permission-denied-p)
 		   (should (eq 'PreToolUse provenance))
-		   (should (equal (mevedel--strip-hook-audit-blocks
-                                   result)
-				  "rewritten denial"))
-                   (let ((record (car (mevedel-test--hook-audit-records
-                                       result))))
+		   (should (equal result "rewritten denial"))
+		   (let ((record (car (plist-get failure-context
+					       :hook-audit-records))))
                      (should (eq (plist-get record :type) 'tool-permission))
                      (should (equal (plist-get record :event) "PreToolUse"))
                      (should (equal (plist-get record :outcome) "deny"))))
@@ -1014,7 +929,8 @@ cover, so the permission step's warning about it is captured here."
 					       :args '(:command "printf SECRET_TOKEN")
 					       :session session))
 				(mevedel-permission-log-enabled t)
-				failure)
+				failure
+				failure-context)
 			   (unwind-protect
 			       (progn
 				 (cl-letf (((symbol-function 'mevedel-hooks-run-event)
@@ -1023,13 +939,12 @@ cover, so the permission step's warning about it is captured here."
 						       '(:continue nil
 							 :stop-reason "blocked")))))
 				   (mevedel-pipeline--step-pre-tool-hooks
-				    context #'ignore (lambda (reason) (setq failure reason))))
-				 (should (equal
-                                          (mevedel--strip-hook-audit-blocks
-                                           failure)
-                                          "blocked by PreToolUse: blocked"))
-                                 (let ((record (car (mevedel-test--hook-audit-records
-                                                     failure))))
+				    context #'ignore
+				    (lambda (reason &optional ctx _kind)
+				      (setq failure reason failure-context ctx))))
+				 (should (equal failure "blocked by PreToolUse: blocked"))
+                                 (let ((record (car (plist-get failure-context
+                                                               :hook-audit-records))))
                                    (should (eq (plist-get record :type)
                                                'tool-permission))
                                    (should (equal (plist-get record :event)
@@ -1062,7 +977,7 @@ cover, so the permission step's warning about it is captured here."
 		     (mevedel-pipeline--step-pre-tool-hooks
 		      context
 		      (lambda (_ctx) (setq next-called t))
-		      (lambda (reason) (setq failure reason))))
+		      (lambda (reason &rest _) (setq failure reason))))
 		   (should-not next-called)
 		   (should failure))
 		 :doc "audits valid updated input before continuing"
@@ -1114,7 +1029,7 @@ cover, so the permission step's warning about it is captured here."
 					 (and (eq event 'PreToolUse)
 					      '(:continue nil :stop-reason "stopped"))))))
 		     (mevedel-pipeline--step-pre-tool-hooks
-		      context #'ignore (lambda (reason) (setq failure reason))))
+		      context #'ignore (lambda (reason &rest _) (setq failure reason))))
 		   (should (equal '(PreToolUse PermissionDenied) (nreverse events)))
 		   (should (eq 'PreToolUse provenance))
 		   (should (string-match-p "stopped" failure))))
@@ -1312,13 +1227,13 @@ cover, so the permission step's warning about it is captured here."
 		     (mevedel-pipeline--step-post-tool-hooks context #'ignore #'ignore))
 		   (should (equal result (plist-get seen-payload :tool-response)))
 		   (should (equal result (plist-get seen-payload :raw-result))))
-                 :doc "post-tool additional context is event-tagged and audited on the result"
+                 :doc "post-tool additional context remains structured before provider projection"
                  (let* ((tool (mevedel-tool--create :name "Read"))
                         (context (list :tool tool
                                        :args nil
                                        :result "visible"
                                        :default-directory default-directory))
-                        result
+                        after-hooks
                         (mevedel-post-tool-use-functions
                          (list (lambda (_event)
                                  '(:additional-context ("hook note")
@@ -1328,13 +1243,14 @@ cover, so the permission step's warning about it is captured here."
                    (mevedel-test--with-captured-messages nil
                      (mevedel-pipeline--step-post-tool-hooks
                       context
-                      (lambda (ctx) (setq result (plist-get ctx :result)))
+                      (lambda (ctx) (setq after-hooks ctx))
                       #'ignore))
-                   (should (string-match-p
-                            "<hook-event name=\"PostToolUse\">"
-                            result))
-                   (let ((record (car (mevedel-test--hook-audit-records
-                                       result)))
+                   (should (equal "visible" (plist-get after-hooks :result)))
+                   (should (equal '((:event "PostToolUse" :body "hook note"))
+                                  (plist-get after-hooks
+                                             :hook-additional-context)))
+                   (let ((record (car (plist-get after-hooks
+                                                 :hook-audit-records)))
                          handler)
                      (should (eq (plist-get record :type) 'tool-context))
                      (should (equal (plist-get record :event) "PostToolUse"))
@@ -1363,10 +1279,9 @@ cover, so the permission step's warning about it is captured here."
 		     (mevedel-pipeline--step-post-tool-hooks
 		      context (lambda (ctx) (setq after-hooks ctx)) #'ignore))
 		   (should (equal "<media-file>\ndata:\nHOOK\n</media-file>"
-				  (mevedel--strip-hook-audit-blocks
-                                   (plist-get after-hooks :result))))
-                   (let ((record (car (mevedel-test--hook-audit-records
-                                       (plist-get after-hooks :result)))))
+				  (plist-get after-hooks :result)))
+                   (let ((record (car (plist-get after-hooks
+                                                 :hook-audit-records))))
                      (should (eq (plist-get record :type)
                                  'tool-result-rewrite))
                      (should (equal (plist-get record :event) "PostToolUse"))
@@ -1387,21 +1302,20 @@ cover, so the permission step's warning about it is captured here."
 				(context (list :tool tool :args nil :result "original"
 					       :hook-audit-records (list repair-audit)
 					       :default-directory default-directory))
-				result)
+				after-hooks)
 			   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
 				      (lambda (_event _payload callback &rest _)
 					(funcall callback '(:updated-result "updated")))))
 			     (mevedel-pipeline--step-post-tool-hooks
 			      context
-			      (lambda (ctx) (setq result (plist-get ctx :result)))
+			      (lambda (ctx) (setq after-hooks ctx))
 			      #'ignore))
-			   (should (equal "updated"
-					  (mevedel--strip-hook-audit-blocks result)))
+			   (should (equal "updated" (plist-get after-hooks :result)))
 			   (should
 			    (cl-some
 			     (lambda (record)
 			       (eq 'tool-input-repair (plist-get record :type)))
-                             (mevedel-test--hook-audit-records result)))))
+                             (plist-get after-hooks :hook-audit-records)))))
 
 (mevedel-deftest mevedel-pipeline--step-post-tool-hooks/no-block
 		 (:doc "does not fail the pipeline for post-tool blocking decisions")
@@ -3456,7 +3370,8 @@ cover, so the permission step's warning about it is captured here."
 		     (mevedel-pipeline--run
 		      (list post-next-signal-step) once-callback nil))
 		   (should (= 1 (length deliveries)))
-		   (should (equal "ok-from-step" (car deliveries))))
+		   (should (equal "ok-from-step"
+				  (plist-get (car deliveries) :result))))
 
 		 :doc "once-fire guard: signaling consumer is caught and does not strand the pipeline"
 		 ;; The defensive `condition-case' inside the once-fire wrapper
@@ -3862,11 +3777,15 @@ cover, so the permission step's warning about it is captured here."
 				  (plist-get ctx :result))))
 		 :doc "passes through when result is within limit"
 		 (let* ((tool (mevedel-tool--create :name "SmallResult" :max-result-size 1000))
-			(ctx (list :tool tool :result "short"))
+			(ctx (list :tool tool :result "short"
+			           :render-data '(:kind ptc)))
 			next-ctx)
 		   (mevedel-pipeline--step-persist
 		    ctx (lambda (c) (setq next-ctx c)) #'ignore)
-		   (should (equal "short" (plist-get next-ctx :result))))
+		   (should (equal "short" (plist-get next-ctx :result)))
+		   (should (equal '(:disposition inline :original-chars 5)
+				  (plist-get (plist-get next-ctx :render-data)
+				             :output-accounting))))
 		 :doc "passes through when error result is within limit"
 		 (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 100))
 			(ctx (list :tool tool :result "Error: small"))
@@ -3915,7 +3834,8 @@ cover, so the permission step's warning about it is captured here."
 				  (mevedel-execution-target-create tmpdir)))
 			(tool (mevedel-tool--create :name "BigResult" :max-result-size 100))
 			(big-result (make-string 500 ?y))
-			(ctx (list :tool tool :result big-result :session session))
+			(ctx (list :tool tool :result big-result :session session
+			           :render-data '(:kind ptc)))
 			next-ctx)
 		   (unwind-protect
 		       (progn
@@ -3923,6 +3843,10 @@ cover, so the permission step's warning about it is captured here."
 			  ctx (lambda (c) (setq next-ctx c)) #'ignore)
 			 (should (string-prefix-p "<persisted-output>"
 						  (plist-get next-ctx :result)))
+			 (should
+			  (equal '(:disposition persisted :original-chars 500)
+				 (plist-get (plist-get next-ctx :render-data)
+				            :output-accounting)))
 			 ;; File should exist on disk
 			 (should (directory-files
 				  (file-name-concat save-path "tool-results")
@@ -4493,20 +4417,147 @@ cover, so the permission step's warning about it is captured here."
 		   (should warnings)
 		   (should (null (plist-get out :render-data)))))
 
-(mevedel-deftest mevedel-pipeline--build-steps/render-transform-order ()
-		 ,test
-		 (test)
-		 :doc "render transform runs after handler and before persistence"
-		 (let* ((tool (mevedel-tool--create
-			       :name "Ordered"
-			       :max-result-size 10))
-			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (< (cl-position #'mevedel-pipeline--step-handler steps)
-			      (cl-position #'mevedel-pipeline--step-repair-reminder steps)))
-		   (should (< (cl-position #'mevedel-pipeline--step-repair-reminder steps)
-			      (cl-position #'mevedel-pipeline--step-render-transform steps)))
-		   (should (< (cl-position #'mevedel-pipeline--step-render-transform steps)
-			      (cl-position #'mevedel-pipeline--step-persist steps)))))
+(mevedel-deftest mevedel-pipeline--build-steps ()
+  ,test
+  (test)
+
+  :doc "provider projection preserves common and provider step ordering"
+  (let ((tool (mevedel-tool--create :name "ReadTool" :read-only-p t)))
+    (should
+     (equal
+      (mevedel-pipeline--build-steps tool)
+      (list #'mevedel-pipeline--step-validate
+            #'mevedel-pipeline--step-pre-tool-hooks
+            #'mevedel-pipeline--step-normalize-paths
+            #'mevedel-pipeline--step-prepare-resources
+            #'mevedel-tool-permission-step
+            #'mevedel-pipeline--step-capture-coverage
+            #'mevedel-pipeline--step-handler
+            #'mevedel-pipeline--step-render-transform
+            #'mevedel-pipeline--step-post-tool-hooks
+            #'mevedel-pipeline--step-hook-side-channel
+            #'mevedel-pipeline--step-repair-reminder
+            #'mevedel-pipeline--step-specialist-nudges
+            #'mevedel-pipeline--step-goal-budget-warning
+            #'mevedel-pipeline--step-attach-render-data
+            #'mevedel-pipeline--step-attach-media-data))))
+
+  :doc "snapshot tools insert snapshot immediately before the handler"
+  (let* ((tool (mevedel-tool--create
+                :name "WriteTool" :read-only-p nil :snapshot-p t))
+         (steps (mevedel-pipeline--build-steps tool)))
+    (should (eq #'mevedel-pipeline--step-snapshot (nth 6 steps)))
+    (should (eq #'mevedel-pipeline--step-handler (nth 7 steps))))
+
+  :doc "mutating tools without a snapshot declaration skip snapshotting"
+  (let ((tool (mevedel-tool--create :name "MkDir" :read-only-p nil)))
+    (should-not
+     (memq #'mevedel-pipeline--step-snapshot
+           (mevedel-pipeline--build-steps tool))))
+
+  :doc "provider projection persists declared oversized results once"
+  (let* ((tool (mevedel-tool--create
+                :name "WithPersist" :read-only-p t :max-result-size 1000))
+         (steps (mevedel-pipeline--build-steps tool)))
+    (should (= 1 (seq-count
+                  (lambda (step)
+                    (eq step #'mevedel-pipeline--step-persist))
+                  steps)))
+    (should (< (cl-position #'mevedel-pipeline--step-specialist-nudges steps)
+               (cl-position #'mevedel-pipeline--step-persist steps)))
+    (should (< (cl-position #'mevedel-pipeline--step-persist steps)
+               (cl-position #'mevedel-pipeline--step-goal-budget-warning steps))))
+
+  :doc "outcome projection stops before all provider-only steps"
+  (let* ((tool (mevedel-tool--create
+                :name "Outcome" :read-only-p t :max-result-size 1000))
+         (steps (mevedel-pipeline--build-steps tool t)))
+    (should (eq #'mevedel-pipeline--step-post-tool-hooks (car (last steps))))
+    (dolist (step (list #'mevedel-pipeline--step-repair-reminder
+                        #'mevedel-pipeline--step-hook-side-channel
+                        #'mevedel-pipeline--step-specialist-nudges
+                        #'mevedel-pipeline--step-persist
+                        #'mevedel-pipeline--step-goal-budget-warning
+                        #'mevedel-pipeline--step-attach-render-data
+                        #'mevedel-pipeline--step-attach-media-data))
+      (should-not (memq step steps)))))
+
+(mevedel-deftest mevedel-pipeline-run-tool-outcome
+  (:before-each
+   (advice-add 'display-warning :around
+               #'mevedel-test--drop-sessionless-permission-warning)
+   :after-each
+   (advice-remove 'display-warning
+                  #'mevedel-test--drop-sessionless-permission-warning))
+  ,test
+  (test)
+
+  :doc "returns the complete canonical result before provider persistence"
+  (let* ((tool (mevedel-tool--create
+                :name "Large"
+                :handler (lambda (_args)
+                           '(:result "abcdef"
+                             :status success
+                             :render-data (:kind sample)))
+                :max-result-size 3
+                :read-only-p t
+                :async-p nil))
+         outcome)
+    (mevedel-pipeline-run-tool-outcome
+     tool (lambda (value) (setq outcome value)) nil)
+    (should (equal "abcdef" (plist-get outcome :result)))
+    (should (equal "abcdef" (plist-get outcome :raw-result)))
+    (should (eq 'success (plist-get outcome :status)))
+    (should (equal '(:kind sample) (plist-get outcome :render-data))))
+
+  :doc "classifies permission denial without parsing result text"
+  (let* ((tool (mevedel-tool--create
+                :name "Denied"
+                :handler (lambda (_args) '(:result "unreachable"))
+                :check-permission-async
+                (lambda (_tool _args cont) (funcall cont 'deny))
+                :read-only-p t
+                :async-p nil))
+         outcome)
+    (mevedel-pipeline-run-tool-outcome
+     tool (lambda (value) (setq outcome value)) nil)
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'permission-denied (plist-get outcome :reason))))
+
+  :doc "carries caller-supplied nested identity"
+  (let* ((tool (mevedel-tool--create
+                :name "Child"
+                :handler (lambda (_args) '(:result "ok"))
+                :read-only-p t
+                :async-p nil))
+         outcome)
+    (mevedel-pipeline-run-tool-outcome
+     tool (lambda (value) (setq outcome value)) nil
+     '(:tool-use-id "parent/1" :parent-tool-use-id "parent" :source ptc))
+    (should (equal "parent/1" (plist-get outcome :tool-use-id)))
+    (should (equal "parent" (plist-get outcome :parent-tool-use-id)))
+    (should (eq 'ptc (plist-get outcome :source))))
+
+  :doc "returns a child-scoped cancellation thunk"
+  (let* ((tool (mevedel-tool--create
+                :name "PendingChild"
+                :handler (lambda (_callback _args) nil)
+                :read-only-p t
+                :async-p t))
+         outcome
+         (cancel
+          (mevedel-pipeline-run-tool-outcome
+           tool (lambda (value) (setq outcome value)) nil
+           '(:tool-use-id "parent/2"
+             :parent-tool-use-id "parent" :source ptc))))
+    (should (functionp cancel))
+    (should-not outcome)
+    (funcall cancel)
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'cancelled (plist-get outcome :reason)))
+    (should (equal "parent/2" (plist-get outcome :tool-use-id))))
+
+  )
 
 ;;
 ;;; File checkpoint capture

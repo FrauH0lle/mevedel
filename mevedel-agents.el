@@ -22,17 +22,20 @@
 (require 'mevedel-models)
 
 ;; `cl-seq'
+(declare-function cl-delete-duplicates "cl-seq" (cl-seq &rest cl-keys))
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
+(declare-function cl-remove-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-some "cl-seq" (cl-pred cl-seq &rest cl-rest))
-(declare-function cl-delete-duplicates "cl-seq" (cl-seq &rest cl-keys))
 
 ;; `gptel'
-(declare-function gptel-get-tool "ext:gptel" (name))
 (defvar gptel-post-tool-call-functions)
 
 ;; `gptel-request'
+(declare-function gptel-get-tool "ext:gptel-request" (name))
 (declare-function gptel-tool-args "ext:gptel-request" (cl-x) t)
+(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
+(declare-function gptel-tool-p "ext:gptel-request" (cl-x))
 
 ;; `mevedel-agent-conversation'
 (defvar mevedel--agent-invocation)
@@ -185,6 +188,16 @@ inside the agent can discover them."
   '((:tool "FollowupAgent") (:tool "WaitAgent")
     (:tool "InterruptAgent"))
   "Tools added to every named role that possesses Agent.")
+
+(defun mevedel-agent-filter-root-only-tools (tools)
+  "Return TOOLS without tools reserved for the root session."
+  (cl-remove-if
+   (lambda (tool)
+     (equal "ToolScript"
+            (cond
+             ((mevedel-tool-p tool) (mevedel-tool-name tool))
+             ((gptel-tool-p tool) (gptel-tool-name tool)))))
+   tools))
 
 (defun mevedel-agent--specs-contain-tool-p (specs name)
   "Return non-nil when resolved SPECS contain a tool named NAME."
@@ -476,7 +489,9 @@ main session's reminder list."
   (let* ((reminders (mevedel-reminders-clone-list
                      (mevedel-agent-reminders agent)))
          (resolved (mevedel-tool-resolve (mevedel-agent--declared-specs agent)))
-         (deferred-tools (plist-get resolved :deferred))
+         (deferred-tools
+          (mevedel-agent-filter-root-only-tools
+           (plist-get resolved :deferred)))
          (deferred-set
           (mapcar (lambda (tool)
                     (cons (list (mevedel-tool-category tool)
@@ -525,8 +540,10 @@ Returns a cons (NAME . PLIST) suitable for the request-local role roster."
                 :tools `(:function
                          (lambda (_tools)
                            (cl-delete-duplicates
-                            (plist-get (mevedel-tool-resolve-gptel ',tool-specs)
-                                       :active))))
+                            (mevedel-agent-filter-root-only-tools
+                             (plist-get
+                              (mevedel-tool-resolve-gptel ',tool-specs)
+                              :active)))))
                 :system system-spec))))
 
 

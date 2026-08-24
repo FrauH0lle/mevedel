@@ -415,7 +415,7 @@ calls within a bounded stage and keep dependencies, waits, approvals, and
 conflicting mutations sequential. It does not encode provider pricing.
 
 `mevedel-gptel-stream-bridge.el` isolates private, version-sensitive gptel
-stream advice. `mevedel-view-stream.el` owns incremental-render scheduling,
+stream advice. `mevedel-view-stream.el` owns live-tail render scheduling,
 pending-tool live rows, and foreground request-progress state, while
 `mevedel-execution-transcript.el` owns durable execution render data and
 compaction archive reconciliation. View Stream delegates transcript projection

@@ -61,6 +61,9 @@
           (mevedel-telemetry-record
            session 'permission-decision
            :request-id "request-1"
+           :tool-use-id "parent/1"
+           :parent-tool-use-id "parent"
+           :call-source 'ptc
            :outcome 'allow
            :command "SECRET raw command"
            :origin "bounded\nvalue")
@@ -76,6 +79,9 @@
             (should (equal "telemetry-test" (plist-get entry :session-id)))
             (should (= 7 (plist-get entry :turn)))
             (should (equal "goal-1" (plist-get entry :goal-id)))
+            (should (equal "parent/1" (plist-get entry :tool-use-id)))
+            (should (equal "parent" (plist-get entry :parent-tool-use-id)))
+            (should (eq 'ptc (plist-get entry :call-source)))
             (should (eq 'active (plist-get entry :goal-status)))
             (should (= 21 (plist-get entry :goal-tokens-used)))
             (should (= 2 (plist-get entry :goal-turns-run)))

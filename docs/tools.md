@@ -2,7 +2,9 @@
 
 ## Tool pipeline
 
-All tools go through `mevedel-pipeline-run-tool`:
+All tools share one execution pipeline. Provider calls enter through
+`mevedel-pipeline-run-tool`; nested programmatic calls use
+`mevedel-pipeline-run-tool-outcome`:
 
 ```mermaid
 flowchart TD
@@ -19,15 +21,15 @@ flowchart TD
     F --> C
     D -- Yes --> G[Snapshot file when declared]
     G --> H[Handler]
-    H --> I[Append repair reminder]
-    I --> J[Render transform]
-    J --> K[Persist oversized result]
-    K --> L[Specialist nudges]
-    L --> M[PostToolUse or failure hooks]
-    M --> N[Re-persist capped result]
+    H --> I[Render transform]
+    I --> J[PostToolUse or failure hooks]
+    J --> K{Consumer}
+    K -- Structured nested call --> L[Canonical status, value, media, identity]
+    K -- Provider --> M[Append repair reminder and specialist nudges]
+    M --> N[Persist oversized result]
     N --> O[Append Goal budget warning when crossed]
     O --> P[Attach render-data]
-    P --> Q[Attach media data]
+    P --> R[Attach media data]
 ```
 
 Synchronous handlers receive `(args)` and asynchronous handlers receive
@@ -35,6 +37,71 @@ Synchronous handlers receive `(args)` and asynchronous handlers receive
 pipeline sequences the standard cross-cutting steps; handlers contain no
 boilerplate for validation, hooks, permissions, snapshots, or
 persistence.
+
+The structured outcome boundary is not a second pipeline. It captures status,
+canonical result, raw result, render-data, media, tool-use identity, parent
+identity, and call source after common execution. Provider-only projection text
+never becomes input to a ToolScript guest. The call returns a cancellation
+thunk that settles its current pipeline continuation exactly once;
+already-started tool-specific effects remain cancellable only when their owner
+exposes that capability.
+
+Handler-owned cleanup registers before the outer pipeline canceller, so a
+compound async tool can cancel and audit its active children before its own
+provider-facing result settles.
+
+### Programmatic Tool Calling
+
+`ToolScript` runs one fresh orchestration script in the closed machine
+documented by its request-local tool description. `mevedel-tool-ptc.el` owns
+that description, the request roster, registration, and aggregate rendering;
+`mevedel-ptc-driver.el` owns nested pipeline orchestration and exposes one
+execution entry to the tool adapter; `mevedel-ptc-interpreter.el` remains the
+pipeline-independent guest machine. Nested calls retain the normal validation,
+hook, permission, snapshot, cancellation, and telemetry behavior. They are
+shown as one live aggregate row and one settled ordered audit, not as invented
+provider transcript messages. Child identities use `ToolScript-ID/N` and source
+`ptc`; those facts reach hooks, permission logs, pipeline telemetry, and the
+child audit. The live row reports active tools, terminal completion counts,
+failures, denials, and permission waits. Child outputs that fit the guest value
+budget stay in the user-visible settled audit but are never copied into
+provider history. An oversized child value becomes a bounded guest error before
+the audit or its checkpoint retains it. The cumulative retained-value budget is
+also charged before parallel results enter either durable surface.
+
+The ToolScript envelope is root-session-only. Retained-agent configuration
+removes it from inherited, role-declared, and deferred tools when the agent
+request is frozen.
+
+The settled envelope's own body carries only what the script returned. Each
+nested call becomes its own collapsible row rendered by that tool's registered
+renderer, so a nested Grep row gets Grep's header and `grep-mode` body rather
+than one flat dump fontified in a single mode. Rows exist only while the
+envelope is expanded, a failed row opens expanded, and a nested compound call
+shows its returned value instead of opening a second level of rows. The calls
+of one `parallel` or `parallel-map` join share a batch identity and are drawn
+as a bracketed group, so a concurrent fan-out is distinguishable from the same
+calls made in sequence; a one-call join is not concurrency and is not marked.
+Retained per-child argument strings are truncated; argument aggregates that are
+too large or too deeply nested, and oversized per-child render data, are dropped
+whole. The transcript therefore never grows a second full copy of a child result.
+
+The dialect supports sequential dependencies plus bounded `parallel` and
+`parallel-map` joins. The latter accept only one direct tool call per entry;
+the host concurrency cap is `mevedel-ptc-parallelism`, and results retain input
+order. A denial aborts the envelope with a bounded partial-work summary.
+Ordinary failures remain values the guest can inspect. In-flight interpreter
+state is ephemeral: cancellation or restart interrupts it and it is never
+resumed from session storage. Before child effects, the session sidecar records
+the envelope and child identities; completions refresh the bounded audit. A
+restart reconstructs one interrupted ToolScript row from that checkpoint and
+consumes it with the repaired segment. Synchronous child callbacks are admitted
+in bounded timer turns so one batch cannot monopolize Emacs. Provider
+projection records whether the envelope output was inline, truncated, or
+persisted, plus its original character count. A `ptc-script` telemetry span
+records only the outcome, budget category, nested-call count, and duration;
+script text, arguments, and results are never included. See
+[`0111-run-programmatic-tool-calls-in-a-closed-machine.md`](adr/0111-run-programmatic-tool-calls-in-a-closed-machine.md).
 
 Request teardown cancels the currently active pipeline step. The tool callback
 then receives one canonical error result, `tool-finished` records one error,
@@ -405,9 +472,15 @@ plist controls only the visual marker and does not participate in dispatch.
 
 Rendering plist: `(:header STRING :body STRING :body-mode SYMBOL
 :status SYMBOL :expandable-p BOOL :hidden-p BOOL
-:coalesce-key STRING
+:coalesce-key STRING :child-calls LIST
 :initially-collapsed-p BOOL)`.
-`:status`, `:expandable-p`, `:hidden-p`, and `:coalesce-key` are optional. When
+`:status`, `:expandable-p`, `:hidden-p`, `:coalesce-key`, and `:child-calls`
+are optional. `:child-calls` belongs to a compound tool that runs other tools:
+each entry is `(:id ID :tool NAME :args PLIST :result STRING :status SYMBOL
+:batch ID :render-data DATA)` and becomes its own collapsible row rendered by
+that tool's own renderer, inserted only while the owning block is expanded.
+Entries sharing a `:batch` value ran concurrently and are bracketed by a glyph
+gutter; a block whose calls all ran in sequence gets no gutter. When
 `:expandable-p` is nil, the view inserts a compact non-toggleable event line
 and ignores `:body` and `:initially-collapsed-p`. When `:hidden-p` is
 non-nil, the view inserts nothing. Consecutive visible renderings with equal

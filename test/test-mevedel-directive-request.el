@@ -455,7 +455,7 @@
 			       (let ((view-buf (buffer-local-value 'mevedel--view-buffer
 								   captured-chat)))
 				 (with-current-buffer view-buf
-				   (mevedel-view--render-incremental captured-chat)))
+				   (mevedel-view-render-live-update captured-chat)))
 			       (let ((view-buf (buffer-local-value 'mevedel--view-buffer
 								   captured-chat)))
 				 (with-current-buffer view-buf

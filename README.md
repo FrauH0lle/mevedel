@@ -96,6 +96,7 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
                    "agents"
                    "prompts"
                    "skills"
+                   "docs/ptc-dialect.md"
                    "tools")))
 
 (use-package mevedel
@@ -1182,6 +1183,8 @@ The maintained detail docs live in [`docs/`](docs/):
   and input history.
 - [`docs/tools.md`](docs/tools.md) — tool pipeline, renderers, groups, and
   oversized-result persistence.
+- [`docs/ptc-dialect.md`](docs/ptc-dialect.md) — closed ToolScript language,
+  nested tools, parallel calls, limits, and security boundary.
 - [`docs/permissions.md`](docs/permissions.md) — permission decision chain,
   bucket precedence, Bash/Eval handling, and sub-agent propagation.
 - [`docs/agents.md`](docs/agents.md) — built-in agents, retained asynchronous execution,

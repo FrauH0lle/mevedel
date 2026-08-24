@@ -1143,14 +1143,16 @@
 (mevedel-deftest mevedel-view--steering-request-context-supported-p ()
   ,test
   (test)
-  :doc "allows bookkeeping-only skill context and rejects request policy"
+  :doc "allows bookkeeping-only context and unrestricted ToolScript policy"
   (should
    (mevedel-view--steering-request-context-supported-p
-    '(:permission-rules nil :hook-rules nil :invoked-skills (alpha))))
+    '(:permission-rules nil :hook-rules nil
+      :ptc-primitives :unrestricted :invoked-skills (alpha))))
   (dolist (context '((:permission-rules (rule))
                      (:hook-rules (rule))
                      (:model model)
-                     (:effort high)))
+                     (:effort high)
+                     (:ptc-primitives ("Read"))))
     (should-not
      (mevedel-view--steering-request-context-supported-p context)))
   (should-not

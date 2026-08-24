@@ -67,8 +67,6 @@
                   "mevedel-permissions" (decision))
 
 ;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-append-hook-side-channel
-                  "mevedel-pipeline" (text context))
 (declare-function mevedel-pipeline-hook-context-audit-records
                   "mevedel-pipeline" (decision event))
 (declare-function mevedel-pipeline-hook-permission-audit-record
@@ -185,6 +183,10 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
                session 'permission-decision
                (append
                 (list :tool-name tool-name
+                      :tool-use-id (plist-get context :tool-use-id)
+                      :parent-tool-use-id
+                      (plist-get context :parent-tool-use-id)
+                      :call-source (plist-get context :call-source)
                       :origin (mevedel-tool-permission--origin context)
                       :mode mode
                       :outcome outcome
@@ -202,6 +204,10 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
                  session 'permission-decision
                  (append
                   (list :tool-name tool-name
+                        :tool-use-id (plist-get context :tool-use-id)
+                        :parent-tool-use-id
+                        (plist-get context :parent-tool-use-id)
+                        :call-source (plist-get context :call-source)
                         :origin (mevedel-tool-permission--origin context)
                         :mode mode :outcome outcome
                         :via (plist-get decision :via))
@@ -242,7 +248,10 @@ when the normal resolver returns `ask'; explicit denials stay intact."
 
 (defun mevedel-tool-permission-deny
     (context fail reason &optional model-reason provenance)
-  "Run `PermissionDenied' hooks for CONTEXT, then call FAIL with REASON.
+  "Run `PermissionDenied' hooks for CONTEXT, then call FAIL.
+
+FAIL receives REASON, the hook-updated context, and
+`permission-denied'.
 
 MODEL-REASON and PROVENANCE are included in the hook event when available."
   (require 'mevedel-hooks)
@@ -266,9 +275,7 @@ MODEL-REASON and PROVENANCE are included in the hook event when available."
               (final-reason
                (or (plist-get decision :permission-reason)
                    reason)))
-         (funcall fail
-                  (mevedel-pipeline-append-hook-side-channel
-                   final-reason updated))))
+         (funcall fail final-reason updated 'permission-denied)))
      context session workspace
      (plist-get context :request)
      (plist-get context :invocation))))
@@ -291,6 +298,13 @@ SETTLE receives the updated CONTEXT and the permission outcome.
 ASK-DECISION is logged only when hooks leave queue admission unresolved.
 FALLBACK-OUTCOME settles an unresolved request without queue admission."
   (let* ((one-shot-p (plist-get context :one-shot-mutations-p))
+         (entry
+          (append
+           (list :tool-use-id (plist-get context :tool-use-id)
+                 :parent-tool-use-id
+                 (plist-get context :parent-tool-use-id)
+                 :call-source (plist-get context :call-source))
+           entry))
          (entry (if one-shot-p
                     (mevedel-permission--one-shot-prompt-entry
                      entry (plist-get context :buffer))
@@ -379,6 +393,8 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                                         'user)
                            updated)
                          outcome))))
+               (when-let* ((progress (plist-get context :progress-callback)))
+                 (ignore-errors (funcall progress 'permission-wait)))
                (mevedel-permission--enqueue queued session)))))))
      context session workspace
      (plist-get context :request)
@@ -510,7 +526,10 @@ existing path extraction behavior."
             paths)))))
 
 (defun mevedel-tool-permission-step (context next fail)
-  "Authorize each filesystem path in CONTEXT before continuing."
+  "Authorize each filesystem path in CONTEXT before continuing.
+
+FAIL receives a reason string and may additionally receive an updated
+context and typed reason."
   (require 'mevedel-agents)
   (require 'mevedel-hooks)
   (require 'mevedel-permission-queue)

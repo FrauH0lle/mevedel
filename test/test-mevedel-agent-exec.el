@@ -391,6 +391,15 @@ fire-count and payload."
      '(:backend frozen-backend :model frozen-model :effort high))
     (should (equal '(frozen-backend . frozen-model) seen)))
 
+  :doc "removes ToolScript from every retained-agent request snapshot"
+  (let* ((ptc (gptel-make-tool :name "ToolScript" :function #'ignore
+                                :description "ToolScript" :args nil))
+         (read (gptel-make-tool :name "Read" :function #'ignore
+                                 :description "Read" :args nil))
+         (gptel-tools (list ptc read))
+         (snapshot (mevedel-agent-exec-request-snapshot nil)))
+    (should (equal (list read) (alist-get 'gptel-tools snapshot))))
+
   :doc "captures every inherited request local through one schema"
   (let* ((gptel--num-messages-to-send 7)
          (gptel--request-params '(:custom "parent"))

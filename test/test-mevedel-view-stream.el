@@ -179,7 +179,7 @@
       (setq-local mevedel-view--agent-transcript-p t)
       (let ((before (buffer-string))
             warned)
-        (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+        (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                    (lambda (&rest _)
                      (let ((inhibit-read-only t))
                        (delete-region (point-min) (point-max)))
@@ -218,7 +218,7 @@
                (- (point) (mevedel-view--input-start)))))
         (cl-letf (((symbol-function 'mevedel-tool-get)
                    (lambda (name) (and (equal name "Bash") bash-tool)))
-                  ((symbol-function 'mevedel-view--render-incremental)
+                  ((symbol-function 'mevedel-view-render-live-update)
                    #'ignore))
           (with-current-buffer data-buf
             ;; Exactly the plist gptel passes: name and arguments, no id.
@@ -526,6 +526,45 @@
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
+(mevedel-deftest mevedel-view-stream-handle-tool-progress ()
+  ,test
+  (test)
+  :doc "preserves a multiline composer draft for generic tool progress"
+  (mevedel-view-stream-test--with-buffers
+    (let ((draft "> quoted\nsecond line"))
+      (with-current-buffer view-buf
+        (mevedel-view-stream-test--insert-composer-draft draft 3))
+      (let ((point-offset
+             (with-current-buffer view-buf
+               (- (point) (mevedel-view--input-start)))))
+        (cl-letf (((symbol-function 'mevedel-view--refresh-tool-row)
+                   (lambda (&rest _) nil))
+                  ((symbol-function
+                    'mevedel-view-stream--schedule-execution-row-recovery)
+                   #'ignore))
+          (mevedel-view-stream-handle-tool-progress
+           (list :type 'progress :data-buffer data-buf
+                 :tool-use-id "ptc-live"
+                 :facts '(:kind ptc :live-p t :active-tool "Read"
+                          :completed-count 2))))
+        (with-current-buffer view-buf
+          (should (eq 'ptc
+                      (plist-get
+                       (plist-get (gethash "ptc-live"
+                                           mevedel-view--execution-events)
+                                  :facts)
+                       :kind)))
+          (should (equal draft
+                         (buffer-substring-no-properties
+                          (mevedel-view--input-start) (point-max))))
+          (should (= point-offset
+                     (- (point) (mevedel-view--input-start)))))
+        (mevedel-view-stream-handle-tool-progress
+         (list :type 'terminal :data-buffer data-buf
+               :tool-use-id "ptc-live"))
+        (with-current-buffer view-buf
+          (should-not (gethash "ptc-live" mevedel-view--execution-events)))))))
+
 (mevedel-deftest mevedel-view-stream-ensure-progress-for-fsm ()
   ,test
   (test)
@@ -594,7 +633,7 @@
               (copy-marker mevedel-view--input-marker))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf (copy-marker (point-min)))))
-      (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+      (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                  (lambda (&rest _) (cl-incf render-count))))
         (with-current-buffer data-buf
           (should-not
@@ -629,7 +668,7 @@
               (copy-marker mevedel-view--input-marker))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf (copy-marker (point-min)))))
-      (cl-letf (((symbol-function 'mevedel-view--render-incremental) #'ignore))
+      (cl-letf (((symbol-function 'mevedel-view-render-live-update) #'ignore))
         (with-current-buffer data-buf
           (dotimes (_ 2)
             (mevedel-view-stream-pre-tool
@@ -654,7 +693,7 @@
               (copy-marker mevedel-view--input-marker))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf (copy-marker (point-min)))))
-      (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+      (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                  (lambda (&rest _) (cl-incf render-count))))
         (with-current-buffer data-buf
           (should-not
@@ -688,7 +727,7 @@
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                      (lambda (&rest _) (cl-incf render-count))))
             (with-current-buffer data-buf
               (should-not
@@ -724,7 +763,7 @@
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                      (lambda (&rest _) (cl-incf render-count))))
             (with-current-buffer data-buf
               (should-not
@@ -798,7 +837,7 @@
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                      (lambda (&rest _) (cl-incf render-count))))
             (with-current-buffer data-buf
               (should-not
@@ -842,7 +881,7 @@
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                      (lambda (&rest _) (cl-incf render-count))))
             (with-current-buffer data-buf
               (should-not
@@ -883,7 +922,7 @@
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                      (lambda (&rest _) (cl-incf render-count))))
             (with-current-buffer data-buf
               (should-not
@@ -922,7 +961,7 @@
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                      (lambda (&rest _) (cl-incf render-count))))
             (with-current-buffer data-buf
               (should-not
@@ -966,7 +1005,7 @@
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                      (lambda (&rest _) (cl-incf render-count))))
             (with-current-buffer data-buf
               (should-not
@@ -1010,7 +1049,7 @@
                 (copy-marker (point-min))))
         (setq mevedel-view--pending-tool-calls
               (list (cons "call-1" "Calling Read: a")))
-        (should (progn (mevedel-view--render-incremental data-buf) t))
+        (should (progn (mevedel-view-render-live-update data-buf) t))
         (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                (response (string-match-p "assistant text" text))
                (calling (string-match-p "Calling Read: a" text))
@@ -1044,7 +1083,7 @@
                 (copy-marker (point-min))))
         (setq mevedel-view--pending-tool-calls
               (list (cons "call-1" "Calling Read: a")))
-        (should (progn (mevedel-view--render-incremental data-buf) t))
+        (should (progn (mevedel-view-render-live-update data-buf) t))
         (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                (old (string-match-p "old text" text))
                (response (string-match-p "assistant text" text))
@@ -1084,7 +1123,7 @@
                    (lambda () nil))
                   ((symbol-function 'mevedel-view--interaction-rebuild)
                    (lambda () nil)))
-          (should (progn (mevedel-view--render-incremental data-buf) t)))
+          (should (progn (mevedel-view-render-live-update data-buf) t)))
         (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                (previous (string-match-p "Previous turn" text))
                (old (string-match-p "old text" text))
@@ -1120,7 +1159,7 @@
                 (copy-marker (point-min))))
         (setq mevedel-view--pending-tool-calls
               (list (cons "call-1" "Calling Read: a")))
-        (should (progn (mevedel-view--render-incremental data-buf) t))
+        (should (progn (mevedel-view-render-live-update data-buf) t))
         (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                (header (string-match-p "mevedel" text))
                (old (string-match-p "old text" text))
@@ -1163,7 +1202,7 @@
                    (lambda () nil))
                   ((symbol-function 'mevedel-view--interaction-rebuild)
                    (lambda () nil)))
-          (should (progn (mevedel-view--render-incremental data-buf) t)))
+          (should (progn (mevedel-view-render-live-update data-buf) t)))
         (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                (previous (string-match-p "Previous turn" text))
                (old (string-match-p "old text" text))
@@ -1206,7 +1245,7 @@
                    (lambda () nil))
                   ((symbol-function 'mevedel-view--interaction-rebuild)
                    (lambda () nil)))
-          (should (progn (mevedel-view--render-incremental data-buf) t)))
+          (should (progn (mevedel-view-render-live-update data-buf) t)))
         (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                (old (string-match-p "old text" text))
                (response (string-match-p "assistant text" text))
@@ -1237,7 +1276,7 @@
             (setq mevedel-view--data-turn-start
                   (with-current-buffer data-buf
                     (copy-marker (point-min)))))
-          (should (progn (mevedel-view--render-incremental data-buf) t))
+          (should (progn (mevedel-view-render-live-update data-buf) t))
           (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                  (old (string-match-p "old text" text))
                  (response (string-match-p "assistant text" text))
@@ -1274,7 +1313,7 @@
                     (copy-marker (point-min))))
             (setq mevedel-view--pending-tool-calls
                   (list (cons "call-1" "Calling Read: a"))))
-          (should (progn (mevedel-view--render-incremental data-buf) t))
+          (should (progn (mevedel-view-render-live-update data-buf) t))
           (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                  (old (string-match-p "old text" text))
                  (response (string-match-p "assistant text" text))
@@ -1310,7 +1349,7 @@
             (setq mevedel-view--data-turn-start
                   (with-current-buffer data-buf
                     (copy-marker (point-min)))))
-          (should (progn (mevedel-view--render-incremental data-buf) t))
+          (should (progn (mevedel-view-render-live-update data-buf) t))
           (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                  (header (string-match-p "mevedel" text))
                  (old (string-match-p "old text" text))
@@ -1339,7 +1378,7 @@
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
       (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+          (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                      (lambda (&rest _) (cl-incf render-count))))
             (with-current-buffer data-buf
               (should-not
@@ -1368,7 +1407,7 @@
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-min)))))
     (let ((mevedel-view-tool-boundary-render-delay 0))
-      (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+      (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                  (lambda (&rest _)
                    #(" ─── agents: 1 running [+] ─────────────────────────────────\n"
                      0 61 (font-lock-face mevedel-view-zone-separator)))))
@@ -1389,7 +1428,7 @@
               (copy-marker mevedel-view--input-marker))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf (copy-marker (point-min)))))
-      (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+      (cl-letf (((symbol-function 'mevedel-view-render-live-update)
                  (lambda (&rest _) (cl-incf render-count))))
         (with-current-buffer data-buf
           (should-not
@@ -1630,7 +1669,7 @@
       (setq mevedel-view--data-turn-start
             (with-current-buffer data-buf (copy-marker (point-max))))
       (setq mevedel-view--pending-tool-calls nil)
-      (mevedel-view--render-incremental data-buf)
+      (mevedel-view-render-live-update data-buf)
       (let ((text (buffer-substring-no-properties
                    (point-min) (point-max))))
         (should (string-match-p "Calling Read: mevedel-pipeline.el" text)))))
@@ -1657,7 +1696,7 @@
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf (copy-marker (point-max))))
         (setq mevedel-view--pending-tool-calls nil)
-        (mevedel-view--render-incremental data-buf start end)
+        (mevedel-view-render-settle data-buf start end)
         (let ((text (buffer-substring-no-properties
                      (point-min) (point-max))))
           (should (string-match-p "Assistant" text))
@@ -1673,7 +1712,7 @@
       (mevedel-view--start-spinner "Thinking...")
       (setq mevedel-view--pending-tool-calls
             '(("call-1" . "Calling Read...")))
-      (mevedel-view--render-incremental data-buf)
+      (mevedel-view-render-live-update data-buf)
       (should (mevedel-view--request-progress-visible-p))
       (let ((text (buffer-substring-no-properties
                    (point-min) (point-max))))
@@ -2275,7 +2314,7 @@
         (setq mevedel-view--in-flight-turn-start
               (copy-marker mevedel-view--input-marker nil))
         (mevedel-view--start-spinner "Thinking...")
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (should (mevedel-view--request-progress-visible-p))
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
@@ -3161,8 +3200,8 @@
         (setq mevedel-view--in-flight-turn-start
               (mevedel-view--insert-user-message "Second"))
         (mevedel-view--start-spinner "Thinking...")
-        (mevedel-view--render-incremental data-buf)
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
+        (mevedel-view-render-live-update data-buf)
         (let* ((text (buffer-substring-no-properties
                       (point-min) mevedel-view--input-marker))
                (assistant-count
@@ -3201,7 +3240,7 @@
                   (lambda (&rest _ignore)
                     (cl-incf changes))
                   nil t)
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (should (= 0 changes))
         (should (string-match-p
                  "Partial response"
@@ -3236,7 +3275,7 @@
             (set-marker-insertion-type mevedel-view--input-marker nil)))
         (setq mevedel-view--data-turn-start data-turn-start)
         (setq mevedel-view--user-pre-rendered nil)
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (let* ((text (buffer-substring-no-properties
                       (point-min) mevedel-view--input-marker))
                (you-count (cl-count-if (lambda (line) (string= line "You"))
@@ -3528,7 +3567,7 @@
                   (point-min) mevedel-view--input-marker))))
       (mevedel-view-stream-test--insert-data data-buf "Assistant answer.\n" 'response)
       (with-current-buffer view-buf
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Full hidden prompt" text))
@@ -3618,7 +3657,7 @@
       (should (timerp mevedel-view--spinner-timer))
       (let (warning later-ran)
         (mevedel-test--with-captured-diagnostics warning
-          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+          (cl-letf (((symbol-function 'mevedel-view-render-settle)
                      (lambda (&rest _) (error "Projection failed"))))
             (with-current-buffer data-buf
               ;; Through the hook, because the point of not signalling is

@@ -4360,7 +4360,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq mevedel-view--data-turn-start data-turn-start)
         (setq mevedel-view--in-flight-turn-start
               (mevedel-view--insert-user-message "Prompt"))
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (goto-char (mevedel-view--input-start))
         (insert "follow up")
         (mevedel-view-send-follow-up)
@@ -4371,7 +4371,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (let ((start (point)))
             (insert "Second partial response.\n")
             (put-text-property start (point) 'gptel 'response)))
-        (mevedel-view--render-incremental data-buf)
+        (mevedel-view-render-live-update data-buf)
         (let* ((text (buffer-substring-no-properties
                       (point-min) (point-max)))
                (queued (string-match-p "follow up" text))

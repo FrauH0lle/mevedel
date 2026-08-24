@@ -70,6 +70,47 @@
   (should (eq (mevedel-skills--coerce-context "inline") 'inline))
   (should (eq (mevedel-skills--coerce-context nil) 'inline)))
 
+(mevedel-deftest mevedel-skills--parse-ptc-primitives ()
+  ,test
+  (test)
+
+  :doc "distinguishes an omitted restriction from an explicit empty one"
+  (progn
+    (should (eq :unrestricted
+                (mevedel-skills--parse-ptc-primitives nil "SKILL.md")))
+    (should (null
+             (mevedel-skills--parse-ptc-primitives
+              '(:ptc-primitives nil) "SKILL.md"))))
+
+  :doc "normalizes a declared closed list"
+  (should (equal '("Read" "Grep")
+                 (mevedel-skills--parse-ptc-primitives
+                  '(:ptc-primitives ("Read" "Grep" "Read")) "SKILL.md")))
+
+  :doc "rejects scalar, blank, and non-string entries"
+  (dolist (value '("Read" ("Read" "") ("Read" Bash)))
+    (should-error
+     (mevedel-skills--parse-ptc-primitives
+      (list :ptc-primitives value) "SKILL.md")
+     :type 'user-error)))
+
+(mevedel-deftest mevedel-skills-intersect-ptc-primitives ()
+  ,test
+  (test)
+
+  :doc "uses unrestricted as identity and empty as absorbing"
+  (progn
+    (should (equal '("Read")
+                   (mevedel-skills-intersect-ptc-primitives
+                    :unrestricted '("Read"))))
+    (should-not (mevedel-skills-intersect-ptc-primitives
+                 '("Read") nil)))
+
+  :doc "preserves the left restriction's order"
+  (should (equal '("Grep" "Read")
+                 (mevedel-skills-intersect-ptc-primitives
+                  '("Grep" "Read" "Bash") '("Read" "Grep")))))
+
 
 ;;
 ;;; Discovery + parsing

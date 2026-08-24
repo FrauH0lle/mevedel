@@ -87,10 +87,14 @@
                   "mevedel-view-render" ())
 (declare-function mevedel-view--refresh-tool-row
                   "mevedel-view-render" (data-buffer tool-use-id))
-(declare-function mevedel-view--render-incremental
-                  "mevedel-view-render" (data-buf &optional start end))
 (declare-function mevedel-view--request-progress-anchor
                   "mevedel-view-render" ())
+(declare-function mevedel-view-render-invalidate-live-tail
+                  "mevedel-view-render" ())
+(declare-function mevedel-view-render-live-update
+                  "mevedel-view-render" (data-buf))
+(declare-function mevedel-view-render-settle
+                  "mevedel-view-render" (data-buf start end))
 
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-clear "mevedel-view-zone" (namespace))
@@ -134,7 +138,7 @@ explicitly started.")
   "View-buffer marker at which the current assistant turn's render begins.
 
 Set by the send path right after the user turn is echoed, consumed by
-`mevedel-view--render-incremental' to bound the delete-and-re-render
+`mevedel-view-render-live-update' to bound the delete-and-re-render
 region for each progress update, and cleared when the final
 `gptel-post-response-functions' render completes.  Nil outside an
 active exchange.")
@@ -143,7 +147,7 @@ active exchange.")
   "Data-buffer marker at which the current assistant turn starts.
 
 Anchored just after the user prompt was forwarded to the data
-buffer, so `mevedel-view--render-incremental' can extract only the
+buffer, so `mevedel-view-render-live-update' can extract only the
 in-flight assistant portion (not the whole conversation) when
 rebuilding the view.  Nil outside an active exchange.")
 
@@ -167,7 +171,7 @@ tools are in flight in parallel.")
   "Number of entries retained in `mevedel-view--execution-events'.")
 
 (defvar-local mevedel-view--execution-events nil
-  "Latest transient Bash event keyed by durable tool-use id.")
+  "Latest transient tool progress keyed by durable tool-use id.")
 
 (defcustom mevedel-view-stream-render-delay 0.4
   "Seconds to wait before rendering a batch of stream chunks.
@@ -256,7 +260,6 @@ the view has already inserted the in-flight markers."
 
 (defun mevedel-view--request-progress-region-start ()
   "Return the start of the visible request-progress region, or nil."
-  (require 'mevedel-view-zone)
   (and (mevedel-view--request-progress-visible-p)
        (mevedel-view-zone-start 'progress)))
 
@@ -687,7 +690,7 @@ POSITION may be an integer or marker."
         (buffer-list))))
 
 (defun mevedel-view-stream--cache-execution-progress (event)
-  "Cache bounded transient progress from EVENT in the current view."
+  "Cache bounded transient tool progress from EVENT in the current view."
   (when-let* ((tool-use-id (plist-get event :tool-use-id)))
     (unless (hash-table-p mevedel-view--execution-events)
       (setq mevedel-view--execution-events (make-hash-table :test #'equal)))
@@ -719,6 +722,17 @@ POSITION may be an integer or marker."
 Always return nil; only the mailbox sink may acknowledge durable delivery."
   (require 'mevedel-execution-transcript)
   (mevedel-execution-transcript-handle-event event)
+  (when (eq (plist-get event :type) 'progress)
+    (setq event
+          (plist-put
+           (copy-sequence event) :output-tail
+           (string-join
+            (last (string-lines (or (plist-get event :output-tail) "")) 5)
+            "\n"))))
+  (mevedel-view-stream-handle-tool-progress event))
+
+(defun mevedel-view-stream-handle-tool-progress (event)
+  "Apply transient tool progress EVENT to its visible aggregate row."
   (let* ((type (plist-get event :type))
          (tool-use-id (plist-get event :tool-use-id))
          (data-buffer (plist-get event :data-buffer))
@@ -728,13 +742,6 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
       (with-current-buffer view-buffer
         (pcase type
           ('progress
-           (setq event
-                 (plist-put
-                  (copy-sequence event) :output-tail
-                  (string-join
-                   (last (string-lines
-                          (or (plist-get event :output-tail) "")) 5)
-                   "\n")))
            (mevedel-view-stream--cache-execution-progress event))
           ('terminal
            (mevedel-view-stream--remove-execution-progress tool-use-id)))
@@ -749,10 +756,10 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
   (require 'mevedel-execution-transcript)
   (mevedel-execution-transcript-retry-pending-terminals data-buf)
   (if (not mevedel-view--agent-transcript-p)
-      (mevedel-view--render-incremental data-buf)
+      (mevedel-view-render-live-update data-buf)
     (condition-case err
         (atomic-change-group
-          (mevedel-view--render-incremental data-buf))
+          (mevedel-view-render-live-update data-buf))
       (error
        (mevedel--warn-once
         'view-stream-agent-render
@@ -974,6 +981,7 @@ When NO-PROGRESS is non-nil, record no active progress state."
     (set-marker mevedel-view--in-flight-turn-start nil))
   (when (markerp mevedel-view--data-turn-start)
     (set-marker mevedel-view--data-turn-start nil))
+  (mevedel-view-render-invalidate-live-tail)
   (setq mevedel-view--in-flight-turn-start
         (and (not no-progress) (copy-marker view-start nil)))
   (setq mevedel-view--data-turn-start
@@ -986,6 +994,7 @@ When NO-PROGRESS is non-nil, record no active progress state."
   (mevedel-view--stop-request-progress)
   (mevedel-view--stop-spinner-timer)
   (mevedel-view--cancel-scheduled-render)
+  (mevedel-view-render-invalidate-live-tail)
   (setq mevedel-view--pending-tool-calls nil)
   (mevedel-view--delete-pending-tool-live-lines)
   (when (markerp mevedel-view--in-flight-turn-start)
@@ -1034,7 +1043,7 @@ When NO-PROGRESS is non-nil, record no active progress state."
                         (or (mevedel-view--append-request-summary
                              data-buf start)
                             end))
-                  (mevedel-view--render-incremental data-buf start end)
+                  (mevedel-view-render-settle data-buf start end)
                   (mevedel-view--debug-log
                    'render-response-after-incremental
                    :state (mevedel-view--debug-state data-buf start end)))

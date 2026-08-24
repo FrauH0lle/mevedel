@@ -675,12 +675,16 @@ and agent transcript handles are intentionally outside this chrome-fragment
 model even when they are clickable or collapsible. They are projections of
 the authoritative data buffer and keep source-coordinate disclosure state.
 Provider failures are expanded by default and preserve the complete provider
-message for manual retry. The incremental renderer
-in `mevedel-view-render.el` (`mevedel-view--render-incremental`) remains the
-correctness path for streaming assistant text. `mevedel-view-stream.el`
-schedules those updates and owns request-progress state and pending-tool live
-rows; `mevedel-gptel-stream-bridge.el` confines the private upstream advice.
-Fragment updates should not bypass the data-buffer transcript.
+message for manual retry. `mevedel-view-render-live-update` retains completed
+semantic units in the view and reparses only the mutable source-backed tail.
+Reasoning summaries and consecutive tool groups are units; response prose
+advances at the last blank-line boundary outside fenced code. Terminal
+settlement calls `mevedel-view-render-settle` for one exact whole-turn
+reconciliation. A full rerender, a new turn, or stream cancellation invalidates
+the retained tail. `mevedel-view-stream.el` schedules live updates and owns
+request-progress state and pending-tool rows;
+`mevedel-gptel-stream-bridge.el` confines the private upstream advice. Fragment
+updates should not bypass the data-buffer transcript.
 Revisit source-backed transcript fragments only as a separate design after a
 concrete performance or correctness problem is identified.
 

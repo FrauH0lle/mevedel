@@ -1034,7 +1034,7 @@
                :activate #'ignore))
         (cl-letf (((symbol-function 'mevedel-view--interaction-rebuild)
                    #'ignore))
-          (mevedel-view--render-incremental data-buf))
+          (mevedel-view-render-live-update data-buf))
         (let* ((text (buffer-substring-no-properties
                       (point-min) mevedel-view--input-marker))
                (assistant-pos (string-match-p "Assistant" text))

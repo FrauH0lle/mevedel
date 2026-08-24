@@ -33,7 +33,7 @@
 (defvar gptel-org-ignore-elements)
 
 ;; `mevedel-view'
-(declare-function mevedel-view--render-incremental "mevedel-view"
+(declare-function mevedel-view-render-live-update "mevedel-view-render"
                   (data-buffer))
 (defvar mevedel-view--data-turn-start)
 (defvar mevedel-view--in-flight-turn-start)

@@ -176,6 +176,59 @@
                     text))
            (should-not (string-match-p "test output" text)))))))
 
+  :doc "collapsing a compound tool takes its nested call rows with it"
+  (mevedel-view-test--with-buffers
+   (with-current-buffer data-buf
+     (insert "ptc source data\n"))
+   (with-current-buffer view-buf
+     (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
+            (rendering
+             '(:header "ToolScript: 1 call (completed)"
+               :body "Returned:\nfinal value\n"
+               :initially-collapsed-p nil
+               :child-calls ((:id "ptc/1" :tool "Read" :status success
+                              :args (:file_path "a.el")
+                              :result "child output")))))
+       (let ((inhibit-read-only t))
+         (goto-char mevedel-view--input-marker)
+         (mevedel-view--insert-rendered-tool rendering source))
+       (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
+                  (lambda (_buf _start _end &optional _collapsed-only)
+                    rendering)))
+         (let ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker)))
+           (should (string-match-p "final value" text))
+           (should (string-match-p "Read: a\\.el" text)))
+         ;; Collapsing the envelope must remove the rows it owns, not
+         ;; orphan them under the collapsed header.
+         (goto-char (point-min))
+         (search-forward "final value")
+         (mevedel-view-toggle-section)
+         (let ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker)))
+           (should (string-match-p "ToolScript: 1 call" text))
+           (should-not (string-match-p "final value" text))
+           (should-not (string-match-p "Read: a\\.el" text)))
+         ;; Expanding again brings them back, and the envelope keeps its
+         ;; own identity instead of inheriting a row's.
+         (goto-char (point-min))
+         (search-forward "ToolScript: 1 call")
+         (mevedel-view-toggle-section)
+         (let ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker)))
+           (should (string-match-p "final value" text))
+           (should (string-match-p "Read: a\\.el" text)))
+         (goto-char (point-min))
+         (search-forward "final value")
+         (should (eq 'tool-summary
+                     (get-text-property (match-beginning 0)
+                                        'mevedel-view-type)))
+         (goto-char (point-min))
+         (search-forward "Read: a.el")
+         (should (eq 'tool-child
+                     (get-text-property (match-beginning 0)
+                                        'mevedel-view-type)))))))
+
   :doc "non-expandable tool events remain non-toggleable and untracked"
   (mevedel-view-test--with-buffers
    (mevedel-tool-register

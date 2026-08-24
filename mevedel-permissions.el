@@ -121,6 +121,7 @@
 (declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
+(defvar mevedel-tool-registry--source-dir)
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
@@ -422,10 +423,19 @@ PATCH-LOCAL-ONLY-P is true only for a prepared all-local ApplyPatch proposal."
               pattern (extract #'mevedel-tool-get-pattern pattern)
               domain (extract #'mevedel-tool-get-domain domain)
               name (extract #'mevedel-tool-get-name name))))
-    (let* ((allowed-roots (or allowed-roots
-                              (and workspace-root (list workspace-root))))
-           (read-only-p
+    (let* ((read-only-p
             (when tool-struct (mevedel-tool-read-only-p tool-struct)))
+           (package-source-root
+            (and read-only-p
+                 (boundp 'mevedel-tool-registry--source-dir)
+                 mevedel-tool-registry--source-dir
+                 (file-name-as-directory
+                  (expand-file-name mevedel-tool-registry--source-dir))))
+           (allowed-roots
+            (delete-dups
+             (append (and package-source-root (list package-source-root))
+                     (or allowed-roots
+                         (and workspace-root (list workspace-root))))))
            (native-edit-p
             (and tool-struct (memq 'edit (mevedel-tool-groups tool-struct))))
            (resource-access (or resource-access

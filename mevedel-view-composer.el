@@ -2478,7 +2478,7 @@ asynchronous preparation ran is left alone instead of cleared."
          ;; Anchor the data-side marker after the forwarded prompt so
          ;; incremental renders extract only the in-flight assistant
          ;; segments from here forward.  Pushed onto the view buffer's
-         ;; buffer-local so it is readable from `--render-incremental'
+         ;; buffer-local so live rendering can read it
          ;; without switching buffers.
          (setq data-turn-start (copy-marker (point) nil)))
        (mevedel-collaboration--safe-accepted-prompt data-buffer)

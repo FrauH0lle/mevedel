@@ -666,6 +666,54 @@
 (mevedel-deftest mevedel-session-persistence-restore (:quiet t)
   ,test
   (test)
+  :doc "settles a durable ToolScript checkpoint as interrupted, no resume"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let (buffer restored session session-dir)
+      (unwind-protect
+          (progn
+            (setq session (mevedel-session-create "main" workspace)
+                  buffer (generate-new-buffer "*test-ptc-recovery*"))
+            (with-current-buffer buffer
+              (org-mode)
+              (setq-local mevedel--session session)
+              (insert "Prompt before interrupted ToolScript\n")
+              (require 'mevedel-ptc-checkpoint)
+              (should
+               (mevedel-ptc-checkpoint-start
+                session buffer "ptc-recovery"
+                "(Read :path \"README.md\")"))
+              (should
+               (mevedel-ptc-checkpoint-update
+                session buffer "ptc-recovery"
+                '(:render-data
+                  (:kind ptc :outcome running
+                   :calls ((:id "ptc-recovery/1" :tool "Read"
+                            :status running)))))))
+            (setq session-dir (mevedel-session-save-path session))
+            (test-mevedel-session-persistence--release-and-kill buffer session)
+            (setq buffer nil
+                  restored
+                  (mevedel-session-persistence-restore session-dir))
+            (with-current-buffer restored
+              (require 'mevedel-ptc-checkpoint)
+              (should (string-match-p
+                       "script interrupted by Emacs restart" (buffer-string)))
+              (should
+               (mevedel-tool-render-data-segment-bounds "ptc-recovery"))
+              (should-not (mevedel-session-ptc-checkpoints mevedel--session)))
+            (should-not
+             (plist-get
+              (mevedel-session-persistence-load-sidecar
+               (mevedel-session-artifacts-sidecar-path session-dir))
+              :ptc-checkpoints)))
+        (test-mevedel-session-persistence--release-and-kill buffer session)
+        (test-mevedel-session-persistence--release-and-kill
+         restored
+         (and restored (buffer-local-value 'mevedel--session restored)))
+        (when (file-directory-p tempdir)
+          (delete-directory tempdir t))
+        (mevedel-workspace-clear-registry))))
   :doc "restores stale rows as lost but supersedes rows with newer facts"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)

@@ -259,6 +259,26 @@
 ;;
 ;;; Top-level round-trip
 
+(mevedel-deftest mevedel-session-codec--sanitize-ptc-checkpoints ()
+  ,test
+  (test)
+  :doc "keeps only bounded read-safe checkpoint records"
+  (let* ((valid '(:id "p" :state running :args (:script "(+ 1 2)")
+                  :result nil :render-data (:kind ptc :calls nil)
+                  :unknown "discard me"))
+         (unsafe '(:id "bad" :state running :args (:script "1")
+                   :render-data #s(hash-table)))
+         (wrong-state '(:id "old" :state paused :args (:script "1")))
+         (result
+          (mevedel-session-codec--sanitize-ptc-checkpoints
+           (list valid unsafe wrong-state))))
+    (should (= 1 (length result)))
+    (should (equal "p" (plist-get (car result) :id)))
+    (should (equal "(+ 1 2)"
+                   (plist-get (plist-get (car result) :args) :script)))
+    (should-not (plist-member (car result) :unknown))))
+
+
 (mevedel-deftest mevedel-session-codec-sanitize-agent-transcripts ()
   ,test
   (test)

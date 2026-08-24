@@ -441,6 +441,7 @@ session view."
            always
            (pcase key
              (:invoked-skills t)
+             (:ptc-primitives (eq value :unrestricted))
              ((or :permission-rules :hook-rules :model :effort)
               (null value))
              (_ nil))))

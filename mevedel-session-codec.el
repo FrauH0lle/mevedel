@@ -72,6 +72,7 @@
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x))
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x))
 (declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x))
+(declare-function mevedel-session-ptc-checkpoints "mevedel-structs" (cl-x))
 (declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x))
 (declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x))
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x))
@@ -100,6 +101,9 @@
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x))
 
+;; `mevedel-utilities'
+(declare-function mevedel--plain-data-p "mevedel-utilities" (value))
+
 ;; `mevedel-workspace'
 (defvar mevedel-workspace-additional-roots)
 
@@ -109,7 +113,7 @@
 ;;
 ;;; Constants
 
-(defconst mevedel-session-codec-format-version "v0.5.3"
+(defconst mevedel-session-codec-format-version "v0.5.4"
   "Current on-disk session sidecar format.
 
 The authority profile is part of this format.  Readers accept exactly this
@@ -135,7 +139,7 @@ add more, and we don't want to act on actions we don't understand).")
     :last-observed-date
     :agent-types-snapshot :skills-snapshot :workspace-instruction-hashes
     :additional-roots :tasks
-    :prompt-index :file-snapshots :agent-transcripts :agent-registry
+    :prompt-index :file-snapshots :ptc-checkpoints :agent-transcripts :agent-registry
     :agent-turn-capacity :plan-metadata :goal :messages)
   "Keys required in every current-version session sidecar.")
 
@@ -578,6 +582,7 @@ The resulting plist is round-trippable via
                                    (mevedel-session-tasks session))
    :prompt-index           (mevedel-session-prompt-index session)
    :file-snapshots         (mevedel-session-file-snapshots session)
+   :ptc-checkpoints        (copy-tree (mevedel-session-ptc-checkpoints session) t)
    :agent-transcripts      (mevedel-session-agent-transcripts session)
    :agent-registry         (mevedel-agent-persistence-serialize-registry session)
    :agent-turn-capacity    (mevedel-session-agent-turn-capacity session)
@@ -620,6 +625,29 @@ the round trip but are ignored when rendered."
             (puthash id plist seen)
             (setf (alist-get id out nil nil #'equal) plist))))))
     (nreverse out)))
+
+(defun mevedel-session-codec--sanitize-ptc-checkpoints (raw)
+  "Return closed, read-safe ToolScript checkpoints from sidecar value RAW."
+  (require 'mevedel-utilities)
+  (cl-loop
+   for checkpoint in (and (proper-list-p raw) raw)
+   for id = (and (proper-list-p checkpoint) (plist-get checkpoint :id))
+   for args = (and (proper-list-p checkpoint) (plist-get checkpoint :args))
+   for script = (and (proper-list-p args) (plist-get args :script))
+   for state = (and (proper-list-p checkpoint)
+                    (plist-get checkpoint :state))
+   for result = (and (proper-list-p checkpoint)
+                     (plist-get checkpoint :result))
+   for render-data = (and (proper-list-p checkpoint)
+                          (plist-get checkpoint :render-data))
+   when (and (stringp id) (<= (length id) 256)
+             (memq state '(running settled))
+             (stringp script) (<= (length script) (* 64 1024))
+             (or (null result) (stringp result))
+             (or (null render-data) (mevedel--plain-data-p render-data)))
+   collect (list :id id :args (list :script script) :state state
+                 :result result
+                 :render-data (copy-tree render-data t))))
 
 (defun mevedel-session-codec-validate-current-sidecar (plist)
   "Return PLIST when it contains every current-version sidecar key."
@@ -806,6 +834,9 @@ their hygiene filters."
                      (plist-get plist :worktree-base-commit)
                      :prompt-index     prompt-index
                      :file-snapshots   (plist-get plist :file-snapshots)
+                     :ptc-checkpoints
+                     (mevedel-session-codec--sanitize-ptc-checkpoints
+                      (plist-get plist :ptc-checkpoints))
                      :plan-metadata    (plist-get plist :plan-metadata)
                      :goal
                      (condition-case nil

@@ -161,17 +161,19 @@
                     :hook-audits (command-audit)
                     :request-context
                     (:permission-rules (permission)
+                     :ptc-primitives ("Read" "Grep")
                      :hook-rules (hook) :invoked-skills (command-record)
                      :model selected :effort high)))
             (list :entry instruction
                   :outcome
                   '(:body "instruction" :hook-context "instruction-context"
                     :hook-audits (instruction-audit)
-                    :request-context (:invoked-skills
+                    :request-context (:ptc-primitives ("Bash") :invoked-skills
                                       (instruction-record))))))))
     (should (= 1 (plist-get aggregate :command-count)))
     (should (equal '("command") (plist-get aggregate :command-bodies)))
     (should (equal '(permission) (plist-get aggregate :permission-rules)))
+    (should (equal '("Read" "Grep") (plist-get aggregate :ptc-primitives)))
     (should (equal '(hook) (plist-get aggregate :hook-rules)))
     (should (equal '(command-record instruction-record)
                    (plist-get aggregate :invoked-skills)))
@@ -180,6 +182,22 @@
     (should (= 1 (length (plist-get aggregate :instruction-reminders))))
     (should (equal '(command-audit instruction-audit)
                    (plist-get aggregate :hook-audits)))))
+
+  :doc "intersects restrictions from stacked command skills"
+  (let ((first (mevedel-skill-plan-entry--create :name "a" :role 'command))
+        (second (mevedel-skill-plan-entry--create :name "b" :role 'command)))
+    (should
+     (equal '("Grep")
+            (plist-get
+             (mevedel-skills-plan--aggregate-prepared
+              (list
+               (list :entry first :outcome
+                     '(:body "a" :request-context
+                       (:ptc-primitives ("Read" "Grep"))))
+               (list :entry second :outcome
+                     '(:body "b" :request-context
+                       (:ptc-primitives ("Grep" "Bash"))))))
+             :ptc-primitives))))
 
 (mevedel-deftest mevedel-skills-plan--prepared-outcome ()
   ,test

@@ -66,6 +66,8 @@
 (declare-function gptel-make-fsm "ext:gptel-request" (&rest args))
 (declare-function gptel-request "ext:gptel-request"
                   (&optional prompt &rest args))
+(declare-function gptel-tool-name "ext:gptel-request" (tool))
+(declare-function gptel-tool-p "ext:gptel-request" (tool))
 (defvar gptel--num-messages-to-send)
 (defvar gptel--request-params)
 (defvar gptel--schema)
@@ -110,6 +112,8 @@
                   "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-configuration-request-locals
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-filter-root-only-tools
+                  "mevedel-agents" (tools))
 (declare-function mevedel-agent-freeze "mevedel-agents" (agent))
 (declare-function mevedel-agent-invocation-activity
                   "mevedel-agents" (cl-x) t)
@@ -395,6 +399,8 @@ Skill-scoped model and effort policy applies to direct skill dispatches."
                  ('gptel-backend (plist-get policy :backend))
                  ('gptel-model (plist-get policy :model))
                  ('gptel-reasoning-effort (plist-get policy :effort))
+                 ('gptel-tools
+                  (mevedel-agent-filter-root-only-tools gptel-tools))
                  (_ (and (boundp symbol) (symbol-value symbol))))
    when (and (eq symbol 'gptel-system-prompt) (functionp value))
    ;; Parts of the prompt are budgeted against the model's context

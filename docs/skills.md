@@ -523,6 +523,17 @@ planning and review phases deny tools in the native `edit` group before skill
 allow grants are considered. Bash and Eval still follow normal permission
 policy in those phases.
 
+## ToolScript Primitives
+
+`ptc-primitives` narrows the nested tools visible to ToolScript for a command
+skill. Omitting the field leaves the request roster unchanged; an explicit
+empty list allows no nested tools. Stacked commands intersect their lists, so
+adding a skill can only remove authority. The result is intersected again with
+the configured ToolScript allowlist and the request's active/deferred tools; it
+never grants or activates a tool. Instruction occurrences ignore this field
+because they do not own the consuming request. ToolScript is root-session-only,
+so prepared fork metadata does not make it available to retained agents.
+
 ## Hooks
 
 Skill frontmatter `hooks` uses the same event -> matcher -> handler shape

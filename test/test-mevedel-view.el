@@ -718,7 +718,40 @@
           (should (equal '((plan . aborted) (permission . aborted))
                          outcomes)))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
-      (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
+
+  :doc "killing an agent view detaches its observer from retained data"
+  (let ((data-buf (generate-new-buffer " *test-agent-data-kill-view*"))
+        (view-buf (generate-new-buffer " *test-agent-view-kill-view*"))
+        (parent-view (generate-new-buffer " *test-parent-kill-view*"))
+        (change-hook #'ignore))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local mevedel--view-buffer parent-view))
+          (mevedel-view--setup
+           view-buf data-buf
+           (list :agent-transcript-p t
+                 :preserve-data-view-buffer t
+                 :parent-view parent-view
+                 :transcript-info '(:live-buffer t)))
+          (with-current-buffer view-buf
+            (setq-local mevedel-view--live-source-change-hook change-hook)
+            (setq-local mevedel-view--live-data-tail-start
+                        (with-current-buffer data-buf
+                          (copy-marker (point-min))))
+            (setq-local mevedel-view--live-view-tail-start
+                        (copy-marker (point-min))))
+          (with-current-buffer data-buf
+            (add-hook 'before-change-functions change-hook nil t))
+          (kill-buffer view-buf)
+          (should (buffer-live-p data-buf))
+          (with-current-buffer data-buf
+            (should-not (memq change-hook before-change-functions))))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))
+      (when (buffer-live-p parent-view) (kill-buffer parent-view)))))
 
 (mevedel-deftest mevedel-view--on-data-killed
   (:doc "data kill hook cleans up queued interactions")

@@ -86,10 +86,12 @@
                   (list :permission-rules rules
                         :model (mevedel-model-tier-selector 'fast)
                         :effort 'high
+                        :ptc-primitives nil
                         :invoked-skills records))
       (mevedel-skills--drain-pending-context request)
       (should (equal rules
                      (mevedel-request-skill-permission-rules request)))
+      (should (null (mevedel-request-ptc-primitives request)))
       (should (equal records (mevedel-session-invoked-skills session)))
       ;; Stash is cleared after drain.
       (should (null mevedel-skills--pending-request-context))))

@@ -31,6 +31,7 @@
 (require 'mevedel-tool-goal)
 (require 'mevedel-tool-introspect)
 (require 'mevedel-tool-patch)
+(require 'mevedel-tool-ptc)
 (require 'mevedel-goal)
 (require 'mevedel-tool-skills)
 (require 'mevedel-tool-task)
@@ -153,6 +154,7 @@
   (mevedel-tool-ui--register)
   (mevedel-tool-skills--register)
   (mevedel-tool-task--register)
+  (mevedel-tool-ptc--register)
   (mevedel-tool-introspect--register))
 
 (defun mevedel-tools-active-count (&optional buffer)
