@@ -12,6 +12,7 @@
 (require 'mevedel-permission-mode)
 (require 'mevedel-plugin-registry)
 (require 'mevedel-structs)
+(require 'tramp)
 
 ;; `gptel'
 (declare-function gptel-make-openai "gptel")
@@ -347,7 +348,6 @@ fixture writes when it derives paths from an unset save path."
 The definition is inert data, and registering it once per process keeps a
 test that addresses a `mevedelmock' path from depending on an earlier test
 having registered it."
-  (require 'tramp)
   (unless (assoc "mevedelmock" tramp-methods)
     (add-to-list
      'tramp-methods
