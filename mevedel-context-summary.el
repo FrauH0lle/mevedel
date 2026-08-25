@@ -20,7 +20,9 @@
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
 (defvar gptel-stream)
+(defvar gptel-system-prompt)
 (defvar gptel-tools)
+(defvar gptel-use-context)
 (defvar gptel-use-tools)
 
 ;; `gptel-request'
@@ -301,26 +303,34 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
                         "Context summary request (%d tokens) exceeds usable context (%d tokens)"
                         estimate usable)
                        :error-class 'size))
-              (let ((gptel-use-tools nil)
-                    (gptel-tools nil))
-                (gptel-with-preset 'gptel-default
-                  (let ((gptel-backend (plist-get policy :backend))
-                        (gptel-model (plist-get policy :model))
-                        (gptel-reasoning-effort (plist-get policy :effort))
-                        (gptel-max-tokens (plist-get policy :max-tokens))
-                        (gptel--request-params
-                         (plist-get policy :request-params))
-                        (gptel-stream nil))
-                    (setq request-started t)
-                    (gptel-request
-                     input
-                     :system system
-                     :buffer request-buffer
-                     :stream nil
-                     :transforms nil
-                     :context
-                     (list :mevedel-context-summary t :purpose purpose)
-                     :callback provider-callback)))))))
+              ;; gptel snapshots request configuration from the :buffer
+              ;; with `buffer-local-value', which falls back to global
+              ;; defaults and never sees dynamic let bindings made in a
+              ;; buffer that holds these variables buffer-locally.  The
+              ;; policy must live on the request buffer itself, or the
+              ;; request silently ships the user's global defaults.
+              (with-current-buffer request-buffer
+                (setq-local gptel-backend (plist-get policy :backend)
+                            gptel-model (plist-get policy :model)
+                            gptel-reasoning-effort (plist-get policy :effort)
+                            gptel-max-tokens (plist-get policy :max-tokens)
+                            gptel--request-params
+                            (plist-get policy :request-params)
+                            gptel-system-prompt system
+                            gptel-use-tools nil
+                            gptel-tools nil
+                            gptel-use-context nil
+                            gptel-stream nil)
+                (setq request-started t)
+                (gptel-request
+                 input
+                 :system system
+                 :buffer request-buffer
+                 :stream nil
+                 :transforms nil
+                 :context
+                 (list :mevedel-context-summary t :purpose purpose)
+                 :callback provider-callback)))))
       (error
        (funcall
         settle

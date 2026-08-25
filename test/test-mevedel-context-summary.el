@@ -222,6 +222,42 @@
     (should-not (plist-get captured :use-tools))
     (should-not (buffer-live-p (plist-get captured :buffer))))
 
+  :doc "policy lives buffer-locally in the request buffer"
+  ;; gptel snapshots request configuration from the :buffer with
+  ;; buffer-local-value.  A dynamic let made in a caller that holds
+  ;; these variables buffer-locally never reaches that snapshot, so the
+  ;; policy must be planted on the request buffer itself.
+  (let ((gptel-model 'global-default-model)
+        captured)
+    (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (&rest _)
+                 '(:backend summary-backend :model summary-model
+                   :effort high)))
+              ((symbol-function 'mevedel-model-usable-input-tokens)
+               (lambda (_policy) 100000))
+              ((symbol-function 'gptel-request)
+               (lambda (_prompt &rest args)
+                 (let ((buffer (plist-get args :buffer)))
+                   (setq captured
+                         (list :model (buffer-local-value 'gptel-model buffer)
+                               :backend (buffer-local-value 'gptel-backend
+                                                            buffer)
+                               :use-tools (buffer-local-value 'gptel-use-tools
+                                                              buffer)
+                               :stream (buffer-local-value 'gptel-stream
+                                                           buffer))))
+                 (funcall (plist-get args :callback)
+                          test-mevedel-context-summary--continuation nil)
+                 'request-fsm)))
+      (with-temp-buffer
+        (setq-local gptel-model 'caller-local-model
+                    gptel-backend 'caller-local-backend)
+        (mevedel-context-summary-generate "evidence" 'continuation #'ignore)))
+    (should (eq (plist-get captured :model) 'summary-model))
+    (should (eq (plist-get captured :backend) 'summary-backend))
+    (should-not (plist-get captured :use-tools))
+    (should-not (plist-get captured :stream)))
+
   :doc "resolves nested Agent summaries from the owning root session"
   (let ((session (mevedel-session--create :name "main"))
         (root (generate-new-buffer " *summary-policy-owner*"))
