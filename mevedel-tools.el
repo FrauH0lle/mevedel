@@ -21,6 +21,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-utilities)
 (require 'mevedel-agents)
+(require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-permission-prompt)
@@ -96,12 +97,14 @@
 ;; `mevedel-compact'
 (declare-function mevedel--compact-defer-steering-p
                   "mevedel-compact" (fsm))
+(autoload 'mevedel--compact-defer-steering-p "mevedel-compact")
 
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-commit-expansion
                   "mevedel-mentions" (session expansion))
 (declare-function mevedel-mentions-expand-user-input
                   "mevedel-mentions" (text session))
+(autoload 'mevedel-mentions-expand-user-input "mevedel-mentions")
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-sweep-request
@@ -133,6 +136,8 @@
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view-interaction-blocking-p
                   "mevedel-view-interaction" (&optional view-buffer))
+(autoload 'mevedel-view-interaction-blocking-p
+  "mevedel-view-interaction")
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
@@ -774,7 +779,6 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
                (when-let* ((view (buffer-local-value
                                   'mevedel--view-buffer buffer))
                            ((buffer-live-p view)))
-                 (require 'mevedel-view-interaction)
                  (mevedel-view-interaction-blocking-p view))))
          (matching
           (and session request-id
@@ -785,9 +789,7 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
          (compaction
           (and (not skip-compaction-gate)
                matching
-               (progn
-                 (require 'mevedel-compact)
-                 (mevedel--compact-defer-steering-p fsm))))
+               (mevedel--compact-defer-steering-p fsm)))
          (snapshot
           (and (not paused) (not interaction) (not compaction) matching)))
     (plist-put info :mevedel-pending-input-hold
@@ -827,7 +829,6 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
                          (plist-get entry :dropped-file-grants)))
                        (expansion
                         (with-current-buffer buffer
-                          (require 'mevedel-mentions)
                           (mevedel-mentions-expand-user-input input session)))
                        (media-contexts
                         (plist-get expansion :media-contexts))
@@ -877,7 +878,6 @@ communication block, and then removes it from the retained FIFO.  Each
 injected block is also written to the owning transcript, preserving the
 model-visible communication in conversation history."
   (when-let* ((ctx (mevedel-tools--deferred-context-for fsm)))
-    (require 'mevedel-agent-control)
     (let* ((agent-p (mevedel-agent-invocation-p ctx))
            (messages (mevedel-agent-control-context-mailbox ctx))
            (info (gptel-fsm-info fsm))
@@ -922,9 +922,7 @@ model-visible communication in conversation history."
                    ctx
                  (mevedel-agent-invocation-parent-session ctx)))
               (parent-path
-               (progn
-                 (require 'mevedel-agent-control)
-                 (mevedel-agent-control-context-path ctx))))
+               (mevedel-agent-control-context-path ctx)))
     (let* ((info (gptel-fsm-info fsm))
            (initialized-p
             (plist-member info :mevedel-agent-child-paths))
