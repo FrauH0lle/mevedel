@@ -88,6 +88,10 @@
                   "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-probe "mevedel-execution-target")
+(autoload 'mevedel-execution-target-readiness-message
+  "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
@@ -143,6 +147,9 @@
 		  "mevedel-prompt-submission" (cl-x) t)
 (declare-function mevedel-prompt-submission-input
 		  "mevedel-prompt-submission" (cl-x) t)
+(autoload 'mevedel-prompt-submission-commit "mevedel-prompt-submission")
+(autoload 'mevedel-prompt-submission-context "mevedel-prompt-submission")
+(autoload 'mevedel-prompt-submission-input "mevedel-prompt-submission")
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-install-defaults
@@ -208,6 +215,7 @@
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-format
                   "mevedel-tool-render-data" (render-data &optional tool-use-id))
+(autoload 'mevedel-tool-render-data-format "mevedel-tool-render-data")
 
 ;; `mevedel-tool-repair'
 (declare-function mevedel-tool-repair-clear-ledger
@@ -226,6 +234,8 @@
                   (request))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
+(autoload 'mevedel-request-drain-cancellers "mevedel-turn")
+(autoload 'mevedel-request-end "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -235,6 +245,10 @@
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" nil)
 (declare-function mevedel-generate-diff "mevedel-utilities"
                   (original modified filepath &optional labels-real))
+(autoload 'mevedel--clear-user-turn-gptel-properties "mevedel-utilities")
+(autoload 'mevedel--optimize-transcript-buffer "mevedel-utilities")
+(autoload 'mevedel--transcript-org-mode "mevedel-utilities")
+(autoload 'mevedel-generate-diff "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view--ensure "mevedel-view" (data-buf))
@@ -334,7 +348,6 @@ interactive display."
   (setq-local org-element-use-cache nil)
   (setq-local org-element-cache-persistent nil)
   (setq-local gptel-org-ignore-elements '(property-drawer))
-  (require 'mevedel-utilities)
   (mevedel--optimize-transcript-buffer))
 
 (defun mevedel-chat-prepare-transcript-buffer ()
@@ -348,7 +361,6 @@ wiped unless permanent-local."
   (let ((org-agenda-file-menu-enabled nil)
         (org-element-use-cache nil)
         (org-element-cache-persistent nil))
-    (require 'mevedel-utilities)
     (mevedel--transcript-org-mode))
   (mevedel--chat-buffer-disable-org-element-cache)
   (setq-local gptel-org-convert-response nil)
@@ -462,9 +474,7 @@ When REFRESH is non-nil, discard the live readiness cache first.  Local
 sessions keep their existing startup behavior and return nil."
   (let ((target (mevedel-session-execution-target session)))
     (when (and target
-               (progn
-                 (require 'mevedel-execution-target)
-                 (mevedel-execution-target-remote-p target)))
+               (mevedel-execution-target-remote-p target))
       (mevedel-execution-target-probe
        target refresh (mevedel-session-sandbox-mode session)))))
 
@@ -485,9 +495,7 @@ sessions keep their existing startup behavior and return nil."
     (unless session
       (user-error "No mevedel session here"))
     (unless (and target
-                 (progn
-                   (require 'mevedel-execution-target)
-                   (mevedel-execution-target-remote-p target)))
+                 (mevedel-execution-target-remote-p target))
       (user-error "Current mevedel session is local"))
     (let ((readiness (mevedel--probe-session-target session t)))
       (when (eq 'ready (plist-get readiness :status))
@@ -635,11 +643,6 @@ mutation lease."
     (unless (local-variable-p 'mevedel-workspace-additional-roots)
       (setq-local mevedel-workspace-additional-roots
                   (copy-alist mevedel-workspace-additional-roots)))
-    ;; Per-completed-turn auto-save is installed as part of the DONE-state
-    ;; transaction by `mevedel-preset--build-handlers'.  Loading the module
-    ;; here pulls in `kill-buffer-hook' and
-    ;; ensures handlers can reach the save function.
-    (require 'mevedel-view-stream)
     ;; gptel owns its `before-save-hook'; mevedel advises the save
     ;; function so request configuration is kept out of the transcript.
     (mevedel-session-artifacts-install-gptel-save-state-advice)
@@ -913,7 +916,6 @@ if none found."
 Return a unified diff string showing original -> final state for each
 file.  Uses the active request's snapshots to compare original states
 with current file contents in WORKSPACE."
-  (require 'mevedel-utilities)
   (let ((diffs "")
         (workspace-root (mevedel-workspace-root
                          (or workspace (mevedel-workspace))))
@@ -1020,11 +1022,7 @@ with the \\='abort symbol as the error parameter.
 
 BUF defaults to the current buffer if not specified."
   (interactive)
-  (require 'mevedel-compact-run)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
-  (require 'mevedel-turn)
   (with-current-buffer (or buf (current-buffer))
     (when-let* ((chat-buffer (mevedel--active-chat-buffer))
                 (_ (buffer-live-p chat-buffer)))
@@ -1146,7 +1144,6 @@ the LLM may have left an open block.  This handles:
 DISPLAY-TEXT is mirrored to the view, defaulting to PROMPT.  KIND and
 HOOK-CONTEXT are forwarded to `mevedel-view--begin-external-turn',
 with NO-SPINNER forwarded when non-nil."
-  (require 'mevedel-utilities)
   (goto-char (point-max))
   (let ((user-turn-start (point)))
     (insert gptel-response-separator)
@@ -1161,7 +1158,6 @@ with NO-SPINNER forwarded when non-nil."
     (insert prompt "\n")
     (mevedel--clear-user-turn-gptel-properties user-turn-start (point))
     (when (and display-text (not (equal display-text prompt)))
-      (require 'mevedel-tool-render-data)
       (insert (mevedel-tool-render-data-format
                (list :kind 'user-display :text display-text)))))
   (mevedel-collaboration--safe-accepted-prompt (current-buffer))
@@ -1182,8 +1178,6 @@ with NO-SPINNER forwarded when non-nil."
 DISPLAY-TEXT is shown in the view instead of PROMPT.  PROMPT-SUBMISSION owns
 accepted hook context until the turn is inserted.  PREPARED-OUTCOME carries
 skill-expanded model input and transcript render data."
-  (when prompt-submission
-    (require 'mevedel-prompt-submission))
   (let* ((hook-context
           (and prompt-submission
                (mevedel-prompt-submission-context prompt-submission)))
@@ -1226,7 +1220,6 @@ ACTION-PLIST is a plist with keys:
   :display-text   - Optional compact transcript display text
   :prompt-submission - Accepted prompt transaction
   :prepared-outcome - Prepared skill and transcript components."
-  (require 'mevedel-utilities)
   (let* ((permission-mode (plist-get action-plist :permission-mode))
          (display-text (or (plist-get action-plist :display-text)
                            "Implement accepted plan"))
