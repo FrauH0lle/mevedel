@@ -1822,6 +1822,27 @@
         (kill-buffer buffer))
       (when (buffer-live-p parent) (kill-buffer parent))))
 
+  :doc "defers role freezing until the effective request is installed"
+  (let* ((session (mevedel-agent-control-test--session))
+         (agent (mevedel-agent--create
+                 :name "dynamic"
+                 :description "Dynamic role"
+                 :system-prompt (lambda () "Dynamic.")))
+         prepared-agent outcome cancel)
+    (cl-letf (((symbol-function 'mevedel-agent-runtime-prepare-task)
+               (lambda (resolved &rest _)
+                 (setq prepared-agent resolved))))
+      (setq cancel
+            (mevedel-agent-control-spawn
+             session "dynamic" "Prepare dynamic role."
+             (lambda (value) (setq outcome value))
+             :agent agent
+             :model-policy '(:backend backend :model model :effort high)))
+      (should (eq agent prepared-agent))
+      (should-not (mevedel-agent-frozen-p prepared-agent))
+      (funcall cancel)
+      (should (eq 'aborted (plist-get outcome :outcome)))))
+
   :doc "summary cancellation releases capacity and suppresses late dispatch"
   (let* ((session (mevedel-agent-control-test--session))
          (parent (generate-new-buffer " *agent-control-summary-cancel*"))

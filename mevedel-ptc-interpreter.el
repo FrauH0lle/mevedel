@@ -6,7 +6,9 @@
 ;; model-authored text.  It is never evaluated by Emacs; it is read into data
 ;; and interpreted here, and its entire world is what this file hands it: a
 ;; closed table of pure primitives, a closed table of syntax transformers, a
-;; closed set of special forms, and the tool primitives named in its roster.
+;; closed set of special forms, the tool primitives named in its roster, and
+;; the script's own top-level `defun'/`defmacro' definitions, whose bodies
+;; run inside this same evaluator.
 ;;
 ;; The execution interface knows nothing about gptel, the tool pipeline, or
 ;; sessions:
@@ -151,6 +153,15 @@ number of quantified atoms."
   :type 'natnum
   :group 'mevedel)
 
+(defcustom mevedel-ptc-max-stack-depth 2000
+  "Maximum continuation-stack depth of a running script.
+Static nesting is bounded at parse time, and loops evaluate at constant
+depth, so only closure invocation can grow the stack without bound.
+This caps guest recursion depth before it exhausts host memory within
+the step budget."
+  :type 'natnum
+  :group 'mevedel)
+
 
 ;;;; Guest values
 
@@ -164,9 +175,11 @@ number of quantified atoms."
   "One mutable, suspended script.
 CONTROL and ENV name the next guest form and its lexical environment.
 STACK holds tagged continuation frames describing what remains after that
-form returns.  MODE is `eval', `return', `waiting', `done', `error', or
+form returns.  DEFS holds the script's top-level definitions as an alist
+of (NAME KIND . CLOSURE), where NAME is a string and KIND is `function'
+or `macro'.  MODE is `eval', `return', `waiting', `done', `error', or
 `closed'."
-  roster obarray control env stack value error-kind (mode 'eval)
+  roster obarray control env stack defs value error-kind (mode 'eval)
   (steps 0) (tool-calls 0) (transitions 0) (next-pause 0)
   (retained-bytes 0) batch-building slice-deadline deadline)
 
@@ -340,15 +353,87 @@ lexical binding is not the commonly assumed one."
                                    (nthcdr 2 form)))
                   (list 'setq counter (list '+ counter 1)))))))
 
+(defun mevedel-ptc--qq-tag (form)
+  "Return `unquote', `splice', or `backquote' when FORM is that construct.
+Also return the tag for a bare symbol spelled like one, so callers can
+reject the dotted-unquote reader convention explicitly."
+  (let ((symbol (if (consp form) (car form) form)))
+    (when (and symbol (symbolp symbol))
+      (pcase (symbol-name symbol)
+        ("," 'unquote)
+        (",@" 'splice)
+        ("`" 'backquote)))))
+
+(defun mevedel-ptc--qq-unquoted (form tag)
+  "Return the single expression of unquote FORM, validating its shape.
+TAG names the construct for error messages."
+  (unless (and (consp form) (= (length form) 2))
+    (error "Malformed '%s': expects exactly one expression"
+           (if (eq tag 'splice) ",@" ",")))
+  (nth 1 form))
+
+(defun mevedel-ptc--qq-constant-p (form)
+  "Return non-nil when template FORM contains no quasiquote construct."
+  (cond
+   ((mevedel-ptc--qq-tag form) nil)
+   ((consp form)
+    (and (mevedel-ptc--qq-constant-p (car form))
+         (mevedel-ptc--qq-constant-p (cdr form))))
+   (t t)))
+
+(defun mevedel-ptc--qq-expand (template)
+  "Expand one-level quasiquote TEMPLATE into `quote'/`list'/`append' calls."
+  (pcase (mevedel-ptc--qq-tag template)
+    ('unquote (mevedel-ptc--qq-unquoted template 'unquote))
+    ('splice (error "',@' is only valid as a list element inside a backquote"))
+    ('backquote (error "Nested backquote is not supported"))
+    (_
+     (if (mevedel-ptc--qq-constant-p template)
+         (list 'quote template)
+       ;; The reader rejects improper lists, so TEMPLATE is a proper list.
+       ;; Merge consecutive non-splice elements into one `list' call.
+       (let ((segments nil)
+             (current nil))
+        (cl-flet ((flush ()
+                    (when current
+                      (push (cons 'list (nreverse current)) segments)
+                      (setq current nil))))
+          (dolist (element template)
+            (pcase (mevedel-ptc--qq-tag element)
+              ('splice
+               (when (symbolp element)
+                 (error "Dotted ',@' is not supported inside a backquote"))
+               (flush)
+               (push (mevedel-ptc--qq-unquoted element 'splice) segments))
+              ((or 'unquote 'backquote)
+               (when (symbolp element)
+                 (error "Dotted ',' is not supported inside a backquote"))
+               (push (mevedel-ptc--qq-expand element) current))
+              (_
+               (push (mevedel-ptc--qq-expand element) current))))
+          (flush))
+        (if (null (cdr segments))
+            (car segments)
+          (cons 'append (nreverse segments))))))))
+
+(defun mevedel-ptc--tx-quasiquote (form)
+  "Transform a guest backquote FORM."
+  (unless (= (length form) 2)
+    (error "Malformed backquote"))
+  (mevedel-ptc--qq-expand (nth 1 form)))
+
 (defconst mevedel-ptc--transformers
   '(("when" . mevedel-ptc--tx-when)
     ("unless" . mevedel-ptc--tx-unless)
     ("push" . mevedel-ptc--tx-push)
     ("dolist" . mevedel-ptc--tx-dolist)
-    ("dotimes" . mevedel-ptc--tx-dotimes))
+    ("dotimes" . mevedel-ptc--tx-dotimes)
+    ("`" . mevedel-ptc--tx-quasiquote))
   "Closed table of guest macro-shaped forms.
-There is no macro system: no `defmacro', no `macrolet', no backquote,
-no guest-visible `macroexpand', and no generalized places.")
+Backquote expands one level here; guest `defmacro' definitions expand
+inside the closed evaluator itself.  There is no `macrolet', no
+guest-visible `macroexpand', no generalized places, and host
+`macroexpand-all' is never applied to guest text.")
 
 
 ;;;; Pure primitives
@@ -365,6 +450,14 @@ be called from host code."
   (unless (listp list)
     (error "'sort': expects a list"))
   (sort (copy-sequence list) #'value<))
+
+(defun mevedel-ptc--gensym (&optional prefix)
+  "Return a fresh uninterned guest symbol, optionally named with PREFIX.
+Freshness is identity, not the name: the symbol is interned nowhere, so
+it can collide with no binding even if its printed name repeats."
+  (unless (or (null prefix) (stringp prefix))
+    (error "'gensym': prefix must be a string"))
+  (make-symbol (or prefix "g")))
 
 (defconst mevedel-ptc-pure-primitives
   '(("car" . car) ("cdr" . cdr) ("caar" . caar) ("cadr" . cadr)
@@ -398,13 +491,16 @@ be called from host code."
     ("null" . null) ("not" . not) ("atom" . atom) ("consp" . consp)
     ("listp" . listp) ("stringp" . stringp) ("numberp" . numberp)
     ("integerp" . integerp) ("floatp" . floatp) ("symbolp" . symbolp)
-    ("sequencep" . sequencep) ("identity" . identity))
+    ("sequencep" . sequencep) ("identity" . identity)
+    ("gensym" . mevedel-ptc--gensym))
   "Closed, hand-audited table of side-effect-free data operations.
 Deliberately not derived from the `pure' or `side-effect-free' symbol
 properties: that set is open, shifts with loaded packages, and includes
 host-state readers such as `getenv', `buffer-substring',
 `symbol-function', and `user-login-name'.  Ambient host reads belong to
-the tool channel, where they are permission-checked and audited.")
+the tool channel, where they are permission-checked and audited.
+`gensym' reads no host state and its symbols are fresh by identity, not
+by name.")
 
 ;;;; Budgets
 
@@ -747,16 +843,85 @@ bound interpreter bookkeeping that must not hold the Emacs command loop.")
         (mevedel-ptc--set-eval state (car forms) env))
     (mevedel-ptc--set-return state nil)))
 
+(defun mevedel-ptc--check-params (params)
+  "Validate lambda-list PARAMS and return it.
+Only plain symbols, `&optional', and one `&rest' followed by exactly one
+name are accepted; `cl-lib' markers such as `&key' fail closed instead
+of silently binding as positional parameters."
+  (unless (listp params)
+    (error "Parameter list must be a list, not %S" params))
+  (let ((names nil)
+        (optional-seen nil)
+        (rest-state nil))
+    (dolist (param params)
+      (unless (and param (symbolp param) (not (eq param t))
+                   (not (mevedel-ptc-keyword-p param)))
+        (error "Bad parameter name: %S" param))
+      (let ((name (symbol-name param)))
+        (cond
+         ((eq rest-state 'done)
+          (error "Nothing may follow the '&rest' parameter"))
+         ((equal name "&optional")
+          (when (or optional-seen rest-state)
+            (error "Misplaced '&optional' in parameter list"))
+          (setq optional-seen t))
+         ((equal name "&rest")
+          (when rest-state
+            (error "Duplicate '&rest' in parameter list"))
+          (setq rest-state 'pending))
+         ((string-prefix-p "&" name)
+          (error "Unsupported lambda-list marker '%s'; only '&optional' and '&rest' exist"
+                 name))
+         (t
+          (when (member name names)
+            (error "Duplicate parameter: %s" name))
+          (push name names)
+          (when (eq rest-state 'pending)
+            (setq rest-state 'done))))))
+    (when (eq rest-state 'pending)
+      (error "'&rest' must be followed by one parameter name")))
+  params)
+
+(defun mevedel-ptc--check-arity (params args)
+  "Signal unless ARGS satisfies the validated lambda-list PARAMS."
+  (let ((required 0)
+        (total 0)
+        (optional nil)
+        (restp nil))
+    (dolist (param params)
+      (pcase (symbol-name param)
+        ("&optional" (setq optional t))
+        ("&rest" (setq restp t))
+        (_ (unless restp
+             (setq total (1+ total))
+             (unless optional (setq required (1+ required)))))))
+    (let ((count (length args)))
+      (when (or (< count required) (and (not restp) (> count total)))
+        (error "Wrong number of arguments: expected %s, got %d"
+               (cond (restp (format "at least %d" required))
+                     ((= required total) (number-to-string required))
+                     (t (format "%d to %d" required total)))
+               count)))))
+
+(defun mevedel-ptc--lookup-def (state name)
+  "Return STATE's definition entry (KIND . CLOSURE) for NAME, or nil."
+  (cdr (assoc name (mevedel-ptc-state-defs state))))
+
 (defun mevedel-ptc--check-callable (callable state)
   "Signal unless CALLABLE is invocable under STATE.
 Checked before the remaining arguments are evaluated."
   (cond
    ((mevedel-ptc-closure-p callable) t)
    ((and callable (symbolp callable))
-    (let ((name (symbol-name callable)))
-      (unless (or (assoc name mevedel-ptc-pure-primitives)
-                  (member name (mevedel-ptc-state-roster state)))
-        (error "Void or forbidden function: %s" name))))
+    (let* ((name (symbol-name callable))
+           (def (mevedel-ptc--lookup-def state name)))
+      (cond
+       ((eq (car-safe def) 'function) t)
+       (def (error "Macro %s cannot be used as a function value" name))
+       ((or (assoc name mevedel-ptc-pure-primitives)
+            (member name (mevedel-ptc-state-roster state)))
+        t)
+       (t (error "Void or forbidden function: %s" name)))))
    (t (error "Not callable: %S" callable))))
 
 (defun mevedel-ptc--suspend-tool (state name args)
@@ -828,9 +993,17 @@ PARAM, ARG-FORMS, and ENV describe the restricted one-call lambda."
   "Make STATE apply CALLABLE to already-evaluated ARGS."
   (cond
    ((mevedel-ptc-closure-p callable)
+    ;; Closure invocation is the only stack growth unbounded by the parse
+    ;; depth limit, so recursion depth is capped here.
+    (when (> (length (mevedel-ptc-state-stack state))
+             mevedel-ptc-max-stack-depth)
+      (mevedel-ptc--fail
+       'stack "Script exceeded its stack budget of %d frames; recursion is too deep"
+       mevedel-ptc-max-stack-depth))
     (let ((env (mevedel-ptc-closure-env callable))
           (params (mevedel-ptc-closure-params callable))
           (rest args))
+      (mevedel-ptc--check-arity params args)
       (while params
         (let ((param (pop params)))
           (cond
@@ -844,8 +1017,12 @@ PARAM, ARG-FORMS, and ENV describe the restricted one-call lambda."
                                   (mevedel-ptc-closure-body callable) env)))
    ((and callable (symbolp callable))
     (let* ((name (symbol-name callable))
+           (def (mevedel-ptc--lookup-def state name))
            (pure (assoc name mevedel-ptc-pure-primitives)))
       (cond
+       ((eq (car-safe def) 'function)
+        (mevedel-ptc--schedule-invoke state (cdr def) args))
+       (def (error "Macro %s cannot be used as a function value" name))
        (pure (mevedel-ptc--set-return
               state (mevedel-ptc--apply-pure state name (cdr pure) args)))
        ((member name (mevedel-ptc-state-roster state))
@@ -955,9 +1132,13 @@ unknown wrapper around a tool call cannot run the tool first."
 
      ((equal name "lambda")
       (mevedel-ptc--set-return
-       state (mevedel-ptc--make-closure :params (nth 1 form)
-                                        :body (nthcdr 2 form)
-                                        :env env)))
+       state (mevedel-ptc--make-closure
+              :params (mevedel-ptc--check-params (nth 1 form))
+              :body (nthcdr 2 form)
+              :env env)))
+
+     ((member name '("defun" "defmacro"))
+      (error "'%s' is only allowed as a top-level form" name))
 
      ((equal name "funcall")
       (push (list :funcall-callable (nthcdr 2 form) env)
@@ -983,9 +1164,11 @@ unknown wrapper around a tool call cannot run the tool first."
       (let* ((lambda-form (car args))
              (params (and (consp lambda-form) (nth 1 lambda-form)))
              (body (and (consp lambda-form) (nthcdr 2 lambda-form))))
+        (mevedel-ptc--check-params params)
         (unless (and (equal "lambda" (mevedel-ptc--operator-name lambda-form))
                      (= (length params) 1)
                      (symbolp (car params))
+                     (not (string-prefix-p "&" (symbol-name (car params))))
                      (not (mevedel-ptc-keyword-p (car params)))
                      (= (length body) 1))
           (error "'parallel-map': lambda must have one parameter and one direct tool call"))
@@ -995,6 +1178,19 @@ unknown wrapper around a tool call cannot run the tool first."
           (push (list :parallel-map-sequence (car params) tool-name tool-args env)
                 (mevedel-ptc-state-stack state))
           (mevedel-ptc--set-eval state (cadr args) env))))
+
+     ;; guest definition
+     ((mevedel-ptc--lookup-def state name)
+      (pcase-let ((`(,kind . ,closure) (mevedel-ptc--lookup-def state name)))
+        (if (eq kind 'macro)
+            (progn
+              ;; The macro body receives the call's argument forms as data
+              ;; and runs in the closed evaluator; the expansion then
+              ;; evaluates in the call site's environment.
+              (push (list :macro-expand env) (mevedel-ptc-state-stack state))
+              (mevedel-ptc--schedule-invoke state closure args))
+          (push (list :invoke closure) (mevedel-ptc-state-stack state))
+          (mevedel-ptc--schedule-args state args env))))
 
      ;; tool primitive
      ((member name (mevedel-ptc-state-roster state))
@@ -1110,6 +1306,16 @@ unknown wrapper around a tool call cannot run the tool first."
          (mevedel-ptc--set-eval state sequence-form env))
         (`(:invoke ,callable)
          (mevedel-ptc--schedule-invoke state callable value))
+        (`(:macro-expand ,env)
+         ;; The expansion is guest data about to become code: bound it like
+         ;; a transformer's output, then hold it to the reader's contract
+         ;; (proper lists, supported atoms, no closures) before evaluating
+         ;; it in the call site's environment.
+         (when (mevedel-ptc--count-nodes value mevedel-ptc-max-transformed-nodes)
+           (mevedel-ptc--fail
+            'expansion "Macro expansion exceeded its size limit"))
+         (mevedel-ptc--validate value)
+         (mevedel-ptc--set-eval state value env))
         (`(:apply-invoke ,callable)
          (let ((spread (car (last value)))
                (fixed (butlast value)))
@@ -1194,7 +1400,7 @@ matches are suppressed rather than guessed."
          argument nil
          (and (equal name "split-string") (= index 1)))))))
 
-(defun mevedel-ptc--preflight (form roster)
+(defun mevedel-ptc--preflight (form roster &optional fn-names macro-names)
   "Reject FORM when it names operators outside the closed tables.
 
 The evaluator resolves every compound form's operator against the same
@@ -1204,6 +1410,12 @@ branches are rejected too; dead code is not a reason to ship an unknown
 call.  Quoted data, binding-name positions, and lambda parameter lists
 are skipped.  Literal regexp arguments to the regexp primitives are
 validated here so a bad regexp fails before any nested tool runs.
+
+FN-NAMES and MACRO-NAMES are the script's own top-level definitions.
+Function call arguments are walked as code; macro call arguments are
+skipped, because only the macro decides which of them are code.
+Backquote templates are walked through their real expansion, so a
+malformed template fails here with the transformer's own message.
 
 All unknown operators are collected and reported in one error, each with
 the nearest known name from ROSTER and the closed tables."
@@ -1218,6 +1430,17 @@ the nearest known name from ROSTER and the closed tables."
                (cond
                 ((null name) (walk-all form))
                 ((equal name "quote") nil)
+                ((equal name "`")
+                 (walk (mevedel-ptc--tx-quasiquote form)))
+                ((member name '("," ",@"))
+                 (mevedel-ptc--fail
+                  'preflight
+                  "'%s' is only valid inside a backquote template" name))
+                ((member name '("defun" "defmacro"))
+                 (mevedel-ptc--fail
+                  'preflight
+                  "'%s' is only allowed as a top-level form of the script"
+                  name))
                 ((equal name "lambda")
                  (walk-all (nthcdr 2 form)))
                 ((member name '("let" "let*"))
@@ -1234,9 +1457,11 @@ the nearest known name from ROSTER and the closed tables."
                    (when (consp spec)
                      (walk (nth 1 spec))))
                  (walk-all (nthcdr 2 form)))
+                ((member name macro-names) nil)
                 ((or (member name mevedel-ptc--special-form-names)
                      (assoc name mevedel-ptc--transformers)
-                     (member name roster))
+                     (member name roster)
+                     (member name fn-names))
                  (walk-all args))
                 ((assoc name mevedel-ptc-pure-primitives)
                  (mevedel-ptc--preflight-literal-regexps name args)
@@ -1250,16 +1475,54 @@ the nearest known name from ROSTER and the closed tables."
       (let ((known (append mevedel-ptc--special-form-names
                            (mapcar #'car mevedel-ptc--transformers)
                            (mapcar #'car mevedel-ptc-pure-primitives)
-                           roster)))
+                           roster fn-names macro-names)))
         (mevedel-ptc--fail
          'preflight
-         "Unknown functions: %s.  Callable names are limited to the documented special forms and conveniences, the pure data primitives, and this request's tools"
+         "Unknown functions: %s.  Callable names are limited to the documented special forms and conveniences, the pure data primitives, this script's definitions, and this request's tools"
          (mapconcat
           (lambda (name)
             (if-let* ((suggestion (mevedel-ptc--suggestion name known)))
                 (format "%s (try: %s)" name suggestion)
               name))
           (nreverse unknown) ", "))))))
+
+(defun mevedel-ptc--collect-definitions (forms roster)
+  "Split top-level FORMS into definitions and body forms.
+Return (DEFS . BODY), where DEFS is the state's definitions alist.
+Definitions are hoisted: they may reference one another regardless of
+order, and only the non-definition forms evaluate.  A definition name
+must not collide with any closed table, ROSTER tool, or prior
+definition, so nothing is ever shadowed."
+  (let ((defs nil)
+        (body nil))
+    (dolist (form forms)
+      (let ((op (and (consp form) (mevedel-ptc--operator-name form))))
+        (if (not (member op '("defun" "defmacro")))
+            (push form body)
+          (let ((name (nth 1 form))
+                (kind (if (equal op "defun") 'function 'macro)))
+            (unless (and name (symbolp name)
+                         (not (mevedel-ptc-keyword-p name))
+                         (not (memq name '(nil t))))
+              (error "'%s': bad definition name %S" op name))
+            (let ((name-string (symbol-name name)))
+              (when (or (member name-string '("defun" "defmacro"))
+                        (member name-string mevedel-ptc--special-form-names)
+                        (assoc name-string mevedel-ptc--transformers)
+                        (assoc name-string mevedel-ptc-pure-primitives)
+                        (member name-string roster)
+                        (assoc name-string defs))
+                (error "'%s': %s collides with an existing callable name"
+                       op name-string))
+              (push (cons name-string
+                          (cons kind
+                                (mevedel-ptc--make-closure
+                                 :params (mevedel-ptc--check-params
+                                          (nth 2 form))
+                                 :body (nthcdr 3 form)
+                                 :env nil)))
+                    defs))))))
+    (cons (nreverse defs) (nreverse body))))
 
 
 ;;;; Public interface
@@ -1272,12 +1535,28 @@ operators outside the closed tables.
 
 Guest state is fresh for every call: nothing persists between scripts."
   (let* ((parsed (mevedel-ptc--read script))
+         (split (mevedel-ptc--collect-definitions (cdr (car parsed)) roster))
+         (defs (car split))
+         (body (cdr split))
+         (fn-names nil)
+         (macro-names nil)
          (now (float-time)))
-    (mevedel-ptc--preflight (car parsed) roster)
+    (unless body
+      (error "Script has no body form after its definitions"))
+    (dolist (def defs)
+      (if (eq (cadr def) 'function)
+          (push (car def) fn-names)
+        (push (car def) macro-names)))
+    (dolist (def defs)
+      (mevedel-ptc--preflight
+       (cons 'progn (mevedel-ptc-closure-body (cddr def)))
+       roster fn-names macro-names))
+    (mevedel-ptc--preflight (cons 'progn body) roster fn-names macro-names)
     (mevedel-ptc--make-state
      :roster roster
      :obarray (cdr parsed)
-     :control (car parsed)
+     :control (cons 'progn body)
+     :defs defs
      :next-pause (max 1 mevedel-ptc-step-slice)
      :slice-deadline (and mevedel-ptc-slice-seconds
                           (+ now mevedel-ptc-slice-seconds))

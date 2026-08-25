@@ -70,17 +70,65 @@ Closed, macro-shaped conveniences:
 
 `push` accepts only a plain bound variable as its place. `dolist` and
 `dotimes` accept only the two-element specification; there is no result form.
-The dialect has no user-defined macros, `macrolet`, backquote, `cl-loop`,
-generalized places, or guest-visible macro expansion.
+The dialect has no `macrolet`, `cl-loop`, generalized places, or
+guest-visible macro expansion.
 
 The ToolScript tool description generates exact signatures for every pure data
-primitive from the interpreter's closed table. Nothing else is callable. The
+primitive from the interpreter's closed table. Beyond those, only a script's
+own top-level definitions are callable. The
 table includes the syntactic path helpers (`file-name-nondirectory`,
 `file-name-directory`, `file-name-concat`, `file-name-extension`,
 `file-name-sans-extension`, `file-name-base` — file-name handlers are disabled
 so they never touch remote state), `take`, and a fixed-comparator `sort` that
 copies its list and orders ascending with `value<`. Guest closures cannot be
 comparators.
+
+## Definitions
+
+A script may open with top-level `defun` and `defmacro` forms:
+
+```elisp
+(defun read-or-nil (path)
+  (let ((r (Read :file_path path)))
+    (if (plist-get r :error) nil r)))
+
+(defmacro with-lines (var call &rest body)
+  (let ((text (gensym)))
+    `(let* ((,text ,call)
+            (,var (split-string ,text "\n" t)))
+       ,@body)))
+
+(with-lines lines (Grep :pattern "TODO" :output_mode "content")
+  (length lines))
+```
+
+Definitions are legal only at the script's top level and are hoisted before
+the body runs, so they may reference one another regardless of order. A
+definition name must not collide with a special form, convenience, pure
+primitive, tool, or earlier definition; nothing is ever shadowed. At least
+one non-definition body form must remain.
+
+Parameter lists accept plain names, `&optional`, and one trailing
+`&rest NAME`. Other markers such as `&key` are rejected, arity is checked on
+every call, and duplicate parameters are errors. The same rules apply to
+`lambda`.
+
+Named functions may recurse; a self-call in tail position runs at constant
+stack depth, and non-tail recursion is bounded by the stack budget. A
+function name is also accepted where a callable is expected, as in
+`(mapcar 'name list)`. A macro name is not a value.
+
+One-level backquote builds list templates: `` `(a ,x ,@items) `` expands to
+`quote`/`list`/`append` calls. Nested backquote, an unquote outside a
+backquote, and the dotted `(a . ,b)` reader convention are rejected.
+
+A macro receives its argument forms unevaluated and runs its body inside the
+same closed evaluator, where it may call pure primitives and tools like any
+other code. The returned expansion is validated against the reader's contract
+and size budgets, then evaluates in the caller's environment. `(gensym)`
+returns a fresh uninterned symbol for hygienic expansions. A macro call
+inside a loop re-expands on every iteration; hoist it out of hot loops when
+that matters.
 
 ## Strings and regexps
 
@@ -192,8 +240,8 @@ Use sequential forms when a later call depends on an earlier result.
 ## Limits and performance
 
 ToolScript bounds script bytes, syntax nodes, nesting depth, evaluation steps,
-wall time, nested-call count, transformed syntax size, regexp work, numeric
-size, individual values, and cumulative retained values. Errors name the
+wall time, nested-call count, recursion depth, transformed syntax size, regexp
+work, numeric size, individual values, and cumulative retained values. Errors name the
 exceeded budget. Final rendering counts repeated references at their serialized
 size, so a small shared object cannot expand into an oversized result while
 printing.
@@ -211,10 +259,12 @@ wide searches before mapping over their results.
 The interpreter yields between short computation slices, so Emacs remains
 interactive. Scripts in flight are runtime state: if Emacs exits or the session
 is recovered, the ToolScript call settles as interrupted and does not resume.
-Only the envelope call and its bounded ordered child audit are checkpointed,
-and the checkpoint is written durably twice per script: once before the first
-nested call and once at settlement. Between those writes, child audit progress
-is journaled in memory only (an unrelated autosave captures it
+For root-session scripts, only the envelope call and its bounded ordered child
+audit are checkpointed, and the checkpoint is written durably twice: once
+before the first nested call and once at settlement. Retained-agent scripts
+skip this checkpoint because their own interrupted-turn handling settles them.
+Between the root-session writes, child audit progress is journaled in memory
+only (an unrelated autosave captures it
 opportunistically) — per-child sidecar writes dominated script runtime,
 serialized parallel batches, and cost one remote round-trip each on TRAMP
 targets. A crash mid-script therefore recovers the child audit as of the last
@@ -227,7 +277,8 @@ stack, timer, or continuation is serialized.
 
 Guest identifiers are read into a private symbol table. Calls resolve against
 closed tables of special forms, audited syntax transformers, pure primitives,
-and the request's ToolScript tool roster. Unknown names fail closed.
+the script's own top-level definitions, and the request's ToolScript tool
+roster. Unknown names fail closed.
 
 The guest cannot evaluate host Lisp or access buffers, processes, files,
 environment variables, user identity, time, or package state directly. It can
@@ -236,4 +287,6 @@ and audit rules apply.
 
 Host `macroexpand-all` is never run on guest text. The closed syntax
 transformers are dispatched only when their names occur in evaluated operator
-position, so quoted data and binding positions remain opaque.
+position, so quoted data and binding positions remain opaque. Guest `defmacro`
+bodies run inside the same closed evaluator with the same tables and budgets,
+so a user macro is a power feature, not a widening of this boundary.

@@ -526,9 +526,8 @@ Returns a cons (NAME . PLIST) suitable for the request-local role roster."
          (system-spec (cond
                        ((stringp sys-prompt) sys-prompt)
                        ((functionp sys-prompt)
-                        `(:function
-                          (lambda (_system)
-                            (funcall ,sys-prompt))))
+                        (list :function
+                              (lambda (_system) sys-prompt)))
                        (t (error "Agent %s has invalid system-prompt: %S"
                                  (mevedel-agent-name agent) sys-prompt)))))
     (cons (mevedel-agent-name agent)

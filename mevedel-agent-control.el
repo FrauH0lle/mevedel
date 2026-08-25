@@ -49,7 +49,6 @@
 (declare-function copy-mevedel-agent "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-configuration-p
                   "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-freeze "mevedel-agents" (agent))
 (declare-function mevedel-agent-hook-rules "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
@@ -72,7 +71,6 @@
 (declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
 (autoload 'copy-mevedel-agent "mevedel-agents")
 (autoload 'mevedel-agent-configuration-p "mevedel-agents")
-(autoload 'mevedel-agent-freeze "mevedel-agents")
 (autoload 'mevedel-agent-hook-rules "mevedel-agents")
 (autoload 'mevedel-agent-invocation-agent-id "mevedel-agents")
 (autoload 'mevedel-agent-invocation-buffer "mevedel-agents")
@@ -1094,7 +1092,6 @@ idempotent cancellation thunk for the unpublished preparation transaction."
                               skill-hook-rules))
                 copy)
             resolved-agent))
-         (resolved-agent (mevedel-agent-freeze resolved-agent))
          (role-name (mevedel-agent-name resolved-agent))
          (context (mevedel-agent-control--normalize-context context))
          (model-selector
