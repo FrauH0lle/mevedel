@@ -11,6 +11,9 @@
 (require 'cl-lib)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
+(require 'mevedel-utilities)
+
+(defvar mevedel-skills--dirty-buffers)
 
 ;; `filenotify'
 (declare-function file-notify-add-watch "filenotify"
@@ -27,6 +30,10 @@
                   "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-prefix
                   "mevedel-execution-target" (cl-x) t)
+(autoload 'mevedel-execution-target-capability "mevedel-execution-target")
+(autoload 'mevedel-execution-target-identity "mevedel-execution-target")
+(autoload 'mevedel-execution-target-label "mevedel-execution-target")
+(autoload 'mevedel-execution-target-prefix "mevedel-execution-target")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-annotate-rules-source
@@ -36,14 +43,19 @@
                   "mevedel-hooks" (rules &optional scope))
 (declare-function mevedel-hooks-project-file-snapshot
                   "mevedel-hooks" (workspace file))
+(autoload 'mevedel-hooks-annotate-rules-source "mevedel-hooks")
+(autoload 'mevedel-hooks-normalize-rules "mevedel-hooks")
+(autoload 'mevedel-hooks-project-file-snapshot "mevedel-hooks")
 
 ;; `mevedel-permission-rules'
 (declare-function mevedel-permission-rules-parse
                   "mevedel-permission-rules" (entry))
+(autoload 'mevedel-permission-rules-parse "mevedel-permission-rules")
 
 ;; `mevedel-plugins'
 (declare-function mevedel-plugins-skill-dirs "mevedel-plugins"
                   (&optional workspace))
+(autoload 'mevedel-plugins-skill-dirs "mevedel-plugins")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
@@ -56,6 +68,7 @@
 
 ;; `yaml'
 (declare-function yaml-parse-string "yaml" (string &rest args))
+(autoload 'yaml-parse-string "yaml")
 
 
 ;;
@@ -194,7 +207,6 @@ skills."
 This file is global rather than per-workspace, and the reader signals
 on malformed content, so a write that died in place would break every
 enablement check in every session until someone repaired it by hand."
-  (require 'mevedel-utilities)
   (mevedel--write-file-atomically
    (mevedel-skills--state-file)
    (with-temp-buffer
@@ -348,8 +360,6 @@ list of parsed mevedel permission rules.  A malformed entry aborts the whole
 skill load: this function signals `user-error' on the first bad
 entry, and `mevedel-skills--build-skill''s `condition-case' skips
   the offending skill with a warning naming SOURCE-FILE."
-  (when entries
-    (require 'mevedel-permission-rules))
   (mapcar (lambda (entry)
             (condition-case err
                 (mevedel-permission-rules-parse entry)
@@ -381,7 +391,6 @@ returned unchanged."
 (defun mevedel-skills--normalize-hooks (hooks &optional scope)
   "Normalize SKILL.md HOOKS frontmatter for SCOPE request propagation."
   (when hooks
-    (require 'mevedel-hooks)
     (mevedel-hooks-normalize-rules
      (mevedel-skills--hooks-plist-to-rules hooks)
      scope)))
@@ -423,7 +432,6 @@ When CONTENT is nil, read SKILL-FILE once.  Preserve `:name' so callers
 can decide whether to honor it or use the directory name.  Frontmatter
 values remain inert data.  Return nil on read/parse failure and warn when
 YAML parsing fails."
-  (require 'yaml)
   (when (or content
             (and (file-readable-p skill-file)
                  (file-regular-p skill-file)))
@@ -608,7 +616,6 @@ relative and WORKSPACE-ROOT is nil."
 
 (defun mevedel-skills--plugin-skill-dir-entries (&optional workspace)
   "Return (PLUGIN-NAME . DIR) entries from plugins enabled in WORKSPACE."
-  (require 'mevedel-plugins)
   (mapcar (lambda (entry)
             (cons (cdr (cdr entry)) (car entry)))
           (mevedel-plugins-skill-dirs workspace)))
@@ -634,7 +641,6 @@ warning when the skill is invalid \\(bad name, etc.).  Computes
 description fallback from the body when frontmatter omits `description'."
   (let* ((snapshot
           (when (eq source 'project)
-            (require 'mevedel-hooks)
             (mevedel-hooks-project-file-snapshot workspace skill-file)))
          (plist (mevedel-skills--parse-frontmatter
                  skill-file (plist-get snapshot :content))))
@@ -805,7 +811,6 @@ explicit scans for tests and internal callers."
                       mevedel-skills--bundled-dir 'bundled))
         (push skill result)))
     (when include-plugins
-      (require 'mevedel-plugins)
       (dolist (entry (mevedel-plugins-skill-dirs workspace))
         (when-let* ((resolved (mevedel-skills--resolve-dir
                                entry workspace-root)))
@@ -1204,7 +1209,6 @@ sentinel is silently dropped)."
          (remote-prefix (file-remote-p dir))
          (watch-supported-p t))
     (when (and remote-prefix target)
-      (require 'mevedel-execution-target)
       (when (equal remote-prefix
                    (mevedel-execution-target-prefix target))
         (let* ((identity (mevedel-execution-target-identity target))
