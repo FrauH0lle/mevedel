@@ -39,7 +39,8 @@
         "/ssh:other@example.test:/srv/project/src/main.el")))))
 
 (mevedel-deftest mevedel-view--decorate-code-blocks-in-range
-  (:doc "`mevedel-view--decorate-code-blocks-in-range' adds copy buttons to fenced blocks")
+  (:doc "`mevedel-view--decorate-code-blocks-in-range' adds copy buttons to fenced blocks"
+   :quiet t)
   ,test
   (test)
   (with-temp-buffer
@@ -95,6 +96,32 @@
       (should (string-prefix-p
                (cdr case)
                (buffer-substring-no-properties (point-min) (point-max))))))
+
+  :doc "copy buttons survive position shifts before their bodies"
+  (with-temp-buffer
+    (insert "```text\nfirst body\n```\n"
+            "middle prose\n"
+            "```text\nskill://local/review\nskill://global/review\n```\n"
+            "after\n")
+    (mevedel-view--decorate-code-blocks-in-range (point-min) (point-max))
+    (let (copied)
+      (goto-char (point-min))
+      (search-forward "text ⧉")
+      (search-forward "text ⧉")
+      (let ((button (button-at (match-beginning 0))))
+        (goto-char (button-end button))
+        (insert "extra header\n")
+        (goto-char (car (button-get button 'mevedel-view-code-block-range)))
+        (insert "inserted body\n"))
+      (cl-letf (((symbol-function 'kill-new)
+                 (lambda (text &optional _replace)
+                   (push text copied))))
+        (goto-char (point-min))
+        (while (search-forward "text ⧉" nil t)
+          (button-activate (button-at (match-beginning 0)))))
+      (should (equal '("first body"
+                       "inserted body\nskill://local/review\nskill://global/review")
+                     (nreverse copied)))))
 
   :doc "empty rendered code block copies an empty string"
   (with-temp-buffer

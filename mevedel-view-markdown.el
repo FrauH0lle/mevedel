@@ -696,11 +696,12 @@ file.el#L12."
 
 (defun mevedel-view--copy-code-block-button-action (button)
   "Copy BUTTON's fenced code block body."
-  (let ((start (button-get button 'mevedel-view-copy-start))
-        (end (button-get button 'mevedel-view-copy-end)))
-    (when (and start end (<= start end))
-      (kill-new (buffer-substring-no-properties start end))
-      (message "Copied"))))
+  (when-let* ((range (button-get button 'mevedel-view-code-block-range))
+              (start (marker-position (car range)))
+              (end (marker-position (cdr range)))
+              ((<= start end)))
+    (kill-new (buffer-substring-no-properties start end))
+    (message "Copied")))
 
 (defun mevedel-view--selected-text-properties (position properties)
   "Return plist of PROPERTIES present at POSITION."
@@ -825,8 +826,7 @@ file.el#L12."
            'action #'mevedel-view--copy-code-block-button-action
            'follow-link t
            'help-echo "Copy code block"
-           'mevedel-view-copy-start (marker-position body-start)
-           'mevedel-view-copy-end (marker-position content-end)
+           'mevedel-view-code-block-range (cons body-start content-end)
            'font-lock-face 'mevedel-view-source-block-language
            'mouse-face 'highlight
            'pointer 'hand)
@@ -846,9 +846,8 @@ file.el#L12."
             (insert panel-padding-line)
             (when carried
               (add-text-properties pad-start (point) carried))))
-        (set-marker body-start nil)
-        (set-marker body-end nil)
-        (set-marker content-end nil)))))
+        (set-marker-insertion-type body-start nil)
+        (set-marker body-end nil)))))
 
 
 ;;
