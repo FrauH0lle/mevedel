@@ -16,6 +16,8 @@
 
 ;;; Code:
 
+(require 'mevedel-structs)
+
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
 
@@ -26,6 +28,9 @@
                   "mevedel-execution-target" (cl-x) t)
 (declare-function mevedel-execution-target-expand-path
                   "mevedel-execution-target" (target path &optional directory))
+(autoload 'mevedel-execution-target-create "mevedel-execution-target")
+(autoload 'mevedel-execution-target-environment "mevedel-execution-target")
+(autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
 
 ;; `mevedel-structs'
 (declare-function mevedel-file-cache--create "mevedel-structs" (&rest slots))
@@ -225,7 +230,6 @@ chat buffer creation and cached here.")
 ROOT is the absolute project root path.  NAME is the display name.  If a
 workspace already exists for this TYPE and ID, return it (ignoring ROOT
 and NAME arguments)."
-  (require 'mevedel-structs)
   (let* ((id (if (and (eq type 'project)
                       (stringp id)
                       (file-name-absolute-p id))
@@ -347,7 +351,6 @@ registry, creating one lazily if needed."
           (let ((path (string-trim (buffer-string))))
             (if (file-remote-p root)
                 (progn
-                  (require 'mevedel-execution-target)
                   (mevedel-execution-target-expand-path
                    (mevedel-execution-target-create root) path root))
               (expand-file-name path root)))))))))
@@ -422,7 +425,6 @@ the execution target's temporary directory, and any additional roots via
                       'mevedel--session mevedel--data-buffer)))))
          (target
           (when (file-remote-p workspace-root)
-            (require 'mevedel-execution-target)
             (or (and session (mevedel-session-execution-target session))
                 (mevedel-execution-target-create workspace-root))))
          (temporary-root

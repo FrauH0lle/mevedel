@@ -14,6 +14,7 @@
   (require 'tabulated-list)
   (require 'transient))
 
+(require 'mevedel-cockpit)
 (require 'transient)
 
 ;; `mevedel-chat'
@@ -34,6 +35,13 @@
                   (workspace working-directory prompt-session
                              &optional directory-scoped))
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
+(autoload 'mevedel--chat-buffer "mevedel-chat")
+(autoload 'mevedel--default-session-name-for-directory "mevedel-chat")
+(autoload 'mevedel--display-chat-buffer "mevedel-chat")
+(autoload 'mevedel--insert-local-user-turn "mevedel-chat")
+(autoload 'mevedel--sessions-in-working-directory "mevedel-chat")
+(autoload 'mevedel--start-chat "mevedel-chat")
+(autoload 'mevedel--workspace-sessions "mevedel-chat")
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer
@@ -73,18 +81,25 @@
                   "mevedel-execution-target" (target path))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-create "mevedel-execution-target")
+(autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
+(autoload 'mevedel-menu "mevedel-menu")
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-within-root-p
                   "mevedel-resource" (path root))
+(autoload 'mevedel-resource-within-root-p "mevedel-resource")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-save
                   "mevedel-session-artifacts"
                   (session buffer &optional settled force))
+(autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-list-sessions
@@ -93,6 +108,10 @@
                   "mevedel-session-persistence"
                   (session-dir &optional lifecycle-source session-override
                                workspace))
+(autoload 'mevedel-session-persistence-list-sessions
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-restore
+  "mevedel-session-persistence")
 
 ;; `mevedel-skills'
 (defvar mevedel-slash-commands)
@@ -114,6 +133,8 @@
                   "mevedel-utilities" (file directory))
 (declare-function mevedel--file-relative-name-or-absolute
                   "mevedel-utilities" (file directory))
+(autoload 'mevedel--file-in-directory-p "mevedel-utilities")
+(autoload 'mevedel--file-relative-name-or-absolute "mevedel-utilities")
 
 ;; `tabulated-list'
 (declare-function tabulated-list-get-id "tabulated-list" ())
@@ -130,7 +151,6 @@
 
 (defun mevedel-worktree--execution-target (directory)
   "Return the execution target containing DIRECTORY."
-  (require 'mevedel-execution-target)
   (mevedel-execution-target-create
    (file-name-as-directory (expand-file-name directory))))
 
@@ -386,7 +406,6 @@ directory they happen to be sitting in."
 
 (defun mevedel-worktree-status--data-buffer (&optional context)
   "Return the data buffer that launched the worktree transient."
-  (require 'mevedel-cockpit)
   (or (mevedel-cockpit-context-data-buffer
        (or context (mevedel-cockpit-current-context)))
       (user-error "No live mevedel session for this worktree status")))
@@ -419,7 +438,6 @@ directory they happen to be sitting in."
 
 (defun mevedel-worktree-status--collect ()
   "Return the worktree status of the current cockpit context."
-  (require 'mevedel-cockpit)
   (let* ((context (mevedel-cockpit-current-context))
          (data-buffer (mevedel-worktree-status--data-buffer context)))
     (with-current-buffer data-buffer
@@ -496,7 +514,6 @@ The complete repository state lives in the worktree info panel."
 (defun mevedel-worktree-status-details ()
   "Open the worktree status info panel."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-show-help
    mevedel-worktree-details-buffer-name
    (mevedel-worktree-status--details-text)))
@@ -516,7 +533,6 @@ The complete repository state lives in the worktree info panel."
 (defun mevedel-worktree-status-list ()
   "Open the tabulated worktree list from the status transient."
   (interactive)
-  (require 'mevedel-cockpit)
   (let* ((context (mevedel-cockpit-current-context))
          (data-buffer (mevedel-worktree-status--data-buffer context)))
     (with-current-buffer data-buffer
@@ -530,7 +546,6 @@ The complete repository state lives in the worktree info panel."
 
 (defun mevedel-worktree--help-text (&optional _context)
   "Return worktree cockpit help text."
-  (require 'mevedel-cockpit)
   (concat
    "mevedel worktree cockpit\n\n"
    "Status keys\n"
@@ -555,7 +570,6 @@ The complete repository state lives in the worktree info panel."
   "Return from worktree status to the main session cockpit."
   (interactive)
   (with-current-buffer (mevedel-worktree-status--data-buffer)
-    (require 'mevedel-menu)
     (mevedel-menu)))
 
 (transient-define-prefix mevedel-worktree-status ()
@@ -579,7 +593,6 @@ The complete repository state lives in the worktree info panel."
 
 (defun mevedel-worktree-list--context ()
   "Return the current worktree list context."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-context))
 
 (defun mevedel-worktree-list--context-data-buffer (&optional context)
@@ -602,7 +615,6 @@ The complete repository state lives in the worktree info panel."
   (let ((path (mevedel-worktree-list--normalize-path path)))
     (if (not (mevedel-workspace-p workspace))
         path
-      (require 'mevedel-utilities)
       (let* ((root (mevedel-worktree-list--normalize-path
                     (mevedel-workspace-root workspace)))
              (relative (mevedel--file-relative-name-or-absolute
@@ -643,7 +655,6 @@ The complete repository state lives in the worktree info panel."
 (defun mevedel-worktree-list--sessions (workspace path)
   "Return live session names in WORKSPACE whose cwd is PATH."
   (when workspace
-    (require 'mevedel-chat)
     (mapcar
      #'car
      (mevedel--sessions-in-working-directory
@@ -695,7 +706,6 @@ The complete repository state lives in the worktree info panel."
 
 (defun mevedel-worktree-list--header (items context)
   "Return the worktree list header line for ITEMS and CONTEXT."
-  (require 'mevedel-cockpit)
   (let ((status (mevedel-worktree-list--status context)))
     (mevedel-cockpit-format-header
      "worktrees"
@@ -712,12 +722,10 @@ The complete repository state lives in the worktree info panel."
 (defun mevedel-worktree-list-refresh ()
   "Refresh the tabulated worktree list."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-refresh))
 
 (defun mevedel-worktree-list--selected-item ()
   "Return the selected worktree item, or nil."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-selected t))
 
 (defun mevedel-worktree-list--details-text (item &optional _context)
@@ -740,7 +748,6 @@ The complete repository state lives in the worktree info panel."
 (defun mevedel-worktree-list-details ()
   "Show details for the selected worktree row."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-details))
 
 (defun mevedel-worktree-list-open-selected ()
@@ -753,7 +760,6 @@ The complete repository state lives in the worktree info panel."
          (workspace (mevedel-cockpit-context-workspace context)))
     (unless workspace
       (user-error "No mevedel workspace for selected worktree"))
-    (require 'mevedel-chat)
     (mevedel--start-chat workspace path nil t)))
 
 (defun mevedel-worktree-list-create ()
@@ -790,7 +796,6 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
          (sessions (mevedel-worktree-list--sessions workspace path)))
     (when (plist-get item :current)
       (user-error "Cannot remove the current worktree"))
-    (require 'mevedel-utilities)
     (unless (mevedel--file-in-directory-p path worktrees-root)
       (user-error "Can only remove worktrees under %s"
                   (mevedel-worktree--native-path
@@ -849,7 +854,6 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
 (defun mevedel-worktree-list-quit ()
   "Quit the worktree list and return to the main session cockpit."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-quit "worktree list"))
 
 (defconst mevedel-worktree-list--surface
@@ -884,13 +888,11 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
 (define-derived-mode mevedel-worktree-list-mode tabulated-list-mode
   "mevedel-worktree"
   "Major mode for the tabulated worktree list."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-setup-tabulated-surface
    mevedel-worktree-list--surface))
 
 (defun mevedel-worktree-list-open (&optional context)
   "Open the tabulated worktree list for CONTEXT."
-  (require 'mevedel-cockpit)
   (let ((context (or context (mevedel-cockpit-current-context))))
     (mevedel-cockpit-open-surface mevedel-worktree-list--surface context)))
 
@@ -978,7 +980,6 @@ branch-name grammar before any mutating Git command runs."
     ;; every component for symlinks, proves truename containment, and
     ;; refuses to answer from a stale TRAMP cache -- the hand-rolled
     ;; check here did neither of the last two reliably.
-    (require 'mevedel-resource)
     (unless (mevedel-resource-within-root-p
              (directory-file-name directory) workspace-root)
       (user-error "Worktree destination resolves outside the workspace: %s"
@@ -1166,7 +1167,6 @@ Use PREFLIGHT when it already describes SESSION's immutable Git state."
     (workspace worktree-directory &optional recovery)
   "Open a mevedel session for WORKSPACE at WORKTREE-DIRECTORY.
 RECOVERY names the exact prepared session or authorizes unique discovery."
-  (require 'mevedel-chat)
   (let* ((expected-id (plist-get recovery :target-session-id))
          (expected-path (plist-get recovery :target-save-path))
          (_
@@ -1182,7 +1182,6 @@ RECOVERY names the exact prepared session or authorizes unique discovery."
                (not expected-id)
                (not live)
                (progn
-                 (require 'mevedel-session-persistence)
                  (cl-remove-if-not
                   (lambda (entry)
                     (equal
@@ -1204,7 +1203,6 @@ RECOVERY names the exact prepared session or authorizes unique discovery."
          (chat-buffer
           (cond
            (expected-id
-            (require 'mevedel-session-persistence)
             (mevedel-session-persistence-restore
              expected-path nil nil workspace))
            (live (cdar live))
@@ -1281,9 +1279,6 @@ new session."
 
 (defun mevedel-worktree--save-stub (chat-buffer)
   "Persist CHAT-BUFFER after a setup stub was inserted."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (with-current-buffer chat-buffer
     (condition-case err
         (mevedel-session-artifacts-save mevedel--session chat-buffer)
