@@ -12,16 +12,21 @@
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-active-turn-p
                   "mevedel-agent-control" (session))
+(autoload 'mevedel-agent-control-active-turn-p "mevedel-agent-control")
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-session-live-p
                   "mevedel-execution" (session))
 (declare-function mevedel-execution-unsettled-mutation-p
                   "mevedel-execution" (session))
+(autoload 'mevedel-execution-session-live-p "mevedel-execution")
+(autoload 'mevedel-execution-unsettled-mutation-p "mevedel-execution")
 
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-state-rollback
                   "mevedel-instruction-registry" (workspace))
+(autoload 'mevedel--instruction-state-rollback
+  "mevedel-instruction-registry")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-check-target-incarnation
@@ -38,10 +43,20 @@
                   (session buffer &optional settled force))
 (declare-function mevedel-session-artifacts-segment-path
                   "mevedel-session-artifacts" (save-path n))
+(autoload 'mevedel-session-artifacts-check-target-incarnation
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-load-instructions
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-artifact
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-segment-path
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-deserialize
                   "mevedel-session-codec" (plist workspace))
+(autoload 'mevedel-session-codec-deserialize "mevedel-session-codec")
 
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability-lease-acquire
@@ -52,20 +67,33 @@
                   (session-dir &optional session))
 (declare-function mevedel-session-durability-publication-head
                   "mevedel-session-durability" (session-dir))
+(autoload 'mevedel-session-durability-lease-acquire
+  "mevedel-session-durability")
+(autoload 'mevedel-session-durability-lease-release
+  "mevedel-session-durability")
+(autoload 'mevedel-session-durability-publication-head
+  "mevedel-session-durability")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-apply-read-only-mode
                   "mevedel-session-persistence" (buf &optional reason))
 (declare-function mevedel-session-persistence-load-sidecar
                   "mevedel-session-persistence" (path))
+(autoload 'mevedel-session-persistence-apply-read-only-mode
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-load-sidecar
+  "mevedel-session-persistence")
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-read
                   "mevedel-session-publication" (session-dir))
+(autoload 'mevedel-session-publication-read "mevedel-session-publication")
 
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-copy-session-state
                   "mevedel-session-rewind" (from to))
+(autoload 'mevedel-session-rewind-copy-session-state
+  "mevedel-session-rewind")
 
 ;; `mevedel-session-transfer'
 (declare-function mevedel-session-transfer-decide
@@ -78,6 +106,12 @@
                   "mevedel-session-transfer" (session))
 (declare-function mevedel-session-transfer-request
                   "mevedel-session-transfer" (session &optional label))
+(autoload 'mevedel-session-transfer-decide "mevedel-session-transfer")
+(autoload 'mevedel-session-transfer-observe-decision
+  "mevedel-session-transfer")
+(autoload 'mevedel-session-transfer-poll "mevedel-session-transfer")
+(autoload 'mevedel-session-transfer-release "mevedel-session-transfer")
+(autoload 'mevedel-session-transfer-request "mevedel-session-transfer")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-adopt-committed-state
@@ -135,14 +169,18 @@
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-gptel-state
                   "mevedel-transcript-restore" ())
+(autoload 'mevedel-transcript-restore-gptel-state
+  "mevedel-transcript-restore")
 
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p
                   "mevedel-transport" (&optional path))
+(autoload 'mevedel-transport-busy-p "mevedel-transport")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-active-p
                   "mevedel-turn" (&optional buffer))
+(autoload 'mevedel-request-active-p "mevedel-turn")
 
 (defcustom mevedel-session-follow-published t
   "Whether a non-owner session buffer follows the owner's committed state.
@@ -294,7 +332,6 @@ Return BUFFER so lifecycle hooks can use this as their value."
 The coordinator owns the session-state part of this decision.  UI and other
 transient owners contribute through the registered drain predicates; a failed
 predicate is conservatively treated as still draining."
-  (require 'mevedel-turn)
   (and (not (mevedel-request-active-p
              (mevedel-session-control-transfer-root-buffer session)))
        (not (mevedel-session-pending-publication session))
@@ -317,7 +354,6 @@ predicate is conservatively treated as still draining."
 Only the owner can answer this: a requester sees `quiescing' and nothing
 about why.  The first blocker is enough -- the user wants to know whether the
 wait is theirs to end, not an inventory."
-  (require 'mevedel-turn)
   (cond
    ((mevedel-request-active-p
      (mevedel-session-control-transfer-root-buffer session))
@@ -339,7 +375,6 @@ wait is theirs to end, not an inventory."
 
 Admission checks use this operation so observing a grant never saves or
 releases the owner's session."
-  (require 'mevedel-session-transfer)
   (let ((state (mevedel-session-transfer-poll session)))
     (mevedel-session-set-control-transfer
      session (or state (mevedel-session-control-transfer session)))
@@ -347,10 +382,6 @@ releases the owner's session."
 
 (defun mevedel-session-control-transfer--poll-owner (session)
   "Poll owner-side state, save drained work, and release the granted lease."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-transfer)
   (let ((state (mevedel-session-transfer-poll session)))
     (when (and (eq (plist-get state :state) 'quiescing)
                (mevedel-session-control-transfer-drained-p session))
@@ -374,9 +405,6 @@ The buffer is left unmodified and read-only-neutral: the caller decides
 whether the result is a writable owner buffer or a read-only follower.  The
 segment number comes from the committed session state, so a rotation on the
 owner's side repoints the visited file here too."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((save-path (mevedel-session-save-path session))
          (logical
           (file-name-nondirectory
@@ -395,7 +423,6 @@ owner's side repoints the visited file here too."
         (insert
          (decode-coding-string
           content (or buffer-file-coding-system 'utf-8-unix))))
-      (require 'mevedel-transcript-restore)
       (mevedel-transcript-restore-gptel-state)
       (set-buffer-modified-p nil)
       (set-visited-file-modtime))))
@@ -497,18 +524,11 @@ artifact reads at all.
 A locally modified buffer is left alone.  Those edits are exactly what the
 transfer path refuses to discard, and a follow tick must not resolve that
 conflict on the user's behalf."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-fork)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
   (when (and (buffer-live-p buffer)
              (or force
                  (buffer-local-value 'mevedel-session-follow-published buffer))
              (not (buffer-modified-p buffer))
              (mevedel-session-save-path session))
-    (require 'mevedel-session-durability)
-    (require 'mevedel-session-publication)
     (let* ((save-path (mevedel-session-save-path session))
            (head (mevedel-session-durability-publication-head save-path)))
       (when (and head
@@ -557,12 +577,6 @@ must not keep other clients out.
 
 The target incarnation, transcript, and instruction restore are staged before
 the live session or buffer changes."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-fork)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
-  (require 'mevedel-overlays)
   (condition-case err
       (let* ((save-path (mevedel-session-save-path session))
              (workspace (mevedel-session-workspace session))
@@ -636,9 +650,6 @@ the live session or buffer changes."
     (mevedel-session-control-transfer-register-root-buffer session buffer)
     (when (buffer-modified-p buffer)
       (user-error "Read-only session changed locally; refresh before transfer"))
-    (require 'mevedel-session-durability)
-    (require 'mevedel-session-publication)
-    (require 'mevedel-session-transfer)
     (let* ((transfer (mevedel-session-control-transfer session))
            (request (plist-get transfer :request))
            (decision
@@ -675,8 +686,6 @@ also what a granted transfer ends with."
     (user-error "Session has not been materialized yet"))
   (when (buffer-modified-p buffer)
     (user-error "Read-only session changed locally; refresh before taking control"))
-  (require 'mevedel-session-durability)
-  (require 'mevedel-session-publication)
   (mevedel-session-control-transfer-register-root-buffer session buffer)
   (if (mevedel-session-durability-lease-acquire
        (mevedel-session-save-path session) (buffer-name buffer) session)
@@ -698,7 +707,6 @@ owner poll may itself publish.  The poll therefore performs no target I/O
 while another TRAMP operation is in progress, or while a publication owns the
 bounded window; the next tick observes the same durable state once the
 transport is free."
-  (require 'mevedel-transport)
   (unless (or (mevedel-session-publication-active-p session)
               (mevedel-transport-busy-p (mevedel-session-save-path session)))
     (if read-only-p
@@ -709,7 +717,6 @@ transport is free."
 
 (defun mevedel-session-control-transfer-request (session)
   "Record a control request for SESSION's current owner."
-  (require 'mevedel-session-transfer)
   (let ((request (mevedel-session-transfer-request session)))
     (when request
       (mevedel-session-set-control-transfer
@@ -718,7 +725,6 @@ transport is free."
 
 (defun mevedel-session-control-transfer-decide (session decision)
   "Record DECISION for SESSION's current transfer request."
-  (require 'mevedel-session-transfer)
   (mevedel-session-transfer-decide session decision))
 
 (defun mevedel-session-control-transfer-descriptor (session read-only-p)
