@@ -110,6 +110,20 @@ fire-count and payload."
 							   (should (equal "Found 2 defcustoms with :set"
 									  (car (car fired))))))
 
+		 :doc "streaming: reasoning stream events pass through without firing"
+		 ;; gptel delivers reasoning as (reasoning . TEXT) and closes the
+		 ;; block with the improper list (reasoning . t).  Neither is a
+		 ;; terminal plist and neither may signal.
+		 (mevedel-agent-exec-test--with-callback cb
+							 (let ((info '(:stream t)))
+							   (funcall cb '(reasoning . "thinking...") info)
+							   (funcall cb '(reasoning . t) info)
+							   (funcall cb "answer" info)
+							   (should (null fired))
+							   (funcall cb t info)
+							   (should (= 1 (length fired)))
+							   (should (equal "answer" (car (car fired))))))
+
 		 :doc "streaming: chunks do not rebuild partial text before terminal"
 		 (let* ((fired nil)
 			(main-cb (lambda (&rest args) (push args fired)))
