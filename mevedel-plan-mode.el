@@ -379,7 +379,7 @@ opening an editable draft."
     (mevedel-plan-mode--feedback-draft chat-buffer))
    ((eq outcome 'aborted)
     (mevedel-plan-mode--demote-proposal session t))
-   ((memq outcome '(invalidated plan-exit superseded)) nil)
+   ((memq outcome '(invalidated plan-exit superseded render-error)) nil)
    (t (message "mevedel: unknown Plan proposal outcome %S" outcome))))
 
 (defun mevedel-plan-mode--approval-entry
@@ -859,6 +859,10 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
 
 (defun mevedel-plan-approval-present (entry &optional session)
   "Replace SESSION's pending Plan approval with ENTRY and render it."
+  ;; The single installer for a pending approval: its renderer and every
+  ;; later settlement reach `mevedel-queue\=' helpers.  Session resume
+  ;; presents an approval before any other interaction has loaded them.
+  (require 'mevedel-queue)
   (let ((session (or session (mevedel-plan-approval--current-session))))
     (if (not session)
         (mevedel-plan-approval--deliver entry 'aborted "no-session")
@@ -882,7 +886,9 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
        (display-warning 'mevedel
                         (format "Plan approval render error: %S" err)
                         :warning)
-       (mevedel-plan-approval-abort session)))))
+       ;; A rendering bug must not discard the proposal: settling it as
+       ;; aborted would drop the selection a later resume needs.
+       (mevedel-plan-approval-abort session 'render-error)))))
 
 (defun mevedel-plan-approval-settle (entry outcome)
   "Settle pending Plan approval ENTRY with OUTCOME."

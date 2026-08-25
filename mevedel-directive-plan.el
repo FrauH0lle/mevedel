@@ -295,7 +295,7 @@ card's selection stays authoritative once retained."
        session (plist-get plan :chat-buffer))
       (mevedel-directive-plan--refresh directive)
       (mevedel-view-enter-directive-scope directive 'plan))
-     ((eq outcome 'aborted)
+     ((memq outcome '(aborted render-error))
       (mevedel-directive-plan-put record :status 'draft :cancelled t)
       (mevedel-directive-plan--clear-session session record attempt)
       (mevedel-directive-plan--persist

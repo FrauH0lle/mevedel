@@ -285,3 +285,8 @@ Plan is active, metadata says `proposed`, and the current artifact still
 matches its recorded hash. Persisted proposals without an implementation model
 snapshot are demoted instead of migrated. Drafts never reactivate
 automatically.
+
+A failed approval renderer dismisses the interaction without touching that
+metadata, so the proposal stays restorable: only a user cancellation discards
+the selection. A directive-owned approval still settles its caller, because a
+waiting batch must not hang on a rendering bug.
