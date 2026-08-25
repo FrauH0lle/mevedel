@@ -56,14 +56,19 @@
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-current-session "mevedel-telemetry" (&optional buffer))
 (declare-function mevedel-telemetry-record "mevedel-telemetry" (session event &rest props))
+(autoload 'mevedel-telemetry-current-session "mevedel-telemetry")
+(autoload 'mevedel-telemetry-record "mevedel-telemetry")
 
 ;; `diff'
 (declare-function diff-no-select "diff"
                   (old new &optional switches no-async buf))
+(autoload 'diff-no-select "diff")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace--project-workspace "mevedel-workspace" ())
+(autoload 'mevedel-workspace "mevedel-workspace")
+(autoload 'mevedel-workspace--project-workspace "mevedel-workspace")
 
 
 ;;
@@ -376,7 +381,6 @@ are still valid when their turn comes."
 
 (defun mevedel-buddy--unified-diff (original current)
   "Return the unified diff hunks between ORIGINAL and CURRENT, or nil."
-  (require 'diff)
   (let ((original-buffer (generate-new-buffer " *mevedel-buddy-original*"))
         (current-buffer (generate-new-buffer " *mevedel-buddy-current*"))
         (output-buffer (generate-new-buffer " *mevedel-buddy-diff*")))
@@ -549,7 +553,6 @@ every tool round, and nil when it errored or was aborted.  gptel's
 handler table is the documented extension point for this; its terminal
 states are the only place that distinguishes the end of one HTTP
 response from the end of the request."
-  (require 'gptel)
   (gptel-make-fsm
    :handlers
    (mapcar
@@ -567,7 +570,6 @@ response from the end of the request."
 Buddy runs from a source buffer and usually has no session at all.  One
 is used when it happens to exist and skipped otherwise."
   (ignore-errors
-    (require 'mevedel-telemetry)
     (mevedel-telemetry-current-session)))
 
 (defun mevedel-buddy--telemetry (event &rest props)
@@ -613,7 +615,6 @@ has already seen and growing each request without bound."
 REVIEWED-THROUGH retires the changes it covered, and is passed only
 when the review settled on its own; an abandoned run passes nil so its
 changes are offered again."
-  (require 'mevedel-buddy-note)
   (when reviewed-through
     (mevedel-buddy--retire-changes scope-key reviewed-through))
   (when mevedel-buddy--timeout-timer
@@ -749,7 +750,6 @@ started by the idle timer, which an explicit request may preempt."
 (defun mevedel-buddy--workspace ()
   "Return the current buffer's workspace, or nil when it has none."
   (ignore-errors
-    (require 'mevedel-workspace)
     (mevedel-workspace)))
 
 (defun mevedel-buddy--severity-instruction ()
@@ -763,7 +763,6 @@ started by the idle timer, which an explicit request may preempt."
 AUTOMATIC marks a run started by the idle timer rather than by the
 user.  Returns non-nil when a request was sent."
   (interactive)
-  (require 'mevedel-buddy-note)
   (let* ((scope-key (mevedel-buddy--scope-key))
          (changes (seq-filter #'mevedel-buddy--live-change-p
                               (mevedel-buddy--changes-for-scope scope-key)))
