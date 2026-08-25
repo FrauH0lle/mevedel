@@ -36,6 +36,13 @@
 (declare-function mevedel-view--visible-response-text
                   "mevedel-view-render" (text))
 
+(require 'json)
+(require 'mevedel-transcript)
+(require 'mevedel-transcript-audit)
+(require 'mevedel-utilities)
+(require 'mevedel-view-render)
+(require 'mevedel-review)
+
 (defconst mevedel-collaboration--protocol-version 2)
 (defconst mevedel-collaboration--max-record-text-bytes
   (/ (- (* 1 1024 1024) 4096) 6)
@@ -77,8 +84,6 @@ six-fold worst case alone does not.")
   "Return the visible, text-only form of assistant TEXT.
 Audit blocks are stripped defensively: a hidden record swallowed into a
 response span must never reach the wire as visible text."
-  (require 'mevedel-view-render)
-  (require 'mevedel-transcript-audit)
   (let ((visible (mevedel-view--visible-response-text
                   (mevedel--strip-hook-audit-blocks text))))
     (unless (stringp visible)
@@ -87,7 +92,6 @@ response span must never reach the wire as visible text."
 
 (defun mevedel-collaboration--clean-user (segment data-buffer)
   "Return visible user text for SEGMENT from DATA-BUFFER."
-  (require 'mevedel-view-render)
   (let ((visible (mevedel-view--user-turn-text (list segment) data-buffer)))
     (unless (stringp visible)
       (error "Canonical user projection failed"))
@@ -159,7 +163,6 @@ key."
 
 (defun mevedel-collaboration--json-string (object)
   "Encode OBJECT as compact JSON text."
-  (require 'json)
   (json-encode object))
 
 
@@ -195,7 +198,6 @@ carry the same operand summary and, for ApplyPatch, the authored patch."
 (defun mevedel-collaboration--tool-record (data-buffer segment &optional occurrence)
   "Return an allowlisted tool record for SEGMENT in DATA-BUFFER."
   (with-current-buffer data-buffer
-    (require 'mevedel-view-render)
     (let* ((start (cadr segment))
            (end (caddr segment))
            (parsed (mevedel-view--tool-call-parse data-buffer start end))
@@ -205,7 +207,6 @@ carry the same operand summary and, for ApplyPatch, the authored patch."
            (raw (buffer-substring-no-properties start end)))
       (unless (stringp name)
         (error "Canonical tool projection failed"))
-      (require 'mevedel-utilities)
       (let* ((id (if tool-use-id
                      (format "tool-%s" tool-use-id)
                    (mevedel-collaboration--stable-record-id
@@ -242,7 +243,6 @@ carry the same operand summary and, for ApplyPatch, the authored patch."
   "Return the current buffer's directive turn ranges, or nil.
 A malformed audit grammar degrades to untagged records instead of
 failing the whole projection."
-  (require 'mevedel-transcript-audit)
   (ignore-errors (mevedel-transcript-buffer-directive-ranges t)))
 
 (defun mevedel-collaboration--attribute-guest-prompts (user-starts)
@@ -267,8 +267,6 @@ can filter the transcript to one directive client-side; user records
 attributed to a collaboration guest carry that guest's name."
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
-      (require 'mevedel-transcript)
-      (require 'mevedel-transcript-audit)
       (let ((ranges (mevedel-collaboration--directive-ranges))
             records user-starts (occurrences (make-hash-table :test #'equal)))
         (dolist (segment (mevedel-transcript-segments
@@ -359,7 +357,6 @@ attributed to a collaboration guest carry that guest's name."
 
 (defun mevedel-collaboration--tool-result-fields (result)
   "Return status, bounded RESULT, and truncation for tool RESULT."
-  (require 'mevedel-utilities)
   (let* ((result (if (stringp result) result (format "%s" (or result ""))))
          (result (mevedel--trim-tool-result result))
          (status (if (string-match-p

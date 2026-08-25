@@ -19,8 +19,12 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'mevedel-utilities)
+(require 'mevedel-execution)
+(require 'mevedel-tool-task)
 (require 'mevedel-transcript)
+(require 'mevedel-transport)
+(require 'mevedel-utilities)
+(require 'mevedel-view-zone)
 
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
@@ -776,7 +780,6 @@ new view buffer is created."
 
 (defun mevedel-view--allow-session-close-p ()
   "Return non-nil when the current session may be closed safely."
-  (require 'mevedel-execution)
   (cond
    ((and mevedel--session
          (mevedel-session-pending-publication mevedel--session))
@@ -1093,10 +1096,9 @@ refresh; a full request upgrades a pending incremental refresh."
         ;; connection timestamp, which stays set for the life of the process
         ;; once any remote file has been touched, so testing it postponed
         ;; every render on a remote workspace forever.
-        (if (progn (require 'mevedel-transport)
-                   (mevedel-transport-busy-p
-                    (and (buffer-live-p data-buffer)
-                         (buffer-local-value 'default-directory data-buffer))))
+        (if (mevedel-transport-busy-p
+             (and (buffer-live-p data-buffer)
+                  (buffer-local-value 'default-directory data-buffer)))
             (setq mevedel-view--render-timer
                   (run-at-time
                    (max 0.1 mevedel-view-rerender-debounce) nil
@@ -1238,7 +1240,6 @@ the editable composer signal instead of settling queued interactions."
 
 (defun mevedel-view--status-task-show-completed-p ()
   "Return non-nil when task status should show completed rows."
-  (require 'mevedel-view-zone)
   (not (mevedel-view-zone-collapse-state
         mevedel-view--status-task-collapse-key t)))
 
@@ -1263,7 +1264,6 @@ the editable composer signal instead of settling queued interactions."
   (let* ((session (mevedel-view--status-session data-buf))
          (show-completed (mevedel-view--status-task-show-completed-p))
          (task-active-p (and session
-                             (require 'mevedel-tool-task nil t)
                              (mevedel-tool-task-session-has-active-p
                               session)))
          (task-body (and task-active-p
@@ -1295,9 +1295,7 @@ the editable composer signal instead of settling queued interactions."
           (setq fragment (plist-put fragment :body-suffix suffix)))
         (push fragment fragments)))
     (when-let* ((session (plist-get model :session))
-                (count (progn
-                         (require 'mevedel-execution)
-                         (mevedel-execution-count-user session)))
+                (count (mevedel-execution-count-user session))
                 ((> count 0)))
       (let ((body (format "Executions: %d live\n" count)))
         (add-text-properties 0 (length body)
@@ -1347,7 +1345,6 @@ the editable composer signal instead of settling queued interactions."
 (defun mevedel-view--render-status (&optional data-buf)
   "Render task, execution, and aggregate agent status for DATA-BUF."
   (unless mevedel-view--agent-transcript-p
-    (require 'mevedel-view-zone)
     (let* ((model (mevedel-view--status-model data-buf))
            (fragments (mevedel-view--status-fragments model))
            (start (mevedel-view--status-anchor))

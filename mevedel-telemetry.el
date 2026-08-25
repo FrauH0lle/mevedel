@@ -74,6 +74,8 @@
 (defvar profiler-max-stack-depth)
 (defvar profiler-memory-log)
 
+(require 'mevedel-execution-target)
+
 
 ;;
 ;;; Customization
@@ -400,7 +402,6 @@ supplies them itself."
 (defun mevedel-telemetry--remote-p (session)
   "Return non-nil when SESSION's execution target is remote."
   (when-let* ((target (mevedel-session-execution-target session)))
-    (require 'mevedel-execution-target)
     (mevedel-execution-target-remote-p target)))
 
 (defun mevedel-telemetry--entry-text (entry)
@@ -418,7 +419,6 @@ supplies them itself."
     (condition-case err
         (if (mevedel-telemetry--remote-p session)
             (progn
-              (require 'mevedel-session-durability)
               (require 'mevedel-session-publication)
               (mevedel-session-publication-append-diagnostic
                session file content))

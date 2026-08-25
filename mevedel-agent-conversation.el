@@ -202,6 +202,10 @@
 ;; `undo-tree'
 (defvar undo-tree-auto-save-history)
 
+(require 'mevedel-execution-telemetry)
+(require 'mevedel-execution-transcript)
+(require 'mevedel-tool-render-data)
+
 
 (defcustom mevedel-agent-conversation-save-debounce 2.0
   "Idle seconds before saving a running retained agent conversation.
@@ -314,7 +318,6 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
                 #'mevedel-view-agent-live-transcript-pre-tool nil t)
       (add-hook 'gptel-post-tool-call-functions
                 #'mevedel-view-agent-live-transcript-post-tool nil t)
-      (require 'mevedel-execution-transcript)
       (add-hook 'gptel-post-response-functions
                 #'mevedel-execution-transcript-retry-terminals nil t)
       (let ((inv invocation))
@@ -471,7 +474,6 @@ payload remains authoritative."
 (defun mevedel-agent-conversation--cached-render-data-bounds
     (invocation parent-buffer agent-id)
   "Return valid cached bounds for AGENT-ID in PARENT-BUFFER."
-  (require 'mevedel-tool-render-data)
   (when (mevedel-agent-invocation-p invocation)
     (let ((beg (mevedel-agent-invocation-render-data-start-marker invocation))
           (end (mevedel-agent-invocation-render-data-end-marker invocation)))
@@ -499,7 +501,6 @@ payload remains authoritative."
 (defun mevedel-agent-conversation--render-data-bounds
     (invocation agent-id)
   "Return current render-data bounds for INVOCATION and AGENT-ID."
-  (require 'mevedel-tool-render-data)
   (or (mevedel-agent-conversation--cached-render-data-bounds
        invocation (current-buffer) agent-id)
       (when-let* ((bounds
@@ -626,7 +627,6 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
 
 (defun mevedel-agent-conversation-refresh (invocation)
   "Persist and redraw INVOCATION's live conversation presentation."
-  (require 'mevedel-tool-render-data)
   (let ((parent (mevedel-agent-invocation-parent-data-buffer invocation))
         (agent-id (mevedel-agent-invocation-agent-id invocation))
         patched-summary-p
@@ -642,9 +642,8 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                          (car
                           (mevedel-agent-invocation-sandbox-summary-cell
                            invocation)))
-                        ((progn
-                           (require 'mevedel-execution-telemetry)
-                           (mevedel-execution-telemetry-sandbox-summary-class summary)))
+                        ((mevedel-execution-telemetry-sandbox-summary-class
+                          summary))
                         ((not
                           (equal
                            summary
@@ -658,7 +657,6 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
                       (mevedel-tool-render-data-update
                        parent tool-use-id updates))
                 (unless patched-summary-p
-                  (require 'mevedel-execution-transcript)
                   (mevedel-execution-transcript-store-pending-terminal
                    parent (list :tool-use-id tool-use-id) updates))))
             (when-let* ((bounds

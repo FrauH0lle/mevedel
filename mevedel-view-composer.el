@@ -13,6 +13,11 @@
 ;; The durable-transaction macro must expand for interpreted loads too,
 ;; so this is a load-time dependency rather than a compile-time one.
 (require 'mevedel-session-durability)
+(require 'mevedel-mention-bindings)
+(require 'mevedel-overlay-ui)
+(require 'mevedel-pending-inputs)
+(require 'mevedel-permission-mode)
+(require 'mevedel-skills-input)
 
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
@@ -458,7 +463,6 @@
 
 (defun mevedel-view--effective-permission-mode ()
   "Return the permission mode to apply to the current view buffer."
-  (require 'mevedel-permission-mode)
   (mevedel-permission-mode-effective
    (and (boundp 'mevedel--session) mevedel--session)
    (and (boundp 'mevedel--data-buffer)
@@ -468,7 +472,6 @@
 
 (defun mevedel-view--permission-mode-display (mode)
   "Return (LABEL FACE) for permission MODE."
-  (require 'mevedel-permission-mode)
   (list
    (mevedel-permission-mode-label mode)
    (pcase mode
@@ -500,8 +503,6 @@ Nil and unknown modes are treated as `ask'."
   "Return the read-only input prompt string for permission MODE.
 The prompt starts with a blank separator line so status and interaction
 rows remain visually distinct from the editable composer."
-  (require 'mevedel-overlay-ui)
-  (require 'mevedel-pending-inputs)
   (let ((mode (or mode (mevedel-view--effective-permission-mode))))
     (if mevedel-view--composer-scope
         (let* ((record (plist-get mevedel-view--composer-scope :record))
@@ -827,7 +828,6 @@ late callback accidentally inserts transcript content below the prompt."
                (marker-buffer mevedel-view--input-marker)))
          (text (and preserve-p
                     (progn
-                      (require 'mevedel-mention-bindings)
                       (mevedel-mention-bindings-copy-text
                        (buffer-substring
                         (mevedel-view--input-start) (point-max))))))
@@ -998,7 +998,6 @@ all displayed windows plus the editable composer text around THUNK."
     (require 'mevedel-view-history)
     (require 'mevedel-view-input-files)
     (require 'mevedel-view-segments)
-    (require 'mevedel-pending-inputs)
     (setq-local mevedel-mentions-agent-enabled-p
                 (not mevedel-view--side-conversation-p))
     (mevedel-mentions-install)
@@ -1237,7 +1236,6 @@ follows `mevedel-view--input-marker'."
            (mevedel-view--next-permission-mode
             (or (mevedel-session-permission-mode session) 'ask))))
       (with-current-buffer data-buf
-        (require 'mevedel-permission-mode)
         (mevedel-permission-mode-transition next))
       (message "mevedel: permission mode %s"
                (car (mevedel-view--permission-mode-display next)))
@@ -1288,7 +1286,6 @@ raised from one has no draft to protect."
 
 (defun mevedel-view--input-text ()
   "Return the user's composer text, trimmed."
-  (require 'mevedel-mention-bindings)
   (let ((text (mevedel-mention-bindings-copy-text
                (buffer-substring
                 (mevedel-view--input-start) (point-max)))))
@@ -1298,8 +1295,6 @@ raised from one has no draft to protect."
   "Bind known mentions in the live composer for SESSION and return input.
 The visible text is unchanged.  Binding before asynchronous preparation
 means a failed attempt leaves the exact source attached for a retry."
-  (require 'mevedel-mention-bindings)
-  (require 'mevedel-skills-input)
   (let* ((input-start (mevedel-view--input-start))
          (raw-input
           (mevedel-mention-bindings-copy-text
@@ -1400,7 +1395,6 @@ When FORCE is non-nil, replace the current draft unconditionally."
 (defun mevedel-view-enter-directive-scope
     (directive action &optional attempt-index workspace)
   "Open DIRECTIVE's shared session view in sticky ACTION scope."
-  (require 'mevedel-overlay-ui)
   (unless (memq action '(discuss plan request-changes retry))
     (error "Unknown directive composer action: %S" action))
   (pcase-let* ((`(,record ,workspace)
@@ -1483,7 +1477,6 @@ When FORCE is non-nil, replace the current draft unconditionally."
 
 (defun mevedel-view--skill-argument-hint ()
   "Return display-only skill argument hint for the current composer."
-  (require 'mevedel-skills-input)
   (when-let* ((session (mevedel-view--session))
               (input-start (and (markerp mevedel-view--input-marker)
                                 (marker-buffer mevedel-view--input-marker)
@@ -1536,7 +1529,6 @@ When FORCE is non-nil, replace the current draft unconditionally."
   (when (and (markerp mevedel-view--input-marker)
              (marker-buffer mevedel-view--input-marker)
              (>= start (mevedel-view--input-start)))
-    (require 'mevedel-mention-bindings)
     (mevedel-mention-bindings-invalidate-edit
      start end (mevedel-view--input-start) (point-max)))
   (mevedel-view--refresh-skill-argument-hint))
@@ -1595,7 +1587,6 @@ when the submission started."
 (defun mevedel-view--finish-fork-skill-outcome
     (name outcome view-buffer data-buffer &optional skill)
   "Handle fork skill OUTCOME for NAME."
-  (require 'mevedel-skills-input)
   (require 'mevedel-turn)
   (when (and (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
@@ -1835,7 +1826,6 @@ starting a new request.  AFTER-INSERT runs once the prompt is durably recorded.
 When INERT-SKILLS is non-nil, skip skill planning entirely: any skill token in
 INPUT stays literal text.  External input -- a collaboration guest's prompt --
 carries prompting authority only, never skill invocation."
-  (require 'mevedel-skills-input)
   (let ((view-buffer (current-buffer))
         (data-buffer mevedel--data-buffer)
         (session (mevedel-view--session))
@@ -1979,7 +1969,6 @@ SNAPSHOT is the exact Source composer state transferred on publication."
   (require 'mevedel-session-fork)
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-rewind)
-  (require 'mevedel-mention-bindings)
   (let ((copy (mevedel-mention-bindings-copy-text text)))
     (dolist (range (mevedel-mention-bindings-ranges copy))
       (let* ((binding (copy-tree (plist-get range :binding) t))

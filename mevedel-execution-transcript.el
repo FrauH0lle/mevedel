@@ -10,6 +10,9 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-execution-telemetry)
+(require 'mevedel-tool-render-data)
+(require 'mevedel-transcript-audit)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-parent-data-buffer
@@ -97,17 +100,13 @@
                  :execution-output
                  (copy-sequence (or (plist-get event :whole-output) ""))))))
     (if (and summary
-             (progn
-               (require 'mevedel-execution-telemetry)
-               (mevedel-execution-telemetry-sandbox-summary-class summary)))
+             (mevedel-execution-telemetry-sandbox-summary-class summary))
         (plist-put render-data :sandbox-summary summary)
       render-data)))
 
 (defun mevedel-execution-transcript--replace-archived-record
     (tool-use-id replacement)
   "Replace current buffer's archived TOOL-USE-ID with REPLACEMENT."
-  (require 'cl-lib)
-  (require 'mevedel-transcript-audit)
   (when-let* ((span
                (cl-find-if
                 (lambda (candidate)
@@ -128,8 +127,6 @@
     (tool-use-id &optional expected)
   "Return non-nil when the current buffer completed TOOL-USE-ID.
 When EXPECTED is non-nil, require the durable record to equal it."
-  (require 'cl-lib)
-  (require 'mevedel-transcript-audit)
   (cl-some
    (lambda (record)
      (and (equal (plist-get record :tool-use-id) tool-use-id)
@@ -144,6 +141,7 @@ When EXPECTED is non-nil, require the durable record to equal it."
 RENDER-DATA is retained in the hidden transcript audit record."
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-artifacts)
+  (require 'mevedel-transcript-restore)
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
       (save-restriction
@@ -179,7 +177,6 @@ RENDER-DATA is retained in the hidden transcript audit record."
                       coding))
                     (let ((org-agenda-file-menu-enabled nil))
                       (org-mode))
-                    (require 'mevedel-transcript-restore)
                     (mevedel-transcript-restore-properties)
                     (unless
                         (or
@@ -198,7 +195,6 @@ RENDER-DATA is retained in the hidden transcript audit record."
                 (insert-file-contents path)
                 (let ((org-agenda-file-menu-enabled nil))
                   (org-mode))
-                (require 'mevedel-transcript-restore)
                 (mevedel-transcript-restore-properties)
                 (unless
                     (or
@@ -231,12 +227,10 @@ RENDER-DATA is retained in the hidden transcript audit record."
 (defun mevedel-execution-transcript--archived-render-data
     (data-buffer tool-use-id)
   "Return archived render data for TOOL-USE-ID in DATA-BUFFER."
-  (require 'cl-lib)
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
       (save-restriction
         (widen)
-        (require 'mevedel-transcript-audit)
         (when-let* ((record
                      (cl-find-if
                       (lambda (candidate)
@@ -251,7 +245,6 @@ RENDER-DATA is retained in the hidden transcript audit record."
 (defun mevedel-execution-transcript-prepare-archive
     (data-buffer tool-use-ids)
   "Return a compaction plan for TOOL-USE-IDS removed from DATA-BUFFER."
-  (require 'mevedel-tool-render-data)
   (let (live completed)
     (dolist (tool-use-id tool-use-ids)
       (when-let* ((render-data
@@ -268,7 +261,6 @@ RENDER-DATA is retained in the hidden transcript audit record."
 
 (defun mevedel-execution-transcript-archive-text (plan)
   "Return durable hidden transcript records for archive PLAN."
-  (require 'mevedel-transcript-audit)
   (concat
    (mapconcat
     (lambda (entry)
@@ -357,7 +349,6 @@ RENDER-DATA is retained in the hidden transcript audit record."
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
       (when (hash-table-p mevedel-execution-transcript--pending-terminals)
-        (require 'mevedel-tool-render-data)
         (let (settled)
           (maphash
            (lambda (tool-use-id pending)
@@ -399,7 +390,6 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
         (tool-use-id (plist-get event :tool-use-id))
         (data-buffer (plist-get event :data-buffer)))
     (when (and (eq type 'terminal) tool-use-id)
-      (require 'mevedel-tool-render-data)
       (let ((render-data
              (mevedel-execution-transcript-terminal-render-data event)))
         (cond

@@ -10,6 +10,9 @@
 
 (eval-when-compile (require 'cl-lib))
 (require 'subr-x)
+(require 'mevedel-tool-render-data)
+(require 'mevedel-transcript-audit)
+(require 'mevedel-utilities)
 
 ;; `mevedel-tool-media'
 (declare-function mevedel-tool-media-extract
@@ -446,7 +449,6 @@ blocks that still carry stale tool properties."
   "Return canonical control ranges in START..END.
 BASE-SEGMENTS are raw `gptel' property runs used to validate persisted
 tool blocks.  Each result is `(TYPE START END VALUE...)'."
-  (require 'mevedel-tool-render-data)
   (let ((ranges
          (append
           (mevedel-transcript--delimited-ranges
@@ -504,7 +506,6 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
                            (when (search-forward
                                   "<!-- /mevedel-hook-audit -->"
                                   (caddr range) t)
-                             (require 'mevedel-transcript-audit)
                              (mevedel-transcript-audit-trusted-range-p
                               (cadr range) (point)))))
                     (and render-p
@@ -607,8 +608,6 @@ runs and incomplete control text remains ordinary transcript text."
                    (mevedel-transcript--range-inside-tool-segment-p
                     range segments))
         (setq segments (mevedel-transcript--overlay-range segments range))))
-    (require 'mevedel-utilities)
-    (require 'mevedel-transcript-audit)
     (dolist (span
              (mevedel-transcript-audit-spans
               (buffer-substring scan-start scan-end)

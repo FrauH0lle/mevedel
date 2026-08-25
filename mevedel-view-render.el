@@ -9,6 +9,8 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-execution-transcript)
+(require 'mevedel-plan)
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra"
@@ -625,11 +627,22 @@ turns rendered as usual.")
 (defun mevedel-view-render-initialize ()
   "Initialize transcript-rendering state in the current view buffer."
   (mevedel-view-render-invalidate-live-tail)
+  (require 'markdown-mode nil t)
+  (require 'org-src nil t)
+  (require 'xml)
+  (require 'mevedel-execution-telemetry)
+  (require 'mevedel-overlay-ui)
+  (require 'mevedel-review)
+  (require 'mevedel-session-artifacts)
+  (require 'mevedel-session-codec)
+  (require 'mevedel-session-persistence)
   (require 'mevedel-tool-render-data)
   (require 'mevedel-transcript)
   (require 'mevedel-transcript-audit)
+  (require 'mevedel-transcript-restore)
   (require 'mevedel-view-disclosure)
   (require 'mevedel-view-segments)
+  (require 'mevedel-view-stream)
   (require 'mevedel-view-zone)
   (setq-local mevedel-view--tool-rendering-cache
               (make-hash-table :test #'equal))
@@ -848,7 +861,6 @@ With prefix argument CLEAR, erase the trace buffer first."
 
 (defun mevedel-view--debug-spinner-state ()
   "Return a plist describing the current request-progress region."
-  (require 'mevedel-view-zone)
   (let ((ov (mevedel-view-zone-region 'progress)))
     (cond
      ((not (overlayp ov)) nil)
@@ -871,7 +883,6 @@ With prefix argument CLEAR, erase the trace buffer first."
   "Return managed-fragment coordinates for POSITION, or nil."
   (when (and (integer-or-marker-p position)
              (< position (point-max)))
-    (require 'mevedel-view-zone)
     (when-let* ((bounds (mevedel-view-zone-bounds-at position)))
       (list :namespace (plist-get bounds :namespace)
             :id (plist-get bounds :id)
@@ -1050,13 +1061,11 @@ through font-lock refontification cycles.  Returns S."
   "Return the best available Markdown major mode for temp fontification."
   (cond
    ((fboundp 'markdown-ts-mode) 'markdown-ts-mode)
-   ((and (require 'markdown-mode nil t)
-         (fboundp 'markdown-mode))
+   ((fboundp 'markdown-mode)
     'markdown-mode)))
 
 (defun mevedel-view--visible-response-text (text)
   "Return response TEXT with model protocol hidden when appropriate."
-  (require 'mevedel-plan)
   (let ((text (mevedel-view--strip-render-data-display-text text)))
     (when (mevedel-view--strip-proposed-plans-p text)
       (setq text (mevedel-plan-strip-proposed text)))
@@ -1582,7 +1591,6 @@ renderer to fall back to the bare `Tool' one-liner."
                                    (substring text sexp-end)))
                      (full-result
                       (if (and (derived-mode-p 'org-mode)
-                               (require 'org-src nil t)
                                (fboundp 'org-unescape-code-in-string))
                           (org-unescape-code-in-string full-result)
                         full-result))
@@ -1973,9 +1981,7 @@ Return nil when HEADER is not a `Tool: argument' style line."
 (defun mevedel-view--sandbox-summary-line (summary)
   "Return a durable warning line for material sandbox SUMMARY."
   (when (and summary
-             (progn
-               (require 'mevedel-execution-telemetry)
-               (mevedel-execution-telemetry-sandbox-summary-class summary)))
+             (mevedel-execution-telemetry-sandbox-summary-class summary))
     (let* ((attempts (or (plist-get summary :attempt-count) 0))
            (started (or (plist-get summary :started-count) 0))
            (refused (or (plist-get summary :refused-count) 0))
@@ -2314,7 +2320,6 @@ does not overwrite the identity of the rows it owns."
 
 (defun mevedel-view-render-toggle-child-call ()
   "Toggle the nested call row at point."
-  (require 'mevedel-view-disclosure)
   (let* ((bounds (mevedel-view-disclosure-section-bounds))
          (start (car-safe bounds))
          (child (and start (get-text-property start 'mevedel-view-tool-child)))
@@ -2382,10 +2387,8 @@ RAW is an optional precomputed expanded tool segment text."
            (terminal-render-data
             (and (equal name "Bash")
                  (buffer-live-p data-buf)
-                 (progn
-                   (require 'mevedel-execution-transcript)
-                   (mevedel-execution-transcript-pending-render-data
-                    data-buf tool-use-id))))
+                 (mevedel-execution-transcript-pending-render-data
+                  data-buf tool-use-id)))
            (event-type (plist-get event :type))
            (call-render-data (plist-get call :render-data))
            (result
@@ -2828,7 +2831,6 @@ Return the new data-buffer end position."
   "Return TEXT without synthetic review `<user_action>' blocks.
 The review module is always loaded with mevedel, so its stripper is the
 one implementation; a second copy here had already started to drift."
-  (require 'mevedel-review)
   (mevedel-review-strip-user-action-blocks text))
 
 (defun mevedel-view--thinking-summary (data-buf seg-start seg-end)
@@ -3325,9 +3327,6 @@ the render so user toggles survive streaming ticks."
     (data-buf source-start source-end &optional session)
   "Return DATA-BUF's variant switch for SOURCE-START..SOURCE-END, or nil.
 SESSION supplies live session context when DATA-BUF is archived."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (when-let* ((session
                (or session
                    (buffer-local-value 'mevedel--session data-buf)))
@@ -3885,7 +3884,6 @@ are left bare, while blank lines between payload lines keep the gutter."
 (defun mevedel-view--bash-completion-summary (text)
   "Return compact visible execution facts from Bash completion TEXT."
   (when (string-match "<bash-execution[^<>]*?/>[[:space:]]*\\'" text)
-    (require 'xml)
     (condition-case nil
         (with-temp-buffer
           (insert (match-string 0 text))
@@ -4175,7 +4173,6 @@ the contiguous run of audit blocks that follows it."
 
 (defun mevedel-view--render-user-turn (segments data-buf &optional directive)
   "Render user SEGMENTS from DATA-BUF, with optional DIRECTIVE metadata."
-  (require 'mevedel-overlay-ui)
   (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
          (prompt-drawers (mevedel-view--user-turn-prompt-drawers
                           segments data-buf))
@@ -4274,7 +4271,6 @@ Directive turns are stored in the data buffer as regular gptel user
 turns plus an ignored `:PROMPT:' drawer.  In org buffers the action is
 stored as a trailing tag (\"Text :implement:\"); in markdown buffers it
 is stored as a leading code-formatted action (\"`implement` Text\")."
-  (require 'mevedel-overlay-ui)
   (let ((trimmed (string-trim text)))
     (cond
      ((string-match "\\`\\(.*?\\)[ \t]+:\\([[:alnum:]_-]+\\):\\'" trimmed)
@@ -4338,10 +4334,7 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
 (defun mevedel-view-directive-actions (directive)
   "Choose a state-correct action for the rendered DIRECTIVE turn."
   (interactive (list (get-text-property (point) 'mevedel-view-directive)))
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
   (require 'mevedel-session-fork)
-  (require 'mevedel-session-persistence)
   (require 'mevedel-session-rewind)
   (pcase-let* ((`(,record ,workspace ,attempt ,attempt-index)
                 (or (mevedel-view--directive-metadata-context directive)
@@ -5233,7 +5226,6 @@ synthesizes a preview with tool counters."
 
 (defun mevedel-view--directive-turn-summary (start end directive)
   "Build a one-line summary for DIRECTIVE rendered between START and END."
-  (require 'mevedel-overlay-ui)
   (let ((tool-count 0)
         (attempt (nth 2 (mevedel-view--directive-metadata-context directive))))
     (let ((pos start))
@@ -5400,7 +5392,6 @@ restore the turn with all inner section state intact.  Signals a
 
 (defun mevedel-view-render-toggle-turn (collapsed)
   "Expand the current turn when COLLAPSED, otherwise collapse it."
-  (require 'mevedel-view-stream)
   (mevedel-view-stream-in-flight-turn-start-position)
   (if collapsed
       (mevedel-view--expand-turn)
@@ -5445,9 +5436,6 @@ When COLLAPSE-NEWEST is non-nil, collapse that turn too."
 
 (defun mevedel-view--settled-response-at-point ()
   "Return the stable settled response target at point."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((bounds (mevedel-view--turn-bounds))
          (role (and bounds
                     (get-text-property
@@ -5500,7 +5488,6 @@ continuation context."
 
 (defun mevedel-view-switch-conversation-variant (fork-point-id)
   "Open the sole related session at FORK-POINT-ID."
-  (require 'mevedel-view-segments)
   (let* ((session
           (and (buffer-live-p mevedel--data-buffer)
                (buffer-local-value 'mevedel--session
@@ -5509,10 +5496,8 @@ continuation context."
               (user-error "Active view has no mevedel session")))
          (session-id (mevedel-session-session-id session))
          (variants
-          (progn
-            (require 'mevedel-session-persistence)
-            (mevedel-session-persistence-conversation-variants
-             session fork-point-id)))
+          (mevedel-session-persistence-conversation-variants
+           session fork-point-id))
          (alternatives
           (cl-remove
            session-id variants
@@ -5565,12 +5550,8 @@ continuation context."
 (defun mevedel-view-rewind-at-point ()
   "Rewind the current session to the settled assistant turn at point."
   (interactive)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
   (require 'mevedel-session-fork)
-  (require 'mevedel-session-persistence)
   (require 'mevedel-session-rewind)
-  (require 'mevedel-view-segments)
   (when (mevedel-session-rewind-rewind
          mevedel--data-buffer (mevedel-view--settled-response-at-point))
     (mevedel-view-return-to-latest-segment)
@@ -5676,7 +5657,6 @@ continuation context."
 
 (defun mevedel-view--next-fragment-position (limit)
   "Return the next navigatable fragment position before LIMIT."
-  (require 'mevedel-view-zone)
   (save-excursion
     (and (< (point) limit)
          (mevedel-view-zone-next limit))))
@@ -5694,7 +5674,6 @@ continuation context."
 
 (defun mevedel-view--previous-fragment-position ()
   "Return the previous navigatable fragment position."
-  (require 'mevedel-view-zone)
   (save-excursion
     (mevedel-view-zone-previous (point-min))))
 
@@ -6005,12 +5984,8 @@ historical banner.  AGENT-TRANSCRIPT-P selects the headerless layout."
 SESSION-DATA-BUF supplies live session metadata.  RENDER-VIEW-BUF is
 used for agent transcripts.  DATA-TURN-START-POS identifies the live
 turn.  SAVED-STATES restores matching disclosure state."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (with-current-buffer data-buf
     (unless (mevedel-view--running-agent-transcript-buffer-p)
-      (require 'mevedel-transcript-restore)
       (mevedel-transcript-restore-properties t))
     (let ((scan-start
            (mevedel-transcript--skip-leading-properties-drawer
@@ -6220,7 +6195,6 @@ previously projected transcript into this render.
 Preserves the active composer, live window state, and an in-flight
 assistant anchor while rebuilding the transcript projection and live
 view chrome."
-  (require 'mevedel-view-segments)
   (unless mevedel--data-buffer
     (error "No data buffer"))
   (atomic-change-group
