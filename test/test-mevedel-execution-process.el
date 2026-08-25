@@ -8,6 +8,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-execution-process)
+(require 'tramp-sh)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -24,7 +25,6 @@
   ,test
   (test)
   :doc "gates the private channel on flag, tty, capability, and size"
-  (require 'tramp)
   (let* ((remote "/ssh:user@host:/srv/project/")
          (command '("sh" "-c" "printf ok"))
          (child (mevedel-execution-process-create :workdir remote))
@@ -384,7 +384,6 @@
          (tramp-cache-data (make-hash-table :test #'equal))
          (real-make-process (symbol-function 'make-process))
          child process spawn-direct-async)
-    (require 'tramp-sh)
     (let ((vec (tramp-dissect-file-name prefix)))
       (should (equal prior-direct-async
                      (tramp-get-method-parameter vec 'tramp-direct-async)))
