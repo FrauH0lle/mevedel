@@ -26,6 +26,7 @@
 (declare-function mevedel-model-effective-context-window "mevedel-models"
                   (&optional model))
 (defvar mevedel-model-context-limit)
+(autoload 'mevedel-model-effective-context-window "mevedel-models")
 
 ;; `mevedel-reminders'
 (defvar mevedel-reminders--current-chat-buffer)
@@ -58,6 +59,7 @@
 ;; `mevedel-tool-permission'
 (declare-function mevedel-tool-permission-paths "mevedel-tool-permission"
                   (tool args &optional context))
+(autoload 'mevedel-tool-permission-paths "mevedel-tool-permission")
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get
@@ -104,8 +106,6 @@ Derived from `mevedel-skills-listing-budget' and the context window of
 the model the pending request resolves to -- a Plan workload's or a
 leading skill's override included, since gptel sizes the system prompt
 before the transforms apply either; assumes ~4 characters per token."
-  (require 'mevedel-models)
-  (require 'mevedel-skills-invoke)
   (let ((limit (mevedel-model-effective-context-window
                 (plist-get (mevedel-skills-request-model-policy) :model))))
     (max 0 (floor (* mevedel-skills-listing-budget limit 4)))))
@@ -391,7 +391,6 @@ path the tool declares is forwarded to `mevedel-skills-maybe-activate'.
 A tool that touches several paths at once declares them together, and
 ApplyPatch is the only tool that does, so reading one path activated on
 the reads around an edit but never on the edit."
-  (require 'mevedel-tool-permission)
   (when-let* ((session (or (and (boundp 'mevedel--session) mevedel--session)
                            (when-let* ((inv (mevedel-skills--current-invocation)))
                              (mevedel-agent-invocation-parent-session inv))))
