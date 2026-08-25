@@ -7,9 +7,12 @@
 
 ;;; Code:
 
+(require 'mevedel-structs)
+
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-call-in-data
                   "mevedel-cockpit" (context function &rest args))
+(autoload 'mevedel-cockpit-call-in-data "mevedel-cockpit")
 
 ;; `mevedel-plugin-registry'
 (declare-function mevedel-plugin-name
@@ -18,6 +21,7 @@
                   "mevedel-plugin-registry" (cl-x) t)
 (declare-function mevedel-plugins-enabled
                   "mevedel-plugin-registry" (&optional workspace))
+(autoload 'mevedel-plugins-enabled "mevedel-plugin-registry")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skills-rescan "mevedel-skills-core" ())
@@ -30,10 +34,10 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
+(autoload 'mevedel--warn-once "mevedel-utilities")
 
 (defun mevedel-plugins-current-workspace ()
   "Return the current chat workspace, if available."
-  (require 'mevedel-structs)
   (or (and (boundp 'mevedel--session)
            mevedel--session
            (mevedel-session-workspace mevedel--session))
@@ -47,10 +51,8 @@ Without CONTEXT, refresh the session owned by the current buffer."
     (condition-case err
         (progn
           (if context
-              (progn
-                (require 'mevedel-cockpit)
-                (mevedel-cockpit-call-in-data
-                 context #'mevedel-skills-rescan))
+              (mevedel-cockpit-call-in-data
+               context #'mevedel-skills-rescan)
             (mevedel-skills-rescan))
           t)
       (user-error nil)
@@ -64,7 +66,6 @@ Without CONTEXT, refresh the session owned by the current buffer."
 (defun mevedel-plugins-skill-dirs (&optional workspace)
   "Return enabled plugin skill directories as source-tagged entries.
 Only plugins enabled in WORKSPACE are returned."
-  (require 'mevedel-plugin-registry)
   (let (entries)
     (dolist (plugin (mevedel-plugins-enabled workspace) (nreverse entries))
       (when-let* ((dir (mevedel-plugin-skills-dir plugin))
