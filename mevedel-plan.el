@@ -8,9 +8,8 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib)
-  (require 'mevedel-structs))
+(eval-when-compile (require 'cl-lib))
+(require 'mevedel-structs)
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
@@ -24,6 +23,14 @@
 (declare-function mevedel-session-artifacts-read-artifact
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
+(autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-ensure-files
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-publish-text
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-artifact
+  "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-plan-metadata "mevedel-structs"
@@ -36,6 +43,7 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text "mevedel-utilities"
 		  (text))
+(autoload 'mevedel--normalize-message-text "mevedel-utilities")
 
 (defconst mevedel-plan--open-tag "<proposed_plan>"
   "Opening tag for proposed plans.")
@@ -53,7 +61,6 @@
   "Return normalized PLAN-MARKDOWN or signal when it is invalid."
   (unless (stringp plan-markdown)
     (error "Plan must be a string"))
-  (require 'mevedel-utilities)
   (let ((plan-markdown (mevedel--normalize-message-text plan-markdown)))
     (when (string-blank-p plan-markdown)
       (error "Plan must not be blank"))
@@ -104,7 +111,6 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
 
 (defun mevedel-plan--metadata-put (session key value)
   "Set KEY to VALUE in SESSION's plan metadata."
-  (require 'mevedel-structs)
   (let ((metadata (copy-sequence (or (mevedel-session-plan-metadata session)
                                      nil))))
     (setq metadata (plist-put metadata key value))
@@ -154,10 +160,6 @@ below `local/plans/'."
   "Return the session-local current plan path for SESSION.
 Materialize the session directory when needed.  BUFFER defaults to the
 current data buffer."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-structs)
   (let* ((session (or session mevedel--session))
          (buffer (or buffer (current-buffer)))
          (save-path (or (mevedel-session-save-path session)
@@ -176,7 +178,6 @@ current data buffer."
 
 ARTIFACT must carry one normalized session-relative `:path'.  The returned
 path names the logical artifact, never an immutable publication file."
-  (require 'mevedel-structs)
   (let* ((save-path (mevedel-session-save-path session))
          (relative (plist-get artifact :path)))
     (unless (and save-path (mevedel-plan-artifact-path-p relative))
@@ -185,16 +186,12 @@ path names the logical artifact, never an immutable publication file."
 
 (defun mevedel-plan--read-path (session relative)
   "Return SESSION artifact RELATIVE decoded as UTF-8 text."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (decode-coding-string
    (mevedel-session-artifacts-read-artifact session relative)
    'utf-8-unix))
 
 (defun mevedel-plan-read-artifact (session artifact)
   "Return SESSION's verified accepted-plan ARTIFACT body."
-  (require 'mevedel-utilities)
   (let ((relative (plist-get artifact :path))
         (hash (plist-get artifact :hash)))
     (unless (and (stringp relative) (stringp hash))
@@ -217,10 +214,6 @@ Return an explicit artifact plist containing `:path' and `:hash'.
 
 Publication only: the caller decides when the session's plan metadata
 follows, which matters when a second publication can still fail."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-structs)
   (let* ((relative-path (or relative-path
                             mevedel-plan--relative-current-path))
          (path (mevedel-plan-current-path session buffer relative-path))
@@ -245,7 +238,6 @@ Return an explicit artifact plist containing `:path' and `:hash'."
   "Replace SESSION's plan metadata for a freshly presented RELATIVE-PATH.
 HASH identifies the published artifact.  Only the selection survives: a
 presented plan is not an accepted or proposed one."
-  (require 'mevedel-structs)
   (let* ((turn (or (mevedel-session-turn-count session) 0))
            (previous (mevedel-session-plan-metadata session))
            (metadata
@@ -270,10 +262,6 @@ CURRENT-ARTIFACT is the plist returned by `mevedel-plan-write-current'.
 RELATIVE-PATH names a deterministic immutable destination when non-nil.
 SOURCE-SESSION owns CURRENT-ARTIFACT and defaults to SESSION.
 Return a plist containing `:path' and `:hash'."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-structs)
   (let* ((source-session (or source-session session))
          (plan-relative (plist-get current-artifact :path))
          (plan-hash (plist-get current-artifact :hash))
@@ -310,10 +298,6 @@ Return a plist containing `:path' and `:hash'."
 
 (defun mevedel-plan-current-body (&optional session)
   "Return SESSION's current plan artifact contents, or nil."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-utilities)
   (when-let* ((session (or session mevedel--session)))
     (let* ((metadata (mevedel-session-plan-metadata session))
            (relative (or (plist-get metadata :path)
@@ -327,7 +311,6 @@ Return a plist containing `:path' and `:hash'."
   "Mark SESSION's CURRENT-ARTIFACT as accepted.
 ACCEPTED-ARTIFACT identifies the immutable archived plan.  When
 SKIP-VERIFICATION is non-nil, do not leave verification pending."
-  (require 'mevedel-structs)
   (let* ((previous (mevedel-session-plan-metadata session))
          (metadata
           (list :path (plist-get current-artifact :path)
