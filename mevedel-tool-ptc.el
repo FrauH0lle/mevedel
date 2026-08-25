@@ -71,11 +71,6 @@
 
 ;;;; Roster
 
-(defconst mevedel-tool-ptc--dialect-manual-path
-  (file-name-concat mevedel-tool-registry--source-dir
-                    "docs" "ptc-dialect.md")
-  "Absolute path to the installed ToolScript dialect manual.")
-
 (defcustom mevedel-ptc-primitive-tools
   '("Read" "Glob" "Grep" "Bash"
     "XrefReferences" "XrefDefinitions" "Imenu" "Treesitter")
@@ -197,7 +192,8 @@ a deferred tool executes normally."
     (concat (mevedel-system-render-template
              (mevedel-tool-prompt tool)
              `(("PTC_DIALECT_MANUAL_PATH" .
-                ,mevedel-tool-ptc--dialect-manual-path)))
+                ,(file-name-concat mevedel-tool-registry--source-dir
+                                   "docs" "ptc-dialect.md"))))
             "\n\n## Pure data operations\n\n"
             (mevedel-tool-ptc--pure-primitive-reference)
             "\n\n## Tools available in this request\n\n"

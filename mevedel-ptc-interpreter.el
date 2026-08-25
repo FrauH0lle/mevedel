@@ -320,11 +320,32 @@ commonly assumed behaviour is not the real one."
                                    (nthcdr 2 form)))
                   (list 'setq tail (list 'cdr tail)))))))
 
+(defun mevedel-ptc--tx-dotimes (form)
+  "Transform a guest `dotimes' FORM.
+Only (dotimes (VAR COUNT) BODY...) is accepted.  The RESULT form is
+rejected for the same reason as `dolist''s: its binding behaviour under
+lexical binding is not the commonly assumed one."
+  (let ((spec (nth 1 form)))
+    (unless (and (consp spec) (= (length spec) 2))
+      (error "'dotimes': expects (dotimes (VAR COUNT) BODY...); the RESULT form is not supported"))
+    (let ((var (nth 0 spec))
+          (count (nth 1 spec))
+          (counter (make-symbol "counter"))
+          (limit (make-symbol "limit")))
+      (unless (and var (symbolp var) (not (mevedel-ptc-keyword-p var)))
+        (error "'dotimes': VAR must be a variable name, not %S" var))
+      (list 'let (list (list limit count) (list counter 0))
+            (list 'while (list '< counter limit)
+                  (cons 'let (cons (list (list var counter))
+                                   (nthcdr 2 form)))
+                  (list 'setq counter (list '+ counter 1)))))))
+
 (defconst mevedel-ptc--transformers
   '(("when" . mevedel-ptc--tx-when)
     ("unless" . mevedel-ptc--tx-unless)
     ("push" . mevedel-ptc--tx-push)
-    ("dolist" . mevedel-ptc--tx-dolist))
+    ("dolist" . mevedel-ptc--tx-dolist)
+    ("dotimes" . mevedel-ptc--tx-dotimes))
   "Closed table of guest macro-shaped forms.
 There is no macro system: no `defmacro', no `macrolet', no backquote,
 no guest-visible `macroexpand', and no generalized places.")
@@ -1208,7 +1229,7 @@ the nearest known name from ROSTER and the closed tables."
                  (dolist (clause args)
                    (when (listp clause)
                      (walk-all clause))))
-                ((equal name "dolist")
+                ((member name '("dolist" "dotimes"))
                  (let ((spec (nth 1 form)))
                    (when (consp spec)
                      (walk (nth 1 spec))))

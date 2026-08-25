@@ -224,7 +224,10 @@
                     (seq-find (lambda (tool)
                                 (equal "ToolScript" (gptel-tool-name tool)))
                               tools))
-                   (description (gptel-tool-description request-ptc)))
+                   (description (gptel-tool-description request-ptc))
+                   (manual-path
+                    (file-name-concat mevedel-tool-registry--source-dir
+                                      "docs" "ptc-dialect.md")))
               (should-not (eq ptc request-ptc))
               (should (equal original (gptel-tool-description ptc)))
               (should (string-match-p
@@ -235,10 +238,9 @@
                        (regexp-quote
                         "(split-string string [separators] [omit-nulls] [trim])")
                        description))
-              (should (file-readable-p
-                       mevedel-tool-ptc--dialect-manual-path))
+              (should (file-readable-p manual-path))
               (should (string-match-p
-                       (regexp-quote mevedel-tool-ptc--dialect-manual-path)
+                       (regexp-quote manual-path)
                        description))
               (should-not (string-match-p
                            "{{PTC_DIALECT_MANUAL_PATH}}" description))

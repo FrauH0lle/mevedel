@@ -78,7 +78,7 @@ recommends those elements while leaving Codex room to choose the next action.
 
 - A just expanded tool call in the view buffer can get swallowed/disappears when the view buffer updates
   - reappears on next view buffer render
-    
+
 - Allow activation and deactivation of skills per project
 - Allow activation and deactivation of plugins per project
 - In Ask mode, ApplyPatch should expand the first one or two hunks
@@ -94,7 +94,7 @@ recommends those elements while leaving Codex room to choose the next action.
 
 - Collapse multiple sequential tool calls (more than three), for example:
   - Searched for 5 patterns, read 1 file, ran 5 shell commands
-  - Ran 5 commands 
+  - Ran 5 commands
 
 - Collapse long input
   - [Pasted text #1 +83 lines]
@@ -111,7 +111,7 @@ recommends those elements while leaving Codex room to choose the next action.
   - doom-modeline/`format-mode-line` took ~4% of allocation during streaming;
     user config, not mevedel — revisit only if redisplay stays hot after the
     render fixes.
-  
+
 ## Entry format
 
 Each entry records its source, owed change, reason for deferral, current
