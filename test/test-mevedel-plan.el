@@ -305,8 +305,8 @@
                            :turn-count 4))
                  (markdown "# Plan\n\nDo it.")
                  (publishes 0)
-                 ;; The publisher is required lazily inside the function
-                 ;; under test, so load it before capturing it.
+                 ;; Load the exact-autoload owner before capturing its real
+                 ;; function definition.
                  (_ (require 'mevedel-session-artifacts))
                  (real (symbol-function
                         'mevedel-session-artifacts-publish-text)))
