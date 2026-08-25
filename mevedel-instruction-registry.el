@@ -11,11 +11,13 @@
 ;; `mevedel-directive'
 (declare-function mevedel-workspace-set-directives
                   "mevedel-directive" (workspace directives))
+(autoload 'mevedel-workspace-set-directives "mevedel-directive")
 
 ;; `mevedel-directive-source'
 (declare-function mevedel--delete-instruction
                   "mevedel-directive-source"
                   (instruction &optional buffer))
+(autoload 'mevedel--delete-instruction "mevedel-directive-source")
 
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-with-id
@@ -26,23 +28,30 @@
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlay-ui"
                   (instruction &optional update-children))
+(autoload 'mevedel--update-instruction-overlay "mevedel-overlay-ui")
 
 ;; `mevedel-overlays'
 (declare-function mevedel--directivep "mevedel-overlays" (instruction))
+(autoload 'mevedel--directivep "mevedel-overlays")
 (defvar mevedel--highlighted-instruction)
 
 ;; `mevedel-persistence'
 (declare-function mevedel--restore-file-instructions
                   "mevedel-persistence"
                   (file &optional message workspace))
+(autoload 'mevedel--restore-file-instructions "mevedel-persistence")
 
 ;; `mevedel-structs'
 (declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
+(autoload 'mevedel-workspace-directives "mevedel-structs")
+(autoload 'mevedel-workspace-id "mevedel-structs")
+(autoload 'mevedel-workspace-type "mevedel-structs")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+(autoload 'mevedel-workspace "mevedel-workspace")
 
 (defvar mevedel--instruction-states (make-hash-table :test #'equal)
   "Workspace-keyed instruction state table.
@@ -105,7 +114,6 @@ Each value is a plist with keys `:instructions', `:id-counter',
 
 (defun mevedel--instruction-workspace-key (&optional workspace)
   "Return the instruction-state key for WORKSPACE."
-  (require 'mevedel-structs)
   (if workspace
       (cons (mevedel-workspace-type workspace)
             (mevedel-workspace-id workspace))
@@ -113,7 +121,6 @@ Each value is a plist with keys `:instructions', `:id-counter',
 
 (defun mevedel--instruction-buffer-workspace (buffer)
   "Return BUFFER's workspace, or nil when it cannot be resolved."
-  (require 'mevedel-workspace)
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (or (and (boundp 'mevedel--workspace)
@@ -145,8 +152,6 @@ Each value is a plist with keys `:instructions', `:id-counter',
 
 (defun mevedel--instruction-state-rollback (workspace)
   "Return a function that restores WORKSPACE's exact instruction state."
-  (require 'mevedel-directive)
-  (require 'mevedel-structs)
   (let* ((key (mevedel--instruction-workspace-key workspace))
          (state (copy-tree (mevedel--instruction-state key)))
          (current-key mevedel--instruction-current-state-key)
@@ -176,8 +181,6 @@ Each value is a plist with keys `:instructions', `:id-counter',
 
 (defun mevedel--clear-instruction-state (&optional workspace)
   "Delete all visible instruction overlays in WORKSPACE and clear its state."
-  (require 'mevedel-directive)
-  (require 'mevedel-structs)
   (let ((mevedel--instruction-state-key-override
          (mevedel--instruction-workspace-key workspace)))
     (dolist (entry (mevedel--instruction-alist))
@@ -219,7 +222,6 @@ handles all the internal bookkeeping and cleanup."
                      (and (null (overlay-buffer instr))
                           (not (overlay-get instr 'mevedel-marked-for-deletion))))
                    (clean-alist-entry (cons)
-                     (require 'mevedel-directive-source)
                      (mapc (lambda (instr)
                              (mevedel--delete-instruction instr (car cons)))
                            (cl-remove-if-not #'trashp (cdr cons)))
@@ -235,11 +237,9 @@ handles all the internal bookkeeping and cleanup."
                         do (let ((,bof (car ,cons)))
                              (if (stringp ,bof) ; bof is a file, restore it.
                                  (progn
-                                   (require 'mevedel-persistence)
                                    (mevedel--restore-file-instructions ,bof))
                                (clean-alist-entry ,cons)))) ; bof is a buffer, clean it.
              (when (stringp ,specific-buffer)
-               (require 'mevedel-persistence)
                (cl-destructuring-bind (buffer _ _) (mevedel--restore-file-instructions ,specific-buffer)
                  (setq ,specific-buffer buffer)))
              (when-let* ((cons (assoc ,specific-buffer (mevedel--instruction-alist))))
@@ -277,7 +277,6 @@ ids."
            (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to link to: "
                                              completion-table nil t))))))
-  (require 'mevedel-overlay-ui)
   (mevedel--instruction-activate-buffer)
   (cl-labels
       ((update-links (instr-id num-key update-id)
@@ -322,7 +321,6 @@ ids."
            (mapcar #'string-to-number
                    (completing-read-multiple "Select instruction ids to unlink from: "
                                              completion-table nil t))))))
-  (require 'mevedel-overlay-ui)
   (mevedel--instruction-activate-buffer)
   (cl-labels
       ((remove-links (instr-id num-key remove-id)
@@ -432,7 +430,6 @@ that have no workspace context."
 (defun mevedel--find-directive-by-uuid (uuid)
   "Find directive overlay with UUID.
 Returns the overlay, or nil if not found."
-  (require 'mevedel-overlays)
   (when uuid
     (mevedel--foreach-instruction instr
       when (and (mevedel--directivep instr)

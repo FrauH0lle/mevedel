@@ -10,9 +10,9 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib)
-  (require 'mevedel-instruction-registry))
+  (require 'cl-lib))
 
+(require 'mevedel-instruction-registry)
 (require 'mevedel-mention-bindings)
 (require 'mevedel-overlays)
 
@@ -37,10 +37,12 @@
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-file-state'
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind &optional offset limit))
+(autoload 'mevedel-session-record-file-access "mevedel-file-state")
 
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-activate-buffer
@@ -72,6 +74,8 @@
                   "mevedel-permissions" (tool-name &rest args))
 (declare-function mevedel-permission--invocation-context
                   "mevedel-permissions" (&rest args))
+(autoload 'mevedel-check-permission "mevedel-permissions")
+(autoload 'mevedel-permission--invocation-context "mevedel-permissions")
 
 ;; `mevedel-persistence'
 (declare-function mevedel--restore-file-instructions
@@ -86,6 +90,10 @@
                   "mevedel-resource" (value &optional directory))
 (declare-function mevedel-resource-prepare
                   "mevedel-resource" (operation address context))
+(autoload 'mevedel-resource-encode-component "mevedel-resource")
+(autoload 'mevedel-resource-execute "mevedel-resource")
+(autoload 'mevedel-resource-normalize-file-path "mevedel-resource")
+(autoload 'mevedel-resource-prepare "mevedel-resource")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
@@ -94,10 +102,16 @@
 (declare-function mevedel-session-artifacts-read-artifact
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
+(autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-artifact
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-logical-path-p
                   "mevedel-session-publication" (path))
+(autoload 'mevedel-session-publication-logical-path-p
+  "mevedel-session-publication")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
@@ -108,6 +122,7 @@
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (session))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(autoload 'mevedel-request-p "mevedel-structs")
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -127,6 +142,14 @@
 (declare-function mevedel-tool-fs-read-slurp-file-contents
                   "mevedel-tool-fs-read"
                   (path &optional offset limit display-path))
+(autoload 'mevedel-tool-fs-read-format-large-pdf-reminder
+  "mevedel-tool-fs-read")
+(autoload 'mevedel-tool-fs-read-large-pdf-p "mevedel-tool-fs-read")
+(autoload 'mevedel-tool-fs-read-list-directory "mevedel-tool-fs-read")
+(autoload 'mevedel-tool-fs-read-media-mime-type "mevedel-tool-fs-read")
+(autoload 'mevedel-tool-fs-read-pdf-media-p "mevedel-tool-fs-read")
+(autoload 'mevedel-tool-fs-read-session-artifact "mevedel-tool-fs-read")
+(autoload 'mevedel-tool-fs-read-slurp-file-contents "mevedel-tool-fs-read")
 (defvar mevedel-tool-fs-read-media-max-bytes)
 
 ;; `mevedel-tool-registry'
@@ -139,6 +162,7 @@
 ;; `mevedel-turn'
 (declare-function mevedel-request-push-canceller
                   "mevedel-turn" (request canceller))
+(autoload 'mevedel-request-push-canceller "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--delimiting-markdown-backticks
@@ -178,7 +202,6 @@ user-prompt boundary."
 (defun mevedel--resolve-ref-by-id (id &optional workspace)
   "Look up reference by numeric ID in WORKSPACE.
 Returns the reference overlay or nil if not found or not a reference."
-  (require 'mevedel-instruction-registry)
   (when-let* ((instr (mevedel--instruction-with-id id workspace)))
     (when (mevedel--referencep instr)
       instr)))
@@ -186,7 +209,6 @@ Returns the reference overlay or nil if not found or not a reference."
 (defun mevedel--resolve-ref-by-uuid (uuid &optional workspace)
   "Look up the reference carrying UUID in WORKSPACE, or return nil.
 Restore stashed instructions in WORKSPACE before searching live overlays."
-  (require 'mevedel-instruction-registry)
   (when-let* ((instr (mevedel--instruction-with-uuid uuid workspace)))
     (and (mevedel--referencep instr) instr)))
 
@@ -228,7 +250,6 @@ Existing bindings remain authoritative."
 Existing valid bindings remain authoritative.  Direct numeric references
 receive the current target's UUID when it exists.  File mentions receive
 an absolute pathname even when the path is currently unavailable."
-  (require 'mevedel-mention-bindings)
   (unless (mevedel-mention-bindings-valid-p text)
     (user-error "Malformed mention binding"))
   (let* ((workspace (and session (mevedel-session-workspace session)))
@@ -516,7 +537,6 @@ mention this reminder to the user."
        ((not (and (featurep 'mcp) (fboundp 'mcp-hub-get-servers)))
         (funcall deny "mcp.el not available"))
        (t
-        (require 'mevedel-resource)
         (condition-case err
             (let* ((address
                     (format "mcp://%s/%s"
@@ -612,14 +632,12 @@ boundary checks."
   "Add PATH with MIME to this prompt buffer's gptel media context.
 When BYTES is non-nil, stage those verified bytes locally until request
 teardown instead of letting gptel read PATH."
-  (require 'mevedel-turn)
   (if (not bytes)
       (progn
         (unless (local-variable-p 'gptel-context)
           (setq-local gptel-context (copy-sequence gptel-context)))
         (cl-pushnew (list path :mime mime) gptel-context :test #'equal))
     (let ((request (bound-and-true-p mevedel--current-request)))
-      (require 'mevedel-structs)
       (unless (and request (mevedel-request-p request))
         (error "Cannot stage session media without an active request"))
       (let* ((owner (current-buffer))
@@ -675,10 +693,6 @@ See `mevedel-mention-handlers' for the INFO plist shape.
 The INFO :captures list for this handler is (WHOLE PATH START END), where
 PATH is either a bare path or a braced token, and START and END are
 optional strings from the `#L<start>[-<end>]' suffix."
-  (require 'mevedel-tool-fs-read)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((path (mevedel-mentions--file-path-from-captures info))
          (bound-path (plist-get (plist-get info :binding) :path))
          (captures (plist-get info :captures))
@@ -718,7 +732,6 @@ optional strings from the `#L<start>[-<end>]' suffix."
          (chat-buffer (or (plist-get info :chat-buffer) (current-buffer)))
          (permission-context
           (with-current-buffer chat-buffer
-            (require 'mevedel-permissions)
             (mevedel-permission--invocation-context
              :tool-name "Read"
              :session session
@@ -764,13 +777,11 @@ to the user."
                 :normalized-context permission-context)))
       (funcall deny-placeholder "permission denied"))
      ((if artifact-logical
-          (progn
-            (require 'mevedel-session-publication)
-            (not
-             (and (mevedel-session-publication-logical-path-p
-                   artifact-logical)
-                  (mevedel-session-artifacts-artifact-present-p
-                   session artifact-logical))))
+          (not
+           (and (mevedel-session-publication-logical-path-p
+                 artifact-logical)
+                (mevedel-session-artifacts-artifact-present-p
+                 session artifact-logical)))
         (not (file-exists-p expanded)))
       (funcall deny-placeholder "does not exist"))
      ((and (not artifact-logical)
@@ -932,7 +943,6 @@ Dispatches per `mevedel-mention-handlers'."
          (new-items nil)
          (media-contexts nil)
          (warnings nil))
-    (require 'mevedel-mention-bindings)
     (dolist (entry mevedel-mention-handlers)
       (let ((regex (car entry))
             (kind (nth 1 entry))
@@ -1084,7 +1094,6 @@ STATUS is the completion exit status."
                 (token (concat "@ref:" candidate))
                 ((equal token
                         (buffer-substring-no-properties start (point)))))
-      (require 'mevedel-mention-bindings)
       (mevedel-mention-bindings-set
        start (point)
        (list :kind 'ref :token token :reference-uuid uuid)))))
@@ -1092,7 +1101,6 @@ STATUS is the completion exit status."
 (defun mevedel-ref-capf ()
   "Completion-at-point function for @ref mentions.
 Provides completion for both @ref:ID and @ref:{tag-query} syntax."
-  (require 'mevedel-instruction-registry)
   (mevedel--instruction-activate-buffer)
   (when (mevedel--instruction-alist-value)
     (save-excursion
@@ -1193,7 +1201,6 @@ STATUS is the completion exit status."
                  (token (mevedel-mentions-file-token display-path)))
             (delete-region path-start (point))
             (insert (substring token (length "@file:")))
-            (require 'mevedel-mention-bindings)
             (mevedel-mention-bindings-set
              prefix-start (point)
              (list :kind 'file :token token
@@ -1459,7 +1466,6 @@ exit-function positions point between the braces."
       (when (and (>= start (point-min))
                  (equal token (buffer-substring-no-properties
                                start (point))))
-        (require 'mevedel-mention-bindings)
         (mevedel-mention-bindings-set
          start (point)
          (list :kind 'mcp :token token :server server :uri uri))))))
