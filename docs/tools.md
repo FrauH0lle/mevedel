@@ -93,9 +93,10 @@ order. A denial aborts the envelope with a bounded partial-work summary.
 Ordinary failures remain values the guest can inspect. In-flight interpreter
 state is ephemeral: cancellation or restart interrupts it and it is never
 resumed from session storage. Before child effects, the session sidecar records
-the envelope and child identities; completions refresh the bounded audit. A
-restart reconstructs one interrupted ToolScript row from that checkpoint and
-consumes it with the repaired segment. Synchronous child callbacks are admitted
+the envelope. Child audit changes are journaled in memory and become durable on
+an unrelated autosave or the settlement write, avoiding one full publication
+per child. A restart reconstructs one interrupted ToolScript row from the last
+durable checkpoint and consumes it with the repaired segment. Synchronous child callbacks are admitted
 in bounded timer turns so one batch cannot monopolize Emacs. Provider
 projection records whether the envelope output was inline, truncated, or
 persisted, plus its original character count. A `ptc-script` telemetry span

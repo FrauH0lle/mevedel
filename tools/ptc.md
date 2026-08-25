@@ -24,9 +24,19 @@ Accepted macro-shaped forms:
     (unless CONDITION BODY...)
     (push VALUE VARIABLE)          ; VARIABLE is a plain bound variable
     (dolist (VAR LIST) BODY...)    ; no RESULT form
+    (dotimes (VAR COUNT) BODY...)  ; no RESULT form
 
 There is no `eval`, macro definition, backquote, `cl-loop`, generalized place,
 buffer/process/filesystem access, or ambient Emacs state.
+
+Every operator is checked before anything runs: a script naming a function
+outside the closed tables is rejected up front with the full list of unknown
+names and nearest-match suggestions. `seq-*` and `cl-*` helpers do not exist;
+use the listed primitives (`take` replaces `seq-take`, `mapcar` replaces
+`cl-mapcar`). Path strings have dedicated pure primitives
+(`file-name-nondirectory`, `file-name-directory`, `file-name-concat`, ...) —
+do not reimplement them with `split-string`. `sort` copies its list and always
+orders ascending with a fixed comparator.
 
 `let` evaluates every initializer in the outer environment. Use `let*` when a
 later initializer needs a variable bound earlier in the same form. `setq` only
@@ -38,9 +48,14 @@ needs no escape there, so a line beginning with `(defcustom` is matched by
 `"^(defcustom"`; a capture group uses `"\\(...\\)"` in script source. Tool
 arguments follow that tool's contract instead: Grep uses ripgrep syntax, where
 `"^[(]defcustom"` safely matches the same literal text.
-Repetition, alternation, backreferences, and group extensions are not in the
-guest regexp subset. Use literals, anchors, bracket classes, ordinary capture
-groups, and `regexp-quote`.
+The guest regexp subset allows `*`, `+`, `?`, and `\{n,m\}` on a single atom:
+one literal, one escaped character, `.`, or one bracket class, so `"^[0-9]+$"`
+works. Quantified groups, a quantifier stacked on another quantifier,
+alternation, backreferences, and group extensions are rejected. Ordinary
+capture groups and `regexp-quote` remain available. Polynomial backtracking is
+charged conservatively from input size and quantified-atom count before Emacs's
+matcher runs. Literal regexps are validated up front, before any nested tool
+runs.
 
 The generated **Pure data operations** section below gives the exact signature
 of every callable data primitive. Brackets mean optional and `name...` means
@@ -55,6 +70,12 @@ Call a listed tool by name with its generated keyword arguments:
 Successful calls normally return strings. A failed nested call returns
 `(:error "message")`, so scripts can branch on `(plist-get result :error)`.
 Permission denial aborts the whole script and cannot be caught.
+
+A nested call returns exactly the string that tool returns in conversation,
+including any formatting the tool documents. `Read` output carries `cat -n`
+style line-number prefixes (`1\tfirst line`) and may end with a truncation
+notice; `Grep` count mode returns absolute `path:count` lines; `Glob` returns
+newline-separated absolute paths. Parse accordingly.
 
 Use parallel forms only for independent calls. Results preserve input order:
 

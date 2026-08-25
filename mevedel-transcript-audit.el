@@ -110,28 +110,36 @@ attributes is the nearest user turn ending at or before POSITION."
 (defun mevedel-transcript-audit-spans (text &optional type)
   "Return parsed audit spans from TEXT, optionally restricted to TYPE.
 
-Each span is a plist containing `:record', `:start', and `:end'."
+Each span is a plist containing `:record', `:start', and `:end'.
+
+Scans TEXT directly: this runs per transcript segment during live
+rendering, and copying TEXT into a temporary buffer first dominated
+render allocation."
   (when (stringp text)
-    (let (spans)
-      (with-temp-buffer
-        (insert text)
-        (goto-char (point-min))
-        (while (search-forward mevedel--hook-audit-open nil t)
-          (let ((start (- (match-beginning 0) (point-min)))
-                (record-start (point)))
-            (when (search-forward mevedel--hook-audit-close nil t)
+    (let ((open-length (length mevedel--hook-audit-open))
+          (close-length (length mevedel--hook-audit-close))
+          (search 0)
+          open spans)
+      (while (setq open (string-search mevedel--hook-audit-open text search))
+        (let* ((record-start (+ open open-length))
+               (close (string-search mevedel--hook-audit-close
+                                     text record-start)))
+          (if (not close)
+              (setq search record-start)
+            (let ((end (+ close close-length)))
               (when-let* (((mevedel-transcript-audit-trusted-range-p
-                            start (- (point) (point-min)) text))
+                            open end text))
                           (record
                            (mevedel--read-hook-audit-record
-                            (buffer-substring-no-properties
-                             record-start (match-beginning 0))))
+                            (substring-no-properties
+                             text record-start close)))
                           ((or (null type)
                                (eq (plist-get record :type) type))))
                 (push (list :record record
-                            :start start
-                            :end (- (point) (point-min)))
-                      spans))))))
+                            :start open
+                            :end end)
+                      spans))
+              (setq search end)))))
       (nreverse spans))))
 
 (defun mevedel-transcript-audit-records (text &optional type)

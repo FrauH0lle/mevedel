@@ -393,6 +393,14 @@ warnings.
 - **Avoid `require` at top level** in library files; prefer
   `declare-function`/`defvar` plus `require` inside functions or
   `eval-when-compile`
+- **Never `require` inside a hot-path function**: an already-satisfied
+  `require` still scans the `features` list on every call. A profiled
+  session put 20% of CPU samples in in-function `require`s on render
+  paths. Code that runs per segment, per chunk, per redraw tick, or per
+  guest step must hoist its `require`s to the file top level (this
+  overrides the lazy-require preference above) or to the path's
+  once-per-call entry point. Lazy `require` stays right for cold paths:
+  commands, settlement, persistence, setup.
 - **ASCII in code, unicode only in UI-facing strings**: comments,
   identifiers, and non-UI strings stay ASCII (use `->` not `→`,
   `lambda`/`fn` not `λ`). Unicode is fine in `propertize`, overlays,

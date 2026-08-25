@@ -73,31 +73,48 @@
          (setf (mevedel-session-ptc-checkpoints session) before)
          (signal (car err) (cdr err)))))))
 
+(defun mevedel-ptc-checkpoint--merge (session id updates)
+  "Merge UPDATES into SESSION checkpoint ID in memory.
+Return non-nil when the checkpoint exists."
+  (when-let* ((checkpoint
+               (seq-find
+                (lambda (item) (equal id (plist-get item :id)))
+                (mevedel-session-ptc-checkpoints session))))
+    (setq checkpoint (copy-sequence checkpoint))
+    (cl-loop for (key value) on updates by #'cddr do
+             (setq checkpoint (plist-put checkpoint key value)))
+    (mevedel-ptc-checkpoint--put session checkpoint)
+    t))
+
+(defun mevedel-ptc-checkpoint-note (session id updates)
+  "Merge UPDATES into SESSION checkpoint ID in memory only.
+No sidecar write happens here: per-child durability cost dominated
+ToolScript runtime and serialized parallel batches, so intra-script
+audit progress is journaled in memory and any unrelated autosave
+captures it opportunistically.  The durable writes are the start and
+settlement checkpoints.  Return non-nil when SESSION is nil or the
+checkpoint exists."
+  (if (not session)
+      t
+    (mevedel-ptc-checkpoint--merge session id updates)))
+
 (defun mevedel-ptc-checkpoint-update (session buffer id updates)
   "Merge UPDATES into SESSION checkpoint ID and rewrite its sidecar.
 Return non-nil when the checkpoint is durable or SESSION is nil."
   (if (not session)
       t
-    (when-let* ((checkpoint
-                 (seq-find
-                  (lambda (item) (equal id (plist-get item :id)))
-                  (mevedel-session-ptc-checkpoints session))))
-      (let ((before (mevedel-session-ptc-checkpoints session)))
-        (condition-case err
-            (progn
-              (setq checkpoint (copy-sequence checkpoint))
-              (cl-loop for (key value) on updates by #'cddr do
-                       (setq checkpoint (plist-put checkpoint key value)))
-              (mevedel-ptc-checkpoint--put session checkpoint)
-              (require 'mevedel-session-persistence)
-              (or (mevedel-session-persistence-write-sidecar-now
-                   session buffer)
-                  (progn
-                    (setf (mevedel-session-ptc-checkpoints session) before)
-                    nil)))
-          (error
-           (setf (mevedel-session-ptc-checkpoints session) before)
-           (signal (car err) (cdr err))))))))
+    (let ((before (mevedel-session-ptc-checkpoints session)))
+      (condition-case err
+          (when (mevedel-ptc-checkpoint--merge session id updates)
+            (require 'mevedel-session-persistence)
+            (or (mevedel-session-persistence-write-sidecar-now
+                 session buffer)
+                (progn
+                  (setf (mevedel-session-ptc-checkpoints session) before)
+                  nil)))
+        (error
+         (setf (mevedel-session-ptc-checkpoints session) before)
+         (signal (car err) (cdr err)))))))
 
 (defun mevedel-ptc-checkpoint-clear-settled (session)
   "Remove settled ToolScript checkpoints from SESSION in memory.

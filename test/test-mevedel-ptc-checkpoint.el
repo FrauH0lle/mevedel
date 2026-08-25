@@ -63,6 +63,31 @@
       (should (equal before
                      (mevedel-session-ptc-checkpoints session))))))
 
+(mevedel-deftest mevedel-ptc-checkpoint-note ()
+  ,test
+  (test)
+  :doc "treats an absent session as recorded"
+  (should (mevedel-ptc-checkpoint-note nil "p" '(:state settled)))
+  :doc "merges into memory without any sidecar write"
+  (let ((session
+         (test-mevedel-ptc-checkpoint--session
+          '((:id "p" :state running :render-data nil))))
+        (wrote nil))
+    (cl-letf (((symbol-function
+                'mevedel-session-persistence-write-sidecar-now)
+               (lambda (&rest _) (setq wrote t))))
+      (should (mevedel-ptc-checkpoint-note
+               session "p" '(:render-data (:kind ptc :outcome running))))
+      (should-not wrote)
+      (should (equal '(:kind ptc :outcome running)
+                     (plist-get
+                      (car (mevedel-session-ptc-checkpoints session))
+                      :render-data)))))
+  :doc "returns nil for an unknown checkpoint id"
+  (should-not (mevedel-ptc-checkpoint-note
+               (test-mevedel-ptc-checkpoint--session)
+               "missing" '(:state settled))))
+
 (mevedel-deftest mevedel-ptc-checkpoint-clear-settled ()
   ,test
   (test)

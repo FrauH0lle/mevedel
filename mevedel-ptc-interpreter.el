@@ -139,7 +139,9 @@ still count until the script ends."
   :group 'mevedel)
 
 (defcustom mevedel-ptc-max-regexp-work 4194304
-  "Maximum regexp-by-input byte product for one guest operation."
+  "Maximum estimated regexp work for one guest operation.
+The estimate is regexp bytes times input bytes raised to at least the
+number of quantified atoms."
   :type 'natnum
   :group 'mevedel)
 
@@ -335,16 +337,31 @@ no guest-visible `macroexpand', and no generalized places.")
   "Split STRING without consulting host separator configuration."
   (split-string string (or separators "[ \f\t\n\r\v]+") omit-nulls trim))
 
+(defun mevedel-ptc--sort (list)
+  "Return a copy of LIST sorted ascending by `value<'.
+The comparator is fixed on the host side because guest closures cannot
+be called from host code."
+  (unless (listp list)
+    (error "'sort': expects a list"))
+  (sort (copy-sequence list) #'value<))
+
 (defconst mevedel-ptc-pure-primitives
   '(("car" . car) ("cdr" . cdr) ("caar" . caar) ("cadr" . cadr)
     ("cdar" . cdar) ("cddr" . cddr) ("cons" . cons) ("list" . list)
     ("append" . append) ("length" . length) ("nth" . nth)
-    ("nthcdr" . nthcdr) ("last" . last) ("reverse" . reverse)
+    ("nthcdr" . nthcdr) ("last" . last) ("take" . take)
+    ("reverse" . reverse) ("sort" . mevedel-ptc--sort)
     ("member" . member) ("memq" . memq) ("assoc" . assoc) ("assq" . assq)
     ("plist-get" . plist-get) ("plist-member" . plist-member)
     ("concat" . concat) ("format" . format) ("substring" . substring)
     ("split-string" . mevedel-ptc--split-string)
     ("string-join" . string-join)
+    ("file-name-nondirectory" . file-name-nondirectory)
+    ("file-name-directory" . file-name-directory)
+    ("file-name-concat" . file-name-concat)
+    ("file-name-extension" . file-name-extension)
+    ("file-name-sans-extension" . file-name-sans-extension)
+    ("file-name-base" . file-name-base)
     ("string-trim" . string-trim) ("string-prefix-p" . string-prefix-p)
     ("string-suffix-p" . string-suffix-p) ("string-match-p" . string-match-p)
     ("string-search" . string-search) ("regexp-quote" . regexp-quote)
@@ -449,38 +466,92 @@ When SERIALIZABLE-P is non-nil, reject guest closures."
         (setf (mevedel-ptc-state-retained-bytes state) total)))
     value))
 
-(defun mevedel-ptc--unsafe-regexp-p (regexp)
-  "Return non-nil when REGEXP is outside the guest's linear subset.
+(defconst mevedel-ptc--max-regexp-quantifiers 8
+  "Maximum quantified atoms in one guest regexp.
+Unnested quantifiers on single atoms cannot blow up exponentially, but
+adjacent overlapping ones (\"a*a*b\") still backtrack polynomially; this
+cap and `mevedel-ptc-max-regexp-work' bound that residual.")
 
-The subset excludes repetition, alternation, backreferences, and group
-extensions.  These constructs can make Emacs's backtracking matcher spend an
-unbounded amount of time inside one otherwise fuel-bounded guest step."
+(defun mevedel-ptc--regexp-quantifier-count (regexp)
+  "Return REGEXP's quantified-atom count, or nil when it is unsafe.
+
+The subset allows `*', `+', `?', and `\\=\\{n,m\\}' on a single atom: a
+literal character, an escaped character, `.', or a bracket class.  It
+excludes quantified groups, a quantifier stacked on another quantifier,
+alternation, backreferences, and group extensions.  Those constructs can
+make Emacs's backtracking matcher spend an unbounded amount of time
+inside one otherwise fuel-bounded guest step."
   (let ((index 0)
         (length (length regexp))
-        in-class)
-    (catch 'unsafe
-      (while (< index length)
-        (let ((char (aref regexp index)))
-          (cond
-           ((eq char ?\\)
-            (setq index (1+ index))
-            (when (< index length)
-              (let ((escaped (aref regexp index)))
-                (when (and (not in-class)
-                           (or (memq escaped '(?{ ?|))
-                               (and (>= escaped ?1) (<= escaped ?9))
-                               (and (eq escaped ?\()
-                                    (< (1+ index) length)
-                                    (eq (aref regexp (1+ index)) ??))))
-                  (throw 'unsafe t)))))
-           ((and (not in-class) (eq char ?\[))
-            (setq in-class t))
-           ((and in-class (eq char ?\]))
-            (setq in-class nil))
-           ((and (not in-class) (memq char '(?* ?+ ??)))
-            (throw 'unsafe t))))
-        (setq index (1+ index)))
-      nil)))
+        (quantifiers 0)
+        in-class
+        ;; What the previous token was: nil (nothing quantifiable), `atom'
+        ;; (a quantifiable single atom), `group' (a closed group), or
+        ;; `quantifier' (a quantifier that must not be stacked on).
+        prev)
+    (cl-flet ((quantify ()
+                (unless (eq prev 'atom) (throw 'unsafe nil))
+                (when (> (cl-incf quantifiers)
+                         mevedel-ptc--max-regexp-quantifiers)
+                  (throw 'unsafe nil))
+                (setq prev 'quantifier)))
+      (catch 'unsafe
+        (while (< index length)
+          (let ((char (aref regexp index)))
+            (cond
+             ((eq char ?\\)
+              (setq index (1+ index))
+              (when (< index length)
+                (let ((escaped (aref regexp index)))
+                  (cond
+                   (in-class nil)
+                   ((eq escaped ?|) (throw 'unsafe nil))
+                   ((and (>= escaped ?1) (<= escaped ?9)) (throw 'unsafe nil))
+                   ((eq escaped ?\()
+                    (when (and (< (1+ index) length)
+                               (eq (aref regexp (1+ index)) ??))
+                      (throw 'unsafe nil))
+                    (setq prev nil))
+                   ((eq escaped ?\)) (setq prev 'group))
+                   ((eq escaped ?{)
+                    ;; Bounded repetition: digits, optional comma+digits.
+                    (quantify)
+                    (let ((start (1+ index))
+                          (comma-seen nil)
+                          (digits 0))
+                      (setq index start)
+                      (catch 'closed
+                        (while (< index length)
+                          (let ((c (aref regexp index)))
+                            (cond
+                             ((and (eq c ?\\)
+                                   (< (1+ index) length)
+                                   (eq (aref regexp (1+ index)) ?}))
+                              (when (zerop digits) (throw 'unsafe nil))
+                              (setq index (1+ index))
+                              (throw 'closed t))
+                             ((and (>= c ?0) (<= c ?9))
+                              (setq digits (1+ digits)))
+                             ((and (eq c ?,) (not comma-seen) (> digits 0))
+                              (setq comma-seen t))
+                             (t (throw 'unsafe nil))))
+                          (setq index (1+ index)))
+                        ;; Unterminated \{ never reached \}.
+                        (throw 'unsafe nil))))
+                   (t (setq prev 'atom))))))
+             ((and (not in-class) (eq char ?\[))
+              (setq in-class t))
+             ((and in-class (eq char ?\]))
+              (setq in-class nil
+                    prev 'atom))
+             (in-class nil)
+             ((memq char '(?* ?+ ??))
+              (quantify))
+             ((memq char '(?^ ?$))
+              (setq prev nil))
+             (t (setq prev 'atom))))
+          (setq index (1+ index)))
+        quantifiers))))
 
 (defun mevedel-ptc--check-regexp (regexp input &optional reject-empty-p)
   "Validate REGEXP against atomic budgets for INPUT.
@@ -490,15 +561,26 @@ When REJECT-EMPTY-P is non-nil, reject an empty REGEXP."
       (mevedel-ptc--fail
        'atomic-work "Guest regexp exceeds its %d byte budget"
        mevedel-ptc-max-regexp-bytes))
-    (when (mevedel-ptc--unsafe-regexp-p regexp)
-      (mevedel-ptc--fail
-       'atomic-work
-       "Guest regexp uses repetition, alternation, a backreference, or a group extension"))
-    (when (and (stringp input)
-               (> (* (string-bytes regexp) (string-bytes input))
-                  mevedel-ptc-max-regexp-work))
-      (mevedel-ptc--fail
-       'atomic-work "Guest regexp exceeds its atomic work budget"))
+    (let ((quantifiers (mevedel-ptc--regexp-quantifier-count regexp)))
+      (unless (numberp quantifiers)
+        (mevedel-ptc--fail
+         'atomic-work
+         "Guest regexp %S is outside the bounded subset: quantifiers apply only to one literal, escape, dot, or bracket class; quantified groups, stacked quantifiers, alternation, and backreferences are rejected"
+         regexp))
+      (condition-case err
+          (string-match-p regexp "")
+        (invalid-regexp
+         (mevedel-ptc--fail
+          'atomic-work "Invalid guest regexp %S: %s"
+          regexp (error-message-string err))))
+      (when (stringp input)
+        (let ((work (string-bytes regexp))
+              (factor (max 1 (string-bytes input))))
+          (dotimes (_ (max 1 quantifiers))
+            (when (> work (/ mevedel-ptc-max-regexp-work factor))
+              (mevedel-ptc--fail
+               'atomic-work "Guest regexp exceeds its atomic work budget"))
+            (setq work (* work factor))))))
     (when (and reject-empty-p (zerop (length regexp)))
       (mevedel-ptc--fail
        'atomic-work "'split-string': an empty separator is forbidden"))))
@@ -543,10 +625,13 @@ When REJECT-EMPTY-P is non-nil, reject an empty REGEXP."
           (setq start (match-end 0)))))))
 
 (defun mevedel-ptc--apply-pure (state name function args)
-  "Apply pure guest FUNCTION named NAME to ARGS under atomic budgets."
+  "Apply pure guest FUNCTION named NAME to ARGS under atomic budgets.
+File-name handlers are disabled so the `file-name-*' primitives stay
+purely syntactic even on remote-looking strings."
   (save-match-data
     (mevedel-ptc--check-primitive-input state name args)
-    (mevedel-ptc-check-value state (apply function args) t)))
+    (let ((file-name-handler-alist nil))
+      (mevedel-ptc-check-value state (apply function args) t))))
 
 (defun mevedel-ptc--charge (state)
   "Charge one guest-form evaluation step against STATE."
@@ -1052,16 +1137,122 @@ unknown wrapper around a tool call cannot run the tool first."
         (_ (error "Unknown interpreter continuation: %S" frame))))))
 
 
+;;;; Preflight
+
+(defconst mevedel-ptc--special-form-names
+  '("quote" "if" "progn" "cond" "and" "or" "let" "let*" "setq" "while"
+    "lambda" "funcall" "apply" "mapcar" "parallel" "parallel-map")
+  "Operator names `mevedel-ptc--eval-compound' handles directly.")
+
+(defun mevedel-ptc--suggestion (name known)
+  "Return the KNOWN name closest to unknown NAME, or nil.
+A known name that survives stripping a namespace-style prefix or suffix
+from NAME counts as closest, so \"seq-take\" suggests \"take\".  Distant
+matches are suppressed rather than guessed."
+  (let (best (best-distance 3))
+    (dolist (candidate known best)
+      (let ((distance
+             (if (or (string-suffix-p (concat "-" candidate) name)
+                     (string-prefix-p (concat candidate "-") name))
+                 1
+               (string-distance name candidate))))
+        (when (< distance best-distance)
+          (setq best candidate
+                best-distance distance))))))
+
+(defun mevedel-ptc--preflight-literal-regexps (name args)
+  "Validate literal regexp arguments of primitive NAME applied to ARGS."
+  (dolist (index (pcase name
+                   ("string-match-p" '(0))
+                   ("split-string" '(1 3))
+                   ("string-trim" '(1 2))
+                   (_ nil)))
+    (let ((argument (nth index args)))
+      (when (stringp argument)
+        (mevedel-ptc--check-regexp
+         argument nil
+         (and (equal name "split-string") (= index 1)))))))
+
+(defun mevedel-ptc--preflight (form roster)
+  "Reject FORM when it names operators outside the closed tables.
+
+The evaluator resolves every compound form's operator against the same
+closed tables, never against the lexical environment, so this static
+walk is exact for evaluated positions.  Unknown names in never-taken
+branches are rejected too; dead code is not a reason to ship an unknown
+call.  Quoted data, binding-name positions, and lambda parameter lists
+are skipped.  Literal regexp arguments to the regexp primitives are
+validated here so a bad regexp fails before any nested tool runs.
+
+All unknown operators are collected and reported in one error, each with
+the nearest known name from ROSTER and the closed tables."
+  (let ((unknown nil))
+    (cl-labels
+        ((walk-all (forms)
+           (dolist (item forms) (walk item)))
+         (walk (form)
+           (when (consp form)
+             (let ((name (mevedel-ptc--operator-name form))
+                   (args (cdr form)))
+               (cond
+                ((null name) (walk-all form))
+                ((equal name "quote") nil)
+                ((equal name "lambda")
+                 (walk-all (nthcdr 2 form)))
+                ((member name '("let" "let*"))
+                 (dolist (binding (nth 1 form))
+                   (when (consp binding)
+                     (walk-all (cdr binding))))
+                 (walk-all (nthcdr 2 form)))
+                ((equal name "cond")
+                 (dolist (clause args)
+                   (when (listp clause)
+                     (walk-all clause))))
+                ((equal name "dolist")
+                 (let ((spec (nth 1 form)))
+                   (when (consp spec)
+                     (walk (nth 1 spec))))
+                 (walk-all (nthcdr 2 form)))
+                ((or (member name mevedel-ptc--special-form-names)
+                     (assoc name mevedel-ptc--transformers)
+                     (member name roster))
+                 (walk-all args))
+                ((assoc name mevedel-ptc-pure-primitives)
+                 (mevedel-ptc--preflight-literal-regexps name args)
+                 (walk-all args))
+                (t
+                 (unless (member name unknown)
+                   (push name unknown))
+                 (walk-all args)))))))
+      (walk form))
+    (when unknown
+      (let ((known (append mevedel-ptc--special-form-names
+                           (mapcar #'car mevedel-ptc--transformers)
+                           (mapcar #'car mevedel-ptc-pure-primitives)
+                           roster)))
+        (mevedel-ptc--fail
+         'preflight
+         "Unknown functions: %s.  Callable names are limited to the documented special forms and conveniences, the pure data primitives, and this request's tools"
+         (mapconcat
+          (lambda (name)
+            (if-let* ((suggestion (mevedel-ptc--suggestion name known)))
+                (format "%s (try: %s)" name suggestion)
+              name))
+          (nreverse unknown) ", "))))))
+
+
 ;;;; Public interface
 
 (defun mevedel-ptc-start (script roster)
   "Begin interpreting SCRIPT with tool primitives named in ROSTER.
 ROSTER is a list of tool-name strings.  Return an opaque state for
-`mevedel-ptc-step', or signal if SCRIPT cannot be read.
+`mevedel-ptc-step', or signal if SCRIPT cannot be read or names
+operators outside the closed tables.
 
 Guest state is fresh for every call: nothing persists between scripts."
   (let* ((parsed (mevedel-ptc--read script))
          (now (float-time)))
+    (mevedel-ptc--preflight (car parsed) roster)
     (mevedel-ptc--make-state
      :roster roster
      :obarray (cdr parsed)

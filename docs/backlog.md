@@ -73,7 +73,12 @@ recommends those elements while leaving Codex room to choose the next action.
 - investigate and test address to resources, preferably in mevedel itself
   - are the hashes necessary? Don't they prohibit the model from calling the correct address?
   - The local:// scratchpad should be clearly promoted in the instructions
-  -
+  - add mevedel://<doc> for internal docs (maybe even sourcecode?)
+    - Internal harness documentation — versioned with the binary.
+
+- A just expanded tool call in the view buffer can get swallowed/disappears when the view buffer updates
+  - reappears on next view buffer render
+    
 - Allow activation and deactivation of skills per project
 - Allow activation and deactivation of plugins per project
 - In Ask mode, ApplyPatch should expand the first one or two hunks
@@ -87,6 +92,26 @@ recommends those elements while leaving Codex room to choose the next action.
   during heavy history-live streaming with point on interaction text,
   convert those captures to markers.
 
+- Collapse multiple sequential tool calls (more than three), for example:
+  - Searched for 5 patterns, read 1 file, ran 5 shell commands
+  - Ran 5 commands 
+
+- Collapse long input
+  - [Pasted text #1 +83 lines]
+
+- Deferred from the 2026-08-25 PTC profiling session (the big levers —
+  segment-classification memoization, hot-path `require` hoisting,
+  `directive-ranges` caching, `audit-spans` string scan, per-script
+  checkpoints — are done):
+  - `mevedel-view--clean-reasoning-text` still allocates ~58 MB/session via
+    `replace-regexp-in-string` in `--scaffolding-only-p`/`--thinking-summary`;
+    consider a cheap "contains only markers?" prefilter before the regexp pass.
+  - Provider reasoning dominated wall clock (95%); benchmark PTC tasks with a
+    lower effort tier or another model before further dialect tuning.
+  - doom-modeline/`format-mode-line` took ~4% of allocation during streaming;
+    user config, not mevedel — revisit only if redisplay stays hot after the
+    render fixes.
+  
 ## Entry format
 
 Each entry records its source, owed change, reason for deferral, current

@@ -277,8 +277,13 @@ reference copied under another tool id stays literal."
                 (push (substring string last strip-start) chunks)
                 (setq last strip-end)
                 (setq search strip-end))))))
-      (push (substring string last) chunks)
-      (apply #'concat (nreverse chunks)))))
+      ;; Nothing stripped: return the argument itself.  This runs on every
+      ;; transcript segment during live rendering, and an unconditional
+      ;; substring+concat copied each segment twice per classification call.
+      (if (null chunks)
+          string
+        (push (substring string last) chunks)
+        (apply #'concat (nreverse chunks))))))
 
 (defun mevedel-tool-media--read-media-reference
     (reference tool-results-dir expected-tool-use-id &optional session)

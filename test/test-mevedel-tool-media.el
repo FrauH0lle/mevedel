@@ -144,6 +144,23 @@
     (should (= 1 (length mevedel-tool-media--store)))
     (should-not (cdr (mevedel-tool-media-extract first nil "toolu_1")))))
 
+(mevedel-deftest mevedel-tool-media-strip-blocks
+    (:vars ((mevedel-tool-media--store nil)))
+  ,test
+  (test)
+  :doc "returns the argument itself when nothing is stripped"
+  ;; This runs per transcript segment during live rendering; the no-op
+  ;; path must not copy the string.
+  (let ((plain "just some tool output\nwith lines"))
+    (should (eq plain (mevedel-tool-media-strip-blocks plain)))
+    (should (eq plain (mevedel-tool-media-strip-blocks plain "toolu_1"))))
+  :doc "still strips an owned propertized block"
+  (let ((stored (mevedel-tool-media-attach-result
+                 "visible" '((:mime "image/png" :kind image :data "QUJD"))
+                 nil "toolu_strip")))
+    (should (equal "visible"
+                   (mevedel-tool-media-strip-blocks stored)))))
+
 (mevedel-deftest mevedel-tool-media-extract
     (:vars ((mevedel-tool-media--store nil)))
   ,test
