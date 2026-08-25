@@ -21,6 +21,7 @@
 (declare-function mevedel-agent-control-steer-user
                   "mevedel-agent-control"
                   (session message &optional before-wake metadata))
+(autoload 'mevedel-agent-control-steer-user "mevedel-agent-control")
 
 ;; `mevedel-chat'
 (declare-function mevedel--submit-generated-turn
@@ -30,6 +31,7 @@
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view--run-follow-up-drain
                   "mevedel-pending-inputs" (data-buffer))
+(autoload 'mevedel-view--run-follow-up-drain "mevedel-pending-inputs")
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-artifact-path-p "mevedel-plan" (path))
@@ -37,6 +39,9 @@
                   (session artifact))
 (declare-function mevedel-plan-resource-address "mevedel-plan"
                   (relative-path))
+(autoload 'mevedel-plan-artifact-path-p "mevedel-plan")
+(autoload 'mevedel-plan-read-artifact "mevedel-plan")
+(autoload 'mevedel-plan-resource-address "mevedel-plan")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
@@ -47,6 +52,11 @@
 (declare-function mevedel-session-artifacts-save
                   "mevedel-session-artifacts"
                   (session buffer &optional settled force))
+(autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-assert-mutation-authority
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
@@ -61,6 +71,7 @@
 ;; `mevedel-system'
 (declare-function mevedel-system-render-prompt-file
                   "mevedel-system" (relative-path &optional replacements))
+(autoload 'mevedel-system-render-prompt-file "mevedel-system")
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record
@@ -73,6 +84,7 @@
 ;; `mevedel-transport'
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport" (key path thunk))
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view-interaction-pending-p
@@ -107,9 +119,6 @@
 (defun mevedel-goal--assert-mutation-authority (session &optional buffer)
   "Require SESSION mutation authority before changing Goal state.
 BUFFER defaults to the current buffer."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-assert-mutation-authority
    session (or buffer (current-buffer))))
 
@@ -127,17 +136,12 @@ BUFFER defaults to the current buffer."
 (defun mevedel-goal--valid-plan-reference-p (reference)
   "Return non-nil when REFERENCE is a normalized relative path."
   (or (null reference)
-      (progn
-        (require 'mevedel-plan)
-        (mevedel-plan-artifact-path-p reference))))
+      (mevedel-plan-artifact-path-p reference)))
 
 (defun mevedel-goal-create (objective &optional session plan-reference id)
   "Create and persist a lifecycle-neutral Goal for OBJECTIVE.
 SESSION defaults to the current session.  PLAN-REFERENCE is an optional
 session-relative accepted-plan artifact.  ID may preallocate the Goal identity."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (setq objective (mevedel-goal--validate-objective objective)
         session (or session mevedel--session))
   (unless session
@@ -222,9 +226,6 @@ reactivated without scheduling because its caller owns the prepared kickoff."
 
 (defun mevedel-goal--persist (session buffer)
   "Persist SESSION from BUFFER when both remain live."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (when (and session (buffer-live-p buffer))
     (with-current-buffer buffer
       (mevedel-session-artifacts-save session buffer))))
@@ -247,10 +248,6 @@ reactivated without scheduling because its caller owns the prepared kickoff."
 The artifact is validated through its private session-owned path, but the
 returned value is the model-facing `local://plans/...' address so Goal context
 never discloses session storage paths."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-plan)
   (when-let* ((reference (mevedel-goal-plan-reference goal)))
     (unless (mevedel-goal--valid-plan-reference-p reference)
       (mevedel-goal--pause-for-integrity
@@ -270,9 +267,7 @@ never discloses session storage paths."
          goal session
          "Accepted-plan artifact is missing or no longer owned by this session"))
       (condition-case nil
-          (progn
-            (require 'mevedel-plan)
-            (mevedel-plan-read-artifact session artifact))
+          (mevedel-plan-read-artifact session artifact)
         (error
           (mevedel-goal--pause-for-integrity
            goal session
@@ -291,7 +286,6 @@ never discloses session storage paths."
     (let* ((budget (mevedel-goal-token-budget goal))
            (used (mevedel-goal-tokens-used goal))
            (plan-address (mevedel-goal--resolve-plan-reference goal session)))
-      (require 'mevedel-system)
       (mevedel-system-render-prompt-file
        "prompts/goals/active-context.md"
        `(("objective" . ,(mevedel-goal-objective goal))
@@ -340,7 +334,6 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
            (buffer-local-value 'mevedel--current-request buffer))
       'request)
      ((mevedel-session-pending-follow-ups session)
-      (require 'mevedel-pending-inputs)
       (run-at-time 0 nil #'mevedel-view--run-follow-up-drain buffer)
       'follow-up)
      ((mevedel-goal--pending-interaction-p session) 'interaction)
@@ -364,7 +357,6 @@ A timer fires wherever the main loop is waiting, so it waits for an idle
 transport rather than nesting inside a remote operation already in flight."
   (when (and (buffer-live-p buffer)
              (eq session (buffer-local-value 'mevedel--session buffer)))
-    (require 'mevedel-transport)
     (mevedel-transport-run-when-idle
      (list 'goal-continuation buffer)
      (buffer-local-value 'default-directory buffer)
@@ -521,7 +513,6 @@ The string `none' removes the limit."
     (mevedel-goal--persist session (current-buffer))
     (when (and (eq (mevedel-goal-status goal) 'active)
                mevedel--current-request)
-      (require 'mevedel-agent-control)
       (ignore-errors
         (mevedel-agent-control-steer-user
          session (mevedel-goal-active-context session))))

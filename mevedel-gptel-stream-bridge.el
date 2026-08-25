@@ -27,10 +27,13 @@
                   "mevedel-telemetry" (&optional buffer))
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
+(autoload 'mevedel-telemetry-current-session "mevedel-telemetry")
+(autoload 'mevedel-telemetry-record "mevedel-telemetry")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
+(autoload 'mevedel--warn-once "mevedel-utilities")
 
 (defcustom mevedel-gptel-stream-bridge-insert-batch-delay 0.04
   "Seconds to batch consecutive string stream inserts in data buffers.
@@ -203,7 +206,6 @@ chunk when that stale transformer fails."
 (defun mevedel-gptel-stream-bridge--gptel-stream-cleanup-advice (orig-fn process status)
   "Call ORIG-FN after wrapping stream transformers for PROCESS.
 STATUS is passed through unchanged."
-  (require 'mevedel-telemetry)
   (let* ((entry (alist-get process gptel--request-alist))
          (fsm (car-safe entry))
          (info (and fsm (fboundp 'gptel-fsm-info)
@@ -279,7 +281,6 @@ early chunk in that gap, gptel's filter sees a nil FSM.  Preserve the
 chunk and replay it once the request entry exists."
   (when (and (> (length output) 0)
              (not (process-get process 'mevedel-telemetry-first-byte)))
-    (require 'mevedel-telemetry)
     (when-let* ((entry (and (boundp 'gptel--request-alist)
                             (alist-get process gptel--request-alist)))
                 (fsm (car-safe entry))

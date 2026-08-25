@@ -24,6 +24,10 @@
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context
                   "mevedel-cockpit" ())
+(autoload 'mevedel-cockpit-context-data-buffer "mevedel-cockpit")
+(autoload 'mevedel-cockpit-context-origin-buffer "mevedel-cockpit")
+(autoload 'mevedel-cockpit-context-view-buffer "mevedel-cockpit")
+(autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
 
 ;; `transient'
 (defvar transient--prefix)
@@ -203,7 +207,6 @@ run once this state replaces it."
 
 (defun mevedel-gptel-bridge--install-advice ()
   "Install temporary advice needed by the explicit gptel bridge."
-  (require 'gptel-transient)
   (unless (advice-member-p
            #'mevedel-gptel-bridge--edit-directive-advice
            'gptel--edit-directive)
@@ -217,7 +220,6 @@ run once this state replaces it."
   "Open `gptel-menu' for cockpit CONTEXT's data buffer."
   (interactive)
   (require 'gptel-transient)
-  (require 'mevedel-cockpit)
   (let* ((context (or context (mevedel-cockpit-current-context)))
          (origin (or (mevedel-cockpit-context-origin-buffer context)
                      (current-buffer)))
