@@ -681,7 +681,17 @@ started by the idle timer, which an explicit request may preempt."
       (user-error "No model resolves for the buddy workload"))
     (with-current-buffer request-buffer
       (setq default-directory
-            (buffer-local-value 'default-directory source)))
+            (buffer-local-value 'default-directory source))
+      ;; gptel snapshots request configuration from the :buffer with
+      ;; `buffer-local-value', which falls back to global defaults and
+      ;; never sees dynamic let bindings made in a buffer holding these
+      ;; variables buffer-locally.  The policy must live on the request
+      ;; buffer itself.
+      (setq-local gptel-backend (plist-get policy :backend)
+                  gptel-model (plist-get policy :model)
+                  gptel-reasoning-effort (plist-get policy :effort)
+                  gptel-use-context nil
+                  gptel-use-tools t))
     (setq mevedel-buddy--running scope-key
           mevedel-buddy--running-automatic automatic
           mevedel-buddy--request-buffer request-buffer
@@ -715,15 +725,13 @@ started by the idle timer, which an explicit request may preempt."
                            (setq mevedel-buddy--timeout-timer nil)
                            (mevedel-buddy--abandon 'timeout))))
       (condition-case nil
-          (let ((gptel-backend (plist-get policy :backend))
-                (gptel-model (plist-get policy :model))
-                (gptel-reasoning-effort (plist-get policy :effort))
-                (gptel-use-context nil)
-                (gptel-use-tools t)
-                (gptel-tools
-                 (mevedel-buddy-note-tools
-                  (lambda ()
-                    (mevedel-buddy--current-generation-p generation)))))
+          (progn
+            (with-current-buffer request-buffer
+              (setq-local gptel-tools
+                          (mevedel-buddy-note-tools
+                           (lambda ()
+                             (mevedel-buddy--current-generation-p
+                              generation)))))
             (gptel-request
              (concat payload (mevedel-buddy-note-serialize))
              :buffer request-buffer
