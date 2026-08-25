@@ -11,6 +11,13 @@
 
 ;;; Code:
 
+(require 'mevedel-session-artifacts)
+(require 'mevedel-session-codec)
+(require 'mevedel-session-durability)
+(require 'mevedel-session-fork)
+(require 'mevedel-session-persistence)
+(require 'mevedel-session-rewind)
+
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
 
@@ -409,12 +416,6 @@ are signaled as finalization errors.
 The caller must already have checked live mutation authority.  This module
 rechecks the portable parent head while holding the reserved lease and uses
 the existing lease/publication gates for every child write."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-durability)
-  (require 'mevedel-session-fork)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
   (let ((transaction
          (mevedel-session-save-as--validate
           session buffer new-name new-id new-save-path)))
