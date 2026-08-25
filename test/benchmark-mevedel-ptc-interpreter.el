@@ -75,7 +75,8 @@
           :result result)))
 
 (defun benchmark-mevedel-ptc--event-loop-drive (script expected)
-  "Run SCRIPT through the ToolScript driver and measure timer service against EXPECTED."
+  "Run SCRIPT through the ToolScript driver, requiring EXPECTED.
+Measure timer service while the driver runs."
   (garbage-collect)
   (let* ((started (float-time))
          (last-probe started)
