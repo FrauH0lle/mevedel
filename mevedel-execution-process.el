@@ -20,6 +20,10 @@
                   "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-native-path
                   "mevedel-execution-target" (target path))
+(autoload 'mevedel-execution-target-create "mevedel-execution-target")
+(autoload 'mevedel-execution-target-direct-async-capable-p
+  "mevedel-execution-target")
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
 
 ;; `tramp'
 (declare-function tramp-dissect-file-name "tramp" (name &optional nodefault))
@@ -207,7 +211,6 @@
 
 (defun mevedel-execution-process--localize-command (command workdir target)
   "Return COMMAND in TARGET's native path domain for WORKDIR."
-  (require 'mevedel-execution-target)
   (let ((target (or target (mevedel-execution-target-create workdir))))
     (mapcar (lambda (argument)
               (if (stringp argument)
@@ -260,7 +263,6 @@
   (and mevedel-execution-process-remote-direct-async
        (not (mevedel-execution-process--child-tty-p child))
        (fboundp 'tramp-direct-async-process-p)
-       (require 'mevedel-execution-target nil t)
        (mevedel-execution-target-direct-async-capable-p
         (mevedel-execution-target-create workdir))
        (< (+ (string-bytes

@@ -18,10 +18,14 @@
 (declare-function mevedel-sandbox-invalidate-probe-cache
                   "mevedel-sandbox" (&optional workdir))
 (declare-function mevedel-sandbox-probe "mevedel-sandbox" (&optional workdir))
+(autoload 'mevedel-sandbox-invalidate-probe-cache "mevedel-sandbox")
+(autoload 'mevedel-sandbox-probe "mevedel-sandbox")
 
 ;; `tramp'
 (declare-function tramp-dissect-file-name "tramp" (name &optional nodefault))
 (declare-function tramp-get-connection-process "tramp" (vec))
+(autoload 'tramp-dissect-file-name "tramp")
+(autoload 'tramp-get-connection-process "tramp")
 
 (define-error 'mevedel-execution-target-error "Execution target error")
 
@@ -348,7 +352,6 @@ DIRECTORY may be target-native or already qualified for TARGET."
 (defun mevedel-execution-target--live-connection (target)
   "Return TARGET's live TRAMP connection process, or nil."
   (when (mevedel-execution-target-remote-p target)
-    (require 'tramp)
     (let ((process
            (tramp-get-connection-process
             (tramp-dissect-file-name
@@ -606,7 +609,6 @@ an unrecognized one leaves the readiness diagnostic naming the programs."
         ('off
          (setq readiness (plist-put readiness :sandbox-status 'off)))
         ((or 'best-effort 'required)
-         (require 'mevedel-sandbox)
          (let ((availability
                 (mevedel-sandbox-probe
                  (mevedel-execution-target-workspace-root target))))
@@ -644,7 +646,6 @@ reconnect or non-nil REFRESH discards it and the matching Bubblewrap cache.
     (when (and remote
                (or refresh
                    (null (mevedel-execution-target-readiness target))))
-      (require 'mevedel-sandbox)
       (mevedel-sandbox-invalidate-probe-cache
        (mevedel-execution-target-workspace-root target)))
     (if (and (not refresh)

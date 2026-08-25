@@ -31,10 +31,18 @@
                   (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds
                   "mevedel-session-artifacts" ())
+(autoload 'mevedel-session-artifacts-publish-transcript-state
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-artifact
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-stabilize-gptel-bounds
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-write-current-buffer-atomically
                   "mevedel-session-persistence" (path))
+(autoload 'mevedel-session-persistence-write-current-buffer-atomically
+  "mevedel-session-persistence")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -58,6 +66,7 @@
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties
                   "mevedel-transcript-restore" (&optional only-if-missing))
+(autoload 'mevedel-transcript-restore-properties "mevedel-transcript-restore")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
@@ -139,9 +148,6 @@ When EXPECTED is non-nil, require the durable record to equal it."
     (data-buffer event render-data)
   "Record terminal EVENT in DATA-BUFFER after its original row was archived.
 RENDER-DATA is retained in the hidden transcript audit record."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-transcript-restore)
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
       (save-restriction

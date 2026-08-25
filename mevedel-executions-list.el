@@ -29,6 +29,15 @@
                   "mevedel-cockpit" (&optional selected-id))
 (declare-function mevedel-cockpit-surface-selected
                   "mevedel-cockpit" (&optional no-error))
+(autoload 'mevedel-cockpit-context-session "mevedel-cockpit")
+(autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
+(autoload 'mevedel-cockpit-format-header "mevedel-cockpit")
+(autoload 'mevedel-cockpit-open-surface "mevedel-cockpit")
+(autoload 'mevedel-cockpit-quit "mevedel-cockpit")
+(autoload 'mevedel-cockpit-setup-tabulated-surface "mevedel-cockpit")
+(autoload 'mevedel-cockpit-surface-context "mevedel-cockpit")
+(autoload 'mevedel-cockpit-surface-refresh "mevedel-cockpit")
+(autoload 'mevedel-cockpit-surface-selected "mevedel-cockpit")
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-interrupt-user
@@ -39,17 +48,23 @@
                   "mevedel-execution" (session execution-id))
 (declare-function mevedel-execution-write-user
                   "mevedel-execution" (session execution-id chars))
+(autoload 'mevedel-execution-interrupt-user "mevedel-execution")
+(autoload 'mevedel-execution-list-user "mevedel-execution")
+(autoload 'mevedel-execution-stop-user "mevedel-execution")
+(autoload 'mevedel-execution-write-user "mevedel-execution")
 (defvar mevedel-execution-event-functions)
 (defvar mevedel-execution-state-change-hook)
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
+(autoload 'mevedel-sandbox-status-text "mevedel-sandbox")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 
 ;; `subr-x'
 (declare-function string-empty-p "subr-x" (string))
+(autoload 'string-empty-p "subr-x")
 
 ;; `tabulated-list'
 (declare-function tabulated-list-mode "tabulated-list" ())
@@ -69,7 +84,6 @@
 
 (defun mevedel-executions-list--collect (context)
   "Collect live execution snapshots for CONTEXT."
-  (require 'mevedel-execution)
   (mevedel-execution-list-user
    (mevedel-executions-list--session context)))
 
@@ -100,7 +114,6 @@
 
 (defun mevedel-executions-list--header (items context)
   "Return cockpit header for execution ITEMS and CONTEXT."
-  (require 'mevedel-cockpit)
   (let ((session (mevedel-cockpit-context-session context)))
     (mevedel-cockpit-format-header
      "executions"
@@ -109,8 +122,6 @@
 
 (defun mevedel-executions-list--details (item _context)
   "Return detail text for execution ITEM."
-  (require 'mevedel-sandbox)
-  (require 'subr-x)
   (let ((tail (or (plist-get item :output-tail) ""))
         (sandbox (plist-get item :sandbox-facts)))
     (format
@@ -182,7 +193,6 @@
 (defun mevedel-executions-list-quit ()
   "Quit the execution cockpit and return to the session cockpit."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-quit "execution cockpit"))
 
 (defconst mevedel-executions-list--surface
@@ -214,14 +224,12 @@
 (define-derived-mode mevedel-executions-list-mode tabulated-list-mode
   "mevedel-executions"
   "Major mode for inspecting and controlling live executions."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-setup-tabulated-surface
    mevedel-executions-list--surface))
 
 (defun mevedel-executions-list-open (&optional context)
   "Open the live execution cockpit for CONTEXT."
   (interactive)
-  (require 'mevedel-cockpit)
   (let ((context (or context (mevedel-cockpit-current-context))))
     (mevedel-executions-list--session context)
     (mevedel-cockpit-open-surface mevedel-executions-list--surface context)))

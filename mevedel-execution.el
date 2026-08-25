@@ -93,10 +93,14 @@
                   "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-workspace-root
                   "mevedel-execution-target" (cl-x) t)
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
+(autoload 'mevedel-execution-target-workspace-root "mevedel-execution-target")
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-artifact-address
                   "mevedel-resource" (path session))
+(autoload 'mevedel-resource-artifact-address "mevedel-resource")
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox--record-launch-failure
@@ -110,6 +114,11 @@
                            additional-permissions sandbox-permissions mode))
 (declare-function mevedel-sandbox-strip-marker
                   "mevedel-sandbox" (preparation child-result))
+(autoload 'mevedel-sandbox--record-launch-failure "mevedel-sandbox")
+(autoload 'mevedel-sandbox-cleanup "mevedel-sandbox")
+(autoload 'mevedel-sandbox-launch-failed-p "mevedel-sandbox")
+(autoload 'mevedel-sandbox-prepare "mevedel-sandbox")
+(autoload 'mevedel-sandbox-strip-marker "mevedel-sandbox")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-mutation-authority
@@ -119,12 +128,22 @@
 (declare-function mevedel-session-artifacts-publish-text
                   "mevedel-session-artifacts"
                   (session path content &optional coding))
+(autoload 'mevedel-session-artifacts-assert-mutation-authority
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-assert-new-mutation-authority
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-publish-text
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability-set-unsettled-mutation
                   "mevedel-session-durability" (session value))
 (declare-function mevedel-session-durability-unsettled-mutation-p
                   "mevedel-session-durability" (session))
+(autoload 'mevedel-session-durability-set-unsettled-mutation
+  "mevedel-session-durability")
+(autoload 'mevedel-session-durability-unsettled-mutation-p
+  "mevedel-session-durability")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session--set-execution-state
@@ -139,6 +158,7 @@
 ;; `mevedel-turn'
 (declare-function mevedel-request-push-canceller
                   "mevedel-turn" (request canceller))
+(autoload 'mevedel-request-push-canceller "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--head-tail-preview-parts
@@ -342,14 +362,10 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
          (target (and authority
                       (mevedel-session-execution-target authority))))
     (when (and target (mevedel-execution-target-remote-p target))
-      (require 'mevedel-session-durability)
       (mevedel-session-durability-unsettled-mutation-p authority))))
 
 (defun mevedel-execution--assert-mutation-authority (record)
   "Assert RECORD's durable remote mutation authority."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((origin (mevedel-execution--record-origin record))
          (authority
           (mevedel-execution--mutation-target
@@ -371,7 +387,6 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
            (target (mevedel-session-execution-target authority)))
       (when (mevedel-execution-target-remote-p target)
         (mevedel-execution--assert-mutation-authority record)
-        (require 'mevedel-session-durability)
         (unless
             (mevedel-session-durability-set-unsettled-mutation authority t)
           (signal 'mevedel-execution-error
@@ -410,7 +425,6 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
       (unless (mevedel-execution--armed-mutation-records session)
         (condition-case err
             (progn
-              (require 'mevedel-session-durability)
               (unless
                   (mevedel-session-durability-set-unsettled-mutation
                    authority nil)
@@ -441,9 +455,6 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
 
 (defun mevedel-execution-acknowledge-unknown (session)
   "Acknowledge and clear SESSION's unproved target process outcome."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((authority (mevedel-execution--mutation-target session))
          (target (and authority
                       (mevedel-session-execution-target authority)))
@@ -456,7 +467,6 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
     (when (and target (mevedel-execution-target-remote-p target))
       (mevedel-session-artifacts-assert-mutation-authority
        authority (current-buffer))
-      (require 'mevedel-session-durability)
       (unless
           (mevedel-session-durability-set-unsettled-mutation authority nil)
         (signal 'mevedel-execution-error
@@ -766,7 +776,6 @@ does not depend on the local spool the target never wrote to."
                    (mevedel-execution--record-recoverable-output-path record)
                  (and (mevedel-execution--record-yielded-p record)
                       (mevedel-execution--spool-path record)))))
-    (require 'mevedel-resource)
     (mevedel-resource-artifact-address
      path
      (mevedel-execution--origin-session
@@ -917,9 +926,6 @@ does not depend on the local spool the target never wrote to."
 
 Publish when RANGE omits bytes, after a prior snapshot, or when TERMINAL-P
 settles a yielded execution.  The live spool always remains local."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((origin (mevedel-execution--record-origin record))
          (session (mevedel-execution--origin-session origin))
          (target (and session (mevedel-session-execution-target session)))
@@ -1482,11 +1488,6 @@ TOOL-ARGS correlates immutable events with the original call.
 TTY non-nil explicitly allocates a terminal and retains writable stdin.
 YIELD-TIME-MS may be nil only for trusted internal callers that must wait for
 terminal settlement."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-sandbox)
-  (require 'mevedel-turn)
   (unless session
     (signal 'mevedel-execution-error
             (list "Managed Bash requires an active session")))
@@ -1648,7 +1649,6 @@ terminal settlement."
 Ordinary non-empty CHARS require a PTY; a single Ctrl-C character interrupts
 either process mode.  CALLBACK receives immediately for terminal state or
 after WAIT-MS while the process remains live."
-  (require 'mevedel-turn)
   (let* ((record
           (mevedel-execution--owned-yielded-record
            session owner execution-id))
@@ -1950,8 +1950,6 @@ Return the number of live or retained records updated."
         (old-prefix (file-name-as-directory (expand-file-name old-root)))
         (new-prefix (file-name-as-directory (expand-file-name new-root)))
         (count 0))
-    (when target
-      (require 'mevedel-execution-target))
     (let ((old-native-prefix
            (and target
                 (mevedel-execution-target-remote-p target)
@@ -2056,7 +2054,6 @@ seconds.  ADDITIONAL-PERMISSIONS and SANDBOX-PERMISSIONS are already-authorized
 confinement inputs.  SESSION and OWNER fix the transient ownership boundary.
 TEARDOWN-FUNCTION releases caller-owned resources when lifecycle destruction
 discards the process without invoking CALLBACK."
-  (require 'mevedel-sandbox)
   (let* ((invocation
           (and (boundp 'mevedel--agent-invocation)
                mevedel--agent-invocation))
