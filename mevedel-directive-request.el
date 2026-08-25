@@ -60,11 +60,13 @@
 (declare-function mevedel-directive-frame-display
                   "mevedel-directive-frame"
                   (directive view-buffer &optional focus))
+(autoload 'mevedel-directive-frame-display "mevedel-directive-frame")
 
 ;; `mevedel-directive-plan'
 (declare-function mevedel-directive-plan-start
                   "mevedel-directive-plan"
                   (directive action prompt-fn callback))
+(autoload 'mevedel-directive-plan-start "mevedel-directive-plan")
 
 ;; `mevedel-directive-source'
 (declare-function mevedel--delete-instruction
@@ -97,6 +99,8 @@
                   "mevedel-models" (spec &optional noerror))
 (declare-function mevedel-model-validate-effort
                   "mevedel-models" (model effort))
+(autoload 'mevedel-model-resolve-provider "mevedel-models")
+(autoload 'mevedel-model-validate-effort "mevedel-models")
 
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
@@ -104,6 +108,7 @@
                   (instruction &optional update-children))
 (declare-function mevedel-overlay-ui-directive-action-label
                   "mevedel-overlay-ui" (action))
+(autoload 'mevedel-overlay-ui-directive-action-label "mevedel-overlay-ui")
 
 ;; `mevedel-overlays'
 (declare-function mevedel--directive-llm-prompt
@@ -122,6 +127,10 @@
                   "mevedel-plan-handoff" (prompt selection))
 (declare-function mevedel-plan-handoff-validate-skill-bindings
                   "mevedel-plan-handoff" (prompt session))
+(autoload 'mevedel-plan-handoff-append-implementation-input
+  "mevedel-plan-handoff")
+(autoload 'mevedel-plan-handoff-validate-skill-bindings
+  "mevedel-plan-handoff")
 
 ;; `mevedel-presets'
 (declare-function mevedel-preset-apply "mevedel-presets"
@@ -138,14 +147,21 @@
 (declare-function
  mevedel-session-artifacts-install-gptel-save-state-advice
  "mevedel-session-artifacts" nil)
+(autoload 'mevedel-session-artifacts-assert-new-mutation-authority
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-ensure-files
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-resume-id
                   "mevedel-session-persistence" (workspace session-id))
+(autoload 'mevedel-session-persistence-resume-id
+  "mevedel-session-persistence")
 
 ;; `mevedel-skills-input'
 (declare-function mevedel-skills-input-prepare-user-input
                   "mevedel-skills-input" (text session))
+(autoload 'mevedel-skills-input-prepare-user-input "mevedel-skills-input")
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-attempt--create
@@ -189,20 +205,25 @@
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-strip
                   "mevedel-tool-render-data" (string &optional expected-tool-use-id))
+(autoload 'mevedel-tool-render-data-strip "mevedel-tool-render-data")
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
                   "mevedel-transcript-audit" (record))
+(autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-begin
                   "mevedel-turn" (session &optional directive-uuid))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
+(autoload 'mevedel-request-begin "mevedel-turn")
+(autoload 'mevedel-request-end "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
 		  "mevedel-utilities" (start end))
+(autoload 'mevedel--clear-user-turn-gptel-properties "mevedel-utilities")
 
 ;; `mevedel-view'
 (defvar mevedel--agent-invocation)
@@ -223,6 +244,7 @@
 
 ;; `org-src'
 (declare-function org-escape-code-in-string "ext:org-src" (s))
+(autoload 'org-escape-code-in-string "org-src")
 
 
 ;;
@@ -348,8 +370,6 @@ Each skill's current source is reloaded at dispatch; a missing,
 disabled, or malformed selection signals before any request starts."
   (if-let* ((skills (mevedel-directive-skills record)))
       (with-current-buffer chat-buffer
-        (require 'mevedel-plan-handoff)
-        (require 'mevedel-skills-input)
         (let ((result (mevedel-plan-handoff-append-implementation-input
                        prompt (list :skills skills))))
           (setq result (mevedel-skills-input-prepare-user-input
@@ -361,7 +381,6 @@ disabled, or malformed selection signals before any request starts."
 
 (defun mevedel--directive-discussion-transcript (directive)
   "Return DIRECTIVE's current-request local discussion as plain text."
-  (require 'mevedel-tool-render-data)
   (mapconcat
    (lambda (turn)
      (format "User: %s\nAssistant%s: %s"
@@ -464,7 +483,6 @@ FEEDBACK supplies requested changes or optional retry guidance."
 
 (defun mevedel--directive-display-text (action directive-text)
   "Return the human-facing transcript text for ACTION and DIRECTIVE-TEXT."
-  (require 'mevedel-overlay-ui)
   (let ((label (mevedel-overlay-ui-directive-action-label action)))
     (if (string-empty-p (string-trim directive-text))
         label
@@ -481,8 +499,6 @@ for inspection.  Request-time projection excludes the complete turn
 from ordinary conversation context.  ACTION is the directive action
 symbol.  Return a marker positioned where the assistant response should
 be inserted."
-  (require 'mevedel-utilities)
-  (require 'mevedel-transcript-audit)
   (let* ((summary directive-text)
          (action-str (symbol-name action))
          (is-org-mode (derived-mode-p 'org-mode))
@@ -500,11 +516,9 @@ be inserted."
             (truncate-string-to-width first-line available-length nil nil "...")))
          (full-prompt-str
           (if is-org-mode
-              (progn
-                (require 'org-src)
-                (concat ":PROMPT:\n"
-                        (org-escape-code-in-string prompt)
-                        "\n:END:\n"))
+              (concat ":PROMPT:\n"
+                      (org-escape-code-in-string prompt)
+                      "\n:END:\n")
             (concat "``` prompt\n" prompt "\n```\n"))))
     (goto-char (point-max))
     (insert
@@ -551,7 +565,6 @@ be inserted."
   "Close a directive transcript turn at point.
 DIRECTIVE-ID, TURN, ACTION, OUTCOME, ACTIVITY-KIND, and SEQUENCE link the
 canonical transcript to its immutable workspace activity record."
-  (require 'mevedel-transcript-audit)
   (insert
    (mevedel--format-hook-audit-record
     (list :type 'directive-turn-boundary
@@ -580,7 +593,6 @@ settling."
   "Return DIRECTIVE's resolved request-local model policy, or nil."
   (when-let* ((provider
                (overlay-get directive 'mevedel-directive-model-provider)))
-    (require 'mevedel-models)
     (let* ((policy (mevedel-model-resolve-provider provider))
            (effort
             (overlay-get directive 'mevedel-directive-reasoning-effort)))
@@ -597,7 +609,6 @@ settling."
                             directive workspace)))
          (cons buffer nil))
        (progn
-         (require 'mevedel-session-persistence)
          (when-let* ((buffer
                       (mevedel-session-persistence-resume-id
                        workspace session-id)))
@@ -780,10 +791,6 @@ CALLBACK is called with (err fsm) when processing completes.
 
 Updates directive status and overlay, handles success/failure states.
 OPTIONS carries local discussion metadata for read-only discussion turns."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-turn)
   (setq directive
         (or (mevedel--topmost-instruction directive 'directive)
             directive))
@@ -930,7 +937,6 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 	      ;; No focus argument: a request the user just started must not
 	      ;; move point into the frame.
 	      ('frame
-	       (require 'mevedel-directive-frame)
 	       (mevedel-directive-frame-display directive view))
 	      ('window
 	       (display-buffer view gptel-display-buffer-action))))
@@ -1055,9 +1061,7 @@ ordinary directive terminal arguments."
 PROMPT-FN builds the implementation prompt from resolved content and
 CALLBACK receives the ordinary terminal (err fsm) arguments."
   (if (mevedel-directive-planning-enabled record)
-      (progn
-        (require 'mevedel-directive-plan)
-        (mevedel-directive-plan-start directive action prompt-fn callback))
+      (mevedel-directive-plan-start directive action prompt-fn callback)
     (overlay-put directive 'mevedel-directive-action
                  (if (eq action 'implement-this) 'implement action))
     (mevedel--process-directive

@@ -32,25 +32,30 @@
 ;; `mevedel-directive-source'
 (declare-function mevedel--directive-record
                   "mevedel-directive-source" (directive))
+(autoload 'mevedel--directive-record "mevedel-directive-source")
 
 ;; `mevedel-instruction-registry'
 
 ;; `mevedel-models'
 (declare-function mevedel-model-current-label
                   "mevedel-models" (&optional buffer))
+(autoload 'mevedel-model-current-label "mevedel-models")
 
 ;; `mevedel-overlays'
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction &optional of-type pred))
+(autoload 'mevedel--topmost-instruction "mevedel-overlays")
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools-active-count "mevedel-tools" (&optional buffer))
+(autoload 'mevedel-tools-active-count "mevedel-tools")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-state-label "mevedel-turn" (&optional buffer))
+(autoload 'mevedel-request-state-label "mevedel-turn")
 
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
@@ -61,6 +66,8 @@
 (declare-function mevedel-view-back-to-chat "mevedel-view-composer" ())
 (declare-function mevedel-view-composer-scope-label
                   "mevedel-view-composer" (&optional scope))
+(autoload 'mevedel-view-back-to-chat "mevedel-view-composer")
+(autoload 'mevedel-view-composer-scope-label "mevedel-view-composer")
 (defvar mevedel-view--composer-scope)
 
 ;; `mevedel-view-render'
@@ -299,11 +306,8 @@ Leads with directive identity, then the state that changes while the
 conversation runs.  Session facts the parent frame's status strip
 already shows -- session name, workspace root, execution target, preset
 -- are deliberately absent: this header has a fraction of the width."
-  (require 'mevedel-turn)
   (when (and (boundp 'mevedel--data-buffer)
              (buffer-live-p mevedel--data-buffer))
-    (require 'mevedel-models)
-    (require 'mevedel-tools)
     (let* ((data-buffer mevedel--data-buffer)
            (id mevedel-directive-frame--directive-id)
            (scope (mevedel-view-composer-scope-label))
@@ -542,7 +546,6 @@ action wants; a request dispatch leaves focus where it is.  Falls back to
 an ordinary window when child frames are unavailable."
   (let ((directive-id
          (when (overlayp directive)
-           (require 'mevedel-overlays)
            (mevedel-directive-id
             (mevedel--directive-record
              (or (mevedel--topmost-instruction directive 'directive)
@@ -633,7 +636,6 @@ composer scope and restores point."
         (with-current-buffer view-buffer
           (mevedel-directive-frame-mode -1)
           (when mevedel-view--composer-scope
-            (require 'mevedel-view-composer)
             (mevedel-view-back-to-chat))))
       (setq mevedel-directive-frame--frame nil
             mevedel-directive-frame--view-buffer nil
