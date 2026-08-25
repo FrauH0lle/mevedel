@@ -699,9 +699,7 @@ fire-count and payload."
 			captured-tools)
 		   (unwind-protect
 		       (progn
-			 (require 'mevedel-tool-exec)
 			 (mevedel-tool-exec--register)
-			 (require 'mevedel-tool-ui)
 			 (mevedel-tool-ui--register)
 			 (with-current-buffer parent-buf
 			   (let ((gptel-agent-preset nil)
