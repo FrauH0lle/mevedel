@@ -8,8 +8,20 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-tool-registry))
+
+(require 'cl-lib)
+(require 'mevedel-bash-analysis)
+(require 'mevedel-bash-policy)
+(require 'mevedel-execution-target)
+(require 'mevedel-permission-log)
+(require 'mevedel-permission-persistence)
+(require 'mevedel-permission-rules)
+(require 'mevedel-permissions)
+(require 'mevedel-structs)
+(require 'mevedel-turn)
+(require 'seq)
+(require 'subr-x)
 
 ;; `mevedel-agents'
 (defvar mevedel--agent-invocation)
@@ -164,8 +176,6 @@
 (defun mevedel-tool-exec-permission-current-context
     (tool-name args &optional session)
   "Return TOOL-NAME's direct execution context for ARGS and SESSION."
-  (require 'mevedel-permissions)
-  (require 'mevedel-structs)
   (mevedel-permission--invocation-context
    :tool-name tool-name
    :args args
@@ -178,7 +188,6 @@
 
 (defun mevedel-tool-exec-permission-default-directory ()
   "Return the working directory for Bash and Eval."
-  (require 'mevedel-structs)
   (let* ((session (and (boundp 'mevedel--session) mevedel--session))
          (workspace (or (and session (mevedel-session-workspace session))
                         (and (boundp 'mevedel--workspace)
@@ -192,7 +201,6 @@
 
 (defun mevedel-tool-exec-permission--capture-permission-origin (input)
   "Return INPUT with its permission owner and session captured."
-  (require 'mevedel-turn)
   (let* ((copy (copy-sequence input))
          (context (copy-sequence (plist-get copy :permission-context))))
     (unless (plist-get context :origin)
@@ -211,7 +219,6 @@
 
 (defun mevedel-tool-exec-permission--permission-origin (permission-context)
   "Return the captured owner from PERMISSION-CONTEXT."
-  (require 'mevedel-turn)
   (or (plist-get permission-context :origin)
       (mevedel-current-origin)))
 
@@ -227,7 +234,6 @@
 
 (defun mevedel-tool-exec-permission--mutation-p (tool-name detail)
   "Return non-nil unless TOOL-NAME runs DETAIL as read-only Bash."
-  (require 'mevedel-bash-analysis)
   (or (not (equal tool-name "Bash"))
       (not (eq 'read-only
                (plist-get (mevedel-bash-analysis-analyze detail) :class)))))
@@ -309,7 +315,6 @@ Fall back to direct queue admission for callers outside the tool pipeline."
 (defun mevedel-tool-exec-permission--log-permission-decision
     (tool-name outcome via permission-context &rest props)
   "Persist TOOL-NAME OUTCOME via VIA from PERMISSION-CONTEXT and PROPS."
-  (require 'mevedel-permission-log)
   (when-let* ((session
                (or (plist-get permission-context :session)
                    (mevedel-tool-exec-permission-session))))
@@ -549,7 +554,6 @@ PERMISSION-CONTEXT supplies the session execution target."
 
 (defun mevedel-tool-exec-permission--direct-resource-grants (permission-context)
   "Return direct user resource grants from PERMISSION-CONTEXT."
-  (require 'mevedel-permission-persistence)
   (if (plist-member permission-context :resource-grants)
       (plist-get permission-context :resource-grants)
     (let* ((session (plist-get permission-context :session))
@@ -565,7 +569,6 @@ PERMISSION-CONTEXT supplies the session execution target."
 (defun mevedel-tool-exec-permission--remembered-additional-profile
     (tool-name operation permission-context)
   "Return direct remembered authority for TOOL-NAME and OPERATION."
-  (require 'mevedel-permission-rules)
   (let* ((buckets (mevedel-bash-policy-buckets permission-context))
          (direct-buckets
           (seq-filter
@@ -605,8 +608,6 @@ PERMISSION-CONTEXT supplies the session execution target."
   "Resolve ARGS into TOOL-NAME's effective child authority for OPERATION.
 EVAL-MODE distinguishes live from batch Eval.  PERMISSION-CONTEXT supplies
 remembered direct user authority."
-  (require 'mevedel-bash-policy)
-  (require 'subr-x)
   (let ((request
          (mevedel-tool-exec-permission--sandbox-request
           args (if (equal tool-name "Bash") 'bash 'eval) eval-mode
@@ -629,7 +630,6 @@ remembered direct user authority."
 (defun mevedel-tool-exec-permission--additional-authority-state
     (tool-name request permission-context)
   "Classify TOOL-NAME's additive REQUEST under PERMISSION-CONTEXT."
-  (require 'mevedel-permission-rules)
   (let* ((requested (plist-get request :additional-permissions))
          (network (eq t (plist-get requested :network)))
          (network-action
@@ -724,7 +724,6 @@ OPERATION-PATTERN is the exact Bash command or Eval expression."
 (defun mevedel-tool-exec-permission--apply-remembered-authority
     (outcome tool-name request session workspace)
   "Store OUTCOME authority selected in REQUEST for TOOL-NAME."
-  (require 'mevedel-bash-analysis)
   (when (memq outcome '(allow-session always-allow))
     (let* ((selection
             (car (plist-get request :remember-cell)))
@@ -910,7 +909,6 @@ INPUT supplies permission context and delegated trust.  Call CONT once."
     (tool-name detail buckets level)
   "Return the full-escalation rule decision for TOOL-NAME and DETAIL.
 BUCKETS supplies ordinary and execution-level rules for LEVEL."
-  (require 'mevedel-permission-rules)
   (if (or (mevedel-tool-exec-permission--full-escalation-explicit-deny-p
            tool-name detail buckets)
           (and (equal tool-name "Bash")
@@ -1122,7 +1120,6 @@ PRESERVE-UI describe the requested execution scope."
 
 (defun mevedel-tool-exec-permission-eval-mode (args)
   "Return the requested Eval execution mode from ARGS."
-  (require 'subr-x)
   (let ((mode (plist-get args :mode)))
     (cond
      ((or (null mode)
@@ -1144,7 +1141,6 @@ PRESERVE-UI describe the requested execution scope."
 Normal model-requested Eval asks unless a rule settles it or the effective
 permission mode is `full-auto'.  Deny and ask rules remain final in every
 mode.  TRUST-LITERAL-P identifies author-written skill body injections."
-  (require 'mevedel-permission-rules)
   (let* ((buckets (mevedel-bash-policy-buckets permission-context))
          (mode (mevedel-bash-policy-effective-permission-mode
                 permission-context))
@@ -1292,8 +1288,6 @@ denial parity with the sync slot is preserved."
     (tool-struct input cont)
   "Authorize Eval INPUT, then layer any requested child authority.
 TOOL-STRUCT and CONT follow the async permission slot contract."
-  (require 'mevedel-bash-policy)
-  (require 'subr-x)
   (condition-case err
       (let* ((input (mevedel-tool-exec-permission--capture-permission-origin input))
              (mode (mevedel-tool-exec-permission-eval-mode input))
@@ -1304,9 +1298,7 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
                           (mevedel-session-execution-target session))))
         (if (and (eq mode 'batch)
                  target
-                 (progn
-                   (require 'mevedel-execution-target)
-                   (mevedel-execution-target-remote-p target)))
+                 (mevedel-execution-target-remote-p target))
             (funcall
              cont
              (mevedel-tool-exec-permission--permission-decision-result
@@ -1355,7 +1347,6 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
 METADATA-P controls decision metadata.  PERMISSION-CONTEXT supplies the
 pending child-confinement request.  Guardian deny recommendations become
 `deny'; unavailable or non-deny guidance allows by default."
-  (require 'mevedel-turn)
   (let ((active t)
         (request (plist-get permission-context :request)))
     (when (mevedel-request-p request)
@@ -1445,7 +1436,6 @@ as before: `allow' / `deny' / `(deny . REASON)' / `aborted'.
 Feedback is shaped into the existing
 \"Command cancelled by user. Feedback: TEXT\" form for LLM-visible
 parity with the sync slot."
-  (require 'mevedel-bash-analysis)
   (let ((command (plist-get input :command))
         (trust-literal-p (plist-get input :trust-literal-p))
         (permission-context (plist-get input :permission-context))
@@ -1585,8 +1575,6 @@ parity with the sync slot."
     (tool-struct input cont)
   "Authorize Bash INPUT, then layer any requested child authority.
 TOOL-STRUCT and CONT follow the async permission slot contract."
-  (require 'mevedel-bash-policy)
-  (require 'subr-x)
   (condition-case err
       (let* ((input (mevedel-tool-exec-permission--capture-permission-origin input))
              (request

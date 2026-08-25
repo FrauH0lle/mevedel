@@ -8,8 +8,18 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib))
+(require 'cl-lib)
+(require 'mevedel-agents)
+(require 'mevedel-bash-analysis)
+(require 'mevedel-execution-target)
+(require 'mevedel-permission-mode)
+(require 'mevedel-permission-persistence)
+(require 'mevedel-permission-rules)
+(require 'mevedel-permissions)
+(require 'mevedel-sandbox)
+(require 'mevedel-structs)
+(require 'seq)
+(require 'subr-x)
 
 ;; `gptel'
 (declare-function gptel-request "ext:gptel-request" (&optional prompt &rest args))
@@ -193,7 +203,6 @@
 ;;;###autoload
 (defun mevedel-bash-policy-read-only-p (argv)
   "Return non-nil when parsed command ARGV has a read-only built-in policy."
-  (require 'cl-lib)
   (let ((command (car argv)))
     (and command
          (not (string-match-p "/" command))
@@ -254,11 +263,6 @@ the caller already analyzed COMMAND.  PERMISSION-CONTEXT supplies the target."
     (command permission-context request)
   "Return COMMAND resources lacking authority under PERMISSION-CONTEXT.
 REQUEST may supply exact additive filesystem grants for this invocation."
-  (require 'mevedel-bash-analysis)
-  (require 'mevedel-execution-target)
-  (require 'mevedel-permission-rules)
-  (require 'mevedel-sandbox)
-  (require 'mevedel-structs)
   (let ((resources
          (mevedel-bash-policy--bash-resource-paths
           command nil permission-context)))
@@ -350,7 +354,6 @@ the user's decision remain authoritative."
 
 (defun mevedel-bash-policy--dedupe-strings (strings)
   "Return STRINGS without duplicates, preserving first occurrence order."
-  (require 'seq)
   (delete-dups
    (seq-filter (lambda (string)
                  (and (stringp string) (not (string-empty-p string))))
@@ -358,7 +361,6 @@ the user's decision remain authoritative."
 
 (defun mevedel-bash-policy-commands-summary (commands)
   "Return a counted, first-seen summary string for COMMANDS."
-  (require 'cl-lib)
   (when-let* ((unique (mevedel-bash-policy--dedupe-strings commands)))
     (string-join
      (mapcar
@@ -372,7 +374,6 @@ the user's decision remain authoritative."
 
 (defun mevedel-bash-policy-decision-specifier-value (command)
   "Return sanitized Bash specifier metadata for COMMAND."
-  (require 'mevedel-bash-analysis)
   (or (mevedel-bash-policy-commands-summary
        (mevedel-bash-policy-command-names
         (mevedel-bash-analysis-analyze command)))
@@ -467,14 +468,12 @@ Compound commands produce one pattern per command segment.  This
 avoids saving a brittle whole-chain string such as
 `pwd && git log --oneline' when the useful reusable rule is
 `git log:*'."
-  (require 'mevedel-bash-analysis)
   (mevedel-bash-policy--dedupe-strings
    (mapcar #'mevedel-bash-policy--bash-allow-pattern-for-segment
            (plist-get (mevedel-bash-analysis-analyze command) :segments))))
 
 (defun mevedel-bash-policy-reusable-operation-p (command)
   "Return non-nil when COMMAND can be remembered without broadening it."
-  (require 'mevedel-bash-analysis)
   (let ((analysis (mevedel-bash-analysis-analyze command)))
     (and (not (string-empty-p (string-trim command)))
          (not (plist-get analysis :complex-p))
@@ -484,8 +483,6 @@ avoids saving a brittle whole-chain string such as
 (defun mevedel-bash-policy-effective-permission-mode
     (&optional permission-context)
   "Return effective permission mode for PERMISSION-CONTEXT."
-  (require 'mevedel-permission-mode)
-  (require 'mevedel-structs)
   (let ((session (if permission-context
                      (plist-get permission-context :session)
                    (and (boundp 'mevedel--session) mevedel--session))))
@@ -497,7 +494,6 @@ avoids saving a brittle whole-chain string such as
 (defun mevedel-bash-policy-effective-sandbox-mode
     (&optional permission-context)
   "Return effective sandbox mode for PERMISSION-CONTEXT."
-  (require 'mevedel-sandbox)
   (mevedel-sandbox-mode-effective
    (if permission-context
        (plist-get permission-context :session)
@@ -507,7 +503,6 @@ avoids saving a brittle whole-chain string such as
     (command &optional analysis permission-context)
   "Return non-nil if COMMAND has an obvious protected path in ANALYSIS.
 PERMISSION-CONTEXT supplies the owning execution target."
-  (require 'mevedel-permission-rules)
   (let ((paths (mevedel-bash-policy--bash-resource-paths
                 command analysis permission-context)))
     (when paths
@@ -580,8 +575,6 @@ Generic fallback denies are evaluated against the original command and its
 recognized top-level segments.  Harvested nested candidates use only pattern
 rules, so a generic fallback cannot defeat a specific allow for the containing
 command.  ANALYSIS is the normalized result for COMMAND when already known."
-  (require 'mevedel-bash-analysis)
-  (require 'mevedel-permission-rules)
   (let* ((analysis (or analysis (mevedel-bash-analysis-analyze command)))
          (top-level (cons command (plist-get analysis :segments)))
          (harvested (mevedel-bash-policy--bash-deny-candidates command analysis)))
@@ -595,10 +588,6 @@ Includes the request-scoped skill rule buckets so a skill's
 `allowed-tools: [Bash(...)]' grants are honored by the Bash
 permission check; without this, skill rules silently failed for
 the Bash tool path because Bash had its own flattened resolver."
-  (require 'mevedel-agents)
-  (require 'mevedel-permission-persistence)
-  (require 'mevedel-permission-rules)
-  (require 'mevedel-structs)
   (if (plist-member permission-context :buckets)
       (plist-get permission-context :buckets)
       (let* ((session (if permission-context
@@ -676,11 +665,6 @@ suspicious under the normal classifier.
 Bucket-aware: delegated invocation and request rules may authorize ordinary
 unknown commands, but only session, persistent, and global user rules may
 authorize dangerous or complex syntax."
-  (require 'cl-lib)
-  (require 'mevedel-bash-analysis)
-  (require 'mevedel-permissions)
-  (require 'mevedel-structs)
-  (require 'subr-x)
   (ignore trust-literal-p)
   (let* ((analysis (mevedel-bash-analysis-analyze command))
          (class (plist-get analysis :class))
@@ -818,7 +802,6 @@ authorize dangerous or complex syntax."
 
 (defun mevedel-bash-policy-guardian-context-string (context)
   "Return CONTEXT formatted for the Bash guardian prompt."
-  (require 'cl-lib)
   (string-join
    (delq nil
          (list
@@ -855,7 +838,6 @@ authorize dangerous or complex syntax."
             (format "Matching explicit allow patterns: %s"
                     (string-join patterns ", ")))
           (when-let* ((facts (plist-get context :sandbox-facts)))
-            (require 'mevedel-sandbox)
             (format "Confinement: %s"
                     (mevedel-sandbox-status-text facts)))))
    "\n"))
@@ -943,7 +925,6 @@ CALLBACK receives nil or a normalized guidance plist."
   (require 'gptel)
   (require 'mevedel-models)
   (require 'mevedel-system)
-  (require 'subr-x)
   (cond
    ((null mevedel-permission-guardian)
     (funcall callback nil))
@@ -991,11 +972,6 @@ suspicious Bash."
 (defun mevedel-bash-policy-guardian-context
     (command &optional permission-context)
   "Return guardian context for COMMAND and PERMISSION-CONTEXT."
-  (require 'cl-lib)
-  (require 'mevedel-bash-analysis)
-  (require 'mevedel-permission-rules)
-  (require 'mevedel-sandbox)
-  (require 'mevedel-structs)
   (let* ((session (if permission-context
                       (plist-get permission-context :session)
                     (and (boundp 'mevedel--session) mevedel--session)))
@@ -1031,7 +1007,6 @@ suspicious Bash."
              when (and pattern
                        (eq (plist-get (cdr rule) :action) 'allow))
              collect pattern)))))
-    (require 'mevedel-sandbox)
     (list :session session
           :workspace workspace
           :working-directory working-directory

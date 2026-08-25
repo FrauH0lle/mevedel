@@ -7,8 +7,12 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'mevedel-tool-registry)
-  (require 'subr-x))
+  (require 'mevedel-tool-registry))
+
+(require 'mevedel-execution-target)
+(require 'mevedel-resource)
+(require 'mevedel-structs)
+(require 'subr-x)
 
 ;; `gptel-request'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
@@ -59,7 +63,6 @@
 
 (defun mevedel-tool-fs-current-workspace-root ()
   "Return the current workspace root visible to the renderer, or nil."
-  (require 'mevedel-structs)
   (or (and (boundp 'mevedel--workspace)
            mevedel--workspace
            (ignore-errors
@@ -72,9 +75,7 @@
 
 (defun mevedel-tool-fs-display-path (path)
   "Return PATH as a compact display path for tool headers."
-  (require 'mevedel-structs)
   (or (and (stringp path)
-           (require 'mevedel-resource)
            (mevedel-resource-address-like-p path)
            path)
       (when (and (stringp path)
@@ -97,8 +98,6 @@
 
 (defun mevedel-tool-fs-model-path (path)
   "Return PATH in the current session's model-visible path domain."
-  (require 'mevedel-execution-target)
-  (require 'mevedel-structs)
   (if-let* ((session (bound-and-true-p mevedel--session))
             (target (mevedel-session-execution-target session)))
       (mevedel-execution-target-native-path target path)
@@ -115,7 +114,6 @@ path that crosses the handler result boundary is the authored address."
 (defun mevedel-tool-fs-resource-attempt (address)
   "Return the prepared attempt for authored ADDRESS, or nil for a path."
   (when (and (stringp address)
-             (require 'mevedel-resource)
              (mevedel-resource-address-like-p address))
     (mevedel-resource-current-attempt address)))
 
@@ -134,7 +132,6 @@ only used to compute a relative component and are never returned.  When
 ADDRESS-PREFIX is non-nil, use it as an already canonical logical prefix;
 this is used for the dynamic memory union whose root itself is not an
 addressable locator."
-  (require 'mevedel-resource)
   (when (and address root path)
     (let* ((root (expand-file-name root))
            (path (expand-file-name path root)))
