@@ -224,7 +224,6 @@
                      (length
                       (mevedel-execution-transcript-test--audit-records-in-file
                        path 'execution-archive))))
-          (require 'mevedel-session-persistence)
           (cl-letf (((symbol-function
                       'mevedel-session-persistence-write-current-buffer-atomically)
                      (lambda (&rest _) (error "Publication failed")))
