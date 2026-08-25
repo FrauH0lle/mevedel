@@ -14,7 +14,7 @@ directory unless absolute.
 
 - Creating an empty file or a directory; neither is expressible in a
   patch -> use `Bash`
-- Directive Planning is read-only: do not call `ApplyPatch` there, even
+- Directive Planning remains read-only: do not call `ApplyPatch` there, even
   for all-local proposals
 - Re-proposing a rejected change, unless the user's feedback asks for a
   revision
