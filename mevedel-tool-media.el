@@ -76,9 +76,6 @@ until the next one replaces it."
 
 TOOL-USE-ID records the tool call that owns the media.  When SESSION is
 non-nil, publish through its durability seam."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (when (stringp tool-results-dir)
     (let* ((dir (file-name-concat tool-results-dir "media"))
            (file (file-name-concat dir (concat "media-" id ".el")))
@@ -92,6 +89,7 @@ non-nil, publish through its durability seam."
                      :items items)))))
       (if session
           (progn
+            (require 'mevedel-session-artifacts)
             (mevedel-session-artifacts-publish-text
              session file content 'utf-8-unix))
         (make-directory dir t)
@@ -104,9 +102,6 @@ non-nil, publish through its durability seam."
   "Return media items for ID from TOOL-RESULTS-DIR.
 EXPECTED-TOOL-USE-ID rejects stale records when non-nil.  SESSION resolves
 remote session artifacts through their committed publication."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (when-let* ((id (and (stringp id) id))
               ((string-match-p (rx string-start (+ hex) string-end) id))
               (dir (if session
@@ -119,6 +114,7 @@ remote session artifacts through their committed publication."
           (let* ((bytes
                   (if session
                       (progn
+                        (require 'mevedel-session-artifacts)
                         (mevedel-session-artifacts-read-artifact
                          session
                          (file-relative-name
