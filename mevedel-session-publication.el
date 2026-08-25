@@ -60,8 +60,6 @@
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-publication-head
                   "mevedel-session-durability" (session-dir))
-(declare-function mevedel-session-recovery-refresh
-                  "mevedel-session-durability" (session))
 (defvar mevedel-session-durability--asserted-directories)
 (defvar mevedel-session-durability--transaction-clock)
 
@@ -70,8 +68,15 @@
                   "mevedel-session-recovery" (session))
 (declare-function mevedel-session-recovery--delete-local
                   "mevedel-session-recovery" (path))
+(declare-function mevedel-session-recovery-refresh
+                  "mevedel-session-recovery" (session))
 (declare-function mevedel-session-recovery-refresh-session-buffers
                   "mevedel-session-recovery" (session))
+(autoload 'mevedel-session-recovery--abandon "mevedel-session-recovery")
+(autoload 'mevedel-session-recovery--delete-local "mevedel-session-recovery")
+(autoload 'mevedel-session-recovery-refresh "mevedel-session-recovery")
+(autoload 'mevedel-session-recovery-refresh-session-buffers
+  "mevedel-session-recovery")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-lease "mevedel-structs" (cl-x) t)
@@ -91,6 +96,7 @@
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-state-dir
                   "mevedel-workspace" (workspace))
+(autoload 'mevedel-workspace-state-dir "mevedel-workspace")
 
 (defun mevedel-session-publication--control-logical-path-p (path)
   "Return non-nil when logical PATH names durability control storage."
@@ -880,7 +886,6 @@ in SESSION and blocks later mutation.  When REQUIRE-COMMIT is non-nil, reject
 reentrant queueing so the caller returns only after its own batch commits, and
 treat a post-commit cleanup error as diagnostic.  Ordinary callers receive
 that error so their lifecycle owner can classify it."
-  (require 'mevedel-session-recovery)
   (mevedel-session-recovery-refresh session)
   (when (mevedel-session-pending-publication session)
     (user-error "Session has pending publication; retry or abandon it first"))
@@ -928,7 +933,6 @@ that error so their lifecycle owner can classify it."
 (defun mevedel-session-publication-retry (&optional session)
   "Retry SESSION's pending critical publication."
   (interactive)
-  (require 'mevedel-session-recovery)
   (setq session (or session
                     (mevedel-session-publication--current-session)))
   (mevedel-session-recovery-refresh session)
@@ -955,7 +959,6 @@ that error so their lifecycle owner can classify it."
 (defun mevedel-session-publication-abandon (&optional session)
   "Explicitly discard SESSION's pending local recovery material."
   (interactive)
-  (require 'mevedel-session-recovery)
   (setq session (or session
                     (mevedel-session-publication--current-session)))
   (mevedel-session-recovery-refresh session)
@@ -1010,7 +1013,6 @@ Diagnostic failure never creates critical pending publication; any local
 staging bytes are discarded before the error is returned to the caller."
   (unless (and (stringp path) (stringp content))
     (error "Diagnostic publication requires string path and content"))
-  (require 'mevedel-session-recovery)
   (mevedel-session-recovery-refresh session)
   (cond
    ((or (mevedel-session-pending-publication session)
@@ -1076,7 +1078,6 @@ staging bytes are discarded before the error is returned to the caller."
 
 (defun mevedel-session-publication-status (session)
   "Return SESSION's stable read-only publication status plist."
-  (require 'mevedel-workspace)
   (let ((lease (mevedel-session-lease session))
         (pending (mevedel-session-pending-publication session)))
     (list :lease-state (plist-get lease :state)
