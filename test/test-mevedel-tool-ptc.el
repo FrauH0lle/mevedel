@@ -48,9 +48,10 @@
       (should tool)
       (should (mevedel-tool-async-p tool))
       (should (equal '(script) (mapcar #'car (mevedel-tool-args tool))))
-      ;; Not read-only: a script may call Bash, so the envelope must never
-      ;; claim less authority than its nested calls can exercise.
-      (should-not (mevedel-tool-read-only-p tool)))))
+      ;; Read-only: the envelope itself never modifies state.  Each nested
+      ;; call carries its own authority, so read-only request rules deny a
+      ;; mutating child individually and the denial aborts the script.
+      (should (mevedel-tool-read-only-p tool)))))
 
 
 ;;

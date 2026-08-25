@@ -114,8 +114,6 @@
                   "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-configuration-request-locals
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-filter-root-only-tools
-                  "mevedel-agents" (tools))
 (declare-function mevedel-agent-freeze "mevedel-agents" (agent))
 (declare-function mevedel-agent-invocation-activity
                   "mevedel-agents" (cl-x) t)
@@ -153,6 +151,10 @@
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--handle-inject
                   "mevedel-reminders" (fsm))
+
+;; `mevedel-tool-ptc'
+(declare-function mevedel-tool-ptc--handle-description
+                  "mevedel-tool-ptc" (fsm))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-agent-roster-inject
@@ -310,6 +312,7 @@ the terminal event through the request callback's exactly-once retry gate."
      ,#'mevedel-tools--handle-agent-roster-inject
      ,#'mevedel-tools--handle-message-inject
      ,#'mevedel-tools--handle-plan-tool-filter
+     ,#'mevedel-tool-ptc--handle-description
      ,#'mevedel-agent-exec--handle-wait-activity
      ,#'mevedel--compact-handle-agent-wait)
     (TPRE ,#'gptel--handle-token-usage
@@ -401,8 +404,6 @@ Skill-scoped model and effort policy applies to direct skill dispatches."
                  ('gptel-backend (plist-get policy :backend))
                  ('gptel-model (plist-get policy :model))
                  ('gptel-reasoning-effort (plist-get policy :effort))
-                 ('gptel-tools
-                  (mevedel-agent-filter-root-only-tools gptel-tools))
                  (_ (and (boundp symbol) (symbol-value symbol))))
    when (and (eq symbol 'gptel-system-prompt) (functionp value))
    ;; Parts of the prompt are budgeted against the model's context

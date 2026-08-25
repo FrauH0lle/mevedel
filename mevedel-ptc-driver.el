@@ -23,6 +23,9 @@
 (require 'mevedel-ptc-interpreter)
 (require 'mevedel-structs)
 
+;; `mevedel-agent-conversation'
+(defvar mevedel--agent-invocation)
+
 ;; `mevedel-ptc-checkpoint'
 (declare-function mevedel-ptc-checkpoint-note
                   "mevedel-ptc-checkpoint" (session id updates))
@@ -299,8 +302,15 @@ ERROR-KIND is the interpreter's typed failure category when available."
               (format "ptc-%d"
                       (cl-incf mevedel-ptc-driver--next-envelope-id))))
          (session (mevedel-telemetry-current-session data-buffer))
+         ;; A retained-agent buffer resolves to the parent session, whose
+         ;; checkpoint recovery reconciles into the root transcript.  An
+         ;; agent-run script therefore never checkpoints; a restart settles
+         ;; it through the agent's own interrupted-turn handling.
          (checkpoint-session
-          (and session (mevedel-session-execution-target session) session))
+          (and session
+               (mevedel-session-execution-target session)
+               (not (bound-and-true-p mevedel--agent-invocation))
+               session))
          (telemetry-span
           (when session
             (mevedel-telemetry-start

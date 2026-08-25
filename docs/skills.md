@@ -531,8 +531,11 @@ empty list allows no nested tools. Stacked commands intersect their lists, so
 adding a skill can only remove authority. The result is intersected again with
 the configured ToolScript allowlist and the request's active/deferred tools; it
 never grants or activates a tool. Instruction occurrences ignore this field
-because they do not own the consuming request. ToolScript is root-session-only,
-so prepared fork metadata does not make it available to retained agents.
+because they do not own the consuming request. Retained agents carry
+ToolScript through their own role tools; prepared fork metadata neither grants
+nor narrows it, so `ptc-primitives` applies only to the request that owns the
+skill, and a child invocation's nested roster comes from the configured
+allowlist intersected with the child's own active tools.
 
 ## Hooks
 
