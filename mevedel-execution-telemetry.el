@@ -16,6 +16,8 @@
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-sandbox-summary-cell
                   "mevedel-agents" (cl-x) t)
+(autoload 'mevedel-agent-invocation-p "mevedel-agents")
+(autoload 'mevedel-agent-invocation-sandbox-summary-cell "mevedel-agents")
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-native-path
@@ -24,6 +26,9 @@
                   "mevedel-execution-target" (cl-x) t)
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-prefix "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
@@ -85,7 +90,6 @@
     (&key session execution-id tool-use-id owner invocation
           pipeline-summary-cell span-event span-properties)
   "Create an opaque telemetry context for one execution."
-  (when invocation (require 'mevedel-agents))
   (mevedel-execution-telemetry--context-create
    :agent-summary-cell
    (and invocation
@@ -277,7 +281,6 @@ requested command started, and REFUSED-P records a policy refusal."
 (defun mevedel-execution-telemetry-prepare-resource-capture
     (context command-text command)
   "Return an optional profiled COMMAND and record it in CONTEXT."
-  (require 'mevedel-execution-target)
   (let* ((session (mevedel-execution-telemetry--context-session context))
          (target (mevedel-session-execution-target session))
          (remote (and target
