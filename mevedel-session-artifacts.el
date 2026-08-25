@@ -6,10 +6,12 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-agents)
-  (require 'mevedel-structs))
+  (require 'mevedel-structs)
+  (require 'mevedel-transport))
 
 ;; `gptel'
 (declare-function gptel--get-buffer-bounds "ext:gptel" nil)
@@ -21,6 +23,8 @@
 
 ;; `mevedel-agent-persistence'
 (declare-function mevedel-agent-persistence-transcript-path-p "mevedel-agent-persistence" (path save-path))
+(autoload 'mevedel-agent-persistence-transcript-path-p
+  "mevedel-agent-persistence")
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x))
@@ -41,9 +45,24 @@
 (declare-function mevedel-execution-target-readiness "mevedel-execution-target" (cl-x))
 (declare-function mevedel-execution-target-refresh-incarnation "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-remote-p "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-acknowledge-incarnation
+  "mevedel-execution-target")
+(autoload 'mevedel-execution-target-incarnation-changed-p
+  "mevedel-execution-target")
+(autoload 'mevedel-execution-target-native-root "mevedel-execution-target")
+(autoload 'mevedel-execution-target-observe-incarnation
+  "mevedel-execution-target")
+(autoload 'mevedel-execution-target-prepare-incarnation-acknowledgement
+  "mevedel-execution-target")
+(autoload 'mevedel-execution-target-probe "mevedel-execution-target")
+(autoload 'mevedel-execution-target-readiness "mevedel-execution-target")
+(autoload 'mevedel-execution-target-refresh-incarnation
+  "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-invalidate-target-grants "mevedel-permissions" (session))
+(autoload 'mevedel-permission-invalidate-target-grants "mevedel-permissions")
 
 ;; `mevedel-persistence'
 (declare-function mevedel--load-instructions-file "mevedel-persistence" (path &optional base-directory confirm quiet workspace directive-records preserve-directives-p))
@@ -51,6 +70,12 @@
 (declare-function mevedel--restore-preserved-directives "mevedel-persistence" (workspace))
 (declare-function mevedel--serialize-instructions "mevedel-persistence" (&optional base-directory include-original-content))
 (declare-function mevedel--write-instructions-file "mevedel-persistence" (path &optional base-directory write-empty quiet include-original-content))
+(autoload 'mevedel--load-instructions-file "mevedel-persistence")
+(autoload 'mevedel--reset-instructions-preserving-directives
+  "mevedel-persistence")
+(autoload 'mevedel--restore-preserved-directives "mevedel-persistence")
+(autoload 'mevedel--serialize-instructions "mevedel-persistence")
+(autoload 'mevedel--write-instructions-file "mevedel-persistence")
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-portable-authority-p "mevedel-session-codec" (session))
@@ -59,16 +84,28 @@
                   "mevedel-session-codec"
                   (session &rest keys))
 (declare-function mevedel-session-codec-write "mevedel-session-codec" (path plist))
+(autoload 'mevedel-session-codec-portable-authority-p
+  "mevedel-session-codec")
+(autoload 'mevedel-session-codec-read "mevedel-session-codec")
+(autoload 'mevedel-session-codec-serialize "mevedel-session-codec")
+(autoload 'mevedel-session-codec-write "mevedel-session-codec")
 
 ;; `mevedel-session-control-transfer'
 (declare-function mevedel-session-control-transfer-observe "mevedel-session-control-transfer" (session))
 (declare-function mevedel-session-control-transfer-register-root-buffer "mevedel-session-control-transfer" (session buffer))
+(autoload 'mevedel-session-control-transfer-observe
+  "mevedel-session-control-transfer")
+(autoload 'mevedel-session-control-transfer-register-root-buffer
+  "mevedel-session-control-transfer")
 
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability-disclose "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-lease-owned-p "mevedel-session-durability" (session))
 (defvar mevedel-session-durability--asserted-directories)
 (defvar mevedel-session-durability--transaction-clock)
+(autoload 'mevedel-session-durability-disclose "mevedel-session-durability")
+(autoload 'mevedel-session-durability-lease-owned-p
+  "mevedel-session-durability")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-allocate-session-id "mevedel-session-persistence" (name sessions-dir))
@@ -82,6 +119,30 @@
 (declare-function mevedel-session-persistence-shallow-ensure-files "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-persistence-update-transcript-entry "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-persistence-write-current-buffer-atomically "mevedel-session-persistence" (path))
+(defvar mevedel-file-history-max-snapshot-bytes)
+(defvar mevedel-sessions-directory)
+(autoload 'mevedel-session-persistence-allocate-session-id
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-authoritative-buffer
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-first-user-message
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-flush-diagnostic-logs
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-lock-acquire
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-notify-session-event
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-root-buffer-for-session
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-root-data-buffer-p
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-shallow-ensure-files
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-update-transcript-entry
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-write-current-buffer-atomically
+  "mevedel-session-persistence")
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-committed-p "mevedel-session-publication" (session artifacts))
@@ -90,10 +151,21 @@
 (declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit))
 (declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir))
 (declare-function mevedel-session-publication-uncommitted-artifact "mevedel-session-publication" (session logical))
+(autoload 'mevedel-session-publication-committed-p
+  "mevedel-session-publication")
+(autoload 'mevedel-session-publication-logical-path-p
+  "mevedel-session-publication")
+(autoload 'mevedel-session-publication-prune-committed
+  "mevedel-session-publication")
+(autoload 'mevedel-session-publication-publish "mevedel-session-publication")
+(autoload 'mevedel-session-publication-read "mevedel-session-publication")
+(autoload 'mevedel-session-publication-uncommitted-artifact
+  "mevedel-session-publication")
 
 ;; `mevedel-session-recovery'
 (declare-function mevedel-session-recovery-refresh "mevedel-session-recovery" (session))
 (defvar mevedel-session-recovery--mutation-cache)
+(autoload 'mevedel-session-recovery-refresh "mevedel-session-recovery")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x))
@@ -126,16 +198,37 @@
 (declare-function mevedel-telemetry-start "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-transcript'
+(declare-function mevedel-transcript--user-prompt-start
+                  "mevedel-transcript" (pos next prop &optional state))
 (declare-function mevedel-transcript-normalize-properties
                   "mevedel-transcript" ())
+(declare-function mevedel-transcript-prompt-scan-state
+                  "mevedel-transcript" ())
+(declare-function mevedel-transcript-segments
+                  "mevedel-transcript" (start end))
+(autoload 'mevedel-transcript--user-prompt-start "mevedel-transcript")
+(autoload 'mevedel-transcript-normalize-properties "mevedel-transcript")
+(autoload 'mevedel-transcript-prompt-scan-state "mevedel-transcript")
+(autoload 'mevedel-transcript-segments "mevedel-transcript")
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record "mevedel-transcript-audit" (record))
 (declare-function mevedel-transcript-audit-spans "mevedel-transcript-audit" (text &optional type))
 (declare-function mevedel-transcript-buffer-directive-ranges "mevedel-transcript-audit" (&optional allow-open))
+(autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
+(autoload 'mevedel-transcript-audit-spans "mevedel-transcript-audit")
+(autoload 'mevedel-transcript-buffer-directive-ranges
+  "mevedel-transcript-audit")
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties "mevedel-transcript-restore" (&optional only-if-missing))
+(autoload 'mevedel-transcript-restore-properties "mevedel-transcript-restore")
+
+;; `mevedel-transport'
+(declare-function mevedel-transport--call-with-exclusive-connection
+                  "mevedel-transport" (thunk))
+(autoload 'mevedel-transport--call-with-exclusive-connection
+  "mevedel-transport")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--forget-place "mevedel-utilities" nil)
@@ -144,14 +237,22 @@
 (declare-function mevedel--write-file-atomically
                   "mevedel-utilities" (path content &optional coding mode))
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
+(autoload 'mevedel--forget-place "mevedel-utilities")
+(autoload 'mevedel--warn-once "mevedel-utilities")
+(autoload 'mevedel--write-file-atomically "mevedel-utilities")
+(autoload 'mevedel-version "mevedel-utilities")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace-ensure-generated-state-ignored "mevedel-workspace" (workspace))
 (defvar mevedel-workspace-additional-roots)
+(autoload 'mevedel-workspace "mevedel-workspace")
+(autoload 'mevedel-workspace-ensure-generated-state-ignored
+  "mevedel-workspace")
 
 ;; `mevedel-workspace-identity'
 (declare-function mevedel-workspace-identity-ensure "mevedel-workspace-identity" (root))
+(autoload 'mevedel-workspace-identity-ensure "mevedel-workspace-identity")
 
 ;; `nadvice'
 (declare-function advice-add "nadvice" (symbol where function &optional props))
@@ -163,6 +264,9 @@
 (declare-function org-entry-get "ext:org" (pom property &optional inherit literal-nil))
 (declare-function org-entry-put "ext:org" (epom property value))
 (defvar org-agenda-file-menu-enabled)
+(autoload 'org-entry-delete "org")
+(autoload 'org-entry-get "org")
+(autoload 'org-entry-put "org")
 
 (defvar mevedel-session-artifacts-require-agent-commit-p nil
   "Non-nil while an acknowledged agent mutation requires immediate commit.")
@@ -224,9 +328,6 @@ fixed logical file directly.  A portable live owner sees its newest locally
 staged write unless COMMITTED-ONLY is non-nil.  Otherwise portable sessions
 resolve only through SESSION's captured immutable publication and verify its
 recorded hash; fixed portable caches are never an authority fallback."
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-durability)
-  (require 'mevedel-session-publication)
   (unless (mevedel-session-publication-logical-path-p logical)
     (error "Invalid session artifact path: %S" logical))
   (let ((save-path (or (mevedel-session-save-path session)
@@ -269,9 +370,6 @@ recorded hash; fixed portable caches are never an authority fallback."
 PID-lock sessions consult the fixed logical path.  Portable sessions consult
 a live owner's newest staged write or captured immutable publication only.
 When COMMITTED-ONLY is non-nil, ignore staged portable writes."
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-durability)
-  (require 'mevedel-session-publication)
   (unless (mevedel-session-publication-logical-path-p logical)
     (error "Invalid session artifact path: %S" logical))
   (let ((save-path (or (mevedel-session-save-path session)
@@ -296,7 +394,6 @@ When COMMITTED-ONLY is non-nil, ignore staged portable writes."
 Insert resolver-verified bytes into a buffer visiting the qualified logical
 path.  When INSPECTION is non-nil, make the buffer read-only and ineligible
 for saving."
-  (require 'cl-lib)
   (let* ((save-path (or (mevedel-session-save-path session)
                         (error "Session has no persistence path")))
          (path (expand-file-name logical save-path))
@@ -330,7 +427,6 @@ for saving."
         (setq buffer-file-name path
               buffer-file-truename path)
         (delay-mode-hooks (set-auto-mode)))
-      (require 'mevedel-utilities)
       (mevedel--forget-place)
       (setq-local mevedel-session--inspection-buffer-p inspection)
       (setq-local buffer-offer-save (not inspection))
@@ -345,7 +441,6 @@ for saving."
 LIVE-BUFFER supplies the current segment even when it has not reached disk.
 Each descriptor contains `:number', `:path', `:status', `:current-p', and
 `:preview'.  Missing and unreadable archived segments remain in the result."
-  (require 'mevedel-session-codec)
   (let* ((save-path (mevedel-session-save-path session))
          (current (or (mevedel-session-current-segment session) 1))
          (index (mevedel-session-prompt-index session)))
@@ -386,7 +481,6 @@ Each descriptor contains `:number', `:path', `:status', `:current-p', and
 The returned buffer restores transcript properties but is never authoritative
 session state.  Signal a `user-error' naming the exact path when the segment
 cannot be read."
-  (require 'mevedel-session-codec)
   (let* ((save-path (mevedel-session-save-path session))
          (current (or (mevedel-session-current-segment session) 1))
          (logical (format "segment-%04d.chat.org" number))
@@ -419,7 +513,6 @@ cannot be read."
               (insert-file-contents path)
               (delay-mode-hooks (org-mode)))
             (setq-local mevedel-session--inspection-buffer-p t)
-            (require 'mevedel-transcript-restore)
             (mevedel-transcript-restore-properties)
             (unless (mevedel-session-codec-portable-authority-p session)
               (setq buffer-file-name nil))
@@ -470,14 +563,11 @@ Skips the initial org property drawer (via
 `#+begin_summary' / `#+end_summary' blocks (the compaction summary
 has its body stripped of the `gptel' property but is not a user
 prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
-  (require 'cl-lib)
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (save-excursion
         (save-restriction
           (widen)
-          (require 'mevedel-transcript)
-          (require 'mevedel-transcript-audit)
           (let* ((content-start
                   (mevedel-session-artifacts-content-start buffer))
                 (directive-ranges
@@ -577,7 +667,6 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
               (car-safe
                mevedel-session-artifacts--fork-point-spans-cache))
           (cdr mevedel-session-artifacts--fork-point-spans-cache)
-        (require 'mevedel-transcript-audit)
         (let ((spans
                (mapcar
                 (lambda (span)
@@ -599,7 +688,6 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
   "Return the stable fork point inside BUFFER source bounds.
 
 SOURCE-START and SOURCE-END must bound one rendered assistant turn."
-  (require 'cl-lib)
   (cl-find-if
    (lambda (fork-point)
      (and (<= source-start (plist-get fork-point :record-start))
@@ -609,7 +697,6 @@ SOURCE-START and SOURCE-END must bound one rendered assistant turn."
 (defun mevedel-session-artifacts--prompt-fork-point
     (prompt next-position fork-points)
   "Return PROMPT's fork point before NEXT-POSITION from FORK-POINTS."
-  (require 'cl-lib)
   (cl-find-if
    (lambda (fork-point)
      (let ((start (plist-get fork-point :record-start)))
@@ -690,7 +777,6 @@ that prompt's model turn."
         (save-excursion
           (goto-char (plist-get prompt :pos))
           (when (text-property-search-forward 'gptel 'response t)
-            (require 'mevedel-transcript-audit)
             (goto-char (point-max))
             (insert
              (mevedel--format-hook-audit-record
@@ -749,19 +835,15 @@ in one place avoids double-writing the sidecar on first save.
 Idempotent -- if SESSION already has a `save-path', repairs BUFFER's
 variable `buffer-file-name' so it visits the current segment before any save.
 Returns SESSION's `save-path' (allocated or existing)."
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
   (let* ((existing-save-path (mevedel-session-save-path session))
            (save-path
             (or existing-save-path
                 (let* ((_disclosure
                         (when (mevedel-execution-target-remote-p
                                (mevedel-session-execution-target session))
-                          (require 'mevedel-session-durability)
                           (mevedel-session-durability-disclose session)))
                        (_workspace-identity
                         (progn
-                          (require 'mevedel-workspace-identity)
                           (mevedel-workspace-identity-ensure
                            (mevedel-workspace-root
                             (mevedel-session-workspace session)))))
@@ -786,7 +868,6 @@ Returns SESSION's `save-path' (allocated or existing)."
                   (setf (mevedel-session-updated-at session)      now)
                   (setf (mevedel-session-current-segment session) 1)
                   (mevedel-session-persistence-flush-diagnostic-logs session)
-                  (require 'mevedel-workspace)
                   (mevedel-workspace-ensure-generated-state-ignored
                    (mevedel-session-workspace session))
                   (setf (mevedel-session-durable-tree-ensured session) t)
@@ -801,11 +882,9 @@ Returns SESSION's `save-path' (allocated or existing)."
         (make-directory save-path t)
         (make-directory (file-name-concat save-path "agents") t)
         (make-directory (file-name-concat save-path "file-history") t)
-        (require 'mevedel-workspace)
         (mevedel-workspace-ensure-generated-state-ignored
          (mevedel-session-workspace session))
         (setf (mevedel-session-durable-tree-ensured session) t))
-      (require 'mevedel-session-control-transfer)
       (when (and (buffer-live-p buffer)
                  (eq buffer (mevedel-session-root-buffer session)))
         (mevedel-session-control-transfer-register-root-buffer session buffer))
@@ -834,7 +913,6 @@ connection, while the fingerprint is one target command.  A first probe or a
 reconnect still runs the full probe, because a new connection may be a new
 target.  A failed observation falls back to the full probe, which settles a
 blocked readiness the caller reports."
-  (require 'mevedel-execution-target)
   (let ((readiness (mevedel-execution-target-probe target nil sandbox-mode)))
     (if (not (eq 'ready (plist-get readiness :status)))
         readiness
@@ -850,8 +928,6 @@ blocked readiness the caller reports."
 
 BUFFER identifies SESSION's live root data buffer.  The fresh probe runs at
 every durable mutation boundary; unchanged targets take no durability I/O."
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
   (unless mevedel-session-artifacts--checking-incarnation
     (let ((buffer
            (or buffer
@@ -865,11 +941,9 @@ every durable mutation boundary; unchanged targets take no durability I/O."
                         (not (bound-and-true-p mevedel--agent-invocation)))))
         (when (or (null (mevedel-session-root-buffer session))
                   (eq buffer (mevedel-session-root-buffer session)))
-          (require 'mevedel-session-control-transfer)
           (mevedel-session-control-transfer-register-root-buffer
            session buffer)))
       (when-let ((target (mevedel-session-execution-target session)))
-        (require 'mevedel-execution-target)
         (unless (mevedel-execution-target-incarnation-changed-p target)
           (if (mevedel-execution-target-remote-p target)
               (let ((readiness
@@ -889,7 +963,6 @@ every durable mutation boundary; unchanged targets take no durability I/O."
             (unless (buffer-live-p root-buffer)
               (error "Target replacement requires the live root session buffer"))
             (let ((mevedel-session-artifacts--checking-incarnation t))
-              (require 'mevedel-permissions)
               (mevedel-permission-invalidate-target-grants session)
               (mevedel-execution-target-prepare-incarnation-acknowledgement
                target)
@@ -917,8 +990,6 @@ Pending critical publication blocks every session.  A portable project session
 also materializes its directory when necessary and must own its live lease.
 Every execution target is incarnation-fenced before mutation.  Shallow
 materialization always uses SESSION's root buffer."
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
   (let ((buffer
          (or buffer
              (and (boundp 'mevedel--session)
@@ -931,14 +1002,11 @@ materialization always uses SESSION's root buffer."
                       (not (bound-and-true-p mevedel--agent-invocation))
                       (not (buffer-live-p
                             (mevedel-session-root-buffer session))))))
-      (require 'mevedel-session-control-transfer)
       (mevedel-session-control-transfer-register-root-buffer
        session buffer))
     (let ((target (mevedel-session-execution-target session)))
       (when (and target
                  (mevedel-session-codec-portable-authority-p session))
-        (require 'mevedel-session-durability)
-        (require 'mevedel-session-recovery)
         (mevedel-session-recovery-refresh session)))
     (when (mevedel-session-pending-publication session)
       (user-error "Session has pending publication; retry or abandon it first"))
@@ -950,7 +1018,6 @@ materialization always uses SESSION's root buffer."
         (let* ((root-buffer
                 (mevedel-session-persistence-root-buffer-for-session
                  session buffer)))
-          (require 'mevedel-session-durability)
           (mevedel-session-durability-disclose session)
           ;; Every portable mutation must have a materialized session
           ;; directory before it is admitted.
@@ -980,14 +1047,12 @@ authority gate; callers use this narrower guard at admission boundaries."
   ;; Hydrate the durable transfer state before admitting a restarted owner.
   ;; Do not run the owner-side drain/release path here: admission must only
   ;; observe state, and settlement remains responsible for releasing it.
-  (require 'mevedel-session-codec)
   (let ((state (plist-get (mevedel-session-control-transfer session) :state)))
     (when (memq state '(quiescing released))
       (user-error "Session is quiescing for cooperative control transfer")))
   (when (and (mevedel-session-codec-portable-authority-p session)
              (mevedel-session-save-path session)
              (mevedel-session-session-id session))
-    (require 'mevedel-session-control-transfer)
     (let ((state
            (plist-get
             (mevedel-session-control-transfer-observe session) :state)))
@@ -1005,7 +1070,6 @@ authority gate; callers use this narrower guard at admission boundaries."
 The committed field never changes once a session has a first turn, so the
 first successful read is cached on the session rather than re-read and
 re-verified on every save."
-  (require 'mevedel-session-codec)
   (or (mevedel-session-persisted-first-user-message session)
       (when-let* ((save-path (mevedel-session-save-path session)))
         (condition-case nil
@@ -1030,8 +1094,6 @@ re-verified on every save."
 
 (defun mevedel-session-artifacts-build-sidecar (session buffer)
   "Build the sidecar plist for SESSION using BUFFER for ancillary fields."
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
   (let* ((first-preview
           (or (mevedel-session-artifacts--persisted-first-user-message
                session)
@@ -1213,9 +1275,7 @@ so a single write can save positions that were correct for the previous
 drawer size.  Recompute after each write and stop once the serialized
 bounds no longer change."
   (when (and (derived-mode-p 'org-mode)
-             (require 'org nil t)
              (fboundp 'gptel--get-buffer-bounds))
-    (require 'mevedel-transcript)
     (save-excursion
       (save-restriction
         (widen)
@@ -1255,7 +1315,6 @@ the buffer size, it shifts the bound view's source coordinates by the
 same amount so disclosures continue to address the intended transcript
 segments.  Cleanup also runs when gptel's save fails, so a partial write
 cannot leave stale request configuration behind."
-  (require 'mevedel-session-persistence)
   (let ((size-before (buffer-size))
         (mevedel-org-buffer-p
          (and (bound-and-true-p mevedel--session)
@@ -1310,7 +1369,6 @@ cannot leave stale request configuration behind."
 Writes `instructions/current.el' and, unless CURRENT-ONLY is non-nil, a
 turn-specific snapshot used by rewind/fork when the session has a turn count."
   (when-let* ((save-path (mevedel-session-save-path session)))
-    (require 'mevedel-persistence)
     (let ((dir (mevedel-session-artifacts-instructions-dir save-path))
           (workspace-root (mevedel-workspace-root
                            (mevedel-session-workspace session)))
@@ -1334,7 +1392,6 @@ When TURN is non-nil, restore the turn-specific snapshot; otherwise restore
 directive identity and activity while replacing historical presentations.
 PRESERVE-DIRECTIVES-P applies that behavior even when the record list is empty.
 Missing snapshots clear presentations only in preservation mode."
-  (require 'mevedel-session-codec)
   (when-let* ((save-path (mevedel-session-save-path session)))
     (let* ((path (if turn
                      (mevedel-session-artifacts-instructions-turn-path
@@ -1349,7 +1406,6 @@ Missing snapshots clear presentations only in preservation mode."
                 (mevedel-session-artifacts-artifact-present-p
                  session logical)
               (file-exists-p path))))
-      (require 'mevedel-persistence)
       (if present-p
         (condition-case err
             (let ((source path)
@@ -1423,13 +1479,9 @@ Missing snapshots clear presentations only in preservation mode."
 Portable project writes enter the session publication queue.  File-workspace
 writes retain the existing same-filesystem temporary-file and rename
 behavior.  Return the publication outcome, or PATH after a direct write."
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
   (if (mevedel-session-codec-portable-authority-p session)
       (progn
         (mevedel-session-artifacts-assert-mutation-authority session)
-        (require 'mevedel-session-durability)
-        (require 'mevedel-session-publication)
         (mevedel-session-publication-publish
          session (list (list :path path :content content :coding coding))))
     (progn
@@ -1449,14 +1501,11 @@ its live root data buffer, and the current immutable publication must contain
 the sidecar.  Mutation authority is checked before the artifact is built."
   ;; An explicit root argument is the registration seam for callers that
   ;; materialize a session without going through view initialization.
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
   (when (and (buffer-live-p root-buffer)
              (with-current-buffer root-buffer
                (and (boundp 'mevedel--session)
                     (eq mevedel--session session)
                     (not (bound-and-true-p mevedel--agent-invocation)))))
-    (require 'mevedel-session-control-transfer)
     (mevedel-session-control-transfer-register-root-buffer
      session root-buffer))
   (unless (and (buffer-live-p root-buffer)
@@ -1468,7 +1517,6 @@ the sidecar.  Mutation authority is checked before the artifact is built."
                (mevedel-session-execution-target session)
                (mevedel-session-codec-portable-authority-p session))
     (error "Session state publication requires a portable materialized session"))
-  (require 'mevedel-session-durability)
   (unless (mevedel-session-artifacts-artifact-present-p
            session "session.meta.el" t)
     (error "Portable session sidecar is not published"))
@@ -1489,8 +1537,6 @@ the sidecar.  Mutation authority is checked before the artifact is built."
 
 ROOT-BUFFER must be SESSION's live root data buffer.  Publication and
 authority failures are propagated to the caller."
-  (require 'mevedel-session-durability)
-  (require 'mevedel-session-publication)
   (let ((result
          (mevedel-session-publication-publish
           session
@@ -1532,9 +1578,6 @@ batch."
 
 The authoritative sidecar must already exist.  Shallow first-turn agent state
 continues to wait for the root turn's completed-turn publication boundary."
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-agent-persistence)
   (unless (mevedel-agent-invocation-p invocation)
     (error "Invalid agent invocation"))
   (let* ((session (mevedel-agent-invocation-parent-session invocation))
@@ -1572,8 +1615,6 @@ continues to wait for the root turn's completed-turn publication boundary."
         (mevedel-session-persistence-update-transcript-entry
          session (mevedel-agent-invocation-agent-id invocation)
          (list :updated-at (format-time-string "%FT%H-%M-%S")))
-        (require 'mevedel-session-durability)
-        (require 'mevedel-session-publication)
         (mevedel-session-publication-publish
          session
          (list
@@ -1605,7 +1646,6 @@ continues to wait for the root turn's completed-turn publication boundary."
 
 (defun mevedel-session-artifacts--instruction-artifacts (session buffer)
   "Return SESSION instruction snapshot artifacts derived from BUFFER."
-  (require 'mevedel-persistence)
   (let* ((save-path (mevedel-session-save-path session))
          (workspace-root
           (mevedel-workspace-root (mevedel-session-workspace session)))
@@ -1647,7 +1687,6 @@ When SETTLED is non-nil, update the prompt index and latest fork point.
 When FORCE is non-nil, publish even when the state is already committed.
 The public save entry point has already completed the mutation gate before
 calling this serializer."
-  (require 'mevedel-session-persistence)
   (mevedel-session-artifacts-ensure-files session buffer)
   (when settled
     (mevedel-session-artifacts-update-prompt-index session buffer)
@@ -1671,8 +1710,6 @@ calling this serializer."
        session
        (or (mevedel-session-turn-count session) 0)
        (mevedel-request-file-snapshots mevedel--current-request)))
-    (require 'mevedel-session-durability)
-    (require 'mevedel-session-publication)
     ;; `updated-at' is stamped only once this save is known to carry a
     ;; change, because stamping it first would make the sidecar differ from
     ;; the committed one on every call and defeat the comparison below.
@@ -1751,8 +1788,6 @@ must materialize a snapshot rather than record a change."
   ;; A direct data-buffer caller establishes the session-owned root before
   ;; the projection boundary is consulted.  View callers must pass their
   ;; registered data buffer, never the view projection itself.
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
   (when (and (buffer-live-p buffer)
              (with-current-buffer buffer
                (and (boundp 'mevedel--session)
@@ -1760,7 +1795,6 @@ must materialize a snapshot rather than record a change."
                     (not (bound-and-true-p mevedel--agent-invocation)))))
     (when (or (null (mevedel-session-root-buffer session))
               (eq buffer (mevedel-session-root-buffer session)))
-      (require 'mevedel-session-control-transfer)
       (mevedel-session-control-transfer-register-root-buffer
        session buffer)))
   (when-let ((buffer (mevedel-session-persistence-authoritative-buffer
@@ -1770,7 +1804,6 @@ must materialize a snapshot rather than record a change."
       (mevedel-session-control-transfer-register-root-buffer session buffer))
     ;; The mutation gate and the publication entry both consult the target
     ;; recovery marker, and nothing in between can install one.
-    (require 'mevedel-session-recovery)
     (let ((mevedel-session-recovery--mutation-cache
            (or (bound-and-true-p mevedel-session-recovery--mutation-cache)
                (list nil)))
@@ -1877,7 +1910,6 @@ must materialize a snapshot rather than record a change."
     (if mevedel-session-artifacts--collecting-critical-artifacts-p
         (push (list :path dest :content content)
               mevedel-session-artifacts--critical-artifacts)
-      (require 'mevedel-utilities)
       ;; Backups are verbatim copies of the user's files inside session
       ;; storage; keep them owner-only rather than inheriting the
       ;; default modes an ordinary artifact gets.
@@ -2043,7 +2075,6 @@ client resumes from, where neither means anything."
 
 (defun mevedel-session-artifacts--publish-segment-text (file text)
   "Atomically write TEXT to FILE and make the current buffer visit it."
-  (require 'mevedel-session-persistence)
   (let ((coding-system buffer-file-coding-system))
     (with-temp-buffer
       (setq buffer-file-coding-system coding-system)
@@ -2061,9 +2092,7 @@ Sets `MEVEDEL_SESSION_ID', `MEVEDEL_SEGMENT_NUMBER',
 `MEVEDEL_SEGMENT_CREATED_AT', and `MEVEDEL_VERSION'.  Caller is
 responsible for ensuring the buffer is in `org-mode' (mevedel data
 buffers are locked to `org-mode' by `mevedel--chat-buffer-setup')."
-  (require 'mevedel-utilities)
   (when (derived-mode-p 'org-mode)
-    (require 'org)
     (org-entry-put (point-min) "MEVEDEL_VERSION" (mevedel-version))
     (org-entry-put (point-min) "MEVEDEL_SESSION_ID"
                    (or (mevedel-session-session-id session) ""))
@@ -2160,8 +2189,6 @@ last as its commit marker."
       ;; Retry can then publish the exact state represented in memory.
       (setq buffer-file-name new-segment
             buffer-file-truename nil)
-      (require 'mevedel-session-durability)
-      (require 'mevedel-session-publication)
       (mevedel-session-publication-publish
        session
        (append
@@ -2217,11 +2244,9 @@ TRUNCATED-TAIL-P is recorded as segment metadata when non-nil.
 Requires SESSION to have a `save-path' (i.e., to have been lazily
 materialized).  Returns the new segment's absolute path on success,
 nil if SESSION is not yet materialized."
-  (require 'mevedel-session-codec)
   (when (mevedel-session-save-path session)
     (mevedel-session-artifacts-assert-mutation-authority session buffer)
     (with-current-buffer buffer
-      (require 'org)
       ;; 1. Save the current segment before replacing the buffer body.
       (let ((portable-p
              (mevedel-session-codec-portable-authority-p session))
@@ -2383,12 +2408,9 @@ the data buffer without carrying over any conversation summary.
 
 Requires SESSION to have a `save-path'.  Returns the new segment's
 absolute path on success, nil if SESSION is not yet materialized."
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
   (when (mevedel-session-save-path session)
     (mevedel-session-artifacts-assert-mutation-authority session buffer)
     (with-current-buffer buffer
-      (require 'org)
       (let ((portable-p
              (mevedel-session-codec-portable-authority-p session))
             (old-segment buffer-file-name)
