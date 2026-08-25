@@ -325,6 +325,35 @@
       "same\nmiddle\nsame\n" (list hunk) "file.txt")
      :type 'error))
 
+  :doc "A line hint resolves an otherwise ambiguous match"
+  (let ((hunk '(:old-lines ("same") :new-lines ("new") :selected t
+                :line-hint 3 :diff-lines ("-same" "+new"))))
+    (should (equal "same\nmiddle\nnew\n"
+                   (mevedel-tool-patch-apply-hunks
+                    "same\nmiddle\nsame\n" (list hunk) "file.txt"))))
+
+  :doc "Keeps baseline line hints stable after earlier line-count changes"
+  (let* ((content "d1\nd2\nd3\nd4\nsep\nx\na\nb\nc\nd\nx\n")
+         (hunks (list
+                 '(:selected t
+                   :old-lines ("d1" "d2" "d3" "d4")
+                   :new-lines nil
+                   :diff-lines ("-d1" "-d2" "-d3" "-d4"))
+                 '(:selected t
+                   :old-lines ("x")
+                   :new-lines ("changed")
+                   :line-hint 6
+                   :diff-lines ("-x" "+changed"))))
+         (hinted (cadr hunks))
+         (operation (list :kind 'update :path "file.txt"
+                          :baseline-content content :hunks hunks)))
+    (mevedel-tool-patch-annotate-line-numbers
+     (list :operations (list operation)))
+    (should (= 6 (plist-get hinted :old-start)))
+    (should (equal "sep\nchanged\na\nb\nc\nd\nx\n"
+                   (mevedel-tool-patch-apply-hunks
+                    content hunks "file.txt"))))
+
   :doc "Applies later hunks after earlier ones, resolving repeats"
   (let ((hunks '((:old-lines ("a") :selected t
                   :diff-lines ("-a" "+A"))
@@ -679,7 +708,26 @@
   (let ((hunk (car (mevedel-tool-patch-parse-update-lines
                     '("@@ here  " "-old" "+new" "*** End of File  ") 2))))
     (should (equal "here" (plist-get hunk :context)))
-    (should (plist-get hunk :eof))))
+    (should (plist-get hunk :eof)))
+
+  :doc "reads a bare positive integer anchor as a line hint"
+  (let ((hunk (car (mevedel-tool-patch-parse-update-lines
+                    '("@@ 412" "-old" "+new") 2))))
+    (should (= 412 (plist-get hunk :line-hint)))
+    (should-not (plist-get hunk :context)))
+
+  :doc "keeps a textual anchor as context with no line hint"
+  (let ((hunk (car (mevedel-tool-patch-parse-update-lines
+                    '("@@ here" "-old" "+new") 2))))
+    (should (equal "here" (plist-get hunk :context)))
+    (should-not (plist-get hunk :line-hint)))
+
+  :doc "leaves zero and zero-padded anchors as context"
+  (dolist (anchor '("0" "007"))
+    (let ((hunk (car (mevedel-tool-patch-parse-update-lines
+                      (list (concat "@@ " anchor) "-old" "+new") 2))))
+      (should (equal anchor (plist-get hunk :context)))
+      (should-not (plist-get hunk :line-hint)))))
 
 (mevedel-deftest mevedel-tool-patch-parse
   (:doc "Parses a complete multi-operation envelope") ,test (test)
@@ -883,7 +931,30 @@
                 '("x" "a" "x") '(:old-lines ("x")) "p" 2)))
   (should-error (mevedel-tool-patch--match-start
                  '("x" "a" "x" "b" "x") '(:old-lines ("x")) "p" 1)
-                :type 'error))
+                :type 'error)
+
+  :doc "a line hint settles an otherwise ambiguous match"
+  (should (= 2 (mevedel-tool-patch--match-start
+                '("x" "a" "x") '(:old-lines ("x") :line-hint 3) "p")))
+  (should (= 0 (mevedel-tool-patch--match-start
+                '("x" "a" "x") '(:old-lines ("x") :line-hint 1) "p")))
+
+  :doc "equidistant candidates stay ambiguous"
+  (should-error (mevedel-tool-patch--match-start
+                 '("x" "a" "x") '(:old-lines ("x") :line-hint 2) "p")
+                :type 'error)
+
+  :doc "a stale hint never rejects an unambiguous match"
+  (should (= 1 (mevedel-tool-patch--match-start
+                '("a" "b") '(:old-lines ("b") :line-hint 900) "x")))
+
+  :doc "hunk order narrows first, the hint settles what it leaves"
+  (should (= 4 (mevedel-tool-patch--match-start
+                '("x" "a" "x" "b" "x") '(:old-lines ("x") :line-hint 5) "p" 1)))
+
+  :doc "hunk order excludes earlier matches before applying the hint"
+  (should (= 2 (mevedel-tool-patch--match-start
+                '("x" "a" "x" "b" "x") '(:old-lines ("x") :line-hint 1) "p" 1))))
 
 (mevedel-deftest mevedel-tool-patch--affected-paths
   (:doc "Includes both source and move destination") ,test (test)

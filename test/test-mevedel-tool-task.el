@@ -728,10 +728,12 @@
 
   :doc "shows agent activity in place of the subject it restates"
   (test-mevedel-tool-task--with-session session
+    (setf (mevedel-session-agent-registry session)
+          '(("/root/explorer" . retained)))
     (setf (mevedel-session-tasks session)
           (list (mevedel-task--create
                  :id 1 :subject "inspect ui" :status 'in-progress
-                 :owner "explorer"
+                 :owner "/root/explorer"
                  :metadata '(:activity "reading TaskListV2"))
                 (mevedel-task--create
                  :id 2 :subject "verify overlay" :status 'pending
@@ -745,6 +747,18 @@
       (should (string-match-p
                "○ #2 worker · verify overlay · blocked by #1, #7" text))
       (should-not (string-match-p "@explorer" text))))
+
+  :doc "keeps bucket subjects even when their metadata names an activity"
+  (test-mevedel-tool-task--with-session session
+    (setf (mevedel-session-tasks session)
+          (list (mevedel-task--create
+                 :id 1 :subject "bucket subject" :status 'in-progress
+                 :owner "workstream"
+                 :metadata '(:activeForm "bucket activity"))))
+    (let ((text (substring-no-properties
+                 (mevedel-tool-task--format-groups session))))
+      (should (string-match-p "workstream · bucket subject" text))
+      (should-not (string-match-p "bucket activity" text))))
 
   :doc "collapses blockers only when several of them are all running"
   (test-mevedel-tool-task--with-session session
@@ -934,34 +948,42 @@
   (:doc "`mevedel-tool-task--render-rows' caps rows without dangling chrome")
   ,test
   (test)
-  :doc "reports an empty body against the task list it was given"
-  (should (equal "No tasks."
-                 (substring-no-properties
-                  (mevedel-tool-task--render-rows nil nil nil))))
+  :doc "reports an empty body as having no open tasks"
   (should (equal "No open tasks."
                  (substring-no-properties
-                  (mevedel-tool-task--render-rows
-                   nil (list (mevedel-task--create
-                              :id 1 :subject "done" :status 'completed))
-                   nil))))
+                  (mevedel-tool-task--render-rows nil nil))))
 
   :doc "joins every row when it fits the cap"
   (should (equal "a\nb"
                  (substring-no-properties
                   (mevedel-tool-task--render-rows
-                   '(("a" 1 0) ("b" 0 1)) nil 2))))
+                   '(("a" 1 0) ("b" 0 1)) 2))))
 
   :doc "drops a trailing header left with nothing under it"
   (let ((text (substring-no-properties
                (mevedel-tool-task--render-rows
-                '(("row" 1 0) ("header" 0 0) ("under" 1 0)) nil 2))))
+                '(("row" 1 0) ("header" 0 0) ("under" 1 0)) 2))))
     (should (equal "row\n  … 1 more open" text)))
 
   :doc "omits the summary when the dropped rows carry no tasks"
   (let ((text (substring-no-properties
                (mevedel-tool-task--render-rows
-                '(("row" 1 0) ("header" 0 0) ("note" 0 0)) nil 2))))
+                '(("row" 1 0) ("header" 0 0) ("note" 0 0)) 2))))
     (should (equal "row" text))))
+
+(mevedel-deftest mevedel-tool-task-format-active-for-llm
+  (:doc "`mevedel-tool-task-format-active-for-llm' uses the TaskList shape")
+  ,test
+  (test)
+  (test-mevedel-tool-task--with-session session
+    (setf (mevedel-session-tasks session)
+          (list (mevedel-task--create
+                 :id 1 :subject "active" :status 'pending
+                 :owner "/root/worker")
+                (mevedel-task--create
+                 :id 2 :subject "finished" :status 'completed)))
+    (should (equal "#1 [pending] active owner=/root/worker"
+                   (mevedel-tool-task-format-active-for-llm session)))))
 
 
 ;;

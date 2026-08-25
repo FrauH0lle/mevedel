@@ -106,9 +106,8 @@
                   "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-tool-task'
-(declare-function mevedel-tool-task--active-p "mevedel-tool-task" (task))
-(declare-function mevedel-tool-task--format-for-llm
-                  "mevedel-tool-task" (tasks))
+(declare-function mevedel-tool-task-format-active-for-llm
+                  "mevedel-tool-task" (session))
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
@@ -1455,9 +1454,7 @@ been written for INTERVAL turns.  INTERVAL defaults to 8 turns."
                ;; The panel rendering is a display concern; the model
                ;; reads the same shape TaskList returns, with canonical
                ;; owner paths and unabbreviated subjects.
-               (mevedel-tool-task--format-for-llm
-                (cl-remove-if-not #'mevedel-tool-task--active-p
-                                  (mevedel-session-tasks session)))))
+               (mevedel-tool-task-format-active-for-llm session)))
    :interval nil))
 
 (defun mevedel-reminders-make-verification-suggestion ()

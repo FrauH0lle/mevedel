@@ -47,7 +47,7 @@ The argument must use this grammar:
 *** Add File: path
 +every added line starts with +
 *** Update File: path
-@@ optional context anchor
+@@ optional context anchor or line number
  unchanged context starts with one space
 -removed line
 +added line
@@ -63,16 +63,19 @@ The argument must use this grammar:
 An Update may contain multiple `@@` hunks. By default include three unchanged
 context lines above and below each change; when consecutive changes sit fewer
 than three lines apart, do not repeat the overlapping context. If three lines
-of context cannot uniquely locate the snippet, add a distinguishing
-`@@ context anchor` naming the enclosing definition, or enlarge the hunk.
-Each hunk takes at most one `@@` anchor.
+of context cannot uniquely locate the snippet, anchor the hunk with `@@ N`,
+where N is the line number its first line carried in your most recent Read of
+that file. A line number only chooses among locations whose content already
+matches, so a stale N is harmless and never rejects a hunk on its own.
+Alternatively add a distinguishing `@@ context anchor` naming the enclosing
+definition, or enlarge the hunk. Each hunk takes at most one `@@` anchor.
 
 Matching tolerates trailing whitespace, surrounding whitespace, and
 ASCII-vs-typographic punctuation differences, in that order of preference,
-but a hunk that matches more than one location is rejected: enlarge it or
-anchor it. Order hunks top-to-bottom within a file; hunk order can
-disambiguate repeated patterns. Applied context lines are taken from the
-file, never rewritten from the patch.
+but a hunk that matches more than one location is rejected: anchor it with
+`@@ N`, enlarge it, or add a context anchor. Order hunks top-to-bottom within
+a file; hunk order can disambiguate repeated patterns. Applied context lines
+are taken from the file, never rewritten from the patch.
 
 Add creates missing parent directories and cannot target an existing file;
 rewrite an existing file with one full-file Update hunk instead. Delete
