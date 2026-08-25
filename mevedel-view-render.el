@@ -49,6 +49,7 @@
 (declare-function mevedel-open-directive-activity
                   "mevedel-directive-activity"
                   (&optional directive workspace))
+(autoload 'mevedel-open-directive-activity "mevedel-directive-activity")
 
 ;; `mevedel-directive-frame'
 (declare-function mevedel-directive-frame-refresh-filter
@@ -74,6 +75,7 @@
 ;; `mevedel-overlays'
 (declare-function mevedel--directive-action-context
                   "mevedel-overlays" (record workspace))
+(autoload 'mevedel--directive-action-context "mevedel-overlays")
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-extract-proposed "mevedel-plan" (text))
@@ -110,6 +112,8 @@
 (declare-function mevedel-session-rewind-rewind-checkpoint
                   "mevedel-session-rewind"
                   (workspace checkpoint &optional buffer))
+(autoload 'mevedel-session-rewind-rewind "mevedel-session-rewind")
+(autoload 'mevedel-session-rewind-rewind-checkpoint "mevedel-session-rewind")
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-attempt-checkpoint
@@ -634,7 +638,6 @@ turns rendered as usual.")
   (require 'mevedel-overlay-ui)
   (require 'mevedel-review)
   (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
   (require 'mevedel-session-persistence)
   (require 'mevedel-tool-render-data)
   (require 'mevedel-transcript)
@@ -4334,8 +4337,6 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
 (defun mevedel-view-directive-actions (directive)
   "Choose a state-correct action for the rendered DIRECTIVE turn."
   (interactive (list (get-text-property (point) 'mevedel-view-directive)))
-  (require 'mevedel-session-fork)
-  (require 'mevedel-session-rewind)
   (pcase-let* ((`(,record ,workspace ,attempt ,attempt-index)
                 (or (mevedel-view--directive-metadata-context directive)
                     (user-error "Directive record is unavailable")))
@@ -4365,8 +4366,7 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
     (pcase choice
       (?d (mevedel-view-enter-directive-scope
            record 'discuss attempt-index workspace))
-      (?i (require 'mevedel-overlays)
-          (mevedel--implement-discussion
+      (?i (mevedel--implement-discussion
            (plist-get (mevedel--directive-action-context record workspace)
                       :directive)))
       (?c (mevedel-view-enter-directive-scope
@@ -4378,8 +4378,7 @@ is stored as a leading code-formatted action (\"`implement` Text\")."
             (mevedel-session-rewind-rewind-checkpoint
              workspace checkpoint
              (mevedel-view--directive-checkpoint-buffer checkpoint))))
-      (?o (require 'mevedel-directive-activity)
-          (mevedel-open-directive-activity record workspace)))))
+      (?o (mevedel-open-directive-activity record workspace)))))
 
 (defun mevedel-view--fontify-directive-display-text (text)
   "Return TEXT with the directive action label fontified."
@@ -5550,8 +5549,6 @@ continuation context."
 (defun mevedel-view-rewind-at-point ()
   "Rewind the current session to the settled assistant turn at point."
   (interactive)
-  (require 'mevedel-session-fork)
-  (require 'mevedel-session-rewind)
   (when (mevedel-session-rewind-rewind
          mevedel--data-buffer (mevedel-view--settled-response-at-point))
     (mevedel-view-return-to-latest-segment)

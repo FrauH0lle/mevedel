@@ -13,6 +13,8 @@
                   "mevedel-session-artifacts" (session number))
 (declare-function mevedel-session-artifacts-segments
                   "mevedel-session-artifacts" (session live-buffer))
+(autoload 'mevedel-session-artifacts-read-segment "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-segments "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-current-segment
@@ -31,6 +33,8 @@
                   "mevedel-view-render" ())
 (declare-function mevedel-view-render-project-segment
                   "mevedel-view-render" (data-buffer state direction))
+(autoload 'mevedel-view-render-capture-segment-state "mevedel-view-render")
+(autoload 'mevedel-view-render-project-segment "mevedel-view-render")
 
 
 ;;
@@ -114,8 +118,6 @@
 
 (defun mevedel-view-segments--show (number direction)
   "Project session segment NUMBER, landing according to DIRECTION."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-view-render)
   (let* ((session (or (mevedel-view-segments--session)
                       (user-error "Active view has no mevedel session")))
          (current (or (mevedel-session-current-segment session) 1)))
@@ -201,7 +203,6 @@
 Interactively, offer every canonical segment, including missing and
 unreadable entries."
   (interactive)
-  (require 'mevedel-session-artifacts)
   (let* ((session (or (mevedel-view-segments--session)
                       (user-error "Active view has no mevedel session")))
          (latest (or (mevedel-session-current-segment session) 1))
@@ -230,7 +231,6 @@ unreadable entries."
   "Return from archived inspection to the live session segment."
   (interactive)
   (when (mevedel-view-historical-segment-p)
-    (require 'mevedel-view-render)
     (let ((old-number mevedel-view-segments--number)
           (old-buffer mevedel-view-segments--buffer)
           (old-state (mevedel-view-render-capture-segment-state))

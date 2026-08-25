@@ -32,6 +32,7 @@
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-teardown-session
                   "mevedel-agent-control" (session))
+(autoload 'mevedel-agent-control-teardown-session "mevedel-agent-control")
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-parent-data-buffer
@@ -58,6 +59,7 @@
 ;; `mevedel-executions-list'
 (declare-function mevedel-executions-list-open
                   "mevedel-executions-list" (&optional context))
+(autoload 'mevedel-executions-list-open "mevedel-executions-list")
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
@@ -165,6 +167,8 @@
 ;; `mevedel-view-control-transfer'
 (declare-function mevedel-view-control-transfer-teardown
                   "mevedel-view-control-transfer" ())
+(autoload 'mevedel-view-control-transfer-teardown
+  "mevedel-view-control-transfer")
 
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
@@ -186,6 +190,8 @@
                   "mevedel-view-markdown" (beg end &optional delete))
 (declare-function mevedel-view--enable-markdown-realign
                   "mevedel-view-markdown" ())
+(autoload 'mevedel-view--buffer-substring-filter "mevedel-view-markdown")
+(autoload 'mevedel-view--enable-markdown-realign "mevedel-view-markdown")
 (autoload 'mevedel-view--normalize-local-file-uri-path
   "mevedel-view-markdown")
 
@@ -604,7 +610,6 @@ request progress row, and input zone.  The input zone starts at
 the editable composer body.
 
 \\{mevedel-view-mode-map}"
-  (require 'mevedel-view-markdown)
   ;; Copying a rendered table yields its canonical pipe Markdown.
   (setq-local filter-buffer-substring-function
               #'mevedel-view--buffer-substring-filter)
@@ -647,20 +652,13 @@ view.  When `:preserve-data-view-buffer' is non-nil, leave DATA-BUF's
 existing `mevedel--view-buffer' binding untouched.  A
 `:side-conversation-p' view omits durable input history, and
 `:transcript-start' hides inherited model context from projection."
-  (require 'mevedel-execution-target)
   (require 'mevedel-models)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-durability)
-  (require 'mevedel-session-persistence)
   (require 'mevedel-tools)
-  (require 'mevedel-turn)
   (require 'mevedel-view-composer)
   (require 'mevedel-view-agent)
   (require 'mevedel-view-history)
   (require 'mevedel-view-interaction)
   (require 'mevedel-view-render)
-  (require 'mevedel-view-stream)
   (with-current-buffer view-buf
     (when (overlayp mevedel-view--composer-keymap-overlay)
       (delete-overlay mevedel-view--composer-keymap-overlay))
@@ -841,7 +839,6 @@ kill hook sees nil and exits without re-entering this function."
   ;; included: a live timer holding a killed buffer is exactly the
   ;; leaked state the test isolation rule forbids, and outside tests it
   ;; is a needless wakeup.
-  (require 'mevedel-view-stream)
   (mevedel-view--stop-spinner-timer)
   (mevedel-view-render-invalidate-live-tail)
   (when (and (boundp 'mevedel-view--control-transfer-timer)
@@ -854,7 +851,6 @@ kill hook sees nil and exits without re-entering this function."
     (setq mevedel-view--control-transfer-torn-down-p t))
   (unless (mevedel-view-agent-handle-view-kill)
     (let ((view-buffer (current-buffer)))
-      (require 'mevedel-view-control-transfer)
       (mevedel-view-control-transfer-teardown)
       (mevedel-view--interaction-clear)
       (when-let* ((db mevedel--data-buffer)
@@ -877,7 +873,6 @@ Kills the associated view buffer."
              (fboundp 'mevedel-execution-teardown-session))
     (mevedel-execution-teardown-session mevedel--session))
   (when mevedel--session
-    (require 'mevedel-agent-control)
     (mevedel-agent-control-teardown-session mevedel--session))
   (when (fboundp 'mevedel-permission-queue-abort-all)
     (mevedel-permission-queue-abort-all mevedel--session))
@@ -1316,7 +1311,6 @@ the editable composer signal instead of settling queued interactions."
 (defun mevedel-view-open-executions ()
   "Open the current session's live execution cockpit."
   (interactive)
-  (require 'mevedel-executions-list)
   (mevedel-executions-list-open))
 
 (defun mevedel-view--execution-state-changed (session data-buffer)

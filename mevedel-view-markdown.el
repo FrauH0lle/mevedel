@@ -15,6 +15,8 @@
                   "mevedel-execution-target" (target path &optional directory))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
@@ -26,10 +28,18 @@
 (declare-function mevedel-session-artifacts-read-artifact
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
+(autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-find-artifact-noselect
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-artifact
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-publication-logical-path-p
                   "mevedel-session-durability" (path))
+(autoload 'mevedel-session-publication-logical-path-p
+  "mevedel-session-durability")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
@@ -50,10 +60,6 @@
 (declare-function mevedel-view-table-rerender "mevedel-view-table"
                   (&optional window))
 
-(require 'mevedel-session-artifacts)
-(require 'mevedel-session-codec)
-(require 'mevedel-session-durability)
-(require 'mevedel-session-persistence)
 (require 'mevedel-view-table)
 (require 'text-property-search)
 
