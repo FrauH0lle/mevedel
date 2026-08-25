@@ -11,8 +11,9 @@
 
 (eval-when-compile
   (require 'cl-lib)
-  (require 'mevedel-agents)
   (require 'subr-x))
+
+(require 'mevedel-agents)
 
 ;; `gptel'
 (declare-function gptel--save-state "ext:gptel" ())
@@ -109,20 +110,35 @@
                   "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-strip-gptel-config-properties
                   "mevedel-session-artifacts" nil)
+(autoload 'mevedel-session-artifacts-find-artifact-noselect
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-publish-text
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-stabilize-gptel-bounds
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-strip-gptel-config-properties
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-portable-authority-p
                   "mevedel-session-codec" (session))
+(autoload 'mevedel-session-codec-portable-authority-p
+  "mevedel-session-codec")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-update-transcript-entry
                   "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-persistence-write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
+(autoload 'mevedel-session-persistence-update-transcript-entry
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-write-sidecar-now
+  "mevedel-session-persistence")
 
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-install-activation-hook
                   "mevedel-skills-prompt" ())
+(autoload 'mevedel-skills-install-activation-hook "mevedel-skills-prompt")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -140,6 +156,9 @@
                   "mevedel-tool-repair" (&rest args))
 (declare-function mevedel-tool-repair-pre-tool-call
                   "mevedel-tool-repair" (&rest args))
+(autoload 'mevedel-tool-repair-clear-ledger "mevedel-tool-repair")
+(autoload 'mevedel-tool-repair-post-tool-call "mevedel-tool-repair")
+(autoload 'mevedel-tool-repair-pre-tool-call "mevedel-tool-repair")
 
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-extract
@@ -163,12 +182,19 @@
                   (ranges &rest keys))
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
+(autoload 'mevedel-transcript-normalize-properties "mevedel-transcript")
+(autoload 'mevedel-transcript-project-evidence "mevedel-transcript")
+(autoload 'mevedel-transcript-segments "mevedel-transcript")
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-enable-gptel-mode
                   "mevedel-transcript-restore" ())
 (declare-function mevedel-transcript-restore-gptel-state
                   "mevedel-transcript-restore" ())
+(autoload 'mevedel-transcript-enable-gptel-mode
+  "mevedel-transcript-restore")
+(autoload 'mevedel-transcript-restore-gptel-state
+  "mevedel-transcript-restore")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--insert-user-role-block-at-marker
@@ -179,6 +205,10 @@
                   "mevedel-utilities" (file-a file-b))
 (declare-function mevedel--transcript-org-mode
                   "mevedel-utilities" ())
+(autoload 'mevedel--insert-user-role-block-at-marker "mevedel-utilities")
+(autoload 'mevedel--optimize-transcript-buffer "mevedel-utilities")
+(autoload 'mevedel--same-file-p "mevedel-utilities")
+(autoload 'mevedel--transcript-org-mode "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
@@ -274,7 +304,6 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
              parent-session parent-workspace))
       (let ((org-element-use-cache nil)
             (org-element-cache-persistent nil))
-        (require 'mevedel-utilities)
         (mevedel--transcript-org-mode))
       (when (fboundp 'org-element-cache-reset)
         (let ((org-element-use-cache t))
@@ -289,7 +318,6 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
       (unless (require 'gptel nil t)
         (kill-buffer buffer)
         (error "Could not load gptel for sub-agent"))
-      (require 'mevedel-transcript-restore)
       (condition-case err
           (mevedel-transcript-enable-gptel-mode)
         (error
@@ -304,7 +332,6 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
         (mevedel-skills-install-activation-hook))
       (add-hook 'gptel-pre-tool-call-functions
                 #'mevedel-agent-conversation--reject-terminal-tool-call -110 t)
-      (require 'mevedel-tool-repair)
       (add-hook 'gptel-pre-tool-call-functions
                 #'mevedel-tool-repair-pre-tool-call -100 t)
       (add-hook 'gptel-post-tool-call-functions
@@ -373,9 +400,6 @@ Use EXISTING-BUFFER when hydrating a persisted logical artifact."
 LOGICAL-PATH is session-relative.  When INSPECTION is non-nil, retain the
 resolver's read-only, no-save buffer contract.
 Return the hydrated conversation buffer."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let ((session (mevedel-agent-invocation-parent-session invocation)))
     (unless session
       (error "Agent conversation has no session"))
@@ -390,8 +414,6 @@ Return the hydrated conversation buffer."
             (setf (mevedel-agent-invocation-buffer invocation) buffer)
             (with-current-buffer buffer
               (let ((inhibit-read-only t))
-                (require 'mevedel-transcript)
-                (require 'mevedel-transcript-restore)
                 (mevedel-transcript-restore-gptel-state)
                 (mevedel-transcript-normalize-properties)
                 (mevedel-agent-conversation-configure invocation)
@@ -444,7 +466,6 @@ payload remains authoritative."
   (when (and (mevedel-agent-invocation-p invocation)
              (stringp block)
              (not (string-empty-p block)))
-    (require 'mevedel-utilities)
     (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
                 ((buffer-live-p buffer)))
       (condition-case err
@@ -599,7 +620,6 @@ payload remains authoritative."
         (setq updates (plist-put updates :verdict verdict)))
       (when activity
         (setq updates (plist-put updates :activity activity)))
-      (require 'mevedel-session-persistence)
       (mevedel-session-persistence-update-transcript-entry
        session agent-id updates))))
 
@@ -765,7 +785,6 @@ Transcript classification and tool-result projection remain owned by
 and private media paths therefore do not become history content."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (require 'mevedel-transcript)
       (let ((ranges
              (cl-loop for segment in
                       (mevedel-transcript-segments (point-min) (point-max))
@@ -802,9 +821,6 @@ Return nil when INVOCATION has no live conversation buffer."
 
 (defun mevedel-agent-conversation--write (invocation)
   "Write INVOCATION's retained conversation, returning non-nil on success."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (when (mevedel-agent-invocation-p invocation)
     (let ((buffer (mevedel-agent-invocation-buffer invocation))
           (relative

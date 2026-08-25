@@ -1299,7 +1299,6 @@
            :activity 'starting
            :conversation-buffer buffer
            :conversation-location "agents/worker.chat.org"))
-         runtime-required
          captured-agent
          captured-configuration
          captured-tool-use-id)
@@ -1312,19 +1311,11 @@
           (mevedel-session-agent-registry session)
           (list (cons "/root/worker" record)))
     (unwind-protect
-        (cl-letf (((symbol-function 'require)
-                   (lambda (feature &rest _)
-                     (when (eq feature 'mevedel-agent-runtime)
-                       (setq runtime-required t))
-                     feature))
-                  ((symbol-function 'mevedel-agent-resolve-role)
+        (cl-letf (((symbol-function 'mevedel-agent-resolve-role)
                    (lambda (&rest _)
                      (error "Follow-up re-resolved the mutable role")))
                   ((symbol-function 'mevedel-agent-runtime-dispatch)
                    (lambda (seen-agent _description _message &rest keys)
-                     (unless runtime-required
-                       (signal 'void-function
-                               '(mevedel-agent-runtime-dispatch)))
                      (setq captured-agent seen-agent
                            captured-configuration
                            (plist-get keys :frozen-configuration)
@@ -1335,7 +1326,6 @@
           (mevedel-agent-control--dispatch-followup
            session record "Continue." "call_followup"))
       (kill-buffer buffer))
-    (should runtime-required)
     (should-not captured-agent)
     (should (eq configuration captured-configuration))
     (should (equal "call_followup" captured-tool-use-id))

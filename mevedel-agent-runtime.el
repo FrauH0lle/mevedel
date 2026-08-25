@@ -11,9 +11,10 @@
 
 (eval-when-compile
   (require 'cl-lib)
-  ;; Required for the cl-defstruct `setf' expanders of invocation slots.
-  (require 'mevedel-agents)
   (require 'subr-x))
+
+;; Required for invocation accessors and `setf' expanders throughout.
+(require 'mevedel-agents)
 
 ;; `gptel-request'
 (declare-function gptel-abort "ext:gptel-request" (buf))
@@ -23,6 +24,7 @@
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-commit-session
                   "mevedel-agent-control" (session))
+(autoload 'mevedel-agent-control-commit-session "mevedel-agent-control")
 (defvar mevedel-agent-control-suppress-persistence)
 
 ;; `mevedel-agent-conversation'
@@ -42,6 +44,16 @@
                   "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-save
                   "mevedel-agent-conversation" (invocation &optional deferred))
+(autoload 'mevedel-agent-conversation-configure "mevedel-agent-conversation")
+(autoload 'mevedel-agent-conversation-final-activity
+  "mevedel-agent-conversation")
+(autoload 'mevedel-agent-conversation-final-response
+  "mevedel-agent-conversation")
+(autoload 'mevedel-agent-conversation-open "mevedel-agent-conversation")
+(autoload 'mevedel-agent-conversation-record-activity
+  "mevedel-agent-conversation")
+(autoload 'mevedel-agent-conversation-refresh "mevedel-agent-conversation")
+(autoload 'mevedel-agent-conversation-save "mevedel-agent-conversation")
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-agent-exec'
@@ -51,10 +63,14 @@
 (declare-function mevedel-agent-exec-run
                   "mevedel-agent-exec"
                   (main-cb agent-type description invocation agent-buffer))
+(autoload 'mevedel-agent-exec-freeze-configuration "mevedel-agent-exec")
+(autoload 'mevedel-agent-exec-run "mevedel-agent-exec")
 
 ;; `mevedel-agent-persistence'
 (declare-function mevedel-agent-persistence-transcript-path-p
                   "mevedel-agent-persistence" (path save-path))
+(autoload 'mevedel-agent-persistence-transcript-path-p
+  "mevedel-agent-persistence")
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-configuration-agent
@@ -122,6 +138,8 @@
                   "mevedel-execution" (session owner))
 (declare-function mevedel-execution-stop-owner
                   "mevedel-execution" (session owner))
+(autoload 'mevedel-execution-owner-live-p "mevedel-execution")
+(autoload 'mevedel-execution-stop-owner "mevedel-execution")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-context-audit-records
@@ -139,6 +157,12 @@
                   "mevedel-hooks"
                   (event event-plist callback
                          &optional session workspace request invocation))
+(autoload 'mevedel-hooks-context-audit-records "mevedel-hooks")
+(autoload 'mevedel-hooks-context-entries "mevedel-hooks")
+(autoload 'mevedel-hooks-decision-reason "mevedel-hooks")
+(autoload 'mevedel-hooks-event-plist "mevedel-hooks")
+(autoload 'mevedel-hooks-format-context "mevedel-hooks")
+(autoload 'mevedel-hooks-run-event "mevedel-hooks")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
@@ -146,10 +170,16 @@
                   (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-publish-agent-terminal-state
                   "mevedel-session-artifacts" (invocation))
+(autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-publish-agent-terminal-state
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-portable-authority-p
                   "mevedel-session-codec" (session))
+(autoload 'mevedel-session-codec-portable-authority-p
+  "mevedel-session-codec")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-record-running-transcript
@@ -160,6 +190,14 @@
                   "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-persistence-write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
+(autoload 'mevedel-session-persistence-record-running-transcript
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-shallow-ensure-files
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-update-transcript-entry
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-write-sidecar-now
+  "mevedel-session-persistence")
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-structs'
@@ -182,6 +220,8 @@
 (declare-function mevedel-tool-task-refresh-display "mevedel-tool-task" ())
 (declare-function mevedel-tool-task-finalize-owner
                   "mevedel-tool-task" (session owner status))
+(autoload 'mevedel-tool-task-finalize-owner "mevedel-tool-task")
+(autoload 'mevedel-tool-task-refresh-display "mevedel-tool-task")
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
@@ -189,17 +229,25 @@
 (declare-function mevedel--hook-prompt-rewrite-audit-record
                   "mevedel-transcript-audit"
                   (event original submitted &optional reason))
+(autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
+(autoload 'mevedel--hook-prompt-rewrite-audit-record
+  "mevedel-transcript-audit")
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-turn "mevedel-turn" (session))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
+(autoload 'mevedel-current-turn "mevedel-turn")
+(autoload 'mevedel-request-end "mevedel-turn")
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-agent-live-transcript-finalize
                   "mevedel-view-agent" (invocation))
 (declare-function mevedel-view-agent-live-transcript-start
                   "mevedel-view-agent" (invocation))
+(autoload 'mevedel-view-agent-live-transcript-finalize
+  "mevedel-view-agent")
+(autoload 'mevedel-view-agent-live-transcript-start "mevedel-view-agent")
 
 (defconst mevedel-agent-runtime--partial-max-chars (* 32 1024)
   "Maximum inline partial response size for an interrupted turn.")
@@ -238,9 +286,6 @@
 
 (defun mevedel-agent-runtime--setup-transcript (invocation agent-buffer)
   "Create and register INVOCATION's transcript for AGENT-BUFFER."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let ((session (mevedel-agent-invocation-parent-session invocation))
         (parent-buffer
          (mevedel-agent-invocation-parent-data-buffer invocation))
@@ -308,7 +353,6 @@
   "Return non-nil when INVOCATION still owns an execution."
   (when-let* ((session
                (mevedel-agent-invocation-parent-session invocation)))
-    (require 'mevedel-execution)
     (mevedel-execution-owner-live-p
      session (mevedel-agent-invocation-require-path invocation))))
 
@@ -326,16 +370,12 @@
 
 (defun mevedel-agent-runtime--transcript-path (invocation)
   "Return INVOCATION's qualified logical transcript path when published."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (when-let* ((relative
                (mevedel-agent-invocation-transcript-relative-path invocation))
               (session (mevedel-agent-invocation-parent-session invocation))
               (save-path (mevedel-session-save-path session)))
     (condition-case err
         (progn
-          (require 'mevedel-agent-persistence)
           (when (and
                  (mevedel-agent-persistence-transcript-path-p
                   relative save-path)
@@ -416,7 +456,6 @@
 
 (defun mevedel-agent-runtime--finalize (invocation status)
   "Persist terminal STATUS and lifecycle effects for INVOCATION."
-  (require 'mevedel-turn)
   ;; `incomplete' is terminal like the other three: finalizing over it
   ;; would run terminal lifecycle effects twice for a hydrated agent.
   (unless (memq (mevedel-agent-invocation-transcript-status invocation)
@@ -429,7 +468,6 @@
         (with-current-buffer buffer
           (mevedel-request-end)))
       (when session
-        (require 'mevedel-execution)
         (mevedel-execution-stop-owner
          session (mevedel-agent-invocation-require-path invocation)))
       (setf (mevedel-agent-invocation-transcript-status invocation) status)
@@ -437,7 +475,6 @@
        invocation 'transcript-status
        (lambda ()
          (when session
-           (require 'mevedel-session-persistence)
            (mevedel-session-persistence-update-transcript-entry
             session (mevedel-agent-invocation-agent-id invocation)
             (list :status status
@@ -465,7 +502,6 @@
        invocation 'tasks
        (lambda ()
          (when (and session (eq status 'completed))
-           (require 'mevedel-tool-task)
            (when (mevedel-tool-task-finalize-owner
                   session (mevedel-agent-invocation-require-path invocation)
                   status)
@@ -494,9 +530,6 @@
 
 (defun mevedel-agent-runtime--settle (invocation response &optional event)
   "Finalize INVOCATION and deliver RESPONSE and EVENT exactly once."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (unless (mevedel-agent-invocation-runtime-settled-p invocation)
     (let* ((pending
             (mevedel-agent-invocation-runtime-pending-response invocation))
@@ -710,7 +743,6 @@ Settle a held provider response once its last owned execution has finished."
 
 (defun mevedel-agent-runtime--run-hook-sync (event payload invocation)
   "Run EVENT with PAYLOAD for INVOCATION and return its decision."
-  (require 'mevedel-hooks)
   (let* ((session (mevedel-agent-invocation-parent-session invocation))
          (workspace (and session (mevedel-session-workspace session)))
          done
@@ -727,7 +759,6 @@ Settle a held provider response once its last owned execution has finished."
 
 (defun mevedel-agent-runtime--run-prompt-hook (prompt invocation)
   "Run `UserPromptSubmit' for agent PROMPT and return its decision."
-  (require 'mevedel-hooks)
   (let* ((session (mevedel-agent-invocation-parent-session invocation))
          (workspace (and session (mevedel-session-workspace session))))
     (mevedel-agent-runtime--run-hook-sync
@@ -742,7 +773,6 @@ Settle a held provider response once its last owned execution has finished."
 (defun mevedel-agent-runtime--run-stop-hook (invocation status)
   "Fire `SubagentStop' hooks for INVOCATION terminal STATUS."
   (when (mevedel-agent-invocation-p invocation)
-    (require 'mevedel-hooks)
     (let* ((session (mevedel-agent-invocation-parent-session invocation))
            (workspace (and session (mevedel-session-workspace session)))
            (agent (mevedel-agent-invocation-agent invocation))
@@ -819,7 +849,6 @@ blocked transition."
           (if context (concat submitted "\n\n" context) submitted))
          (rewrite-audit
           (progn
-            (require 'mevedel-transcript-audit)
             (mevedel--hook-prompt-rewrite-audit-record
              'UserPromptSubmit prompt submitted
              (mevedel-hooks-decision-reason prompt-decision)))))
@@ -832,8 +861,6 @@ blocked transition."
   "Prepare one new AGENT task asynchronously and call CALLBACK.
 PATH is the reserved canonical child path.  CALLBACK receives an outcome
 plist carrying either `:turn' and `:start-hook-audits' or `:error'."
-  (require 'mevedel-hooks)
-  (require 'mevedel-turn)
   (let* ((session (and (boundp 'mevedel--session) mevedel--session))
          (workspace (and session (mevedel-session-workspace session)))
          (invocation (mevedel-agent-invocation-create agent))
@@ -945,7 +972,6 @@ HOOK-AUDITS are hidden transcript records associated with this user turn."
                         (mevedel-agent-invocation-require-path invocation))))
       (insert "\n" (or prompt "") "\n")
       (when hook-audits
-        (require 'mevedel-transcript-audit)
         (dolist (audit hook-audits)
           (insert (mevedel--format-hook-audit-record audit))))
       (when (mevedel-agent-invocation-transcript-relative-path invocation)
@@ -969,9 +995,6 @@ HOOK-AUDITS are hidden transcript records associated with this user turn."
 AGENT starts a new conversation; FROZEN-CONFIGURATION and the three retained
 identity values continue one.  PATH is the conversation's canonical address.
 ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
-  (require 'mevedel-agent-conversation)
-  (require 'mevedel-agent-exec)
-  (require 'mevedel-turn)
   (unless (and (stringp path) (string-match-p "\\`/root/" path))
     (error "Agent requires a canonical path below /root"))
   (when (and frozen-configuration

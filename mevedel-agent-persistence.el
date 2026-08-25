@@ -11,10 +11,13 @@
 
 (eval-when-compile
   (require 'cl-lib)
-  (require 'mevedel-agent-control)
-  (require 'mevedel-agents)
-  (require 'mevedel-structs)
   (require 'subr-x))
+
+(require 'mevedel-agent-control)
+(require 'mevedel-agents)
+(require 'mevedel-reminders)
+(require 'mevedel-structs)
+(require 'mevedel-utilities)
 
 ;; `gptel-request'
 (declare-function gptel-backend-name "ext:gptel-request" (cl-x) t)
@@ -36,6 +39,8 @@
                   "mevedel-agent-conversation"
                   (invocation parent-data-buffer logical-path
                               &optional inspection))
+(autoload 'mevedel-agent-conversation-hydrate
+  "mevedel-agent-conversation")
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-request-locals-p
@@ -53,6 +58,8 @@
 (declare-function mevedel-session-artifacts-artifact-present-p
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
+(autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--plain-data-p "mevedel-utilities" (value))
@@ -69,7 +76,6 @@
 
 Malformed records are dropped.  The returned queue keeps RAW's stored order;
 callers reverse it only when delivering the mailbox as FIFO."
-  (require 'mevedel-utilities)
   (cl-labels
       ((timestamp-p (value)
          (or (integerp value)
@@ -285,9 +291,6 @@ have no result yet, but a stored result always includes both fields."
 
 Invalid live registry state signals an error so a save cannot appear to
 succeed after silently losing an addressable agent."
-  (require 'mevedel-agent-control)
-  (require 'mevedel-reminders)
-  (require 'mevedel-utilities)
   (let ((seen-paths (make-hash-table :test #'equal))
         (seen-ids (make-hash-table :test #'equal)))
     (mapcar
@@ -464,12 +467,8 @@ succeed after silently losing an addressable agent."
   "Return a validated retained registry decoded from sidecar data RAW.
 
 Malformed identities are diagnosed and dropped independently.  Unexpected
-programming errors propagate instead of masquerading as corrupt user data."
+  programming errors propagate instead of masquerading as corrupt user data."
   (require 'gptel)
-  (require 'mevedel-agent-control)
-  (require 'mevedel-agents)
-  (require 'mevedel-reminders)
-  (require 'mevedel-utilities)
   (let ((seen-paths (make-hash-table :test #'equal))
         (seen-ids (make-hash-table :test #'equal))
         candidates)
@@ -517,12 +516,6 @@ Invalid or missing conversation files reject only their own identity and its
 descendants.  When READONLY-P is nil, active persisted turns recover as
 interrupted without dispatching a provider request.  Return the number of
 dropped or recovered records."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-agent-control)
-  (require 'mevedel-agent-conversation)
-  (require 'mevedel-agents)
   (let* ((save-path (mevedel-session-save-path session))
          (records
           (sort (copy-sequence (mevedel-session-agent-registry session))
