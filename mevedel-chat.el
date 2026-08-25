@@ -202,6 +202,7 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-reminders "mevedel-structs"
                   (cl-x) t)
+(declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -610,7 +611,11 @@ mutation lease."
     (mevedel-model-apply-session-policy mevedel--session buf)
     (mevedel-reminders-install-defaults mevedel--session)
     (when (equal source "resume")
-      (mevedel--queue-reconciliation-reminder mevedel--session))
+      (mevedel--queue-reconciliation-reminder mevedel--session)
+      (when (plist-get (mevedel-session-plan-metadata mevedel--session)
+                       :implementation-retry)
+        (message "mevedel: accepted plan implementation is pending; \
+M-x mevedel-retry-plan-implementation resumes it")))
     (require 'mevedel-goal)
     ;; Install the mevedel-augmented FSM handler chain as the buffer-local
     ;; `gptel-send--handlers' so every request from this buffer -- whether
