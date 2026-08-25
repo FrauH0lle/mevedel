@@ -44,7 +44,8 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
+(require 'lisp-mode)
 
 (define-error 'mevedel-ptc-error "ToolScript error")
 
@@ -258,7 +259,6 @@ Lisp's, not Emacs's, and Emacs's reader has no `#.' syntax to disable."
               (push (car res) forms)
               (setq pos (cdr res))))
         (end-of-file
-         (require 'lisp-mode)
          (unless
              (with-temp-buffer
                (set-syntax-table emacs-lisp-mode-syntax-table)
