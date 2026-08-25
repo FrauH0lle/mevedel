@@ -12,6 +12,7 @@
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-block-turn
 		  "mevedel-agent-control" (session path activity))
+(autoload 'mevedel-agent-control-block-turn "mevedel-agent-control")
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
@@ -24,19 +25,23 @@
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view--pending-inputs-render
                   "mevedel-pending-inputs" (&optional session))
+(autoload 'mevedel-view--pending-inputs-render "mevedel-pending-inputs")
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue--render-head
 		  "mevedel-permission-queue" (&optional session))
+(autoload 'mevedel-permission-queue--render-head "mevedel-permission-queue")
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
                   "mevedel-permission-mode"
                   (&optional session data-buffer surface-buffer))
+(autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
 
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-approval-render "mevedel-plan-mode"
 		  (&optional session))
+(autoload 'mevedel-plan-approval-render "mevedel-plan-mode")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
@@ -89,6 +94,8 @@
 (declare-function mevedel-view-control-transfer-initialize
                   "mevedel-view-control-transfer"
                   (rebuild-function drain-predicate))
+(autoload 'mevedel-view-control-transfer-initialize
+  "mevedel-view-control-transfer")
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--debug-log "mevedel-view-render"
@@ -109,6 +116,9 @@
 		  (namespace start end fragments))
 (declare-function mevedel-view-zone-region "mevedel-view-zone"
 		  (namespace))
+(autoload 'mevedel-view-zone-fragment-bounds "mevedel-view-zone")
+(autoload 'mevedel-view-zone-reconcile "mevedel-view-zone")
+(autoload 'mevedel-view-zone-region "mevedel-view-zone")
 
 ;;
 ;;; State
@@ -140,13 +150,6 @@ is reading or typing in.")
 
 (defun mevedel-view-interaction-initialize ()
   "Initialize interaction descriptor state in the current view buffer."
-  (require 'mevedel-agent-control)
-  (require 'mevedel-pending-inputs)
-  (require 'mevedel-permission-mode)
-  (require 'mevedel-permission-queue)
-  (require 'mevedel-plan-mode)
-  (require 'mevedel-view-control-transfer)
-  (require 'mevedel-view-zone)
   (setq-local mevedel-view--interaction-descriptors
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--interaction-overlays

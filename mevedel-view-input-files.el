@@ -8,6 +8,7 @@
 
 (eval-when-compile
   (require 'cl-lib))
+(require 'dnd)
 
 ;; `cl-seq'
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
@@ -22,11 +23,19 @@
 (declare-function mevedel-mention-bindings-set
                   "mevedel-mention-bindings"
                   (start end binding &optional object))
+(autoload 'mevedel-mention-bindings-set "mevedel-mention-bindings")
 
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-file-paths-in-text
                   "mevedel-mentions" (text))
 (declare-function mevedel-mentions-file-token "mevedel-mentions" (path))
+(autoload 'mevedel-mentions-file-paths-in-text "mevedel-mentions")
+(autoload 'mevedel-mentions-file-token "mevedel-mentions")
+
+;; `mevedel-resource'
+(declare-function mevedel-resource-normalize-file-path
+                  "mevedel-resource" (value &optional directory))
+(autoload 'mevedel-resource-normalize-file-path "mevedel-resource")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-activate-dropped-file-grants
@@ -51,6 +60,7 @@
 (declare-function mevedel-workspace-ensure-generated-state-ignored
                   "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace-state-dir "mevedel-workspace" (workspace))
+(autoload 'mevedel-workspace-state-dir "mevedel-workspace")
 
 ;; `select'
 (declare-function gui-get-selection "select" (selection-symbol target-type))
@@ -118,7 +128,6 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
 
 (defun mevedel-view--insert-dropped-file-mentions (paths)
   "Insert @file mentions for dropped PATHS into the composer."
-  (require 'mevedel-mention-bindings)
   (mevedel-view--ensure-interactive-chat-view)
   (let ((session (mevedel-view--session))
         tokens)
@@ -147,8 +156,6 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
 
 (defun mevedel-view--mentioned-file-paths (input)
   "Return expanded @file paths mentioned in INPUT."
-  (require 'mevedel-mentions)
-  (require 'mevedel-resource)
   (mevedel-mentions-file-paths-in-text input))
 
 (defun mevedel-view--pop-dropped-file-grants-for-input (input session)
@@ -197,7 +204,6 @@ handler advertises `dnd-multiple-handler'."
 
 (defun mevedel-view--media-dir ()
   "Return the workspace media directory for clipboard images."
-  (require 'mevedel-workspace)
   (let* ((session (mevedel-view--session))
          (workspace (and session (mevedel-session-workspace session))))
     (unless workspace
@@ -267,7 +273,6 @@ ARG is passed through from the interactive prefix."
 
 (defun mevedel-view--install-dnd ()
   "Install local file drag/drop support for the current view buffer."
-  (require 'dnd)
   (let (rest)
     (dolist (entry dnd-protocol-alist)
       (unless (eq (cdr entry) 'mevedel-view--dnd-handle-files)

@@ -28,12 +28,17 @@
                   "mevedel-session-codec" (path))
 (declare-function mevedel-session-codec-write
                   "mevedel-session-codec" (path plist))
+(autoload 'mevedel-session-codec-read "mevedel-session-codec")
+(autoload 'mevedel-session-codec-write "mevedel-session-codec")
 
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-physical-path
                   "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-read-file
                   "mevedel-session-control-fs" (path &optional coding-system))
+(autoload 'mevedel-session-control-fs-physical-path
+  "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-read-file "mevedel-session-control-fs")
 
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
@@ -57,6 +62,7 @@
 (declare-function mevedel-workspace-ensure-generated-state-ignored
                   "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace-state-dir "mevedel-workspace" (workspace))
+(autoload 'mevedel-workspace-state-dir "mevedel-workspace")
 
 
 ;;
@@ -159,7 +165,6 @@ duplicates are skipped.  History navigation state is reset."
 
 (defun mevedel-view-history--path (&optional session)
   "Return SESSION's workspace input-history path, or nil."
-  (require 'mevedel-workspace)
   (when-let* ((sess (or session (mevedel-view-history--session)))
               (workspace (mevedel-session-workspace sess)))
     (file-name-concat (mevedel-workspace-state-dir workspace)
@@ -269,7 +274,6 @@ to `.bad' and ignored."
     (let (contents entries problem malformed-p)
       (condition-case err
           (when (file-exists-p path)
-            (require 'mevedel-session-control-fs)
             (setq contents
                   (mevedel-session-control-fs-read-file
                    (mevedel-session-control-fs-physical-path path))))
@@ -294,7 +298,6 @@ to `.bad' and ignored."
 
 (defun mevedel-view-history-save (&optional view-buffer)
   "Persist VIEW-BUFFER input history."
-  (require 'mevedel-session-codec)
   (let ((buf (or view-buffer (current-buffer))))
     (when (buffer-live-p buf)
       (with-current-buffer buf
@@ -317,7 +320,6 @@ to `.bad' and ignored."
               ;; own in between and take the reply.
               (mevedel-transport-with-exclusive-connection
                 (make-directory (file-name-directory path) t)
-                (require 'mevedel-workspace)
                 (mevedel-workspace-ensure-generated-state-ignored
                  (mevedel-session-workspace session))
                 (let* ((current (mevedel-view-history--entries))

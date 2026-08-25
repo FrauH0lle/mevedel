@@ -14,6 +14,7 @@
 
 ;; `mevedel-tool-task'
 (declare-function mevedel-toggle-tasks "mevedel-tool-task" ())
+(autoload 'mevedel-toggle-tasks "mevedel-tool-task")
 
 ;; `mevedel-view'
 (defvar mevedel-view--display-map)
@@ -21,10 +22,12 @@
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-agent-status-toggle
                   "mevedel-view-agent" ())
+(autoload 'mevedel-view-agent-status-toggle "mevedel-view-agent")
 
 ;; `mevedel-view-audit'
 (declare-function mevedel-view-audit-toggle-hook-audit
                   "mevedel-view-audit" ())
+(autoload 'mevedel-view-audit-toggle-hook-audit "mevedel-view-audit")
 
 ;; `mevedel-view-composer'
 (defvar mevedel-view--input-marker)
@@ -46,16 +49,30 @@
                   "mevedel-view-render" ())
 (declare-function mevedel-view-render-toggle-turn
                   "mevedel-view-render" (collapsed))
+(autoload 'mevedel-view-render-add-display-properties "mevedel-view-render")
+(autoload 'mevedel-view-render-child-calls-end "mevedel-view-render")
+(autoload 'mevedel-view-render-collapsed-disclosure "mevedel-view-render")
+(autoload 'mevedel-view-render-insert-expanded-disclosure
+  "mevedel-view-render")
+(autoload 'mevedel-view-render-section-body-end "mevedel-view-render")
+(autoload 'mevedel-view-render-toggle-child-call "mevedel-view-render")
+(autoload 'mevedel-view-render-toggle-hook-context "mevedel-view-render")
+(autoload 'mevedel-view-render-toggle-turn "mevedel-view-render")
 
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-segments-display-buffer
                   "mevedel-view-segments" ())
+(autoload 'mevedel-view-segments-display-buffer "mevedel-view-segments")
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-in-flight-turn-start-position
                   "mevedel-view-stream" ())
 (declare-function mevedel-view-stream-set-in-flight-turn-start
                   "mevedel-view-stream" (position))
+(autoload 'mevedel-view-stream-in-flight-turn-start-position
+  "mevedel-view-stream")
+(autoload 'mevedel-view-stream-set-in-flight-turn-start
+  "mevedel-view-stream")
 (defvar mevedel-view--data-turn-start)
 
 
@@ -402,7 +419,6 @@ a marker so toggles that change buffer length do not invalidate the walk."
                        ((eq vtype 'mailbox-delivery)
                         (mevedel-view-disclosure--toggle-mailbox))
                        ((eq vtype 'tool-child)
-                        (require 'mevedel-view-render)
                         (mevedel-view-render-toggle-child-call))
                        ((cdr entry)
                         (mevedel-view-disclosure--collapse-section source vtype))
@@ -440,12 +456,10 @@ this helper.  Source-backed transcript/tool disclosure remains owned by
     (cond
      ((and (eq namespace 'status) (eq id 'tasks)
            (get-text-property (point) 'mevedel-view-zone-collapsible))
-      (require 'mevedel-tool-task)
       (mevedel-toggle-tasks)
       t)
      ((and (eq namespace 'status) (eq id 'agents)
            (get-text-property (point) 'mevedel-view-zone-collapsible))
-      (require 'mevedel-view-agent)
       (mevedel-view-agent-status-toggle)
       t))))
 
@@ -462,18 +476,14 @@ section only."
      ((mevedel-view-disclosure--toggle-fragment)
       t)
      ((memq vtype '(turn-header turn-summary))
-      (require 'mevedel-view-render)
       (mevedel-view-render-toggle-turn collapsed))
      ((eq vtype 'mailbox-delivery)
       (mevedel-view-disclosure--toggle-mailbox))
      ((eq vtype 'hook-context)
-      (require 'mevedel-view-render)
       (mevedel-view-render-toggle-hook-context))
      ((eq vtype 'hook-audit)
-      (require 'mevedel-view-audit)
       (mevedel-view-audit-toggle-hook-audit))
      ((eq vtype 'tool-child)
-      (require 'mevedel-view-render)
       (mevedel-view-render-toggle-child-call))
      ((and source (memq vtype mevedel-view-disclosure--collapsible-vtypes))
       (if collapsed
@@ -645,9 +655,6 @@ from signalling `args-out-of-range' on stale source coordinates."
 
 (defun mevedel-view-disclosure--expand-section (source vtype)
   "Expand a collapsed section with SOURCE coordinates and VTYPE."
-  (require 'mevedel-view-render)
-  (require 'mevedel-view-segments)
-  (require 'mevedel-view-stream)
   (let* ((bounds (mevedel-view-disclosure-section-bounds))
          (data-buf (mevedel-view-segments-display-buffer)))
     (when (and bounds data-buf (buffer-live-p data-buf))
@@ -693,9 +700,6 @@ from signalling `args-out-of-range' on stale source coordinates."
 
 (defun mevedel-view-disclosure--collapse-section (source vtype)
   "Collapse an expanded SOURCE section of VTYPE to its rendered summary."
-  (require 'mevedel-view-render)
-  (require 'mevedel-view-segments)
-  (require 'mevedel-view-stream)
   (let* ((bounds (mevedel-view-disclosure-section-bounds))
          (data-buf (mevedel-view-segments-display-buffer))
          (rendering

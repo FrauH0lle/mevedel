@@ -17,6 +17,7 @@
 (declare-function mevedel-session-artifacts-save
                   "mevedel-session-artifacts"
                   (session buffer &optional settled force))
+(autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
 ;; `mevedel-session-control-transfer'
 (declare-function mevedel-session-control-transfer--follow-published
@@ -55,10 +56,16 @@
                   (session-dir &optional session))
 (declare-function mevedel-session-durability-lease-state
                   "mevedel-session-durability" (session-dir))
+(autoload 'mevedel-session-durability-lease-release
+  "mevedel-session-durability")
+(autoload 'mevedel-session-durability-lease-state
+  "mevedel-session-durability")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-apply-read-only-mode
                   "mevedel-session-persistence" (buf &optional reason))
+(autoload 'mevedel-session-persistence-apply-read-only-mode
+  "mevedel-session-persistence")
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session--save-failed)
 
@@ -74,6 +81,7 @@
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-reset-agent-ephemeral-state
                   "mevedel-view-agent" (&optional view-buffer))
+(autoload 'mevedel-view-reset-agent-ephemeral-state "mevedel-view-agent")
 (defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-history'
@@ -81,12 +89,16 @@
                   (&optional session))
 (declare-function mevedel-view-history-save "mevedel-view-history"
                   (&optional view-buffer))
+(autoload 'mevedel-view-history-load "mevedel-view-history")
+(autoload 'mevedel-view-history-save "mevedel-view-history")
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--full-rerender "mevedel-view-render"
                   (&optional transcript-buffer source-changed-p))
 (declare-function mevedel-view--rebase-data-sources "mevedel-view-render"
                   (mapping))
+(autoload 'mevedel-view--full-rerender "mevedel-view-render")
+(autoload 'mevedel-view--rebase-data-sources "mevedel-view-render")
 
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-session-control-transfer)
@@ -209,19 +221,14 @@ transfer in flight wants a cadence the idle session does not."
     (with-current-buffer view
       (pcase event
         ('save-history
-         (require 'mevedel-view-history)
          (mevedel-view-history-save))
         ('load-history
-         (require 'mevedel-view-history)
          (mevedel-view-history-load (car args)))
         ('rerender
-         (require 'mevedel-view-render)
          (mevedel-view--full-rerender))
         ('rebase-data-sources
-         (require 'mevedel-view-render)
          (mevedel-view--rebase-data-sources (car args)))
         ('reset-agent-ephemeral-state
-         (require 'mevedel-view-agent)
          (mevedel-view-reset-agent-ephemeral-state))
         ('refresh-status
          (when-let ((data (mevedel-view--control-transfer-data-buffer)))
@@ -263,7 +270,6 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
                        (ignore-errors
                          (mevedel-session-control-transfer-poll
                           session data t)))
-              (require 'mevedel-view-render)
               (mevedel-view--full-rerender))
             (when (not read-only-p)
               (ignore-errors
@@ -322,16 +328,14 @@ client holds is requested instead; that client grants it automatically once
 `mevedel-session-transfer-prompt-timeout' passes, then finishes its work and
 releases, so control arrives without anyone sitting at the other machine."
   (interactive)
-  (require 'mevedel-session-durability)
   (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
     (unless (buffer-local-value 'mevedel-session--read-only-mode data)
       (user-error "This session is already writable here"))
     (if (eq 'foreign
             (mevedel-session-durability-lease-state
              (mevedel-session-save-path session)))
-        (mevedel-view-control-transfer-request)
+      (mevedel-view-control-transfer-request)
       (mevedel-session-control-transfer-acquire session data)
-      (require 'mevedel-view-render)
       (mevedel-view--full-rerender)
       (mevedel-view--control-transfer-rebuild))))
 
@@ -343,10 +347,6 @@ The session is saved and published before the lease goes, so whoever takes
 it next starts from the work done here.  Live work blocks the release for
 the same reason a granted transfer waits for it."
   (interactive)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-durability)
   (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
     (when (buffer-local-value 'mevedel-session--read-only-mode data)
       (user-error "This session is already read-only here"))
@@ -385,7 +385,6 @@ this view follows."
       (user-error "This session is writable here; there is nothing to follow"))
     (if (mevedel-session-control-transfer--follow-published session data t)
         (progn
-          (require 'mevedel-view-render)
           (mevedel-view--full-rerender)
           (mevedel-view--control-transfer-rebuild)
           (message "mevedel: advanced to the owner's newest published state"))
