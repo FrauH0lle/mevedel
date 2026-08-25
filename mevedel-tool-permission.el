@@ -108,11 +108,28 @@
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
 
+(defvar mevedel-tool-permission--initialized nil
+  "Non-nil after runtime permission dependencies have loaded.")
+
+(defun mevedel-tool-permission--initialize ()
+  "Load runtime dependencies after the pipeline load cycle has closed."
+  (unless mevedel-tool-permission--initialized
+    (require 'mevedel-agents)
+    (require 'mevedel-execution)
+    (require 'mevedel-hooks)
+    (require 'mevedel-permission-log)
+    (require 'mevedel-permission-queue)
+    (require 'mevedel-permission-rules)
+    (require 'mevedel-permissions)
+    (require 'mevedel-pipeline)
+    (require 'mevedel-structs)
+    (require 'mevedel-telemetry)
+    (require 'mevedel-tool-registry)
+    (setq mevedel-tool-permission--initialized t)))
+
 (defun mevedel-tool-permission--origin (context &optional explicit-origin)
   "Return the canonical agent path for permission CONTEXT.
 EXPLICIT-ORIGIN takes precedence when non-nil."
-  (require 'mevedel-agents)
-  (require 'mevedel-structs)
   (or explicit-origin
       (plist-get context :origin)
       (and-let* ((request (plist-get context :request))
@@ -134,7 +151,6 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
 
 (defun mevedel-tool-permission--specifier-props (context)
   "Return sanitized permission specifier properties from CONTEXT."
-  (require 'mevedel-permission-rules)
   (let* ((tool (plist-get context :tool))
          (tool-name (and tool (mevedel-tool-name tool)))
          (args (plist-get context :args))
@@ -163,11 +179,7 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
 (defun mevedel-tool-permission-log-decision
     (context decision &rest props)
   "Persist sanitized DECISION diagnostics for CONTEXT with PROPS."
-  (require 'mevedel-permission-log)
-  (require 'mevedel-permissions)
-  (require 'mevedel-structs)
-  (require 'mevedel-telemetry)
-  (require 'mevedel-tool-registry)
+  (mevedel-tool-permission--initialize)
   (let ((session (plist-get context :session)))
     (when (and session
                (not (plist-get decision :logged)))
@@ -254,8 +266,7 @@ FAIL receives REASON, the hook-updated context, and
 `permission-denied'.
 
 MODEL-REASON and PROVENANCE are included in the hook event when available."
-  (require 'mevedel-hooks)
-  (require 'mevedel-pipeline)
+  (mevedel-tool-permission--initialize)
   (let ((session (plist-get context :session))
         (workspace (plist-get context :workspace)))
     (mevedel-pipeline-run-hook-event
@@ -500,7 +511,7 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
 Addressed read-only operands are already authorized by their resource
 attempt and do not become permission paths.  Ordinary paths retain the
 existing path extraction behavior."
-  (require 'mevedel-tool-registry)
+  (mevedel-tool-permission--initialize)
   (let* ((proposal (plist-get context :patch-proposal))
          (paths
           (condition-case nil
@@ -530,13 +541,7 @@ existing path extraction behavior."
 
 FAIL receives a reason string and may additionally receive an updated
 context and typed reason."
-  (require 'mevedel-agents)
-  (require 'mevedel-hooks)
-  (require 'mevedel-permission-queue)
-  (require 'mevedel-permissions)
-  (require 'mevedel-pipeline)
-  (require 'mevedel-structs)
-  (require 'mevedel-tool-registry)
+  (mevedel-tool-permission--initialize)
   (let* ((tool (plist-get context :tool))
          (session (plist-get context :session))
          (paths (mevedel-tool-permission-paths
@@ -544,9 +549,7 @@ context and typed reason."
     (cond
      ((and session
            (not (mevedel-tool-read-only-p tool))
-           (progn
-             (require 'mevedel-execution)
-             (mevedel-execution-mutation-blocked-p session)))
+           (mevedel-execution-mutation-blocked-p session))
       (funcall fail
                "Mutating execution is blocked by an unknown remote outcome"))
      ((null paths)

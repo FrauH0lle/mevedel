@@ -11,6 +11,13 @@
 
 (eval-when-compile (require 'cl-lib))
 
+(require 'mevedel-agents)
+(require 'mevedel-permission-mode)
+(require 'mevedel-permission-persistence)
+(require 'mevedel-permission-rules)
+(require 'mevedel-structs)
+(require 'mevedel-tool-registry)
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
@@ -237,8 +244,6 @@ PATCH-LOCAL-ONLY-P is the prepared ApplyPatch classification used by the Plan
 boundary.
 PERMISSION-REQUEST admits an interactive request at its hook boundary before
 it enters the shared queue."
-  (require 'mevedel-permission-persistence)
-  (require 'mevedel-tool-registry)
   (setq tool (or tool
                  (and tool-name (mevedel-tool-ensure tool-name)))
         tool-name (or tool-name (and tool (mevedel-tool-name tool))))
@@ -373,7 +378,6 @@ happen for a non-read-only tool."
 
 (defun mevedel-permission--plan-mode-p (&optional session)
   "Return non-nil when the owning session is planning read-only work."
-  (require 'mevedel-agents)
   (let ((owner
          (or session
              (and (boundp 'mevedel--session) mevedel--session)
@@ -409,8 +413,6 @@ RESOURCE-GRANTS define the filesystem boundary.  NORMALIZED-CONTEXT, when
 non-nil, is returned unchanged so a caller can reuse an invocation preflight.
 ONE-SHOT-MUTATIONS-P requires explicit approval for non-read-only tools.
 PATCH-LOCAL-ONLY-P is true only for a prepared all-local ApplyPatch proposal."
-  (require 'mevedel-permission-mode)
-  (require 'mevedel-permission-rules)
   (if normalized-context
       normalized-context
     (setq mode (or mode mevedel-permission-mode))
@@ -617,7 +619,6 @@ exact-match in-bounds path list."
 
 (defun mevedel-permission--resource-decision (context)
   "Return CONTEXT's independent filesystem resource decision, or nil."
-  (require 'mevedel-permission-rules)
   (when-let* ((path (plist-get context :path)))
     (let ((granted-p (plist-get context :resource-granted-p)))
       (cond
@@ -669,8 +670,6 @@ authoritative despite one-shot."
 The preflight owns normalization and absolute denials.  Callers own the
 tool-specific command-policy slot; this function covers the shared rule,
 mode, and native-resource tail."
-  (require 'mevedel-permission-mode)
-  (require 'mevedel-permission-rules)
   (let* ((tool-name (plist-get context :tool-name))
          (buckets (plist-get context :buckets))
          (path (plist-get context :path))
@@ -731,7 +730,6 @@ mode, and native-resource tail."
 
 (defun mevedel-permission-add-session-resource-grant (session path access)
   "Grant SESSION exact PATH access at READ or WRITE level."
-  (require 'mevedel-permission-rules)
   (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-assert-mutation-authority session)
   (let ((grant (mevedel-permission-rules-resource-grant path access)))
@@ -743,7 +741,6 @@ mode, and native-resource tail."
 (defun mevedel-permission-remove-session-resource-grant
     (session path access)
   "Revoke SESSION's exact PATH ACCESS resource grant."
-  (require 'mevedel-permission-rules)
   (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-assert-mutation-authority session)
   (let ((grant (mevedel-permission-rules-resource-grant path access)))
@@ -784,7 +781,6 @@ rule recorded inside any sub-agent's permission prompt, such as
 \"allow-session\" or \"deny-session\", immediately applies to the parent
 and to every other live sub-agent sharing the same session struct.  This
 is a deliberate contract, not an accident of the buffer-local plumbing."
-  (require 'mevedel-permission-rules)
   (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-assert-mutation-authority session)
   (let* ((key (or spec-key (and path :path)))
@@ -802,8 +798,6 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
 
 (defun mevedel-permission-invalidate-target-grants (session)
   "Revoke SESSION's exact authority after target replacement."
-  (require 'mevedel-permission-mode)
-  (require 'mevedel-permission-persistence)
   (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-assert-mutation-authority session)
   (setf (mevedel-session-resource-grants session) nil
@@ -846,7 +840,6 @@ scoping by any other specifier (`:pattern', `:domain', `:name').
 RESOURCE-ACCESS stores exact path authority separately from rules.
 NETWORK and FILE-SYSTEM store a capability-qualified operation rule.
 SANDBOX-PERMISSIONS qualifies an already requested execution level."
-  (require 'mevedel-permission-persistence)
   (cl-flet ((session-rule (action)
               (when session
                 (mevedel-permission--add-session-rule

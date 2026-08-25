@@ -9,8 +9,22 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-tool-registry))
+
+(require 'cl-lib)
+(require 'mevedel-agent-control)
+(require 'mevedel-agent-runtime)
+(require 'mevedel-bash-analysis)
+(require 'mevedel-bash-policy)
+(require 'mevedel-execution)
+(require 'mevedel-pipeline)
+(require 'mevedel-sandbox)
+(require 'mevedel-telemetry)
+(require 'mevedel-tool-exec-permission)
+(require 'mevedel-turn)
+(require 'mevedel-workspace)
+(require 'subr-x)
+(require 'xml)
 
 ;; `gptel'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
@@ -144,7 +158,6 @@ writes use 250-30000ms and pure polls use 5000-300000ms."
 
 (defun mevedel-tool-exec--execution-artifact-directory (session)
   "Return SESSION's retained execution artifact directory, if available."
-  (require 'mevedel-pipeline)
   (unless (and (mevedel-session-execution-target session)
                (mevedel-execution-target-remote-p
                 (mevedel-session-execution-target session)))
@@ -172,10 +185,8 @@ writes use 250-30000ms and pure polls use 5000-300000ms."
                workdir)
             temporary-file-directory))
          (roots
-          (condition-case nil
-              (progn
-                (require 'mevedel-workspace)
-                (mevedel--all-allowed-roots (current-buffer)))
+         (condition-case nil
+              (mevedel--all-allowed-roots (current-buffer))
             (error nil))))
     (when remote
       (setq roots
@@ -207,16 +218,14 @@ operation rather than a successful or semantic non-error result."
     (cond
      ((not facts) text)
      (suppress-p
-      (when (and (eq (plist-get facts :filesystem) 'unrestricted)
-                 (not (eq (plist-get facts :sandbox) 'unavailable)))
-        (require 'mevedel-sandbox)
+     (when (and (eq (plist-get facts :filesystem) 'unrestricted)
+                (not (eq (plist-get facts :sandbox) 'unavailable)))
         (mevedel--warn-once
          'exec-skill-unconfined
          "Skill shell expansion ran without confinement: %s"
          (mevedel-sandbox-status-text facts)))
-      text)
+     text)
      (t
-      (require 'mevedel-sandbox)
       (string-join
        (delq
         nil
@@ -237,7 +246,6 @@ operation rather than a successful or semantic non-error result."
 
 (defun mevedel-tool-exec--execution-facts-xml (facts)
   "Return compact model-visible XML derived from canonical FACTS."
-  (require 'xml)
   (let (attributes)
     (dolist (entry '((:execution-id . "execution_id")
                      (:command . "command")
@@ -345,7 +353,6 @@ stopped command's outcome."
 
 (defun mevedel-tool-exec-handle-execution-event (event owner-context)
   "Secure an independently completed Bash EVENT in its owner mailbox."
-  (require 'subr-x)
   (when (and (eq (plist-get event :type) 'terminal)
              (eq (plist-get event :delivery) 'mailbox))
     (let* ((args (plist-get event :tool-args))
@@ -356,12 +363,10 @@ stopped command's outcome."
              (plist-get args :suppress-sandbox-disclosure-p))))
       (if (mevedel-session-p owner-context)
           (progn
-            (require 'mevedel-agent-control)
             (mevedel-agent-control-enqueue-execution-result
              owner-context
              (plist-get event :owner)
              (plist-get envelope :result)))
-        (require 'mevedel-agent-runtime)
         (mevedel-agent-runtime-queue-execution-completion
          owner-context
          (plist-get event :owner)
@@ -370,11 +375,6 @@ stopped command's outcome."
 (defun mevedel-tool-exec--bash (callback args)
   "Execute a Bash command and return its output.
 CALLBACK receives the result envelope.  ARGS is a plist with :command."
-  (require 'mevedel-bash-policy)
-  (require 'mevedel-bash-analysis)
-  (require 'mevedel-tool-exec-permission)
-  (require 'subr-x)
-  (require 'mevedel-turn)
   (let ((command (plist-get args :command))
         (tty (plist-get args :tty)))
     (unless (stringp command)
@@ -400,7 +400,6 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
            (workdir (mevedel-tool-exec-permission-default-directory)))
       (unless session
         (error "Bash requires an active session"))
-      (require 'mevedel-execution)
       (mevedel-execution-start-bash
        (lambda (observation)
          (funcall
@@ -430,9 +429,6 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
 
 (defun mevedel-tool-exec--write-stdin (callback args)
   "Poll or write to one owner-scoped yielded execution from ARGS."
-  (require 'mevedel-tool-exec-permission)
-  (require 'subr-x)
-  (require 'mevedel-turn)
   (let* ((execution-id (plist-get args :execution_id))
          (chars (or (plist-get args :chars) ""))
          (requested-yield-time-ms (plist-get args :yield_time_ms))
@@ -445,8 +441,6 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
       (error "Parameter chars must be a string"))
     (unless session
       (error "WriteStdin requires an active session"))
-    (require 'mevedel-execution)
-    (require 'mevedel-telemetry)
     (mevedel-telemetry-record-audit
      session 'execution-observe-requested
      :execution-id execution-id
@@ -475,13 +469,10 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
 
 (defun mevedel-tool-exec--list-executions (_args)
   "Return yielded executions visible to the current model owner."
-  (require 'mevedel-tool-exec-permission)
-  (require 'mevedel-turn)
   (let ((session (mevedel-tool-exec-permission-session))
         (owner (mevedel-current-origin)))
     (unless session
       (error "ListExecutions requires an active session"))
-    (require 'mevedel-execution)
     (let* ((facts (mevedel-execution-list session owner))
            (result
             (if facts
@@ -491,9 +482,6 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
 
 (defun mevedel-tool-exec--stop-execution (callback args)
   "Stop one owner-scoped yielded execution named by ARGS."
-  (require 'mevedel-tool-exec-permission)
-  (require 'subr-x)
-  (require 'mevedel-turn)
   (let ((execution-id (plist-get args :execution_id))
         (session (mevedel-tool-exec-permission-session))
         (owner (mevedel-current-origin)))
@@ -501,7 +489,6 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
       (error "Parameter execution_id is required"))
     (unless session
       (error "StopExecution requires an active session"))
-    (require 'mevedel-execution)
     (mevedel-execution-stop
      session owner execution-id
      (lambda (observation)
@@ -539,8 +526,6 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
 CALLBACK receives the result envelope.  RESULT-FORMAT controls
 the model-facing shape.  PRESERVE-UI restores the selected frame's
 window configuration after evaluation."
-  (require 'mevedel-tool-exec-permission)
-  (require 'subr-x)
   (let ((standard-output (generate-new-buffer " *mevedel-eval-elisp*"))
         (window-configuration (and preserve-ui
                                    (current-window-configuration)))
@@ -639,9 +624,6 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
   "Evaluate EXPRESSION in a child process and call CALLBACK.
 ADDITIONAL-PERMISSIONS is the validated additive execution profile.
 SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
-  (require 'mevedel-tool-exec-permission)
-  (require 'subr-x)
-  (require 'mevedel-turn)
   (let* ((workdir (mevedel-tool-exec-permission-default-directory))
          (session (mevedel-tool-exec-permission-session))
          (owner (mevedel-current-origin))
@@ -660,7 +642,6 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
         (progn
           (with-temp-file script-file
             (insert script))
-          (require 'mevedel-execution)
           (mevedel-execution-start-one-shot
            (lambda (child-result)
              (let* ((exit-code (plist-get child-result :exit-code))
@@ -721,7 +702,6 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
 (defun mevedel-tool-exec--eval (callback args)
   "Evaluate an Elisp expression and return the result.
 CALLBACK receives the result envelope.  ARGS is a plist with :expression."
-  (require 'mevedel-tool-exec-permission)
   (let ((expression (plist-get args :expression))
         (result-format (plist-get args :result-format))
         (mode (mevedel-tool-exec-permission-eval-mode args)))
@@ -849,9 +829,6 @@ Header shows a truncated first line of the command; body fontifies as
 
 (defun mevedel-tool-exec--register ()
   "Register Bash and Eval tools."
-  (require 'mevedel-tool-exec-permission)
-  (require 'subr-x)
-
   (mevedel-define-tool
    :name "Bash"
    :description "Execute Bash commands."
