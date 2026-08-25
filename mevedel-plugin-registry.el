@@ -7,15 +7,18 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib)
-  (require 'subr-x))
+(require 'cl-lib)
+(require 'json)
+(require 'subr-x)
+(require 'mevedel-structs)
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-session
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context
                   "mevedel-cockpit" ())
+(autoload 'mevedel-cockpit-context-session "mevedel-cockpit")
+(autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-invalidate-config "mevedel-hooks" ())
@@ -26,6 +29,8 @@
 (declare-function mevedel-session-artifacts-publish-text
                   "mevedel-session-artifacts"
                   (session path content &optional coding))
+(autoload 'mevedel-session-artifacts-publish-text
+  "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -36,10 +41,12 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--write-file-atomically
                   "mevedel-utilities" (path content &optional coding mode))
+(autoload 'mevedel--write-file-atomically "mevedel-utilities")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-state-dir
                   "mevedel-workspace" (workspace))
+(autoload 'mevedel-workspace-state-dir "mevedel-workspace")
 
 ;; `subr'
 (defvar read-eval)
@@ -99,29 +106,23 @@ roots below it."
 
 (defun mevedel-plugins--global-mevedel-dir ()
   "Return the global mevedel-specific plugin directory."
-  (require 'mevedel-structs)
   (mevedel-plugins--normalize-directory
    (file-name-concat mevedel-user-dir "plugins")))
 
 (defun mevedel-plugins-state-file (&optional workspace)
   "Return the persistent plugin state file for WORKSPACE.
 Return nil when WORKSPACE is nil."
-  (require 'mevedel-structs)
-  (require 'mevedel-workspace)
   (when workspace
     (file-name-concat (mevedel-workspace-state-dir workspace) "plugins.el")))
 
 (defun mevedel-plugins--workspace-plugins-dir (workspace resource-dir)
   "Return WORKSPACE plugin directory under RESOURCE-DIR."
-  (require 'mevedel-structs)
   (file-name-concat (mevedel-workspace-root workspace)
                     resource-dir
                     "plugins"))
 
 (defun mevedel-plugins-plugin-data-dir (plugin-name &optional workspace)
   "Return persistent data directory for PLUGIN-NAME in WORKSPACE."
-  (require 'mevedel-structs)
-  (require 'mevedel-workspace)
   (unless workspace
     (error "No workspace for plugin data"))
   (file-name-concat (mevedel-workspace-state-dir workspace)
@@ -201,9 +202,6 @@ Return a list of plists, each with a `:file' path."
   "Read plugin manifest under ROOT.
 Return a `mevedel-plugin' or `mevedel-plugin-error', or nil when ROOT
 does not contain a readable Codex plugin manifest."
-  (require 'cl-lib)
-  (require 'json)
-  (require 'mevedel-structs)
   (let ((file (mevedel-plugins-manifest-file root)))
     (when (file-readable-p file)
       (let* ((root (file-name-as-directory (expand-file-name root)))
@@ -410,8 +408,6 @@ Items include usable plugin manifests and visible metadata errors."
 
 (defun mevedel-plugins--state-session (workspace)
   "Return the live session authorized to mutate WORKSPACE plugin state."
-  (require 'mevedel-cockpit)
-  (require 'mevedel-structs)
   (let ((session
          (or (and (boundp 'mevedel--session) mevedel--session)
              (ignore-errors
@@ -431,7 +427,6 @@ Items include usable plugin manifests and visible metadata errors."
 
 (defun mevedel-plugins--write-state (state &optional workspace)
   "Persist plugin STATE for WORKSPACE."
-  (require 'mevedel-session-artifacts)
   (let* ((file (or (mevedel-plugins-state-file workspace)
                    (error "No workspace for plugin state")))
          (content (mevedel-plugins--state-text state)))
@@ -445,7 +440,6 @@ Items include usable plugin manifests and visible metadata errors."
       ;; hook consent, and `mevedel-plugins--read-state' reads a
       ;; truncated file as nil, so a write that died in place would
       ;; silently disable everything.
-      (require 'mevedel-utilities)
       (mevedel--write-file-atomically file content))))
 
 (defun mevedel-plugins--state-plist (name &optional workspace)
@@ -455,7 +449,6 @@ Items include usable plugin manifests and visible metadata errors."
 (defun mevedel-plugins-source-root (root &optional workspace)
   "Return the durable source identity for ROOT in WORKSPACE.
 Project sources use workspace-relative paths; other sources stay absolute."
-  (require 'mevedel-structs)
   (when root
     (let* ((root (file-name-as-directory (expand-file-name root)))
            (workspace-root
@@ -484,7 +477,6 @@ Project sources use workspace-relative paths; other sources stay absolute."
 (defun mevedel-plugins-same-root-p (a b &optional workspace)
   "Return non-nil when source roots A and B identify the same directory.
 Relative identities are requalified through the live WORKSPACE root."
-  (require 'mevedel-structs)
   (when (and a b)
     (let ((base (and workspace (mevedel-workspace-root workspace))))
       (equal (file-name-as-directory (expand-file-name a base))
@@ -493,7 +485,8 @@ Relative identities are requalified through the live WORKSPACE root."
 (defun mevedel-plugins--hook-rules-from-file (file)
   "Return normalized hook rules from FILE."
   (when (and (file-readable-p file)
-             (require 'mevedel-hooks nil t))
+             (or (fboundp 'mevedel-hooks-read-config-file)
+                 (require 'mevedel-hooks nil t)))
     (mevedel-hooks-read-config-file file)))
 
 (defun mevedel-plugins--hook-rules-from-hooks (hooks)
@@ -598,7 +591,6 @@ Relative identities are requalified through the live WORKSPACE root."
 (defun mevedel-plugins-remove-state-for-source
     (name root &optional workspace)
   "Remove NAME state only when it points at source ROOT."
-  (require 'cl-lib)
   (when-let* ((state (mevedel-plugins--read-state workspace))
               (entry (assoc name state))
               ((mevedel-plugins-same-root-p
@@ -817,7 +809,6 @@ Relative identities are requalified through the live WORKSPACE root."
 (defun mevedel-plugins-active-shadowed-source
     (plugin &optional workspace)
   "Return shadowed active source for PLUGIN in WORKSPACE, or nil."
-  (require 'cl-lib)
   (let ((state (mevedel-plugins--state-plist
                 (mevedel-plugin-name plugin) workspace)))
     (and (plist-get state :enabled)

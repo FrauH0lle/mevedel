@@ -7,9 +7,9 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib)
-  (require 'subr-x))
+(require 'cl-lib)
+(require 'subr-x)
+(require 'mevedel-plugin-registry)
 
 ;; `mevedel-plugin-registry'
 (declare-function mevedel-plugin-name
@@ -102,7 +102,6 @@ into each other's staging tree or delete it on the way out."
 
 (defun mevedel-plugins-install (target)
   "Install GitHub plugin TARGET."
-  (require 'mevedel-plugin-registry)
   (let ((repo (mevedel-plugins--install-target-repo target)))
     (if (not (mevedel-plugins--github-target-p repo))
         "Invalid plugin target: use OWNER/REPO or a GitHub repository."
@@ -161,7 +160,6 @@ into each other's staging tree or delete it on the way out."
 (defun mevedel-plugins-update (name &optional workspace)
   "Update installed plugin NAME with git pull.
 Preserve plugin state in WORKSPACE."
-  (require 'mevedel-plugin-registry)
   (if-let* ((plugin (mevedel-plugins-find name workspace)))
       (let* ((root (mevedel-plugin-root plugin))
              (previous-state (mevedel-plugins-state-entry
@@ -196,7 +194,6 @@ Preserve plugin state in WORKSPACE."
 
 (defun mevedel-plugins--managed-root-p (root)
   "Return non-nil when ROOT is below a mevedel-managed global root."
-  (require 'cl-lib)
   (let ((root (mevedel-plugins-source-root root)))
     (cl-some
      (lambda (managed)
@@ -207,7 +204,6 @@ Preserve plugin state in WORKSPACE."
 (defun mevedel-plugins-remove (name &optional workspace)
   "Remove managed installed plugin NAME.
 Workspace runtime data is retained."
-  (require 'mevedel-plugin-registry)
   (if-let* ((plugin (mevedel-plugins-find name workspace)))
       (let ((root (mevedel-plugin-root plugin)))
         (cond
