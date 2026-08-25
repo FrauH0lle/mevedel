@@ -20,6 +20,7 @@
                   (result-string &optional tool-results-dir
                                  expected-tool-use-id
                                  allow-payload-tool-use-id))
+(autoload 'mevedel-tool-media-extract "mevedel-tool-media")
 
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-trusted-range-p
@@ -1496,7 +1497,6 @@ assistant turn."
   "Return neutral call/result evidence parts for tool TEXT.
 CAP bounds retained result characters.  TOOL-RESULTS-DIR and TOOL-ID resolve
 trusted native media metadata without returning payload bytes."
-  (require 'mevedel-tool-media)
   (let* ((extracted
           (mevedel-tool-media-extract
            text tool-results-dir tool-id t))

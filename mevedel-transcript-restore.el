@@ -11,6 +11,9 @@
   (require 'cl-lib)
   (require 'subr-x))
 
+(require 'gptel)
+(require 'mevedel-transcript)
+
 ;; `gptel'
 (declare-function gptel--restore-props "ext:gptel" (bounds-alist))
 (declare-function gptel-mode "ext:gptel" (&optional arg))
@@ -87,7 +90,6 @@ Rewriting the Org property drawer can move every stored position, so
 repeat until its serialized bounds settle.  Derived repairs do not mark
 the buffer modified."
   (when (derived-mode-p 'org-mode)
-    (require 'org)
     (let ((was-modified (buffer-modified-p))
           (changed nil)
           (again t)
@@ -118,8 +120,6 @@ When ONLY-IF-MISSING is non-nil, do not overwrite existing live
 properties with persisted bounds.  Canonical structural normalization
 still runs whenever transcript properties are present."
   (when (derived-mode-p 'org-mode)
-    (require 'gptel)
-    (require 'mevedel-transcript)
     (let* ((scan-start
             (mevedel-transcript--skip-leading-summary-block
              (mevedel-transcript--skip-leading-properties-drawer
