@@ -1701,9 +1701,6 @@
         (with-current-buffer parent
           (setq-local mevedel--session session
                       mevedel--agent-invocation parent-invocation)
-          (require 'mevedel-agent-exec)
-          (require 'mevedel-agent-runtime)
-          (require 'mevedel-context-summary)
           (cl-letf
               (((symbol-function 'mevedel-compact-evidence-summary-context-evidence)
                 (lambda (tool-use-id)
@@ -1832,8 +1829,6 @@
     (unwind-protect
         (with-current-buffer parent
           (setq-local mevedel--session session)
-          (require 'mevedel-agent-runtime)
-          (require 'mevedel-context-summary)
           (cl-letf
               (((symbol-function 'mevedel-compact-evidence-summary-context-evidence)
                 (lambda (_) "Frozen evidence"))
@@ -1869,8 +1864,6 @@
     (unwind-protect
         (with-current-buffer parent
           (setq-local mevedel--session session)
-          (require 'mevedel-agent-runtime)
-          (require 'mevedel-context-summary)
           (cl-letf
               (((symbol-function 'mevedel-compact-evidence-summary-context-evidence)
                 (lambda (_) "Frozen evidence"))
@@ -1907,7 +1900,6 @@
           (mevedel-session-agent-turn-capacity second) 1)
     (unwind-protect
         (progn
-          (require 'mevedel-context-summary)
           (cl-letf
             (((symbol-function 'mevedel-compact-evidence-summary-context-evidence)
               (lambda (_) "Frozen evidence"))
