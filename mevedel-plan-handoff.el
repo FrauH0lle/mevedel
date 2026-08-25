@@ -8,9 +8,11 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (eval-when-compile
-  (require 'cl-lib)
+  (require 'gptel-request)
   (require 'mevedel-structs))
+(require 'mevedel-plan)
 
 ;; `gptel'
 (defvar gptel-prompt-prefix-alist)
@@ -29,20 +31,26 @@
                   "mevedel-compact-evidence" ())
 (declare-function mevedel-compact-evidence-select
                   "mevedel-compact-evidence" (target limit aggressive))
+(autoload 'mevedel-compact-evidence-find-boundary "mevedel-compact-evidence")
+(autoload 'mevedel-compact-evidence-previous-summary "mevedel-compact-evidence")
+(autoload 'mevedel-compact-evidence-select "mevedel-compact-evidence")
 
 ;; `mevedel-compact-run'
 (declare-function mevedel-compact-run-start
                   "mevedel-compact-run" (&rest keys))
 (defvar mevedel-compact-run-cancel)
+(autoload 'mevedel-compact-run-start "mevedel-compact-run")
 
 ;; `mevedel-compact-target'
 (declare-function mevedel-compact-target-main-target
                   "mevedel-compact-target" ())
+(autoload 'mevedel-compact-target-main-target "mevedel-compact-target")
 
 ;; `mevedel-context-summary'
 (declare-function mevedel-context-summary-generate
                   "mevedel-context-summary"
                   (source purpose callback &rest args))
+(autoload 'mevedel-context-summary-generate "mevedel-context-summary")
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-ensure "mevedel-goal"
@@ -50,6 +58,9 @@
 (declare-function mevedel-goal-new-id "mevedel-goal" nil)
 (declare-function mevedel-goal-pause-runtime-failure "mevedel-goal"
                   (buffer reason))
+(autoload 'mevedel-goal-ensure "mevedel-goal")
+(autoload 'mevedel-goal-new-id "mevedel-goal")
+(autoload 'mevedel-goal-pause-runtime-failure "mevedel-goal")
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-ranges
@@ -57,6 +68,8 @@
 (declare-function mevedel-mention-bindings-set
                   "mevedel-mention-bindings"
                   (start end binding &optional object))
+(autoload 'mevedel-mention-bindings-ranges "mevedel-mention-bindings")
+(autoload 'mevedel-mention-bindings-set "mevedel-mention-bindings")
 
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-provider
@@ -65,10 +78,14 @@
                   "mevedel-models" (session effort &optional buffer))
 (declare-function mevedel-model-set-session-provider
                   "mevedel-models" (session provider &optional buffer))
+(autoload 'mevedel-model-resolve-provider "mevedel-models")
+(autoload 'mevedel-model-set-session-effort "mevedel-models")
+(autoload 'mevedel-model-set-session-provider "mevedel-models")
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-transition
                   "mevedel-permission-mode" (mode))
+(autoload 'mevedel-permission-mode-transition "mevedel-permission-mode")
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan--metadata-put "mevedel-plan"
@@ -84,6 +101,7 @@
 ;; `mevedel-presets'
 (declare-function mevedel-preset-restore-session "mevedel-presets"
                   (session &optional buffer))
+(autoload 'mevedel-preset-restore-session "mevedel-presets")
 
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-outcome
@@ -94,6 +112,8 @@
                   "mevedel-execution-target" (target path))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-save
@@ -104,12 +124,18 @@
                   (session buffer &rest keys))
 (declare-function mevedel-session-artifacts-summary-block
                   "mevedel-session-artifacts" (summary))
+(autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-start-fresh-segment
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-summary-block
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-restore
                   "mevedel-session-persistence"
                   (session-dir &optional lifecycle-source
                                session-override workspace))
+(autoload 'mevedel-session-persistence-restore "mevedel-session-persistence")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-session-get-skill-by-source
@@ -119,10 +145,15 @@
                   "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skills-skill-enabled-p
                   "mevedel-skills-core" (skill))
+(autoload 'mevedel-session-get-skill-by-source "mevedel-skills-core")
+(autoload 'mevedel-skill-name "mevedel-skills-core")
+(autoload 'mevedel-skill-user-invocable-p "mevedel-skills-core")
+(autoload 'mevedel-skills-skill-enabled-p "mevedel-skills-core")
 
 ;; `mevedel-skills-input'
 (declare-function mevedel-skills-input-prepare-user-input
                   "mevedel-skills-input" (text session))
+(autoload 'mevedel-skills-input-prepare-user-input "mevedel-skills-input")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
@@ -159,6 +190,9 @@
 (declare-function mevedel-worktree-create-session
                   "mevedel-worktree"
                   (&optional branch purpose clean recovery))
+(autoload 'mevedel-worktree-create-session "mevedel-worktree")
+(autoload 'mevedel-worktree-repository-root "mevedel-worktree")
+(autoload 'mevedel-worktree-session-directory "mevedel-worktree")
 
 (defconst mevedel-plan-handoff--accepted-goal-objective
   (concat
@@ -243,7 +277,6 @@ reservation while its prepared kickoff has not started."
                (start (+ (length result) 4)))
           (setq result
                 (concat result "Use " token " during implementation.\n"))
-          (require 'mevedel-mention-bindings)
           (mevedel-mention-bindings-set
            start (+ start (length token))
            (list :kind 'skill :token token
@@ -286,14 +319,12 @@ needs no session."
 
 (defun mevedel-plan-handoff--persist (session chat-buffer)
   "Persist SESSION from CHAT-BUFFER."
-  (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-save session chat-buffer))
 
 (defun mevedel-plan-handoff--apply-model-policy
     (selection session buffer)
   "Apply SELECTION's accepted model policy to SESSION in BUFFER."
   (when-let* ((label (plist-get selection :model-provider)))
-    (require 'mevedel-models)
     (mevedel-model-set-session-provider
      session (mevedel-model-resolve-provider label) buffer)
     (mevedel-model-set-session-effort
@@ -301,8 +332,6 @@ needs no session."
 
 (defun mevedel-plan-handoff-validate-skill-bindings (prompt session)
   "Signal when an explicit skill binding in PROMPT is unavailable in SESSION."
-  (require 'mevedel-mention-bindings)
-  (require 'mevedel-skills-core)
   (dolist (range (mevedel-mention-bindings-ranges prompt))
     (let* ((binding (plist-get range :binding))
            (source (and (eq (plist-get binding :kind) 'skill)
@@ -331,13 +360,11 @@ needs no session."
                (list :path (plist-get accepted :path)
                      :hash (plist-get accepted :hash)))))
     (when (eq (plist-get selection :execution) 'goal)
-      (require 'mevedel-goal)
       (setq record (plist-put record :goal-id (mevedel-goal-new-id))))
     record))
 
 (defun mevedel-plan-handoff--accepted-body (session artifact)
   "Return SESSION's validated immutable accepted-plan ARTIFACT body."
-  (require 'mevedel-plan)
   (mevedel-plan-read-artifact session artifact))
 
 (defun mevedel-plan-handoff--worktree-target-buffer (record)
@@ -347,7 +374,6 @@ needs no session."
     (unless (and (stringp save-path) (file-directory-p save-path)
                  (stringp session-id))
       (error "Prepared Worktree session is unavailable"))
-    (require 'mevedel-session-persistence)
     (let* ((buffer (mevedel-session-persistence-restore save-path))
            (session (buffer-local-value 'mevedel--session buffer)))
       (unless (equal session-id (mevedel-session-session-id session))
@@ -359,7 +385,6 @@ needs no session."
 
 (defun mevedel-plan-handoff--prepare-worktree (session chat-buffer record)
   "Create RECORD's Worktree target and persist its identity in SESSION."
-  (require 'mevedel-worktree)
   (let* ((selection (plist-get record :selection))
          (branch (plist-get selection :branch))
          (prepared (copy-tree record))
@@ -413,7 +438,6 @@ needs no session."
 (defun mevedel-plan-handoff--prepare-worktree-target
     (session chat-buffer record)
   "Prepare RECORD's target artifact, settings, and Mode for SESSION."
-  (require 'mevedel-session-artifacts)
   (let* ((selection (plist-get record :selection))
          (mode (plist-get selection :mode))
          (target-buffer (mevedel-plan-handoff--worktree-target-buffer record))
@@ -454,8 +478,6 @@ needs no session."
         (when (eq (plist-get selection :execution) 'goal)
           (setq-local mevedel-goal-token-budget
                       (plist-get selection :goal-token-budget)))
-        (require 'mevedel-presets)
-        (require 'mevedel-permission-mode)
         (mevedel-preset-restore-session target-session target-buffer)
         (mevedel-plan-handoff--apply-model-policy
          selection target-session target-buffer)
@@ -531,7 +553,6 @@ projected evidence.  CHAT-BUFFER is left unchanged."
          settled)
     (when (string-blank-p source)
       (user-error "Not enough conversation content to summarize"))
-    (require 'mevedel-context-summary)
     (let ((cancel
            (mevedel-context-summary-generate
             source 'handoff
@@ -580,8 +601,6 @@ source checkout.
 
 Both spellings go, because a model-visible path is target-native: on a
 remote session the native spelling is the only one the evidence carries."
-  (require 'mevedel-worktree)
-  (require 'mevedel-execution-target)
   (let* ((directory (file-name-as-directory
                      (expand-file-name
                       (mevedel-session-working-directory session))))
@@ -642,10 +661,6 @@ authoritative plan; SOURCE-TRANSFORM filters the projected evidence."
   "Generate the implementation handoff for SESSION RECORD from CHAT-BUFFER.
 Worktree keeps CHAT-BUFFER intact and makes one attempt; Here compacts
 CHAT-BUFFER under the ordinary compaction retry policy."
-  (require 'mevedel-compact)
-  (require 'mevedel-compact-evidence)
-  (require 'mevedel-compact-run)
-  (require 'mevedel-compact-target)
   (with-current-buffer chat-buffer
     (let* ((selection (plist-get record :selection))
            (plan
@@ -775,7 +790,6 @@ the durable retry was retained"
 
 (defun mevedel-plan-handoff--prepare-context (session chat-buffer record)
   "Rotate CHAT-BUFFER once and return RECORD advanced to submission."
-  (require 'mevedel-session-artifacts)
   (let ((prepared (plist-put record :step 'submit)))
     ;; The segment transaction persists the advanced retry step, so recovery
     ;; cannot repeat a completed rotation.
@@ -804,7 +818,6 @@ the durable retry was retained"
     (setq-local mevedel-goal-token-budget
                 (plist-get
                  (plist-get record :selection) :goal-token-budget))
-    (require 'mevedel-goal)
     (mevedel-goal-ensure
      mevedel-plan-handoff--accepted-goal-objective
      target-session
@@ -893,7 +906,6 @@ the durable retry was retained"
       (mevedel-plan-handoff--apply-model-policy
        selection target-session target-buffer)
       (with-current-buffer target-buffer
-        (require 'mevedel-skills-input)
         (setq prompt
               (mevedel-skills-input-prepare-user-input prompt target-session))
         (mevedel-plan-handoff-validate-skill-bindings
@@ -958,7 +970,6 @@ the durable retry was retained"
         (mevedel-plan-handoff--persist session chat-buffer)
         (when (eq location 'here)
           (with-current-buffer chat-buffer
-            (require 'mevedel-permission-mode)
             (mevedel-permission-mode-transition
              (plist-get selection :mode))))
         (while record

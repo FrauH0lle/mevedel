@@ -47,6 +47,7 @@
 ;; `mevedel-goal'
 (declare-function mevedel-goal-tool-result-budget-warning
                   "mevedel-goal" (session fsm))
+(autoload 'mevedel-goal-tool-result-budget-warning "mevedel-goal")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-context-audit-records
@@ -78,10 +79,16 @@
 (declare-function mevedel-session-artifacts-publish-text
                   "mevedel-session-artifacts"
                   (session path content &optional coding))
+(autoload 'mevedel-session-artifacts-assert-new-mutation-authority
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-publish-text
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-shallow-ensure-files
                   "mevedel-session-persistence" (session buffer))
+(autoload 'mevedel-session-persistence-shallow-ensure-files
+  "mevedel-session-persistence")
 
 ;; `mevedel-specialist-nudges'
 (declare-function mevedel-specialist-nudges-apply
@@ -176,6 +183,8 @@
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-ensure-generated-state-ignored
                   "mevedel-workspace" (workspace))
+(autoload 'mevedel-workspace-ensure-generated-state-ignored
+  "mevedel-workspace")
 (defvar mevedel--workspace)
 
 ;; `subr'
@@ -265,11 +274,9 @@ shallow materialization fails."
                          (mevedel-request-ephemeral-p request))))
       (let ((save-path (or (mevedel-session-save-path session)
                            (when (and buffer (buffer-live-p buffer))
-                             (require 'mevedel-session-persistence)
                              (mevedel-session-persistence-shallow-ensure-files
                               session buffer)))))
         (when save-path
-          (require 'mevedel-workspace)
           (mevedel-workspace-ensure-generated-state-ignored
            (mevedel-session-workspace session))
           (file-name-concat save-path "tool-results"))))))
@@ -282,9 +289,6 @@ SESSION owns the output file through its `tool-results/' directory.
 BUFFER is the chat data buffer used to shallowly materialize SESSION
 when it has not been saved yet.  If no session-owned directory is
 available, falls back to `mevedel-pipeline--truncate-result'."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (setq result (mevedel--normalize-message-text result))
   (if-let* ((dir (mevedel-pipeline-tool-results-dir session buffer)))
       (let* ((name (mevedel-tool-name tool))
@@ -1498,7 +1502,6 @@ explicit `:updated-result' changes the model-visible tool result."
         (fsm (plist-get context :fsm)))
     (if (and (stringp result) session fsm)
         (progn
-          (require 'mevedel-goal)
           (if-let* ((warning
                      (mevedel-goal-tool-result-budget-warning session fsm)))
               (funcall
@@ -1591,9 +1594,6 @@ guard, a sync error escaping a step's NEXT recursion (after the
 recursion already delivered a success result to CALLBACK) would
 double-fire.  Errors from the wrapped invocation are caught and
 logged so a misbehaving CALLBACK cannot strand the pipeline."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((dispatch-buffer (current-buffer))
          (session (and (boundp 'mevedel--session) mevedel--session))
          (workspace

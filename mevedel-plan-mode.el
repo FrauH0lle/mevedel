@@ -6,9 +6,10 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib)
-  (require 'mevedel-structs))
+(require 'cl-lib)
+(require 'subr-x)
+(eval-when-compile (require 'mevedel-structs))
+(require 'mevedel-plan)
 
 ;; `gptel'
 (defvar gptel-reasoning-effort)
@@ -22,20 +23,28 @@
                   "mevedel-interaction-prompt" (content face))
 (declare-function mevedel--prompt-key
                   "mevedel-interaction-prompt" (key))
+(autoload 'mevedel--prompt-announce "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt--settle "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt-framed-body "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt-key "mevedel-interaction-prompt")
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu-open-model-selection "mevedel-menu"
                   (&rest options))
+(autoload 'mevedel-menu-open-model-selection "mevedel-menu")
 
 ;; `mevedel-models'
 (declare-function mevedel-model-current-provider-label
                   "mevedel-models" (&optional buffer))
 (declare-function mevedel-model-resolve-provider
                   "mevedel-models" (spec &optional noerror))
+(autoload 'mevedel-model-current-provider-label "mevedel-models")
+(autoload 'mevedel-model-resolve-provider "mevedel-models")
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view-enqueue-external-follow-up
                   "mevedel-pending-inputs" (data-buffer text &rest keys))
+(autoload 'mevedel-view-enqueue-external-follow-up "mevedel-pending-inputs")
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-accept "mevedel-plan"
@@ -54,6 +63,8 @@
 (declare-function mevedel-plan-handoff-start "mevedel-plan-handoff"
                   (session chat-buffer selection accepted))
 (defvar mevedel-plan-handoff-implementation-modes)
+(autoload 'mevedel-plan-handoff-selection-valid-p "mevedel-plan-handoff")
+(autoload 'mevedel-plan-handoff-start "mevedel-plan-handoff")
 
 ;; `mevedel-queue'
 (declare-function mevedel-queue--current-session "mevedel-queue" ())
@@ -61,24 +72,33 @@
                   "mevedel-queue" (entry key value))
 (declare-function mevedel-queue--unregister-entry-interaction
                   "mevedel-queue" (entry))
+(autoload 'mevedel-queue--current-session "mevedel-queue")
+(autoload 'mevedel-queue--entry-metadata-put "mevedel-queue")
+(autoload 'mevedel-queue--unregister-entry-interaction "mevedel-queue")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
                   "mevedel-session-artifacts" (session))
+(autoload 'mevedel-session-artifacts-assert-new-mutation-authority
+  "mevedel-session-artifacts")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-source-file "mevedel-skills-core" (cl-x) t)
+(autoload 'mevedel-skill-name "mevedel-skills-core")
+(autoload 'mevedel-skill-source-file "mevedel-skills-core")
 
 ;; `mevedel-skills-input'
 (declare-function mevedel-skills-input-prepare-user-input
                   "mevedel-skills-input" (text session))
+(autoload 'mevedel-skills-input-prepare-user-input "mevedel-skills-input")
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-view-refresh-associated-input-prompt
                   "mevedel-view-composer" ())
 (declare-function mevedel-skills-user-visible-skills
                   "mevedel-skills-ui" (session &optional inline-only))
+(autoload 'mevedel-skills-user-visible-skills "mevedel-skills-ui")
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
@@ -112,6 +132,7 @@
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-segments "mevedel-transcript"
 		  (start end))
+(autoload 'mevedel-transcript-segments "mevedel-transcript")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text "mevedel-utilities"
@@ -127,6 +148,7 @@
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add "mevedel-view-history" (input))
+(autoload 'mevedel-view-history-add "mevedel-view-history")
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
@@ -147,6 +169,9 @@
 		  "mevedel-worktree" (session purpose))
 (declare-function mevedel-worktree-validate-branch-name
 		  "mevedel-worktree" (name &optional directory))
+(autoload 'mevedel-worktree-collect-status "mevedel-worktree")
+(autoload 'mevedel-worktree-default-branch-name "mevedel-worktree")
+(autoload 'mevedel-worktree-validate-branch-name "mevedel-worktree")
 
 ;;
 ;;; Plan conversation mode
@@ -167,9 +192,6 @@
 (defun mevedel-plan-mode-enter (&optional session)
   "Enter a sticky Plan conversation for SESSION."
   (interactive)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let ((session (mevedel-plan-mode--current-session session)))
     (unless session
       (user-error "No mevedel session for Plan mode"))
@@ -196,7 +218,6 @@
     (when (and session (mevedel-session-plan-mode session))
       (mevedel-plan-mode--demote-proposal session t)
       (when (mevedel-session-pending-plan-approval session)
-        (require 'mevedel-goal)
         (mevedel-plan-approval-abort session 'plan-exit))
       (mevedel-plan-mode--deactivate session))
     nil))
@@ -235,7 +256,6 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
 
 (defun mevedel-plan-mode--assistant-prose (start end)
   "Return root-assistant prose in START..END, excluding tool evidence."
-  (require 'mevedel-transcript)
   (mevedel--normalize-message-text
    (mapconcat
     (lambda (segment)
@@ -252,9 +272,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
         :execution 'direct
         :mode (or (mevedel-session-permission-mode session) 'ask)
         :model-provider
-        (progn
-          (require 'mevedel-models)
-          (mevedel-model-current-provider-label))
+        (mevedel-model-current-provider-label)
         :reasoning-effort
         (and (boundp 'gptel-reasoning-effort) gptel-reasoning-effort)
         :goal-token-budget
@@ -264,7 +282,6 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
 
 (defun mevedel-plan-mode--next-mode (mode)
   "Return the Plan implementation mode after MODE."
-  (require 'mevedel-plan-handoff)
   (or (cadr (memq mode mevedel-plan-handoff-implementation-modes))
       (car mevedel-plan-handoff-implementation-modes)))
 
@@ -310,7 +327,6 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
 (defun mevedel-plan-mode--accept
     (plan-markdown chat-buffer session selection)
   "Accept PLAN-MARKDOWN and dispatch SELECTION from CHAT-BUFFER SESSION."
-  (require 'mevedel-plan-handoff)
   (unless (mevedel-plan-handoff-selection-valid-p selection)
     (error "Unsupported Plan implementation selection: %S" selection))
   (let* ((artifacts (mevedel-plan-accept
@@ -326,7 +342,6 @@ A draft already in the composer is stashed into the input history
 before the template replaces it, and the user is told how to recall
 it -- the feedback template must not silently destroy unsubmitted
 text."
-  (require 'mevedel-view-history)
   (let ((target (mevedel-view--interaction-target-buffer chat-buffer)))
     (with-current-buffer target
       (let ((draft (string-trim
@@ -352,7 +367,6 @@ text."
 The remote counterpart of the Emacs feedback draft: the same request
 template, submitted immediately as a queued follow-up instead of
 opening an editable draft."
-  (require 'mevedel-pending-inputs)
   (mevedel-view-enqueue-external-follow-up
    chat-buffer
    (format
@@ -399,7 +413,6 @@ opening an editable draft."
 
 (defun mevedel-plan-mode--read-worktree-branch (entry)
   "Read and validate a Worktree branch for approval ENTRY."
-  (require 'mevedel-worktree)
   (let* ((session (plist-get entry :session))
          (directory (mevedel-session-working-directory session))
          (default (mevedel-worktree-default-branch-name
@@ -411,7 +424,6 @@ opening an editable draft."
 (defun mevedel-plan-mode--worktree-warning (entry)
   "Return ENTRY's dirty-source warning when Worktree is selected."
   (when (eq (plist-get (plist-get entry :selection) :location) 'worktree)
-    (require 'mevedel-worktree)
     (with-current-buffer (plist-get entry :chat-buffer)
       (when (plist-get (mevedel-worktree-collect-status) :dirty-p)
         "Worktree starts at HEAD; uncommitted changes are not included."))))
@@ -433,7 +445,6 @@ opening an editable draft."
   (interactive)
   (unless mevedel-plan-mode--instructions-entry
     (user-error "No Plan implementation instructions to save"))
-  (require 'subr-x)
   (let* ((entry mevedel-plan-mode--instructions-entry)
          (session (plist-get entry :session))
          (selection (plist-get entry :selection))
@@ -443,7 +454,6 @@ opening an editable draft."
          (instructions
           (unless (string-empty-p instructions)
             (with-current-buffer (plist-get entry :chat-buffer)
-              (require 'mevedel-skills-input)
               (mevedel-skills-input-prepare-user-input
                instructions session)))))
     (plist-put selection :instructions
@@ -474,7 +484,6 @@ opening an editable draft."
 
 (defun mevedel-plan-mode--toggle-skill (entry)
   "Toggle one user-invocable implementation skill for approval ENTRY."
-  (require 'mevedel-skills-ui)
   (let* ((selection (plist-get entry :selection))
          (skills
           (mevedel-skills-user-visible-skills
@@ -520,7 +529,6 @@ opening an editable draft."
 
 (defun mevedel-plan-mode--render-approval (entry)
   "Render standalone Plan approval ENTRY in the interaction zone."
-  (require 'mevedel-interaction-prompt)
   (let ((chat-buffer (plist-get entry :chat-buffer))
         (selection (plist-get entry :selection))
         (directive-p (plist-get entry :directive))
@@ -532,7 +540,6 @@ opening an editable draft."
            (when overlay (mevedel--prompt--settle overlay outcome)))
          (accept ()
            (interactive)
-           (require 'mevedel-models)
            (let ((accepted (copy-tree selection))
                  (provider (plist-get selection :model-provider)))
              (when (eq (plist-get accepted :location) 'worktree)
@@ -587,7 +594,6 @@ opening an editable draft."
              (mevedel-plan-mode--selection-changed entry)))
          (open-model ()
            (interactive)
-           (require 'mevedel-menu)
            (mevedel-menu-open-model-selection
             :title "Implementation model"
             :provider (plist-get selection :model-provider)
@@ -795,7 +801,6 @@ opening an editable draft."
 (defun mevedel-plan-mode-restore-pending-approval
     (&optional session chat-buffer)
   "Restore SESSION's genuine pending Plan proposal in CHAT-BUFFER."
-  (require 'mevedel-plan-handoff)
   (let* ((session (mevedel-plan-mode--current-session session))
          (chat-buffer (or chat-buffer (current-buffer)))
          (metadata (and session (mevedel-session-plan-metadata session)))
@@ -838,7 +843,6 @@ opening an editable draft."
 
 (defun mevedel-plan-approval--current-session ()
   "Resolve the session that owns the pending Plan approval."
-  (require 'mevedel-queue)
   (mevedel-queue--current-session))
 
 (defun mevedel-plan-approval--deliver (entry outcome phase &optional retain)
@@ -862,7 +866,6 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
   ;; The single installer for a pending approval: its renderer and every
   ;; later settlement reach `mevedel-queue\=' helpers.  Session resume
   ;; presents an approval before any other interaction has loaded them.
-  (require 'mevedel-queue)
   (let ((session (or session (mevedel-plan-approval--current-session))))
     (if (not session)
         (mevedel-plan-approval--deliver entry 'aborted "no-session")
