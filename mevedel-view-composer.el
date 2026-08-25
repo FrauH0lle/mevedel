@@ -1482,14 +1482,33 @@ When FORCE is non-nil, replace the current draft unconditionally."
    (or session (mevedel-view--session))))
 
 (defun mevedel-view--occupied-root-workflow-p (session)
-  "Return non-nil when SESSION owns work that makes later input a follow-up."
-  (or (mevedel-session-pending-plan-approval session)
-      (mevedel-session-directive-planning session)
-      (plist-get (mevedel-session-plan-metadata session)
-                 :implementation-retry)
-      (mevedel-view--reserved-goal-handoff-id session)
-      (when-let* ((goal (mevedel-session-goal session)))
-        (not (eq (mevedel-goal-status goal) 'complete)))))
+  "Return a symbol naming SESSION's occupying workflow, or nil.
+Non-nil means later input is a follow-up.  The symbol is one of
+`plan-approval', `directive-planning', `implementation-retry',
+`goal-handoff', or `goal'."
+  (cond
+   ((mevedel-session-pending-plan-approval session) 'plan-approval)
+   ((mevedel-session-directive-planning session) 'directive-planning)
+   ((plist-get (mevedel-session-plan-metadata session)
+               :implementation-retry)
+    'implementation-retry)
+   ((mevedel-view--reserved-goal-handoff-id session) 'goal-handoff)
+   ((when-let* ((goal (mevedel-session-goal session)))
+      (not (eq (mevedel-goal-status goal) 'complete)))
+    'goal)))
+
+(defun mevedel-view--occupied-root-workflow-error (occupied)
+  "Signal the user error for the OCCUPIED root workflow symbol."
+  (user-error
+   "%s"
+   (pcase occupied
+     ('implementation-retry
+      "An accepted plan implementation is pending -- M-x mevedel-retry-plan-implementation resumes it")
+     ('plan-approval
+      "A plan proposal is awaiting approval -- respond to it first")
+     ((or 'goal-handoff 'goal)
+      "An unfinished Goal owns this session -- /goal resume continues it")
+     (_ "The workflow is occupied -- use C-c TAB for a follow-up"))))
 
 (defun mevedel-view--steerable-root-request-p (request)
   "Return non-nil when REQUEST is an ordinary root provider turn."
@@ -2132,8 +2151,8 @@ their local dispatch path."
 		 "A request is already active -- wait or abort first"))
                ((not active-request)
 		(funcall restore)
-		(user-error
-		 "The workflow is occupied -- use C-c TAB for a follow-up"))
+		(mevedel-view--occupied-root-workflow-error
+		 (mevedel-view--occupied-root-workflow-p session)))
                ((not (mevedel-view--steerable-root-request-p active-request))
 		(funcall restore)
 		(user-error

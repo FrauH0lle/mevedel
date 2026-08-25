@@ -482,6 +482,51 @@
     (setf (mevedel-session-plan-mode mevedel--session) nil)
     (should-not (mevedel-view--plan-mode-p))))
 
+(mevedel-deftest mevedel-view--occupied-root-workflow-p ()
+  ,test
+  (test)
+
+  :doc "idle session is not occupied"
+  (should-not (mevedel-view--occupied-root-workflow-p
+               (mevedel-session--create :authority-mode 'pid-lock
+                                        :name "main")))
+
+  :doc "retained implementation retry names its cause"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+                                          :name "main")))
+    (setf (mevedel-session-plan-metadata session)
+          '(:implementation-retry (:selection (:location here))))
+    (should (eq 'implementation-retry
+                (mevedel-view--occupied-root-workflow-p session))))
+
+  :doc "unfinished goal names its cause; complete goal does not occupy"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+                                          :name "main")))
+    (setf (mevedel-session-goal session)
+          (mevedel-goal--create :id "g1" :objective "obj" :status 'paused))
+    (should (eq 'goal (mevedel-view--occupied-root-workflow-p session)))
+    (setf (mevedel-goal-status (mevedel-session-goal session)) 'complete)
+    (should-not (mevedel-view--occupied-root-workflow-p session))))
+
+(mevedel-deftest mevedel-view--occupied-root-workflow-error ()
+  ,test
+  (test)
+
+  :doc "implementation retry hints the retry command"
+  (should (string-match-p
+           "mevedel-retry-plan-implementation"
+           (cadr (should-error
+                  (mevedel-view--occupied-root-workflow-error
+                   'implementation-retry)
+                  :type 'user-error))))
+
+  :doc "unknown cause keeps the generic follow-up hint"
+  (should (string-match-p
+           "C-c TAB"
+           (cadr (should-error
+                  (mevedel-view--occupied-root-workflow-error nil)
+                  :type 'user-error)))))
+
 (mevedel-deftest mevedel-view-cycle-permission-mode
   (:quiet t :doc "cycles the current session mode and refreshes the prompt")
   ,test
