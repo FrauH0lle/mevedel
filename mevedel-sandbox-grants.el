@@ -12,6 +12,8 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'subr-x)
+
 
 ;;
 ;;; Grant resolution
@@ -143,7 +145,6 @@ FIRST-FD defaults to 10."
 (defun mevedel-sandbox--fd-backed-command (command grants &optional workdir)
   "Wrap COMMAND to preserve exact target GRANTS on file descriptors.
 When WORKDIR is remote, discover and launch the wrapper on that target."
-  (require 'subr-x)
   (if (not grants)
       command
     (let* ((remote (and workdir (file-remote-p workdir)))
