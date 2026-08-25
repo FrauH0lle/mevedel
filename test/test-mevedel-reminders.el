@@ -1296,10 +1296,11 @@ this collapses both shapes to the delivered text."
     (should (funcall (mevedel-reminder-trigger r) session))
     (let ((content (substring-no-properties
                     (funcall (mevedel-reminder-content r) session))))
-      (should (string-match-p "Main · 1 open · 0 done" content))
-      (should (string-match-p "main work" content))
-      (should (string-match-p "worker · 1 open · 1 done" content))
-      (should (string-match-p "agent work" content))
+      ;; The nudge sends the model the shape TaskList returns, not the
+      ;; panel rendering, so display decisions cannot alter it.
+      (should (string-match-p "#1 \\[in_progress\\] main work" content))
+      (should (string-match-p
+               "#2 \\[pending\\] agent work owner=worker" content))
       (should-not (string-match-p "finished" content))
       (should-not (string-match-p "completed-only work" content))
       (should-not (string-match-p "done work" content))
