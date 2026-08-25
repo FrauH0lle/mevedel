@@ -721,7 +721,6 @@
             (with-temp-buffer
               (insert-file-contents segment-path)
               (org-mode)
-              (require 'mevedel-transcript-restore)
               (mevedel-transcript-restore-properties)
               (should (string-match-p "summary again" (buffer-string)))
               (should (string-match-p "tail again" (buffer-string)))
