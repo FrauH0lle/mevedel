@@ -39,6 +39,12 @@
                   "mevedel-agent-control" (record) t)
 (declare-function mevedel-agent-record-path
                   "mevedel-agent-control" (record) t)
+(autoload 'mevedel-agent-control-list-agents "mevedel-agent-control")
+(autoload 'mevedel-agent-control-settled-result "mevedel-agent-control")
+(autoload 'mevedel-agent-record-activity "mevedel-agent-control")
+(autoload 'mevedel-agent-record-conversation-buffer "mevedel-agent-control")
+(autoload 'mevedel-agent-record-conversation-location "mevedel-agent-control")
+(autoload 'mevedel-agent-record-path "mevedel-agent-control")
 
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-project-history
