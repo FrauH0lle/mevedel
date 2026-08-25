@@ -8,8 +8,8 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'mevedel-structs))
+(require 'mevedel-resource)
+(require 'mevedel-turn)
 
 ;; `gptel-request'
 (declare-function gptel-backend-name "ext:gptel-request" (cl-x) t)
@@ -176,7 +176,6 @@
 (defun mevedel-tool-repair--resource-address-like-p (value)
   "Return non-nil when VALUE begins with a resource-like scheme prefix."
   (when (stringp value)
-    (require 'mevedel-resource)
     (mevedel-resource-address-like-p value)))
 
 (defun mevedel-tool-repair--issue (path kind expected actual &optional schema)
@@ -686,7 +685,6 @@ Invalid outcomes intentionally omit tentative args and repair records."
     (name status raw-args final-args repairs issues info
           &optional failure-class abandoned-repairs)
   "Build a buffer-local dispatch entry from one raw tool-call INFO."
-  (require 'mevedel-turn)
   (list :tool name :status status
         :raw-args raw-args :args final-args
         :repairs repairs :issues issues

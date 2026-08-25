@@ -7,7 +7,8 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'mevedel-structs))
+(require 'mevedel-structs)
+(require 'mevedel-telemetry)
 
 ;; `gptel'
 (declare-function gptel-backend-name "ext:gptel-request" (cl-x) t)
@@ -120,7 +121,8 @@
   (condition-case nil
       (if-let* ((record (mevedel-tool-repair-audit-record state repairs)))
           (progn
-            (require 'mevedel-transcript-audit)
+            (unless (fboundp 'mevedel--format-hook-audit-record)
+              (require 'mevedel-transcript-audit))
             (mevedel--format-hook-audit-record record))
         "")
     (error
@@ -248,12 +250,11 @@
     (condition-case nil
         (let ((target (mevedel-session-execution-target session)))
           (if (and target
-                   (progn
-                     (require 'mevedel-execution-target)
-                     (mevedel-execution-target-remote-p target)))
+                   (mevedel-execution-target-remote-p target))
               (progn
-                (require 'mevedel-session-durability)
-                (require 'mevedel-session-publication)
+                (unless (fboundp
+                         'mevedel-session-publication-append-diagnostic)
+                  (require 'mevedel-session-publication))
                 (mevedel-session-publication-append-diagnostic
                  session file content))
             (make-directory (file-name-directory file) t)
@@ -276,9 +277,7 @@
            (target (mevedel-session-execution-target session))
            (remote-p
             (and target
-                 (progn
-                   (require 'mevedel-execution-target)
-                   (mevedel-execution-target-remote-p target)))))
+                 (mevedel-execution-target-remote-p target))))
       (if (and pending remote-p)
           (when (mevedel-tool-repair--persist-content
                  session (mapconcat #'mevedel-tool-repair--event-text
@@ -293,7 +292,6 @@
   "Record redacted telemetry EVENT for SESSION without blocking execution."
   (condition-case nil
       (when session
-        (require 'mevedel-telemetry)
         (let* ((event (mevedel-tool-repair--safe-event event))
                (log (append (mevedel-session-repair-log session) (list event)))
                (audit-session (mevedel-session-audit-target session)))
@@ -306,9 +304,7 @@
                    (target (mevedel-session-execution-target session))
                    (remote-p
                     (and target
-                         (progn
-                           (require 'mevedel-execution-target)
-                           (mevedel-execution-target-remote-p target)))))
+                         (mevedel-execution-target-remote-p target))))
               (when (or pending remote-p
                         (not
                          (mevedel-tool-repair--persist-event session event)))
