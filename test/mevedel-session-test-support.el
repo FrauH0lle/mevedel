@@ -462,7 +462,6 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
 (defun test-mevedel-session-persistence--cold-agent-tree-round-trip ()
   "Exercise one durable agent-tree cold resume and its recovery boundary."
   (mevedel-tools-register)
-  (require 'mevedel-agent-runtime)
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let* ((session (mevedel-session-create "main" workspace))
@@ -634,7 +633,6 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                      :info (list :buffer idle-buffer :backend nil
                                  :data idle-data
                                  :mevedel-agent-invocation identity))))
-              (require 'mevedel-tools)
               (mevedel-tools--handle-message-inject root-fsm)
               (mevedel-tools--handle-message-inject idle-fsm)
               (should-not (mevedel-session-messages restored-session))
@@ -900,7 +898,6 @@ The result is a plist whose :tempdir owns every created file."
           (insert-file-contents
            (mevedel-session-artifacts-segment-path parent-path 2))
           (org-mode)
-          (require 'mevedel-transcript-restore)
           (mevedel-transcript-restore-properties)
           (goto-char (point-max))
           (insert
