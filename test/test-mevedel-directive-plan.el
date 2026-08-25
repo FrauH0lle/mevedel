@@ -120,6 +120,35 @@
           (should (stringp (plist-get settled :err))))
       (delete-overlay directive)))
 
+  :doc "settles the caller when the approval cannot be rendered"
+  (let* ((attempt (gensym "attempt-"))
+         (record (mevedel-directive--create
+                  :id "directive" :request "Request"
+                  :plan (list :status 'proposed :action 'implement
+                              :attempt attempt)))
+         (session (mevedel-session--create
+                   :name "main"
+                   :directive-planning
+                   (list :directive-id "directive" :attempt attempt)))
+         (directive (make-overlay (point-min) (point-min)))
+         (settled 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-directive-plan--persist)
+                   #'ignore)
+                  ((symbol-function 'mevedel-directive-plan--refresh)
+                   #'ignore)
+                  ((symbol-function
+                    'mevedel-directive-plan--restore-chat-scope)
+                   #'ignore))
+          (mevedel-directive-plan--approval-outcome
+           directive record session
+           (lambda (&rest _) (cl-incf settled))
+           attempt
+           'render-error)
+          (should (= 1 settled))
+          (should (plist-get (mevedel-directive-plan record) :cancelled)))
+      (delete-overlay directive)))
+
   :doc "rejects a captured Accept after a replacement attempt starts"
   (let* ((old-attempt (gensym "old-attempt-"))
          (new-attempt (gensym "new-attempt-"))

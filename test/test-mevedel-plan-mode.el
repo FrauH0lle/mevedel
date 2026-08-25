@@ -293,6 +293,30 @@
             (should (= 1 archives))))
         (when (buffer-live-p chat-buffer) (kill-buffer chat-buffer))))))
 
+(mevedel-deftest mevedel-plan-approval-render
+  (:quiet t :doc "a failing renderer keeps the proposal restorable")
+  (let* ((selection '(:location here :context current :execution direct
+                      :mode ask :model-provider "Test:test-model"
+                      :reasoning-effort nil))
+         (session
+          (mevedel-session--create
+           :authority-mode 'pid-lock :name "test" :plan-mode t
+           :plan-metadata (list :status 'proposed
+                                :proposal-id '(1 2 "hash")
+                                :selection selection)))
+         (entry
+          (list :session session
+                :renderer (lambda (_entry) (error "Boom"))
+                :callback
+                (lambda (outcome)
+                  (mevedel-plan-mode--approval-callback
+                   "# Plan" (current-buffer) session outcome)))))
+    (mevedel-plan-approval-present entry session)
+    (should-not (mevedel-session-pending-plan-approval session))
+    (let ((metadata (mevedel-session-plan-metadata session)))
+      (should (eq 'proposed (plist-get metadata :status)))
+      (should (equal selection (plist-get metadata :selection))))))
+
 (mevedel-deftest mevedel-plan-mode--render-approval
   (:doc "renders and toggles execution without applying Mode before acceptance")
   ,test
@@ -795,7 +819,39 @@
            (string-match-p "plan pending" (buffer-string)))
           (let ((metadata (mevedel-session-plan-metadata session)))
             (should (eq 'draft (plist-get metadata :status)))
-            (should-not (plist-member metadata :selection))))))))
+            (should-not (plist-member metadata :selection)))))))
+
+  :doc "loads the queue helpers its renderer and settlement need"
+  (mevedel-view-test--with-buffers
+    (let* ((selection '(:location here :context current
+                        :execution direct :mode ask
+                        :goal-token-budget nil))
+           (session
+            (mevedel-session--create
+             :authority-mode 'pid-lock
+             :name "test"
+             :plan-mode t
+             :plan-metadata
+             (list :status 'proposed :proposal-id '(1 2 "hash")
+                   :selection selection)))
+           (entry
+            (mevedel-plan-mode--approval-entry
+             "# Plan" data-buf session selection)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        ;; Resume presents an approval before any other interaction has
+        ;; pulled in `mevedel-queue\='.
+        (setq features (remq 'mevedel-queue features))
+        (fmakunbound 'mevedel-queue--entry-metadata-put)
+        (fmakunbound 'mevedel-queue--unregister-entry-interaction)
+        (mevedel-plan-approval-present entry session)
+        (should (fboundp 'mevedel-queue--entry-metadata-put))
+        (should (fboundp 'mevedel-queue--unregister-entry-interaction)))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (should (gethash (plist-get entry :interaction-id)
+                         mevedel-view--interaction-descriptors)))
+      (mevedel-plan-approval-abort session))))
 
 (mevedel-deftest mevedel-plan-mode--feedback-draft ()
   ,test
