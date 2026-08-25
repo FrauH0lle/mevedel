@@ -16,10 +16,13 @@
                   "mevedel-execution-target" (target path))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-run-tool
                   "mevedel-pipeline" (tool callback args))
+(autoload 'mevedel-pipeline-run-tool "mevedel-pipeline")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-argument-names
@@ -28,27 +31,40 @@
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-source "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-source-dir "mevedel-skills-core" (cl-x) t)
+(autoload 'mevedel-skill-argument-names "mevedel-skills-core")
+(autoload 'mevedel-skill-effort "mevedel-skills-core")
+(autoload 'mevedel-skill-name "mevedel-skills-core")
+(autoload 'mevedel-skill-source "mevedel-skills-core")
+(autoload 'mevedel-skill-source-dir "mevedel-skills-core")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
+(autoload 'mevedel-session-execution-target "mevedel-structs")
+(autoload 'mevedel-session-name "mevedel-structs")
+(autoload 'mevedel-session-session-id "mevedel-structs")
 
 ;; `mevedel-tool-exec'
 (declare-function mevedel-tool-exec--register "mevedel-tool-exec" ())
+(autoload 'mevedel-tool-exec--register "mevedel-tool-exec")
 
 ;; `mevedel-tool-registry'
 (declare-function copy-mevedel-tool "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get
                   "mevedel-tool-registry" (name &optional category))
+(autoload 'copy-mevedel-tool "mevedel-tool-registry")
+(autoload 'mevedel-tool-args "mevedel-tool-registry")
+(autoload 'mevedel-tool-get "mevedel-tool-registry")
 
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-extract
                   "mevedel-tool-render-data"
                   (result-string &optional session expected-tool-use-id
                                  allow-payload-tool-use-id))
+(autoload 'mevedel-tool-render-data-extract "mevedel-tool-render-data")
 
 ;;
 ;;; Argument tokenization
@@ -60,7 +76,6 @@ whitespace splitting when shell parsing fails (unbalanced quotes
 etc.).  Empty tokens that can fall out of leading/trailing
 whitespace are filtered.  Ports the parsing half of ccs's
 argumentSubstitution.ts."
-  (require 'cl-lib)
   (cond
    ((null arguments) nil)
    ((not (stringp arguments)) nil)
@@ -274,9 +289,7 @@ When AUTHOR-ONLY-P is non-nil, skip matches that overlap non-author text."
          (source (and skill (mevedel-skill-source skill)))
          (target (and session (mevedel-session-execution-target session))))
     (if (and dir target
-             (progn
-               (require 'mevedel-execution-target)
-               (mevedel-execution-target-remote-p target))
+             (mevedel-execution-target-remote-p target)
              (or (eq source 'project)
                  (and (eq source 'plugin) (file-remote-p dir))))
         (progn
@@ -313,9 +326,6 @@ Named-argument matching uses strict word-boundary semantics so
 argument names are filtered out at scan time
 \\=(see `mevedel-skills--parse-argument-names') so they cannot
 shadow `$0'/`$1' shorthand."
-  (require 'cl-lib)
-  (require 'mevedel-skills-core)
-  (require 'mevedel-structs)
   (let* ((session-id (or (and session (mevedel-session-session-id session))
                          (and session (mevedel-session-name session))
                          ""))
@@ -393,7 +403,6 @@ report.  The pipeline's canonical status decides the outcome; the display
 text only refines it, because a denial is worth naming separately.  Taking
 the visible half also keeps the serialized side-channel block out of the
 prompt, which only a tool result has stripped for it."
-  (require 'mevedel-tool-render-data)
   (pcase-let* ((`(,visible . ,render-data)
                 (mevedel-tool-render-data-extract result))
                (status (plist-get render-data :status)))
@@ -425,7 +434,6 @@ prompt, which only a tool result has stripped for it."
   "Return why SKILL shell injection cannot run in remote SESSION, or nil."
   (when-let* ((target (and session
                            (mevedel-session-execution-target session))))
-    (require 'mevedel-execution-target)
     (when (mevedel-execution-target-remote-p target)
       (let ((source (and skill (mevedel-skill-source skill)))
             (dir (and skill (mevedel-skill-source-dir skill))))
@@ -453,7 +461,6 @@ CALLBACK receives either \\=(:status ok :output STRING) or
 original shell-injection marker used in diagnostics."
   (let ((tool (or (ignore-errors (mevedel-tool-get "Bash"))
                   (progn
-                    (require 'mevedel-tool-exec)
                     (mevedel-tool-exec--register)
                     (ignore-errors (mevedel-tool-get "Bash"))))))
     (when tool
@@ -474,7 +481,6 @@ original shell-injection marker used in diagnostics."
      (t
       (condition-case err
           (progn
-            (require 'mevedel-tool-render-data)
             (unless (fboundp 'mevedel-tools--current-deferred-context)
               (require 'mevedel-tools))
             (mevedel-pipeline-run-tool
@@ -503,7 +509,6 @@ CALLBACK receives either \\=(:status ok :output STRING) or
 original elisp-injection marker used in diagnostics."
   (let ((tool (or (ignore-errors (mevedel-tool-get "Eval"))
                   (progn
-                    (require 'mevedel-tool-exec)
                     (mevedel-tool-exec--register)
                     (ignore-errors (mevedel-tool-get "Eval"))))))
     (when tool
@@ -523,7 +528,6 @@ original elisp-injection marker used in diagnostics."
      (t
       (condition-case err
           (progn
-            (require 'mevedel-tool-render-data)
             (unless (fboundp 'mevedel-tools--current-deferred-context)
               (require 'mevedel-tools))
             (mevedel-pipeline-run-tool
@@ -667,7 +671,6 @@ exclusive end of the current line."
 
 (defun mevedel-skills-preparation-markdown-code-ranges (text)
   "Return Markdown code ranges in TEXT that should not run as injections."
-  (require 'cl-lib)
   (let* ((fence-ranges (mevedel-skills-preparation--markdown-code-fence-ranges text))
          (inline-ranges (mevedel-skills-preparation--markdown-inline-code-ranges
                          text fence-ranges)))
@@ -789,11 +792,6 @@ Each command/expression goes through its normal tool pipeline with
 `:trust-literal-p t', so permission checking, execution, and
 oversized-result persistence stay aligned with normal tool
 execution.  SKILL and SESSION identify the invoking skill and target."
-  (require 'cl-lib)
-  (require 'mevedel-pipeline)
-  (require 'mevedel-skills-core)
-  (require 'mevedel-structs)
-  (require 'mevedel-tool-registry)
   (if-let* ((match (mevedel-skills-preparation--injection-match text)))
       (let ((start (plist-get match :start))
             (end (plist-get match :end))
