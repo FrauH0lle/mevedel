@@ -75,6 +75,7 @@
 (declare-function mevedel-view-enqueue-external-follow-up
                   "mevedel-pending-inputs"
                   (data-buffer text &rest keys))
+(autoload 'mevedel-view-enqueue-external-follow-up "mevedel-pending-inputs")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-session-id "mevedel-structs" (session))
@@ -82,12 +83,15 @@
 ;; `mevedel-view'
 (declare-function mevedel-view--abort-data-buffer
                   "mevedel-view" (data-buffer))
+(autoload 'mevedel-view--abort-data-buffer "mevedel-view")
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
+(autoload 'mevedel-view-abort "mevedel-view-composer")
 
 ;; `mevedel-view-input-files'
 (declare-function mevedel-view--media-dir "mevedel-view-input-files" ())
+(autoload 'mevedel-view--media-dir "mevedel-view-input-files")
 
 ;;
 ;;; Customization and state
@@ -620,8 +624,6 @@ never enters model-visible context."
                                  (buffer-local-value 'mevedel--view-buffer
                                                      data-buffer))))
           (when (buffer-live-p view-buffer)
-            (require 'mevedel-pending-inputs)
-            (require 'mevedel-view-input-files)
             ;; Attached images ride the same pipeline as clipboard images
             ;; pasted in Emacs: saved under the session media directory,
             ;; then mentioned and read-granted by the queue seam.
@@ -734,9 +736,7 @@ budget -- drops the whole set rather than attaching a partial one."
                (buffer-local-value 'mevedel--view-buffer data-buffer)))
           (if (buffer-live-p view-buffer)
               (with-current-buffer view-buffer
-                (require 'mevedel-view-composer)
                 (mevedel-view-abort))
-            (require 'mevedel-view)
             (mevedel-view--abort-data-buffer data-buffer)))))))
 
 (defun mevedel-collaboration--on-frame (peer frame)
