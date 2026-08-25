@@ -7,7 +7,10 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
+(require 'mevedel-transcript)
+(require 'mevedel-transcript-audit)
+(require 'subr-x)
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
@@ -21,12 +24,18 @@
 ;; `mevedel-compact-estimation'
 (declare-function mevedel-compact-estimation-usable-tokens
                   "mevedel-compact-estimation" ())
+(autoload 'mevedel-compact-estimation-usable-tokens
+  "mevedel-compact-estimation")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-segment-summary-bounds
                   "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-strip-summary-handoff-prefix
                   "mevedel-session-artifacts" (summary))
+(autoload 'mevedel-session-artifacts-segment-summary-bounds
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-strip-summary-handoff-prefix
+  "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-invoked-skills "mevedel-structs" (cl-x) t)
@@ -363,7 +372,6 @@ When AGENT-PATH is non-nil, include only invocations from that conversation."
 
 (defun mevedel-compact-evidence-buffer-active-p (buf)
   "Return non-nil if BUF has an active gptel request."
-  (require 'cl-lib)
   (cl-find-if
    (lambda (entry)
      (eq (thread-first (cadr entry)
@@ -376,7 +384,6 @@ When AGENT-PATH is non-nil, include only invocations from that conversation."
   "Find the compaction boundary in the current buffer.
 Return the position just after the last response, or nil if no response
 exists."
-  (require 'mevedel-transcript)
   (let (boundary)
     (dolist (seg (mevedel-transcript-segments (point-min) (point-max)))
       (when (eq (car seg) 'response)
@@ -389,7 +396,6 @@ exists."
 User-authored text after the previous assistant response begins a turn.
 Tool-call/result spans between assistant response chunks do not create a
 new turn.  BODY-START defaults to the main-session body start."
-  (require 'mevedel-transcript)
   (let ((after-response t)
         ;; The segments arrive in order, so one carried state counts the
         ;; block-depth prefix once for the whole pass.
@@ -420,7 +426,6 @@ tool spans.  Positive limits retain the anchored summary, when present, and
 the requested number of most recent live turns.  This function reads only the
 current buffer, so turns already rotated into compacted segments cannot be
 reconstructed into a child conversation."
-  (require 'mevedel-transcript)
   (pcase context
     ('none "")
     ('all (buffer-substring (point-min) (point-max)))
@@ -443,7 +448,6 @@ reconstructed into a child conversation."
 
 (defun mevedel-compact-evidence-summary-context-evidence (tool-use-id)
   "Return frozen parent evidence excluding TOOL-USE-ID's tool segment."
-  (require 'mevedel-transcript)
   (let* ((session (and (boundp 'mevedel--session) mevedel--session))
          (agent-path
           (if-let* ((invocation (and (boundp 'mevedel--agent-invocation)
@@ -466,7 +470,6 @@ reconstructed into a child conversation."
 
 (defun mevedel-compact-evidence--directive-ranges ()
   "Return complete directive ranges using current-buffer positions."
-  (require 'mevedel-transcript-audit)
   (mevedel-transcript-buffer-directive-ranges))
 
 (defun mevedel-compact-evidence--regions-without-directives (regions)
@@ -493,9 +496,6 @@ The tail starts after the response preceding the preserved recent turns.
 If keeping `mevedel-compact-evidence-tail-turns' turns would exceed
 `mevedel-compact-evidence-tail-budget', older preserved turns are dropped.
 BODY-START defaults to the main-session body start."
-  (require 'cl-lib)
-  (require 'mevedel-compact-estimation)
-  (require 'mevedel-transcript)
   (if aggressive
       limit
     (let* ((body-start (or body-start (mevedel-compact-evidence-body-start)))
@@ -578,7 +578,6 @@ compaction was in flight remain in place."
               (insert compacted-prefix))
           (erase-buffer)
           (insert-buffer-substring source-buffer))
-        (require 'mevedel-transcript-audit)
         (mevedel-transcript-exclude-directive-turns)))))
 
 (defun mevedel-compact-evidence--system-reminder-block (body)
@@ -599,18 +598,11 @@ compaction was in flight remain in place."
 (defun mevedel-compact-evidence--summary-bounds ()
   "Return plist bounds for the leading summary block, or nil.
 The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-segment-summary-bounds))
 
 (defun mevedel-compact-evidence-previous-summary ()
   "Return the leading compaction summary body, or nil."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (when-let* ((bounds (mevedel-compact-evidence--summary-bounds)))
-    (require 'mevedel-utilities)
     (mevedel-session-artifacts-strip-summary-handoff-prefix
      (string-trim
       (mevedel--strip-hook-audit-blocks
@@ -655,7 +647,6 @@ current agent buffer's invocation."
   "Return live tool-use ids removed within BEGIN..END.
 This includes both concrete tool rows and durable execution archives carried
 forward by an earlier compaction."
-  (require 'cl-lib)
   (let ((position begin)
         ids)
     (while (< position end)
@@ -667,7 +658,6 @@ forward by an earlier compaction."
       (setq position
             (or (next-single-property-change position 'gptel nil end)
                 end)))
-    (require 'mevedel-transcript-audit)
     (dolist (record
              (mevedel-transcript-audit-records
               (buffer-substring begin end)
@@ -680,8 +670,6 @@ forward by an earlier compaction."
   "Return the start of INFO's current transcript tool batch.
 Only search from BODY-START so inherited parent history cannot become the
 pending continuation."
-  (require 'cl-lib)
-  (require 'mevedel-transcript)
   (let ((ids
          (delq nil
                (mapcar
@@ -706,7 +694,6 @@ pending continuation."
 (defun mevedel-compact-evidence-select (target limit aggressive)
   "Return TARGET's projected evidence selection ending at LIMIT.
 AGGRESSIVE selects whether to preserve the ordinary recent-turn tail."
-  (require 'mevedel-transcript)
   (let* ((body-start (plist-get target :body-start))
          (tail-start
           (mevedel-compact-evidence-tail-start limit aggressive body-start))
@@ -737,7 +724,6 @@ AGGRESSIVE selects whether to preserve the ordinary recent-turn tail."
   "Return the number of complete user-authored requests in retained tail.
 TAIL-START and LIMIT delimit the retained tail.  AGGRESSIVE means no
 tail is retained."
-  (require 'cl-lib)
   (if aggressive
       0
     (length

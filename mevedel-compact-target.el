@@ -7,7 +7,8 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
+(require 'subr-x)
 
 ;; `gptel'
 (declare-function gptel--update-status "ext:gptel" (msg &optional face))
@@ -22,6 +23,8 @@
 ;; `mevedel-agent-persistence'
 (declare-function mevedel-agent-persistence-transcript-path-p
                   "mevedel-agent-persistence" (path save-path))
+(autoload 'mevedel-agent-persistence-transcript-path-p
+  "mevedel-agent-persistence")
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
@@ -47,12 +50,25 @@
                   "mevedel-compact-evidence" ())
 (declare-function mevedel-compact-evidence-turn-starts-before
                   "mevedel-compact-evidence" (limit &optional body-start))
+(autoload 'mevedel-compact-evidence-agent-summary-bounds
+  "mevedel-compact-evidence")
+(autoload 'mevedel-compact-evidence-agent-task-heading
+  "mevedel-compact-evidence")
+(autoload 'mevedel-compact-evidence-body-start "mevedel-compact-evidence")
+(autoload 'mevedel-compact-evidence-previous-summary
+  "mevedel-compact-evidence")
+(autoload 'mevedel-compact-evidence-turn-starts-before
+  "mevedel-compact-evidence")
 
 ;; `mevedel-execution-transcript'
 (declare-function mevedel-execution-transcript-archive-text
                   "mevedel-execution-transcript" (plan))
 (declare-function mevedel-execution-transcript-commit-archive
                   "mevedel-execution-transcript" (data-buffer plan))
+(autoload 'mevedel-execution-transcript-archive-text
+  "mevedel-execution-transcript")
+(autoload 'mevedel-execution-transcript-commit-archive
+  "mevedel-execution-transcript")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-context-audit-records
@@ -76,6 +92,14 @@
                   "mevedel-session-artifacts" (summary))
 (declare-function mevedel-session-artifacts-summary-block
                   "mevedel-session-artifacts" (summary))
+(autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-publish-text "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-rotate-segment "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-segment-path "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-strip-summary-handoff-prefix
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-summary-block "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
 (declare-function mevedel-file-interaction-modified-turn
@@ -102,9 +126,17 @@
                   "mevedel-transcript-audit" (record))
 (declare-function mevedel--strip-hook-audit-blocks
                   "mevedel-transcript-audit" (text))
+(autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
+(autoload 'mevedel--strip-hook-audit-blocks "mevedel-transcript-audit")
+
+;; `mevedel-transcript'
+(declare-function mevedel-transcript-segments
+                  "mevedel-transcript" (start end))
+(autoload 'mevedel-transcript-segments "mevedel-transcript")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--same-file-p "mevedel-utilities" (a b))
+(autoload 'mevedel--same-file-p "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
@@ -130,29 +162,21 @@
 
 (defun mevedel-compact-target-current-persisted-p ()
   "Return non-nil when current buffer can use segment rotation."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (and (boundp 'mevedel--session)
        mevedel--session
        (mevedel-session-save-path mevedel--session)
        buffer-file-name
-       (progn
-         (require 'mevedel-utilities)
-         (mevedel--same-file-p
-          buffer-file-name
-          (mevedel-session-artifacts-segment-path
-           (mevedel-session-save-path mevedel--session)
-           (mevedel-session-current-segment mevedel--session))))))
+       (mevedel--same-file-p
+        buffer-file-name
+        (mevedel-session-artifacts-segment-path
+         (mevedel-session-save-path mevedel--session)
+         (mevedel-session-current-segment mevedel--session)))))
 
 (defun mevedel-compact-target--apply
     (summary &optional tail-text pending-text hook-audits archive-text)
   "Rotate the current segment with SUMMARY, TAIL-TEXT, and PENDING-TEXT.
 HOOK-AUDITS are persisted next to the summary.  ARCHIVE-TEXT contains
 hidden execution records replacing compacted tool rows."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let ((session (and (boundp 'mevedel--session) mevedel--session)))
     (unless (and session (mevedel-compact-target-current-persisted-p))
       (user-error "Session is not materialized on disk"))
@@ -191,7 +215,6 @@ retained after tail-budget and aggressive-compaction decisions."
   "Return reminder body for SESSION file references omitted by compaction.
 PRESERVED-TAIL-TURNS is the actual count returned by
 `mevedel-compact-evidence-preserved-tail-turn-count'."
-  (require 'cl-lib)
   (when-let* ((files (mevedel-compact-target--omitted-file-references
                       session preserved-tail-turns)))
     (let* ((limit mevedel-compact-target-file-reference-reminder-limit)
@@ -221,21 +244,13 @@ PRESERVED-TAIL-TURNS is the actual count returned by
 (defun mevedel-compact-target--append-hook-audits (summary records)
   "Return SUMMARY followed by ignored PreCompact audit RECORDS."
   (if (and records (stringp summary))
-      (progn
-        (require 'mevedel-utilities)
-         (concat summary
-                 (mapconcat #'mevedel--format-hook-audit-record records "")))
+      (concat summary
+              (mapconcat #'mevedel--format-hook-audit-record records ""))
     summary))
 
 
 (defun mevedel-compact-target-agent-target (invocation)
   "Return the private compaction target for persisted INVOCATION, or nil."
-  (require 'cl-lib)
-  (require 'mevedel-compact-evidence)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-agent-persistence)
   (when-let* (((mevedel-agent-invocation-p invocation))
               (buffer (mevedel-agent-invocation-buffer invocation))
               ((eq buffer (current-buffer)))
@@ -270,7 +285,6 @@ PRESERVED-TAIL-TURNS is the actual count returned by
       (when (<= task-heading anchor-end)
         (let ((previous-summary
                (when summary-bounds
-                 (require 'mevedel-utilities)
                  (mevedel-session-artifacts-strip-summary-handoff-prefix
                   (string-trim
                    (mevedel--strip-hook-audit-blocks
@@ -304,9 +318,6 @@ PRESERVED-TAIL-TURNS is the actual count returned by
 
 (defun mevedel-compact-target--agent-archive-path (session canonical-path)
   "Return SESSION's next unused archive for CANONICAL-PATH."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((save-path
           (file-name-as-directory (mevedel-session-save-path session)))
          (remote-p (file-remote-p save-path))
@@ -330,14 +341,12 @@ PRESERVED-TAIL-TURNS is the actual count returned by
 (defun mevedel-compact-target--commit-execution-row-archive (target)
   "Commit TARGET's prepared execution-row archive after compaction."
   (when-let* ((plan (plist-get target :execution-archive-plan)))
-    (require 'mevedel-execution-transcript)
     (mevedel-execution-transcript-commit-archive
      (plist-get target :buffer) plan)))
 
 (defun mevedel-compact-target--execution-row-archive-text (target)
   "Return TARGET's durable execution-row replacement records."
   (when-let* ((plan (plist-get target :execution-archive-plan)))
-    (require 'mevedel-execution-transcript)
     (mevedel-execution-transcript-archive-text plan)))
 
 (defun mevedel-compact-target--agent-apply
@@ -345,9 +354,6 @@ PRESERVED-TAIL-TURNS is the actual count returned by
             &optional _auto _preserved-tail-turns)
   "Apply agent TARGET compaction with SUMMARY, TAIL-TEXT, and PENDING-TEXT.
 HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((invocation (plist-get target :invocation))
          (session (plist-get target :session))
          (canonical-path (plist-get target :transcript-path))
@@ -385,7 +391,6 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
     (target summary tail-text pending-text hook-audits
             auto preserved-tail-turns)
   "Apply main-session TARGET compaction and arrange its file reminder."
-  (require 'cl-lib)
   (let ((session (plist-get target :session)))
     (mevedel-compact-target--apply
      summary tail-text pending-text hook-audits
@@ -456,7 +461,6 @@ AUTO is non-nil for automatic compaction."
 
 (defun mevedel-compact-target-main-target ()
   "Return the private target adapter for the current main-session segment."
-  (require 'mevedel-compact-evidence)
   (let ((session mevedel--session))
     (list :buffer (current-buffer)
           :session session
