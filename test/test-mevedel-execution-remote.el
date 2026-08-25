@@ -315,7 +315,6 @@ the small and the staged path need proof on a real connection rather than on a
 local temporary directory.  Durable session work is carried as programs of
 pinned operations, and the round trips they save are exactly what a real
 connection charges for, so the program path is proved here too."
-  (require 'mevedel-session-control-fs)
   (let* ((directory (file-name-concat root "control-fs"))
          (small (file-name-concat directory "small.el"))
          (large (file-name-concat directory "large.bin"))
@@ -971,7 +970,6 @@ connection charges for, so the program path is proved here too."
               (setq default-directory remote-root))
             ;; A live view registers the parent's root data buffer; the side
             ;; conversation's durable authority resolves through it.
-            (require 'mevedel-session-control-transfer)
             (mevedel-session-control-transfer-register-root-buffer
              parent root-buffer)
             (with-current-buffer side-buffer
@@ -1308,7 +1306,6 @@ connection charges for, so the program path is proved here too."
 (defun test-mevedel-execution-remote--exercise-publication-media
     (session buffer)
   "Publish SESSION and round-trip durable media through BUFFER."
-  (require 'mevedel)
   (with-current-buffer buffer
     (insert "Remote publication transcript\n")
     (should (mevedel-session-artifacts-save session buffer)))
@@ -1371,7 +1368,6 @@ connection charges for, so the program path is proved here too."
           :segment 1 :turn 1 :file-turn 1 :cum-turn 1
           :captured-file-turn 1)))
       (mevedel-session-artifacts-save session buffer))
-    (require 'mevedel-worktree)
     (setq reservation (mevedel-worktree-fork-reservation session))
     (setq target (plist-put target :worktree-reservation reservation))
     (setq child (mevedel-session-fork-worktree-fork buffer target))
@@ -1528,7 +1524,6 @@ connection charges for, so the program path is proved here too."
               (puthash (mevedel-execution-target-identity target) t
                        mevedel-session-durability--disclosed-targets))
             (test-mevedel-execution-remote--stage "probe alias A complete")
-            (require 'mevedel)
             (with-current-buffer buffer
               (org-mode)
               (setq-local mevedel--workspace workspace-a
@@ -1759,7 +1754,6 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
 (defun test-mevedel-execution-remote--exercise-transfer-only
     (variable method)
   "Exercise only independent control transfer for VARIABLE and METHOD."
-  (require 'mevedel)
   (let* ((base (test-mevedel-execution-remote--real-root variable method))
          (root (test-mevedel-execution-remote--real-temp-directory
                 base (format "mevedel-%s-transfer-" method)))
