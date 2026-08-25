@@ -6,9 +6,11 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib)
-  (require 'mevedel-instruction-registry))
+(eval-when-compile (require 'cl-lib))
+
+(require 'mevedel-directive)
+(require 'mevedel-instruction-registry)
+(require 'mevedel-structs)
 
 ;; `mevedel-directive'
 (declare-function mevedel-directive-add-subdirective
@@ -68,6 +70,7 @@
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlay-ui"
                   (instruction &optional update-children))
+(autoload 'mevedel--update-instruction-overlay "mevedel-overlay-ui")
 
 ;; `mevedel-overlays'
 (declare-function mevedel--child-instructions
@@ -86,6 +89,15 @@
                   "mevedel-overlays" (sub parent))
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction &optional of-type pred))
+(autoload 'mevedel--child-instructions "mevedel-overlays")
+(autoload 'mevedel--directivep "mevedel-overlays")
+(autoload 'mevedel--instructions-at "mevedel-overlays")
+(autoload 'mevedel--instructions-in "mevedel-overlays")
+(autoload 'mevedel--nested-directives "mevedel-overlays")
+(autoload 'mevedel--parent-instruction "mevedel-overlays")
+(autoload 'mevedel--read-directive "mevedel-overlays")
+(autoload 'mevedel--subinstruction-of-p "mevedel-overlays")
+(autoload 'mevedel--topmost-instruction "mevedel-overlays")
 (defvar mevedel--default-instruction-priority)
 
 ;; `mevedel-persistence'
@@ -94,6 +106,9 @@
 (declare-function mevedel-persistence-resolve-instruction-anchor
                   "mevedel-persistence"
                   (overlay-start overlay-end anchor parent-range))
+(autoload 'mevedel--setup-buffer-hooks "mevedel-persistence")
+(autoload 'mevedel-persistence-resolve-instruction-anchor
+  "mevedel-persistence")
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive--create "mevedel-structs" (&rest slots))
@@ -184,7 +199,6 @@ overlay is restored.")
 
 (defun mevedel--instruction-anchor-for-instruction (instruction)
   "Return a lightweight restore anchor for INSTRUCTION."
-  (require 'mevedel-overlays)
   (when-let* ((buffer (overlay-buffer instruction)))
     (with-current-buffer buffer
       (let* ((start (overlay-start instruction))
@@ -214,8 +228,6 @@ overlay is restored.")
 
 (defun mevedel--directive-record (directive)
   "Return the workspace record presented by DIRECTIVE."
-  (require 'mevedel-instruction-registry)
-  (require 'mevedel-structs)
   (when-let* ((buffer (overlay-buffer directive))
               (workspace (mevedel--instruction-buffer-workspace buffer))
               (id (overlay-get directive 'mevedel-uuid)))
@@ -265,7 +277,6 @@ overlay is restored.")
 
 (defun mevedel--refresh-directive-anchor (directive)
   "Refresh the durable anchor presented by DIRECTIVE."
-  (require 'mevedel-directive)
   (when-let* (((not (overlay-get directive
                                  'mevedel-transient-source-missing)))
               (record (mevedel--directive-source-record directive)))
@@ -307,9 +318,6 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--mark-buffer-source-missing (buffer)
   "Remove BUFFER's source presentations and retain directives as Source missing."
-  (require 'mevedel-directive)
-  (require 'mevedel-instruction-registry)
-  (require 'mevedel-overlays)
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (mevedel--instruction-activate-buffer buffer)
@@ -342,7 +350,6 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--reconcile-directive-sources (workspace)
   "Mark live directive buffers in WORKSPACE Source missing when files vanish."
-  (require 'mevedel-instruction-registry)
   (when workspace
     (mevedel--instruction-activate-workspace workspace)
     (dolist (entry (copy-sequence (mevedel--instruction-alist)))
@@ -357,8 +364,6 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 (defun mevedel--reattach-directive-overlay
     (id anchor workspace buffer start end)
   "Restore ID with ANCHOR in WORKSPACE and BUFFER from START to END."
-  (require 'mevedel-instruction-registry)
-  (require 'mevedel-overlays)
   (with-current-buffer buffer
     (unless (and (integer-or-marker-p start)
                  (integer-or-marker-p end)
@@ -379,8 +384,6 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--reattach-directive (record workspace buffer start end)
   "Reattach source-missing RECORD in WORKSPACE to BUFFER from START to END."
-  (require 'mevedel-directive)
-  (require 'mevedel-overlay-ui)
   (unless (and (memq record (mevedel-workspace-directives workspace))
                (eq 'source-missing
                    (plist-get (mevedel-directive-anchor record) :state)))
@@ -397,7 +400,6 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 (defun mevedel--reattach-subdirective
     (record owner workspace buffer start end)
   "Reattach nested RECORD owned by OWNER in WORKSPACE from START to END."
-  (require 'mevedel-directive)
   (unless (and (memq owner (mevedel-workspace-directives workspace))
                (memq record (mevedel-directive-subdirectives owner)))
     (user-error "Nested directive does not belong to this workspace"))
@@ -429,11 +431,6 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel-archive-directive (record workspace)
   "Archive activity-owning RECORD in WORKSPACE and hide its source presentation."
-  (require 'mevedel-directive)
-  (require 'mevedel-instruction-registry)
-  (require 'mevedel-overlay-ui)
-  (require 'mevedel-overlays)
-  (require 'mevedel-structs)
   (unless (memq record (mevedel-workspace-directives workspace))
     (user-error "Directive does not belong to this workspace"))
   (unless (mevedel-directive-has-activity-p record)
@@ -463,7 +460,6 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--detach-directive (entry)
   "Replace the evaporated directive described by ENTRY at a zero-width anchor."
-  (require 'mevedel-directive)
   (let* ((old (plist-get entry :overlay))
          (record (plist-get entry :record))
          (marker (plist-get entry :marker))
@@ -571,7 +567,6 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--register-directive (directive request)
   "Register DIRECTIVE and REQUEST under their top-level workspace owner."
-  (require 'mevedel-directive)
   (let* ((buffer (overlay-buffer directive))
          (workspace (mevedel--instruction-buffer-workspace buffer)))
     (unless workspace
@@ -626,7 +621,6 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--set-directive-status (directive status)
   "Set DIRECTIVE's workspace-owned transient STATUS."
-  (require 'mevedel-directive)
   (when-let* ((owner (mevedel--topmost-instruction directive 'directive))
               (record (mevedel--directive-record owner)))
     (mevedel-directive-set-state record status))
@@ -634,8 +628,6 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--create-instruction-overlay-in (buffer start end)
   "Create an overlay in BUFFER from START to END of the lines."
-  (require 'mevedel-instruction-registry)
-  (require 'mevedel-persistence)
   (make-local-variable 'mevedel--after-change-functions-hooked)
   (mevedel--instruction-activate-buffer buffer)
   (with-current-buffer buffer
@@ -681,7 +673,6 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--submitted-subdirectives (directive)
   "Return immutable snapshots of DIRECTIVE's currently submitted details."
-  (require 'mevedel-directive)
   (mapcar #'mevedel-subdirective-copy
           (mevedel-directive-subdirectives
            (or (mevedel--directive-record directive)
@@ -689,8 +680,6 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
 
 (defun mevedel--create-reference-in (buffer start end)
   "Create a region reference from START to END in BUFFER."
-  (require 'mevedel-overlay-ui)
-  (require 'mevedel-overlays)
   (let ((ov (mevedel--create-instruction-overlay-in buffer start end)))
     (overlay-put ov 'mevedel-instruction-type 'reference)
     (overlay-put ov 'evaporate t)
@@ -705,10 +694,6 @@ controls special formatting if non-nil.
 
 DIRECTIVE-TEXT is used as the default directive.  Having DIRECTIVE-TEXT
 be non-nil prevents the opening of a prompt buffer."
-  (require 'mevedel-directive)
-  (require 'mevedel-overlay-ui)
-  (require 'mevedel-overlays)
-  (require 'mevedel-structs)
   (let ((ov (mevedel--create-instruction-overlay-in buffer start end)))
     (unless bodyless
       (overlay-put ov 'evaporate t))
@@ -725,10 +710,6 @@ be non-nil prevents the opening of a prompt buffer."
 
 If the overlay is already dead, just perform the cleanup.
 BUFFER is required in order to perform cleanup on a dead instruction."
-  (require 'mevedel-directive)
-  (require 'mevedel-instruction-registry)
-  (require 'mevedel-overlay-ui)
-  (require 'mevedel-overlays)
   ;; We want to handle this function in two different ways. The first way
   ;; handles regular deletion, i.e. when the function was invoked on an existing
   ;; instruction. The second way is for when the instruction was deleted
@@ -794,7 +775,6 @@ Returns an empty string if there is no directive text."
 
 (defun mevedel--set-directive-request (directive request)
   "Set DIRECTIVE's current REQUEST without changing its identity."
-  (require 'mevedel-directive)
   (let ((record (mevedel--directive-source-record directive)))
     (cond
      ((mevedel-directive-p record)
@@ -851,10 +831,6 @@ Returns an empty string if there is no directive text."
 
 (defun mevedel--restore-source-missing-directives (buffer)
   "Reattach exact unambiguous source-missing directives returning in BUFFER."
-  (require 'mevedel-instruction-registry)
-  (require 'mevedel-overlays)
-  (require 'mevedel-persistence)
-  (require 'mevedel-structs)
   (let* ((workspace (mevedel--instruction-buffer-workspace buffer))
          (file (buffer-file-name buffer))
          (restored 0))
