@@ -907,7 +907,7 @@
                        ;; Other deftests wipe `mevedel-agent--registry'
                        ;; in their :after-each; re-load to restore the
                        ;; built-in agent definitions.
-                       (load-file (locate-library "mevedel-agents"))))
+                       (load (locate-library "mevedel-agents") nil t)))
   ,test
   (test)
 
