@@ -10,7 +10,9 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-compact-estimation)
 (require 'mevedel-structs)
+(require 'mevedel-transport)
 
 ;; `gptel'
 (declare-function gptel-backend-name "ext:gptel" (cl-x) t)
@@ -43,6 +45,7 @@
                   "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-dispatch-after-turn "mevedel-goal" (fsm))
@@ -59,10 +62,13 @@
                   "mevedel-hooks"
                   (event event-plist callback
                          &optional session workspace request invocation))
+(autoload 'mevedel-hooks-event-plist "mevedel-hooks")
+(autoload 'mevedel-hooks-run-event "mevedel-hooks")
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view--schedule-follow-up-drain
                   "mevedel-pending-inputs" (fsm))
+(autoload 'mevedel-view--schedule-follow-up-drain "mevedel-pending-inputs")
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel--implementation-permission-mode-restore
@@ -85,10 +91,12 @@
 ;; `mevedel-ptc-checkpoint'
 (declare-function mevedel-ptc-checkpoint-clear-settled
                   "mevedel-ptc-checkpoint" (session))
+(autoload 'mevedel-ptc-checkpoint-clear-settled "mevedel-ptc-checkpoint")
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-restore-reserved-context
                   "mevedel-reminders" (buffer))
+(autoload 'mevedel-reminders-restore-reserved-context "mevedel-reminders")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-mutation-authority
@@ -96,6 +104,9 @@
 (declare-function mevedel-session-artifacts-save
                   "mevedel-session-artifacts"
                   (session buffer &optional settled force))
+(autoload 'mevedel-session-artifacts-assert-mutation-authority
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
@@ -131,6 +142,7 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
+(autoload 'mevedel-view-rerender "mevedel-view")
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-rebuild
@@ -140,6 +152,7 @@
 (declare-function mevedel-view--append-request-summary
                   "mevedel-view-render"
                   (data-buf search-start &optional extra))
+(autoload 'mevedel-view--append-request-summary "mevedel-view-render")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -225,7 +238,6 @@ only call sites that may invoke cancellers."
   "Signal a user error when SESSION's execution target is not ready."
   (when-let* ((session)
               (target (mevedel-session-execution-target session)))
-    (require 'mevedel-execution-target)
     (when (mevedel-execution-target-remote-p target)
       (mevedel-execution-target-probe
        target nil (mevedel-session-sandbox-mode session))
@@ -242,9 +254,6 @@ only call sites that may invoke cancellers."
 If `mevedel--current-request' is already set, log a warning and replace
 it.  Optional DIRECTIVE-UUID sets the directive being processed.  Returns
 the new request struct."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (mevedel-request-assert-target-ready session)
   (mevedel-session-artifacts-assert-mutation-authority
    session (current-buffer))
@@ -314,7 +323,6 @@ Also returns any hook context the ended request reserved.  Reminder
 injection runs ahead of the handler that begins a request, so a delivered
 payload has already released its reservation and only an undelivered one
 is returned here."
-  (require 'mevedel-reminders)
   (mevedel-reminders-restore-reserved-context (current-buffer))
   (when mevedel--current-request
     (let ((request mevedel--current-request))
@@ -407,7 +415,6 @@ is returned here."
                    (condition-case nil
                        (gptel-backend-name backend)
                      (error nil)))))
-        (require 'mevedel-view-render)
         (mevedel-view--append-request-summary
          chat-buffer
          (plist-get info :position)
@@ -429,7 +436,6 @@ is returned here."
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
       (when (bound-and-true-p mevedel--session)
-        (require 'mevedel-hooks)
         (let* ((workspace (mevedel-workspace))
                (reason (and (eq event 'StopFailure)
                             (or (mevedel--fsm-error-message fsm)
@@ -467,9 +473,6 @@ Signal when the request is missing or its reservation is not the next turn."
 
 (defun mevedel--turn-autosave (fsm)
   "Persist the completed turn represented by FSM and refresh its view."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (when-let* ((info (gptel-fsm-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
@@ -481,7 +484,6 @@ Signal when the request is missing or its reservation is not the next turn."
               saved)
           (condition-case err
               (progn
-                (require 'mevedel-ptc-checkpoint)
                 (mevedel-ptc-checkpoint-clear-settled mevedel--session)
                 (unless (mevedel-session-artifacts-save
                          mevedel--session chat-buffer t)
@@ -498,7 +500,6 @@ Signal when the request is missing or its reservation is not the next turn."
              (setq-local mevedel-session--save-failed t)
              (force-mode-line-update)))
           (when (and saved (buffer-live-p mevedel--view-buffer))
-            (require 'mevedel-view)
             (mevedel-view-rerender mevedel--view-buffer)))))))
 
 (defun mevedel--turn-restore-permission-mode (fsm)
@@ -565,7 +566,6 @@ Each step re-derives its own buffer from FSM, so waiting costs the chain no
 context.  Settlement keeps the request open until the chain finishes, so a
 Goal continuation or a user send still observes the workflow as busy while
 this waits."
-  (require 'mevedel-transport)
   (let ((buffer (mevedel--turn-buffer fsm)))
     (mevedel-transport-run-when-idle
      (list 'turn-settlement (or buffer fsm))
@@ -602,7 +602,6 @@ command.
 The whole chain defers as one unit rather than step by step, because its order
 is load-bearing: `mevedel--turn-end-request\=' follows the autosave, and
 inverting them drops the turn's file-history checkpoints."
-  (require 'mevedel-compact-estimation)
   (mevedel--turn-commit fsm)
   (mevedel--defer-turn-steps
    fsm
@@ -621,7 +620,6 @@ inverting them drops the turn's file-history checkpoints."
            (mevedel--turn-after-publication
             #'mevedel-goal-dispatch-after-turn machine))
          (lambda (machine)
-           (require 'mevedel-pending-inputs)
            (mevedel--turn-after-publication
             #'mevedel-view--schedule-follow-up-drain machine)))))
 
@@ -630,7 +628,6 @@ inverting them drops the turn's file-history checkpoints."
 
 Deferred for the same reason as `mevedel--complete-turn\=': the failure chain
 also autosaves, and it reaches here from the same process sentinel."
-  (require 'mevedel-compact-estimation)
   (mevedel--turn-commit fsm)
   (mevedel--defer-turn-steps
    fsm
