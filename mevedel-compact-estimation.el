@@ -8,7 +8,8 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
+(require 'mevedel-models)
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
@@ -71,7 +72,6 @@ block."
 
 (defun mevedel-compact-estimation-usable-tokens ()
   "Return usable context tokens after response reserve."
-  (require 'mevedel-models)
   (mevedel-model-usable-input-tokens
    (list :backend gptel-backend
          :model gptel-model
@@ -90,7 +90,6 @@ block."
 
 (defun mevedel-compact-estimation-workload-policy ()
   "Resolve and return the summarization workload model policy."
-  (require 'mevedel-models)
   (append '(:max-tokens nil :request-params nil)
           (mevedel-model-resolve-workload 'summarization)))
 
@@ -105,7 +104,6 @@ block."
 
 (defun mevedel-compact-estimation-policy-threshold-tokens (policy)
   "Return the compaction threshold for model POLICY."
-  (require 'mevedel-models)
   (mevedel-compact-estimation-threshold-tokens
    (mevedel-model-usable-input-tokens policy)))
 
@@ -139,8 +137,6 @@ block."
 
 Context-summary requests are ignored so their token
 count never becomes the baseline for the chat buffer."
-  (require 'cl-lib)
-  (require 'mevedel-models)
   (when-let* ((info (and fsm (gptel-fsm-info fsm)))
               ((not (mevedel-compact-estimation-summary-request-p info)))
               (chat-buffer (plist-get info :buffer))
@@ -431,7 +427,6 @@ run."
   "Return a token estimate for realized request DATA.
 Text is still estimated with chars/4.  Native image payloads are counted
 as model-visible images instead of raw base64 text."
-  (require 'cl-lib)
   (let ((chars 0)
         (media-tokens 0))
     (cl-labels

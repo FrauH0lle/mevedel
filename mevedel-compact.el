@@ -10,6 +10,10 @@
 (eval-when-compile
   (require 'cl-lib)
   (require 'gptel))
+(require 'mevedel-compact-estimation)
+(require 'mevedel-compact-evidence)
+(require 'mevedel-compact-run)
+(require 'mevedel-compact-target)
 (require 'mevedel-transcript)
 
 ;; `gptel'
@@ -42,6 +46,7 @@
 ;; `mevedel-agent-exec'
 (declare-function mevedel-agent-exec-request-snapshot
                   "mevedel-agent-exec" (policy))
+(autoload 'mevedel-agent-exec-request-snapshot "mevedel-agent-exec")
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
@@ -122,6 +127,7 @@
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-steering-inject
                   "mevedel-tools" (fsm &optional skip-compaction-gate))
+(autoload 'mevedel-tools--handle-steering-inject "mevedel-tools")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
@@ -130,6 +136,7 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--assert-live-tip
                   "mevedel-view-composer" (&optional allow-armed-fork))
+(autoload 'mevedel-view--assert-live-tip "mevedel-view-composer")
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--stop-request-progress
@@ -181,8 +188,6 @@
 
 (defun mevedel--compact-auto-eligible-p ()
   "Return non-nil when automatic compaction may run in this buffer."
-  (require 'mevedel-compact-run)
-  (require 'mevedel-compact-target)
   (and mevedel-compact-auto
        (not mevedel--compact-auto-disabled)
        (not mevedel-compact-run-in-flight)
@@ -191,8 +196,6 @@
 
 (defun mevedel--compact-auto-ineligible-reason ()
   "Return a short reason automatic compaction cannot run, or nil."
-  (require 'mevedel-compact-run)
-  (require 'mevedel-compact-target)
   (cond
    ((not mevedel-compact-auto) "auto-compaction is disabled")
    (mevedel--compact-auto-disabled "auto-compaction is disabled after repeated failures")
@@ -207,7 +210,6 @@
 
 (defun mevedel--compact-should-compact-p (&optional token-estimate)
   "Return automatic compaction admission for TOKEN-ESTIMATE, or nil."
-  (require 'mevedel-compact-estimation)
   (let* ((estimate (or token-estimate (mevedel-compact-estimation-estimate-tokens)))
          (target-policy (mevedel-compact-estimation-target-policy))
          (admission
@@ -252,9 +254,7 @@
 With prefix argument AGGRESSIVE, compact without preserving a recent
   tail.  INSTRUCTIONS is an optional string of manual summary guidance."
   (interactive "P")
-  (require 'mevedel-compact-run)
   (when (bound-and-true-p mevedel--data-buffer)
-    (require 'mevedel-view-composer)
     (mevedel-view--assert-live-tip))
   (let* ((chat-buffer
           (cond
@@ -270,7 +270,6 @@ With prefix argument AGGRESSIVE, compact without preserving a recent
 
 (defun mevedel--compact-auto-failure (chat-buffer err)
   "Surface automatic compaction failure ERR for CHAT-BUFFER."
-  (require 'mevedel-compact-run)
   (when (buffer-live-p chat-buffer)
     (with-current-buffer chat-buffer
       (when (>= mevedel-compact-run-failure-count 3)
@@ -294,7 +293,6 @@ With prefix argument AGGRESSIVE, compact without preserving a recent
 
 (defun mevedel--compact-continuation-wait-p (fsm)
   "Return non-nil when FSM is entering WAIT for a tool continuation."
-  (require 'mevedel-compact-estimation)
   (when-let* ((info (and fsm (gptel-fsm-info fsm))))
     (and (not (mevedel-compact-estimation-summary-request-p info))
          (or (eq (car (plist-get info :history)) 'TRET)
@@ -305,9 +303,6 @@ With prefix argument AGGRESSIVE, compact without preserving a recent
 
 The rebuilt data keeps the effective backend, model, and active tool
 set already stored on FSM's info plist."
-  (require 'mevedel-compact-estimation)
-  (require 'mevedel-compact-evidence)
-  (require 'mevedel-compact-target)
   (let* ((info (gptel-fsm-info fsm))
          (old-data (plist-get info :data))
          (had-dry-run (plist-member info :dry-run))
@@ -382,7 +377,6 @@ set already stored on FSM's info plist."
   "Dispatch FSM after TARGET compaction, including deferred root steering."
   (if (plist-get target :invocation)
       (mevedel--compact-provider-wait fsm)
-    (require 'mevedel-tools)
     (mevedel-tools--handle-steering-inject fsm t)
     (unless (plist-get (gptel-fsm-info fsm) :mevedel-pending-input-hold)
       (mevedel--compact-provider-wait fsm))))
@@ -413,9 +407,6 @@ set already stored on FSM's info plist."
     (fsm target admission &optional pending-start)
   "Gate FSM continuation through TARGET using precomputed ADMISSION.
 PENDING-START, when non-nil, begins the continuation batch that must survive."
-  (require 'mevedel-compact-evidence)
-  (require 'mevedel-compact-run)
-  (require 'mevedel-compact-target)
   (if (not admission)
       (mevedel--compact-provider-wait fsm)
     (let ((pending-start (or pending-start
@@ -448,10 +439,6 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
 
 (defun mevedel--compact-handle-agent-wait (fsm)
   "Run persisted-agent compaction before a continuation request in FSM."
-  (require 'mevedel-compact-estimation)
-  (require 'mevedel-compact-evidence)
-  (require 'mevedel-compact-run)
-  (require 'mevedel-compact-target)
   (let* ((info (and fsm (gptel-fsm-info fsm)))
          (agent-buffer (and (listp info) (plist-get info :buffer)))
          (invocation
@@ -495,7 +482,6 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
 
 (defun mevedel--compact-main-wait-decision (fsm)
   "Return the main continuation compaction decision for FSM, or nil."
-  (require 'mevedel-compact-estimation)
   (let* ((info (and fsm (gptel-fsm-info fsm)))
          (chat-buffer (and (listp info) (plist-get info :buffer))))
     (when (and (mevedel--compact-continuation-wait-p fsm)
@@ -532,8 +518,6 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
 
 (defun mevedel--compact-handle-wait (fsm)
   "Run continuation auto-compaction for FSM before `gptel--handle-wait'."
-  (require 'mevedel-compact-estimation)
-  (require 'mevedel-compact-target)
   (let* ((info (and fsm (gptel-fsm-info fsm)))
          (cached (and (listp info)
                       (plist-get info :mevedel-compaction-wait-decision))))
@@ -565,10 +549,6 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
   "Run auto-compaction before request realization.
 CONTINUE is gptel's async transform continuation.  FSM is the request
 state machine."
-  (require 'mevedel-compact-estimation)
-  (require 'mevedel-compact-evidence)
-  (require 'mevedel-compact-run)
-  (require 'mevedel-compact-target)
   (let* ((info (and fsm (gptel-fsm-info fsm)))
          (source-buffer (and (listp info) (plist-get info :buffer)))
          (prompt-buffer (current-buffer))
@@ -579,7 +559,6 @@ state machine."
          (context (and (listp info) (plist-get info :context)))
          (late-tail-start (copy-marker (point-max) nil)))
     (when (listp info)
-      (require 'mevedel-agent-exec)
       (plist-put
        info :mevedel-request-locals
        (mevedel-agent-exec-request-snapshot

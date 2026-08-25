@@ -52,10 +52,13 @@
 (declare-function mevedel-context-summary-generate
                   "mevedel-context-summary"
                   (source purpose callback &rest keys))
+(autoload 'mevedel-context-summary-generate "mevedel-context-summary")
 
 ;; `mevedel-execution-transcript'
 (declare-function mevedel-execution-transcript-prepare-archive
                   "mevedel-execution-transcript" (data-buffer tool-use-ids))
+(autoload 'mevedel-execution-transcript-prepare-archive
+  "mevedel-execution-transcript")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string
@@ -270,7 +273,6 @@ the persistent failure counter unchanged."
                        (mevedel-compact-run--state-summary-ready state)))
             (setq summary (funcall summary-ready summary)))
           (when (mevedel-compact-run--state-archived-tool-use-ids state)
-            (require 'mevedel-execution-transcript)
             (setf
              (mevedel-compact-run--state-target state)
              (plist-put
@@ -322,7 +324,6 @@ rather than escaping, because the caller may be an asynchronous hook."
     (condition-case err
         (if-let* ((prepared (mevedel-compact-run--state-prepared-summary state)))
             (mevedel-compact-run--apply-summary state prepared hook-audits)
-          (require 'mevedel-context-summary)
           (let* ((source
                   (if hook-context
                       (concat
