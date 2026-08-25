@@ -10,6 +10,12 @@
   (require 'cl-lib)
   (require 'subr-x))
 
+(require 'mevedel-resource)
+(require 'mevedel-tool-fs)
+(require 'mevedel-execution)
+(require 'mevedel-tool-registry)
+(require 'mevedel-turn)
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-start-helper
                   "mevedel-execution"
@@ -264,7 +270,6 @@ is the raw matches output.  Header shows the pattern and match count
 \(one line per match); body fontifies as `grep-mode' for file:line
 coloring.  `grep-mode' is autoloaded; `mevedel-view--fontify-as' falls
 back to text verbatim if activation fails."
-  (require 'mevedel-tool-fs)
   (when (stringp result)
     (let* ((pattern (or (plist-get args :pattern) ""))
            (visible (mevedel-tool-fs-strip-system-reminders result))
@@ -283,7 +288,6 @@ back to text verbatim if activation fails."
   "Rendering plist for the Glob tool.
 NAME is \"Glob\".  ARGS carries `:pattern'.  RESULT is a newline-separated
 list of matching files.  Header shows pattern and file count."
-  (require 'mevedel-tool-fs)
   (when (stringp result)
     (let* ((pattern (or (plist-get args :pattern) ""))
            (lines (seq-filter (lambda (l) (not (string-empty-p l)))
@@ -479,10 +483,6 @@ and FAILURE-GUIDANCE tells the caller how to narrow a failed invocation."
   "Find files matching a glob pattern using ripgrep.
 CALLBACK receives the result envelope.  ARGS is a plist with :pattern
 and optional :path."
-  (require 'cl-lib)
-  (require 'mevedel-resource)
-  (require 'mevedel-tool-fs)
-  (require 'mevedel-turn)
   (let* ((address (plist-get args :path))
          (attempt (and (not mevedel-tool-fs-search--resource-dispatching)
                        (mevedel-tool-fs-resource-attempt address))))
@@ -548,7 +548,6 @@ and optional :path."
                                (plist-get args :path))
                               mevedel-tool-fs-search--rg-vcs-exclusions
                               paths)))
-                (require 'mevedel-execution)
                 (mevedel-execution-start-helper
                  (lambda (child-result)
                    (with-temp-buffer
@@ -592,7 +591,6 @@ and optional :path."
                                    (or address mevedel-tool-fs-search--resource-address))
                                   mevedel-tool-fs-search--rg-vcs-exclusions
                                   (list path))))
-                    (require 'mevedel-execution)
                     (mevedel-execution-start-helper
                      (lambda (child-result)
                        (with-temp-buffer
@@ -620,11 +618,6 @@ and optional :path."
 CALLBACK receives the result envelope.  ARGS is a plist with :pattern and
 optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
 :type, :multiline, :context, :-A, :-B, :-C."
-  (require 'cl-lib)
-  (require 'mevedel-resource)
-  (require 'mevedel-tool-fs)
-  (require 'mevedel-tool-registry)
-  (require 'mevedel-turn)
   (let* ((address (plist-get args :path))
          (attempt (and (not mevedel-tool-fs-search--resource-dispatching)
                        (mevedel-tool-fs-resource-attempt address))))
@@ -757,7 +750,6 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                        mevedel-tool-fs-search--rg-vcs-exclusions
                        (list "-e" pattern)
                        (or resource-paths (list path))))
-                (require 'mevedel-execution)
                 (mevedel-execution-start-helper
                  (lambda (child-result)
                    (with-temp-buffer

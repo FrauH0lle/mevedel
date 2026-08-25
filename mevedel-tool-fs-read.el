@@ -10,6 +10,15 @@
   (require 'cl-lib)
   (require 'subr-x))
 
+(require 'mevedel-agents)
+(require 'mevedel-execution-target)
+(require 'mevedel-file-state)
+(require 'mevedel-pipeline)
+(require 'mevedel-resource)
+(require 'mevedel-structs)
+(require 'mevedel-tool-fs)
+(require 'mevedel-utilities)
+
 ;; `gptel-request'
 (declare-function gptel--model-capable-p "ext:gptel-request"
                   (cap &optional model))
@@ -126,7 +135,6 @@ via `mevedel-view--fontify-as'."
 NAME is \"Read\".  ARGS carries `:file_path'.  RESULT is the line-numbered
 file content.  Header shows the file basename and line count; body
 fontifies as the file's natural mode when detectable from extension."
-  (require 'mevedel-tool-fs)
   (when (and (stringp result)
              (not (string-match-p "\\`[ \t\n]*Error:" result)))
     ;; Renderer output is disposable UI state rebuilt on each rerender.
@@ -401,10 +409,6 @@ Delete the temporary copy before returning."
 
 (defun mevedel-tool-fs-read-large-pdf-p (path)
   "Return non-nil when PDF PATH should get bounded-page guidance."
-  (require 'mevedel-execution-target)
-  (require 'mevedel-structs)
-  (require 'mevedel-tool-fs)
-  (require 'mevedel-utilities)
   (and (mevedel-tool-fs-read-pdf-media-p path)
        (let ((page-count (mevedel-tool-fs-read--pdf-page-count path))
              (size (mevedel-tool-fs-read--file-size path)))
@@ -414,10 +418,6 @@ Delete the temporary copy before returning."
 
 (defun mevedel-tool-fs-read-format-large-pdf-reminder (path)
   "Return model-visible guidance for a large PDF at PATH."
-  (require 'mevedel-execution-target)
-  (require 'mevedel-structs)
-  (require 'mevedel-tool-fs)
-  (require 'mevedel-utilities)
   (let* ((shown (mevedel-tool-fs-read--visible-path path))
          (page-count (mevedel-tool-fs-read--pdf-page-count path))
          (size (mevedel-tool-fs-read--file-size path))
@@ -841,8 +841,6 @@ cell (ENTRIES . TRUNCATED-P) where ENTRIES is a list of paths relative
 to PATH and TRUNCATED-P is non-nil if the listing was capped at
 MAX-ENTRIES (defaulting to 1000).  Signals an error if rg is missing,
 PATH is not a readable directory, or rg exits with an unexpected code."
-  (require 'mevedel-tool-fs)
-  (require 'mevedel-utilities)
   (let ((max (or max-entries 1000)))
     (unless (mevedel-tool-fs-executable-find "rg" path)
       (error "'rg' not installed on execution target"))
@@ -888,7 +886,6 @@ OFFSET to 1 and LIMIT to `mevedel-tool-fs-read--default-limit' lines.
 Returns the bounded content string with line numbers; signals an error on
 any validation failure.  Callers that want graceful degradation should
 wrap in `condition-case'."
-  (require 'mevedel-tool-fs)
   (unless (file-readable-p path)
     (error "File %s is not readable" (mevedel-tool-fs-read--visible-path path)))
   (when (file-directory-p path)
@@ -1061,7 +1058,6 @@ wrap in `condition-case'."
 
 OFFSET and LIMIT select the requested line range.  Remote fixed-path caches
 are deliberately ignored."
-  (require 'mevedel-tool-fs)
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
@@ -1296,14 +1292,6 @@ content, not a read failure.\n</system-reminder>"
 
 (defun mevedel-tool-fs-read (args)
   "Return the Read result for ARGS in a canonical handler envelope."
-  (require 'mevedel-agents)
-  (require 'mevedel-execution-target)
-  (require 'mevedel-file-state)
-  (require 'mevedel-pipeline)
-  (require 'mevedel-resource)
-  (require 'mevedel-structs)
-  (require 'mevedel-tool-fs)
-  (require 'mevedel-utilities)
   (let* ((address (plist-get args :file_path))
          (attempt (mevedel-tool-fs-resource-attempt address)))
     (if attempt
