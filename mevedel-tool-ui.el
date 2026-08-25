@@ -376,7 +376,7 @@
   (mevedel-define-tool
     :name "Agent"
     :description "Start a retained asynchronous child agent."
-    :prompt-file "tools/agent.md"
+    :prompt-file "prompts/tools/agent.md"
     :handler #'mevedel-tool-ui--agent
     :args ((task_name string :required
                       "Lowercase ASCII name for the new child path segment.")
@@ -400,7 +400,7 @@
   (mevedel-define-tool
     :name "FollowupAgent"
     :description "Continue or steer one retained non-root agent."
-    :prompt-file "tools/followupagent.md"
+    :prompt-file "prompts/tools/followupagent.md"
     :handler #'mevedel-tool-ui--followup-agent
     :args ((target string :required
                    "Canonical path or relative descendant path.")
@@ -413,7 +413,7 @@
   (mevedel-define-tool
     :name "ListAgents"
     :description "List retained agent paths, roles, and activity."
-    :prompt-file "tools/listagents.md"
+    :prompt-file "prompts/tools/listagents.md"
     :handler #'mevedel-tool-ui--list-agents
     :args ((path_prefix string :optional
                         "Canonical subtree path prefix. Omit to list all."))
@@ -423,7 +423,7 @@
   (mevedel-define-tool
     :name "InterruptAgent"
     :description "Interrupt one retained agent's current turn."
-    :prompt-file "tools/interruptagent.md"
+    :prompt-file "prompts/tools/interruptagent.md"
     :handler #'mevedel-tool-ui--interrupt-agent
     :args ((target string :required
                    "Canonical path or relative descendant path."))
@@ -433,7 +433,7 @@
   (mevedel-define-tool
     :name "ToolSearch"
     :description "Search for and load deferred tools before using them."
-    :prompt-file "tools/toolsearch.md"
+    :prompt-file "prompts/tools/toolsearch.md"
     :handler #'mevedel-tool-ui--tool-search
     :args ((query string :required
                   "Search query: tool name or capability description.")
@@ -446,7 +446,7 @@
   (mevedel-define-tool
     :name "SendMessage"
     :description "Queue an interim, non-duplicative message for any retained agent without starting a turn."
-    :prompt-file "tools/sendmessage.md"
+    :prompt-file "prompts/tools/sendmessage.md"
     :handler #'mevedel-tool-ui--send-message
     :args ((target string :required
                    "Canonical path or relative descendant path.")
@@ -458,7 +458,7 @@
   (mevedel-define-tool
     :name "WaitAgent"
     :description "Wait for mailbox activity, user steering, or timeout. Only RESULT delivery is terminal."
-    :prompt-file "tools/waitagent.md"
+    :prompt-file "prompts/tools/waitagent.md"
     :handler #'mevedel-tool-ui--wait-agent
     :args ((timeout_ms integer :optional
                        "Timeout in milliseconds; omitted values default to 30000, out-of-range numeric values clamp to 10000-3600000, and unrepairable values are rejected."

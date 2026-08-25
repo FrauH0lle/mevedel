@@ -2,6 +2,26 @@ Apply one coherent filesystem change with a Codex-style patch. Put every
 related file operation in one call. Paths are relative to the session working
 directory unless absolute.
 
+### When to use `ApplyPatch`
+
+- Creating, editing, deleting, moving, or renaming text files
+- Batching the related file operations of one coherent change into a
+  single atomic proposal
+- Editing `local://` session scratch content; it is the only resource
+  family writable by ApplyPatch
+
+### When NOT to use `ApplyPatch`
+
+- Creating an empty file or a directory; neither is expressible in a
+  patch -> use `Bash`
+- Directive Planning is read-only: do not call `ApplyPatch` there, even
+  for all-local proposals
+- Re-proposing a rejected change, unless the user's feedback asks for a
+  revision
+- Reading files -> use `Read`
+
+### How to use `ApplyPatch`
+
 Resource addresses
 - File operands may use ordinary paths or canonical `local://` addresses.
 - `local://notes.md` names session scratch content; it is the only resource
@@ -16,8 +36,6 @@ Plan-mode boundary
   destination target is a non-bare `local://` descendant.
 - Ordinary paths, mixed local/ordinary proposals, other-scheme addresses, and
   malformed or bare endpoints are denied before materialization.
-- Directive Planning remains read-only: do not call `ApplyPatch` there, even
-  for all-local proposals.
 
 Outside Plan mode, mixed local and ordinary operations remain one atomic
 proposal.
@@ -57,9 +75,60 @@ disambiguate repeated patterns. Applied context lines are taken from the
 file, never rewritten from the patch.
 
 Add creates missing parent directories and cannot target an existing file;
-rewrite an existing file with one full-file Update hunk instead. Creating an
-empty file or directory is not expressible in a patch; use Bash for those.
-Delete removes the whole file. Move is one indivisible source/destination
-operation and may also contain update hunks. Do not use shell commands for
-file edits. Do not propose a rejected change again unless the user's feedback
-asks for a revision.
+rewrite an existing file with one full-file Update hunk instead. Delete
+removes the whole file. Move is one indivisible source/destination operation
+and may also contain update hunks. Do not use shell commands for file edits.
+
+### Examples of good usage
+
+<example>
+- Edit one function with anchored context:
+ApplyPatch(patch="*** Begin Patch
+*** Update File: src/config.py
+@@ def load_config
+ def load_config(path):
+-    data = json.load(open(path))
++    with open(path) as fh:
++        data = json.load(fh)
+     return validate(data)
+*** End Patch")
+</example>
+
+<example>
+- One coherent change touching two files:
+ApplyPatch(patch="*** Begin Patch
+*** Add File: src/limits.py
++MAX_RETRIES = 3
+*** Update File: src/client.py
+@@
+ import time
++from limits import MAX_RETRIES
+*** End Patch")
+</example>
+
+### Examples of bad usage
+
+<example>
+ApplyPatch(patch="*** Begin Patch
+*** Add File: src/client.py
++...entire rewritten file...
+*** End Patch")
+<reasoning>
+Add cannot target an existing file. Rewrite an existing file with one
+full-file Update hunk instead.
+</reasoning>
+</example>
+
+<example>
+ApplyPatch(patch="*** Begin Patch
+*** Update File: src/util.py
+@@
+-    return None
++    return default
+*** End Patch")
+<reasoning>
+No surrounding context: a one-line hunk that matches several locations
+is rejected. Include three context lines or an @@ anchor naming the
+enclosing definition.
+</reasoning>
+</example>

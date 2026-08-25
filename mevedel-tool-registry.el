@@ -33,7 +33,7 @@
 ;; Captured at load time so that `mevedel-define-tool' can resolve
 ;; :prompt-file paths at compile time.  Straight.el symlinks .el files
 ;; into build/ but not data directories, so we resolve symlinks to find
-;; the real repo root where tools/ lives.
+;; the real repo root where prompts/tools/ lives.
 
 (defvar mevedel-tool-registry--source-dir
   (let* ((lib (or load-file-name buffer-file-name))
@@ -44,7 +44,7 @@
                     lib)))
     (file-name-directory (file-truename el-file)))
   "Directory containing the mevedel source files.
-Resolved through symlinks so data files (tools/, etc.) are reachable.")
+Resolved through symlinks so data files (prompts/tools/, etc.) are reachable.")
 
 
 ;;

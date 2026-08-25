@@ -1081,7 +1081,7 @@ this runs after the task mutation it accompanies."
   (mevedel-define-tool
     :name "TaskCreate"
     :description "Create one or more tasks in the session task list."
-    :prompt-file "tools/taskcreate.md"
+    :prompt-file "prompts/tools/taskcreate.md"
     :handler #'mevedel-tool-task--handle-create
     :args ((tasks array :required
                   "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (canonical agent path or bucket string, optional; use subjects/descriptions for workstream names), blockedBy (array of task IDs, optional), metadata (object, optional)."
@@ -1098,7 +1098,7 @@ this runs after the task mutation it accompanies."
   (mevedel-define-tool
     :name "TaskUpdate"
     :description "Update the status or fields of an existing task."
-    :prompt-file "tools/taskupdate.md"
+    :prompt-file "prompts/tools/taskupdate.md"
     :handler #'mevedel-tool-task--handle-update
     :args ((id integer :required
                "The integer ID of the task to update.")
@@ -1126,7 +1126,7 @@ this runs after the task mutation it accompanies."
   (mevedel-define-tool
     :name "TaskNote"
     :description "Set or clear the current status note for an owner task group."
-    :prompt-file "tools/tasknote.md"
+    :prompt-file "prompts/tools/tasknote.md"
     :handler #'mevedel-tool-task--handle-note
     :args ((note string :required
                  "Owner-scoped status note to show above open tasks. Pass an empty string only when intentionally clearing.")
@@ -1139,7 +1139,7 @@ this runs after the task mutation it accompanies."
   (mevedel-define-tool
     :name "TaskList"
     :description "List the tasks currently tracked in the session."
-    :prompt-file "tools/tasklist.md"
+    :prompt-file "prompts/tools/tasklist.md"
     :handler #'mevedel-tool-task--handle-list
     :args ((status string :optional
                    "Optional filter: \"pending\", \"in_progress\", or \"completed\"."))
@@ -1150,7 +1150,7 @@ this runs after the task mutation it accompanies."
   (mevedel-define-tool
     :name "TaskGet"
     :description "Retrieve full details for a single task by ID."
-    :prompt-file "tools/taskget.md"
+    :prompt-file "prompts/tools/taskget.md"
     :handler #'mevedel-tool-task--handle-get
     :args ((id integer :required
                "The integer ID of the task to retrieve."))

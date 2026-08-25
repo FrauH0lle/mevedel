@@ -855,7 +855,7 @@ Header shows a truncated first line of the command; body fontifies as
   (mevedel-define-tool
    :name "Bash"
    :description "Execute Bash commands."
-   :prompt-file "tools/bash.md"
+   :prompt-file "prompts/tools/bash.md"
    :handler #'mevedel-tool-exec--bash
    :args ((command string :required
                    "The Bash command to execute from the session working directory. Can include pipes and standard shell operators.")
@@ -899,6 +899,7 @@ Header shows a truncated first line of the command; body fontifies as
   (mevedel-define-tool
    :name "WriteStdin"
    :description "Poll unread output or send input to a yielded Bash execution."
+   :prompt-file "prompts/tools/writestdin.md"
    :handler #'mevedel-tool-exec--write-stdin
    :args ((execution_id string :required
                         "Opaque execution ID returned by Bash.")
@@ -921,6 +922,7 @@ Header shows a truncated first line of the command; body fontifies as
   (mevedel-define-tool
    :name "ListExecutions"
    :description "List yielded Bash executions owned by this agent."
+   :prompt-file "prompts/tools/listexecutions.md"
    :handler #'mevedel-tool-exec--list-executions
    :args ()
    :read-only-p t
@@ -929,6 +931,7 @@ Header shows a truncated first line of the command; body fontifies as
   (mevedel-define-tool
    :name "StopExecution"
    :description "Stop one yielded Bash execution owned by this agent."
+   :prompt-file "prompts/tools/stopexecution.md"
    :handler #'mevedel-tool-exec--stop-execution
    :args ((execution_id string :required
                         "Opaque execution ID returned by Bash."))
@@ -943,7 +946,7 @@ Header shows a truncated first line of the command; body fontifies as
   (mevedel-define-tool
    :name "Eval"
    :description "Evaluate an Elisp expression and return the result."
-   :prompt-file "tools/eval.md"
+   :prompt-file "prompts/tools/eval.md"
    :handler #'mevedel-tool-exec--eval
    :args ((expression string :required "A single elisp sexp to evaluate with default-directory set to the session working directory.")
           (mode string :optional "Execution mode: live (default) evaluates in the current Emacs; batch evaluates in a child emacs --batch process."

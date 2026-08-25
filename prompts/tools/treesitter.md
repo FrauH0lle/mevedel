@@ -2,14 +2,14 @@ Get tree-sitter syntax tree information for a file, including node types,
 ranges, and hierarchical structure. Useful for understanding code structure and
 AST analysis.
 
-### When to use Treesitter
+### When to use `Treesitter`
 
 - Analyzing precise syntax structure of code
 - Understanding code hierarchy and nesting
 - Extracting structured information about code elements
 - Working with complex syntax that needs precise parsing
 
-### When NOT to use Treesitter
+### When NOT to use `Treesitter`
 
 - Simple text search -> use Grep
 - Just reading code -> use Read
@@ -17,7 +17,7 @@ AST analysis.
 - Language does not have tree-sitter support in Emacs
 - You do not need detailed syntax tree information
 
-### How to use Treesitter
+### How to use `Treesitter`
 
 - Provide the file path and optionally a line/column position
 - Only works for languages with tree-sitter grammar installed in Emacs

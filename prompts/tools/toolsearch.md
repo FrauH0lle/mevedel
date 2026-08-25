@@ -12,6 +12,14 @@ loaded.
 - When a task requires tools beyond basic reading and searching
 - At the start of complex tasks to check what specialized tools exist
 
+### When NOT to use `ToolSearch`
+
+- The tool is already active in your tool set -- call it directly
+- Looking up general information or documentation -> ToolSearch only
+  finds tools, it is not a web or code search
+- Re-running the same failed query; if a name matched nothing, the
+  capability does not exist as a deferred tool
+
 ### How to use `ToolSearch`
 
 1. Search by exact tool name when a reminder or prior result names one:
@@ -28,7 +36,7 @@ loaded.
 Do not call a deferred tool directly before loading it with ToolSearch.
 That can fail as an unknown tool call.
 
-### Examples
+### Examples of good usage
 
 <example>
 ToolSearch(query="function_source", load=true)
@@ -43,4 +51,21 @@ ToolSearch(query="edit", load=false)
 ToolSearch(query="ApplyPatch", load=true)
 -> Loads ApplyPatch. The tool is available now; call ApplyPatch with its normal
    arguments in your next tool call.
+</example>
+
+### Examples of bad usage
+
+<example>
+ToolSearch(query="Grep", load=true)
+<reasoning>
+Grep is already active. Call it directly instead of searching for it.
+</reasoning>
+</example>
+
+<example>
+ToolSearch(query="how to parse JSON in elisp")
+<reasoning>
+ToolSearch matches tool names and capability groups, not general
+questions. Use the appropriate research tool or answer directly.
+</reasoning>
 </example>

@@ -1,7 +1,7 @@
 Find where a function, variable, or class is used throughout your codebase.
 Perfect for understanding code dependencies and impact analysis.
 
-### When to use XrefReferences
+### When to use `XrefReferences`
 
 - Finding all callers of a function before modifying it
 - Understanding where a variable is read/written
@@ -9,14 +9,14 @@ Perfect for understanding code dependencies and impact analysis.
 - Tracing data flow through a codebase
 - Verifying that dead code is truly unused
 
-### When NOT to use XrefReferences
+### When NOT to use `XrefReferences`
 
 - Searching for text patterns -> use Grep
 - Looking for file names -> use Glob
 - Getting an overview of a file -> use Imenu
 - Complex multi-step searches -> delegate
 
-### How to use XrefReferences
+### How to use `XrefReferences`
 
 - Provide the exact identifier name (case-sensitive)
 - Specify a file in the project for context (affects which xref backend is

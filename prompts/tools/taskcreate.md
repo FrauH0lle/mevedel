@@ -21,7 +21,7 @@ or from other tasks via `blockedBy`.
 - The work is a single trivial edit or a direct answer
 - You would create only one pending task and never update it
 
-### Task object shape
+### How to use `TaskCreate`
 
 Pass `tasks` as an array. Each task object may contain:
 
@@ -45,7 +45,7 @@ Use `in_progress` for tasks that are actually being worked on now.
 Multiple tasks may be `in_progress` when work is genuinely concurrent,
 especially across sub-agents.
 
-### Examples
+### Examples of good usage
 
 <example>
 TaskCreate(tasks=[
@@ -60,4 +60,22 @@ TaskCreate(tasks=[
   {"subject": "Implement module A", "owner": "/root/worker_1"},
   {"subject": "Implement module B", "owner": "/root/worker_2", "blockedBy": [1]}
 ], note="Module B waits for module A", noteOwner="/root/worker_2")
+</example>
+
+### Examples of bad usage
+
+<example>
+TaskCreate(tasks=[{"subject": "Fix the typo in README"}])
+<reasoning>
+A single trivial edit that will never be updated. Just do the work.
+</reasoning>
+</example>
+
+<example>
+TaskCreate(tasks=[{"subject": "Implement module A", "owner": "backend work"}])
+<reasoning>
+Invents a proxy owner for an agent. Use the actual retained path such
+as "/root/worker_1", or omit owner for your own tasks; workstream names
+belong in subjects and descriptions.
+</reasoning>
 </example>

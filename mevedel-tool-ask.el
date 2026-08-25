@@ -554,7 +554,7 @@ CALLBACK receives the formatted answers.  ARGS is a plist with :questions."
   (mevedel-define-tool
     :name "Ask"
     :description "Ask the user one or more questions and wait for their responses."
-    :prompt-file "tools/ask.md"
+    :prompt-file "prompts/tools/ask.md"
     :handler #'mevedel-tool-ask--ask
     :args ((questions array :required
                       "Array of question objects. Each question must have predefined answer options. Options may be strings or objects with label, description, and preview fields. Mark exactly one option per question by appending ` (Recommended)` to that option label."

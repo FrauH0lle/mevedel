@@ -67,9 +67,6 @@ recommends those elements while leaving Codex room to choose the next action.
 
 - Consider making mevedel's data buffers hidden
 
-- Find a better folder for the tool description markdown files
-- Ensure all tools have the examples and their descriptions in markdown files
-
 - investigate and test address to resources, preferably in mevedel itself
   - are the hashes necessary? Don't they prohibit the model from calling the correct address?
   - The local:// scratchpad should be clearly promoted in the instructions
@@ -78,6 +75,7 @@ recommends those elements while leaving Codex room to choose the next action.
 
 - A just expanded tool call in the view buffer can get swallowed/disappears when the view buffer updates
   - reappears on next view buffer render
+- Expanded tools can get collapsed when re-render or update happens
 
 - Allow activation and deactivation of skills per project
 - Allow activation and deactivation of plugins per project
@@ -96,7 +94,7 @@ recommends those elements while leaving Codex room to choose the next action.
   - Searched for 5 patterns, read 1 file, ran 5 shell commands
   - Ran 5 commands
 
-- Collapse long input
+- Collapse long input, for example
   - [Pasted text #1 +83 lines]
 
 - Deferred from the 2026-08-25 PTC profiling session (the big levers —

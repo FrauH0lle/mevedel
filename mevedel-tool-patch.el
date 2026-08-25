@@ -1568,7 +1568,7 @@ has added private physical paths to their operation records."
     :name "ApplyPatch"
     :description "Apply one patch that may add, update, delete, or move files."
     :summary "Apply a multi-file patch."
-    :prompt-file "tools/applypatch.md"
+    :prompt-file "prompts/tools/applypatch.md"
     :handler #'mevedel-tool-patch-handler
     :args ((patch string :required
                   "A complete *** Begin Patch / *** End Patch patch."))

@@ -1,14 +1,14 @@
 Navigate and explore a file's structure by listing all its functions, classes,
 and variables with their locations.
 
-### When to use Imenu
+### When to use `Imenu`
 
 - Getting a structural overview of a single file's organization
 - Listing all functions, classes, methods in a file
 - Understanding file structure before making changes
 - Quickly finding what symbols are defined in a file
 
-### When NOT to use Imenu
+### When NOT to use `Imenu`
 
 - Searching across multiple files -> use Grep or delegate
 - Finding where a symbol is used (references) -> use XrefReferences
@@ -16,7 +16,7 @@ and variables with their locations.
 - The file is very large and you only need specific content -> use Read with
   line ranges
 
-### How to use Imenu
+### How to use `Imenu`
 
 - Provide the file path to analyze
 - Returns a hierarchical list of symbols (functions, classes, methods, etc.)

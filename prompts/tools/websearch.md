@@ -40,3 +40,21 @@ WebSearch(query="React useEffect official documentation")
 - Research error message:
 WebSearch(query="TypeError cannot read properties of undefined debugging")
 </example>
+
+### Examples of bad usage
+
+<example>
+- Reading a known URL:
+WebSearch(query="https://docs.python.org/3/library/json.html")
+<reasoning>
+The URL is already known. Should use WebFetch to read it directly.
+</reasoning>
+</example>
+
+<example>
+- Searching for local project code:
+WebSearch(query="mevedel-tool-registry defstruct fields")
+<reasoning>
+Project-local information. Should use Grep or Read on the codebase.
+</reasoning>
+</example>

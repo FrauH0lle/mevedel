@@ -173,7 +173,7 @@ why)."
     :name "WebSearch"
     :description "Search the web for the top results to a query."
     :summary "Search the web for the top results to a query."
-    :prompt-file "tools/websearch.md"
+    :prompt-file "prompts/tools/websearch.md"
     :handler #'mevedel-tool-web--websearch
     :args ((query string :required
                   "The natural language search query, can be multiple words."))
@@ -187,7 +187,7 @@ why)."
   (mevedel-define-tool
     :wrap (gptel-get-tool '("gptel-agent" "WebFetch"))
     :summary "Fetch and read the contents of a URL."
-    :prompt-file "tools/webfetch.md"
+    :prompt-file "prompts/tools/webfetch.md"
     :groups (web)
     :read-only-p t
     :max-result-size 50000
@@ -203,7 +203,7 @@ why)."
     :name "YouTube"
     :description "Find the description and transcript for a YouTube video."
     :summary "Find the description and transcript for a YouTube video."
-    :prompt-file "tools/youtube.md"
+    :prompt-file "prompts/tools/youtube.md"
     :handler #'mevedel-tool-web--youtube
     :args ((url string :required
                 "The YouTube video URL, for example \"https://www.youtube.com/watch?v=H2qJRnV8ZGA\""))

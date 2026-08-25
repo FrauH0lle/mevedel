@@ -35,7 +35,7 @@ Resource addresses
     labels any captured output as partial; narrow the path, glob, or pattern
     after a timeout.
 
-### When to use Grep
+### When to use `Grep`
 
 - Finding a specific string or pattern in the codebase
 - You know what you are looking for and where it likely is
@@ -44,7 +44,7 @@ Resource addresses
   tool result
 - Quick, focused searches with expected results under 20 matches
 
-### When NOT to use Grep
+### When NOT to use `Grep`
 
 - Building code understanding or exploring unfamiliar code -> delegate
 - Finding symbol definitions, callers, or usages when xref is available -> use
@@ -55,7 +55,7 @@ Resource addresses
 - Searching for files by name -> use Glob
 - Reading known file contents -> use Read
 
-### How to use Grep
+### How to use `Grep`
 
 - Supports full regex syntax
 - A `glob` is an explicit inclusion filter and may select otherwise ignored

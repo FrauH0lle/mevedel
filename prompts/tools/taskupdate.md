@@ -14,7 +14,13 @@ depended on it, so downstream tasks become unblocked.
   dependencies as the plan evolves
 - You discover a new dependency between existing tasks
 
-### Fields
+### When NOT to use `TaskUpdate`
+
+- The work item does not exist yet -> use `TaskCreate`
+- You only want to post progress context without changing any task
+  field -> use `TaskNote`
+
+### How to use `TaskUpdate`
 
 - `id` — **required** integer task ID to update
 - `subject` — optional new non-blank subject line
@@ -37,7 +43,7 @@ Only pass `note=""` when intentionally tearing down or replacing the
 visible status note; ordinary completion updates should omit `note`
 unless they need to change the status line.
 
-### Examples
+### Examples of good usage
 
 <example>
 TaskUpdate(id=2, status="in_progress", note="Working through validation")
@@ -49,4 +55,22 @@ TaskUpdate(id=2, status="completed")
 
 <example>
 TaskUpdate(id=3, owner="/root/worker_2", blockedBy=[1, 2])
+</example>
+
+### Examples of bad usage
+
+<example>
+TaskUpdate(id=2, status="completed", note="")
+<reasoning>
+Passing note="" clears the visible status note as a side effect.
+Ordinary completion updates should omit note entirely.
+</reasoning>
+</example>
+
+<example>
+TaskUpdate(id=99, subject="Write migration script")
+<reasoning>
+Trying to add new work through an update. New work items are created
+with TaskCreate; TaskUpdate only modifies existing IDs.
+</reasoning>
 </example>

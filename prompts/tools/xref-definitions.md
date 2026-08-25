@@ -1,21 +1,21 @@
 Search for functions, variables, or classes by name pattern across your project.
 Helps you discover code elements when you know part of the name.
 
-### When to use XrefDefinitions
+### When to use `XrefDefinitions`
 
 - Discovering functions or variables with names matching a pattern
 - Finding related symbols when you know part of the name
 - Exploring API surface area by naming convention
 - Locating symbol definitions by partial name
 
-### When NOT to use XrefDefinitions
+### When NOT to use `XrefDefinitions`
 
 - Searching for specific text in files -> use Grep
 - Finding exact symbol references/usage -> use XrefReferences
 - Searching across many files without symbol focus -> delegate
 - Pattern is too vague and will return many results -> delegate
 
-### How to use XrefDefinitions
+### How to use `XrefDefinitions`
 
 - Provide a pattern (substring or regex) to match symbol names
 - Works with indexed symbols (LSP, TAGS, elisp definitions)
