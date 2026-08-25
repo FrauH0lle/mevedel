@@ -781,7 +781,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
           (kill-buffer buffer)))
       (delete-directory save-path t))))
 
-(mevedel-deftest mevedel-agent-runtime--settle ()
+(mevedel-deftest mevedel-agent-runtime--settle (:quiet t)
   ,test
   (test)
   :doc "batches only materialized portable terminal state after registry update"
