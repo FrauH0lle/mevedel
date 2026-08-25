@@ -282,16 +282,18 @@
             (cl-letf (((symbol-function
                         'mevedel-session-artifacts-publish-text)
                        (lambda (seen-session path content &optional coding)
-                         (setq published
-                               (list seen-session path content coding))
+                         (push (list seen-session path content coding)
+                               published)
                          (funcall original-publish
                                   seen-session path content coding))))
               (mevedel-compact-target--agent-apply
                target "## Goal\n- Continue" "Recent tail.\n"
                "Pending result.\n" nil))))
+      ;; The archive publishes first; a portable session then publishes
+      ;; the rewritten canonical transcript.
       (should (equal (list session archive
                            (substring-no-properties original) 'utf-8-unix)
-                     published))
+                     (car (last published))))
       (should (file-exists-p archive))
       (should (equal original
                      (with-temp-buffer

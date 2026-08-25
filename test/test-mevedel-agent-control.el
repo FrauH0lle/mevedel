@@ -1531,18 +1531,21 @@
             (should-not (assoc "/root/unavailable"
                                (mevedel-session-agent-registry session))))
           (let (synchronous-results scheduled
-                (commits 0))
+                (publication-fails t))
             (cl-letf (((symbol-function 'mevedel-version)
                        (lambda (&rest _) "test"))
                       ((symbol-function 'run-at-time)
                        (lambda (_delay _repeat function &rest args)
                          (setq scheduled (cons function args))
                          'fake-terminal-retry))
-                      ((symbol-function 'mevedel-agent-control-commit-session)
-                       (lambda (_session)
-                         (cl-incf commits)
-                         (when (= commits 2)
-                           (error "Injected terminal commit failure"))
+                      ;; A portable session commits its terminal agent
+                      ;; state through the publication, local target
+                      ;; included.
+                      ((symbol-function
+                        'mevedel-session-artifacts-publish-agent-terminal-state)
+                       (lambda (_invocation)
+                         (when publication-fails
+                           (error "Injected terminal publication failure"))
                          t))
                       ((symbol-function 'mevedel-agent-exec-run)
                      (lambda (callback _role _description child
@@ -1574,6 +1577,7 @@
                   (should (eq 'running
                               (mevedel-agent-record-activity record)))
                   (should scheduled)
+                  (setq publication-fails nil)
                   (let ((retry scheduled))
                     (setq scheduled nil)
                     (apply (car retry) (cdr retry)))

@@ -663,22 +663,22 @@
        invocation "/root/explore" "duplicate")))))
 
 (defun test-mevedel-agent-runtime--terminal-settlement-events (artifact-p)
-  "Return terminal persistence events with committed sidecar ARTIFACT-P."
+  "Return a local portable session's terminal persistence events.
+ARTIFACT-P selects whether its sidecar counts as committed."
   (let* ((save-path
           (file-name-as-directory
            (make-temp-file "mevedel-agent-terminal-" t)))
          (parent (generate-new-buffer " *agent-terminal-parent*"))
          (child (generate-new-buffer " *agent-terminal-child*"))
-         (target 'remote-target)
+         (target 'local-target)
          (session
           (mevedel-session--create
            :name "main" :execution-target target :save-path save-path
-           :authority-mode 'pid-lock))
+           :authority-mode 'portable))
          (invocation (mevedel-agent-runtime-test--invocation child))
          events)
     (unwind-protect
         (progn
-          (require 'mevedel-execution-target)
           ;; Keep the materialized cache opposite to the authoritative
           ;; publication membership so this test detects fixed-path reads.
           (unless artifact-p
@@ -697,9 +697,7 @@
                   (when mevedel-agent-control-suppress-persistence
                     (cons (lambda () (push 'rollback events))
                           (lambda () (push 'delivery events))))))
-          (cl-letf (((symbol-function 'mevedel-execution-target-remote-p)
-                     (lambda (candidate) (eq candidate target)))
-                    ((symbol-function
+          (cl-letf (((symbol-function
                       'mevedel-session-artifacts-artifact-present-p)
                      (lambda (seen-session logical)
                        (push (list 'presence logical) events)
@@ -786,7 +784,7 @@
 (mevedel-deftest mevedel-agent-runtime--settle ()
   ,test
   (test)
-  :doc "batches only materialized remote terminal state after registry update"
+  :doc "batches only materialized portable terminal state after registry update"
   (should
    (equal '((presence "session.meta.el")
             (finalize t) (callback t) publication delivery)
@@ -799,7 +797,7 @@
   :doc "portable publication failure rolls staged control state back"
   (let* ((session (mevedel-session--create
                    :name "main" :save-path temporary-file-directory
-                   :execution-target 'remote))
+                   :execution-target 'local :authority-mode 'portable))
          (invocation (mevedel-agent-runtime-test--invocation))
          events)
     (setf (mevedel-agent-invocation-parent-session invocation) session
@@ -813,9 +811,7 @@
             (push 'callback events)
             (cons (lambda () (push 'rollback events))
                   (lambda () (push 'delivery events)))))
-    (cl-letf (((symbol-function 'mevedel-execution-target-remote-p)
-               (lambda (&rest _) t))
-              ((symbol-function
+    (cl-letf (((symbol-function
                 'mevedel-session-artifacts-artifact-present-p)
                (lambda (&rest _) t))
               ((symbol-function 'mevedel-agent-runtime--finalize)
@@ -837,7 +833,7 @@
   :doc "portable delivery retries without repeating its committed publication"
   (let* ((session (mevedel-session--create
                    :name "main" :save-path temporary-file-directory
-                   :execution-target 'remote))
+                   :execution-target 'local :authority-mode 'portable))
          (invocation (mevedel-agent-runtime-test--invocation))
          (callbacks 0)
          (publications 0)
@@ -856,9 +852,7 @@
                     (cl-incf deliveries)
                     (when (= deliveries 1)
                       (error "Delivery unavailable"))))))
-    (cl-letf (((symbol-function 'mevedel-execution-target-remote-p)
-               (lambda (&rest _) t))
-              ((symbol-function
+    (cl-letf (((symbol-function
                 'mevedel-session-artifacts-artifact-present-p)
                (lambda (&rest _) t))
               ((symbol-function 'mevedel-agent-runtime--finalize) #'ignore)
