@@ -170,8 +170,8 @@ fire-count and payload."
 							 (should (equal "complete response" (car (car fired)))))
 
 		 :doc "non-streaming (:stream absent, no `t'): string branch fires MAIN-CB"
-		 ;; gptel removes `:stream' from info when the request is non-streaming
-		 ;; and never sends a terminal `t' event -- see gptel-request.el 2864.
+		 ;; gptel removes `:stream' from info when the request is non-streaming,
+		 ;; and `gptel-curl--stream-cleanup' only runs for streaming requests.
 		 ;; The string must be treated as terminal here.
 		 (mevedel-agent-exec-test--with-callback cb
 							 (funcall cb "complete non-streaming response" nil)
@@ -242,6 +242,41 @@ fire-count and payload."
 							                          :mevedel-agent-terminal-status)))
 							   (should (equal "boom"
 							                  (plist-get event :error-details)))))
+
+                 :doc "in-band error on `t' terminal settles as error, not empty completion"
+                 ;; A provider can fail in-band on an HTTP 200 stream: the
+                 ;; parser stashes the error on INFO and
+                 ;; `gptel-curl--stream-cleanup' still fires `t'.
+                 (mevedel-agent-exec-test--with-callback cb
+                                                         (let ((info (list :stream t
+                                                                           :status "HTTP/2 200"
+                                                                           :error '(:type "service_unavailable_error"))))
+                                                           (funcall cb "partial text" info)
+                                                           (funcall cb t info)
+                                                           (should (= 1 (length fired)))
+                                                           (let ((event (car (car fired))))
+                                                             (should (eq 'error
+                                                                         (plist-get
+                                                                          event :mevedel-agent-terminal-status)))
+                                                             (should (equal '(:type "service_unavailable_error")
+                                                                            (plist-get event :error-details)))
+                                                             (should (string-match-p
+                                                                      "partial text"
+                                                                      (plist-get event :fallback-partial))))
+                                                           (should (equal "HTTP/2 200: service_unavailable_error"
+                                                                          (mevedel-agent-invocation-terminal-reason
+                                                                           default-invocation)))))
+
+                 :doc "in-band error on the non-streaming string terminal settles as error"
+                 (mevedel-agent-exec-test--with-callback cb
+                                                         (funcall cb "response text" (list :error "boom"))
+                                                         (should (= 1 (length fired)))
+                                                         (let ((event (car (car fired))))
+                                                           (should (eq 'error
+                                                                       (plist-get
+                                                                        event :mevedel-agent-terminal-status)))
+                                                           (should (equal "boom"
+                                                                          (plist-get event :error-details)))))
 
 		 :doc "abort (`'abort') emits one structured terminal event"
 		 (mevedel-agent-exec-test--with-callback cb
