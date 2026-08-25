@@ -18,10 +18,13 @@
 ;; `mevedel-tool-repair'
 (declare-function mevedel-tool-repair-format-path
                   "mevedel-tool-repair" (path))
+(autoload 'mevedel-tool-repair-format-path "mevedel-tool-repair")
 
 ;; `mevedel-tool-repair-diagnostics'
 (declare-function mevedel-tool-repair-normalize-audit-record
                   "mevedel-tool-repair-diagnostics" (record))
+(autoload 'mevedel-tool-repair-normalize-audit-record
+  "mevedel-tool-repair-diagnostics")
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--hook-prompt-rewrite-audit-record
@@ -47,6 +50,7 @@
 ;; `mevedel-view-render'
 (declare-function mevedel-view-render-add-display-properties
                   "mevedel-view-render" (start end &optional default-vtype))
+(autoload 'mevedel-view-render-add-display-properties "mevedel-view-render")
 
 (require 'mevedel-transcript-audit)
 (require 'mevedel-view-disclosure)
@@ -189,29 +193,27 @@ When EXPANDED is non-nil, include record details."
   (pcase (plist-get record :type)
     ('tool-input-repair
      (condition-case nil
-         (progn
-           (require 'mevedel-tool-repair)
-           (if-let* ((audit
-                      (mevedel-tool-repair-normalize-audit-record record)))
-               (concat
-                (if (eq (plist-get audit :state) 'committed)
-                    "  ◇ tool input repaired\n"
-                  "  ◇ tool input repair abandoned\n")
-                (when expanded
-                  (mapconcat
-                   (lambda (repair)
-                     (concat
-                      "    Rule: " (symbol-name (plist-get repair :rule)) "\n"
-                      "    Path"
-                      (if (= 1 (length (plist-get repair :paths))) ": " "s: ")
-                      (mapconcat #'mevedel-tool-repair-format-path
-                                 (plist-get repair :paths) ", ")
-                      "\n    Shape: "
-                      (symbol-name (plist-get repair :before))
-                      " -> " (symbol-name (plist-get repair :after)) "\n"))
-                   (plist-get audit :repairs)
-                   "")))
-             "  ◇ tool input repair audit unavailable\n"))
+         (if-let* ((audit
+                    (mevedel-tool-repair-normalize-audit-record record)))
+             (concat
+              (if (eq (plist-get audit :state) 'committed)
+                  "  ◇ tool input repaired\n"
+                "  ◇ tool input repair abandoned\n")
+              (when expanded
+                (mapconcat
+                 (lambda (repair)
+                   (concat
+                    "    Rule: " (symbol-name (plist-get repair :rule)) "\n"
+                    "    Path"
+                    (if (= 1 (length (plist-get repair :paths))) ": " "s: ")
+                    (mapconcat #'mevedel-tool-repair-format-path
+                               (plist-get repair :paths) ", ")
+                    "\n    Shape: "
+                    (symbol-name (plist-get repair :before))
+                    " -> " (symbol-name (plist-get repair :after)) "\n"))
+                 (plist-get audit :repairs)
+                 "")))
+           "  ◇ tool input repair audit unavailable\n")
        (error "  ◇ tool input repair audit unavailable\n")))
     ('guest-prompt
      ;; Collaboration guest attribution renders as the turn heading
@@ -314,7 +316,6 @@ EXPANDED means insert the disclosure body expanded."
 
 (defun mevedel-view-audit-toggle-hook-audit ()
   "Toggle a hook audit disclosure."
-  (require 'mevedel-view-render)
   (let* ((bounds (mevedel-view-disclosure-section-bounds))
          (source (and bounds
                       (get-text-property

@@ -39,6 +39,8 @@
 ;; `mevedel-agent-persistence'
 (declare-function mevedel-agent-persistence-transcript-path-p
                   "mevedel-agent-persistence" (path save-path))
+(autoload 'mevedel-agent-persistence-transcript-path-p
+  "mevedel-agent-persistence")
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
@@ -59,6 +61,10 @@
 (declare-function mevedel-session-artifacts-find-artifact-noselect
                   "mevedel-session-artifacts"
                   (session logical &optional inspection))
+(autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-find-artifact-noselect
+  "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-agent-transcripts "mevedel-structs" (cl-x) t)
@@ -77,6 +83,7 @@
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties
                   "mevedel-transcript-restore" (&optional only-if-missing))
+(autoload 'mevedel-transcript-restore-properties "mevedel-transcript-restore")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
@@ -681,10 +688,6 @@ usual.  Keyboard invocation outside an attribution signals a user error."
 Retained agents resolve through their conversation buffer when it is resident;
 otherwise their validated transcript file is opened.
 Signals `user-error' when no transcript source can be opened."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-agent-persistence)
   (let* ((data-buf (and (boundp 'mevedel--data-buffer)
                         mevedel--data-buffer))
          (session (and data-buf (buffer-live-p data-buf)
@@ -795,9 +798,6 @@ Signals `user-error' when no transcript source can be opened."
 (defun mevedel-view--ensure-agent-transcript-view (agent-path info parent-view)
   "Return a rendered transcript inspection view for AGENT-PATH and INFO.
 PARENT-VIEW is the session view that opened the transcript."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((session (plist-get info :session))
          (session-key
           (or (mevedel-session-session-id session)
@@ -854,7 +854,6 @@ PARENT-VIEW is the session view that opened the transcript."
       ;; insertion fail with buffer-read-only.  Only cold transcript
       ;; files are restored and frozen.
       (unless (or live-p retained-p)
-        (require 'mevedel-transcript-restore)
         (mevedel-transcript-restore-properties)
         (unless buffer-read-only
           (read-only-mode +1))))
