@@ -660,7 +660,6 @@ With prefix ARG (\\[universal-argument]):
                               (mevedel-workspace-root workspace)))
          (entry
           (unless arg
-            (require 'mevedel-session-persistence)
             (mevedel-session-persistence-choose-entry workspace))))
     (cond
      ((bufferp entry)
@@ -747,11 +746,9 @@ always prompt for the session name."
   ;; `:result' strings become API-shaped tool_result messages) catches
   ;; both tool-follow-up and user-initiated request paths while leaving
   ;; the chat-buffer display / view parser / persistence untouched.
-  (require 'mevedel-tool-render-data)
   (mevedel-tool-render-data-install-provider-adapter)
 
   ;; Preserve empty object versus null before gptel runs tool hooks.
-  (require 'mevedel-tool-repair)
   (mevedel-tool-repair-install-shape-adapter)
 
   ;; Install slash-command advice on `gptel-send'
@@ -763,12 +760,6 @@ always prompt for the session name."
 
   ;; Install the gptel stream compatibility bridge.
   (mevedel-gptel-stream-bridge-install)
-
-  ;; Best-effort save and cleanup of live sessions on Emacs exit.  The hook
-  ;; itself is installed at `mevedel-session-persistence' file-load time so
-  ;; it's active even when the user never calls `mevedel-install' (e.g. only
-  ;; invokes `mevedel-resume').
-  (require 'mevedel-session-persistence)
 
   (message "mevedel installed successfully"))
 
