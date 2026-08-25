@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 
 (eval-when-compile
   (require 'mevedel-tool-registry))
@@ -375,6 +376,7 @@ open tasks for that owner completed, propagate dependency unblocking, and
         (mevedel-tool-task--mark-write session))
       changed)))
 
+
 ;;
 ;;; Formatting helpers
 
@@ -418,7 +420,7 @@ Only agent-owned tasks carry one: the main session's current work is
 already visible in the transcript.  Truncation happens at the single
 row-text site in `mevedel-tool-task--format-one'."
   (when (and (eq (mevedel-task-status task) 'in-progress)
-             (mevedel-task-owner task))
+             (mevedel-agent-path-p (mevedel-task-owner task)))
     (let ((activity (mevedel-tool-task--metadata-get
                      (mevedel-task-metadata task)
                      :activity :activeForm :active-form :active_form)))
@@ -579,20 +581,13 @@ blockers."
             ((> open 0) (format "… %d more open" open))
             (t (format "… %d completed" completed))))))
 
-(defun mevedel-tool-task--chrome-row-p (row)
-  "Return non-nil when ROW carries no task counts of its own.
-Headers, notes, and the `done' label are chrome: they only make sense
-above the rows they introduce."
-  (and (zerop (nth 1 row)) (zerop (nth 2 row))))
-
-(defun mevedel-tool-task--render-rows (rows tasks max-lines)
+(defun mevedel-tool-task--render-rows (rows max-lines)
   "Join ROWS into a panel body, capping the result at MAX-LINES.
 ROWS are (TEXT OPEN-COUNT COMPLETED-COUNT) triples whose counts sum to
-the tasks a truncation drops.  TASKS is the session task list, used
-only to word the empty message."
+the tasks a truncation drops."
   (cond
    ((null rows)
-    (mevedel-tool-task--dim (if tasks "No open tasks." "No tasks.")))
+    (mevedel-tool-task--dim "No open tasks."))
    ((or (null max-lines) (<= (length rows) max-lines))
     (string-join (mapcar #'car rows) "\n"))
    (t
@@ -603,7 +598,8 @@ only to word the empty message."
       ;; A cut landing right after a header leaves that header with
       ;; nothing under it; drop it rather than dangle it.
       (while (and visible
-                  (mevedel-tool-task--chrome-row-p (car (last visible))))
+                  (zerop (nth 1 (car (last visible))))
+                  (zerop (nth 2 (car (last visible)))))
         (setq visible (butlast visible)))
       (string-join
        (append (mapcar #'car visible)
@@ -628,13 +624,9 @@ MAX-LINES caps the rendered body without changing task storage."
   (let* ((tasks (mevedel-session-tasks session))
          (active (mevedel-tool-task--sort-active-tasks
                   (cl-remove-if-not #'mevedel-tool-task--active-p tasks)))
-         (buckets (make-hash-table :test #'equal))
+         (buckets (seq-group-by #'mevedel-task-owner active))
          (grouped (make-hash-table :test #'equal))
          rows)
-    (dolist (task active)
-      (let ((owner (mevedel-task-owner task)))
-        (puthash owner (append (gethash owner buckets) (list task))
-                 buckets)))
     (cl-flet ((note-row (owner)
                 (when owner
                   (when-let*
@@ -646,7 +638,7 @@ MAX-LINES caps the rendered body without changing task storage."
         (push (list line 0 0) rows))
       (dolist (task active)
         (let* ((owner (mevedel-task-owner task))
-               (bucket (gethash owner buckets)))
+               (bucket (alist-get owner buckets nil nil #'equal)))
           (cond
            ;; The main session is the default owner, so a "Main"
            ;; header names nothing its unprefixed rows do not already
@@ -693,7 +685,7 @@ MAX-LINES caps the rendered body without changing task storage."
                                  tasks))
                         0 1)
                   rows)))))
-    (mevedel-tool-task--render-rows (nreverse rows) tasks max-lines)))
+    (mevedel-tool-task--render-rows (nreverse rows) max-lines)))
 
 (defun mevedel-tool-task--format-for-llm (tasks)
   "Return a plain-text summary of TASKS for the LLM."
@@ -714,6 +706,12 @@ MAX-LINES caps the rendered body without changing task storage."
                  parts))
          (string-join (nreverse parts) " ")))
      tasks "\n")))
+
+(defun mevedel-tool-task-format-active-for-llm (session)
+  "Return SESSION's non-completed tasks in the TaskList text shape."
+  (mevedel-tool-task--format-for-llm
+   (cl-remove-if-not #'mevedel-tool-task--active-p
+                     (mevedel-session-tasks session))))
 
 
 ;;

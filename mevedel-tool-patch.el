@@ -258,12 +258,19 @@ local sessions untouched until permission and plan checks have completed."
     path))
 
 (defun mevedel-tool-patch-parse-update-lines (lines first-line)
-  "Parse update payload LINES beginning at FIRST-LINE into hunks."
+  "Parse update payload LINES beginning at FIRST-LINE into hunks.
+A hunk's `@@' anchor is either a context line or a bare positive line
+number; the latter becomes `:line-hint' and only breaks ties between
+otherwise ambiguous matches."
   (let (hunks current changed-p)
     (cl-labels
-        ((new-hunk (context)
-           (list :context context :old-lines nil :new-lines nil
-                 :diff-lines nil :eof nil :selected t))
+        ((new-hunk (anchor)
+           (let ((numeric (and anchor
+                               (string-match-p "\\`[1-9][0-9]*\\'" anchor))))
+             (list :context (unless numeric anchor)
+                   :line-hint (and numeric (string-to-number anchor))
+                   :old-lines nil :new-lines nil
+                   :diff-lines nil :eof nil :selected t)))
          (ensure-current ()
            (unless current
              (setq current (new-hunk nil))))
@@ -543,16 +550,22 @@ IGNORE-EOF drops the end-of-file anchoring requirement of an
           (push start starts))))
     (nreverse starts)))
 
-(defun mevedel-tool-patch--match-start (lines hunk path &optional after)
+(defun mevedel-tool-patch--match-start
+    (lines hunk path &optional after line-offset)
   "Return the unique start for HUNK in LINES from PATH.
 Matching passes decrease in strictness: exact, ignoring trailing
 whitespace, ignoring surrounding whitespace, then folding typographic
 punctuation to ASCII.  An `*** End of File' hunk is first anchored to
 the end of LINES, then retried unanchored.  Unlike Codex, every pass
-still requires a unique match; when AFTER is non-nil, an otherwise
-ambiguous match is retried among the candidates at or after that line
-index, since hunks arrive in file order.  The winning pass label is
-recorded on HUNK as `:match-pass' (nil for an exact match)."
+still requires a unique match.  Ties are broken in two steps: when
+AFTER is non-nil, the candidates at or after that line index are
+preferred, since hunks arrive in file order; a remaining tie is then
+settled by HUNK's `:line-hint', the bare line number of a numeric `@@'
+anchor, which selects the nearest candidate.  LINE-OFFSET translates
+that baseline hint into the current LINES coordinates.  Neither step
+can empty the candidate set, so a stale hint never rejects a hunk on
+its own.  The winning pass label is recorded on HUNK as `:match-pass'
+(nil for an exact match)."
   (let (starts pass)
     (cl-loop
      for ignore-eof in (if (plist-get hunk :eof) '(nil t) '(nil))
@@ -564,13 +577,25 @@ recorded on HUNK as `:match-pass' (nil for an exact match)."
      until starts)
     (when (and after (> (length starts) 1))
       (let ((ordered (seq-filter (lambda (start) (>= start after)) starts)))
-        (when (= 1 (length ordered))
+        (when ordered
           (setq starts ordered))))
+    ;; ponytail: nearest candidate wins with no distance ceiling; add a
+    ;; window if a far-off hint is ever seen picking the wrong region.
+    (when-let* ((hint (and (> (length starts) 1) (plist-get hunk :line-hint))))
+      (let* ((target (+ (1- hint) (or line-offset 0)))
+             (distance (lambda (start) (abs (- start target))))
+             (best (apply #'min (mapcar distance starts)))
+             (nearest (seq-filter (lambda (start)
+                                    (= best (funcall distance start)))
+                                  starts)))
+        (when (= 1 (length nearest))
+          (setq starts nearest))))
     (plist-put hunk :match-pass (and starts pass))
     (pcase (length starts)
       (0 (error "Patch hunk does not match %s" path))
       (1 (car starts))
-      (_ (error "Patch hunk is ambiguous in %s; provide more context" path)))))
+      (_ (error "Patch hunk is ambiguous in %s; anchor it with @@ LINE or add context"
+                path)))))
 
 (defun mevedel-tool-patch--section-label (lines start)
   "Return a diff-style section label for a hunk at START in LINES.
@@ -635,11 +660,12 @@ advance the order-disambiguation cursor when they match, so a later
 hunk that previewed cleanly stays unambiguous after a deselection."
   (let ((eol (if (string-search "\r\n" content) "\r\n" "\n"))
         (lines (mevedel-tool-patch--lines content))
-        (after 0))
+        (after 0)
+        (line-offset 0))
     (dolist (hunk hunks)
       (if (plist-get hunk :selected)
           (let* ((start (mevedel-tool-patch--match-start
-                         lines hunk path after))
+                         lines hunk path after line-offset))
                  (old-count (length (plist-get hunk :old-lines)))
                  (replacement (mevedel-tool-patch--hunk-replacement
                                lines start hunk)))
@@ -647,10 +673,11 @@ hunk that previewed cleanly stays unambiguous after a deselection."
                   (append (seq-take lines start)
                           replacement
                           (nthcdr (+ start old-count) lines)))
-            (setq after (+ start (length replacement))))
+            (setq after (+ start (length replacement)))
+            (cl-incf line-offset (- (length replacement) old-count)))
         (when-let* ((start (ignore-errors
                              (mevedel-tool-patch--match-start
-                              lines hunk path after))))
+                              lines hunk path after line-offset))))
           (setq after (+ start (length (plist-get hunk :old-lines)))))))
     (string-join lines eol)))
 
