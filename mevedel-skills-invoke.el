@@ -28,6 +28,7 @@
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(autoload 'gptel-fsm-info "gptel-request")
 
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-current-path
@@ -52,14 +53,17 @@
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
+(autoload 'mevedel-agent--create "mevedel-agents")
+(autoload 'mevedel-agent-get "mevedel-agents")
+(autoload 'mevedel-agent-invocation-hook-rules "mevedel-agents")
+(autoload 'mevedel-agent-invocation-skill-permission-rules "mevedel-agents")
+(autoload 'mevedel-agent-name "mevedel-agents")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string
                   "mevedel-hooks" (decision &optional event))
 (declare-function mevedel-hooks-decision-reason
                   "mevedel-hooks" (decision))
-(declare-function mevedel-hooks-sanitize-final-decision
-                  "mevedel-hooks" (event decision))
 (declare-function mevedel-hooks-event-plist
                   "mevedel-hooks"
                   (event &optional session workspace &rest extra))
@@ -67,6 +71,13 @@
                   "mevedel-hooks"
                   (event event-plist callback
                          &optional session workspace request invocation))
+(declare-function mevedel-hooks-sanitize-final-decision
+                  "mevedel-hooks" (event decision))
+(autoload 'mevedel-hooks-additional-context-string "mevedel-hooks")
+(autoload 'mevedel-hooks-decision-reason "mevedel-hooks")
+(autoload 'mevedel-hooks-event-plist "mevedel-hooks")
+(autoload 'mevedel-hooks-run-event "mevedel-hooks")
+(autoload 'mevedel-hooks-sanitize-final-decision "mevedel-hooks")
 
 ;; `mevedel-models'
 (declare-function mevedel-model-merge-skill-policy
@@ -84,6 +95,10 @@
 (declare-function mevedel-skills-preparation-substitute
                   "mevedel-skills-preparation"
                   (text arguments session skill))
+(autoload 'mevedel-skills-preparation-expand-body
+  "mevedel-skills-preparation")
+(autoload 'mevedel-skills-preparation-substitute
+  "mevedel-skills-preparation")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-attached-skill-records
@@ -119,6 +134,8 @@
 (declare-function mevedel--hook-prompt-rewrite-audit-record
                   "mevedel-transcript-audit"
                   (event original submitted &optional reason))
+(autoload 'mevedel--hook-prompt-rewrite-audit-record
+  "mevedel-transcript-audit")
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
@@ -128,6 +145,7 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
+(autoload 'mevedel--warn-once "mevedel-utilities")
 
 ;;
 ;;; Request-scoped skill context
@@ -229,7 +247,6 @@ transforms apply this policy to the temp buffer, so any request-time
 consumer of the effective model -- the roster budget included -- must
 resolve through this one seam rather than read the buffer's
 `gptel-model' directly."
-  (require 'mevedel-models)
   (mevedel-model-resolve-workload
    (and (bound-and-true-p mevedel--session)
         (not (bound-and-true-p mevedel--agent-invocation))
@@ -295,7 +312,6 @@ context.  CALLBACK receives (PROMPT DECISION).  Non-user ORIGIN values
 skip the hook and call CALLBACK with PROMPT and nil."
   (if (not (eq origin 'user))
       (funcall callback prompt nil)
-    (require 'mevedel-hooks)
     (let* ((workspace (and session (mevedel-session-workspace session)))
            (request (and (boundp 'mevedel--current-request)
                          mevedel--current-request)))
@@ -323,8 +339,6 @@ DISPLAY-CALLBACK receives the lifecycle event when non-nil."
 
 (defun mevedel-skills--prompt-rewrite-audit-record (original decision)
   "Return a `UserPromptExpansion' rewrite audit record, or nil."
-  (require 'mevedel-hooks)
-  (require 'mevedel-transcript-audit)
   (when-let* ((updated (plist-get decision :updated-input))
               ((stringp updated)))
     (mevedel--hook-prompt-rewrite-audit-record
@@ -532,7 +546,6 @@ its outcome exactly once."
   "Build the successful preparation outcome from METADATA.
 ORIGINAL and EXPANDED are the pre-hook and post-hook bodies.  DECISION is the
 sanitized `UserPromptExpansion' hook decision."
-  (require 'mevedel-hooks)
   (let* ((skill (plist-get metadata :skill))
          (arguments (plist-get metadata :arguments))
          (role (plist-get metadata :role))
@@ -585,7 +598,6 @@ ROLE is `command' or `instruction'.  ORIGIN is `user', `model', or
 `internal'.  CALLBACK receives the normal outcome plist.  Instruction
 preparation forces empty arguments and ignores command-only policy metadata.
 Allowed-tool rules apply only to the temporary preparation request."
-  (require 'mevedel-skills-preparation)
   (if-let* ((rejection (mevedel-skills--preparation-rejection
                         skill role origin)))
       (mevedel-skills--invoke-error
@@ -723,7 +735,6 @@ tools propagate through the spawn path's request-locals capture."
 
 (defun mevedel-skills--fork-task-name (session skill-name)
   "Return an unused retained-agent task name for SKILL-NAME in SESSION."
-  (require 'mevedel-agent-control)
   (let* ((base
           (concat
            "skill_"
