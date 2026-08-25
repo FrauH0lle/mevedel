@@ -9,8 +9,9 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib)
-  (require 'tabulated-list))
+  (require 'cl-lib))
+
+(require 'tabulated-list)
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
@@ -172,7 +173,6 @@ LABEL is used in the owner error."
 
 (defun mevedel-cockpit-goto-id (id)
   "Move point to tabulated row ID, or to the first row when absent."
-  (require 'tabulated-list)
   (goto-char (point-min))
   (catch 'found
     (when id
@@ -222,7 +222,6 @@ LABEL is used in the owner error."
 (defun mevedel-cockpit-surface-refresh (&optional selected-id)
   "Refresh the current tabulated cockpit, preserving SELECTED-ID."
   (interactive)
-  (require 'tabulated-list)
   (let* ((surface (mevedel-cockpit--current-surface))
          (context (mevedel-cockpit-surface-context surface))
          (collect-function (plist-get surface :collect))
@@ -246,7 +245,6 @@ LABEL is used in the owner error."
   "Return the selected cockpit surface item.
 When NO-ERROR is non-nil, return nil instead of signaling when no row
 item is selected."
-  (require 'tabulated-list)
   (mevedel-cockpit-surface-context)
   (let* ((surface (mevedel-cockpit--current-surface))
          (row-label (or (plist-get surface :row-label) "item"))
@@ -373,7 +371,6 @@ a help label are still valid bindings, but are omitted from generated help."
 
 (defun mevedel-cockpit-setup-tabulated-surface (surface)
   "Initialize the current tabulated buffer from SURFACE."
-  (require 'tabulated-list)
   (setq mevedel-cockpit--surface surface
         tabulated-list-format (plist-get surface :format)
         tabulated-list-padding (or (plist-get surface :padding) 2)
@@ -415,7 +412,6 @@ LABEL is a user-facing surface label used in the dead-owner error."
     (when (and (plist-get surface :require-session)
                (not (mevedel-cockpit-context-session context)))
       (user-error "No mevedel session in this buffer")))
-  (require 'tabulated-list)
   ;; One buffer name per surface, so a second session would otherwise
   ;; take the first session's buffer by overwriting its context -- and
   ;; with it the only handle the surface had on what it still owes that

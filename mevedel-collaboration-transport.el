@@ -20,6 +20,8 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'json)
+
 ;; `json'
 (declare-function json-encode "json" (object))
 
@@ -121,7 +123,6 @@ come out of the same budget.")
   "Serialize FRAME as a JSON string.
 FRAME is a plist with keyword keys; nested values may be the alist
 shapes the projection already produces, which `json-encode' accepts."
-  (require 'json)
   (json-encode frame))
 
 (defun mevedel-collaboration--frame-decode (text)

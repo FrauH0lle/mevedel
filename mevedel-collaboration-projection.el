@@ -41,7 +41,6 @@
 (require 'mevedel-transcript-audit)
 (require 'mevedel-utilities)
 (require 'mevedel-view-render)
-(require 'mevedel-review)
 
 (defconst mevedel-collaboration--protocol-version 2)
 (defconst mevedel-collaboration--max-record-text-bytes

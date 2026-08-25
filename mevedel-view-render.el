@@ -84,6 +84,7 @@
 ;; `mevedel-review'
 (declare-function mevedel-review-strip-user-action-blocks
 		  "mevedel-review" (text))
+(autoload 'mevedel-review-strip-user-action-blocks "mevedel-review")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-fork-point-at-source
