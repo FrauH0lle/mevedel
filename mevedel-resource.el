@@ -43,11 +43,15 @@
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-project-history
                   "mevedel-agent-conversation" (buffer &optional session))
+(autoload 'mevedel-agent-conversation-project-history
+  "mevedel-agent-conversation")
 
 ;; `mevedel-agent-persistence'
 (declare-function mevedel-agent-persistence-restore-tree
                   "mevedel-agent-persistence"
                   (session root-buffer &optional readonly-p))
+(autoload 'mevedel-agent-persistence-restore-tree
+  "mevedel-agent-persistence")
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-list-user "mevedel-execution" (session))
@@ -61,6 +65,7 @@
 (declare-function mevedel-skills-source-key "mevedel-skills-core" (source-file))
 (declare-function mevedel-skills-scan "mevedel-skills-core"
                   (&optional workspace-root dirs workspace))
+(autoload 'mevedel-skills-scan "mevedel-skills-core")
 
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
@@ -77,9 +82,12 @@
                   (&optional workspace))
 (declare-function mevedel-system--memory-roots "mevedel-system"
                   (&optional workspace))
+(autoload 'mevedel-system--memory-content "mevedel-system")
+(autoload 'mevedel-system--memory-roots "mevedel-system")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" ())
+(autoload 'mevedel--transcript-org-mode "mevedel-utilities")
 
 (defconst mevedel-resource-supported-schemes
   '(local artifact skill agent history memory mcp)
@@ -438,7 +446,6 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
 
 (defun mevedel-resource--skill-list (session context)
   "Return currently discoverable skills for SESSION and CONTEXT."
-  (require 'mevedel-skills-core)
   (let* ((workspace (mevedel-resource--workspace context session))
          (workspace-root (and workspace (mevedel-workspace-root workspace)))
          (skills (and session (mevedel-session-skills session))))
@@ -473,7 +480,6 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
 
 (defun mevedel-resource--memory-roots (context session)
   "Return configured memory root metadata for CONTEXT and SESSION."
-  (require 'mevedel-system)
   (mevedel-system--memory-roots
    (mevedel-resource--workspace context session)))
 
@@ -882,7 +888,6 @@ When HISTORY-P is non-nil, list only identities with retained conversations."
 
 (defun mevedel-resource--json-parse (payload)
   "Parse complete JSON PAYLOAD with sentinels for null, false, and missing."
-  (require 'json)
   (condition-case err
       (json-parse-string
        payload :object-type 'alist :array-type 'array
@@ -971,12 +976,10 @@ parent is discarded."
     (unwind-protect
         (progn
           (with-current-buffer root-buffer
-            (require 'mevedel-utilities)
             (mevedel--transcript-org-mode)
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace
                         (and session (mevedel-session-workspace session))))
-          (require 'mevedel-agent-persistence)
           (mevedel-agent-persistence-restore-tree session root-buffer t)
           (let ((buffer (mevedel-agent-record-conversation-buffer record)))
             (if (buffer-live-p buffer)
@@ -992,7 +995,6 @@ parent is discarded."
                      (mevedel-agent-record-conversation-buffer record))))
     (unless (buffer-live-p buffer)
       (setq buffer (mevedel-resource--history-hydrate record session)))
-    (require 'mevedel-agent-conversation)
     (mevedel-agent-conversation-project-history buffer session)))
 
 (defun mevedel-resource--skill-list-result (session context)
@@ -1077,7 +1079,6 @@ the union index read, which already tolerates missing roots."
        (if (equal components '("root"))
            (pcase operation
              ('read
-              (require 'mevedel-system)
               (mevedel-system--memory-content
                (mevedel-resource--workspace context session)))
              ((or 'glob 'grep)
