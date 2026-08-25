@@ -10,8 +10,12 @@
   (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
+;; `gptel-request'
+(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
+(autoload 'mevedel-abort "mevedel-chat")
 
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--data-buffer "mevedel-interaction-prompt"
@@ -26,9 +30,26 @@
 (declare-function mevedel--prompt-attribution-line
                   "mevedel-interaction-prompt" (origin))
 (defvar mevedel--prompt-overlays)
+(autoload 'mevedel--prompt--data-buffer "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt--register-canceller "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt--settle "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt-announce "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt-attribution-line "mevedel-interaction-prompt")
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--positional-to-plist
+                  "mevedel-pipeline" (raw-args specs))
+(declare-function mevedel-pipeline-run-tool
+                  "mevedel-pipeline" (tool callback args))
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool--resolve-prompt
+                  "mevedel-tool-registry" (prompt))
+(declare-function mevedel-tool-register "mevedel-tool-registry" (tool))
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
+(autoload 'mevedel-current-origin "mevedel-turn")
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
@@ -37,6 +58,9 @@
 (declare-function mevedel-view--interaction-target-buffer
                   "mevedel-view-interaction"
                   (&optional data-buffer))
+(autoload 'mevedel-view--interaction-register "mevedel-view-interaction")
+(autoload 'mevedel-view--interaction-target-buffer
+  "mevedel-view-interaction")
 
 
 ;;
@@ -155,23 +179,18 @@
 
 CALLBACK is the async callback function to call with results.
 QUESTIONS is an array of question plists, each with :question and :options keys."
-  (require 'mevedel-turn)
   (mevedel-tools--validate-params callback mevedel-tools--ask-user
     (questions (vectorp . "array")))
-
-          (require 'mevedel-interaction-prompt)
 
           (let* ((source-buffer (current-buffer))
                  (origin (mevedel-current-origin))
                  (questions-list (append questions nil)) ; Convert vector to list
                  (answers (make-vector (length questions-list) nil))
                  (chat-buffer
-                  (progn
-                    (require 'mevedel-view-interaction)
-                    (or (mevedel-view--interaction-target-buffer
-                         (with-current-buffer source-buffer
-                           (mevedel--prompt--data-buffer)))
-                        (error "No live view for Ask prompt"))))
+                  (or (mevedel-view--interaction-target-buffer
+                       (with-current-buffer source-buffer
+                         (mevedel--prompt--data-buffer)))
+                      (error "No live view for Ask prompt")))
                  (interaction-id (list :ask (gensym "ask-")))
                  (overlay nil)
                  (current-index 0))
