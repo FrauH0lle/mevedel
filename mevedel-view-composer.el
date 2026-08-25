@@ -57,6 +57,12 @@
 (declare-function mevedel-directive-frame-display
                   "mevedel-directive-frame"
                   (directive view-buffer &optional focus))
+(autoload 'mevedel-directive-frame-display "mevedel-directive-frame")
+
+;; `mevedel-directive-plan'
+(declare-function mevedel-directive-plan-continue
+                  "mevedel-directive-plan" (directive input))
+(autoload 'mevedel-directive-plan-continue "mevedel-directive-plan")
 
 ;; `mevedel-directive-request'
 (declare-function mevedel--directive-session-buffer
@@ -76,6 +82,7 @@
 ;; `mevedel-goal'
 (declare-function mevedel-goal-start "mevedel-goal"
 		  (objective &optional prompt-submission))
+(autoload 'mevedel-goal-start "mevedel-goal")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string
@@ -91,6 +98,7 @@
 			 workspace request invocation))
 (declare-function mevedel-hooks-sanitize-final-decision
                   "mevedel-hooks" (event decision))
+(autoload 'mevedel-hooks-event-plist "mevedel-hooks")
 
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-buffer-workspace
@@ -116,6 +124,7 @@
 (declare-function mevedel-mentions-install "mevedel-mentions" nil)
 (declare-function mevedel-mentions-prepare-user-input
 		  "mevedel-mentions" (text &optional session))
+(autoload 'mevedel-mentions-install "mevedel-mentions")
 (defvar mevedel-mentions-agent-enabled-p)
 
 ;; `mevedel-menu'
@@ -130,6 +139,7 @@
                   "mevedel-overlays" (record workspace))
 (declare-function mevedel--topmost-instruction
                   "mevedel-overlays" (instruction &optional of-type pred))
+(autoload 'mevedel--topmost-instruction "mevedel-overlays")
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view--queue-prepared-steering
@@ -150,10 +160,17 @@
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-reserved-goal-id
 		  "mevedel-plan-handoff" (&optional session))
+(autoload 'mevedel-plan-handoff-reserved-goal-id "mevedel-plan-handoff")
 
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-mode--invalidate-proposal
 		  "mevedel-plan-mode" (&optional session))
+(declare-function mevedel-plan-mode-enter "mevedel-plan-mode"
+                  (&optional session))
+(declare-function mevedel-plan-mode-exit "mevedel-plan-mode"
+                  (&optional session))
+(autoload 'mevedel-plan-mode-enter "mevedel-plan-mode")
+(autoload 'mevedel-plan-mode-exit "mevedel-plan-mode")
 
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-accept
@@ -181,9 +198,12 @@
 		  "mevedel-prompt-submission" (submission))
 (declare-function mevedel-prompt-submission-set-outcome
 		  "mevedel-prompt-submission" (submission outcome))
+(autoload 'mevedel-prompt-submission-cancel "mevedel-prompt-submission")
+(autoload 'mevedel-prompt-submission-create "mevedel-prompt-submission")
 
 ;; `mevedel-resource-capf'
 (declare-function mevedel-resource-capf "mevedel-resource-capf" ())
+(autoload 'mevedel-resource-capf "mevedel-resource-capf")
 
 ;; `mevedel-review'
 (declare-function mevedel-review-command-skill-p "mevedel-review"
@@ -196,6 +216,8 @@
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
                   "mevedel-session-artifacts" (session))
+(autoload 'mevedel-session-artifacts-assert-new-mutation-authority
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-fork'
 (declare-function mevedel-session-fork-conversation-fork
@@ -204,6 +226,10 @@
                   "mevedel-session-fork" (session path))
 (declare-function mevedel-session-fork-worktree-fork
                   "mevedel-session-fork" (buffer target))
+(autoload 'mevedel-session-fork-conversation-fork "mevedel-session-fork")
+(autoload 'mevedel-session-fork-retarget-worktree-path
+  "mevedel-session-fork")
+(autoload 'mevedel-session-fork-worktree-fork "mevedel-session-fork")
 
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
@@ -212,10 +238,13 @@
 (declare-function mevedel-session-rewind-assert-stable-source
                   "mevedel-session-rewind"
                   (session buffer operation))
+(autoload 'mevedel-session-rewind-assert-stable-source
+  "mevedel-session-rewind")
 
 ;; `mevedel-side-conversation'
 (declare-function mevedel-side-conversation-send
                   "mevedel-side-conversation" ())
+(autoload 'mevedel-side-conversation-send "mevedel-side-conversation")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-session-get-skill "mevedel-skills-core"
@@ -251,6 +280,7 @@
 		  "mevedel-skills-plan" (plan expanded-prompt))
 (declare-function mevedel-skills-plan-user-input "mevedel-skills-plan"
 		  (text session))
+(autoload 'mevedel-skills-plan-user-input "mevedel-skills-plan")
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills-install-font-lock "mevedel-skills-ui"
@@ -263,6 +293,7 @@
 		  "mevedel-skills-ui" (skill arguments))
 (declare-function mevedel-skills-slash-capf "mevedel-skills-ui"
 		  (buffer session local-commands &optional input-start))
+(autoload 'mevedel-skills-install-font-lock "mevedel-skills-ui")
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-structs'
@@ -311,14 +342,17 @@
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-blocks
                   "mevedel-tool-render-data" (string))
+(autoload 'mevedel-tool-render-data-blocks "mevedel-tool-render-data")
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
 		  "mevedel-transcript" nil)
+(autoload 'mevedel-transcript-prompt-transform-start "mevedel-transcript")
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
 		  "mevedel-transcript-audit" (record))
+(autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-assert-target-ready
@@ -327,16 +361,22 @@
                   (session &optional directive-uuid))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
+(autoload 'mevedel-request-assert-target-ready "mevedel-turn")
+(autoload 'mevedel-request-begin "mevedel-turn")
+(autoload 'mevedel-request-end "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
 		  "mevedel-utilities" (start end))
 (declare-function mevedel--normalize-message-text "mevedel-utilities"
 		  (text))
+(autoload 'mevedel--clear-user-turn-gptel-properties "mevedel-utilities")
+(autoload 'mevedel--normalize-message-text "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view--abort-data-buffer
                   "mevedel-view" (data-buffer))
+(autoload 'mevedel-view--abort-data-buffer "mevedel-view")
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--side-conversation-p)
 (defvar mevedel-view--status-marker)
@@ -366,6 +406,7 @@
 (declare-function mevedel-view-history-next "mevedel-view-history" ())
 (declare-function mevedel-view-history-previous "mevedel-view-history" ())
 (declare-function mevedel-view-history-search "mevedel-view-history" ())
+(autoload 'mevedel-view-history-load "mevedel-view-history")
 
 ;; `mevedel-view-input-files'
 (declare-function mevedel-view--activate-dropped-file-grants
@@ -376,6 +417,7 @@
                   "mevedel-view-input-files" (input))
 (declare-function mevedel-view--pop-dropped-file-grants-for-input
                   "mevedel-view-input-files" (input session))
+(autoload 'mevedel-view--install-dnd "mevedel-view-input-files")
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-rebuild
@@ -405,11 +447,13 @@
                   "mevedel-view-render" ())
 (declare-function mevedel-view-reset-agent-ephemeral-state
                   "mevedel-view-render" (&optional data-buf))
+(autoload 'mevedel-view--append-request-summary "mevedel-view-render")
 (defvar mevedel-view--display-map)
 
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-historical-segment-p
                   "mevedel-view-segments" ())
+(autoload 'mevedel-view-historical-segment-p "mevedel-view-segments")
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--stop-request-progress
@@ -426,6 +470,8 @@
 		  "mevedel-worktree" (session))
 (declare-function mevedel-worktree-fork-reservation
 		  "mevedel-worktree" (session &optional preflight))
+(autoload 'mevedel-worktree-fork-preflight "mevedel-worktree")
+(autoload 'mevedel-worktree-fork-reservation "mevedel-worktree")
 
 ;;
 ;;; Input prompt
@@ -665,11 +711,6 @@ composer body.")
 
 (defun mevedel-view--arm-session-fork (fork-type)
   "Arm FORK-TYPE from the settled assistant response at point."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-fork)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
   (mevedel-view--ensure-interactive-chat-view)
   (let* ((target (mevedel-view-fork-point-at-point))
          (session (mevedel-view--session))
@@ -683,7 +724,6 @@ composer body.")
     (mevedel-session-rewind-assert-stable-source
      session mevedel--data-buffer "forking")
     (when (eq fork-type 'worktree)
-      (require 'mevedel-worktree)
       (let ((preflight (mevedel-worktree-fork-preflight session)))
         (setq reservation
               (mevedel-worktree-fork-reservation session preflight))))
@@ -772,7 +812,6 @@ This covers the interval before the prompt has been accepted and before
 (defun mevedel-view--cancel-pending-submission ()
   "Cancel this view's pending hook or skill preparation, if any."
   (when mevedel-view--prompt-hook-pending
-    (require 'mevedel-prompt-submission)
     (mevedel-prompt-submission-cancel mevedel-view--prompt-hook-pending)
     (setq mevedel-view--prompt-hook-pending nil))
   (when mevedel-view--pending-skill-submission
@@ -990,19 +1029,10 @@ all displayed windows plus the editable composer text around THUNK."
   (unless mevedel-view--agent-transcript-p
     (setq mevedel-view--composer-scope nil
           mevedel-view--composer-drafts (make-hash-table :test #'equal))
-    (require 'mevedel-mentions)
-    (require 'mevedel-skills-ui)
-    (require 'mevedel-transcript)
-    (require 'mevedel-transcript-audit)
-    (require 'mevedel-utilities)
-    (require 'mevedel-view-history)
-    (require 'mevedel-view-input-files)
-    (require 'mevedel-view-segments)
     (setq-local mevedel-mentions-agent-enabled-p
                 (not mevedel-view--side-conversation-p))
     (mevedel-mentions-install)
     (mevedel-view--install-dnd)
-    (require 'mevedel-resource-capf)
     (add-hook 'completion-at-point-functions
               #'mevedel-resource-capf nil t)
     (unless mevedel-view--side-conversation-p
@@ -1253,7 +1283,6 @@ follows `mevedel-view--input-marker'."
                            (buffer-local-value 'mevedel--session data-buf)))))
     (unless (and data-buf session)
       (user-error "No mevedel session for Plan mode"))
-    (require 'mevedel-plan-mode)
     (if (mevedel-session-plan-mode session)
         (mevedel-plan-mode-exit session)
       (mevedel-plan-mode-enter session))
@@ -1380,7 +1409,6 @@ When FORCE is non-nil, replace the current draft unconditionally."
 
 (defun mevedel-view--directive-record (directive workspace)
   "Resolve DIRECTIVE to a workspace record and WORKSPACE."
-  (require 'mevedel-overlays)
   (cond
    ((overlayp directive)
     (let* ((owner (mevedel--topmost-instruction directive 'directive))
@@ -1430,7 +1458,6 @@ When FORCE is non-nil, replace the current draft unconditionally."
       (with-current-buffer view-buffer
         (mevedel-view--switch-composer-scope scope)
         (goto-char (point-max)))
-      (require 'mevedel-directive-frame)
       (mevedel-directive-frame-display directive view-buffer t)
       view-buffer)))
 
@@ -1451,7 +1478,6 @@ When FORCE is non-nil, replace the current draft unconditionally."
 
 (defun mevedel-view--reserved-goal-handoff-id (&optional session)
   "Return SESSION's Goal handoff reservation, or nil."
-  (require 'mevedel-plan-handoff)
   (mevedel-plan-handoff-reserved-goal-id
    (or session (mevedel-view--session))))
 
@@ -1552,11 +1578,10 @@ and command argument completion for commands with finite choices."
 
 DISPLAY-TEXT is shown in the view for the user turn.  INPUT is written
 to the data buffer as the authoritative user prompt.  The data-turn
-marker is anchored after that prompt so the eventual fork result can be
+  marker is anchored after that prompt so the eventual fork result can be
 rendered by the normal post-response hook.  HOOK-CONTEXT is summarized
 in the view when present.  SUBMITTED-DRAFT is the composer text captured
 when the submission started."
-  (require 'mevedel-turn)
   (let ((view-turn-start
          (mevedel-view--insert-user-message display-text nil hook-context)))
     (mevedel-view--clear-submitted-input submitted-draft)
@@ -1587,7 +1612,6 @@ when the submission started."
 (defun mevedel-view--finish-fork-skill-outcome
     (name outcome view-buffer data-buffer &optional skill)
   "Handle fork skill OUTCOME for NAME."
-  (require 'mevedel-turn)
   (when (and (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
     (when (and (fboundp 'mevedel-review-command-skill-p)
@@ -1833,7 +1857,6 @@ carries prompting authority only, never skill invocation."
         ;; below run asynchronously, and only this entry is still holding
         ;; the draft the user actually submitted.
         (submitted-draft (mevedel-view--visible-draft)))
-    (require 'mevedel-skills-plan)
     (let* ((plan
             (unless inert-skills
               (with-current-buffer data-buffer
@@ -1901,11 +1924,6 @@ carries prompting authority only, never skill invocation."
     (source-view input target snapshot)
   "Publish TARGET from SOURCE-VIEW, then submit INPUT in its Child.
 SNAPSHOT is the exact Source composer state transferred on publication."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-fork)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
   (let* ((fork-type (plist-get target :fork-type))
          (source-data
           (buffer-local-value 'mevedel--data-buffer source-view))
@@ -1964,11 +1982,6 @@ SNAPSHOT is the exact Source composer state transferred on publication."
 
 (defun mevedel-view--retarget-worktree-mention-bindings (text session)
   "Retarget repository-local mention bindings in TEXT for SESSION."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-fork)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
   (let ((copy (mevedel-mention-bindings-copy-text text)))
     (dolist (range (mevedel-mention-bindings-ranges copy))
       (let* ((binding (copy-tree (plist-get range :binding) t))
@@ -2015,7 +2028,6 @@ SNAPSHOT is the exact Source composer state transferred on publication."
          (mevedel--discuss-directive-turn
           directive input (plist-get scope :attempt-index)))
         ('plan
-         (require 'mevedel-directive-plan)
          (mevedel-directive-plan-continue directive input))
         ('request-changes
          (mevedel--request-directive-changes directive input))
@@ -2043,9 +2055,7 @@ SNAPSHOT is the exact Source composer state transferred on publication."
   "Send the current root or ephemeral side-conversation composer text."
   (interactive)
   (if mevedel-view--side-conversation-p
-      (progn
-        (require 'mevedel-side-conversation)
-        (mevedel-side-conversation-send))
+      (mevedel-side-conversation-send)
     (mevedel-view--send-root)))
 
 (defun mevedel-view--send-root ()
@@ -2054,12 +2064,6 @@ Extracts text from the input zone, plans all bound `$skill' mentions,
 renders the original text in the history region, and dispatches either
 one coherent request or one leading fork command.  Slash commands retain
 their local dispatch path."
-  (require 'mevedel-compact-run)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-fork)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
   (mevedel-view--ensure-interactive-chat-view)
   (mevedel-view--assert-live-tip t)
   (when mevedel-view--pending-input-edit
@@ -2174,7 +2178,6 @@ their local dispatch path."
                    args
                    (lambda ()
                      (with-current-buffer data-buffer
-                       (require 'mevedel-plan-mode)
                        (mevedel-plan-mode-enter))
                      (mevedel-view-history-add input)))))
                (local
@@ -2195,7 +2198,6 @@ their local dispatch path."
                   (progn
                     ;; Parsing stays in Source so malformed skill syntax cannot
                     ;; publish a child.  Expansion and hooks belong to Child.
-                    (require 'mevedel-skills-plan)
                     (with-current-buffer mevedel--data-buffer
                       (mevedel-skills-plan-user-input input session))
                     (mevedel-view--submit-armed-session-fork
@@ -2227,7 +2229,6 @@ INPUT is the original composer text, including the slash command."
            (mevedel-view-history-add input)
            (mevedel-view--clear-submitted-input submitted-draft))
          (with-current-buffer data-buffer
-           (require 'mevedel-goal)
            (mevedel-goal-start
             (mevedel-prompt-submission-input submission) submission)))))))
 
@@ -2254,7 +2255,6 @@ input."
     (unless (and data-buffer (buffer-live-p data-buffer))
       (user-error "Data buffer has been killed"))
     (with-current-buffer data-buffer
-      (require 'mevedel-hooks)
       (setq session mevedel--session
             workspace mevedel--workspace))
     (setq submission
@@ -2383,9 +2383,6 @@ supplies hook context, audits, and commit ownership.  MODEL-INPUT, when non-nil,
 replaces INPUT only in the temporary request prompt.  SUBMITTED-DRAFT is the
 composer text this submission captured; a draft the user changed while
 asynchronous preparation ran is left alone instead of cleared."
-  (require 'mevedel-compact-run)
-  (require 'mevedel-tool-render-data)
-  (require 'mevedel-turn)
   (mevedel-view--ensure-interactive-chat-view)
   (when (buffer-local-value 'mevedel-compact-run-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")
@@ -2461,7 +2458,6 @@ asynchronous preparation ran is left alone instead of cleared."
          (when mevedel-view--pending-guest-attribution
            (setq guest-name mevedel-view--pending-guest-attribution
                  mevedel-view--pending-guest-attribution nil)
-           (require 'mevedel-transcript-audit)
            (insert (mevedel--format-hook-audit-record
                     (list :type 'guest-prompt :name guest-name))))
          ;; Anchor the data-side marker after the forwarded prompt so
@@ -2500,10 +2496,9 @@ asynchronous preparation ran is left alone instead of cleared."
             ;; request clears; the UI stops before that teardown so it never
             ;; outlives the request it describes.  C-g is the user's own
             ;; cancellation, not a provider failure, so it settles as
-            ;; aborted like every other cancellation; and the interrupted
-            ;; start left gptel's mode-line at " Waiting" for a request
-            ;; that no longer exists.
-            (require 'mevedel-view-render)
+           ;; aborted like every other cancellation; and the interrupted
+           ;; start left gptel's mode-line at " Waiting" for a request
+           ;; that no longer exists.
             (let ((quit-p (eq (car err) 'quit)))
               (mevedel-view--append-request-summary
                (current-buffer) data-turn-start
@@ -2531,7 +2526,6 @@ asynchronous preparation ran is left alone instead of cleared."
                                    chat-buffer)))
     (with-current-buffer chat-buffer
       (setq-local mevedel--pending-model-input nil))
-    (require 'mevedel-transcript)
     (goto-char (mevedel-transcript-prompt-transform-start))
     (delete-region (point) (point-max))
     (insert model-input)))
@@ -2553,7 +2547,6 @@ asynchronous preparation ran is left alone instead of cleared."
   (mevedel-view--stop-request-progress)
   (when-let* ((data-buf mevedel--data-buffer)
               (_ (buffer-live-p data-buf)))
-    (require 'mevedel-view)
     (mevedel-view--abort-data-buffer data-buf)))
 
 
