@@ -13,6 +13,7 @@
 (require 'mevedel-goal)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-tool-render-data)
+(require 'mevedel-view)
 (require 'mevedel-view-zone)
 (require 'helpers
          (file-name-concat
@@ -526,8 +527,6 @@
 		   (unwind-protect
 		       (with-temp-buffer
 			 (setq-local mevedel--session session)
-			 (require 'mevedel-session-persistence)
-			 (require 'mevedel-view)
 			   (cl-letf (((symbol-function
 				     'mevedel-reminders-install-defaults)
 				    #'ignore)
@@ -606,8 +605,6 @@
 		   (unwind-protect
 		       (with-current-buffer chat
 			 (setq-local mevedel--session session)
-			 (require 'mevedel-session-persistence)
-			 (require 'mevedel-view)
 			 (cl-letf (((symbol-function
 				     'mevedel-reminders-install-defaults)
 				    #'ignore)
