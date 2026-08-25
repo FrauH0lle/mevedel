@@ -10,6 +10,8 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'mevedel-resource)
+
 ;; `cl-lib'
 (declare-function cl-find-if "cl-lib" (predicate sequence &rest args))
 
@@ -295,7 +297,6 @@ History candidates are limited to records with retained conversations."
 
 (defun mevedel-resource-capf ()
   "Complete canonical resource addresses at point from bounded metadata."
-  (require 'mevedel-resource)
   (let* ((end (point))
          (start (save-excursion
                   (skip-chars-backward "^ \t\n\r")
