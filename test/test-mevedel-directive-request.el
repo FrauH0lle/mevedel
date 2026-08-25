@@ -123,9 +123,6 @@
   (test)
   :doc "appends selected skills and validates them against the session"
   (progn
-    (require 'mevedel-plan-handoff)
-    (require 'mevedel-skills-invoke)
-    (require 'mevedel-skills-core)
     (let* ((source "/tmp/alpha/SKILL.md")
            (skill (mevedel-skill--create
                    :name "alpha" :source-file source
@@ -537,7 +534,6 @@
 				 (with-temp-buffer
 				   (insert-file-contents segment)
 				   (org-mode)
-				   (require 'mevedel-transcript-restore)
 				   (mevedel-transcript-restore-properties)
 				   (should (= 2 (length
 						 (mevedel-transcript-audit-records
