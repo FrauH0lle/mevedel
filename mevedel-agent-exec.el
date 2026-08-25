@@ -10,7 +10,7 @@
 ;; The extraction fixes a streaming-truncation bug present in the upstream
 ;; `gptel-agent--task': that function's `(pred stringp)' branch fires its main
 ;; callback on every streamed chunk and has no `t' branch, so gptel's
-;; stream-complete signal (`gptel-request.el' line 2864) is silently dropped.
+;; stream-complete signal is silently dropped.
 ;; Since gptel's tool-call commit path locks in the first delivered value, the
 ;; parent agent only ever sees the first chunk of a sub-agent's final response.
 ;; The runner here accumulates on string chunks and fires exactly once on `t',
@@ -562,9 +562,10 @@ whose runtime handoff fails and retries it from an owned timer."
                                                   where partial-cell)
   "Return the callback used by `mevedel-agent-exec-run'.
 
-MAIN-CB receives the final accumulated partial string exactly once.
+MAIN-CB receives the final accumulated partial string on success, or a
+structured terminal event on error or abort, exactly once.
 
-AGENT-TYPE and DESCRIPTION decorate the error / abort messages.  WHERE
+AGENT-TYPE and DESCRIPTION decorate the abort message.  WHERE
 is the tracking-marker fallback for the initial `tool-call' dispatch.
 PARTIAL-CELL is a one-element list holding the running accumulated
 text seed.  String chunks are stored separately and joined only when a
@@ -572,21 +573,25 @@ terminal branch needs the final text.
 
 The dispatch table is:
 
-- nil: transport error; MAIN-CB receives a formatted error string.
+- nil: transport error; MAIN-CB receives a structured error event.
 - `(tool-call . CALLS)': update tracking marker and hand off to
   `gptel--display-tool-calls'.
 - `(pred stringp)': accumulate into PARTIAL-CELL.  When `:stream' is
   absent from the info plist (non-streaming request), also treat the
-  string as the terminal signal because gptel never sends `'t' in
-  that mode -- see `gptel-curl--stream-cleanup' at gptel-request.el
-  2864, which is the only site that fires `'t' and runs on the
-  streaming curl sentinel only.  Both non-streaming paths
-  \(`gptel--url-parse-response' at 2602 and the non-streaming branch
-  of `gptel-curl--parse-response' at 3018) deliver the final text as
-  one string and advance the FSM without any terminal event.
+  string as the terminal signal.  `gptel-curl--stream-cleanup' fires
+  `'t' from the streaming curl sentinel, while both non-streaming
+  paths (`gptel--url-parse-response' and the
+  non-streaming branch of `gptel-curl--parse-response') deliver the
+  final text as one string and advance the FSM without any terminal
+  event.
 - `'t': stream complete; if no tool-use is pending, run the optional
   transformer over the partial and fire MAIN-CB once.
-- `'abort': aborted; MAIN-CB receives a formatted abort string.
+- `'abort': aborted; MAIN-CB receives a structured abort event.
+
+Both terminal success branches first check `:error' on the info plist:
+a provider can fail in-band on an HTTP 200 stream (the parser stashes
+the error and `gptel-curl--stream-cleanup' still fires `'t'), and that
+turn must settle as an error, not as an empty completion.
 
 A per-closure `fired' latch makes accepted delivery idempotent.  A rejected
 MAIN-CB handoff remains pending and an owned timer retries it without another
@@ -640,6 +645,20 @@ provider callback."
                               partial-chars 0)
                         (setcar partial-cell text)
                         text))
+                    (deliver-error ()
+                      (let* ((fallback-partial (partial-string))
+                             (inv (mevedel-agent-exec--invocation-from-info
+                                   info)))
+                        (when-let* ((reason
+                                     (mevedel-agent-exec--error-reason-from-info
+                                      info)))
+                          (setf (mevedel-agent-invocation-terminal-reason inv)
+                                reason))
+                        (when (overlayp ov) (delete-overlay ov))
+                        (deliver
+                         (list :mevedel-agent-terminal-status 'error
+                               :error-details (plist-get info :error)
+                               :fallback-partial fallback-partial))))
                     (finalize ()
                       (when mevedel-agent-exec-debug
                         (message "mevedel AGENT-EXEC FINALIZE agent=%s desc=%S \
@@ -648,6 +667,16 @@ partial-len=%d :tool-use=%S :stream=%S"
                                  (partial-length)
                                  (and (plist-get info :tool-use) t)
                                  (and (plist-get info :stream) t)))
+                      ;; An in-band provider error on an HTTP 200 stream
+                      ;; reaches this callback as the success terminal:
+                      ;; gptel's stream parser only stashes the error on
+                      ;; INFO and `gptel-curl--stream-cleanup' fires t for
+                      ;; any 200 close.  Settle it as an error, not as an
+                      ;; empty completion.
+                      (if (plist-get info :error)
+                          (deliver-error)
+                        (finalize-success)))
+                    (finalize-success ()
                       (when (overlayp ov) (delete-overlay ov))
                       ;; Drive transcript finalization from
                       ;; the success path so a non-error completion
@@ -681,19 +710,7 @@ partial-len=%d :tool-use=%S :stream=%S"
             (deliver pending-terminal))
           (unless fired
             (pcase resp
-              ('nil
-               (let* ((fallback-partial (partial-string))
-                      (inv (mevedel-agent-exec--invocation-from-info info)))
-                 (when-let* ((reason
-                              (mevedel-agent-exec--error-reason-from-info
-                               info)))
-                   (setf (mevedel-agent-invocation-terminal-reason inv)
-                         reason))
-                 (when (overlayp ov) (delete-overlay ov))
-                 (deliver
-                  (list :mevedel-agent-terminal-status 'error
-                        :error-details (plist-get info :error)
-                        :fallback-partial fallback-partial))))
+              ('nil (deliver-error))
               (`(tool-call . ,calls)
                (unless (plist-get info :tracking-marker)
                  (plist-put info :tracking-marker where))
