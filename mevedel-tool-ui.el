@@ -14,6 +14,10 @@
   (require 'mevedel-tool-registry)
   (require 'subr-x))
 
+(require 'json)
+(require 'mevedel-agent-control)
+(require 'mevedel-turn)
+
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-cancel-wait
                   "mevedel-agent-control" (session path))
@@ -73,15 +77,12 @@
 
 (defun mevedel-tool-ui--agent (callback args)
   "Launch the agent described by ARGS and report through CALLBACK."
-  (require 'mevedel-turn)
   (let ((task-name (plist-get args :task_name))
         (message (plist-get args :message))
         (role (plist-get args :role))
         (context (plist-get args :context))
         (model (plist-get args :model))
         (effort (plist-get args :effort)))
-    (require 'json)
-    (require 'mevedel-agent-control)
     (let ((cancel
            (mevedel-agent-control-spawn
             mevedel--session task-name message
@@ -122,7 +123,6 @@
 
 (defun mevedel-tool-ui--followup-agent (args)
   "Continue or steer the retained agent described by ARGS."
-  (require 'mevedel-agent-control)
   (let* ((record
           (mevedel-agent-control-followup
            mevedel--session
@@ -139,8 +139,6 @@
 
 (defun mevedel-tool-ui--list-agents (args)
   "Return the retained agent roster described by ARGS."
-  (require 'json)
-  (require 'mevedel-agent-control)
   (let ((path-prefix (plist-get args :path_prefix)))
     (list :result
           (json-serialize
@@ -151,8 +149,6 @@
 
 (defun mevedel-tool-ui--interrupt-agent (args)
   "Interrupt the retained agent turn described by ARGS."
-  (require 'json)
-  (require 'mevedel-agent-control)
   (let* ((result
           (mevedel-agent-control-interrupt
            mevedel--session (plist-get args :target)))
@@ -178,7 +174,6 @@
 
 (defun mevedel-tool-ui--send-message (args)
   "Queue the SendMessage described by ARGS."
-  (require 'mevedel-agent-control)
   (let ((path
          (mevedel-agent-control-send-message
           mevedel--session
@@ -201,8 +196,6 @@
 
 (defun mevedel-tool-ui--wait-agent (callback args)
   "Suspend WaitAgent ARGS and report the wake reason through CALLBACK."
-  (require 'mevedel-agent-control)
-  (require 'mevedel-turn)
   (when-let* ((path
                (mevedel-agent-control-wait
                 mevedel--session

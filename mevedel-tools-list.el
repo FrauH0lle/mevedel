@@ -13,6 +13,7 @@
   (require 'tabulated-list))
 
 (require 'subr-x)
+(require 'mevedel-cockpit)
 (require 'mevedel-structs)
 
 ;; `gptel'
@@ -200,8 +201,6 @@
 
 (defun mevedel-tools-list--header-line (&optional items context)
   "Return the tools cockpit header line for ITEMS and CONTEXT."
-  (require 'mevedel-tools)
-  (require 'mevedel-cockpit)
   (let ((counts nil))
     (dolist (item items)
       (cl-incf (alist-get (plist-get item :state) counts 0)))
@@ -219,7 +218,6 @@
 
 (defun mevedel-tools-list--context ()
   "Return the current tools cockpit context."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-context))
 
 (defun mevedel-tools-list--context-data-buffer ()
@@ -236,12 +234,10 @@
 (defun mevedel-tools-list-refresh ()
   "Refresh the current tools listing buffer."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-refresh))
 
 (defun mevedel-tools-list--selected-item ()
   "Return the selected tools cockpit item, or nil."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-selected t))
 
 (defun mevedel-tools-list--selected-item-for-state (state)
@@ -265,7 +261,6 @@
 (defun mevedel-tools-list-details ()
   "Show details for the tool row at point."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-details))
 
 (defun mevedel-tools-list--main-data-buffer ()
@@ -379,7 +374,6 @@
 (defun mevedel-tools-list-search-load (&optional query)
   "Search deferred tools by QUERY and queue matching tools for loading."
   (interactive)
-  (require 'mevedel-tools)
   (let* ((context (mevedel-tools-list--context))
          (session (or (mevedel-cockpit-context-session context)
                       (user-error "No mevedel session in this buffer")))
@@ -433,7 +427,6 @@
 (defun mevedel-tools-list-help ()
   "Open tools cockpit help."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-show-help
    mevedel-tools-help-buffer-name
    (mevedel-tools-list--help-text)))
@@ -441,7 +434,6 @@
 (defun mevedel-tools-list-quit ()
   "Quit the tools cockpit and return to the main session cockpit."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-quit "tools cockpit"))
 
 (defconst mevedel-tools-list--surface
@@ -476,13 +468,11 @@
 (define-derived-mode mevedel-tools-list-mode tabulated-list-mode
   "mevedel-tools"
   "Major mode for managing mevedel tool state."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-setup-tabulated-surface
    mevedel-tools-list--surface))
 
 (defun mevedel-tools-list-open (&optional context)
   "Open the tools listing buffer for CONTEXT."
-  (require 'mevedel-cockpit)
   (require 'mevedel-tools)
   (let ((context (or context (mevedel-cockpit-current-context))))
     (unless (mevedel-cockpit-context-session context)

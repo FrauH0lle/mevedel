@@ -16,6 +16,7 @@
 
 (require 'subr-x)
 (require 'mevedel-structs)
+(require 'mevedel-turn)
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
@@ -240,7 +241,6 @@ The JSON object from gptel may arrive as either form; normalize once."
 
 (defun mevedel-tool-task--write-turn (session)
   "Return the task-write turn for SESSION."
-  (require 'mevedel-turn)
   (mevedel-current-turn session))
 
 (defun mevedel-tool-task--mark-write (session)
