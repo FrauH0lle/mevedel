@@ -10,13 +10,38 @@
   (require 'cl-lib)
   (require 'mevedel-structs))
 
-;; Every control operation in this file runs through the session control
-;; filesystem, so its feature is a hard load-time dependency rather than a
-;; lazily reachable one.
+;; Recovery always operates through durability's control filesystem and
+;; refreshes the registered session root after mutation.
 (require 'mevedel-session-control-fs)
+(require 'mevedel-session-control-transfer)
+(require 'mevedel-session-durability)
 
 ;; `files'
 (defvar remote-file-name-inhibit-cache)
+
+;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-create-file
+                  "mevedel-session-control-fs"
+                  (path content &optional coding-system))
+(declare-function mevedel-session-control-fs-delete-directory
+                  "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-delete-file
+                  "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-directory-p
+                  "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-list-directory
+                  "mevedel-session-control-fs" (directory regexp))
+(declare-function mevedel-session-control-fs-make-directory
+                  "mevedel-session-control-fs" (path &optional parents))
+(declare-function mevedel-session-control-fs-path-exists-p
+                  "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-physical-path
+                  "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-run-program
+                  "mevedel-session-control-fs" (operations))
+(declare-function mevedel-session-control-fs-write-file
+                  "mevedel-session-control-fs"
+                  (path content &optional coding-system))
 
 ;; `mevedel-session-control-transfer'
 (declare-function mevedel-session-control-transfer-notify
@@ -26,28 +51,6 @@
                   "mevedel-session-control-transfer" (session))
 
 ;; `mevedel-session-durability'
-(declare-function mevedel-session-control-fs-create-file
-                  "mevedel-session-durability"
-                  (path content &optional coding-system))
-(declare-function mevedel-session-control-fs-delete-directory
-                  "mevedel-session-durability" (path))
-(declare-function mevedel-session-control-fs-delete-file
-                  "mevedel-session-durability" (path))
-(declare-function mevedel-session-control-fs-directory-p
-                  "mevedel-session-durability" (path))
-(declare-function mevedel-session-control-fs-list-directory
-                  "mevedel-session-durability" (directory regexp))
-(declare-function mevedel-session-control-fs-make-directory
-                  "mevedel-session-durability" (path &optional parents))
-(declare-function mevedel-session-control-fs-path-exists-p
-                  "mevedel-session-durability" (path))
-(declare-function mevedel-session-control-fs-physical-path
-                  "mevedel-session-durability" (path))
-(declare-function mevedel-session-control-fs-run-program
-                  "mevedel-session-durability" (operations))
-(declare-function mevedel-session-control-fs-write-file
-                  "mevedel-session-durability"
-                  (path content &optional coding-system))
 (declare-function mevedel-session-durability--assert-no-pid-lock
                   "mevedel-session-durability" (session-dir))
 (declare-function mevedel-session-durability--portable-session-p
