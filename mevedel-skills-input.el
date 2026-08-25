@@ -10,6 +10,9 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'gptel)
+(require 'mevedel-mention-bindings)
+
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (predicate &rest sequences))
 
@@ -45,6 +48,7 @@
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-replace-with-placeholder
                   "mevedel-mentions" (start end placeholder))
+(autoload 'mevedel-mentions-replace-with-placeholder "mevedel-mentions")
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-encode-component
@@ -55,10 +59,16 @@
                   "mevedel-resource" (operation address context))
 (declare-function mevedel-resource-skill-digest
                   "mevedel-resource" (source-file))
+(autoload 'mevedel-resource-encode-component "mevedel-resource")
+(autoload 'mevedel-resource-execute "mevedel-resource")
+(autoload 'mevedel-resource-prepare "mevedel-resource")
+(autoload 'mevedel-resource-skill-digest "mevedel-resource")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
                   "mevedel-session-artifacts" (session))
+(autoload 'mevedel-session-artifacts-assert-new-mutation-authority
+  "mevedel-session-artifacts")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-session-get-skill
@@ -74,6 +84,14 @@
                   "mevedel-skills-core" (skill))
 (declare-function mevedel-skills-install
                   "mevedel-skills-core" (session &optional buffer))
+(autoload 'mevedel-session-get-skill "mevedel-skills-core")
+(autoload 'mevedel-session-get-skill-by-source "mevedel-skills-core")
+(autoload 'mevedel-skill-name "mevedel-skills-core")
+(autoload 'mevedel-skill-p "mevedel-skills-core")
+(autoload 'mevedel-skill-source-file "mevedel-skills-core")
+(autoload 'mevedel-skill-user-invocable-p "mevedel-skills-core")
+(autoload 'mevedel-skills-skill-enabled-p "mevedel-skills-core")
+(autoload 'mevedel-skills-install "mevedel-skills-core")
 
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills-activate-context
@@ -86,10 +104,16 @@
 (declare-function mevedel-skills-prepare
                   "mevedel-skills-invoke"
                   (skill arguments callback &rest keys))
+(autoload 'mevedel-skills-activate-context "mevedel-skills-invoke")
+(autoload 'mevedel-skills-clear-pending-context "mevedel-skills-invoke")
+(autoload 'mevedel-skills-invoke "mevedel-skills-invoke")
+(autoload 'mevedel-skills-prepare "mevedel-skills-invoke")
 
 ;; `mevedel-skills-preparation'
 (declare-function mevedel-skills-preparation-markdown-code-ranges
                   "mevedel-skills-preparation" (text))
+(autoload 'mevedel-skills-preparation-markdown-code-ranges
+  "mevedel-skills-preparation")
 
 ;; `mevedel-structs'
 (defvar mevedel--current-directive-uuid)
@@ -99,25 +123,32 @@
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-format
                   "mevedel-tool-render-data" (render-data &optional tool-use-id))
+(autoload 'mevedel-tool-render-data-format "mevedel-tool-render-data")
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
                   "mevedel-transcript" ())
 (declare-function mevedel-transcript-restore-ignored-properties
                   "mevedel-transcript" (start end))
+(autoload 'mevedel-transcript-prompt-transform-start "mevedel-transcript")
+(autoload 'mevedel-transcript-restore-ignored-properties "mevedel-transcript")
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
                   "mevedel-transcript-audit" (record))
+(autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
 
 ;; `mevedel-turn'
 (declare-function mevedel--complete-turn "mevedel-turn" (fsm))
 (declare-function mevedel-request-begin
                   "mevedel-turn" (session &optional directive-uuid))
+(autoload 'mevedel--complete-turn "mevedel-turn")
+(autoload 'mevedel-request-begin "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
                   "mevedel-utilities" (start end))
+(autoload 'mevedel--clear-user-turn-gptel-properties "mevedel-utilities")
 
 ;; `text-property-search'
 (declare-function prop-match-end "text-property-search" (match))
@@ -166,9 +197,7 @@ original `$skill' invocation compactly."
                      (mevedel-skills-input--inline-display-text
                       name arguments)
                      :expanded-prompt expanded-prompt))
-         (block (progn
-                  (require 'mevedel-tool-render-data)
-                  (mevedel-tool-render-data-format data))))
+         (block (mevedel-tool-render-data-format data)))
     block))
 
 (defun mevedel-skills-input--insert-inline-user-skill-render-data
@@ -184,7 +213,6 @@ original `$skill' invocation compactly."
                              (lambda (attachment)
                                (list :name (plist-get attachment :name)))
                              attachments))))
-    (require 'mevedel-tool-render-data)
     (mevedel-tool-render-data-format data)))
 
 (defun mevedel-skills-input-attachment-reminder (attachment)
@@ -197,7 +225,6 @@ original `$skill' invocation compactly."
     (attachments start end)
   "Replace prompt mentions for prepared ATTACHMENTS between START and END.
 Return attachments that were actually referenced, preserving first use."
-  (require 'mevedel-mention-bindings)
   (let* ((text (buffer-substring start end))
          (by-name (make-hash-table :test #'equal))
          (by-source (make-hash-table :test #'equal))
@@ -231,7 +258,6 @@ Return attachments that were actually referenced, preserving first use."
         (unless (gethash attachment seen)
           (puthash attachment t seen)
           (push attachment used))))
-    (require 'mevedel-mentions)
     (dolist (replacement (sort replacements
                                (lambda (a b) (> (car a) (car b)))))
       (mevedel-mentions-replace-with-placeholder
@@ -240,7 +266,6 @@ Return attachments that were actually referenced, preserving first use."
 
 (defun mevedel-skills-input-transform-inline-attachments (fsm)
   "Expand prepared inline `$skill' attachments into prompt context."
-  (require 'gptel-request)
   (when-let* ((chat-buffer (and fsm (plist-get (gptel-fsm-info fsm) :buffer)))
               ((buffer-live-p chat-buffer))
               (attachments
@@ -248,7 +273,6 @@ Return attachments that were actually referenced, preserving first use."
                 'mevedel-skills-input--pending-inline-attachments chat-buffer)))
     (with-current-buffer chat-buffer
       (setq-local mevedel-skills-input--pending-inline-attachments nil))
-    (require 'mevedel-transcript)
     (let* ((start (copy-marker (mevedel-transcript-prompt-transform-start) nil))
            (used (mevedel-skills-input--replace-inline-attachment-mentions
                   attachments (marker-position start) (point-max))))
@@ -277,8 +301,6 @@ user has disabled the prompt prefix -- and falling back to the last
 occurrence of the configured prompt prefix.  If neither boundary is
 present the whole buffer is treated as the pending prompt.  END is
 always `point-max'.  Returns nil only for an empty buffer."
-  (require 'gptel-request)
-  (require 'text-property-search)
   (save-excursion
     (goto-char (point-max))
     (let* ((match (text-property-search-backward 'gptel nil nil t))
@@ -332,7 +354,6 @@ bodies are naturally multi-line."
 
 (defun mevedel-skills-input-escaped-position-p (text pos)
   "Return non-nil when POS in TEXT is escaped by an odd backslash run."
-  (require 'cl-lib)
   (let ((i (1- pos))
         (count 0))
     (while (and (>= i 0)
@@ -405,9 +426,6 @@ When ALLOW-ROOT is nil, exclude the leading root skill invocation."
   "Return live `$skill' tokens in TEXT resolved through RESOLVER.
 Each token has `:start', `:end', `:name', and `:value'.  When
 ALLOW-ROOT is non-nil, include the leading root invocation."
-  (require 'cl-lib)
-  (require 'mevedel-mention-bindings)
-  (require 'mevedel-skills-preparation)
   (let ((first-nonspace (or (string-match-p "\\S-" text) -1))
         (code-ranges (mevedel-skills-preparation-markdown-code-ranges text))
         tokens)
@@ -437,9 +455,6 @@ ALLOW-ROOT is non-nil, include the leading root invocation."
 Return TEXT unchanged.  Call this at a submission boundary so an exact
 source resolves against its latest on-disk contents even when automatic
 modification checking is disabled."
-  (require 'cl-lib)
-  (require 'mevedel-mention-bindings)
-  (require 'mevedel-skills-core)
   (when (cl-some
          (lambda (range)
            (eq 'skill
@@ -454,8 +469,6 @@ Existing valid bindings remain authoritative.  Manually typed known
 tokens receive a binding when their skill has a stable source file.
 Existing bindings trigger one explicit discovery refresh so exact
 sources are checked before the submission leaves the composer."
-  (require 'mevedel-mention-bindings)
-  (require 'mevedel-skills-core)
   (unless (mevedel-mention-bindings-valid-p text)
     (user-error "Malformed mention binding"))
   (let ((result (mevedel-mention-bindings-copy-text text)))
@@ -489,7 +502,6 @@ sources are checked before the submission leaves the composer."
   "Return non-nil when SOURCE-FILE still resolves as skill NAME.
 The resource resolver checks the exact source identity and current enabled
 state; the executor callback intentionally does not read the skill body."
-  (require 'mevedel-resource)
   (condition-case nil
       (let* ((address
               (format "skill://%s@%s"
@@ -511,8 +523,6 @@ state; the executor callback intentionally does not read the skill body."
 Success is `(:status ok :skill SKILL)'.  A valid binding whose target is
 unavailable returns `(:status unavailable :message MESSAGE)'.
 Unknown unbound names are successful with a nil skill."
-  (require 'mevedel-mention-bindings)
-  (require 'mevedel-skills-core)
   (let* ((token (concat "$" name))
          (property (and (< start (length text))
                         (get-text-property
@@ -553,7 +563,6 @@ Unknown `$foo' text is ignored.  Known but unavailable skills remain
 occurrences marked with :unavailable and :message so dispatch can annotate
 them without preparing a skill body.  When ALLOW-ROOT is non-nil, include a
 leading mention after command dispatch has declined it."
-  (require 'mevedel-mention-bindings)
   (unless (mevedel-mention-bindings-valid-p text)
     (user-error "Malformed mention binding"))
   (let* ((tokens
@@ -626,25 +635,14 @@ fork skill suppresses the main `gptel-send'; it records the retained
 agent's final result as the assistant side of that turn and
 runs the normal post-response hooks so the view and persistence layers
 observe the completed response."
-  (require 'gptel)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-structs)
-  (require 'mevedel-transcript)
-  (require 'mevedel-transcript-audit)
-  (require 'mevedel-turn)
-  (require 'mevedel-utilities)
   (let* ((render-data (plist-get outcome :render-data))
          (hook-audits (plist-get outcome :hook-audits))
          (result (or (plist-get outcome :result)
                      "Fork skill produced no result."))
          (result (if render-data
-                     (progn
-                       (require 'mevedel-tool-render-data)
-                       (concat result
-                               (mevedel-tool-render-data-format
-                                render-data)))
+                     (concat result
+                             (mevedel-tool-render-data-format
+                              render-data))
                    result)))
     (unless (bound-and-true-p mevedel--current-request)
       (when (bound-and-true-p mevedel--session)
@@ -689,7 +687,6 @@ observe the completed response."
 (defun mevedel-skills-input-command-delete-context (command-pos)
   "Return deletion context for a command starting at COMMAND-POS.
 The result is a plist with :delete-start and :after-prefix."
-  (require 'gptel-request)
   (let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist))
          (has-prefix (and prefix (not (string-empty-p prefix))))
          (line-start (save-excursion
@@ -756,7 +753,6 @@ Returns:
 - `unknown' preparation failed and the caller should abort the send.
 - nil       no invocable leading `$skill' is present; caller should scan the
             complete prompt for inline attachments."
-  (require 'mevedel-skills-invoke)
   (when-let* ((region (mevedel-skills-input-current-prompt-region))
               (text (buffer-substring (car region) (cdr region)))
               (parsed (mevedel-skills-input-parse-skill-line text)))
@@ -899,7 +895,6 @@ forwarded to inline mention scanning."
 
 (defun mevedel-skills-input-clear-pending ()
   "Clear pending inline attachment request state in the current buffer."
-  (require 'mevedel-skills-invoke)
   (mevedel-skills-clear-pending-context)
   (setq-local mevedel-skills-input--pending-inline-attachments nil))
 
@@ -909,7 +904,6 @@ forwarded to inline mention scanning."
 Return `skill' when preparation took ownership of continuing the send,
 or nil when no inline attachments exist.  Unavailable skills are annotated
 without blocking the send."
-  (require 'mevedel-skills-invoke)
   (when-let* ((region (mevedel-skills-input-current-prompt-region))
               (session (and (bound-and-true-p mevedel--session)
                             mevedel--session))
