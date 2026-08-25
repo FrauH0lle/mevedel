@@ -1052,7 +1052,8 @@ BUF defaults to the current buffer if not specified."
           (mevedel-permission-queue-abort-all))
         (when (fboundp 'mevedel-plan-approval-abort)
           (mevedel-plan-approval-abort))
-        (when (functionp mevedel-compact-run-cancel)
+        (when (and (boundp 'mevedel-compact-run-cancel)
+                   (functionp mevedel-compact-run-cancel))
           (funcall mevedel-compact-run-cancel)))
       ;; Phase 2: loop `gptel-abort'.  It only cancels one request per
       ;; call, so continue until no request owned by this root buffer remains.

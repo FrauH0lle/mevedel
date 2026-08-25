@@ -7,11 +7,12 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-expand-path
                   "mevedel-execution-target" (target path &optional directory))
+(autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-ensure "mevedel-tool-registry" (name))
@@ -22,6 +23,13 @@
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-paths "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
+(autoload 'mevedel-tool-ensure "mevedel-tool-registry")
+(autoload 'mevedel-tool-get "mevedel-tool-registry")
+(autoload 'mevedel-tool-get-domain "mevedel-tool-registry")
+(autoload 'mevedel-tool-get-name "mevedel-tool-registry")
+(autoload 'mevedel-tool-get-path "mevedel-tool-registry")
+(autoload 'mevedel-tool-get-paths "mevedel-tool-registry")
+(autoload 'mevedel-tool-get-pattern "mevedel-tool-registry")
 
 
 ;;
@@ -135,7 +143,6 @@ task_name.  The keyword is a syntactic slot; the matching
 semantics are owned by the tool's `get-name' getter.  Authors of
 permission rules should consult each tool's documentation rather
 than assume cross-tool uniformity for the same keyword."
-  (require 'mevedel-tool-registry)
   (when-let* ((tool (mevedel-tool-get tool-name)))
     (cond ((mevedel-tool-get-pattern tool) :pattern)
           ((mevedel-tool-get-domain  tool) :domain)
@@ -171,7 +178,6 @@ Failure modes:
 - unknown tool name -> `user-error'
 - qualifier on a tool with no specifier slot (e.g. `\"Ask(foo)\"') ->
   `user-error'"
-  (require 'mevedel-tool-registry)
   (unless (stringp entry)
     (user-error "Malformed allowed-tools entry: %S (must be a string)" entry))
   (let ((case-fold-search nil))
@@ -217,7 +223,6 @@ Returns non-nil if PATH matches PATTERN."
     (let* ((expanded
             (cond
              ((and target (string-prefix-p "~" pattern))
-              (require 'mevedel-execution-target)
               (mevedel-execution-target-expand-path target pattern))
              ((or (string-prefix-p "~" pattern)
                   (file-name-absolute-p pattern))
@@ -532,7 +537,6 @@ defcustom buckets may otherwise authorize or explicitly ask for LEVEL."
 
 (defun mevedel-permission-rules-merge-resource-grant (grants path access)
   "Return GRANTS with exact PATH promoted to ACCESS."
-  (require 'cl-lib)
   (let ((grant (mevedel-permission-rules-resource-grant path access)))
     (if (mevedel-permission-rules-resource-granted-p path access grants)
         grants

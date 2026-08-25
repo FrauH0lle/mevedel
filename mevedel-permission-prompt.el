@@ -15,6 +15,8 @@
                   "mevedel-execution-target" (target path))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--data-buffer
@@ -35,23 +37,37 @@
                   "mevedel-interaction-prompt" (key))
 (defvar mevedel--prompt-overlays)
 
+(autoload 'mevedel--prompt--data-buffer "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt--overlay-at-point "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt--register-canceller "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt--settle "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt-announce "mevedel-interaction-prompt")
 (autoload 'mevedel--prompt-attribution-line "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt-framed-body "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt-key "mevedel-interaction-prompt")
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue--render-head
                   "mevedel-permission-queue" (&optional session))
+(autoload 'mevedel-permission-queue--render-head "mevedel-permission-queue")
 
 ;; `mevedel-queue'
 (declare-function mevedel-queue--entry-metadata-get
                   "mevedel-queue" (entry key))
 (declare-function mevedel-queue--entry-metadata-put
                   "mevedel-queue" (entry key value))
+(autoload 'mevedel-queue--entry-metadata-get "mevedel-queue")
+(autoload 'mevedel-queue--entry-metadata-put "mevedel-queue")
 
 ;; `mevedel-side-conversation'
 (declare-function mevedel-side-conversation-mutation-warning
                   "mevedel-side-conversation" (record effect))
 (declare-function mevedel-side-conversation-mutation-warning-pending-p
                   "mevedel-side-conversation" (record))
+(autoload 'mevedel-side-conversation-mutation-warning
+  "mevedel-side-conversation")
+(autoload 'mevedel-side-conversation-mutation-warning-pending-p
+  "mevedel-side-conversation")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
@@ -62,6 +78,9 @@
                   "mevedel-view-interaction" (descriptor))
 (declare-function mevedel-view--interaction-target-buffer
                   "mevedel-view-interaction" (data-buffer))
+(autoload 'mevedel-view--interaction-register "mevedel-view-interaction")
+(autoload 'mevedel-view--interaction-target-buffer
+  "mevedel-view-interaction")
 
 
 ;;
@@ -94,12 +113,9 @@
   (if-let ((ov (mevedel--prompt--overlay-at-point
                 'mevedel-permission-prompt)))
       (let ((entry (overlay-get ov 'mevedel-view-interaction-entry)))
-        (when (plist-get entry :mutation-p)
-          (require 'mevedel-side-conversation))
         (if (and (plist-get entry :mutation-p)
                  (mevedel-side-conversation-mutation-warning-pending-p entry))
             (progn
-              (require 'mevedel-permission-queue)
               (mevedel-permission-queue--render-head
                (plist-get entry :session)))
           (mevedel--prompt--settle ov 'allow-once)))
@@ -195,7 +211,6 @@
                       (append selected (list grant)))))))))
       (setcar cell selection)
       (when-let* ((session (plist-get entry :session)))
-        (require 'mevedel-permission-queue)
         (mevedel-permission-queue--render-head session)))))
 
 (defun mevedel-permission--prompt-finish (result)
@@ -234,8 +249,6 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
     (content include-always cont
              &optional count entry suppress-allow-session once-only)
   "Display a permission prompt for CONTENT and call CONT with its outcome."
-  (require 'mevedel-interaction-prompt)
-  (require 'mevedel-side-conversation)
   (let* ((source-buffer (current-buffer))
          (target-buf
           (if (fboundp 'mevedel-view--interaction-target-buffer)

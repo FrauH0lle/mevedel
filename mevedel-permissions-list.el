@@ -9,8 +9,7 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'tabulated-list))
+(require 'mevedel-cockpit)
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-session
@@ -41,12 +40,21 @@
                   "mevedel-permission-persistence" (workspace path access))
 (declare-function mevedel-permission-remove-persistent-rule
                   "mevedel-permission-persistence" (workspace rule))
+(autoload 'mevedel-permission-persistent-authority
+  "mevedel-permission-persistence")
+(autoload 'mevedel-permission-remove-persistent-resource-grant
+  "mevedel-permission-persistence")
+(autoload 'mevedel-permission-remove-persistent-rule
+  "mevedel-permission-persistence")
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-remove-session-resource-grant
                   "mevedel-permissions" (session path access))
 (declare-function mevedel-permission-remove-session-rule
                   "mevedel-permissions" (session rule))
+(autoload 'mevedel-permission-remove-session-resource-grant
+  "mevedel-permissions")
+(autoload 'mevedel-permission-remove-session-rule "mevedel-permissions")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -92,7 +100,6 @@
 
 (defun mevedel-permissions-list--collect (context)
   "Return remembered authority items for CONTEXT."
-  (require 'mevedel-permission-persistence)
   (let* ((session (mevedel-cockpit-context-session context))
          (workspace (mevedel-cockpit-context-workspace context))
          (persistent (and workspace
@@ -169,8 +176,6 @@
 (defun mevedel-permissions-list-revoke ()
   "Revoke the selected remembered authority."
   (interactive)
-  (require 'mevedel-permission-persistence)
-  (require 'mevedel-permissions)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-cockpit-context-session context))
          (workspace (mevedel-cockpit-context-workspace context))
@@ -195,7 +200,6 @@
 (defun mevedel-permissions-list-quit ()
   "Quit the permissions cockpit and return to the session cockpit."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-quit "permissions cockpit"))
 
 
@@ -248,14 +252,12 @@
 (define-derived-mode mevedel-permissions-list-mode tabulated-list-mode
   "mevedel-permissions"
   "Major mode for inspecting and revoking remembered permission authority."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-setup-tabulated-surface
    mevedel-permissions-list--surface))
 
 (defun mevedel-permissions-list-open (&optional context)
   "Open the remembered authority cockpit for CONTEXT."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-open-surface
    mevedel-permissions-list--surface
    (or context (mevedel-cockpit-current-context))))
