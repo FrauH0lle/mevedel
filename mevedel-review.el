@@ -12,7 +12,6 @@
 
 (require 'cl-lib)
 
-(require 'json)
 (require 'subr-x)
 (require 'mevedel-skills-ui)
 (require 'mevedel-structs)
@@ -31,10 +30,14 @@
                   "mevedel-agent-control" t t)
 (declare-function mevedel-agent-record-path
                   "mevedel-agent-control" (cl-x) t)
+(autoload 'mevedel-agent-control-interrupt "mevedel-agent-control")
+(autoload 'mevedel-agent-control-spawn "mevedel-agent-control")
+(autoload 'mevedel-agent-record-path "mevedel-agent-control")
 
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-refresh
                   "mevedel-agent-conversation" (invocation))
+(autoload 'mevedel-agent-conversation-refresh "mevedel-agent-conversation")
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-get "mevedel-agents" (name))
@@ -52,6 +55,10 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-status
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-verdict
+                  "mevedel-agents" (cl-x) t)
+(declare-function \(setf\ mevedel-agent-invocation-verdict\)
+                  "mevedel-agents" (value cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-resolve-role "mevedel-agents" (role))
 
@@ -72,6 +79,9 @@
                   "mevedel-execution-target" (target path &optional directory))
 (declare-function mevedel-execution-target-native-path
                   "mevedel-execution-target" (target path))
+(autoload 'mevedel-execution-target-create "mevedel-execution-target")
+(autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
 
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-commit
@@ -84,6 +94,8 @@
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
                   "mevedel-session-artifacts" (session))
+(autoload 'mevedel-session-artifacts-assert-new-mutation-authority
+  "mevedel-session-artifacts")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-agent "mevedel-skills-core" (cl-x) t)
@@ -95,6 +107,7 @@
 ;; `mevedel-skills-input'
 (declare-function mevedel-skills-input-insert-fork-result
                   "mevedel-skills-input" (outcome))
+(autoload 'mevedel-skills-input-insert-fork-result "mevedel-skills-input")
 
 ;; `mevedel-skills-ui'
 (defvar mevedel-slash-commands)
@@ -115,6 +128,7 @@
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-format
                   "mevedel-tool-render-data" (render-data &optional tool-use-id))
+(autoload 'mevedel-tool-render-data-format "mevedel-tool-render-data")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-begin
@@ -123,10 +137,14 @@
                   "mevedel-turn" (&optional abort-plan-approval))
 (declare-function mevedel-request-push-canceller
                   "mevedel-turn" (request canceller))
+(autoload 'mevedel-request-begin "mevedel-turn")
+(autoload 'mevedel-request-end "mevedel-turn")
+(autoload 'mevedel-request-push-canceller "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
                   "mevedel-utilities" (start end))
+(autoload 'mevedel--clear-user-turn-gptel-properties "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
@@ -145,6 +163,7 @@
                   (input display-text &optional hook-context
                          submitted-draft))
 (declare-function mevedel-view--visible-draft "mevedel-view-composer" ())
+(autoload 'mevedel-view--assert-live-tip "mevedel-view-composer")
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add
@@ -274,7 +293,6 @@
 (defun mevedel-review--current-data-buffer ()
   "Return the current mevedel data buffer, or nil outside mevedel."
   (when (bound-and-true-p mevedel--data-buffer)
-    (require 'mevedel-view-composer)
     (mevedel-view--assert-live-tip))
   (cond
    ((and (boundp 'mevedel--data-buffer)
@@ -552,7 +570,6 @@ CWD is used for git merge-base resolution."
 
 (defun mevedel-review--repo-root (cwd)
   "Return the Git repository root for CWD, or CWD if unavailable."
-  (require 'mevedel-execution-target)
   (let ((target (mevedel-execution-target-create cwd)))
     (file-name-as-directory
      (mevedel-execution-target-expand-path
@@ -568,7 +585,6 @@ CWD is used for git merge-base resolution."
 
 (defun mevedel-review--target-native-path (cwd path)
   "Return PATH in CWD's target-native path domain."
-  (require 'mevedel-execution-target)
   (mevedel-execution-target-native-path
    (mevedel-execution-target-create cwd) path))
 
@@ -973,11 +989,6 @@ Loading the agents module registers the bundled agents."
 
 (defun mevedel-review--record-direct-turn (display data-buffer)
   "Record direct no-view review DISPLAY in DATA-BUFFER."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-turn)
-  (require 'mevedel-utilities)
   (with-current-buffer data-buffer
     (when mevedel--session
       (mevedel-session-artifacts-assert-new-mutation-authority
@@ -1001,7 +1012,6 @@ Loading the agents module registers the bundled agents."
 
 (defun mevedel-review--end-direct-request (data-buffer)
   "End DATA-BUFFER's direct review request if one is active."
-  (require 'mevedel-turn)
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
       (when (bound-and-true-p mevedel--current-request)
@@ -1050,7 +1060,6 @@ Loading the agents module registers the bundled agents."
   "Insert hidden progress handle for INVOCATION, HINT, and COMMAND."
   (when-let* (((mevedel-agent-invocation-p invocation))
               (path (mevedel-agent-invocation-path invocation)))
-    (require 'mevedel-tool-render-data)
     (let* ((render-data
             (mevedel-review--progress-render-data invocation hint command))
            (block (mevedel-tool-render-data-format render-data)))
@@ -1089,7 +1098,6 @@ Loading the agents module registers the bundled agents."
               (setf (mevedel-agent-invocation-verdict invocation) verdict)
               (when (buffer-live-p
                      (mevedel-agent-invocation-parent-data-buffer invocation))
-                (require 'mevedel-agent-conversation)
                 (mevedel-agent-conversation-refresh invocation)))
             (plist-put outcome :verdict verdict))
         (when (mevedel-agent-invocation-p invocation)
@@ -1111,7 +1119,6 @@ non-empty, is appended to the leaf prompt.  PROGRESS-CALLBACK, when non-nil,
 receives the retained invocation before provider dispatch.  COMMAND defaults
 to `review'.  CWD and TARGET, when non-nil, create package evidence after the
 parent request has accepted the review turn."
-  (require 'mevedel-turn)
   (let* ((command (or command 'review))
          (session mevedel--session))
     (if (null session)
@@ -1132,7 +1139,6 @@ parent request has accepted the review turn."
                   (concat prompt "\n\n" submit-context)
                 prompt))
              path invocation preparation-cancel cancelled-p settled-p)
-        (require 'mevedel-agent-control)
         (cl-labels
             ((finish
               (result)
@@ -1210,7 +1216,6 @@ parent request has accepted the review turn."
 
 (defun mevedel-review--handle-direct-outcome (outcome data-buffer &optional command)
   "Handle OUTCOME for COMMAND direct dispatch targeting DATA-BUFFER."
-  (require 'mevedel-skills-input)
   (when (buffer-live-p data-buffer)
     (pcase (plist-get outcome :status)
       ('ok
@@ -1233,7 +1238,6 @@ parent request has accepted the review turn."
 (defun mevedel-review--handle-view-outcome
     (outcome view-buffer data-buffer &optional command)
   "Handle OUTCOME for COMMAND dispatch from VIEW-BUFFER to DATA-BUFFER."
-  (require 'mevedel-skills-input)
   (when (and (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
     (pcase (plist-get outcome :status)
