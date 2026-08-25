@@ -10,12 +10,15 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib)
-  (require 'subr-x))
+  (require 'cl-lib))
+
+(require 'shell)
+(require 'subr-x)
 
 ;; `mevedel-bash-policy'
 (declare-function mevedel-bash-policy-read-only-p
                   "mevedel-bash-policy" (argv))
+(autoload 'mevedel-bash-policy-read-only-p "mevedel-bash-policy")
 
 ;; `shell'
 (defvar shell-file-name-quote-list)
@@ -29,6 +32,14 @@
 (declare-function treesit-node-type "treesit" (node))
 (declare-function treesit-parser-create "treesit" (language &optional buffer no-reuse tag))
 (declare-function treesit-parser-root-node "treesit" (parser))
+(autoload 'treesit-language-available-p "treesit")
+(autoload 'treesit-node-check "treesit")
+(autoload 'treesit-node-child "treesit")
+(autoload 'treesit-node-child-count "treesit")
+(autoload 'treesit-node-text "treesit")
+(autoload 'treesit-node-type "treesit")
+(autoload 'treesit-parser-create "treesit")
+(autoload 'treesit-parser-root-node "treesit")
 
 
 ;;
@@ -74,7 +85,6 @@ alongside negation and pattern operators.")
 
 (defun mevedel-bash-analysis--split-command (source)
   "Split SOURCE using Bash quoting rules on every platform."
-  (require 'shell)
   (let ((shell-file-name-quote-list
          '(?\| ?& ?< ?> ?\( ?\) ?\; ?\s ?$ ?* ?! ?\" ?' ?` ?# ?\\)))
     (split-string-shell-command source)))
@@ -341,9 +351,7 @@ quotes or escaped with a backslash do not close the substitution."
    ((mevedel-bash-analysis--dangerous-p commands source) 'dangerous)
    (complex-p 'complex)
    ((and commands
-         (progn
-           (require 'mevedel-bash-policy)
-           (cl-every #'mevedel-bash-policy-read-only-p commands)))
+         (cl-every #'mevedel-bash-policy-read-only-p commands))
     'read-only)
    (t 'unknown)))
 
@@ -564,7 +572,6 @@ would leave `:segments', `:candidates', and `:resources' empty for every
 unsupported construct, and those are the surfaces protected-path checks
 and explicit deny rules match against: an environment assignment in front
 of a denied command would otherwise present nothing to match."
-  (require 'treesit)
   (with-temp-buffer
     (insert source)
     (pcase-let* ((`(,scan-segments ,scan-reasons)
@@ -601,7 +608,6 @@ of a denied command would otherwise present nothing to match."
 The result contains `:class', `:commands', `:parser', `:resources', and
 `:reasons'.  Tree-sitter is selected only through normal Emacs grammar
   configuration; no grammar path is added here."
-  (require 'subr-x)
   (setq source (mevedel-bash-analysis--normalize-line-continuations source))
   (if (and (fboundp 'treesit-language-available-p)
            (treesit-language-available-p 'bash))
