@@ -35,6 +35,7 @@
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-tool-results-dir
                   "mevedel-pipeline" (session buffer &optional request))
+(defvar mevedel-pipeline--active-call-source)
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-execute

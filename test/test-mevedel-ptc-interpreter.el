@@ -278,7 +278,25 @@ dispatched), and `:pauses'."
     (should (string-match-p "push.*expects"
                             (test-mevedel-ptc--error "(let ((x nil)) (push 1 x y))")))
     (should (string-match-p "dolist.*expects"
-                            (test-mevedel-ptc--error "(dolist (x (list 1) r) x)"))))
+                            (test-mevedel-ptc--error "(dolist (x (list 1) r) x)")))
+    (should (string-match-p "dotimes.*expects"
+                            (test-mevedel-ptc--error "(dotimes (i 3 r) i)")))
+    (should (string-match-p "dotimes.*VAR"
+                            (test-mevedel-ptc--error "(dotimes (:i 3) 1)"))))
+
+  :doc "dotimes binds the counter per iteration and evaluates COUNT once"
+  (progn
+    (should (equal '(2 1 0)
+                   (test-mevedel-ptc--value
+                    "(let ((acc nil)) (dotimes (i 3) (push i acc)) acc)")))
+    (should (equal 0 (test-mevedel-ptc--value
+                      "(let ((n 0)) (dotimes (_ 0) (setq n 1)) n)")))
+    (should (equal '(0 1)
+                   (test-mevedel-ptc--value
+                    "(let ((fns nil))
+                       (dotimes (i 2)
+                         (push (lambda () i) fns))
+                       (mapcar (lambda (f) (funcall f)) (reverse fns)))"))))
 
   :doc "supports the documented control flow and data forms"
   (progn
