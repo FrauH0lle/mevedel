@@ -34,18 +34,25 @@
 (defvar gptel-tools)
 (defvar gptel-use-context)
 (defvar gptel-use-tools)
+(autoload 'gptel-context--collect "gptel-context")
+(autoload 'gptel-context--wrap-in-buffer "gptel-context")
 
 ;; `mevedel-agent-exec'
 (declare-function mevedel-agent-exec-request-snapshot
                   "mevedel-agent-exec" (policy))
+(autoload 'mevedel-agent-exec-request-snapshot "mevedel-agent-exec")
 
 ;; `mevedel-chat'
 (declare-function mevedel-chat-install-request-hooks "mevedel-chat" ())
 (declare-function mevedel-chat-prepare-transcript-buffer "mevedel-chat" ())
+(autoload 'mevedel-chat-install-request-hooks "mevedel-chat")
+(autoload 'mevedel-chat-prepare-transcript-buffer "mevedel-chat")
 
 ;; `mevedel-compact-evidence'
 (declare-function mevedel-compact-evidence-context-snapshot
                   "mevedel-compact-evidence" (context))
+(autoload 'mevedel-compact-evidence-context-snapshot
+  "mevedel-compact-evidence")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-effective-rules
@@ -55,22 +62,31 @@
                   "mevedel-hooks" (rules &optional scope))
 (defvar mevedel-hooks-context-frozen-p)
 (defvar mevedel-hooks-tool-events)
+(autoload 'mevedel-hooks-effective-rules "mevedel-hooks")
+(autoload 'mevedel-hooks-normalize-rules "mevedel-hooks")
 
 ;; `mevedel-mentions'
 (declare-function mevedel--transform-expand-mentions
                   "mevedel-mentions" (fsm))
 (declare-function mevedel-mentions-prepare-user-input
                   "mevedel-mentions" (text &optional session))
+(autoload 'mevedel--transform-expand-mentions "mevedel-mentions")
+(autoload 'mevedel-mentions-prepare-user-input "mevedel-mentions")
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-abort-all
                   "mevedel-permission-queue" (&optional session))
+(autoload 'mevedel-permission-queue-abort-all "mevedel-permission-queue")
 
 ;; `mevedel-permission-persistence'
 (declare-function mevedel-permission-persistence-load-resource-grants
                   "mevedel-permission-persistence" (workspace))
 (declare-function mevedel-permission-persistence-load-rules
                   "mevedel-permission-persistence" (workspace))
+(autoload 'mevedel-permission-persistence-load-resource-grants
+  "mevedel-permission-persistence")
+(autoload 'mevedel-permission-persistence-load-rules
+  "mevedel-permission-persistence")
 
 ;; `mevedel-permission-rules'
 (defvar mevedel-permission-rules)
@@ -79,18 +95,23 @@
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-freeze-context
                   "mevedel-permissions" (persistent-rules resource-grants))
+(autoload 'mevedel-permission-freeze-context "mevedel-permissions")
 
 ;; `mevedel-presets'
 (declare-function mevedel--wrap-terminal-handlers
                   "mevedel-presets" (handlers &optional transitions))
+(autoload 'mevedel--wrap-terminal-handlers "mevedel-presets")
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-format-block
                   "mevedel-reminders" (content))
+(autoload 'mevedel-reminders-format-block "mevedel-reminders")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
                   "mevedel-session-artifacts" (session))
+(autoload 'mevedel-session-artifacts-assert-new-mutation-authority
+  "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-directive-uuid
@@ -138,26 +159,33 @@
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
+(autoload 'mevedel-transcript-segments "mevedel-transcript")
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel-transcript-exclude-directive-turns
                   "mevedel-transcript-audit" (&optional fsm))
+(autoload 'mevedel-transcript-exclude-directive-turns
+  "mevedel-transcript-audit")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-begin
                   "mevedel-turn" (session &optional directive-uuid))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
+(autoload 'mevedel-request-begin "mevedel-turn")
+(autoload 'mevedel-request-end "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--restore-overlay
                   "mevedel-utilities"
                   (buffer overlay-start overlay-end properties))
+(autoload 'mevedel--restore-overlay "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view--ensure
                   "mevedel-view" (data-buf &optional view-name options))
 (defvar mevedel-view--abort-function)
+(autoload 'mevedel-view--ensure "mevedel-view")
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
@@ -175,6 +203,8 @@
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-ensure-progress-for-fsm
                   "mevedel-view-stream" (fsm))
+(autoload 'mevedel-view-stream-ensure-progress-for-fsm
+  "mevedel-view-stream")
 
 ;; `mevedel-workspace'
 (defvar mevedel-workspace-additional-roots)
@@ -210,7 +240,6 @@
 
 (defun mevedel-side-conversation--tool-hook-rules (rules)
   "Return a frozen copy of tool-pipeline hook RULES."
-  (require 'mevedel-hooks)
   (cl-remove-if-not
    (lambda (entry) (memq (car entry) mevedel-hooks-tool-events))
    (copy-tree (mevedel-hooks-normalize-rules rules))))
@@ -250,14 +279,12 @@ Callers re-render RECORD (which emits the warning via
 
 (defun mevedel-side-conversation--interrupted-boundary (body)
   "Return a model-visible interrupted-context boundary containing BODY."
-  (require 'mevedel-reminders)
   (concat (propertize "\n" 'gptel 'ignore)
           (mevedel-reminders-format-block body)
           "\n"))
 
 (defun mevedel-side-conversation--request-locals ()
   "Return the current buffer's frozen gptel request locals."
-  (require 'mevedel-agent-exec)
   (let* ((fsm (and mevedel--current-request
                    (mevedel-request-fsm mevedel--current-request)))
          (info (and fsm (gptel-fsm-info fsm))))
@@ -321,7 +348,6 @@ Callers re-render RECORD (which emits the warning via
 
 (defun mevedel-side-conversation--copy-context-sources (contexts)
   "Return immutable temporary copies of gptel CONTEXTS and their resources."
-  (require 'mevedel-utilities)
   (let (copies labels media source-buffers source-files)
     (condition-case err
         (progn
@@ -405,7 +431,6 @@ Callers re-render RECORD (which emits the warning via
 OWNER-BUFFER owns invocation-time source copies while formatting is pending."
   (if (not (and gptel-use-context gptel-context))
       (funcall callback nil)
-    (require 'gptel-context)
     (let* ((resources
             (mevedel-side-conversation--copy-context-sources
              (gptel-context--collect (copy-tree gptel-context))))
@@ -475,7 +500,6 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
                (buffer-local-value
                 'mevedel-side-conversation--frozen-context data-buffer))
               (text (plist-get context :text)))
-    (require 'gptel-context)
     (gptel-context--wrap-in-buffer text (plist-get context :method))))
 
 (defun mevedel-side-conversation--transform-frozen-effort (fsm)
@@ -494,7 +518,6 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
 
 (defun mevedel-side-conversation--accepted-context-p ()
   "Return non-nil when the transcript contains any accepted model context."
-  (require 'mevedel-transcript)
   (or (cl-some (lambda (segment) (eq (car segment) 'user))
                (mevedel-transcript-segments (point-min) (point-max)))
       (save-excursion
@@ -511,7 +534,6 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
 
 (defun mevedel-side-conversation--snapshot ()
   "Return the invocation-time model context for a new side conversation."
-  (require 'mevedel-compact-evidence)
   (if (not mevedel--current-request)
       (mevedel-compact-evidence-context-snapshot 'all)
     (let* ((fsm (mevedel-request-fsm mevedel--current-request))
@@ -583,10 +605,6 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
 
 (defun mevedel-side-conversation--handle-wait (fsm)
   "Begin the transient side request owned by FSM on its first WAIT."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-turn)
   (let* ((info (gptel-fsm-info fsm))
          (data-buffer (plist-get info :buffer)))
     (when (and (not (plist-get info :mevedel-request-begun))
@@ -611,7 +629,6 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
 
 (defun mevedel-side-conversation--handle-terminal (fsm)
   "Settle the transient side request owned by terminal FSM."
-  (require 'mevedel-turn)
   (when-let* ((data-buffer (plist-get (gptel-fsm-info fsm) :buffer))
               ((buffer-live-p data-buffer)))
     (with-current-buffer data-buffer
@@ -624,13 +641,11 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
 
 (defun mevedel-side-conversation--abort (&optional _data-buffer)
   "Abort work in the current side data buffer without persistence."
-  (require 'mevedel-turn)
   (let ((aborted (mevedel-side-conversation--busy-p (current-buffer))))
     ;; Tool and permission callbacks may launch a follow-up provider request.
     ;; Settle them before draining gptel's process list.
     (when mevedel--current-request
       (mevedel-request-end))
-    (require 'mevedel-permission-queue)
     (mevedel-permission-queue-abort-all mevedel--session)
     (while (mevedel-side-conversation--busy-p (current-buffer))
       (setq aborted t)
@@ -669,7 +684,6 @@ OWNER-BUFFER owns invocation-time source copies while formatting is pending."
 Returns a plist of invocation-time copies consumed by
 `mevedel-side-conversation--make-session' and
 `mevedel-side-conversation--init-side-buffer'."
-  (require 'mevedel-permission-persistence)
   (let ((workspace (or mevedel--workspace
                        (mevedel-session-workspace mevedel--session))))
     (list
@@ -734,7 +748,6 @@ SIDE-SESSION is the transient session for the conversation.  FROZEN is
 the plist from `mevedel-side-conversation--freeze-parent-state'.
 FROZEN-CONTEXT is the materialized gptel context plist."
   (with-current-buffer side-data
-    (require 'mevedel-chat)
     (mevedel-chat-prepare-transcript-buffer)
     (setq-local mevedel--session side-session
                 mevedel--current-request nil
@@ -767,7 +780,6 @@ FROZEN-CONTEXT is the materialized gptel context plist."
                   (append (cdr entry)
                           (list
                            #'mevedel-side-conversation--handle-terminal)))))
-      (require 'mevedel-presets)
       (setq-local gptel-send--handlers
                   (mevedel--wrap-terminal-handlers
                    handlers (default-value 'gptel-send--transitions))))
@@ -802,7 +814,6 @@ FROZEN-CONTEXT is the materialized gptel context plist."
         (t
          (error "Expected a materialized gptel system prompt")))))
     (require 'mevedel-tools)
-    (require 'mevedel-tool-registry)
     (dolist (name mevedel-side-conversation--tool-names)
       (mevedel-tool-ensure name))
     (setq-local
@@ -818,7 +829,6 @@ FROZEN-CONTEXT is the materialized gptel context plist."
     (setq-local mevedel-view--abort-function
                 #'mevedel-side-conversation--abort)
     (let ((transcript-start (copy-marker (point-max) nil)))
-      (require 'mevedel-view)
       (mevedel-view--ensure
        side-data nil
        (list :side-conversation-p t
@@ -885,7 +895,6 @@ FROZEN-CONTEXT is the materialized gptel context plist."
     (mevedel-side-conversation--validate-input raw)
     (let ((input
            (with-current-buffer mevedel--data-buffer
-             (require 'mevedel-mentions)
              (mevedel-mentions-prepare-user-input raw session))))
       (mevedel-view--forward-input
        input :display-text raw :prompt-checked t))))
