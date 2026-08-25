@@ -38,6 +38,9 @@
                   (workload &optional explicit-selector explicit-effort))
 (declare-function mevedel-model-validate-effort
                   "mevedel-models" (model effort))
+(autoload 'mevedel-model-resolve-provider "mevedel-models")
+(autoload 'mevedel-model-resolve-workload "mevedel-models")
+(autoload 'mevedel-model-validate-effort "mevedel-models")
 
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--update-instruction-overlay
@@ -51,6 +54,8 @@
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view--schedule-late-follow-up-drain
                   "mevedel-pending-inputs" ())
+(autoload 'mevedel-view--schedule-late-follow-up-drain
+  "mevedel-pending-inputs")
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-extract-proposed "mevedel-plan" (text))
@@ -60,6 +65,10 @@
                   "mevedel-plan-handoff" (prompt selection))
 (declare-function mevedel-plan-handoff-validate-skill-bindings
                   "mevedel-plan-handoff" (prompt session))
+(autoload 'mevedel-plan-handoff-append-implementation-input
+  "mevedel-plan-handoff")
+(autoload 'mevedel-plan-handoff-validate-skill-bindings
+  "mevedel-plan-handoff")
 
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-approval-present
@@ -76,10 +85,12 @@
 (declare-function mevedel-session-artifacts-save
                   "mevedel-session-artifacts"
                   (session buffer &optional settled force))
+(autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
 ;; `mevedel-skills-input'
 (declare-function mevedel-skills-input-prepare-user-input
                   "mevedel-skills-input" (text session))
+(autoload 'mevedel-skills-input-prepare-user-input "mevedel-skills-input")
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
@@ -132,14 +143,10 @@
     (with-current-buffer view-buffer
       (mevedel-view-back-to-chat)
       (when drain
-        (require 'mevedel-pending-inputs)
         (mevedel-view--schedule-late-follow-up-drain)))))
 
 (defun mevedel-directive-plan--persist (session chat-buffer)
   "Persist SESSION from CHAT-BUFFER."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-save session chat-buffer))
 
 (defun mevedel-directive-plan--planning-prompt
@@ -160,7 +167,6 @@ FEEDBACK and PROPOSAL describe a requested replacement proposal."
 
 (defun mevedel-directive-plan--planning-model-policy (directive)
   "Resolve DIRECTIVE's explicit model or the planning workload."
-  (require 'mevedel-models)
   (or (mevedel--directive-model-policy directive)
       (mevedel-model-resolve-workload 'planning)))
 
@@ -185,7 +191,6 @@ card's selection stays authoritative once retained."
 
 (defun mevedel-directive-plan--model-policy (selection)
   "Return request-local model policy from approval SELECTION."
-  (require 'mevedel-models)
   (let* ((provider (plist-get selection :model-provider))
          (policy (mevedel-model-resolve-provider provider))
          (effort (plist-get selection :reasoning-effort)))
@@ -194,7 +199,6 @@ card's selection stays authoritative once retained."
 
 (defun mevedel-directive-plan--implementation-prompt (plan selection)
   "Return PLAN's accepted directive prompt with SELECTION additions."
-  (require 'mevedel-plan-handoff)
   (or (plist-get plan :accepted-prompt)
       (mevedel-plan-handoff-append-implementation-input
        (format
@@ -224,7 +228,6 @@ card's selection stays authoritative once retained."
          (implementation-input
           (mevedel-directive-plan--implementation-prompt plan selection)))
     (with-current-buffer (plist-get plan :chat-buffer)
-      (require 'mevedel-skills-input)
       (setq implementation-input
             (mevedel-skills-input-prepare-user-input implementation-input session))
       (mevedel-plan-handoff-validate-skill-bindings

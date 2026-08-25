@@ -42,6 +42,7 @@
 ;; `mevedel-system'
 (declare-function mevedel-system-render-prompt-file
                   "mevedel-system" (relative-path &optional replacements))
+(autoload 'mevedel-system-render-prompt-file "mevedel-system")
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-finish "mevedel-telemetry"
@@ -91,7 +92,6 @@
 
 (defun mevedel-context-summary--prompt (purpose)
   "Return the fixed system prompt for context-summary PURPOSE."
-  (require 'mevedel-system)
   (mevedel-system-render-prompt-file
    "prompts/context-summary/summary.md"
    `(("PURPOSE_RULE" .

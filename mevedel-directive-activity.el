@@ -128,6 +128,7 @@
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (&optional start end))
+(autoload 'mevedel-transcript-segments "mevedel-transcript")
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
@@ -164,12 +165,17 @@
                   "mevedel-view-zone" (&optional limit))
 (declare-function mevedel-view-zone-reconcile
                   "mevedel-view-zone" (zone start end fragments))
+(autoload 'mevedel-view-zone-forget "mevedel-view-zone")
+(autoload 'mevedel-view-zone-next "mevedel-view-zone")
+(autoload 'mevedel-view-zone-previous "mevedel-view-zone")
+(autoload 'mevedel-view-zone-reconcile "mevedel-view-zone")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 ;; `org-src'
 (declare-function org-escape-code-in-string "org-src" (string))
+(autoload 'org-escape-code-in-string "org-src")
 
 (defvar-local mevedel-directive-activity--workspace nil
   "Workspace owning the inspected directive.")
@@ -287,7 +293,6 @@
         (id (mevedel-directive-id directive)))
     (with-current-buffer buffer
       (org-mode)
-      (require 'org-src)
       (setq-local gptel-response-separator "\n\n"
                   gptel-prompt-prefix-alist '((org-mode . "*** "))
                   mevedel--session
@@ -381,7 +386,6 @@
                   mevedel-view--interaction-marker (copy-marker (point) t)
                   mevedel-view--input-marker (copy-marker (point) nil))
       (with-current-buffer data-buffer
-        (require 'mevedel-transcript)
         (let* ((segments (mevedel-transcript-segments
                           (point-min) (point-max)))
                (turns (mevedel-view--group-transcript-turns
@@ -422,7 +426,6 @@
   (unless (and mevedel-directive-activity--workspace
                (mevedel-directive-p mevedel-directive-activity--directive))
     (user-error "No directive inspector is associated with this buffer"))
-  (require 'mevedel-view-zone)
   (let ((inhibit-read-only t))
     (mevedel-directive-activity--kill-transcript)
     (dolist (symbol '(mevedel-view--status-marker
@@ -568,10 +571,6 @@
 (defun mevedel-directive-activity-rewind ()
   "Rewind the shared execution session before the attempt at point."
   (interactive)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-fork)
-  (require 'mevedel-session-persistence)
   (require 'mevedel-session-rewind)
   (let* ((attempt (mevedel-directive-activity--attempt-at-point))
          (checkpoint
