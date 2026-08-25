@@ -15,13 +15,21 @@
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-valid-p
                   "mevedel-mention-bindings" (text))
+(autoload 'mevedel-mention-bindings-valid-p "mevedel-mention-bindings")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-context "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-source-file "mevedel-skills-core" (cl-x) t)
+(declare-function mevedel-skills-intersect-ptc-primitives
+                  "mevedel-skills-core" (left right))
 (declare-function mevedel-skills-source-key
                   "mevedel-skills-core" (source-file))
+(autoload 'mevedel-skill-context "mevedel-skills-core")
+(autoload 'mevedel-skill-name "mevedel-skills-core")
+(autoload 'mevedel-skill-source-file "mevedel-skills-core")
+(autoload 'mevedel-skills-intersect-ptc-primitives "mevedel-skills-core")
+(autoload 'mevedel-skills-source-key "mevedel-skills-core")
 
 ;; `mevedel-skills-input'
 (declare-function mevedel-skills-input-attachment-reminder
@@ -31,15 +39,20 @@
                   (text session start end name))
 (declare-function mevedel-skills-input-scan-tokens
                   "mevedel-skills-input" (text resolver &optional allow-root))
+(autoload 'mevedel-skills-input-attachment-reminder "mevedel-skills-input")
+(autoload 'mevedel-skills-input-resolve-mention "mevedel-skills-input")
+(autoload 'mevedel-skills-input-scan-tokens "mevedel-skills-input")
 
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills-prepare
                   "mevedel-skills-invoke"
                   (skill arguments callback &rest keys))
+(autoload 'mevedel-skills-prepare "mevedel-skills-invoke")
 
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-format
                   "mevedel-tool-render-data" (render-data &optional tool-use-id))
+(autoload 'mevedel-tool-render-data-format "mevedel-tool-render-data")
 
 
 ;;
@@ -86,7 +99,6 @@
   "Resolve live skill tokens in TEXT against SESSION.
 Return available tokens and unavailable bound occurrences separately.
 Unknown and intentionally literal tokens remain unresolved."
-  (require 'mevedel-skills-input)
   (let (available unavailable)
     (dolist
         (token
@@ -271,7 +283,6 @@ same source.
 
 Unknown names and escaped, quoted, or code-span syntax are not planned.
 Malformed atomic binding data signals a `user-error'."
-  (require 'mevedel-mention-bindings)
   (unless (mevedel-mention-bindings-valid-p text)
     (user-error "Malformed mention binding"))
   (let ((resolved (mevedel-skills-plan--resolve text session)))
@@ -325,7 +336,6 @@ function uses recorded extents and never scans TEXT."
 
 (defun mevedel-skills-plan--aggregate-prepared (pairs)
   "Aggregate ordered prepared entry PAIRS into prompt components and policy."
-  (require 'mevedel-skills-input)
   (let ((command-count
          (cl-count-if
           (lambda (pair)
@@ -505,8 +515,6 @@ transaction fails or is cancelled, later callbacks have no effect."
 
 (defun mevedel-skills-plan-render-data (plan expanded-prompt)
   "Return hidden render data for PLAN and exact EXPANDED-PROMPT."
-  (unless (fboundp 'mevedel-tool-render-data-format)
-    (require 'mevedel-tool-render-data))
   (mevedel-tool-render-data-format
    (list :kind 'inline-skill
          :display-text (mevedel-skill-invocation-plan-text plan)
