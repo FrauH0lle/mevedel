@@ -11,7 +11,9 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(eval-when-compile
+  (require 'cl-lib)
+  (require 'mevedel-structs))
 
 ;; `emacs'
 (defvar default-file-modes)
@@ -32,10 +34,13 @@
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-probe "mevedel-sandbox" ())
+(autoload 'mevedel-sandbox-probe "mevedel-sandbox")
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-append-diagnostic
                   "mevedel-session-publication" (session path content))
+(autoload 'mevedel-session-publication-append-diagnostic
+  "mevedel-session-publication")
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x))
@@ -418,10 +423,8 @@ supplies them itself."
                          (mevedel-telemetry-path session))))
     (condition-case err
         (if (mevedel-telemetry--remote-p session)
-            (progn
-              (require 'mevedel-session-publication)
-              (mevedel-session-publication-append-diagnostic
-               session file content))
+            (mevedel-session-publication-append-diagnostic
+             session file content)
           (make-directory (file-name-directory file) t)
           (write-region content nil file t 'silent)
           t)
@@ -650,9 +653,7 @@ Return an opaque span plist accepted by `mevedel-telemetry-finish'."
          (git (and directory (mevedel-telemetry--git-snapshot directory)))
          (gptel (mevedel-telemetry--library-snapshot 'gptel))
          (gptel-agent (mevedel-telemetry--library-snapshot 'gptel-agent))
-         (sandbox
-          (when (require 'mevedel-sandbox nil t)
-            (ignore-errors (mevedel-sandbox-probe)))))
+         (sandbox (ignore-errors (mevedel-sandbox-probe))))
     (apply #'mevedel-telemetry-record
            session 'reproduction-environment
            :boundary boundary
@@ -797,7 +798,6 @@ so version control never hears about any of it."
   (interactive)
   (unless mevedel-telemetry--profiler-session
     (user-error "No mevedel profiler run is active"))
-  (require 'profiler)
   (let* ((session mevedel-telemetry--profiler-session)
          (directory (mevedel-telemetry-profiler-directory session))
          (failure-stage 'stop))
