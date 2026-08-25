@@ -571,12 +571,37 @@ present."
         (string-join (nreverse lines) "\n")
       "No resource address families are currently available in this request.")))
 
+(defconst mevedel-system--ptc-guidance
+  (concat
+   "When several tool calls are only a means to one final value - later "
+   "calls depend on earlier results, or many independent calls form one "
+   "batch - prefer a single `ToolScript` call over issuing the calls one "
+   "turn at a time. It runs the whole data-dependent sequence in one turn "
+   "and returns only the final value, keeping intermediate output out of "
+   "the conversation.\n\n")
+  "System-prompt promotion of ToolScript, ending with its own separator.")
+
+(defun mevedel-system--toolscript-active-p (context)
+  "Return non-nil when ToolScript is an active tool for CONTEXT."
+  (let* ((buffer (mevedel-system-context-refresh-buffer context))
+         (tools (and (boundp 'gptel-tools)
+                     (if (buffer-live-p buffer)
+                         (buffer-local-value 'gptel-tools buffer)
+                       gptel-tools))))
+    (seq-some (lambda (tool)
+                (equal "ToolScript" (ignore-errors (gptel-tool-name tool))))
+              tools)))
+
 (defun mevedel-system--tool-orchestration-prompt (context)
   "Return tool orchestration guidance rendered for CONTEXT."
   (mevedel-system-render-prompt-file
    "prompts/system/tool-orchestration.md"
    `(("RESOURCE_ROSTER" .
-      ,(mevedel-system--resource-roster context)))))
+      ,(mevedel-system--resource-roster context))
+     ("PTC_GUIDANCE" .
+      ,(if (mevedel-system--toolscript-active-p context)
+           mevedel-system--ptc-guidance
+         "")))))
 
 (defun mevedel-system--skills-prompt (context)
   "Return dynamic skills prompt text for CONTEXT, or nil."
