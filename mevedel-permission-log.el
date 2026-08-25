@@ -14,10 +14,13 @@
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-append-diagnostic
                   "mevedel-session-publication" (session path content))
+(autoload 'mevedel-session-publication-append-diagnostic
+  "mevedel-session-publication")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
@@ -63,7 +66,6 @@
 (defun mevedel-permission-log--remote-p (session)
   "Return non-nil when SESSION's execution target is remote."
   (when-let* ((target (mevedel-session-execution-target session)))
-    (require 'mevedel-execution-target)
     (mevedel-execution-target-remote-p target)))
 
 (defun mevedel-permission-log--printable-value (value)
@@ -108,11 +110,8 @@
                          (mevedel-permission-log-path session))))
     (condition-case err
         (if (mevedel-permission-log--remote-p session)
-            (progn
-              (require 'mevedel-session-durability)
-              (require 'mevedel-session-publication)
-              (mevedel-session-publication-append-diagnostic
-               session file content))
+            (mevedel-session-publication-append-diagnostic
+             session file content)
           (make-directory (file-name-directory file) t)
           (write-region content nil file t 'silent)
           t)

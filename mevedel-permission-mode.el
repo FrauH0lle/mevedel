@@ -15,6 +15,8 @@
                   "mevedel-plan-mode" (&optional session))
 (declare-function mevedel-plan-mode-exit
                   "mevedel-plan-mode" (&optional session))
+(autoload 'mevedel-plan-mode-active-p "mevedel-plan-mode")
+(autoload 'mevedel-plan-mode-exit "mevedel-plan-mode")
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-make-full-auto-mode
@@ -25,10 +27,16 @@
                   "mevedel-reminders" (session reminder))
 (declare-function mevedel-session-remove-reminder
                   "mevedel-reminders" (session type))
+(autoload 'mevedel-reminders-make-full-auto-mode "mevedel-reminders")
+(autoload 'mevedel-reminders-make-full-auto-mode-exit "mevedel-reminders")
+(autoload 'mevedel-session-ensure-reminder "mevedel-reminders")
+(autoload 'mevedel-session-remove-reminder "mevedel-reminders")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-mutation-authority
                   "mevedel-session-artifacts" (session &optional buffer))
+(autoload 'mevedel-session-artifacts-assert-mutation-authority
+  "mevedel-session-artifacts")
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-view-refresh-associated-input-prompt
@@ -137,7 +145,6 @@ SESSION defaults to the current data buffer's session."
                       (and data-buf
                            (buffer-local-value 'mevedel--session data-buf)))))
     (when session
-      (require 'mevedel-reminders)
       (cond
        ((eq target-mode 'full-auto)
         (mevedel-session-remove-reminder session 'full-auto-mode-exit)
@@ -152,14 +159,12 @@ SESSION defaults to the current data buffer's session."
 (defun mevedel-permission-mode-transition (mode)
   "Transition the current session to permission MODE.
 Runs mode-specific lifecycle hooks."
-  (require 'mevedel-plan-mode)
   (let* ((target (mevedel-permission-mode-normalize mode))
          (data-buf (mevedel-permission-mode-data-buffer))
          (session (and data-buf
                        (buffer-local-value 'mevedel--session data-buf))))
     (if (not session)
         (set-default-toplevel-value 'mevedel-permission-mode target)
-      (require 'mevedel-session-artifacts)
       (with-current-buffer data-buf
         (mevedel-session-artifacts-assert-mutation-authority
          session data-buf)

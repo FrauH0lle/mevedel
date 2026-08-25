@@ -37,6 +37,9 @@
                   "mevedel-interaction-prompt" (overlay outcome))
 (declare-function mevedel--prompt-announce
                   "mevedel-interaction-prompt" (overlay))
+(autoload 'mevedel--prompt--register-canceller "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt--settle "mevedel-interaction-prompt")
+(autoload 'mevedel--prompt-announce "mevedel-interaction-prompt")
 (defvar mevedel--prompt-overlays)
 
 ;; `mevedel-reminders'
@@ -44,12 +47,18 @@
                   "mevedel-reminders" (summary))
 (declare-function mevedel-session-ensure-reminder
                   "mevedel-reminders" (session reminder))
+(autoload 'mevedel-reminders-make-user-revised-patch "mevedel-reminders")
+(autoload 'mevedel-session-ensure-reminder "mevedel-reminders")
 
 ;; `mevedel-side-conversation'
 (declare-function mevedel-side-conversation-mutation-warning
                   "mevedel-side-conversation" (record effect))
 (declare-function mevedel-side-conversation-mutation-warning-pending-p
                   "mevedel-side-conversation" (record))
+(autoload 'mevedel-side-conversation-mutation-warning
+  "mevedel-side-conversation")
+(autoload 'mevedel-side-conversation-mutation-warning-pending-p
+  "mevedel-side-conversation")
 
 ;; `mevedel-structs'
 (defvar mevedel--session)
@@ -670,7 +679,6 @@ same reason."
 (defun mevedel-patch-review-start (proposal callback data-buffer)
   "Stage PROPOSAL for review and settle it through CALLBACK.
 DATA-BUFFER is the tool-calling buffer whose view owns the interaction."
-  (require 'mevedel-side-conversation)
   (mevedel-tool-patch-annotate-line-numbers proposal)
   (plist-put proposal :id
              (list 'patch-review (cl-incf mevedel-patch-review--counter)))
@@ -681,7 +689,6 @@ DATA-BUFFER is the tool-calling buffer whose view owns the interaction."
   (let ((overlay (mevedel-patch-review--render proposal)))
     (plist-put proposal :overlay overlay)
     (with-current-buffer (plist-get proposal :view-buffer)
-      (require 'mevedel-interaction-prompt)
       (overlay-put overlay 'mevedel-user-request t)
       (overlay-put overlay 'mevedel--callback
                    (lambda (outcome)
@@ -1254,7 +1261,6 @@ the edit moved the region it matches."
               (data-buffer (plist-get proposal :data-buffer))
               ((buffer-live-p data-buffer))
               (session (buffer-local-value 'mevedel--session data-buffer)))
-    (require 'mevedel-reminders)
     (mevedel-session-ensure-reminder
      session (mevedel-reminders-make-user-revised-patch summary))))
 
