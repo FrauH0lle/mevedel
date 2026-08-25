@@ -12,10 +12,19 @@
 (eval-when-compile
   (require 'mevedel-tool-registry))
 
+;; `apropos'
+(declare-function apropos-parse-pattern "apropos" (pattern &optional do-all))
+(autoload 'apropos-parse-pattern "apropos")
+
+;; `gptel-request'
+(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+
 ;; `imenu'
 (declare-function imenu--make-index-alist "imenu" (&optional noerror))
 (declare-function imenu--subalist-p "imenu" (item))
 (defvar imenu--index-alist)
+(autoload 'imenu--make-index-alist "imenu")
+(autoload 'imenu--subalist-p "imenu")
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
@@ -24,9 +33,22 @@
                   "mevedel-execution-target" (target path))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-create "mevedel-execution-target")
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--positional-to-plist
+                  "mevedel-pipeline" (raw-args specs))
+(declare-function mevedel-pipeline-run-tool
+                  "mevedel-pipeline" (tool callback args))
 
 ;; `mevedel-tool-registry'
+(declare-function mevedel-tool--resolve-prompt
+                  "mevedel-tool-registry" (prompt))
+(declare-function mevedel-tool-register "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
+(autoload 'mevedel-tool-truthy-p "mevedel-tool-registry")
 
 ;; `project'
 (declare-function project-current "project" (&optional maybe-prompt dir))
@@ -59,6 +81,15 @@
 (declare-function xref-location-line "xref" (cl-x) t)
 (declare-function xref-location-marker "xref" (cl-x) t)
 (declare-function xref-matches-in-files "xref" (regexp files))
+(autoload 'xref-backend-apropos "xref")
+(autoload 'xref-backend-references "xref")
+(autoload 'xref-find-backend "xref")
+(autoload 'xref-item-location "xref")
+(autoload 'xref-item-summary "xref")
+(autoload 'xref-location-group "xref")
+(autoload 'xref-location-line "xref")
+(autoload 'xref-location-marker "xref")
+(autoload 'xref-matches-in-files "xref")
 
 
 ;;
@@ -74,7 +105,6 @@
 
 (defun mevedel-tool-code--execution-target (path)
   "Return the execution target containing absolute PATH."
-  (require 'mevedel-execution-target)
   (mevedel-execution-target-create (file-name-directory path)))
 
 (defun mevedel-tool-code--with-file-buffer (file-path callback)
@@ -159,7 +189,6 @@ When TARGET is non-nil, render locations in its target-native path domain."
   "Find references to an identifier using xref.
 CALLBACK receives the result envelope.  ARGS is a plist with :identifier
 and :file_path."
-  (require 'xref)
   (let ((identifier (plist-get args :identifier))
         (file-path (plist-get args :file_path)))
     (mevedel-tool-code--with-file-buffer
@@ -219,9 +248,6 @@ and :file_path."
   "Find symbols matching a pattern using `xref-backend-apropos'.
 CALLBACK receives the result envelope.  ARGS is a plist with :pattern
 and :file_path."
-  (require 'xref)
-  ;; `xref-apropos-regexp' calls into apropos without loading it.
-  (require 'apropos)
   (let ((pattern (plist-get args :pattern))
         (file-path (plist-get args :file_path)))
     (mevedel-tool-code--with-file-buffer
@@ -316,7 +342,6 @@ while the visiting buffer may be narrowed."
 (defun mevedel-tool-code--imenu (callback args)
   "List symbols in a file using imenu.
 CALLBACK receives the result envelope.  ARGS is a plist with :file_path."
-  (require 'imenu)
   (let ((file-path (plist-get args :file_path)))
     (mevedel-tool-code--with-file-buffer
      file-path
