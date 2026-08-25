@@ -365,10 +365,10 @@ aggregate live-agent status and targeted handle refresh. The main view renders
 compact one-line agent handles from tool render-data and sidecar state.
 Handles show canonical path, role, status, call count, and transcript
 attribution; recent ephemeral
-activity is kept out of the default view to avoid churn. Terminal
-handles open a rendered read-only transcript view from the saved
-transcript file. Running handles open a rendered read-only view over
-the live agent buffer when that buffer is available. Open live transcript
+activity is kept out of the default view to avoid churn. Resident retained
+agents open a rendered read-only view over their conversation buffer whether
+running or idle; cold and historical handles use the saved transcript file.
+Open live transcript
 views are observation-only projections that follow the main renderer's stream
 and tool cadence without redirecting parent interactions. See
 [`docs/view.md`](view.md#buffer-roles) for their update, scrolling, header,

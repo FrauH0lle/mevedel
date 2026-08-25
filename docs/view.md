@@ -33,8 +33,9 @@ ephemeral projection state.
   compact Markdown-rendered turns, status and interaction zones, and the
   input zone.
 - **Agent transcript view**: rendered read-only projection of a sub-agent
-  transcript. Running agents use the live agent buffer; terminal agents use
-  the saved transcript file.
+  transcript. Resident retained agents use their live conversation buffer
+  whether running or idle; cold and historical agents use the saved transcript
+  file.
 - **Directive inspector**: explicit read-only projection of one workspace
   directive record for durable access after compaction, archive, or source
   loss. It replaces the currently displayed view and never owns a composer,
@@ -69,12 +70,12 @@ reuse or repurpose one another's inspection view.
 
 If the observed agent settles while its transcript view is open, the view
 renders the final content immediately and updates its header in place. It
-keeps the live data buffer rather than swapping source buffers mid-display.
+keeps the retained data buffer rather than swapping source buffers mid-display.
 Closing the inspection view preserves data buffers owned by retained agent
 records so a later `FollowupAgent` can continue them; parent-session teardown
 kills every retained conversation buffer from the session registry, whether
-or not it has an open inspection view. Reopening resolves the saved transcript
-normally.
+or not it has an open inspection view. Reopening reuses a resident retained
+buffer and otherwise resolves the saved transcript.
 
 The live transcript header updates on the same stream and tool events as the
 body. It reflects running or blocked state, tool-call count, and elapsed time.
@@ -1075,11 +1076,11 @@ visible agent path, or a mouse click, opens the transcript.  Agent handles
 and activity-row paths are clickable when a transcript entry is available.
 `FollowupAgent: PATH` and `SendMessage: PATH` start collapsed and expand
 to the exact follow-up or sent message.
-Running agents show status/activity in the main view
-and may open a rendered read-only transcript view over the live agent
-buffer while that buffer is available. Terminal agents open a rendered
-read-only transcript view from the saved transcript file through
-`mevedel-view-open-agent-transcript`.
+Resident retained agents show status/activity in the main view and open a
+rendered read-only transcript view over their conversation buffer whether
+running or idle. An open idle view begins live projection when a follow-up
+turn starts. Cold and historical agents open from the saved transcript file
+through `mevedel-view-open-agent-transcript`.
 
 `mevedel-transcript-restore.el` restores only the gptel bounds/properties
 needed for rendering and normalizes them through `mevedel-transcript.el`'s
