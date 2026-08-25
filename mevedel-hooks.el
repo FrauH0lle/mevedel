@@ -36,6 +36,9 @@
                   "mevedel-execution-target" (target path))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-identity "mevedel-execution-target")
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-plugin-registry'
 (declare-function mevedel-plugin-hooks "mevedel-plugin-registry" (cl-x) t)
@@ -53,10 +56,13 @@
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-queue-turn-event
                   "mevedel-reminders" (buffer key body &optional commit))
+(autoload 'mevedel-reminders-queue-turn-event "mevedel-reminders")
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-append-diagnostic
                   "mevedel-session-publication" (session path content))
+(autoload 'mevedel-session-publication-append-diagnostic
+  "mevedel-session-publication")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skills-project-files
@@ -74,6 +80,7 @@
                   "mevedel-telemetry" (session event &rest props))
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
+(autoload 'mevedel-telemetry-record-audit "mevedel-telemetry")
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
@@ -82,6 +89,8 @@
 (declare-function mevedel-current-turn "mevedel-turn" (session))
 (declare-function mevedel-request-push-canceller
                   "mevedel-turn" (request canceller))
+(autoload 'mevedel-current-turn "mevedel-turn")
+(autoload 'mevedel-request-push-canceller "mevedel-turn")
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--claim-spinner-status
@@ -95,6 +104,7 @@
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-state-dir
                   "mevedel-workspace" (workspace))
+(autoload 'mevedel-workspace-state-dir "mevedel-workspace")
 
 (defvar gptel-model)
 (defvar read-eval)
@@ -633,7 +643,6 @@ The returned plist includes `:path', `:hash', `:content', and
 
 (defun mevedel-hooks--project-config-candidates (workspace)
   "Return existing project hook files for WORKSPACE in load order."
-  (require 'mevedel-workspace)
   (when workspace
     (let (files)
       (dolist (dir (list (file-name-concat
@@ -1236,7 +1245,6 @@ slot unchanged and returns nil."
   (when-let* ((session session)
               (decision (mevedel-hooks--safe-decision decision)))
     (when (mevedel-hooks--decision-blocking-p decision)
-      (require 'mevedel-reminders)
       (mevedel-reminders-queue-turn-event
        (current-buffer) (list 'hook event)
        (format "%s hook blocked the previous operation: %s. Adapt your next action to respect this hook decision instead of retrying the same blocked operation unchanged."
@@ -1250,7 +1258,6 @@ slot unchanged and returns nil."
 
 (defun mevedel-hooks-event-plist (event &optional session workspace &rest extra)
   "Build a generic hook plist for EVENT, SESSION, WORKSPACE, and EXTRA."
-  (require 'mevedel-turn)
   (let* ((workspace (or workspace
                         (and session (mevedel-session-workspace session))))
          (workspace-root (and workspace (mevedel-workspace-root workspace)))
@@ -1349,12 +1356,8 @@ EVENT labels each generated hook event block."
     (condition-case err
         (let ((target (mevedel-session-execution-target session)))
           (if (and target
-                   (progn
-                     (require 'mevedel-execution-target)
-                     (mevedel-execution-target-remote-p target)))
+                   (mevedel-execution-target-remote-p target))
               (progn
-                (require 'mevedel-session-durability)
-                (require 'mevedel-session-publication)
                 (mevedel-session-publication-append-diagnostic
                  session file content))
             (make-directory (file-name-directory file) t)
@@ -1379,9 +1382,7 @@ EVENT labels each generated hook event block."
            (target (mevedel-session-execution-target session))
            (remote-p
             (and target
-                 (progn
-                   (require 'mevedel-execution-target)
-                   (mevedel-execution-target-remote-p target)))))
+                 (mevedel-execution-target-remote-p target))))
       (if (and pending remote-p)
           (when (mevedel-hooks--persist-log-content
                  session (mapconcat #'mevedel-hooks--log-entry-text
@@ -1395,7 +1396,6 @@ EVENT labels each generated hook event block."
 (defun mevedel-hooks--log (session entry)
   "Append hook log ENTRY to SESSION."
   (when session
-    (require 'mevedel-telemetry)
     (let ((log (append (mevedel-session-hook-log session)
                        (list entry))))
       (when (and mevedel-hooks-log-limit
@@ -1407,15 +1407,12 @@ EVENT labels each generated hook event block."
              (target (mevedel-session-execution-target session))
              (remote-p
               (and target
-                   (progn
-                     (require 'mevedel-execution-target)
-                     (mevedel-execution-target-remote-p target)))))
+                   (mevedel-execution-target-remote-p target))))
         (when (or pending remote-p
                   (not (mevedel-hooks--persist-log-entry session entry)))
           (setf (mevedel-session-hook-log-pending session)
                 (append pending (list entry))))))
     (let ((handler (plist-get entry :handler)))
-      (require 'mevedel-telemetry)
       (mevedel-telemetry-record-audit
        session 'hook-handler
        :hook-event (plist-get entry :event)
@@ -1673,9 +1670,7 @@ record only that context was added, without duplicating the body."
                       (mevedel-session-execution-target session)))
          (target-command-p
           (and target
-               (progn
-                 (require 'mevedel-execution-target)
-                 (mevedel-execution-target-remote-p target))
+               (mevedel-execution-target-remote-p target)
                (or (eq source 'project-file)
                    (and (eq source 'plugin)
                         (stringp root)
@@ -1688,7 +1683,6 @@ record only that context was added, without duplicating the body."
                 (env-data data))
             (cond
              ((file-remote-p root)
-              (require 'mevedel-execution-target)
               (unless (and target (file-remote-p data))
                 (signal 'mevedel-execution-target-error
                         (list "Target plugin data is not on the plugin target")))
@@ -1733,7 +1727,6 @@ record only that context was added, without duplicating the body."
       (signal 'mevedel-execution-target-error
               (list "Command hook has no trusted execution origin")))
     (when target
-      (require 'mevedel-execution-target)
       (cond
        ((file-remote-p directory)
         (mevedel-execution-target-native-path target directory))
@@ -1749,7 +1742,6 @@ record only that context was added, without duplicating the body."
   (if-let* ((target (and session
                          (mevedel-session-execution-target session))))
       (progn
-        (require 'mevedel-execution-target)
         (cl-labels
             ((native-input (value)
                (cond
@@ -1786,7 +1778,6 @@ record only that context was added, without duplicating the body."
 (defun mevedel-hooks--run-command-handler
     (event handler event-plist session request callback)
   "Run command HANDLER for EVENT and call CALLBACK with decision."
-  (require 'mevedel-turn)
   (let* ((command (plist-get handler :command))
          (timeout (mevedel-hooks--command-timeout handler))
          (default-directory

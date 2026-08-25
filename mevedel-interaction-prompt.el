@@ -13,11 +13,14 @@
 
 ;; `gptel-agent-tools'
 (declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
+(autoload 'gptel-agent--block-bg "gptel-agent-tools")
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
 (declare-function mevedel-request-push-canceller
                   "mevedel-turn" (request canceller))
+(autoload 'mevedel-current-origin "mevedel-turn")
+(autoload 'mevedel-request-push-canceller "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
@@ -114,7 +117,6 @@ the overlay lives in the parent view, but the active request belongs
 to the agent data buffer.  OVERLAY, when non-nil, is tagged with the
 owning request so shared view buffers only cancel request-local
 prompts during request teardown."
-  (require 'mevedel-turn)
   (let ((prompt-buffer (current-buffer))
         (source-buffer (or source-buffer (current-buffer))))
     (when-let* ((data-buf (mevedel--prompt--data-buffer source-buffer))
@@ -221,7 +223,6 @@ set on materialized interaction-zone descriptor text."
 (defun mevedel--prompt-framed-body (content face)
   "Return CONTENT inside the standard interaction prompt frame.
 FACE is inherited by the top and bottom rule lines."
-  (require 'gptel-agent-tools)
   (let ((body
          (concat
           "\n"
@@ -255,7 +256,6 @@ CALLBACK receives `approve', `deny', `(feedback . TEXT)', or
 `aborted'.  TITLE is the heading text, CONTENT describes the
 request, QUESTION is the final question, and HELP-ECHO-TEXT is
 optional hover text."
-  (require 'mevedel-turn)
   (let* ((source-buffer (current-buffer))
          (origin (mevedel-current-origin))
          (target-buffer

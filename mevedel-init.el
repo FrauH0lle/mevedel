@@ -37,6 +37,7 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
                   "mevedel-utilities" (start end))
+(autoload 'mevedel--clear-user-turn-gptel-properties "mevedel-utilities")
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--forward-input
@@ -150,7 +151,6 @@
 
 (defun mevedel-init--send-direct (prompt data-buffer)
   "Insert PROMPT into DATA-BUFFER and send it with `gptel-send'."
-  (require 'mevedel-utilities)
   (with-current-buffer data-buffer
     (mevedel-init--ensure-sendable)
     (goto-char (point-max))
