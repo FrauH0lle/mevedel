@@ -23,6 +23,7 @@
 (declare-function mevedel-execution-run-helper
                   "mevedel-execution"
                   (name command read-paths writable-roots &rest keys))
+(autoload 'mevedel-execution-run-helper "mevedel-execution")
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-readiness
@@ -36,6 +37,7 @@
 (declare-function mevedel-mention-bindings-set
                   "mevedel-mention-bindings"
                   (start end binding &optional object))
+(autoload 'mevedel-mention-bindings-ranges "mevedel-mention-bindings")
 
 ;; `mevedel-structs'
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -44,18 +46,22 @@
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-restore-ignored-properties
                   "mevedel-transcript" (start end))
+(autoload 'mevedel-transcript-restore-ignored-properties "mevedel-transcript")
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
+(autoload 'mevedel-current-origin "mevedel-turn")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 ;; `org'
 (declare-function org-mode "org" ())
+(autoload 'org-mode "org")
 
 ;; `org-indent'
 (declare-function org-indent-mode "org-indent" (&optional arg))
+(autoload 'org-indent-mode "org-indent")
 
 ;; `saveplace'
 (defvar save-place-mode)
@@ -90,8 +96,6 @@ prefix argument, or when HERE is non-nil, insert it at point."
   "Run helper COMMAND as NAME, returning (EXIT-CODE . OUTPUT).
 READ-PATHS and WRITABLE-ROOTS declare the helper's filesystem boundary.
 OUTPUT is returned unchanged so callers may interpret its whitespace."
-  (require 'mevedel-execution)
-  (require 'mevedel-turn)
   (let* ((result (mevedel-execution-run-helper
                   name command read-paths writable-roots
                   :session (or session (bound-and-true-p mevedel--session))
@@ -211,7 +215,6 @@ insertion from running expensive editor hooks."
 
 (defun mevedel--transcript-org-mode ()
   "Enable Org mode without activating its frame-wide indentation redraw."
-  (require 'org)
   (if (fboundp 'org-indent-mode)
       (cl-letf (((symbol-function 'org-indent-mode) #'ignore))
         (org-mode))
@@ -691,7 +694,6 @@ line by itself."
 (defun mevedel--clear-user-turn-gptel-properties (start end)
   "Clear inherited properties from START to END.
 Preserve atomic mention bindings and live structural producer provenance."
-  (require 'mevedel-mention-bindings)
   (let* ((inhibit-read-only t)
          (text (buffer-substring start end))
          (bindings (mevedel-mention-bindings-ranges
@@ -711,7 +713,6 @@ Preserve atomic mention bindings and live structural producer provenance."
               (add-text-properties
                (+ start position) (+ start next) (list property t)))
             (setq position next))))))
-  (require 'mevedel-transcript)
   (mevedel-transcript-restore-ignored-properties start end))
 
 (defconst mevedel--render-data-open "<!-- mevedel-render-data -->"

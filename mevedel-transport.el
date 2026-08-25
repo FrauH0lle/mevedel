@@ -22,6 +22,9 @@
 (declare-function tramp-get-connection-process "tramp" (vec))
 (declare-function tramp-get-connection-property
                   "tramp-cache" (key property &optional default))
+(autoload 'tramp-dissect-file-name "tramp")
+(autoload 'tramp-get-connection-process "tramp")
+(autoload 'tramp-get-connection-property "tramp-cache")
 
 
 ;;
@@ -101,7 +104,6 @@ uncounts itself."
 This catches a caller that reached the connection without going through the
 file-name handler, which is what TRAMP's own internal command senders do."
   (when (and (stringp path) (file-remote-p path))
-    (require 'tramp)
     (when-let* ((process (tramp-get-connection-process
                           (tramp-dissect-file-name path))))
       (and (process-live-p process)
