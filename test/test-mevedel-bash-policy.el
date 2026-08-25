@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'gptel)
 (require 'mevedel-bash-policy)
 (require 'cl-lib)
 (require 'seq)
@@ -776,7 +777,6 @@ for effects despite reusable authority"
   ,test
   (test)
   :doc "ignores reasoning callback events and uses the final JSON response"
-  (require 'gptel nil t)
   (let ((result :pending)
         (gptel-stream t)
         (mevedel-permission-guardian-timeout 60))
@@ -808,7 +808,6 @@ for effects despite reusable authority"
                    result)))
 
   :doc "preserves the required semantic risk boundary examples"
-  (require 'gptel nil t)
   (dolist
       (case
        '(("git status --short"
@@ -848,7 +847,6 @@ for effects despite reusable authority"
       (should (equal expected result))))
 
   :doc "adds scoped project context without main-session instructions"
-  (require 'gptel nil t)
   (let* ((root-dir (file-name-as-directory
                     (make-temp-file "mevedel-guardian-profile-" t)))
          (subdir (file-name-concat root-dir "packages" "api"))
@@ -905,7 +903,6 @@ for effects despite reusable authority"
       (delete-directory root-dir t)))
 
   :doc "uses guardian workload tier for the gptel request"
-  (require 'gptel nil t)
   (dolist (session-stream '(t nil))
     (let ((captured-workload nil)
           (captured-backend nil)
@@ -1001,7 +998,6 @@ for effects despite reusable authority"
   (let ((requested nil)
         (guidance :unset)
         (mevedel-permission-guardian-timeout 60))
-    (require 'gptel nil t)
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                (lambda (&rest _)
                  (user-error "Reasoning effort max is unsupported")))
