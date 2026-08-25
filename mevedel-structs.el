@@ -15,6 +15,8 @@
                   "mevedel-execution-target" (workspace-root))
 (declare-function mevedel-execution-target-expand-path
                   "mevedel-execution-target" (target path &optional directory))
+(autoload 'mevedel-execution-target-create "mevedel-execution-target")
+(autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
 
 ;; `mevedel-sandbox'
 (defvar mevedel-sandbox-mode)
@@ -497,7 +499,6 @@ Format: *mevedel:SESSION@WORKSPACE*"
 Returns the session struct.  Does not create the buffer -- the caller is
 responsible for buffer setup.  WORKING-DIRECTORY defaults to the
 workspace root and is kept stable for the lifetime of the session."
-  (require 'mevedel-execution-target)
   (let* ((target
           (mevedel-execution-target-create
            (mevedel-workspace-root workspace)))
