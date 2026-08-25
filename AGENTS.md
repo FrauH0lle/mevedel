@@ -390,17 +390,19 @@ warnings.
   filesystem path components.
 - **Provide**: each file ends with `(provide 'mevedel-MODNAME)` and
   `;;; mevedel-MODNAME.el ends here`
-- **Avoid `require` at top level** in library files; prefer
-  `declare-function`/`defvar` plus `require` inside functions or
-  `eval-when-compile`
-- **Never `require` inside a hot-path function**: an already-satisfied
-  `require` still scans the `features` list on every call. A profiled
-  session put 20% of CPU samples in in-function `require`s on render
-  paths. Code that runs per segment, per chunk, per redraw tick, or per
-  guest step must hoist its `require`s to the file top level (this
-  overrides the lazy-require preference above) or to the path's
-  once-per-call entry point. Lazy `require` stays right for cold paths:
-  commands, settlement, persistence, setup.
+- **Minimize explicit runtime `require`s**: prefer actual autoloaded entry
+  points. Use `declare-function` and `defvar` for byte-compiler declarations
+  only; they do not load libraries, and variable access does not trigger
+  autoloading.
+- **Load dependencies at feature boundaries**: when a runtime dependency is
+  not autoloaded or otherwise guaranteed to be loaded, `require` it once in a
+  cold command/setup entry point, or at top level when it is unconditional
+  and acyclic. Use `eval-when-compile` only for compile-time dependencies.
+- **Never call `require` on a hot path**: code reached per segment, chunk,
+  redraw tick, or guest step must rely on an earlier load boundary. A profiled
+  session attributed 20% of CPU samples to repeated `require` calls. Avoid
+  circular dependencies through module direction rather than scattering
+  lazy `require`s through helpers.
 - **ASCII in code, unicode only in UI-facing strings**: comments,
   identifiers, and non-UI strings stay ASCII (use `->` not `→`,
   `lambda`/`fn` not `λ`). Unicode is fine in `propertize`, overlays,
