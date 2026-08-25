@@ -26,8 +26,9 @@ initial task. Archived raw segments are never reconstructed. The initial task
 is appended after this immutable snapshot; parent turns added later are not
 synchronized into the child.
 
-At spawn, mevedel materializes the role's dynamic instructions and effective
-tools, then captures the exact request backend, model, reasoning effort,
+Before provider dispatch, after task preparation, mevedel materializes the
+role's dynamic instructions and effective tools, then captures the exact
+request backend, model, reasoning effort,
 system prompt, tools, context settings, request parameters, and model policy
 maps. Resolution starts with the delegator's current request defaults, applies
 the role workload, and finally applies explicit `model` and `effort` values.

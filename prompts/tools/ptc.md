@@ -23,12 +23,16 @@ on the installed manual at `{{PTC_DIALECT_MANUAL_PATH}}`.
 - A single ordinary tool call: call the tool directly
 - Bulk text processing: search with `Grep` instead of reading many
   files and scanning their lines in the interpreter
-- Anything needing `eval`, macros, buffers, processes, filesystem
-  access, or ambient Emacs state; the dialect has none of these
+- Anything needing `eval`, buffers, processes, filesystem access, or
+  ambient Emacs state; the dialect has none of these
 
 ### How to use `ToolScript`
 
 #### Quick reference
+
+The `script` argument takes a whole script, not a single expression: several
+top-level forms evaluate as an implicit `progn`, and the last form's value is
+the tool result.
 
 Special forms:
 
@@ -43,7 +47,23 @@ Accepted macro-shaped forms:
     (dolist (VAR LIST) BODY...)    ; no RESULT form
     (dotimes (VAR COUNT) BODY...)  ; no RESULT form
 
-There is no `eval`, macro definition, backquote, `cl-loop`, generalized place,
+Top-level definitions (only at the script's top level, hoisted before the
+body runs, so order and forward references do not matter):
+
+    (defun NAME (PARAMS...) BODY...)
+    (defmacro NAME (PARAMS...) BODY...)
+
+Parameter lists accept plain names, `&optional`, and a trailing
+`&rest NAME`; `&key` does not exist. Arity is checked. A definition name
+must not collide with any built-in name or tool. Named functions are
+callable directly or as `(mapcar 'name list)`.
+
+One-level backquote works for building lists and macro expansions:
+`` `(a ,x ,@items) ``. Nested backquote is rejected. `(gensym)` returns a
+fresh symbol for hygienic macro expansions. Macros expand inside the same
+closed evaluator; expansions are validated and budgeted like any code.
+
+There is no `eval`, `cl-loop`, `macrolet`, generalized place,
 buffer/process/filesystem access, or ambient Emacs state.
 
 Every operator is checked before anything runs: a script naming a function

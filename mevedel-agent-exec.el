@@ -108,6 +108,7 @@
                   "mevedel-agent-conversation" (invocation &optional deferred))
 
 ;; `mevedel-agents'
+(declare-function copy-mevedel-agent "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-configuration--create
                   "mevedel-agents" (&rest args))
 (declare-function mevedel-agent-configuration-p
@@ -130,6 +131,7 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-relative-path
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-system-prompt "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 (defvar mevedel-agent-request-local-symbols)
 
@@ -420,18 +422,26 @@ Skill-scoped model and effort policy applies to direct skill dispatches."
     (agent-type invocation &optional model-policy)
   "Freeze AGENT-TYPE's effective request configuration for INVOCATION.
 MODEL-POLICY may supply a tuple already validated before spawn admission."
-  (let ((agent (mevedel-agent-freeze
-                (mevedel-agent-invocation-agent invocation))))
-    (setf (mevedel-agent-invocation-agent invocation) agent)
+  (let* ((policy
+          (or model-policy
+              (mevedel-agent-exec--policy-for-invocation
+               agent-type invocation)))
+         (gptel-model (or (plist-get policy :model) gptel-model))
+         (gptel-backend (or (plist-get policy :backend) gptel-backend)))
     (gptel-with-preset
      (mevedel-agent-exec--request-preset agent-type invocation)
-     (let ((policy
-            (or model-policy
-                (mevedel-agent-exec--policy-for-invocation
-                 agent-type invocation))))
+     (let* ((request-locals
+             (mevedel-agent-exec-request-snapshot policy))
+            (agent
+             (copy-mevedel-agent
+              (mevedel-agent-invocation-agent invocation))))
+       (setf (mevedel-agent-system-prompt agent)
+             (alist-get 'gptel-system-prompt request-locals))
+       (setq agent (mevedel-agent-freeze agent))
+       (setf (mevedel-agent-invocation-agent invocation) agent)
        (mevedel-agent-configuration--create
         :agent agent
-        :request-locals (mevedel-agent-exec-request-snapshot policy))))))
+        :request-locals request-locals)))))
 
 
 ;;

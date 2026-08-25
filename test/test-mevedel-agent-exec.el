@@ -536,7 +536,68 @@ fire-count and payload."
                      (alist-get 'gptel--request-params snapshot)))
       (should (cl-some
                (lambda (tool) (equal "Read" (gptel-tool-name tool)))
-               (alist-get 'gptel-tools snapshot))))))
+               (alist-get 'gptel-tools snapshot)))))
+
+  :doc "materializes dynamic instructions under the agent request context"
+  (let* ((prompt-calls 0)
+         (agent
+          (mevedel-agent--create
+           :name "freeze_dynamic"
+           :description "Freeze dynamic request config"
+           :tools '((:tool "ToolScript"))
+           :system-prompt
+           (lambda ()
+             (format "%d/%s/%s/%s"
+                     (cl-incf prompt-calls)
+                     gptel-backend gptel-model
+                     (mapconcat #'gptel-tool-name gptel-tools ",")))))
+         (invocation (mevedel-agent-invocation-create agent))
+         (gptel-agent-preset '(:model preset-model))
+         (gptel-tools
+          (list (gptel-make-tool :name "Read" :function #'ignore
+                                 :description "parent")))
+         (configuration
+          (mevedel-agent-exec-freeze-configuration
+           "freeze_dynamic" invocation
+           '(:backend frozen-backend :model frozen-model :effort high))))
+    (let* ((frozen-agent
+            (mevedel-agent-configuration-agent configuration))
+           (prompt
+           (alist-get
+            'gptel-system-prompt
+            (mevedel-agent-configuration-request-locals configuration))))
+      (should (= 1 prompt-calls))
+      (should (string-prefix-p "1/frozen-backend/frozen-model/" prompt))
+      (should (string-match-p "ToolScript" prompt))
+      (should-not (string-match-p "Read" prompt))
+      (should (equal prompt (mevedel-agent-system-prompt frozen-agent)))))
+
+  :doc "materializes the default role's inherited dynamic prompt once"
+  (let* ((prompt-calls 0)
+         (agent
+          (mevedel-agent--create
+           :name "default"
+           :description "Default request config"
+           :tools nil
+           :system-prompt "Unused role prompt."))
+         (invocation (mevedel-agent-invocation-create agent))
+         (gptel-agent-preset '(:model preset-model))
+         (gptel-system-prompt
+          (lambda ()
+            (format "%d/%s" (cl-incf prompt-calls) gptel-model)))
+         (configuration
+          (mevedel-agent-exec-freeze-configuration
+           "default" invocation
+           '(:backend frozen-backend :model frozen-model :effort high)))
+         (frozen-agent
+          (mevedel-agent-configuration-agent configuration))
+         (prompt
+          (alist-get
+           'gptel-system-prompt
+           (mevedel-agent-configuration-request-locals configuration))))
+    (should (= 1 prompt-calls))
+    (should (equal "1/frozen-model" prompt))
+    (should (equal prompt (mevedel-agent-system-prompt frozen-agent)))))
 
 
 (mevedel-deftest mevedel-agent-exec--refresh-initial-transcript-state ()

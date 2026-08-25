@@ -168,7 +168,56 @@ dispatched), and `:pauses'."
   (let ((name "test-mevedel-ptc-unique-guest-identifier"))
     (should-not (intern-soft name))
     (ignore-errors (mevedel-ptc-start (format "(let ((%s 1)) %s)" name name) nil))
-    (should-not (intern-soft name))))
+    (should-not (intern-soft name)))
+
+  :doc "rejects definition-name collisions and definitions without a body"
+  (progn
+    (should (string-match-p
+             "collides" (test-mevedel-ptc--error "(defun list (x) x) 1")))
+    (should (string-match-p
+             "collides" (test-mevedel-ptc--error "(defmacro when (x) x) 1")))
+    (should (string-match-p
+             "collides"
+             (test-mevedel-ptc--error
+              "(defun f (x) x) (defmacro f (x) x) 1")))
+    (should (string-match-p
+             "collides" (test-mevedel-ptc--error "(defun Read (x) x) 1"
+                                                 '("Read"))))
+    (should (string-match-p
+             "no body form" (test-mevedel-ptc--error "(defun f (x) x)")))
+    (should (string-match-p
+             "bad definition name"
+             (test-mevedel-ptc--error "(defun \"f\" (x) x) 1"))))
+
+  :doc "rejects definitions outside the script's top level"
+  (progn
+    (should (string-match-p
+             "top-level"
+             (test-mevedel-ptc--error "(progn (defun f (x) x)) 1")))
+    (should (string-match-p
+             "top-level"
+             (test-mevedel-ptc--error "(let ((a 1)) (defmacro m () 1) a)"))))
+
+  :doc "validates definition lambda lists at start"
+  (progn
+    (should (string-match-p
+             "Unsupported lambda-list marker"
+             (test-mevedel-ptc--error "(defun f (&key a) a) (f)")))
+    (should (string-match-p
+             "Duplicate parameter"
+             (test-mevedel-ptc--error "(defun f (a a) a) (f 1 2)")))
+    (should (string-match-p
+             "must be followed by one parameter name"
+             (test-mevedel-ptc--error "(defun f (a &rest) a) (f 1)"))))
+
+  :doc "preflights definition bodies and unquotes outside a backquote"
+  (progn
+    (should (string-match-p
+             "Unknown functions"
+             (test-mevedel-ptc--error "(defun f () (unknown-op 1)) (f)")))
+    (should (string-match-p
+             "only valid inside a backquote"
+             (test-mevedel-ptc--error ",x")))))
 
 
 ;;
@@ -178,6 +227,15 @@ dispatched), and `:pauses'."
   (:vars ((test-mevedel-ptc--expander-ran nil)))
   ,test
   (test)
+
+  :doc "validates ordinary lambda lists when evaluated"
+  (progn
+    (should (string-match-p
+             "Unsupported lambda-list marker"
+             (test-mevedel-ptc--error "(funcall (lambda (&key a) a) 1)")))
+    (should (string-match-p
+             "Bad parameter name"
+             (test-mevedel-ptc--error "(funcall (lambda (t) t) 1)"))))
 
   :doc "rejects a host macro without ever running its expander"
   (progn
@@ -381,6 +439,21 @@ dispatched), and `:pauses'."
                           (list \"a\" \"b\"))"
            '("Read")
            (lambda (_name args) (cadr args)))))
+
+  :doc "requires one plain validated parameter for parallel-map"
+  (progn
+    (should
+     (string-match-p
+      "Unsupported lambda-list marker"
+      (test-mevedel-ptc--error
+       "(parallel-map (lambda (&key) (Read :file_path \"a\")) (list 1))"
+       '("Read"))))
+    (should
+     (string-match-p
+      "lambda must have one parameter"
+      (test-mevedel-ptc--error
+       "(parallel-map (lambda (&optional) (Read :file_path \"a\")) (list 1))"
+       '("Read")))))
 
   :doc "rejects nested tool effects while constructing a parallel call"
   (let ((run (test-mevedel-ptc--run
@@ -603,7 +676,113 @@ dispatched), and `:pauses'."
            "(Read :file_path \"x\")" '("Read")
            (lambda (_name _args) circle)))
     (should (eq 'error (plist-get run :outcome)))
-    (should (string-match-p "Circular aggregate" (plist-get run :value)))))
+    (should (string-match-p "Circular aggregate" (plist-get run :value))))
+
+  :doc "expands one-level backquote templates with unquote and splice"
+  (progn
+    (should (equal '(a b c) (test-mevedel-ptc--value "`(a b c)")))
+    (should (equal '(a 3 c)
+                   (test-mevedel-ptc--value "(let ((x 3)) `(a ,x c))")))
+    (should (equal '(a 1 2 b)
+                   (test-mevedel-ptc--value
+                    "(let ((xs (list 1 2))) `(a ,@xs b))")))
+    (should (equal 5 (test-mevedel-ptc--value "`,(+ 2 3)")))
+    (should (equal '(a (b 7))
+                   (test-mevedel-ptc--value "(let ((x 7)) `(a (b ,x)))")))
+    (should (equal '(:k 1)
+                   (test-mevedel-ptc--value "(let ((v 1)) `(:k ,v))"))))
+
+  :doc "rejects nested backquote, dotted unquote, and top-level splice"
+  (progn
+    (should (string-match-p "Nested backquote"
+                            (test-mevedel-ptc--error "``a")))
+    (should (string-match-p "only valid as a list element"
+                            (test-mevedel-ptc--error "`,@x")))
+    (should (string-match-p "not supported inside a backquote"
+                            (test-mevedel-ptc--error "(let ((b 1)) `(a . ,b))"))))
+
+  :doc "defines and calls top-level functions"
+  (progn
+    (should (equal 120 (test-mevedel-ptc--value
+                        "(defun fact (n) (if (< n 2) 1 (* n (fact (- n 1)))))
+                         (fact 5)")))
+    ;; Definitions are hoisted: f may call g defined below it.
+    (should (equal 3 (test-mevedel-ptc--value
+                      "(defun f (x) (g x)) (f 2) (defun g (x) (+ x 1)) (f 2)")))
+    (should (equal '(1 4 9)
+                   (test-mevedel-ptc--value
+                    "(defun sq (x) (* x x)) (mapcar 'sq (list 1 2 3))")))
+    (should (equal 7 (test-mevedel-ptc--value
+                      "(defun add (a &optional b) (+ a (if b b 5))) (add 2)")))
+    (should (equal '(1 (2 3))
+                   (test-mevedel-ptc--value
+                    "(defun pack (a &rest rest) (list a rest)) (pack 1 2 3)")))
+    (should (string-match-p
+             "Wrong number of arguments"
+             (test-mevedel-ptc--error "(defun f (a b) a) (f 1)"))))
+
+  :doc "expands guest macros in the call site environment"
+  (progn
+    (should (equal 6 (test-mevedel-ptc--value
+                      "(defmacro twice (form) `(+ ,form ,form))
+                       (let ((x 3)) (twice x))")))
+    (should (equal 30 (test-mevedel-ptc--value
+                       "(defmacro with-sum (var a b &rest body)
+                          `(let ((,var (+ ,a ,b))) ,@body))
+                        (with-sum s 1 2 (* s 10))")))
+    (should (equal 1 (test-mevedel-ptc--value
+                      "(defmacro fresh () (let ((g (gensym)))
+                         `(let ((,g 1)) ,g)))
+                       (fresh)")))
+    ;; A macro's unevaluated arguments are data, not preflighted code.
+    (should (equal 1 (test-mevedel-ptc--value
+                      "(defmacro k (x) 1) (k (unknown-op 1))"))))
+
+  :doc "macro expansions may call tools through the ordinary channel"
+  (let ((run (test-mevedel-ptc--run
+              "(defmacro rd (p) `(Read :file_path ,p)) (rd \"a\")"
+              '("Read"))))
+    (should (eq 'done (plist-get run :outcome)))
+    (should (equal "<Read>" (plist-get run :value)))
+    (should (equal '(("Read" (:file_path "a"))) (plist-get run :calls))))
+
+  :doc "rejects a macro used as a function value"
+  (should (string-match-p
+           "Macro m cannot be used as a function value"
+           (test-mevedel-ptc--error "(defmacro m (x) x) (funcall 'm 1)")))
+
+  :doc "validates macro expansions before evaluating them"
+  (progn
+    (should (string-match-p
+             "Unsupported literal"
+             (test-mevedel-ptc--error "(defmacro bad () (lambda () 1)) (bad)")))
+    (let ((mevedel-ptc-max-transformed-nodes 1))
+      (should (eq 'expansion
+                  (plist-get (test-mevedel-ptc--run
+                              "(defmacro m () `(+ 1 2)) (m)")
+                             :kind)))))
+
+  :doc "returns fresh gensym symbols distinct by identity"
+  (let ((value (test-mevedel-ptc--value-raw "(list (gensym) (gensym \"tmp\"))")))
+    (should (symbolp (nth 0 value)))
+    (should (symbolp (nth 1 value)))
+    (should-not (eq (nth 0 value) (nth 1 value)))
+    (should (string-prefix-p "tmp" (symbol-name (nth 1 value)))))
+
+  :doc "bounds non-tail recursion depth with the stack budget"
+  (let ((mevedel-ptc-max-stack-depth 50))
+    ;; The wrapping `+' keeps a continuation frame per call.  A self-call in
+    ;; tail position runs at constant depth instead: the machine is
+    ;; naturally tail-calling, which the next assertion pins down.
+    (let ((run (test-mevedel-ptc--run
+                "(defun grow (n) (+ 1 (grow n))) (grow 0)")))
+      (should (eq 'error (plist-get run :outcome)))
+      (should (eq 'stack (plist-get run :kind))))
+    (should (equal 'done
+                   (plist-get (test-mevedel-ptc--run
+                               "(defun count (n) (if (< n 500) (count (+ n 1)) n))
+                                (count 0)")
+                              :outcome)))))
 
 (provide 'test-mevedel-ptc-interpreter)
 ;;; test-mevedel-ptc-interpreter.el ends here
