@@ -14,10 +14,10 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-structs)
 (require 'mevedel-turn)
 
 (eval-when-compile
-  (require 'mevedel-structs)
   ;; Needed for `setf' on `gptel-fsm' struct slots (native comp)
   (require 'gptel-request nil t))
 
@@ -26,6 +26,10 @@
 (declare-function gptel--modify-value "ext:gptel" (original new-spec))
 (declare-function gptel-get-preset "ext:gptel" (name))
 (declare-function gptel-make-preset "ext:gptel" (name &rest keys))
+(autoload 'gptel--apply-preset "gptel")
+(autoload 'gptel--modify-value "gptel")
+(autoload 'gptel-get-preset "gptel")
+(autoload 'gptel-make-preset "gptel")
 
 ;; `gptel-request'
 (declare-function gptel--handle-wait "ext:gptel-request" (fsm))
@@ -52,6 +56,8 @@
 ;; `mevedel-compact-estimation'
 (declare-function mevedel-compact-estimation-record-token-baseline
                   "mevedel-compact-estimation" (fsm))
+(autoload 'mevedel-compact-estimation-record-token-baseline
+  "mevedel-compact-estimation")
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-capture-request "mevedel-goal" (fsm))
@@ -73,6 +79,8 @@
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
                   "mevedel-session-artifacts" (session))
+(autoload 'mevedel-session-artifacts-assert-new-mutation-authority
+  "mevedel-session-artifacts")
 
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--drain-pending-context
@@ -98,6 +106,13 @@
 (declare-function mevedel-tool-resolve-gptel
                   "mevedel-tool-registry" (specs))
 (declare-function mevedel-tool-summary "mevedel-tool-registry" (cl-x) t)
+(autoload 'mevedel-tool-all "mevedel-tool-registry")
+(autoload 'mevedel-tool-category "mevedel-tool-registry")
+(autoload 'mevedel-tool-name "mevedel-tool-registry")
+(autoload 'mevedel-tool-read-only-p "mevedel-tool-registry")
+(autoload 'mevedel-tool-resolve "mevedel-tool-registry")
+(autoload 'mevedel-tool-resolve-gptel "mevedel-tool-registry")
+(autoload 'mevedel-tool-summary "mevedel-tool-registry")
 
 ;; `mevedel-tool-ptc'
 (declare-function mevedel-tool-ptc--handle-description
@@ -194,7 +209,6 @@ Mevedel public and private variables take precedence over gptel variables."
 A preset may be defined through mevedel or directly through gptel, and
 both declare parents the same way, so a cycle can run through either
 registry."
-  (require 'gptel)
   (mevedel-preset--parent-list
    (or (alist-get name mevedel-preset--registry)
        (gptel-get-preset name))))
@@ -413,10 +427,6 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
 ;;;###autoload
 (defun mevedel--define-presets ()
   "Define gptel presets for mevedel actions."
-  (require 'gptel)
-  (require 'mevedel-compact-estimation)
-  (require 'mevedel-tool-registry)
-
   ;; Read-only preset for discussion/analysis
   (mevedel-define-preset mevedel-discuss
     :description "Read-only tools for code analysis and discussion"
@@ -595,9 +605,6 @@ alist with mevedel-specific handlers added:
   4.  Canonical successful-turn transaction (DONE state handler only)
   5.  Failure and abort cleanup"
   ;; 1. Add the pre-sample WAIT handlers in execution order.
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
       (setcdr wait-entry
