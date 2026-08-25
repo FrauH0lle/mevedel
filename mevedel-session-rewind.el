@@ -6,8 +6,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-agents)
   (require 'mevedel-structs))
 
@@ -16,25 +17,35 @@
 
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-active-turn-p "mevedel-agent-control" (session))
+(autoload 'mevedel-agent-control-active-turn-p "mevedel-agent-control")
 
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer-disable-org-element-cache "mevedel-chat" nil)
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
+(autoload 'mevedel--run-session-start-hooks "mevedel-chat")
 
 ;; `mevedel-directive'
 (declare-function mevedel-workspace-rewind-directives "mevedel-directive" (workspace session-id target-turn))
 (declare-function mevedel-workspace-set-directives "mevedel-directive" (workspace directives))
+(autoload 'mevedel-workspace-rewind-directives "mevedel-directive")
+(autoload 'mevedel-workspace-set-directives "mevedel-directive")
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-session-live-p "mevedel-execution" (session))
+(autoload 'mevedel-execution-session-live-p "mevedel-execution")
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create "mevedel-execution-target" (workspace-root))
 (declare-function mevedel-execution-target-native-path "mevedel-execution-target" (target path))
+(autoload 'mevedel-execution-target-create "mevedel-execution-target")
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
 
 ;; `mevedel-persistence'
 (declare-function mevedel--reset-instructions-preserving-directives "mevedel-persistence" (workspace directives))
 (declare-function mevedel--restore-preserved-directives "mevedel-persistence" (workspace))
+(autoload 'mevedel--reset-instructions-preserving-directives
+  "mevedel-persistence")
+(autoload 'mevedel--restore-preserved-directives "mevedel-persistence")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-mutation-authority "mevedel-session-artifacts" (session &optional buffer))
@@ -55,15 +66,56 @@
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds "mevedel-session-artifacts" nil)
 (declare-function mevedel-session-artifacts-strip-gptel-config-properties "mevedel-session-artifacts" nil)
 (declare-function mevedel-session-artifacts-update-prompt-index "mevedel-session-artifacts" (session buffer))
+(autoload 'mevedel-session-artifacts-assert-mutation-authority
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-backup-path "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-build-sidecar "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-collect-prompts
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-fork-point-spans
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-instructions-current-path
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-instructions-dir
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-instructions-turn-path
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-load-instructions
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-printed-value
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-artifact
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-file-raw
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-save-instructions
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-segment-path
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-sidecar-path
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-stabilize-gptel-bounds
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-strip-gptel-config-properties
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-update-prompt-index
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-deserialize "mevedel-session-codec" (plist workspace))
 (declare-function mevedel-session-codec-portable-authority-p "mevedel-session-codec" (session))
 (declare-function mevedel-session-codec-read "mevedel-session-codec" (path))
 (declare-function mevedel-session-codec-write "mevedel-session-codec" (path plist))
+(autoload 'mevedel-session-codec-deserialize "mevedel-session-codec")
+(autoload 'mevedel-session-codec-portable-authority-p
+  "mevedel-session-codec")
+(autoload 'mevedel-session-codec-read "mevedel-session-codec")
+(autoload 'mevedel-session-codec-write "mevedel-session-codec")
 
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability-call-with-reserved-lease "mevedel-session-durability" (session function))
+(autoload 'mevedel-session-durability-call-with-reserved-lease
+  "mevedel-session-durability")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-list-sessions "mevedel-session-persistence" (workspace &optional cached))
@@ -71,15 +123,33 @@
 (declare-function mevedel-session-persistence-parse-iso-time "mevedel-session-persistence" (str))
 (declare-function mevedel-session-persistence-resume-id "mevedel-session-persistence" (workspace session-id))
 (declare-function mevedel-session-persistence-write-current-buffer-atomically "mevedel-session-persistence" (path))
+(autoload 'mevedel-session-persistence-list-sessions
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-notify-session-event
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-parse-iso-time
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-resume-id
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-write-current-buffer-atomically
+  "mevedel-session-persistence")
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-discard-rolled-back "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-logical-path-p "mevedel-session-publication" (path))
 (declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit))
 (declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir))
+(autoload 'mevedel-session-publication-discard-rolled-back
+  "mevedel-session-publication")
+(autoload 'mevedel-session-publication-logical-path-p
+  "mevedel-session-publication")
+(autoload 'mevedel-session-publication-publish "mevedel-session-publication")
+(autoload 'mevedel-session-publication-read "mevedel-session-publication")
 
 ;; `mevedel-session-recovery'
 (declare-function mevedel-session-recovery-record-failure "mevedel-session-recovery" (session reason recovery-path))
+(autoload 'mevedel-session-recovery-record-failure
+  "mevedel-session-recovery")
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-attempt-checkpoint "mevedel-structs" (cl-x))
@@ -113,6 +183,7 @@
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties "mevedel-transcript-restore" (&optional only-if-missing))
+(autoload 'mevedel-transcript-restore-properties "mevedel-transcript-restore")
 
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
@@ -136,9 +207,7 @@
 
 Portable project Rewind resolves only the committed immutable publication.  File
 sessions retain their existing direct file-history read."
-         (require 'mevedel-session-artifacts)
-         (require 'mevedel-session-codec)
-         (if (mevedel-session-codec-portable-authority-p session)
+  (if (mevedel-session-codec-portable-authority-p session)
       (mevedel-session-artifacts-read-artifact
        session (file-name-concat "file-history" backup-name) t)
     (mevedel-session-artifacts-read-file-raw
@@ -184,7 +253,6 @@ or earlier.  Possible `:action' values are:
              latest snapshot (i.e., no detected external changes).
   overwrite  Target has content; file differs from target AND from
              latest snapshot (external edits will be overwritten)."
-  (require 'mevedel-session-artifacts)
   (let* ((target-backup-name
           (plist-get target-plist
                      (if before-turn :pre-backup-name :backup-name)))
@@ -233,7 +301,6 @@ or earlier.  Possible `:action' values are:
 Returns a list of plan-entry plists (see
 `mevedel-session-rewind--plan-action').  An empty list means
 nothing to do.  When BEFORE-TURN is non-nil, target the pre-turn checkpoint."
-  (require 'cl-lib)
   (let ((target-state
          (mevedel-session-rewind-state-at-turn
           session cum-turn before-turn))
@@ -381,7 +448,6 @@ entries are not attempted.  The user-visible report goes to
 
 (defun mevedel-session-rewind--modified-buffers-for-plan (plan)
   "Return modified buffers visiting files affected by restore PLAN."
-  (require 'cl-lib)
   (let (buffers)
     (dolist (entry plan)
       (when-let* ((path (plist-get entry :path))
@@ -549,7 +615,6 @@ turn first within each segment."
   "Format ISO (a `YYYY-MM-DDTHH-MM-SS' string) as a relative age.
 Returns strings like `2h ago' / `yesterday' / `Apr 22'.  Returns a
 placeholder when ISO cannot be parsed."
-  (require 'mevedel-session-persistence)
   (let ((t2 (mevedel-session-persistence-parse-iso-time iso)))
     (if (not t2)
         "?"
@@ -569,7 +634,6 @@ Returns `point-max' when TURN-N is the final user prompt.  Skips the
 leading org property drawer, `#+begin_summary'/`#+end_summary' block
 bodies, and gptel org tool/reasoning scaffolding to stay consistent with
 `mevedel-session-artifacts-collect-prompts'."
-  (require 'mevedel-session-artifacts)
   (save-excursion
     (save-restriction
       (widen)
@@ -584,9 +648,6 @@ bodies, and gptel org tool/reasoning scaffolding to stay consistent with
     (session buffer target &optional before-turn)
   "Load SESSION's TARGET transcript boundary into BUFFER without publishing it.
 When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
-  (require 'cl-lib)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
   (let* ((segment-n (plist-get target :segment))
          (segment-path
           (mevedel-session-artifacts-segment-path
@@ -619,7 +680,6 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
             ;; below are locatable.  Only the transcript text matters in
             ;; this scratch buffer, so gptel's org config restore is
             ;; deliberately not involved.
-            (require 'mevedel-transcript-restore)
             (mevedel-transcript-restore-properties)))
         (let* ((id (plist-get target :fork-point-id))
                (fork-point
@@ -644,7 +704,6 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
 
 (defun mevedel-session-rewind-resolve-fork-target (session target)
   "Resolve TARGET's stable identity against SESSION's current index."
-  (require 'cl-lib)
   (let ((id (plist-get target :fork-point-id)))
     (or
      (cl-loop for (segment . prompts)
@@ -674,10 +733,8 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
      operation))
   (when (buffer-local-value 'mevedel--current-request buffer)
     (user-error "Abort the current request before %s" operation))
-  (require 'mevedel-execution)
   (when (mevedel-execution-session-live-p session)
     (user-error "Stop live executions with /ps or /stop before %s" operation))
-  (require 'mevedel-agent-control)
   (when (mevedel-agent-control-active-turn-p session)
     (user-error "Interrupt active agent turns before %s" operation))
   (when-let* ((goal (mevedel-session-goal session))
@@ -702,7 +759,6 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
   "Return non-nil when PATH differs in the Git index."
   (let ((directory (file-name-directory path)))
     (when (file-directory-p directory)
-      (require 'mevedel-execution-target)
       (let* ((target (mevedel-execution-target-create directory))
              (default-directory (file-name-as-directory directory))
              (remote (file-remote-p default-directory))
@@ -720,9 +776,6 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
 (defun mevedel-session-rewind--detached-child-count
     (session target-turn)
   "Return direct child count detached by rewinding SESSION to TARGET-TURN."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
   (let ((session-id (mevedel-session-session-id session))
         (portable-p
          (mevedel-session-codec-portable-authority-p session))
@@ -748,7 +801,6 @@ When BEFORE-TURN is non-nil, discard TARGET itself as well as later text."
 
 (defun mevedel-session-rewind--rewind-impact (session target file-plan)
   "Return the complete Rewind impact for SESSION, TARGET, and FILE-PLAN."
-  (require 'cl-lib)
   (let* ((target-turn (plist-get target :cum-turn))
          (surviving-turn (1- target-turn)))
     (list
@@ -865,7 +917,6 @@ Drops segments past PICKED-SEGMENT entirely.  In the picked segment,
 keeps only prompts whose `:cum-turn' is `<=' PICKED-CUM-TURN, or all
 prompts when PICKED-CUM-TURN is nil.  When BEFORE-TURN is non-nil, drops the
 picked prompt too."
-  (require 'cl-lib)
   (cl-loop for (seg . prompts) in index
            when (< seg picked-segment)
            collect (cons seg (copy-sequence prompts))
@@ -887,7 +938,6 @@ picked prompt too."
 SNAPSHOTS is an alist keyed by cumulative turn number.  When
 PICKED-CUM-TURN is nil, returns SNAPSHOTS unchanged.  When BEFORE-TURN is
 non-nil, drops the picked checkpoint too."
-  (require 'cl-lib)
   (if (null picked-cum-turn)
       snapshots
     (cl-remove-if-not
@@ -901,7 +951,6 @@ non-nil, drops the picked checkpoint too."
     (entries picked-cum-turn)
   "Return ENTRIES trimmed at PICKED-CUM-TURN.
 Entries without an integer `:parent-turn' remain visible."
-  (require 'cl-lib)
   (cl-remove-if
    (lambda (entry)
      (let ((parent-turn (plist-get (cdr entry) :parent-turn)))
@@ -910,8 +959,6 @@ Entries without an integer `:parent-turn' remain visible."
 
 (defun mevedel-session-rewind--rewind-candidate (session target)
   "Return SESSION state reduced in place semantics to TARGET."
-  (require 'cl-lib)
-  (require 'mevedel-session-persistence)
   (let* ((candidate (copy-sequence session))
          (target-turn (plist-get target :cum-turn))
          (turn (1- target-turn))
@@ -1007,7 +1054,6 @@ Entries without an integer `:parent-turn' remain visible."
 
 Only the publication's logical artifacts are copied.  Lease, publication,
 recovery, and other control paths are never materialized."
-  (require 'mevedel-session-artifacts)
   (unless publication
     (error "Portable project operation requires a committed session publication"))
   (dolist (entry (plist-get publication :artifacts))
@@ -1062,9 +1108,6 @@ TARGET identifies the retained segment and turn."
 
 When PUBLICATION is non-nil, materialize only its immutable logical artifacts;
 portable lease and publication control directories are never copied."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
   (if publication
       (progn
         (mevedel-session-rewind-materialize-publication
@@ -1162,9 +1205,6 @@ Return descriptions of every artifact that could not be restored."
 SESSION supplies the owned publication path.  BUFFER supplies live transcript
 state.  STATE, when non-nil, supplies the logical sidecar state without
 replacing SESSION's live lease runtime."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-durability)
-  (require 'mevedel-session-publication)
   (let* ((save-path (mevedel-session-save-path session))
          (sidecar-name "session.meta.el")
          artifacts)
@@ -1192,8 +1232,6 @@ replacing SESSION's live lease runtime."
 (defun mevedel-session-rewind--install-rewind-buffer
     (buffer staging-buffer session target)
   "Install STAGING-BUFFER as BUFFER for rewound SESSION at TARGET."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-persistence)
   (with-current-buffer buffer
     (let ((inhibit-read-only t))
       (replace-buffer-contents staging-buffer)
@@ -1214,9 +1252,6 @@ replacing SESSION's live lease runtime."
     (session buffer target plan)
   "Commit portable project SESSION, BUFFER, TARGET, and file PLAN through one
 head CAS."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-durability)
-  (require 'mevedel-session-publication)
   (let* ((workspace (mevedel-session-workspace session))
          (directives (copy-sequence
                       (mevedel-workspace-directives workspace)))
@@ -1410,7 +1445,6 @@ head CAS."
 (defun mevedel-session-rewind--commit-rewind
     (session buffer target plan)
   "Commit SESSION, BUFFER, TARGET, and file PLAN as one recoverable Rewind."
-  (require 'mevedel-session-codec)
   (if (mevedel-session-codec-portable-authority-p session)
       (mevedel-session-rewind--commit-remote-rewind
        session buffer target plan)
@@ -1420,10 +1454,6 @@ head CAS."
 (defun mevedel-session-rewind--commit-local-rewind
     (session buffer target plan)
   "Commit local SESSION, BUFFER, TARGET, and file PLAN as one Rewind."
-  (require 'mevedel-directive)
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
   (let* ((workspace (mevedel-session-workspace session))
          (directives (copy-sequence
                       (mevedel-workspace-directives workspace)))
@@ -1606,8 +1636,6 @@ head CAS."
                   "Rewind rollback incomplete; inconsistent artifacts: %s"
                   (string-join (nreverse rollback-failures) ", "))))
             (when (mevedel-session-codec-portable-authority-p session)
-              (require 'mevedel-session-durability)
-              (require 'mevedel-session-recovery)
               (mevedel-session-recovery-record-failure
                session reason temporary-root))
             (error "%s; recovery data: %s" reason temporary-root))
@@ -1616,7 +1644,6 @@ head CAS."
 
 (defun mevedel-session-rewind-rewind (buffer target)
   "Rewind BUFFER's session in place to stable assistant TARGET."
-  (require 'mevedel-session-artifacts)
   (let ((session (buffer-local-value 'mevedel--session buffer)))
     (unless (and session (plist-get target :fork-point-id))
       (user-error "Rewind requires a settled assistant response"))
@@ -1670,7 +1697,6 @@ head CAS."
     (workspace checkpoint &optional buffer)
   "Rewind WORKSPACE to CHECKPOINT, resuming its session when needed.
 BUFFER is the already-live execution session when available."
-  (require 'mevedel-session-persistence)
   (let ((session-id (plist-get checkpoint :session-id))
         (turn (plist-get checkpoint :turn)))
     (unless (and (stringp session-id) (natnump turn))
