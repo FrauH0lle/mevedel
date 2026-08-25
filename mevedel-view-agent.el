@@ -824,11 +824,16 @@ PARENT-VIEW is the session view that opened the transcript."
       ;; bounds; full `gptel-org--restore-state' also restores backend
       ;; and tool objects, which is unnecessary and noisy for a
       ;; read-only transcript view.
-      (unless live-p
+      ;; A retained conversation buffer can run another turn while the
+      ;; agent is idle now; freezing it makes the next gptel stream
+      ;; insertion fail with buffer-read-only.  Only cold transcript
+      ;; files are restored and frozen.
+      (unless (or live-p
+                  (mevedel-view--retained-agent-data-p agent-data info))
         (require 'mevedel-transcript-restore)
-        (mevedel-transcript-restore-properties))
-      (unless (or live-p buffer-read-only)
-        (read-only-mode +1)))
+        (mevedel-transcript-restore-properties)
+        (unless buffer-read-only
+          (read-only-mode +1))))
     (with-current-buffer agent-view
       (mevedel-view--full-rerender)
       (when live-p
