@@ -18,7 +18,10 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
+(require 'mevedel-ptc-checkpoint)
+(require 'mevedel-ptc-interpreter)
+(require 'mevedel-structs)
 
 ;; `mevedel-ptc-checkpoint'
 (declare-function mevedel-ptc-checkpoint-note
@@ -46,6 +49,8 @@
 (declare-function mevedel-pipeline-active-tool-use-id "mevedel-pipeline" ())
 (declare-function mevedel-pipeline-run-tool-outcome
                   "mevedel-pipeline" (tool callback args &optional metadata))
+(autoload 'mevedel-pipeline-active-tool-use-id "mevedel-pipeline")
+(autoload 'mevedel-pipeline-run-tool-outcome "mevedel-pipeline")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-push-canceller
@@ -61,16 +66,23 @@
                   "mevedel-telemetry" (span &rest props))
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
+(autoload 'mevedel-telemetry-current-session "mevedel-telemetry")
+(autoload 'mevedel-telemetry-finish "mevedel-telemetry")
+(autoload 'mevedel-telemetry-start "mevedel-telemetry")
 
 ;; `mevedel-tool-media'
 (declare-function mevedel-tool-media-reference-items
                   "mevedel-tool-media" (items))
+(autoload 'mevedel-tool-media-reference-items "mevedel-tool-media")
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-args "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-ensure
                   "mevedel-tool-registry" (name &optional category))
 (declare-function mevedel-tool-name "mevedel-tool-registry" (tool))
+(autoload 'mevedel-tool-args "mevedel-tool-registry")
+(autoload 'mevedel-tool-ensure "mevedel-tool-registry")
+(autoload 'mevedel-tool-name "mevedel-tool-registry")
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-handle-tool-progress
@@ -99,8 +111,6 @@ Guest keywords live in the script's private symbol universe and are not
 declared arguments and only then interned.  An undeclared argument is an
 error naming what the tool does accept, which is also the script's
 earliest chance to learn it got the contract wrong."
-  (unless (fboundp 'mevedel-ptc-keyword-p)
-    (require 'mevedel-ptc-interpreter))
   (let ((declared (mapcar (lambda (spec) (symbol-name (car spec)))
                           (mevedel-tool-args tool)))
         (name (mevedel-tool-name tool))
@@ -158,8 +168,6 @@ earliest chance to learn it got the contract wrong."
 A child row renders through its own tool's renderer, which reads
 arguments for header text, so a long value is truncated rather than
 carried into the transcript whole."
-  (unless (fboundp 'mevedel-ptc-check-value)
-    (require 'mevedel-ptc-interpreter))
   (condition-case nil
       (let ((mevedel-ptc-max-value-bytes mevedel-ptc-driver--arg-total-max)
             (mevedel-ptc-max-value-nodes mevedel-ptc-driver--arg-node-max))
@@ -174,8 +182,6 @@ carried into the transcript whole."
 Oversized data is dropped whole rather than truncated: a nested
 renderer reads its own structured fields, and a mangled value would
 render worse than no value at all."
-  (unless (fboundp 'mevedel-ptc-check-value)
-    (require 'mevedel-ptc-interpreter))
   (when data
     (condition-case nil
         (let ((mevedel-ptc-max-value-bytes mevedel-ptc-driver--child-detail-max)
@@ -286,8 +292,6 @@ ERROR-KIND is the interpreter's typed failure category when available."
 
 (defun mevedel-ptc-driver-run (callback script roster)
   "Run SCRIPT with ROSTER, delivering its outcome to CALLBACK."
-  (require 'mevedel-ptc-interpreter)
-  (require 'mevedel-telemetry)
   (let* ((data-buffer (current-buffer))
          (started-at (float-time))
          (envelope-id
@@ -314,7 +318,6 @@ ERROR-KIND is the interpreter's typed failure category when available."
                (active nil)
                (dispatch-many nil))
           (when checkpoint-session
-            (require 'mevedel-ptc-checkpoint)
             (unless (mevedel-ptc-checkpoint-start
                      checkpoint-session data-buffer envelope-id script)
               (error "ToolScript audit checkpoint could not be persisted")))
@@ -419,7 +422,6 @@ ERROR-KIND is the interpreter's typed failure category when available."
                                 (plist-get outcome :render-data))))
                         (media (plist-get outcome :media)))
                     (when media
-                      (require 'mevedel-tool-media)
                       (setq entry
                             (plist-put
                              entry :media
