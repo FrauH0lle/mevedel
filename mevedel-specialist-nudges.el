@@ -26,6 +26,7 @@
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-specialist-capabilities
                   "mevedel-reminders" (session))
+(autoload 'mevedel-reminders-specialist-capabilities "mevedel-reminders")
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
@@ -225,7 +226,6 @@ content line at all is not classifiable."
 (defun mevedel-specialist-nudges--specialist-capabilities (session)
   "Return specialist capabilities for SESSION, or nil if unavailable."
   (when session
-    (require 'mevedel-reminders)
     (mevedel-reminders-specialist-capabilities session)))
 
 (defun mevedel-specialist-nudges--family-applicable-p (context caps family names)
