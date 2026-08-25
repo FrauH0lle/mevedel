@@ -11,15 +11,11 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib)
-  (require 'subr-x))
+(require 'cl-lib)
+(require 'mevedel-permission-mode)
 
-;; `mevedel-permission-mode'
-(declare-function mevedel-permission-mode-get-session-scoped
-                  "mevedel-permission-mode" (sym slot-getter))
-(declare-function mevedel-permission-mode-set-session-scoped
-                  "mevedel-permission-mode" (sym val slot-setter))
+(eval-when-compile
+  (require 'subr-x))
 
 ;; `mevedel-permission-rules'
 (declare-function mevedel-permission-protected-path-policy
@@ -28,6 +24,9 @@
                   "mevedel-permission-rules"
                   (path pattern &optional target))
 (defvar mevedel-protected-paths)
+(autoload 'mevedel-permission-protected-path-policy
+  "mevedel-permission-rules")
+(autoload 'mevedel-permission-rules-match-path-p "mevedel-permission-rules")
 
 ;; `mevedel-sandbox-grants'
 (declare-function mevedel-sandbox--additional-filesystem-mounts
@@ -44,6 +43,15 @@
                   "mevedel-sandbox-grants" (arguments permissions))
 (declare-function mevedel-sandbox--resolve-filesystem-permissions
                   "mevedel-sandbox-grants" (permissions))
+(autoload 'mevedel-sandbox--additional-filesystem-mounts
+  "mevedel-sandbox-grants")
+(autoload 'mevedel-sandbox--fd-backed-command "mevedel-sandbox-grants")
+(autoload 'mevedel-sandbox--grant-paths "mevedel-sandbox-grants")
+(autoload 'mevedel-sandbox--granted-path-mounts "mevedel-sandbox-grants")
+(autoload 'mevedel-sandbox--open-granted-paths "mevedel-sandbox-grants")
+(autoload 'mevedel-sandbox--protected-remounts "mevedel-sandbox-grants")
+(autoload 'mevedel-sandbox--resolve-filesystem-permissions
+  "mevedel-sandbox-grants")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session--set-sandbox-mode
@@ -66,14 +74,12 @@
 
 (defun mevedel-sandbox-mode--set (sym val)
   "Set session-scoped sandbox SYM to canonical VAL."
-  (require 'mevedel-permission-mode)
   (mevedel-permission-mode-set-session-scoped
    sym (mevedel-sandbox-mode-normalize val)
    #'mevedel-session--set-sandbox-mode))
 
 (defun mevedel-sandbox-mode--get (sym)
   "Return sandbox SYM from the current session or its global default."
-  (require 'mevedel-permission-mode)
   (mevedel-permission-mode-get-session-scoped
    sym #'mevedel-session-sandbox-mode))
 
@@ -328,7 +334,6 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
 
 (defun mevedel-sandbox--writable-symlink-component (path writable-roots)
   "Return the first symlink crossing in PATH under WRITABLE-ROOTS."
-  (require 'cl-lib)
   (let* ((path (expand-file-name path))
          (target-prefix (file-remote-p path))
          (current (if target-prefix (concat target-prefix "/") "/"))
@@ -365,8 +370,6 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
 
 (defun mevedel-sandbox--protected-candidates (workdir writable-roots)
   "Return concrete protected-path candidates for WORKDIR and WRITABLE-ROOTS."
-  (require 'cl-lib)
-  (require 'mevedel-permission-rules)
   (let ((target-prefix (file-remote-p workdir))
         target-home candidates)
     (cl-labels
@@ -536,7 +539,6 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
 
 (defun mevedel-sandbox--protected-restrictions (workdir writable-roots)
   "Compile protected restrictions for WORKDIR and WRITABLE-ROOTS."
-  (require 'cl-lib)
   (let (restrictions cleanup-paths)
     (condition-case err
         (progn
@@ -720,8 +722,6 @@ WORKDIR identifies the execution target that the pending child will use."
   "Prepare COMMAND in WORKDIR with WRITABLE-ROOTS using EXECUTABLE.
 MOUNT-PROC-P requests a fresh proc filesystem for the PID namespace.
 ADDITIONAL-PERMISSIONS is the validated additive execution profile."
-  (require 'cl-lib)
-  (require 'mevedel-sandbox-grants)
   (let* ((canonical-workdir
           (file-name-as-directory (file-truename workdir)))
          (roots (mevedel-sandbox--canonical-directories writable-roots)))
