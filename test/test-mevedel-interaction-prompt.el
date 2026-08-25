@@ -11,6 +11,7 @@
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-structs)
 (require 'mevedel-view)
+(require 'mevedel-view-composer)
 (require 'mevedel-view-interaction)
 (require 'helpers
          (file-name-concat
@@ -76,7 +77,6 @@
       (should-not mevedel--prompt-overlays)))
 
   :doc "removes interaction descriptor when prompt settles"
-  (require 'mevedel-view-composer)
   (with-temp-buffer
     (let* ((mevedel-view--interaction-descriptors
             (make-hash-table :test #'equal))
