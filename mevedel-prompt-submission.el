@@ -9,10 +9,12 @@
 
 (eval-when-compile
   (require 'cl-lib))
+(require 'mevedel-structs)
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-consume-session-context
                   "mevedel-hooks" (session entries))
+(autoload 'mevedel-hooks-consume-session-context "mevedel-hooks")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-hook-context-pending
@@ -62,11 +64,9 @@
     ('pending
      (let ((entries (mevedel-prompt-submission-context-entries submission)))
        (when (and entries
-                  (not (progn
-                         (require 'mevedel-hooks)
-                         (mevedel-hooks-consume-session-context
-                          (mevedel-prompt-submission-session submission)
-                          entries))))
+                  (not (mevedel-hooks-consume-session-context
+                        (mevedel-prompt-submission-session submission)
+                        entries)))
          (error "Prompt context ownership changed before commit"))
        (setf (mevedel-prompt-submission-state submission) 'committed)
        t))
@@ -79,11 +79,9 @@
     ('pending
      (let ((entries (mevedel-prompt-submission-context-entries submission)))
        (when (and entries
-                  (not (progn
-                         (require 'mevedel-hooks)
-                         (mevedel-hooks-consume-session-context
-                          (mevedel-prompt-submission-session submission)
-                          entries))))
+                  (not (mevedel-hooks-consume-session-context
+                        (mevedel-prompt-submission-session submission)
+                        entries)))
          (error "Prompt context ownership changed before reservation"))
        (setf (mevedel-prompt-submission-state submission) 'reserved)
        t))
