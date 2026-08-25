@@ -44,6 +44,8 @@
                   (&optional buffer))
 (declare-function mevedel-telemetry-record "mevedel-telemetry"
                   (session event &rest props))
+(autoload 'mevedel-telemetry-current-session "mevedel-telemetry")
+(autoload 'mevedel-telemetry-record "mevedel-telemetry")
 
 (defvar-local mevedel-edit-diagnostics--state nil
   "Per-owner edit diagnostic baselines and pending reports.")
@@ -266,13 +268,7 @@ Scans the current buffer."
 (defun mevedel-edit-diagnostics--record-telemetry
     (buffer outcome &optional report)
   "Record count-only diagnostic OUTCOME for BUFFER and REPORT."
-  (unless (and (fboundp 'mevedel-telemetry-current-session)
-               (fboundp 'mevedel-telemetry-record))
-    (require 'mevedel-telemetry nil t))
-  (when-let* ((session
-               (and (fboundp 'mevedel-telemetry-current-session)
-                    (fboundp 'mevedel-telemetry-record)
-                    (mevedel-telemetry-current-session buffer))))
+  (when-let* ((session (mevedel-telemetry-current-session buffer)))
     (mevedel-telemetry-record
      session 'edit-diagnostics
      :outcome outcome
