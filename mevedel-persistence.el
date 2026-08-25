@@ -14,7 +14,8 @@
 (require 'cl-lib)
 (require 'subr-x)
 
-(eval-when-compile (require 'mevedel-instruction-registry))
+(require 'mevedel-directive-source)
+(require 'mevedel-instruction-registry)
 (require 'mevedel-overlays)
 (require 'mevedel-utilities)
 
@@ -29,6 +30,8 @@
 (declare-function mevedel--serialize-directives
                   "mevedel-directive-persistence"
                   (workspace base-directory))
+(autoload 'mevedel--deserialize-directives "mevedel-directive-persistence")
+(autoload 'mevedel--serialize-directives "mevedel-directive-persistence")
 
 ;; `mevedel-directive-source'
 (declare-function mevedel--mark-buffer-source-missing
@@ -48,6 +51,12 @@
 ;; `mevedel-overlays'
 (declare-function mevedel--subinstruction-of-p
                   "mevedel-overlays" (sub parent))
+
+;; `mevedel-overlay-ui'
+(declare-function mevedel--update-instruction-overlay
+                  "mevedel-overlay-ui"
+                  (instruction &optional update-children))
+(autoload 'mevedel--update-instruction-overlay "mevedel-overlay-ui")
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-anchor "mevedel-structs" (cl-x) t)
@@ -119,9 +128,6 @@ BASE-DIRECTORY controls how file names are stored.  When non-nil,
 file names are serialized relative to it; otherwise absolute names are
 used.  When INCLUDE-ORIGINAL-CONTENT is non-nil, include full buffer
 contents for position patching if the file changes before restore."
-  (require 'mevedel-directive-persistence)
-  (require 'mevedel-directive-source)
-  (require 'mevedel-instruction-registry)
   (mevedel--instruction-activate-buffer)
   (mevedel--reconcile-directive-sources
    (mevedel--instruction-buffer-workspace (current-buffer)))
@@ -242,9 +248,6 @@ Returns the number of saved instructions."
 (defun mevedel--reset-instructions-preserving-directives
     (workspace directives)
   "Clear WORKSPACE presentations while retaining authored DIRECTIVES."
-  (require 'mevedel-directive)
-  (require 'mevedel-directive-source)
-  (require 'mevedel-instruction-registry)
   (let ((mevedel--instruction-state-key-override
          (mevedel--instruction-workspace-key workspace)))
     (dolist (entry (copy-sequence (mevedel--instruction-alist)))
@@ -256,7 +259,6 @@ Returns the number of saved instructions."
 
 (defun mevedel--restore-preserved-directives (workspace)
   "Safely restore Source missing directive presentations in WORKSPACE."
-  (require 'mevedel-directive-source)
   (dolist (file
            (delete-dups
             (cl-loop
@@ -290,11 +292,6 @@ BASE-DIRECTORY resolves relative file names in PATH.  CONFIRM prompts
 before replacing existing instructions.  QUIET suppresses messages.
 DIRECTIVE-RECORDS retains current authored records; PRESERVE-DIRECTIVES-P
 enables that mode for an empty record list."
-  (require 'mevedel-directive)
-  (require 'mevedel-directive-persistence)
-  (require 'mevedel-directive-source)
-  (require 'mevedel-instruction-registry)
-  (require 'mevedel-overlay-ui)
   (setq workspace (or workspace
                       (mevedel--instruction-buffer-workspace
                        (current-buffer))))
@@ -374,7 +371,6 @@ enables that mode for an empty record list."
 
 A file being outdated refers to the file in the instructions alist not being
 up-to-date, not the actual file on the disk being outdated."
-  (require 'mevedel-instruction-registry)
   (when-let* ((buffer (find-buffer-visiting file)))
     (mevedel--instruction-activate-buffer buffer))
   (when (file-exists-p file)
@@ -401,8 +397,6 @@ Runs on the global `kill-buffer-hook' for the buffer being killed.
 It must be one named function registered once: a per-buffer closure
 per instruction buffer grows the global hook without bound and runs
 every closure on every kill in Emacs."
-  (require 'mevedel-directive-source)
-  (require 'mevedel-instruction-registry)
   (let ((buffer (current-buffer)))
     (mevedel--instruction-activate-buffer buffer)
     (when (mevedel--buffer-has-instructions-p buffer)
@@ -420,8 +414,6 @@ every closure on every kill in Emacs."
 
 Sets up hooks to preserve mevedel instructions when BUFFER is killed or
 reverted, and restores them afterward."
-  (require 'mevedel-directive-source)
-  (require 'mevedel-instruction-registry)
   (add-hook 'kill-buffer-hook #'mevedel--stash-instructions-on-kill)
   (with-current-buffer buffer
     (unless mevedel--buffer-hooks-setup
@@ -621,9 +613,6 @@ the amount of instructions lost to the patching process, if any.
 If MESSAGE is non-nil, message the intent of patching outdated files.
 When WORKSPACE is non-nil, associate the restored buffer with it before
 restoring overlays."
-  (require 'mevedel-directive-source)
-  (require 'mevedel-instruction-registry)
-  (require 'mevedel-overlay-ui)
   (let ((mevedel--inhibit-file-patching t))
     (when-let* (((not mevedel--inhibit-source-missing-restore))
                 (buffer (find-buffer-visiting file)))
@@ -707,7 +696,6 @@ restoring overlays."
 (add-hook 'find-file-hook
           (lambda ()
             (unless mevedel--inhibit-file-patching
-              (require 'mevedel-instruction-registry)
               (mevedel--instruction-activate-buffer (current-buffer))
               (mevedel--restore-file-instructions (buffer-file-name (current-buffer))))))
 

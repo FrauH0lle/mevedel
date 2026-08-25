@@ -844,6 +844,9 @@
         (setq features (remq 'mevedel-queue features))
         (fmakunbound 'mevedel-queue--entry-metadata-put)
         (fmakunbound 'mevedel-queue--unregister-entry-interaction)
+        (autoload 'mevedel-queue--entry-metadata-put "mevedel-queue")
+        (autoload 'mevedel-queue--unregister-entry-interaction
+          "mevedel-queue")
         (mevedel-plan-approval-present entry session)
         (should (fboundp 'mevedel-queue--entry-metadata-put))
         (should (fboundp 'mevedel-queue--unregister-entry-interaction)))
@@ -1534,7 +1537,7 @@
       (kill-buffer chat-buffer))))
 
 (mevedel-deftest mevedel-plan-approval--current-session
-  (:doc "loads its owner instead of assuming a caller already did")
+  (:doc "resolves its exact owner autoload instead of assuming a caller did")
   ;; Buffer cleanup reaches this resolver, and a partial load order left it
   ;; calling a function whose module nothing had required: the abort then
   ;; failed with `void-function' and the session was never aborted.
@@ -1543,6 +1546,7 @@
         (progn
           (fmakunbound 'mevedel-queue--current-session)
           (setq features (delq 'mevedel-queue features))
+          (autoload 'mevedel-queue--current-session "mevedel-queue")
           (should-not (mevedel-plan-approval--current-session)))
       (unless (fboundp 'mevedel-queue--current-session)
         (fset 'mevedel-queue--current-session saved))
