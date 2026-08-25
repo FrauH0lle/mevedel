@@ -46,6 +46,8 @@
                   (rules source &optional source-file source-root))
 (declare-function mevedel-hooks-normalize-rules
                   "mevedel-hooks" (rules &optional scope))
+(autoload 'mevedel-hooks-annotate-rules-source "mevedel-hooks")
+(autoload 'mevedel-hooks-normalize-rules "mevedel-hooks")
 
 ;; `mevedel-models'
 (declare-function mevedel-model-agent-tool-description "mevedel-models" ())
@@ -69,6 +71,15 @@
                   "mevedel-reminders" ())
 (declare-function mevedel-reminders-serialize-agent-templates
                   "mevedel-reminders" (reminders))
+(autoload 'mevedel-reminders-clone-list "mevedel-reminders")
+(autoload 'mevedel-reminders-make-agent-deferred-tools-expired
+  "mevedel-reminders")
+(autoload 'mevedel-reminders-make-agent-deferred-tools-roster
+  "mevedel-reminders")
+(autoload 'mevedel-reminders-make-max-turns-warning "mevedel-reminders")
+(autoload 'mevedel-reminders-make-reviewer-read-only "mevedel-reminders")
+(autoload 'mevedel-reminders-make-verifier-read-only "mevedel-reminders")
+(autoload 'mevedel-reminders-serialize-agent-templates "mevedel-reminders")
 
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
@@ -81,12 +92,14 @@
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(autoload 'mevedel-agent-path-p "mevedel-structs")
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
 ;; `mevedel-system'
 (declare-function mevedel-system-build-prompt
                   "mevedel-system" (profile &rest keys))
+(autoload 'mevedel-system-build-prompt "mevedel-system")
 
 
 ;;
@@ -255,7 +268,6 @@ the caller's current session context.  Reminders and hooks remain templates,
 but are copied so later role redefinition cannot alter retained follow-ups.
 Every reminder must have a durable recipe because retained agents survive a
 cold session resume."
-  (require 'mevedel-reminders)
   (if (mevedel-agent-frozen-p agent)
       agent
     (let ((frozen (copy-mevedel-agent agent))
@@ -314,7 +326,6 @@ Creates a `mevedel-agent' struct and registers it in
          (system-prompt-form
           (when system-components
             `(lambda ()
-               (require 'mevedel-system)
                (mevedel-system-build-prompt
                 (list :workspace-aware t
                       :components ,system-components)
@@ -335,7 +346,6 @@ Creates a `mevedel-agent' struct and registers it in
                    :hook-rules
                    ,(when hooks
                       `(progn
-                         (require 'mevedel-hooks)
                          (mevedel-hooks-annotate-rules-source
                           (mevedel-hooks-normalize-rules ',hooks 'agent)
                           'user nil user-emacs-directory))))))
@@ -455,7 +465,6 @@ and render-data markers are runtime-only caches for cheap live updates."
 
 (defun mevedel-agent-invocation-require-path (invocation)
   "Return INVOCATION's canonical path, or signal an error."
-  (require 'mevedel-structs)
   (let ((path (mevedel-agent-invocation-path invocation)))
     (unless (mevedel-agent-path-p path)
       (error "Agent invocation has no canonical path: %s"
@@ -485,7 +494,6 @@ sub-agent can discover the agent's own lazy tools.  When the deferred set
 is non-empty, invocation-scoped roster and expiry reminders are added so
 the sub-agent learns which tools it can activate without polluting the
 main session's reminder list."
-  (require 'mevedel-reminders)
   (let* ((reminders (mevedel-reminders-clone-list
                      (mevedel-agent-reminders agent)))
          (resolved (mevedel-tool-resolve (mevedel-agent--declared-specs agent)))

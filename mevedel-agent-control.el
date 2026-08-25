@@ -22,6 +22,9 @@
                   "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-save
                   "mevedel-agent-conversation" (invocation &optional deferred))
+(autoload 'mevedel-agent-conversation-final-response
+  "mevedel-agent-conversation")
+(autoload 'mevedel-agent-conversation-save "mevedel-agent-conversation")
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-agent-runtime'
@@ -35,6 +38,12 @@
                   "mevedel-agent-runtime" t t)
 (declare-function mevedel-agent-runtime-task-background
                   "mevedel-agent-runtime" (summary))
+(autoload 'mevedel-agent-runtime-abandon-persistence
+  "mevedel-agent-runtime")
+(autoload 'mevedel-agent-runtime-dispatch "mevedel-agent-runtime")
+(autoload 'mevedel-agent-runtime-interrupt "mevedel-agent-runtime")
+(autoload 'mevedel-agent-runtime-prepare-task "mevedel-agent-runtime")
+(autoload 'mevedel-agent-runtime-task-background "mevedel-agent-runtime")
 
 ;; `mevedel-agents'
 (declare-function copy-mevedel-agent "mevedel-agents" (cl-x))
@@ -61,16 +70,36 @@
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-resolve-role "mevedel-agents" (role))
 (declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
+(autoload 'copy-mevedel-agent "mevedel-agents")
+(autoload 'mevedel-agent-configuration-p "mevedel-agents")
+(autoload 'mevedel-agent-freeze "mevedel-agents")
+(autoload 'mevedel-agent-hook-rules "mevedel-agents")
+(autoload 'mevedel-agent-invocation-agent-id "mevedel-agents")
+(autoload 'mevedel-agent-invocation-buffer "mevedel-agents")
+(autoload 'mevedel-agent-invocation-frozen-configuration "mevedel-agents")
+(autoload 'mevedel-agent-invocation-parent-session "mevedel-agents")
+(autoload 'mevedel-agent-invocation-path "mevedel-agents")
+(autoload 'mevedel-agent-invocation-terminal-reason "mevedel-agents")
+(autoload 'mevedel-agent-invocation-transcript-relative-path "mevedel-agents")
+(autoload 'mevedel-agent-invocation-transcript-status "mevedel-agents")
+(autoload 'mevedel-agent-name "mevedel-agents")
+(autoload 'mevedel-agent-resolve-role "mevedel-agents")
+(autoload 'mevedel-agents-specs "mevedel-agents")
 
 ;; `mevedel-compact-evidence'
 (declare-function mevedel-compact-evidence-context-snapshot
                   "mevedel-compact-evidence" (context))
 (declare-function mevedel-compact-evidence-summary-context-evidence
                   "mevedel-compact-evidence" (tool-use-id))
+(autoload 'mevedel-compact-evidence-context-snapshot
+  "mevedel-compact-evidence")
+(autoload 'mevedel-compact-evidence-summary-context-evidence
+  "mevedel-compact-evidence")
 
 ;; `mevedel-context-summary'
 (declare-function mevedel-context-summary-generate
                   "mevedel-context-summary" t t)
+(autoload 'mevedel-context-summary-generate "mevedel-context-summary")
 
 ;; `mevedel-models'
 (declare-function mevedel-model-parse-effort "mevedel-models" (value))
@@ -78,10 +107,15 @@
 (declare-function mevedel-model-resolve-workload
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
+(autoload 'mevedel-model-parse-effort "mevedel-models")
+(autoload 'mevedel-model-parse-selector "mevedel-models")
+(autoload 'mevedel-model-resolve-workload "mevedel-models")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-save-agent-state
                   "mevedel-session-persistence" (session))
+(autoload 'mevedel-session-persistence-save-agent-state
+  "mevedel-session-persistence")
 
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
@@ -212,7 +246,6 @@ Return the normalized payload stored in the record."
   "Commit SESSION's materialized agent state or signal an error."
   (unless mevedel-agent-control-suppress-persistence
     (when (mevedel-session-save-path session)
-      (require 'mevedel-session-persistence)
       (unless (mevedel-session-persistence-save-agent-state session)
         (error "Agent state could not be persisted"))))
   t)
@@ -295,7 +328,6 @@ blockers compose and stale releases cannot alter a later follow-up."
                  (or (not (buffer-modified-p))
                      (when (and (boundp 'mevedel--agent-invocation)
                                 mevedel--agent-invocation)
-                       (require 'mevedel-agent-conversation)
                        (mevedel-agent-conversation-save
                         mevedel--agent-invocation))))))
           (if saved-p
@@ -630,7 +662,6 @@ unregistered child is a normal transient state, not an error."
          (partial
           (and identity
                (progn
-                 (require 'mevedel-agent-conversation)
                  (ignore-errors
                    (mevedel-agent-conversation-final-response identity)))))
          (location (mevedel-agent-record-conversation-location record)))
@@ -951,7 +982,6 @@ Return rollback and post-commit delivery closures for INVOCATION."
       (unless (mevedel-agent-configuration-p configuration)
         (error "Agent has no frozen configuration: %s"
                (mevedel-agent-record-path record)))
-      (require 'mevedel-agent-runtime)
       (unless
           (mevedel-agent-runtime-dispatch
            nil (file-name-nondirectory (mevedel-agent-record-path record))
@@ -1025,7 +1055,6 @@ Return rollback and post-commit delivery closures for INVOCATION."
     (let* ((record (mevedel-agent-control--record-at-path session path))
            (activity (mevedel-agent-record-activity record)))
       (when (mevedel-agent-control--active-p record)
-        (require 'mevedel-agent-runtime)
         (mevedel-agent-runtime-interrupt
          (mevedel-agent-record-invocation record)
          (format "interrupted by %s" caller-path)))
@@ -1051,7 +1080,6 @@ idempotent cancellation thunk for the unpublished preparation transaction."
   (mevedel-agent-control--validate-spawn session task-name message)
   (unless (functionp callback)
     (error "Agent spawn callback must be a function"))
-  (require 'mevedel-agents)
   (when (and role (null agent)
              (mevedel-agents-specs)
              (not (assoc-string role (mevedel-agents-specs))))
@@ -1070,9 +1098,7 @@ idempotent cancellation thunk for the unpublished preparation transaction."
          (role-name (mevedel-agent-name resolved-agent))
          (context (mevedel-agent-control--normalize-context context))
          (model-selector
-          (progn
-            (require 'mevedel-models)
-            (mevedel-model-parse-selector model)))
+          (mevedel-model-parse-selector model))
          (effort (mevedel-model-parse-effort effort))
          (model-policy
           (or model-policy
@@ -1146,7 +1172,6 @@ idempotent cancellation thunk for the unpublished preparation transaction."
            ;; can only start once preparation has produced it.
            (condition-case err
                (progn
-                 (require 'mevedel-context-summary)
                  (setq
                   summary-cancel
                   (mevedel-context-summary-generate
@@ -1179,14 +1204,12 @@ idempotent cancellation thunk for the unpublished preparation transaction."
                (start-provider result)))))
       (condition-case err
           (progn
-            (require 'mevedel-compact-evidence)
             (if (eq context 'summary)
                 (setq summary-evidence
                       (mevedel-compact-evidence-summary-context-evidence
                        parent-tool-use-id))
               (setq context-snapshot
                     (mevedel-compact-evidence-context-snapshot context)))
-            (require 'mevedel-agent-runtime)
             (mevedel-agent-runtime-prepare-task
              resolved-agent (or description task-name) message
              (mevedel-agent-record-path record) #'prepared

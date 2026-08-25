@@ -30,6 +30,8 @@
   ;; `mevedel-agent-invocation-*' slots referenced below.
   (require 'mevedel-agents))
 
+(require 'mevedel-agent-conversation)
+(require 'mevedel-compact-estimation)
 (require 'mevedel-models)
 
 ;; `gptel'
@@ -462,8 +464,6 @@ reflects the event before the wrapper's `partial` accumulator acts on
 it. Terminal events (t, nil, abort) skip the forward step.
 
 Returns the spawned FSM."
-  (require 'mevedel-agent-conversation)
-  (require 'mevedel-compact-estimation)
   (unless (mevedel-agent-invocation-p invocation)
     (error "Invalid sub-agent invocation"))
   (unless (buffer-live-p agent-buffer)
