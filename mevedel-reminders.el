@@ -18,6 +18,9 @@
 (require 'cl-lib)
 (require 'mevedel-structs)
 
+(eval-when-compile
+  (require 'gptel-request nil t))
+
 ;; `gptel'
 (defvar gptel-prompt-transform-functions)
 
@@ -31,6 +34,7 @@
 ;; `imenu'
 (declare-function imenu--make-index-alist "imenu" (&optional noerror))
 (defvar imenu--index-alist)
+(autoload 'imenu--make-index-alist "imenu")
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-agent
@@ -67,6 +71,12 @@
                   "mevedel-compact-estimation" (&optional usable-tokens))
 (declare-function mevedel-compact-estimation-usable-tokens
                   "mevedel-compact-estimation" ())
+(autoload 'mevedel-compact-estimation-estimate-tokens
+  "mevedel-compact-estimation")
+(autoload 'mevedel-compact-estimation-threshold-tokens
+  "mevedel-compact-estimation")
+(autoload 'mevedel-compact-estimation-usable-tokens
+  "mevedel-compact-estimation")
 
 ;; `mevedel-file-state'
 (declare-function mevedel-file-cache-consume-external-changes
@@ -83,6 +93,7 @@
 ;; `mevedel-plan'
 (declare-function mevedel-plan-resource-address "mevedel-plan"
                   (relative-path))
+(autoload 'mevedel-plan-resource-address "mevedel-plan")
 
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
@@ -94,6 +105,10 @@
 (declare-function mevedel-session-artifacts-read-artifact
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
+(autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-artifact
+  "mevedel-session-artifacts")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
@@ -108,16 +123,20 @@
 ;; `mevedel-tool-task'
 (declare-function mevedel-tool-task-format-active-for-llm
                   "mevedel-tool-task" (session))
+(autoload 'mevedel-tool-task-format-active-for-llm "mevedel-tool-task")
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
                   "mevedel-transcript" ())
+(autoload 'mevedel-transcript-prompt-transform-start "mevedel-transcript")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--plain-data-p "mevedel-utilities" (value))
 (declare-function mevedel-generate-diff
                   "mevedel-utilities"
                   (original modified filepath &optional labels-real))
+(autoload 'mevedel--plain-data-p "mevedel-utilities")
+(autoload 'mevedel-generate-diff "mevedel-utilities")
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-file-buffers "mevedel-workspace"
@@ -249,7 +268,6 @@ only when a frozen agent template must survive a cold session resume."
 
 (defun mevedel-reminders--recipe-p (recipe)
   "Return non-nil when RECIPE names a trusted read-safe constructor."
-  (require 'mevedel-utilities)
   (when (and (proper-list-p recipe)
              (symbolp (car recipe))
              (mevedel--plain-data-p recipe))
@@ -428,12 +446,8 @@ with `:blocks' in reminder order and `:commits'."
 (defun mevedel-reminders--compact-token-state ()
   "Return context-pressure state for the current chat buffer.
 The returned plist contains `:tokens', `:threshold', `:usable',
-and `:ratio', or nil if compaction helpers are unavailable."
-  (require 'mevedel-compact-estimation)
-  (when-let* ((buf (mevedel-reminders--current-buffer))
-              ((fboundp 'mevedel-compact-estimation-estimate-tokens))
-              ((fboundp 'mevedel-compact-estimation-threshold-tokens))
-              ((fboundp 'mevedel-compact-estimation-usable-tokens)))
+and `:ratio', or nil when no chat buffer is collecting reminders."
+  (when-let* ((buf (mevedel-reminders--current-buffer)))
     (with-current-buffer buf
       (let* ((tokens (mevedel-compact-estimation-estimate-tokens))
              (threshold (mevedel-compact-estimation-threshold-tokens))
@@ -624,7 +638,6 @@ Runs after `mevedel--transform-expand-mentions'."
               ((buffer-live-p chat-buffer))
               (session (buffer-local-value 'mevedel--session chat-buffer)))
     (let ((mevedel-reminders--current-chat-buffer chat-buffer))
-      (require 'mevedel-transcript)
       (let ((commits nil))
         (when-let* ((contexts (mevedel-session-hook-context-pending session)))
           ;; Reserve rather than defer: these entries are in flight for
@@ -765,7 +778,6 @@ your original version of those changes unless the user asks."
 
 (defun mevedel-reminders--plan-path (session)
   "Return SESSION's immutable accepted plan path, when valid."
-  (require 'mevedel-plan)
   (when-let* ((metadata (mevedel-session-plan-metadata session))
               (path (plist-get metadata :accepted-path))
               (address (condition-case nil
@@ -775,9 +787,6 @@ your original version of those changes unless the user asks."
 
 (defun mevedel-reminders--plan-reference-content (session)
   "Return bounded contents of SESSION's immutable accepted artifact."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (when-let* ((path (mevedel-reminders--plan-path session)))
     (when (mevedel-session-artifacts-artifact-present-p session path)
       (let ((content
@@ -1012,7 +1021,6 @@ payloads bounded when large rewrites or reformats occur."
 (defun mevedel-reminders--format-edited-file-change (change max-diff-lines)
   "Render CHANGE (plist from detect-external-changes) as a reminder block body.
 MAX-DIFF-LINES caps the unified diff size."
-  (require 'mevedel-utilities)
   (let ((path (plist-get change :path))
         (status (plist-get change :status))
         (old (plist-get change :old))
@@ -1149,28 +1157,26 @@ sensitive runtime state.")
 
 (defun mevedel-reminders--xref-available-in-buffer-p ()
   "Return non-nil when current buffer has a useful xref backend."
-  (when (require 'xref nil t)
-    (condition-case nil
-        (let ((kind (mevedel-reminders--xref-backend-kind
-                     (xref-find-backend))))
-          (pcase kind
-            ((or 'eglot 'lsp 'elisp) t)
-            ('etags (mevedel-reminders--tags-table-available-p))
-            (_ nil)))
-      (error nil))))
+  (condition-case nil
+      (let ((kind (mevedel-reminders--xref-backend-kind
+                   (xref-find-backend))))
+        (pcase kind
+          ((or 'eglot 'lsp 'elisp) t)
+          ('etags (mevedel-reminders--tags-table-available-p))
+          (_ nil)))
+    (error nil)))
 
 (defun mevedel-reminders--imenu-available-in-buffer-p ()
   "Return non-nil when current buffer exposes a non-empty Imenu index."
-  (when (require 'imenu nil t)
-    (condition-case nil
-        (progn
-          (imenu--make-index-alist t)
-          (cl-some (lambda (item)
-                     (and (consp item)
-                          (stringp (car item))
-                          (not (string-prefix-p "*" (car item)))))
-                   imenu--index-alist))
-      (error nil))))
+  (condition-case nil
+      (progn
+        (imenu--make-index-alist t)
+        (cl-some (lambda (item)
+                   (and (consp item)
+                        (stringp (car item))
+                        (not (string-prefix-p "*" (car item)))))
+                 imenu--index-alist))
+    (error nil)))
 
 (defun mevedel-reminders--treesitter-available-in-buffer-p ()
   "Return non-nil when current buffer has an active tree-sitter parser."
@@ -1448,7 +1454,6 @@ been written for INTERVAL turns.  INTERVAL defaults to 8 turns."
                                    last-write)
                                 stale-after))))))
    :content (lambda (session)
-              (require 'mevedel-tool-task)
               (format
                "You have active tasks that have not been updated recently. Review and update task status as you make progress (set to in_progress when starting, completed when done). Use TaskUpdate to keep task status current.\n\n%s"
                ;; The panel rendering is a display concern; the model
