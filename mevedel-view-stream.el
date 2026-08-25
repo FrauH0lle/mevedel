@@ -10,6 +10,8 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-execution-transcript)
+(require 'mevedel-view-zone)
 
 ;; `cl-extra'
 (declare-function cl-subseq "cl-extra" (sequence start &optional end))
@@ -248,7 +250,6 @@ the view has already inserted the in-flight markers."
 
 (defun mevedel-view--request-progress-visible-p ()
   "Return non-nil when a request-progress fragment is visible."
-  (require 'mevedel-view-zone)
   (let ((ov (mevedel-view-zone-region 'progress)))
     (and (overlayp ov)
          (eq (overlay-buffer ov) (current-buffer))
@@ -275,7 +276,6 @@ the view has already inserted the in-flight markers."
 (defun mevedel-view--render-request-progress ()
   "Render the current request-progress row from buffer-local state."
   (when mevedel-view--spinner-status
-    (require 'mevedel-view-zone)
     (let ((display-status
            (mevedel-view--spinner-display-status
             mevedel-view--spinner-status)))
@@ -292,13 +292,11 @@ the view has already inserted the in-flight markers."
 
 (defun mevedel-view--clear-request-progress ()
   "Remove the fragment-managed request-progress row."
-  (require 'mevedel-view-zone)
   (mevedel-view-zone-clear 'progress)
   (setq mevedel-view--spinner-rendered-display-status nil))
 
 (defun mevedel-view--forget-request-progress-region ()
   "Forget the request-progress region after a larger redraw deleted it."
-  (require 'mevedel-view-zone)
   (mevedel-view-zone-forget 'progress)
   (setq mevedel-view--spinner-rendered-display-status nil))
 
@@ -407,7 +405,6 @@ FACE defaults to `mevedel-view-spinner'."
 
 (defun mevedel-view--request-progress-prefix ()
   "Return separator text before the request progress row."
-  (require 'mevedel-view-zone)
   (let* ((pos (or (mevedel-view-zone-start 'progress)
                   (mevedel-view--request-progress-anchor)))
          (prefix
@@ -720,7 +717,6 @@ POSITION may be an integer or marker."
 (defun mevedel-view-stream-handle-execution-event (event)
   "Apply Bash EVENT to its authoritative row and visible view.
 Always return nil; only the mailbox sink may acknowledge durable delivery."
-  (require 'mevedel-execution-transcript)
   (mevedel-execution-transcript-handle-event event)
   (when (eq (plist-get event :type) 'progress)
     (setq event
@@ -753,7 +749,6 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
 
 (defun mevedel-view--render-stream-update (data-buf)
   "Incrementally render DATA-BUF, isolating observer-view failures."
-  (require 'mevedel-execution-transcript)
   (mevedel-execution-transcript-retry-pending-terminals data-buf)
   (if (not mevedel-view--agent-transcript-p)
       (mevedel-view-render-live-update data-buf)
@@ -881,7 +876,6 @@ Runs as a `gptel-post-tool-call-functions' hook in the data buffer.
 ARGS is the tool-call plist.  The lightweight pending-tool live line is
 refreshed immediately, while the heavier incremental render is
 debounced so bursts of completed tool calls coalesce."
-  (require 'mevedel-execution-transcript)
   (mevedel-execution-transcript-retry-pending-terminals (current-buffer))
   (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                              mevedel--view-buffer))
@@ -918,7 +912,6 @@ debounced so bursts of completed tool calls coalesce."
 
 (defun mevedel-view--delete-pending-tool-live-lines ()
   "Delete fragment-backed pending-tool live-tail rows from the view buffer."
-  (require 'mevedel-view-zone)
   (mevedel-view-zone-clear 'history-live))
 
 (defun mevedel-view--insert-pending-tool-lines (entries)
@@ -931,7 +924,6 @@ appended.
 Pending-tool rows are part of the in-flight transcript live tail, so
 they fall back to the history/status boundary rather than the input
   marker when no render insertion marker is dynamically bound."
-  (require 'mevedel-view-zone)
   (let ((anchor (mevedel-view--pending-tool-insertion-target)))
     (mevedel-view-zone-reconcile
      'history-live anchor anchor
@@ -1006,7 +998,6 @@ When NO-PROGRESS is non-nil, record no active progress state."
 
 (defun mevedel-view-stream-render-response (start end)
   "Finish and render gptel response bounds START and END."
-  (require 'mevedel-execution-transcript)
   (mevedel-execution-transcript-retry-pending-terminals (current-buffer))
   (when-let* ((view-buf (buffer-local-value 'mevedel--view-buffer
                                             (current-buffer)))

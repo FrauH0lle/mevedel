@@ -50,7 +50,12 @@
 (declare-function mevedel-view-table-rerender "mevedel-view-table"
                   (&optional window))
 
-(eval-when-compile (require 'text-property-search))
+(require 'mevedel-session-artifacts)
+(require 'mevedel-session-codec)
+(require 'mevedel-session-durability)
+(require 'mevedel-session-persistence)
+(require 'mevedel-view-table)
+(require 'text-property-search)
 
 (defun mevedel-view--normalize-local-file-uri-path (path)
   "Normalize local file URI PATH for Emacs file APIs."
@@ -115,10 +120,6 @@ buffer."
 An ordinary existing file returns t.  An artifact in the active remote
 session returns `(SESSION . LOGICAL)' only when that logical path is staged
 or committed; fixed session-cache existence is ignored."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-durability)
-  (require 'mevedel-session-persistence)
   (when (stringp path)
     (let* ((session (bound-and-true-p mevedel--session))
            (target (and session
@@ -141,9 +142,6 @@ or committed; fixed session-cache existence is ignored."
 
 (defun mevedel-view--linkify-path-action (button)
   "Open the file or published session artifact referenced by BUTTON."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let ((path (button-get button 'mevedel-view-path))
         (line (button-get button 'mevedel-view-line))
         (session (button-get button 'mevedel-view-session))
@@ -455,7 +453,6 @@ the ratio it was rendered with, independent of later configuration
 changes.  A no-op when the buffer is undisplayed or every tracked
 image already matches the window.  Callers own undo and modified-flag
 discipline."
-  (require 'text-property-search)
   (when-let* ((window (if (and window (window-live-p window))
                           window
                         (get-buffer-window (current-buffer) t)))
@@ -688,7 +685,6 @@ file.el#L12."
           (mevedel-view--linkify-paths-in-range start end-marker)
           ;; Run after links and paths so their buttons and faces carry into
           ;; rendered cells.
-          (require 'mevedel-view-table)
           (mevedel-view-table-decorate
            start end-marker
            (mevedel-view--src-block-body-ranges start end-marker)))
@@ -879,7 +875,6 @@ any window or nothing is stale."
               (modified (buffer-modified-p)))
           (unwind-protect
               (progn
-                (require 'mevedel-view-table)
                 (mevedel-view-table-rerender window)
                 (mevedel-view--rerender-images window))
             (restore-buffer-modified-p modified)))))))

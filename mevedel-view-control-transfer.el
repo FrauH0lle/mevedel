@@ -88,6 +88,9 @@
 (declare-function mevedel-view--rebase-data-sources "mevedel-view-render"
                   (mapping))
 
+(require 'mevedel-interaction-prompt)
+(require 'mevedel-session-control-transfer)
+
 
 ;;
 ;;; Customization
@@ -249,7 +252,6 @@ transfer in flight wants a cadence the idle session does not."
 The timer passes its owning view explicitly; it must not depend on the
 ambient current buffer, which may be an unrelated buffer when a timer fires."
   (when (buffer-live-p (or view (current-buffer)))
-    (require 'mevedel-session-control-transfer)
     (with-current-buffer (or view (current-buffer))
       (when-let ((data (mevedel-view--control-transfer-data-buffer)))
         (let* ((session (buffer-local-value 'mevedel--session data))
@@ -277,7 +279,6 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
 (defun mevedel-view-control-transfer-grant ()
   "Grant the currently displayed cooperative control-transfer request."
   (interactive)
-  (require 'mevedel-session-control-transfer)
   (let ((data (mevedel-view--control-transfer-data-buffer)))
     (unless data (user-error "No active mevedel session"))
     (with-current-buffer data
@@ -287,7 +288,6 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
 (defun mevedel-view-control-transfer-keep ()
   "Reject the currently displayed cooperative control-transfer request."
   (interactive)
-  (require 'mevedel-session-control-transfer)
   (let ((data (mevedel-view--control-transfer-data-buffer)))
     (unless data (user-error "No active mevedel session"))
     (with-current-buffer data
@@ -297,7 +297,6 @@ ambient current buffer, which may be an unrelated buffer when a timer fires."
 (defun mevedel-view-control-transfer-request ()
   "Request control of the current read-only portable session."
   (interactive)
-  (require 'mevedel-session-control-transfer)
   (let ((data (mevedel-view--control-transfer-data-buffer)))
     (unless data (user-error "No active mevedel session"))
     (with-current-buffer data
@@ -323,7 +322,6 @@ client holds is requested instead; that client grants it automatically once
 `mevedel-session-transfer-prompt-timeout' passes, then finishes its work and
 releases, so control arrives without anyone sitting at the other machine."
   (interactive)
-  (require 'mevedel-session-control-transfer)
   (require 'mevedel-session-durability)
   (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
     (unless (buffer-local-value 'mevedel-session--read-only-mode data)
@@ -348,7 +346,6 @@ the same reason a granted transfer waits for it."
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-control-transfer)
   (require 'mevedel-session-durability)
   (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
     (when (buffer-local-value 'mevedel-session--read-only-mode data)
@@ -367,7 +364,6 @@ the same reason a granted transfer waits for it."
 (defun mevedel-toggle-follow ()
   "Toggle whether this non-owner view follows the owner's published turns."
   (interactive)
-  (require 'mevedel-session-control-transfer)
   (pcase-let ((`(,data . ,_session) (mevedel-view--control-transfer-session)))
     (let ((enabled
            (with-current-buffer data
@@ -384,7 +380,6 @@ the same reason a granted transfer waits for it."
 This is what following does on a timer, run now and regardless of whether
 this view follows."
   (interactive)
-  (require 'mevedel-session-control-transfer)
   (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
     (unless (buffer-local-value 'mevedel-session--read-only-mode data)
       (user-error "This session is writable here; there is nothing to follow"))
@@ -398,7 +393,6 @@ this view follows."
 
 (defun mevedel-view--control-transfer-body (descriptor)
   "Return the rendered interaction body for control-transfer DESCRIPTOR."
-  (require 'mevedel-interaction-prompt)
   (let* ((attention (plist-get descriptor :attention))
          (detail (plist-get descriptor :detail))
          (keys (plist-get descriptor :keys)))
@@ -435,7 +429,6 @@ this view follows."
 
 (defun mevedel-view-control-transfer-current-descriptor ()
   "Return the current view's complete control-transfer descriptor, or nil."
-  (require 'mevedel-session-control-transfer)
   (when-let* ((data (mevedel-view--control-transfer-data-buffer))
               (session (buffer-local-value 'mevedel--session data))
               (descriptor
@@ -488,7 +481,6 @@ this view follows."
 
 (defun mevedel-view-control-transfer-initialize (rebuild-function drain-predicate)
   "Initialize transfer UI using REBUILD-FUNCTION and DRAIN-PREDICATE."
-  (require 'mevedel-session-control-transfer)
   (mevedel-view-control-transfer-teardown)
   ;; Initialization is the one legitimate re-arm after a teardown.
   (setq-local mevedel-view--control-transfer-torn-down-p nil)

@@ -48,13 +48,14 @@
 (declare-function mevedel-view-render-add-display-properties
                   "mevedel-view-render" (start end &optional default-vtype))
 
+(require 'mevedel-transcript-audit)
+(require 'mevedel-view-disclosure)
+
 (defun mevedel-view--hook-audit-records-from-text
     (text &optional type data-buf source-start)
   "Return hook audit records parsed from TEXT.
 When TYPE is non-nil, return only records with matching `:type'.
 DATA-BUF and SOURCE-START attach each record's exact source range."
-  (require 'mevedel-transcript-audit)
-  (require 'mevedel-view-disclosure)
   (delq nil
         (mapcar
          (lambda (span)
@@ -163,7 +164,6 @@ When EXPANDED is non-nil, include ordered handler details."
 
 (defun mevedel-view--user-turn-hook-audits (segments data-buf)
   "Return hook audit records found in user SEGMENTS from DATA-BUF."
-  (require 'mevedel-transcript-audit)
   (with-current-buffer data-buf
     (let (records)
       (dolist (seg segments)
@@ -314,7 +314,6 @@ EXPANDED means insert the disclosure body expanded."
 
 (defun mevedel-view-audit-toggle-hook-audit ()
   "Toggle a hook audit disclosure."
-  (require 'mevedel-view-disclosure)
   (require 'mevedel-view-render)
   (let* ((bounds (mevedel-view-disclosure-section-bounds))
          (source (and bounds

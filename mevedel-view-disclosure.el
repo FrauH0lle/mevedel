@@ -141,7 +141,6 @@ toggleable.")
   "Return a render-time identity anchor for SOURCE in the data buffer.
 The anchor should remain stable when a source-backed segment extends in
 place, but change when a later rewrite reuses the same numeric start."
-  (require 'mevedel-view-segments)
   (when (and source
              (consp source)
              (integer-or-marker-p (car source))

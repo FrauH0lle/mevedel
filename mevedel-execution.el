@@ -147,6 +147,11 @@
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 
+(require 'mevedel-execution-process)
+(require 'mevedel-execution-scheduler)
+(require 'mevedel-execution-telemetry)
+(require 'mevedel-utilities)
+
 ;;
 ;;; Configuration and private state
 
@@ -288,7 +293,6 @@ separate from passive event hooks; the context is never published to them.")
 
 (defun mevedel-execution--new-state ()
   "Return an empty opaque execution state."
-  (require 'mevedel-execution-scheduler)
   (mevedel-execution--state-create
    :next-id 0
    :records (make-hash-table :test #'equal)
@@ -376,7 +380,6 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
 
 (defun mevedel-execution--mark-unknown (record error-data &optional child-status)
   "Record ERROR-DATA when RECORD's target process outcome cannot be proved."
-  (require 'mevedel-execution-process)
   (let* ((child-status
           (or child-status
               (when-let* ((child (mevedel-execution--record-child record)))
@@ -491,7 +494,6 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
 
 (defun mevedel-execution--read-output (record)
   "Return RECORD's complete decoded spooled output."
-  (require 'mevedel-execution-process)
   (if-let* ((child (mevedel-execution--record-child record)))
       (mevedel-execution-process-read child)
     ""))
@@ -499,7 +501,6 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
 (defun mevedel-execution--release-runtime (record)
   "Release RECORD's child and managed timers.
 The process spool remains owned by RECORD until registry cleanup."
-  (require 'mevedel-execution-process)
   (dolist (timer (list (mevedel-execution--record-observer-timer record)
                        (mevedel-execution--record-progress-timer record)
                        (mevedel-execution--record-retire-timer record)
@@ -548,7 +549,6 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
 (defun mevedel-execution--start-process
     (callback name command workdir timeout session owner teardown-function)
   "Start raw COMMAND and call CALLBACK with its bounded terminal result."
-  (require 'mevedel-execution-process)
   (let* ((record
           (mevedel-execution--record-create
            :callback callback
@@ -598,13 +598,11 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
 
 (defun mevedel-execution--spool-path (record)
   "Return RECORD's process-owned raw spool path."
-  (require 'mevedel-execution-process)
   (when-let* ((child (mevedel-execution--record-child record)))
     (mevedel-execution-process-spool-path child)))
 
 (defun mevedel-execution--create-child (record spool-path)
   "Create RECORD's process child using SPOOL-PATH."
-  (require 'mevedel-execution-process)
   (mevedel-execution-process-create
    :workdir (mevedel-execution--record-workdir record)
    :tty (mevedel-execution--record-tty-p record)
@@ -638,7 +636,6 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
 
 (defun mevedel-execution--telemetry (record event &rest props)
   "Record safe execution EVENT and PROPS for RECORD."
-  (require 'mevedel-execution-telemetry)
   (mevedel-execution-telemetry-record
    (mevedel-execution--record-telemetry-context record) event props t))
 
@@ -777,7 +774,6 @@ does not depend on the local spool the target never wrote to."
 
 (defun mevedel-execution--facts (record)
   "Return an immutable public fact snapshot for RECORD."
-  (require 'mevedel-execution-process)
   (let* ((finished (mevedel-execution--record-finished-p record))
          (child-status
           (mevedel-execution-process-status
@@ -872,7 +868,6 @@ does not depend on the local spool the target never wrote to."
 
 (defun mevedel-execution--whole-preview (record)
   "Return RECORD's bounded whole-artifact head-and-tail preview."
-  (require 'mevedel-utilities)
   (plist-get
    (mevedel--head-tail-preview-parts
     (or (mevedel-execution--record-output-head record) "")
@@ -895,7 +890,6 @@ does not depend on the local spool the target never wrote to."
 
 (defun mevedel-execution--unread-preview (record unread-bytes)
   "Return RECORD's bounded unread preview for UNREAD-BYTES."
-  (require 'mevedel-utilities)
   (let* ((parts
           (mevedel--head-tail-preview-parts
            (or (mevedel-execution--record-unread-head record) "")
@@ -1347,7 +1341,6 @@ process-filter appends use the published path."
 
 (defun mevedel-execution--launch-managed (record command)
   "Launch managed RECORD with raw COMMAND."
-  (require 'mevedel-execution-process)
   (condition-case err
       (let* ((origin (mevedel-execution--record-origin record))
              (session (mevedel-execution--origin-session origin))
@@ -1492,8 +1485,6 @@ terminal settlement."
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
-  (require 'mevedel-execution-process)
-  (require 'mevedel-execution-telemetry)
   (require 'mevedel-sandbox)
   (require 'mevedel-turn)
   (unless session
@@ -2065,7 +2056,6 @@ seconds.  ADDITIONAL-PERMISSIONS and SANDBOX-PERMISSIONS are already-authorized
 confinement inputs.  SESSION and OWNER fix the transient ownership boundary.
 TEARDOWN-FUNCTION releases caller-owned resources when lifecycle destruction
 discards the process without invoking CALLBACK."
-  (require 'mevedel-execution-telemetry)
   (require 'mevedel-sandbox)
   (let* ((invocation
           (and (boundp 'mevedel--agent-invocation)

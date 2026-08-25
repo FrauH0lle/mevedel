@@ -13,6 +13,7 @@
 (require 'cl-lib)
 (require 'ring)
 (require 'subr-x)
+(require 'mevedel-mention-bindings)
 (require 'mevedel-utilities)
 (require 'mevedel-transport)
 
@@ -111,7 +112,6 @@
 
 (defun mevedel-view-history--input-text ()
   "Return current view input text, untrimmed."
-  (require 'mevedel-mention-bindings)
   (mevedel-mention-bindings-copy-text
    (buffer-substring (mevedel-view--input-start) (point-max))))
 
@@ -127,7 +127,6 @@
   "Add INPUT to the current view buffer's input history.
 INPUT is trimmed before insertion.  Empty entries and consecutive
 duplicates are skipped.  History navigation state is reset."
-  (require 'mevedel-mention-bindings)
   (let ((entry (string-trim
                 (mevedel-mention-bindings-copy-text
                  (mevedel--normalize-message-text (or input "")))))
@@ -195,7 +194,6 @@ does not substitute its own navigation behavior there."
   "Return newest-first history entries from PLIST.
 Signal an error when PLIST is not valid input-history data."
   (let ((entries (plist-get plist :entries)))
-    (require 'mevedel-mention-bindings)
     (unless (and (equal 2 (plist-get plist :version))
                  (listp entries)
                  (cl-every

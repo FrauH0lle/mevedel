@@ -43,6 +43,8 @@
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
 
+(require 'mevedel-telemetry)
+
 (defconst mevedel-execution-telemetry--audit-prop-keys
   '(:additional-read-count :additional-write-count
     :after-confined-launch-failure :cache-identity :chunk-bytes :command-hash
@@ -84,7 +86,6 @@
           pipeline-summary-cell span-event span-properties)
   "Create an opaque telemetry context for one execution."
   (when invocation (require 'mevedel-agents))
-  (when span-event (require 'mevedel-telemetry))
   (mevedel-execution-telemetry--context-create
    :agent-summary-cell
    (and invocation
@@ -125,7 +126,6 @@
 (defun mevedel-execution-telemetry-finish (context &rest properties)
   "Finish CONTEXT's optional telemetry span with PROPERTIES."
   (when-let* ((span (mevedel-execution-telemetry--context-span context)))
-    (require 'mevedel-telemetry)
     (apply #'mevedel-telemetry-finish span properties)))
 
 (defun mevedel-execution-telemetry-safe-facts (facts)
@@ -278,7 +278,6 @@ requested command started, and REFUSED-P records a policy refusal."
     (context command-text command)
   "Return an optional profiled COMMAND and record it in CONTEXT."
   (require 'mevedel-execution-target)
-  (require 'mevedel-telemetry)
   (let* ((session (mevedel-execution-telemetry--context-session context))
          (target (mevedel-session-execution-target session))
          (remote (and target
@@ -324,7 +323,6 @@ requested command started, and REFUSED-P records a policy refusal."
     (context event props &optional audit)
   "Record execution EVENT and PROPS from CONTEXT.
 When AUDIT is non-nil, retain only the safe forwarded-audit property set."
-  (require 'mevedel-telemetry)
   (let* ((session (mevedel-execution-telemetry--context-session context))
          (props
           (if (not (and audit

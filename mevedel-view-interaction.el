@@ -140,7 +140,13 @@ is reading or typing in.")
 
 (defun mevedel-view-interaction-initialize ()
   "Initialize interaction descriptor state in the current view buffer."
+  (require 'mevedel-agent-control)
+  (require 'mevedel-pending-inputs)
+  (require 'mevedel-permission-mode)
+  (require 'mevedel-permission-queue)
+  (require 'mevedel-plan-mode)
   (require 'mevedel-view-control-transfer)
+  (require 'mevedel-view-zone)
   (setq-local mevedel-view--interaction-descriptors
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--interaction-overlays
@@ -155,7 +161,6 @@ is reading or typing in.")
 
 (defun mevedel-view--interaction-telemetry-close (id)
   "Record and forget telemetry lifetime ID."
-  (require 'mevedel-permission-mode)
   (when-let* ((metadata
                (and (hash-table-p mevedel-view--interaction-telemetry-opened)
                     (gethash id mevedel-view--interaction-telemetry-opened))))
@@ -497,7 +502,6 @@ snapshot taken at registration."
     (let ((bounds (mevedel-view-zone-fragment-bounds 'interaction id)))
       (unless bounds
         (plist-put entry :hidden nil)
-        (require 'mevedel-plan-mode)
         (mevedel-plan-approval-render session)
         (setq bounds
               (mevedel-view-zone-fragment-bounds 'interaction id)))
@@ -596,7 +600,6 @@ snapshot taken at registration."
 
 (defun mevedel-view--interaction-render ()
   "Render interaction-zone fragments and descriptor callback overlays."
-  (require 'mevedel-view-zone)
   (unless mevedel-view--interaction-render-suppressed
     (let* ((label (mevedel-view--interaction-count-label))
            (pairs (mevedel-view--interaction-descriptor-pairs))
@@ -629,7 +632,6 @@ A descriptor that comes back under the same id reuses its overlay
 object, so an unchanged rebuild leaves the zone text, point, and held
 overlay references untouched.  Callbacks are never settled here."
   (unless mevedel-view--agent-transcript-p
-    (require 'mevedel-view-control-transfer)
     (unwind-protect
         (let ((mevedel-view--interaction-render-suppressed t))
           (mevedel-view--interaction-clear-for-rebuild)
@@ -638,15 +640,12 @@ overlay references untouched.  Callbacks are never settled here."
                         (mevedel-view-control-transfer-current-descriptor)))
               (mevedel-view--interaction-register descriptor))
             (when (mevedel-session-pending-plan-approval session)
-              (require 'mevedel-plan-mode)
               (mevedel-plan-approval-render session))
             (when (mevedel-session-permission-queue session)
-              (require 'mevedel-permission-queue)
               (mevedel-permission-queue--render-head session))
             (when (or (mevedel-session-pending-steering session)
                       (mevedel-session-pending-follow-ups session)
                       (mevedel-session-pending-input-failure-paused session))
-              (require 'mevedel-pending-inputs)
               (mevedel-view--pending-inputs-render session)))
           (when (hash-table-p mevedel-view--interaction-telemetry-opened)
             (let (closed)
@@ -666,7 +665,6 @@ overlay references untouched.  Callbacks are never settled here."
 
 (defun mevedel-view--interaction-register (descriptor)
   "Register DESCRIPTOR in the interaction zone and return its overlay."
-  (require 'mevedel-permission-mode)
   (unless (hash-table-p mevedel-view--interaction-descriptors)
     (setq mevedel-view--interaction-descriptors
           (make-hash-table :test #'equal)))
@@ -718,7 +716,6 @@ overlay references untouched.  Callbacks are never settled here."
         (when (and session origin
                    (not (equal origin "/root"))
                    (not (eq kind 'permission)))
-          (require 'mevedel-agent-control)
           (overlay-put
            overlay 'mevedel-agent-activity-release
            (mevedel-agent-control-block-turn

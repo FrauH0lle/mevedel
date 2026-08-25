@@ -16,6 +16,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-media)
 (require 'mevedel-transcript-audit)
+(require 'mevedel-utilities)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -72,7 +73,6 @@ the serialized render-data without re-running the tool.")
 
 (defun mevedel-tool-render-data-size (data)
   "Return the printed size of DATA after stripping text properties."
-  (require 'mevedel-utilities)
   (length (prin1-to-string (mevedel-tool-render-data--plain data))))
 
 (defun mevedel-tool-render-data-format
@@ -89,7 +89,6 @@ parser and persistence).  An `:around' advice on
 the single chokepoint where tool result strings become the LLM-bound
 API message, without touching the callback that drives chat-buffer
 display."
-  (require 'mevedel-utilities)
   (let ((data (mevedel-tool-render-data--plain render-data)))
     (setq data (copy-sequence data))
     (if tool-use-id

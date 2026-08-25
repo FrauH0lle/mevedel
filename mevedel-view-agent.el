@@ -8,6 +8,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-view-zone)
 
 ;; `cl-seq'
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
@@ -1113,7 +1114,6 @@ collapsed marker; expanded row content is rendered from Agent handles."
 
 (defun mevedel-view--status-agent-expanded-p ()
   "Return non-nil when aggregate agent status should show handle rows."
-  (require 'mevedel-view-zone)
   (if (mevedel-view-zone-collapse-state-set-p
        mevedel-view--status-agent-collapse-key)
       (not (mevedel-view-zone-collapse-state
@@ -1293,7 +1293,6 @@ one handle/status row without scheduling repeated full rerenders."
 (defun mevedel-view-agent-status-toggle ()
   "Toggle the aggregate live agent status rows."
   (interactive)
-  (require 'mevedel-view-zone)
   (let ((collapsed (mevedel-view--status-agent-expanded-p)))
     (mevedel-view-zone-set-collapse-state
      mevedel-view--status-agent-collapse-key collapsed))
@@ -1350,7 +1349,6 @@ the current live or persisted transcript and reports any unavailable source."
   "Reset view-local ephemeral agent UI state in VIEW-BUFFER.
 Defaults to the current buffer."
   (with-current-buffer (or view-buffer (current-buffer))
-    (require 'mevedel-view-zone)
     (mevedel-view-zone-set-collapse-state
      mevedel-view--status-agent-collapse-key nil)
     (mevedel-view--render-status)))

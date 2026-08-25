@@ -181,6 +181,16 @@
 ;; `subr'
 (defvar read-eval)
 
+(require 'mevedel-execution-target)
+(require 'mevedel-execution-telemetry)
+(require 'mevedel-resource)
+(require 'mevedel-specialist-nudges)
+(require 'mevedel-telemetry)
+(require 'mevedel-tool-media)
+(require 'mevedel-tool-permission)
+(require 'mevedel-tool-render-data)
+(require 'mevedel-turn)
+
 (defvar mevedel-pipeline--active-tool-use-id nil
   "Tool-use id dynamically visible while a handler starts its work.")
 
@@ -276,7 +286,6 @@ available, falls back to `mevedel-pipeline--truncate-result'."
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
   (setq result (mevedel--normalize-message-text result))
-  (require 'mevedel-resource)
   (if-let* ((dir (mevedel-pipeline-tool-results-dir session buffer)))
       (let* ((name (mevedel-tool-name tool))
              (file (concat
@@ -453,7 +462,6 @@ that bypass `mevedel-pipeline-run-tool'."
   "Discard prepared resource attempts held by CONTEXT."
   (when-let* ((cell (plist-get context :resource-attempts-cell))
               (attempts (and (consp cell) (car cell))))
-    (require 'mevedel-resource)
     (mevedel-resource-discard-attempts attempts)
     (setcar cell nil)))
 
@@ -661,10 +669,8 @@ references in that target against DIRECTORY."
       value
     (if execution-target
         (progn
-          (require 'mevedel-execution-target)
           (mevedel-execution-target-expand-path
            execution-target value directory))
-      (require 'mevedel-resource)
       (mevedel-resource-normalize-file-path value directory))))
 
 (defun mevedel-pipeline--canonicalize-path-value
@@ -676,8 +682,6 @@ existing ancestors.  Remote lookups bypass TRAMP's attribute cache so
 authorization observes the target's current link destination."
   (if (or (not (stringp value)) (string-empty-p value))
       value
-    (when execution-target
-      (require 'mevedel-execution-target))
     (let* ((remote-file-name-inhibit-cache t)
            (canonical (file-truename value)))
       (if execution-target
@@ -697,7 +701,6 @@ re-resolve these arguments.  Resource-looking `path-or-resource' values stay
 authored addresses and are prepared by the resource step.  FAIL is unused:
 normalization passes an unresolvable value through verbatim, and an invalid
 target path signals for the pipeline runner to handle."
-  (require 'mevedel-resource)
   (let* ((tool (plist-get context :tool))
          (args (plist-get context :args))
          (session (plist-get context :session))
@@ -781,7 +784,6 @@ Preparation is deliberately content-free.  It parses each semantic
 ordinary filesystem paths pass through unchanged.  Malformed addresses and
 unsupported operation/scheme pairs signal validation failures before any
 permission or handler work begins."
-  (require 'mevedel-resource)
   (let* ((tool (plist-get context :tool))
          (operation (mevedel-pipeline--resource-operation tool))
          (args (plist-get context :args))
@@ -932,7 +934,6 @@ Hooks see validated args and may rewrite them.  Rewritten args are
 validated again before the pipeline continues.  Permission decisions
 from hooks are carried in CONTEXT for the permission step, where they
 can tighten policy or skip a prompt without overriding explicit denies."
-  (require 'mevedel-tool-permission)
   (let* ((tool (plist-get context :tool))
          (session (plist-get context :session))
          (workspace (plist-get context :workspace))
@@ -1019,7 +1020,6 @@ snapshots it.  Only included for tools declaring snapshots.  CONTEXT must
 contain `:tool' and `:args'.  NEXT is called on success.  FAIL is
 unused -- a snapshot failure is best-effort and should never fail the
   pipeline."
-  (require 'mevedel-tool-permission)
   (let ((tool (plist-get context :tool))
         (args (plist-get context :args)))
     (dolist (path (mevedel-tool-permission-paths tool args context))
@@ -1056,7 +1056,6 @@ Missing files are stored as nil; unreadable paths retain a diagnostic gap."
 
 (defun mevedel-pipeline--step-capture-coverage (context next _fail)
   "Record untracked directive filesystem effects from CONTEXT, then call NEXT."
-  (require 'mevedel-turn)
   (let ((tool (plist-get context :tool))
         (request (plist-get context :request)))
     (when (and request
@@ -1270,7 +1269,6 @@ FAIL is unused; transform failures warn and leave CONTEXT unchanged."
              ((null render-data)
               (funcall next context))
              ((progn
-                (require 'mevedel-tool-render-data)
                 (> (mevedel-tool-render-data-size render-data)
                    mevedel-pipeline--render-transform-max-data-size))
               (display-warning
@@ -1313,7 +1311,6 @@ When neither was produced, passes CONTEXT through unchanged."
          (render-data
           (if (and sandbox-summary
                    (progn
-                     (require 'mevedel-execution-telemetry)
                      (mevedel-execution-telemetry-sandbox-summary-class
                       sandbox-summary)))
               (plist-put (copy-sequence render-data)
@@ -1325,7 +1322,6 @@ When neither was produced, passes CONTEXT through unchanged."
             render-data)))
     (if (and render-data (stringp result))
         (progn
-          (require 'mevedel-tool-render-data)
           (funcall next
                    (plist-put context :result
                               (concat result
@@ -1341,7 +1337,6 @@ and `:kind'.  The block is hidden in the data buffer and stripped at the
 gptel tool-result serialization boundary.  Backends that gain native
 tool-result media support can read this contract at that boundary
 without changing handler return shapes."
-  (require 'mevedel-tool-media)
   (let ((result (plist-get context :result))
         (media (plist-get context :media)))
     (if (and media (stringp result))
@@ -1431,8 +1426,6 @@ possibly-updated context."
 
 Hooks receive both `:raw-result' and the final `:result'.  Only an
 explicit `:updated-result' changes the model-visible tool result."
-  (require 'mevedel-tool-media)
-  (require 'mevedel-tool-render-data)
   (let* ((media (mevedel-tool-media-normalize-items
                  (plist-get context :media)))
          (context (plist-put context :media media))
@@ -1523,7 +1516,6 @@ explicit `:updated-result' changes the model-visible tool result."
 
 (defun mevedel-pipeline--step-specialist-nudges (context next _fail)
   "Apply specialist-tool prompting policy to CONTEXT, then call NEXT."
-  (require 'mevedel-specialist-nudges)
   (funcall next (mevedel-specialist-nudges-apply context)))
 
 ;;
@@ -1548,7 +1540,6 @@ Provider projection then appends hook context, repair feedback, and specialist
 nudges, persists oversized output when declared, adds a Goal warning, and
 attaches render-data and media.  Outcome-only consumers stop at the canonical
 common boundary."
-  (require 'mevedel-tool-permission)
   (let ((common
          (append
           (list #'mevedel-pipeline--step-validate
@@ -1603,8 +1594,6 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
   (require 'mevedel-session-persistence)
   (require 'mevedel-session-codec)
   (require 'mevedel-session-artifacts)
-  (require 'mevedel-telemetry)
-  (require 'mevedel-turn)
   (let* ((dispatch-buffer (current-buffer))
          (session (and (boundp 'mevedel--session) mevedel--session))
          (workspace

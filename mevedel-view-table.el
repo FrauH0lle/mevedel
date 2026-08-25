@@ -18,7 +18,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
-(eval-when-compile (require 'text-property-search))
+(require 'text-property-search)
 
 ;; `mevedel-view-markdown'
 (declare-function mevedel-view--markdown-source "mevedel-view-markdown"
@@ -694,7 +694,6 @@ The rendered text retains SOURCE and the displaying window's pixel
 width as text properties, and carries the view's own properties from
 START across the rewrite.  WINDOW, when live, is the window the
 layout targets; otherwise a window showing the buffer is used."
-  (require 'mevedel-view-markdown)
   (let* ((window (if (and window (window-live-p window))
                      window
                    (get-buffer-window (current-buffer) t)))
@@ -728,7 +727,6 @@ layout targets; otherwise a window showing the buffer is used."
   "Render Markdown pipe tables between START and END.
 Tables overlapping AVOID-RANGES or linkify-exempt text stay raw;
 already rendered regions are ignored."
-  (require 'mevedel-view-markdown)
   ;; Render back to front so earlier bounds stay valid as each
   ;; replacement shifts everything after it.
   (dolist (table (mevedel-view-table--find-tables start end avoid-ranges))
@@ -748,7 +746,6 @@ modified-flag discipline."
   ;; ponytail: every stale table in the buffer re-renders, on-screen or
   ;; not; restrict to window-start..window-end first if long transcripts
   ;; make a resize visibly stall.
-  (require 'text-property-search)
   (when-let* ((window (if (and window (window-live-p window))
                           window
                         (get-buffer-window (current-buffer) t)))
