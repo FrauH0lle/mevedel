@@ -299,7 +299,7 @@ instead of one flat dump fontified in a single mode."
    :name "ToolScript"
    :description "Run an orchestration script that calls other tools."
    :summary "Orchestrate several tool calls in one turn with a small Lisp script."
-   :prompt-file "tools/ptc.md"
+   :prompt-file "prompts/tools/ptc.md"
    :handler #'mevedel-tool-ptc--handler
    :args ((script string :required
                   "The orchestration script. See the tool description for the accepted dialect."))

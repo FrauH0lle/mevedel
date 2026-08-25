@@ -1,6 +1,27 @@
 Evaluate one Elisp expression and return the result and any printed
 output.
 
+### When to use `Eval`
+
+- Testing elisp code snippets or expressions
+- Verifying code changes work correctly
+- Checking variable values or function behavior
+- Demonstrating elisp functionality to users
+- Calculating results
+- Exploring live Emacs state or testing short hypotheses with `mode=live`
+- Running longer or UI-risky Elisp checks with `mode=batch`
+
+### When NOT to use `Eval`
+
+- Multi-expression evaluations -> one call per expression (no progn)
+- File modifications -> use `ApplyPatch`
+- Shell operations -> use `Bash`
+- Test commands -> use `Bash`
+- Untrusted code -> live Eval is unrestricted code execution, and batch
+  confinement is not a substitute for trusting the expression
+
+### How to use `Eval`
+
 `expression` can be anything to evaluate: a function call, a variable,
 a quasi-quoted expression. Only the first sexp is read and evaluated.
 If you need multiple expressions, make one call per expression. Do not
@@ -61,25 +82,6 @@ not available to live Eval.
 Output from `print`, `prin1`, and `princ` is captured and returned as
 STDOUT. Use `print` for diagnostic output, not `message` (which goes
 to `*Messages*` and is not captured).
-
-### When to use `Eval`
-
-- Testing elisp code snippets or expressions
-- Verifying code changes work correctly
-- Checking variable values or function behavior
-- Demonstrating elisp functionality to users
-- Calculating results
-- Exploring live Emacs state or testing short hypotheses with `mode=live`
-- Running longer or UI-risky Elisp checks with `mode=batch`
-
-### When NOT to use `Eval`
-
-- Multi-expression evaluations -> one call per expression (no progn)
-- File modifications -> use `ApplyPatch`
-- Shell operations -> use `Bash`
-- Test commands -> use `Bash`
-- Untrusted code -> live Eval is unrestricted code execution, and batch
-  confinement is not a substitute for trusting the expression
 
 ### Examples of good usage
 

@@ -30,20 +30,20 @@ Resource addresses
 - When you are doing an open-ended search that may require multiple rounds of
   globbing and grepping, delegate to a specialist agent
 
-### When to use Glob
+### When to use `Glob`
 
 - Searching for files by name patterns or extensions
 - You know the file pattern but not exact location
 - Finding all files of a certain type
 - Exploring project or directory structure
 
-### When NOT to use Glob
+### When NOT to use `Glob`
 
 - Searching file contents -> use Grep
 - You know the exact file path -> use Read
 - Doing open-ended multi-round searches -> delegate
 
-### How to use Glob
+### How to use `Glob`
 
 - Supports standard glob patterns: `**/*.ts`, `*.{js,jsx}`, `src/**/*.py`.
 - Directory-qualified patterns narrow the search below `path`; absolute

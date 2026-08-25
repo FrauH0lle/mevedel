@@ -60,6 +60,7 @@ SUMMARY is required for `blocked'.  CAPTURED-ID must match its Goal identity."
   (mevedel-define-tool
     :name "UpdateGoal"
     :description "Update the active goal. Use only to mark it achieved or genuinely blocked. Do not use blocked merely because work is hard, slow, uncertain, or incomplete. Do not mark complete because the budget is nearly exhausted or you are stopping. You cannot pause, resume, or re-budget a goal; the user controls those."
+    :prompt-file "prompts/tools/updategoal.md"
     :handler #'mevedel-tool-goal--handle-update
     :args ((status string :required
                    "Required. Set to complete only when the objective is achieved and no required work remains. Set to blocked only after the same blocking condition has recurred for at least three consecutive goal turns and user input or an external change is required."

@@ -384,8 +384,13 @@ offers session-local lifecycle operations:
 Manual tool changes do not mutate presets or global configuration, and they
 do not rewrite already-running child agent tool state.
 
-Tool descriptions live in `tools/*.md` and are loaded via
-`mevedel-define-tool`'s `:prompt-file` keyword.
+Tool descriptions live in `prompts/tools/*.md` and are loaded via
+`mevedel-define-tool`'s `:prompt-file` keyword. Every file follows one
+template: an unheaded intro, then `### When to use \`X\``, `### When NOT
+to use \`X\``, `### How to use \`X\`` (tool-specific reference material
+goes in `####` subsections there), `### Examples of good usage`, and
+`### Examples of bad usage` with `<example>`/`<reasoning>` blocks. New
+tools get a file with all six parts.
 
 ### Hook boundaries
 

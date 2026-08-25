@@ -204,7 +204,7 @@ addressable locator."
   (mevedel-define-tool
     :name "Glob"
     :description "Fast file pattern matching tool that works with any codebase size."
-    :prompt-file "tools/glob.md"
+    :prompt-file "prompts/tools/glob.md"
     :handler #'mevedel-tool-fs-search-glob
     :args ((pattern string :required
                    "The glob pattern to match files against.")
@@ -220,7 +220,7 @@ addressable locator."
   (mevedel-define-tool
     :name "Read"
     :description "Read a file from the local filesystem."
-    :prompt-file "tools/read.md"
+    :prompt-file "prompts/tools/read.md"
     :handler #'mevedel-tool-fs-read
     :args ((file_path path-or-resource :required "Absolute or relative path to the file to read, or a canonical resource address. Relative paths are resolved from the session working directory.")
            (offset integer :optional
@@ -243,7 +243,7 @@ addressable locator."
   (mevedel-define-tool
     :name "Grep"
     :description "Search file contents using ripgrep."
-    :prompt-file "tools/grep.md"
+    :prompt-file "prompts/tools/grep.md"
     :handler #'mevedel-tool-fs-search-grep
     :args ((pattern string :required
                    "The regular expression pattern to search for in file contents.")

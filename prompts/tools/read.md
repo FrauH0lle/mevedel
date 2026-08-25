@@ -57,14 +57,14 @@ Usage:
   PDF page images. They require ImageMagick (`magick` or `convert`); omit them
   when the original media can be sent as-is.
 
-### When to use Read
+### When to use `Read`
 
 - You need to examine file contents
 - Before editing any file (required)
 - You know the exact file path
 - Inspecting known code ranges and implementation details
 
-### When NOT to use Read
+### When NOT to use `Read`
 
 - Searching for files by name -> use Glob
 - Searching file contents across multiple files -> use Grep
@@ -72,7 +72,7 @@ Usage:
 - Finding symbol definitions, callers, or usages -> use XrefDefinitions or
   XrefReferences
 
-### How to use Read
+### How to use `Read`
 - Default behavior reads from the beginning and stops at the built-in line and
   output caps
 - For large files, use offset and limit parameters to read specific sections

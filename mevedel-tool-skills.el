@@ -27,6 +27,7 @@
   (mevedel-define-tool
     :name "Skill"
     :description "Invoke a reusable prompt recipe (skill) by name."
+    :prompt-file "prompts/tools/skill.md"
     :handler #'mevedel-skills--invoke-handler
     :args ((name string :required
                  "The skill name (as shown in the skills listing).")
@@ -40,6 +41,7 @@
   (mevedel-define-tool
     :name "ListSkills"
     :description "List active model-invocable skills, optionally filtered by query."
+    :prompt-file "prompts/tools/listskills.md"
     :handler #'mevedel-skills--list-handler
     :args ((query string :optional
                   "Optional case-insensitive search over skill name and description."))

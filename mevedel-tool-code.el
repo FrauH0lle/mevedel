@@ -614,7 +614,7 @@ than silently answered for somewhere else."
     :name "XrefReferences"
     :description "Find where a function, variable, or class is used throughout your codebase."
     :summary "LSP-aware symbol references, callers, and impact analysis."
-    :prompt-file "tools/xref-references.md"
+    :prompt-file "prompts/tools/xref-references.md"
     :handler #'mevedel-tool-code--xref-references
     :args ((identifier string :required
                        "The exact identifier to find references for (case-sensitive).")
@@ -631,7 +631,7 @@ than silently answered for somewhere else."
     :name "XrefDefinitions"
     :description "Search for functions, variables, or classes by name pattern across your project."
     :summary "LSP-aware symbol definitions and name discovery."
-    :prompt-file "tools/xref-definitions.md"
+    :prompt-file "prompts/tools/xref-definitions.md"
     :handler #'mevedel-tool-code--xref-definitions
     :args ((pattern string :required
                     "The pattern (substring or regex) to match symbol names.")
@@ -648,7 +648,7 @@ than silently answered for somewhere else."
     :name "Imenu"
     :description "Navigate and explore a file's structure by listing all its functions, classes, and variables with their locations."
     :summary "Fast outline of functions, classes, and variables in one file."
-    :prompt-file "tools/imenu.md"
+    :prompt-file "prompts/tools/imenu.md"
     :handler #'mevedel-tool-code--imenu
     :args ((file_path path :required
                       "Path to the file to analyze for symbols."))
@@ -662,7 +662,7 @@ than silently answered for somewhere else."
   (mevedel-define-tool
     :name "Treesitter"
     :description "Get tree-sitter syntax tree information for a file."
-    :prompt-file "tools/treesitter.md"
+    :prompt-file "prompts/tools/treesitter.md"
     :handler #'mevedel-tool-code--treesitter
     :args ((file_path path :required
                       "Path to the file to analyze.")

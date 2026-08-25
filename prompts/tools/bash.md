@@ -8,7 +8,22 @@ IMPORTANT: Do NOT use this for file operations, finding, reading or
 editing files. Use the provided file tools instead: `Read`, `ApplyPatch`,
 `Glob`, `Grep`.
 
-# Instructions
+### When to use `Bash`
+
+- System commands: git, make, compiler commands, etc.
+- Commands that truly require shell execution
+- Running tests or builds
+
+### When NOT to use `Bash`
+
+- File operations -> use dedicated file tools instead
+- Finding files -> use `Glob`
+- Searching contents -> use `Grep`
+- Reading files -> use `Read`
+- Editing or creating files -> use `ApplyPatch`
+- Communication with user -> output text directly
+
+### How to use `Bash`
 
 - Commands run from the session working directory by default
 - Commands run with filesystem and process confinement and without network by
@@ -39,7 +54,7 @@ editing files. Use the provided file tools instead: `Read`, `ApplyPatch`,
 - Run tests, check your work or otherwise close the loop to verify changes you make
 - Do NOT use newlines to separate commands (newlines are ok in quoted strings)
 
-### Network escalation
+#### Network escalation
 
 Start with the default sandbox. If an important command fails with a likely
 network or sandbox error, decide whether the operation is still needed. When it
@@ -55,7 +70,7 @@ access is the only requested change; the selected filesystem and process
 profile remains unchanged. If confinement is unavailable, the result discloses
 that execution was unrestricted.
 
-### Filesystem escalation
+#### Filesystem escalation
 
 If a confined command fails because it needs a protected path, make a new Bash
 call with `sandbox_permissions="with_additional_permissions"`, a concise
@@ -71,7 +86,7 @@ process confinement remain unchanged. Filesystem approval does not authorize
 the Bash command itself, which is checked independently. Network and exact
 filesystem permissions may be requested together when both are necessary.
 
-### Full execution escalation
+#### Full execution escalation
 
 Start confined and request only additive authority when that is sufficient. If
 an important command still fails because the sandbox itself prevents the
@@ -85,21 +100,6 @@ runs directly as the user with unrestricted filesystem, network, and process
 access. The new call is a distinct invocation and is never an automatic replay.
 Do not request full escalation merely to avoid a normal command permission
 prompt or before a relevant confined failure.
-
-### When to use `Bash`
-
-- System commands: git, make, compiler commands, etc.
-- Commands that truly require shell execution
-- Running tests or builds
-
-### When NOT to use `Bash`
-
-- File operations -> use dedicated file tools instead
-- Finding files -> use `Glob`
-- Searching contents -> use `Grep`
-- Reading files -> use `Read`
-- Editing or creating files -> use `ApplyPatch`
-- Communication with user -> output text directly
 
 ### Examples of good usage
 
