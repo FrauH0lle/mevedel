@@ -14,10 +14,11 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'mevedel-instruction-registry))
 (require 'cl-lib)
 (require 'subr-x)
 
+(require 'mevedel-directive-source)
+(require 'mevedel-instruction-registry)
 (require 'mevedel-utilities)
 
 ;; `gptel'
@@ -37,17 +38,23 @@
                   (session-name &optional create workspace working-directory))
 (declare-function mevedel--patch-buffer "mevedel-chat" (&optional create workspace))
 (declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
+(autoload 'mevedel--active-chat-buffer "mevedel-chat")
+(autoload 'mevedel--chat-buffer "mevedel-chat")
+(autoload 'mevedel--patch-buffer "mevedel-chat")
+(autoload 'mevedel--replace-patch-buffer "mevedel-chat")
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-directive-frame'
 (declare-function mevedel-directive-frame-display
                   "mevedel-directive-frame"
                   (directive view-buffer &optional focus))
+(autoload 'mevedel-directive-frame-display "mevedel-directive-frame")
 
 ;; `mevedel-directive-plan'
 (declare-function mevedel-directive-plan--planning-prompt
                   "mevedel-directive-plan"
                   (implementation-prompt &optional feedback proposal))
+(autoload 'mevedel-directive-plan--planning-prompt "mevedel-directive-plan")
 
 ;; `mevedel-directive-request'
 (declare-function mevedel--directive-bound-session-buffer
@@ -63,6 +70,7 @@
 ;; `mevedel-directive'
 (declare-function mevedel-directive-has-activity-p
                   "mevedel-directive" (directive))
+(autoload 'mevedel-directive-has-activity-p "mevedel-directive")
 
 ;; `mevedel-directive-source'
 (declare-function mevedel--create-directive-in
@@ -134,6 +142,7 @@
 (declare-function mevedel--update-instruction-overlay
                   "mevedel-overlay-ui"
                   (instruction &optional update-children))
+(autoload 'mevedel--update-instruction-overlay "mevedel-overlay-ui")
 
 ;; `mevedel-persistence'
 (declare-function mevedel--restore-file-instructions
@@ -143,6 +152,8 @@
 ;; `mevedel-plan-handoff'
 (declare-function mevedel-plan-handoff-append-implementation-input
                   "mevedel-plan-handoff" (prompt selection))
+(autoload 'mevedel-plan-handoff-append-implementation-input
+  "mevedel-plan-handoff")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
@@ -195,6 +206,7 @@
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+(autoload 'mevedel-workspace "mevedel-workspace")
 
 (defcustom mevedel-reference-color
   (face-attribute 'font-lock-constant-face :foreground nil 'default)
@@ -305,7 +317,6 @@ point in the buffer and allows one to have better accuracy when
 instructions overlap to the point where no other reasonable option is
 available."
   (interactive "d")
-  (require 'mevedel-overlay-ui)
   (let ((instructions-at-point (mevedel--instructions-at point))
         (original-highlighted-instruction mevedel--highlighted-instruction))
     (cond
@@ -330,8 +341,6 @@ available."
 (defun mevedel-modify-directive ()
   "Modify the directive under the point."
   (interactive)
-  (require 'mevedel-directive-source)
-  (require 'mevedel-overlay-ui)
   (when-let* ((directive (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'directive)
                                                                 t)))
     (when (memq (mevedel--directive-status directive)
@@ -346,7 +355,6 @@ available."
 (defun mevedel-modify-reference-commentary ()
   "Modify the reference commentary under the point."
   (interactive)
-  (require 'mevedel-overlay-ui)
   (when-let* ((reference (mevedel--highest-priority-instruction (mevedel--instructions-at (point) 'reference)
                                                                 t)))
     (mevedel--read-commentary reference)))
@@ -357,7 +365,6 @@ available."
 Display a message to the user showing how many instructions were
 deleted.  Throw a user error if no instructions to delete were found."
   (interactive)
-  (require 'mevedel-directive-source)
   (let ((deleted-count 0))
     (if (use-region-p)
         (let ((start (region-beginning))
@@ -381,8 +388,6 @@ deleted.  Throw a user error if no instructions to delete were found."
 (defun mevedel-delete-all-instructions ()
   "Delete all mevedel instructions across all buffers."
   (interactive)
-  (require 'mevedel-directive-source)
-  (require 'mevedel-instruction-registry)
   (mevedel--instruction-activate-buffer)
   (let ((instr-count (length (mevedel--all-instructions))))
     (when (and (called-interactively-p 'any)
@@ -453,10 +458,8 @@ deleted.  Throw a user error if no instructions to delete were found."
 
 This command is useful to see what is actually being sent to the model."
   (interactive)
-  (require 'mevedel-directive-source)
   (let ((directive (mevedel--topmost-instruction (car (mevedel--instructions-at (point) 'directive))
                                                  'directive)))
-    (require 'mevedel-chat)
     (let* ((record (mevedel--directive-record directive))
            (state (mevedel-directive-state record))
            (action (intern (completing-read "Preview action: "
@@ -481,13 +484,11 @@ This command is useful to see what is actually being sent to the model."
       (when-let* (((eq action 'implement))
                   ((not (mevedel-directive-planning-enabled record)))
                   (skills (mevedel-directive-skills record)))
-        (require 'mevedel-plan-handoff)
         (setq request-string
               (mevedel-plan-handoff-append-implementation-input
                request-string (list :skills skills))))
       (when (and (eq action 'implement)
                  (mevedel-directive-planning-enabled record))
-        (require 'mevedel-directive-plan)
         (setq request-string
               (mevedel-directive-plan--planning-prompt request-string)))
       (let ((bufname "*mevedel-directive-preview*"))
@@ -522,8 +523,6 @@ Examples:
   (cat or dog or (sheep and black))
   ((cat and dog) or (dog and goose))"
   (interactive)
-  (require 'mevedel-directive-source)
-  (require 'mevedel-overlay-ui)
   (if-let* ((directive (mevedel--topmost-instruction
                         (mevedel--highest-priority-instruction (mevedel--instructions-at (point)) t)
                         'directive)))
@@ -540,8 +539,6 @@ Examples:
 
 Adds specificly to REFERENCE if it is non-nil."
   (interactive)
-  (require 'mevedel-instruction-registry)
-  (require 'mevedel-overlay-ui)
   (let* ((instructions (mevedel--instructions-at (point) 'reference))
          (instr (or reference (mevedel--highest-priority-instruction instructions t))))
     (if instr
@@ -556,7 +553,6 @@ Adds specificly to REFERENCE if it is non-nil."
 (defun mevedel-remove-tags ()
   "Remove tags from the reference under the point."
   (interactive)
-  (require 'mevedel-overlay-ui)
   (let* ((instructions (mevedel--instructions-at (point) 'reference))
          (instr (mevedel--highest-priority-instruction instructions t)))
     (if instr
@@ -578,7 +574,6 @@ Each instruction is represented as a plist with :overlay-start,
 :overlay-end, :anchor, and :properties keys, capturing the overlay's
 position, lightweight re-anchoring context, and semantic properties for
 later restoration."
-  (require 'mevedel-instruction-registry)
   (mevedel--foreach-instruction (instr buffer)
     collect (list :overlay-start (overlay-start instr)
                   :overlay-end (overlay-end instr)
@@ -594,7 +589,6 @@ Save the buffer's instructions and original content to
 `(mevedel--instruction-alist)', then remove the instruction overlays from the
 buffer.  The content is either the current buffer content or
 FILE-CONTENTS."
-  (require 'mevedel-instruction-registry)
   (mevedel--instruction-activate-buffer buffer)
   (let ((instrs (mevedel--stashed-buffer-instructions buffer)))
     (when instrs
@@ -776,7 +770,6 @@ Returns the validated query string."
   "Return references in WORKSPACE filtered by tag QUERY.
 
 See `mevedel--tag-query-prefix-from-infix' for QUERY format."
-  (require 'mevedel-instruction-registry)
   (let ((mevedel--instruction-state-key-override
          (or (and workspace (mevedel--instruction-workspace-key workspace))
              mevedel--instruction-state-key-override))
@@ -795,7 +788,6 @@ See `mevedel--tag-query-prefix-from-infix' for QUERY format."
 
 (defun mevedel--available-tags ()
   "Return a list of all the tags in the loaded references."
-  (require 'mevedel-instruction-registry)
   (let ((tags-hash (make-hash-table)))
     (mevedel--foreach-instruction (ref)
       do (when (mevedel--referencep ref)
@@ -811,7 +803,6 @@ If no instruction found in the buffer, checks the next buffers in the
 `(mevedel--instruction-alist)' alist.
 
 Returns the found instruction, if any."
-  (require 'mevedel-instruction-registry)
   ;; We want the buffers to be a cyclic list, based on the current buffer.
   (mevedel--instruction-activate-buffer)
   (let* ((buffers (let ((bufs (mapcar #'car (mevedel--instruction-alist))))
@@ -921,8 +912,6 @@ A directive is empty if it does not have a body or secondary directives."
 If a region is selected but partially covers an existing instruction,
 then the function will resize it.  See either `mevedel-create-reference'
 or `mevedel-create-directive' for details on how the resizing works."
-  (require 'mevedel-directive-source)
-  (require 'mevedel-overlay-ui)
   ;; A directive's durable record is anchored to a file: without one it
   ;; can never be reattached after a load, and archiving or detaching it
   ;; would write a record that no longer loads at all.
@@ -1002,9 +991,6 @@ activity (archive it instead), a directive containing nested directives
 (convert those first), and a bodyless directive (a reference cannot be
 empty)."
   (interactive)
-  (require 'mevedel-directive)
-  (require 'mevedel-directive-source)
-  (require 'mevedel-instruction-registry)
   (let ((instructions
          (if (use-region-p)
              (mevedel--instructions-in (region-beginning) (region-end))
@@ -1112,7 +1098,6 @@ Instruction type can either be `reference' or `directive'."
 (defun mevedel-get-directive-patch (directive)
   "Get the stored patch for DIRECTIVE, if any.
 Returns the unified diff string, or nil if no patch is stored."
-  (require 'mevedel-directive-source)
   (when-let* ((record (mevedel--directive-record directive))
               (attempt (car (last (mevedel-directive-attempts record))))
               (patch (mevedel-directive-attempt-patch attempt))
@@ -1123,7 +1108,6 @@ Returns the unified diff string, or nil if no patch is stored."
   "Return the parent of the given INSTRUCTION overlay.
 
 If OF-TYPE is non-nil, returns the parent with the given type."
-  (require 'mevedel-directive-source)
   (with-current-buffer (overlay-buffer instruction)
     (let ((beg (overlay-start instruction))
           (end (overlay-end instruction)))
@@ -1218,7 +1202,6 @@ Returns: t if A and B are congruent, nil otherwise."
 
 (defun mevedel--buffer-has-instructions-p (buffer)
   "Return non-nil if BUFFER has any mevedel instructions associated with it."
-  (require 'mevedel-instruction-registry)
   (mevedel--instruction-activate-buffer buffer)
   (assoc buffer (mevedel--instruction-alist)))
 
@@ -1272,7 +1255,6 @@ Does not return instructions that contain the region in its entirety."
 
 (defun mevedel--all-instructions ()
   "Return a list of all currently loaded instructions."
-  (require 'mevedel-instruction-registry)
   (mevedel--foreach-instruction inst collect inst))
 
 (cl-defun mevedel--topmost-instruction (instruction &optional of-type pred)
@@ -1421,7 +1403,6 @@ Optionally filer the by OF-TYPE (either reference or directive)."
 
 Returns plist with :summary and :references keys, optionally for
 specified DIRECTIVE and tag QUERY."
-  (require 'mevedel-instruction-registry)
   (let* ((pred
           (lambda (instr)
             (mevedel--reference-matches-query-p instr
@@ -1524,7 +1505,6 @@ specified DIRECTIVE and tag QUERY."
 
 (defun mevedel--directive-llm-prompt (directive)
   "Craft the prompt for the LLM model associated with the DIRECTIVE."
-  (require 'mevedel-workspace)
   (when (mevedel--directive-empty-p directive)
     (error "Directive %s is empty" directive))
   (let* ((context (mevedel--context nil directive))
@@ -1651,8 +1631,6 @@ treat them as subdirectives, instead."
   "Return RECORD's live directive and validated prompt in WORKSPACE.
 
 This is the shared individual and batch submission eligibility check."
-  (require 'mevedel-directive-source)
-  (require 'mevedel-instruction-registry)
   (let* ((anchor (mevedel-directive-anchor record))
          (evidence (plist-get anchor :evidence))
          (directive

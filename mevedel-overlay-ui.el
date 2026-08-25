@@ -7,8 +7,9 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib)
-  (require 'mevedel-instruction-registry))
+  (require 'cl-lib))
+
+(require 'mevedel-instruction-registry)
 
 ;; `gptel-request'
 (declare-function gptel--model-name "ext:gptel-request" (model))
@@ -25,6 +26,10 @@
                   "mevedel-chat" (&optional create workspace))
 (declare-function mevedel--replace-patch-buffer
                   "mevedel-chat" (patch-content))
+(autoload 'mevedel--active-chat-buffer "mevedel-chat")
+(autoload 'mevedel--chat-buffer "mevedel-chat")
+(autoload 'mevedel--patch-buffer "mevedel-chat")
+(autoload 'mevedel--replace-patch-buffer "mevedel-chat")
 
 ;; `mevedel-directive'
 (declare-function mevedel-directive-actions
@@ -37,11 +42,17 @@
                   "mevedel-directive" (directive enabled))
 (declare-function mevedel-directive-set-skills
                   "mevedel-directive" (directive skills))
+(autoload 'mevedel-directive-actions "mevedel-directive")
+(autoload 'mevedel-directive-has-activity-p "mevedel-directive")
+(autoload 'mevedel-directive-request-changed-p "mevedel-directive")
+(autoload 'mevedel-directive-set-planning-enabled "mevedel-directive")
+(autoload 'mevedel-directive-set-skills "mevedel-directive")
 
 ;; `mevedel-directive-frame'
 (declare-function mevedel-directive-frame-display
                   "mevedel-directive-frame"
                   (directive view-buffer &optional focus))
+(autoload 'mevedel-directive-frame-display "mevedel-directive-frame")
 
 ;; `mevedel-directive-request'
 (declare-function mevedel--directive-bound-session-buffer
@@ -67,6 +78,14 @@
                   "mevedel-directive-source" (directive))
 (declare-function mevedel-archive-directive
                   "mevedel-directive-source" (record workspace))
+(autoload 'mevedel--delete-instruction "mevedel-directive-source")
+(autoload 'mevedel--detached-directive-p "mevedel-directive-source")
+(autoload 'mevedel--directive-record "mevedel-directive-source")
+(autoload 'mevedel--directive-status "mevedel-directive-source")
+(autoload 'mevedel--directive-text "mevedel-directive-source")
+(autoload 'mevedel--order-detached-directives-at "mevedel-directive-source")
+(autoload 'mevedel--refresh-directive-anchor "mevedel-directive-source")
+(autoload 'mevedel-archive-directive "mevedel-directive-source")
 
 ;; `mevedel-instruction-registry'
 (declare-function mevedel--instruction-buffer-workspace
@@ -88,10 +107,12 @@
 ;; `mevedel-menu'
 (declare-function mevedel-menu-open-model-selection
                   "mevedel-menu" (&rest options))
+(autoload 'mevedel-menu-open-model-selection "mevedel-menu")
 
 ;; `mevedel-models'
 (declare-function mevedel-model-current-provider-label
                   "mevedel-models" (&optional buffer))
+(autoload 'mevedel-model-current-provider-label "mevedel-models")
 
 ;; `mevedel-overlay-ui'
 (declare-function mevedel--ov-actions-abort
@@ -132,6 +153,23 @@
 (declare-function mevedel-delete-instructions "mevedel-overlays" ())
 (declare-function mevedel-get-directive-patch
                   "mevedel-overlays" (directive))
+(autoload 'mevedel--bodyless-instruction-p "mevedel-overlays")
+(autoload 'mevedel--child-instructions "mevedel-overlays")
+(autoload 'mevedel--commentary-text "mevedel-overlays")
+(autoload 'mevedel--commentary-truncated-text "mevedel-overlays")
+(autoload 'mevedel--directive-truncated-text "mevedel-overlays")
+(autoload 'mevedel--directivep "mevedel-overlays")
+(autoload 'mevedel--highest-priority-instruction "mevedel-overlays")
+(autoload 'mevedel--inherited-tags "mevedel-overlays")
+(autoload 'mevedel--instruction-bufferlevel-p "mevedel-overlays")
+(autoload 'mevedel--instruction-type "mevedel-overlays")
+(autoload 'mevedel--instructions-at "mevedel-overlays")
+(autoload 'mevedel--instructions-congruent-p "mevedel-overlays")
+(autoload 'mevedel--parent-instruction "mevedel-overlays")
+(autoload 'mevedel--reference-tags "mevedel-overlays")
+(autoload 'mevedel--topmost-instruction "mevedel-overlays")
+(autoload 'mevedel-delete-instructions "mevedel-overlays")
+(autoload 'mevedel-get-directive-patch "mevedel-overlays")
 (defvar mevedel--default-instruction-priority)
 (defvar mevedel--highlighted-instruction)
 (defvar mevedel-always-match-untagged-references)
@@ -154,6 +192,7 @@
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills-user-visible-skills
                   "mevedel-skills-ui" (session &optional inline-only))
+(autoload 'mevedel-skills-user-visible-skills "mevedel-skills-ui")
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
@@ -176,6 +215,7 @@
 (declare-function mevedel-view-enter-directive-scope
                   "mevedel-view-composer"
                   (directive action &optional attempt-index workspace))
+(autoload 'mevedel-view-enter-directive-scope "mevedel-view-composer")
 
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
@@ -185,6 +225,7 @@
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+(autoload 'mevedel-workspace "mevedel-workspace")
 
 (defconst mevedel--directive-action-labels
   '((implement . "Implement")
@@ -208,9 +249,6 @@
       (list provider
             (overlay-get directive 'mevedel-directive-reasoning-effort)
             nil)
-    (require 'mevedel-chat)
-    (require 'mevedel-models)
-    (require 'mevedel-workspace)
     (let ((buffer
            (mevedel--chat-buffer
             "main" t (mevedel-workspace (overlay-buffer directive)))))
@@ -231,7 +269,6 @@
       (user-error "Cannot change the model while the directive is processing"))
     (pcase-let ((`(,provider ,effort ,inherited)
                  (mevedel--directive-model-values directive)))
-      (require 'mevedel-menu)
       (mevedel-menu-open-model-selection
        :title "Directive model"
        :provider provider
@@ -288,7 +325,6 @@ overlay the choices appear only in the minibuffer."
   "Return the session that enumerates skills for RECORD in WORKSPACE.
 Prefers RECORD's live bound execution session, then the workspace's
 active chat session."
-  (require 'mevedel-chat)
   (let ((buffer (or (mevedel--directive-bound-session-buffer
                      record workspace)
                     (mevedel--active-chat-buffer workspace))))
@@ -299,8 +335,6 @@ active chat session."
 
 (defun mevedel--ov-actions-toggle-skill (directive)
   "Toggle one implementation skill on DIRECTIVE's directive record."
-  (require 'mevedel-directive)
-  (require 'mevedel-skills-ui)
   (let* ((record (mevedel--directive-record directive))
          (workspace
           (mevedel--instruction-buffer-workspace
@@ -333,7 +367,6 @@ active chat session."
 (defun mevedel--ov-actions-settings (&optional instruction)
   "Edit Plan-before-implementation, skills, and model settings for INSTRUCTION."
   (interactive (list (mevedel--ov-actions-getov)))
-  (require 'mevedel-directive)
   (let* ((directive (mevedel--topmost-instruction instruction 'directive))
          (record (mevedel--directive-record directive))
          (planning-enabled (mevedel-directive-planning-enabled record))
@@ -366,9 +399,6 @@ active chat session."
 INSTRUCTION is the overlay to dispatch actions for, CI is true for
 interactive calls."
   (interactive (list (mevedel--ov-actions-getov) t))
-  (require 'mevedel-directive-source)
-  (require 'mevedel-instruction-registry)
-  (require 'mevedel-overlays)
   (let ((choice)
         (instruction-type (mevedel--instruction-type instruction)))
     (pcase-let* ((request-owner
@@ -484,7 +514,6 @@ interactive calls."
 (defun mevedel--ov-actions-continue-plan (&optional instruction)
   "Continue INSTRUCTION's retained directive planning conversation."
   (interactive (list (mevedel--ov-actions-getov)))
-  (require 'mevedel-view-composer)
   (mevedel-view-enter-directive-scope
    (mevedel--topmost-instruction instruction 'directive) 'plan))
 
@@ -517,9 +546,7 @@ active in the buffer."
          (record (mevedel--directive-record owner))
          (id (mevedel-directive-id record))
          (data-buffer
-          (progn
-            (require 'mevedel-chat)
-            (car (mevedel--directive-session-buffer record workspace))))
+          (car (mevedel--directive-session-buffer record workspace)))
          (view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
          found)
     (with-current-buffer view-buffer
@@ -541,7 +568,6 @@ active in the buffer."
         (mevedel-view-toggle-section)))
     ;; Navigation only: point stays on the answer, so this does not enter
     ;; directive composer scope the way the follow-up actions do.
-    (require 'mevedel-directive-frame)
     (mevedel-directive-frame-display owner view-buffer t)))
 
 (defun mevedel--ov-actions-view-changes (&optional instructions)
@@ -635,7 +661,6 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
 
 (defun mevedel--instruction-action-setup (instruction instruction-type)
   "Install interaction properties for INSTRUCTION of INSTRUCTION-TYPE."
-  (require 'mevedel-directive-source)
   (add-hook 'eldoc-documentation-functions
             #'mevedel--ov-actions-help nil 'local)
   (let ((status (and (eq instruction-type 'directive)
@@ -1063,8 +1088,6 @@ PRIORITY is the inherited priority and PARENT is the tree parent."
 (defun mevedel--update-instruction-overlay
     (instruction &optional update-children)
   "Update INSTRUCTION's presentation and optionally UPDATE-CHILDREN."
-  (require 'mevedel-directive-source)
-  (require 'mevedel-overlays)
   (let ((conflicting
          (cl-some
           (lambda (other)
@@ -1100,7 +1123,6 @@ PRIORITY is the inherited priority and PARENT is the tree parent."
 If multiple instruction overlays exist at point, prompt the user to
 select one via `completing-read'.  If only one overlay exists, return it
 directly.  Return nil if no overlays exist at point."
-  (require 'mevedel-overlays)
   (let* ((ovs (mevedel--instructions-at (point)))
          (ov-strings (cl-loop for ov in ovs
                               collect (string-trim (overlay-get ov 'before-string))))
@@ -1134,10 +1156,10 @@ directly.  Return nil if no overlays exist at point."
     (let ((name (nth 0 spec))
           (target (nth 1 spec))
           (owner (nth 2 spec)))
+      (autoload target (symbol-name owner))
       (defalias (intern (format "mevedel--ov-actions-%s" name))
         (lambda (&optional _instructions)
           (interactive)
-          (require owner)
           (call-interactively target))
         (format "Wrapper around `%s' for overlay dispatch actions." target)))))
 

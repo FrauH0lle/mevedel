@@ -9,6 +9,8 @@
 ;;; Code:
 
 (require 'transient)
+(require 'mevedel-cockpit)
+(require 'mevedel-models)
 
 ;; `gptel'
 (declare-function gptel--model-name "ext:gptel" (model))
@@ -47,6 +49,7 @@
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-count-user "mevedel-execution" (session))
+(autoload 'mevedel-execution-count-user "mevedel-execution")
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-label
@@ -61,10 +64,17 @@
                   "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-support-tier
                   "mevedel-execution-target" (cl-x) t)
+(autoload 'mevedel-execution-target-label "mevedel-execution-target")
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-native-root "mevedel-execution-target")
+(autoload 'mevedel-execution-target-readiness "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
+(autoload 'mevedel-execution-target-support-tier "mevedel-execution-target")
 
 ;; `mevedel-executions-list'
 (declare-function mevedel-executions-list-open
                   "mevedel-executions-list" (&optional context))
+(autoload 'mevedel-executions-list-open "mevedel-executions-list")
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
@@ -78,6 +88,7 @@
 ;; `mevedel-gptel-bridge'
 (declare-function mevedel-gptel-bridge-open
                   "mevedel-gptel-bridge" (&optional context))
+(autoload 'mevedel-gptel-bridge-open "mevedel-gptel-bridge")
 
 ;; `mevedel-models'
 (declare-function mevedel-model-current-label "mevedel-models"
@@ -105,25 +116,33 @@
                   (&optional mode))
 (declare-function mevedel-permission-mode-transition
                   "mevedel-permission-mode" (mode))
+(autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
+(autoload 'mevedel-permission-mode-label "mevedel-permission-mode")
+(autoload 'mevedel-permission-mode-transition "mevedel-permission-mode")
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-permissions-list'
 (declare-function mevedel-permissions-list-open "mevedel-permissions-list"
                   (&optional context))
+(autoload 'mevedel-permissions-list-open "mevedel-permissions-list")
 
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-approval-render
                   "mevedel-plan-mode" (&optional session))
 (declare-function mevedel-plan-mode-enter
                   "mevedel-plan-mode" (&optional session))
+(autoload 'mevedel-plan-approval-render "mevedel-plan-mode")
+(autoload 'mevedel-plan-mode-enter "mevedel-plan-mode")
 
 ;; `mevedel-plugin-registry'
 (declare-function mevedel-plugins-count-label "mevedel-plugin-registry"
                   (&optional workspace))
+(autoload 'mevedel-plugins-count-label "mevedel-plugin-registry")
 
 ;; `mevedel-plugin-ui'
 (declare-function mevedel-plugins-list-open "mevedel-plugin-ui"
                   (&optional context))
+(autoload 'mevedel-plugins-list-open "mevedel-plugin-ui")
 
 ;; `mevedel-presets'
 (declare-function mevedel-preset-apply "mevedel-presets" (name &optional buffer))
@@ -136,15 +155,21 @@
 ;; `mevedel-session-control-transfer'
 (declare-function mevedel-session-control-transfer-drain-blocker
                   "mevedel-session-control-transfer" (session))
+(autoload 'mevedel-session-control-transfer-drain-blocker
+  "mevedel-session-control-transfer")
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-status
                   "mevedel-session-publication" (session))
+(autoload 'mevedel-session-publication-status
+  "mevedel-session-publication")
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills-count-label "mevedel-skills-ui" (session))
 (declare-function mevedel-skills-list-open "mevedel-skills-ui"
                   (&optional context))
+(autoload 'mevedel-skills-count-label "mevedel-skills-ui")
+(autoload 'mevedel-skills-list-open "mevedel-skills-ui")
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
@@ -173,16 +198,20 @@
 ;; `mevedel-tools'
 (declare-function mevedel-tools-active-count "mevedel-tools"
                   (&optional buffer))
+(autoload 'mevedel-tools-active-count "mevedel-tools")
 
 ;; `mevedel-tools-list'
 (declare-function mevedel-tools-list-open "mevedel-tools-list"
                   (&optional context))
+(autoload 'mevedel-tools-list-open "mevedel-tools-list")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-active-p "mevedel-turn"
                   (&optional buffer))
 (declare-function mevedel-request-state-label "mevedel-turn"
                   (&optional buffer))
+(autoload 'mevedel-request-active-p "mevedel-turn")
+(autoload 'mevedel-request-state-label "mevedel-turn")
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--assert-live-tip
@@ -206,6 +235,14 @@
                   "mevedel-view-control-transfer" ())
 (declare-function mevedel-view-control-transfer-keep
                   "mevedel-view-control-transfer" ())
+(autoload 'mevedel-refresh-session "mevedel-view-control-transfer")
+(autoload 'mevedel-release-control "mevedel-view-control-transfer")
+(autoload 'mevedel-take-control "mevedel-view-control-transfer")
+(autoload 'mevedel-toggle-follow "mevedel-view-control-transfer")
+(autoload 'mevedel-view-control-transfer-grant
+  "mevedel-view-control-transfer")
+(autoload 'mevedel-view-control-transfer-keep
+  "mevedel-view-control-transfer")
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session-follow-published)
 
@@ -225,11 +262,17 @@
 (declare-function mevedel-view-previous-segment "mevedel-view-segments" ())
 (declare-function mevedel-view-segments-current-number
                   "mevedel-view-segments" ())
+(autoload 'mevedel-view-go-to-segment "mevedel-view-segments")
+(autoload 'mevedel-view-next-segment "mevedel-view-segments")
+(autoload 'mevedel-view-previous-segment "mevedel-view-segments")
+(autoload 'mevedel-view-segments-current-number "mevedel-view-segments")
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-status-summary "mevedel-worktree"
                   (&optional context))
 (declare-function mevedel-worktree-status-open "mevedel-worktree" ())
+(autoload 'mevedel-worktree-status-open "mevedel-worktree")
+(autoload 'mevedel-worktree-status-summary "mevedel-worktree")
 
 (defconst mevedel-menu-help-buffer-name "*mevedel help*"
   "Name of the session cockpit help buffer.")
@@ -248,7 +291,6 @@
 
 (defun mevedel-menu--context ()
   "Return the current live cockpit context."
-  (require 'mevedel-cockpit)
   (let ((context (mevedel-cockpit-current-context)))
     (unless (and (mevedel-cockpit-context-view-buffer context)
                  (mevedel-cockpit-context-data-buffer context))
@@ -277,7 +319,6 @@
 
 (defun mevedel-menu--mode-symbol (&optional session data-buffer surface-buffer)
   "Return the effective permission mode for the cockpit context."
-  (require 'mevedel-permission-mode)
   (let ((context (unless (and session data-buffer surface-buffer)
                    (condition-case nil
                        (mevedel-menu--context)
@@ -296,18 +337,15 @@
 
 (defun mevedel-menu--mode-label (&optional mode)
   "Return the cockpit label for permission MODE."
-  (require 'mevedel-permission-mode)
   (mevedel-permission-mode-label mode))
 
 (defun mevedel-menu--model-label ()
   "Return the current model label."
-  (require 'mevedel-models)
   (mevedel-model-current-label
    (mevedel-cockpit-context-data-buffer (mevedel-menu--context))))
 
 (defun mevedel-menu--active-tool-count ()
   "Return the number of active gptel tools in the data buffer."
-  (require 'mevedel-tools)
   (mevedel-tools-active-count
    (mevedel-cockpit-context-data-buffer (mevedel-menu--context))))
 
@@ -322,7 +360,6 @@
 
 (defun mevedel-menu--worktree-label ()
   "Return the current branch or detached HEAD label."
-  (require 'mevedel-worktree)
   (plist-get (mevedel-worktree-status-summary (mevedel-menu--context))
              :label))
 
@@ -337,7 +374,6 @@
   "Return SESSION's execution-target info-panel rows."
   (when-let* ((target (and session
                            (mevedel-session-execution-target session))))
-    (require 'mevedel-execution-target)
     (let* ((readiness (mevedel-execution-target-readiness target))
            (status (or (plist-get readiness :status) 'not-probed))
            (sandbox (plist-get readiness :sandbox-status)))
@@ -354,9 +390,6 @@
 (defun mevedel-menu--durability-description (session)
   "Return SESSION's persistence, lease, and publication info-panel rows."
   (when (and session (mevedel-session-workspace session))
-    (require 'mevedel-execution-target)
-    (require 'mevedel-session-durability)
-    (require 'mevedel-session-publication)
     (let* ((target (mevedel-session-execution-target session))
            (status (mevedel-session-publication-status session))
            (path (plist-get status :authoritative-state-path))
@@ -384,8 +417,6 @@
 Nominal state belongs in the session info panel; only conditions the user
 may want to act on earn a line in a cockpit header."
   (when session
-    (require 'mevedel-execution-target)
-    (require 'mevedel-session-publication)
     (let* ((target (mevedel-session-execution-target session))
            (readiness (and target
                            (mevedel-execution-target-readiness target)))
@@ -417,7 +448,6 @@ may want to act on earn a line in a cockpit header."
   "Return the cockpit header string.
 One identity line, plus an alert line when session state is off-nominal.
 The complete target and durability state lives in the session info panel."
-  (require 'mevedel-turn)
   (let* ((context (mevedel-menu--context))
          (data-buffer (mevedel-cockpit-context-data-buffer context))
          (session (mevedel-cockpit-context-session context))
@@ -428,8 +458,6 @@ The complete target and durability state lives in the session info panel."
                 session data-buffer
                 (mevedel-cockpit-context-view-buffer context)))
          (request-state (mevedel-request-state-label data-buffer)))
-    (when target
-      (require 'mevedel-execution-target))
     (concat
      (mevedel-menu--face "mevedel" 'transient-heading)
      " "
@@ -486,7 +514,6 @@ The complete target and durability state lives in the session info panel."
 
 Authority first, because every action on the surface either changes it or is
 unavailable until it changes."
-  (require 'mevedel-session-control-transfer)
   (let* ((context (mevedel-menu--context))
          (session (mevedel-cockpit-context-session context))
          (read-only-p (mevedel-menu--read-only-p))
@@ -521,7 +548,6 @@ unavailable until it changes."
 
 (defun mevedel-menu--session-info-text ()
   "Return the complete session state as info-panel text."
-  (require 'mevedel-turn)
   (let* ((context (mevedel-menu--context))
          (data-buffer (mevedel-cockpit-context-data-buffer context))
          (session (mevedel-cockpit-context-session context))
@@ -531,7 +557,6 @@ unavailable until it changes."
          (mode (mevedel-menu--mode-symbol
                 session data-buffer
                 (mevedel-cockpit-context-view-buffer context))))
-    (require 'mevedel-models)
     (string-join
      (delq
       nil
@@ -567,7 +592,6 @@ unavailable until it changes."
 
 (defun mevedel-menu--navigate-description ()
   "Return the navigation surface header with the projected segment."
-  (require 'mevedel-view-segments)
   (let* ((context (mevedel-menu--context))
          (session (mevedel-cockpit-context-session context))
          (view-buffer (mevedel-cockpit-context-view-buffer context))
@@ -644,7 +668,6 @@ unavailable until it changes."
 
 (defun mevedel-menu--executions-description ()
   "Return the top-level executions row description."
-  (require 'mevedel-execution)
   (let* ((session (mevedel-cockpit-context-session
                    (mevedel-menu--context)))
          (count (mevedel-execution-count-user session)))
@@ -655,7 +678,6 @@ unavailable until it changes."
 
 (defun mevedel-menu--skills-description ()
   "Return the top-level skills row description."
-  (require 'mevedel-skills-ui)
   (let ((context (mevedel-menu--context)))
     (mevedel-menu--state-description
      "Skills"
@@ -664,7 +686,6 @@ unavailable until it changes."
 
 (defun mevedel-menu--plugins-description ()
   "Return the top-level plugins row description."
-  (require 'mevedel-plugin-registry)
   (let ((workspace (mevedel-cockpit-context-workspace
                     (mevedel-menu--context))))
     (mevedel-menu--state-description
@@ -917,7 +938,6 @@ state rather than as a fourth permission choice."
 
 (defun mevedel-menu--request-active-p ()
   "Return non-nil when the current session has an active request."
-  (require 'mevedel-turn)
   (mevedel-request-active-p
    (mevedel-cockpit-context-data-buffer (mevedel-menu--context))))
 
@@ -935,7 +955,6 @@ state rather than as a fourth permission choice."
 
 (defun mevedel-menu--set-mode (mode)
   "Set the current session permission MODE."
-  (require 'mevedel-permission-mode)
   (mevedel-cockpit-call-in-data
    (mevedel-menu--context) #'mevedel-permission-mode-transition mode)
   (force-mode-line-update t))
@@ -943,7 +962,6 @@ state rather than as a fourth permission choice."
 (defun mevedel-menu--enter-plan ()
   "Enter Plan mode for the current cockpit session."
   (interactive)
-  (require 'mevedel-plan-mode)
   (mevedel-cockpit-call-in-data
    (mevedel-menu--context) #'mevedel-plan-mode-enter)
   (force-mode-line-update t))
@@ -996,7 +1014,6 @@ state rather than as a fourth permission choice."
   "Return the selectable efforts for SCOPE's model.
 The list is the model's supported efforts followed by nil for the
 provider default, which is the full cycle the surface offers."
-  (require 'mevedel-models)
   (let* ((scope (or scope (transient-scope)))
          (provider (mevedel-model-resolve-provider
                     (plist-get scope :model-provider) t)))
@@ -1066,7 +1083,6 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
       ('mode
        (transient-setup 'mevedel-menu--mode))
       ('permissions
-       (require 'mevedel-permissions-list)
        (mevedel-cockpit-call-in-data
         context #'mevedel-permissions-list-open context))
       ('model
@@ -1078,23 +1094,18 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
       ('preset
        (transient-setup 'mevedel-menu--preset))
       ('skills
-       (require 'mevedel-skills-ui)
        (mevedel-cockpit-call-in-data
         context #'mevedel-skills-list-open context))
       ('plugins
-       (require 'mevedel-plugin-ui)
        (mevedel-cockpit-call-in-data
         context #'mevedel-plugins-list-open context))
       ('tools
-       (require 'mevedel-tools-list)
        (mevedel-cockpit-call-in-data
         context #'mevedel-tools-list-open context))
       ('executions
-       (require 'mevedel-executions-list)
        (mevedel-cockpit-call-in-data
         context #'mevedel-executions-list-open context))
       ('worktree
-       (require 'mevedel-worktree)
        (mevedel-cockpit-call-in-data
         context #'mevedel-worktree-status-open))
       ('help
@@ -1117,40 +1128,34 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
 (defun mevedel-menu--take-control ()
   "Take control of this session from the view buffer."
   (interactive)
-  (require 'mevedel-view-control-transfer)
   (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-take-control))
 
 (defun mevedel-menu--release-control ()
   "Release this session's lease from the view buffer."
   (interactive)
-  (require 'mevedel-view-control-transfer)
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-release-control))
 
 (defun mevedel-menu--grant-control ()
   "Grant the pending control-transfer request from the view buffer."
   (interactive)
-  (require 'mevedel-view-control-transfer)
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-view-control-transfer-grant))
 
 (defun mevedel-menu--keep-control ()
   "Decline the pending control-transfer request from the view buffer."
   (interactive)
-  (require 'mevedel-view-control-transfer)
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-view-control-transfer-keep))
 
 (defun mevedel-menu--toggle-follow ()
   "Toggle published-state following from the view buffer."
   (interactive)
-  (require 'mevedel-view-control-transfer)
   (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-toggle-follow))
 
 (defun mevedel-menu--refresh-session ()
   "Re-read the owner's newest published state from the view buffer."
   (interactive)
-  (require 'mevedel-view-control-transfer)
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-refresh-session))
 
@@ -1228,7 +1233,6 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (let* ((context (mevedel-menu--context))
          (session (mevedel-cockpit-context-session context))
          (buffer (mevedel-cockpit-context-data-buffer context)))
-    (require 'mevedel-models)
     (mevedel-menu-open-model-selection
      :title "Session model"
      :provider (mevedel-model-current-provider-label buffer)
@@ -1332,7 +1336,6 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
 (defun mevedel-menu--open-session-info ()
   "Open the session info panel."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-show-help
    mevedel-menu-session-info-buffer-name
    (mevedel-menu--session-info-text)))
@@ -1340,7 +1343,6 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
 (defun mevedel-menu--open-preset-report ()
   "Open the resolved preset policy info panel."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-show-help
    mevedel-menu-preset-report-buffer-name
    (mevedel-menu--preset-report-text)))
@@ -1348,7 +1350,6 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
 (defun mevedel-menu--open-goal-record ()
   "Open the Goal record info panel."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-show-help
    mevedel-menu-goal-record-buffer-name
    (mevedel-menu--goal-record-text)))
@@ -1409,7 +1410,6 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
 (defun mevedel-menu--open-gptel ()
   "Open the gptel bridge surface."
   (interactive)
-  (require 'mevedel-gptel-bridge)
   (mevedel-gptel-bridge-open (mevedel-menu--context)))
 
 

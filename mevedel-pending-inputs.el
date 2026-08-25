@@ -16,6 +16,7 @@
 
 ;; The follow-up drain shares the session durability transaction used by
 ;; composer dispatch, so the macro must expand for interpreted loads too.
+(require 'mevedel-cockpit)
 (require 'mevedel-session-durability)
 
 ;; `gptel-request'
@@ -29,6 +30,8 @@
                   "mevedel-agent-control" (session))
 (declare-function mevedel-agent-control-wake-root-user
                   "mevedel-agent-control" (session))
+(autoload 'mevedel-agent-control-root-waiting-p "mevedel-agent-control")
+(autoload 'mevedel-agent-control-wake-root-user "mevedel-agent-control")
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer
@@ -58,11 +61,14 @@
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-copy-text
                   "mevedel-mention-bindings" (text))
+(autoload 'mevedel-mention-bindings-copy-text "mevedel-mention-bindings")
 
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-expand-user-input
                   "mevedel-mentions" (text session))
 (declare-function mevedel-mentions-file-token "mevedel-mentions" (path))
+(autoload 'mevedel-mentions-expand-user-input "mevedel-mentions")
+(autoload 'mevedel-mentions-file-token "mevedel-mentions")
 
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-display-text
@@ -77,6 +83,8 @@
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
                   "mevedel-session-artifacts" (session))
+(autoload 'mevedel-session-artifacts-assert-new-mutation-authority
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
@@ -140,10 +148,12 @@
 ;; `mevedel-transport'
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport" (key path thunk))
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text
                   "mevedel-utilities" (text))
+(autoload 'mevedel--normalize-message-text "mevedel-utilities")
 
 ;; `mevedel-view'
 (defvar mevedel-view--side-conversation-p)
@@ -359,10 +369,8 @@ session view."
               ((buffer-live-p view-buffer))
               (session (buffer-local-value 'mevedel--session data-buffer)))
     (with-current-buffer view-buffer
-      (require 'mevedel-utilities)
       (let ((input (mevedel--normalize-message-text text)))
         (when paths
-          (require 'mevedel-mentions)
           (setq input (concat input " "
                               (mapconcat #'mevedel-mentions-file-token
                                          paths " ")))
@@ -431,7 +439,6 @@ session view."
           (mevedel-session--set-active-dropped-file-grants
            session (append temporary-grants active))
           (with-current-buffer mevedel--data-buffer
-            (require 'mevedel-mentions)
             (mevedel-mentions-expand-user-input text session)))
       (mevedel-session--set-active-dropped-file-grants session active))))
 
@@ -516,7 +523,6 @@ longer accepts the prepared input."
              (mevedel-view--input-text) input)
         (mevedel-view--clear-input))
       (mevedel-view--interaction-rebuild)
-      (require 'mevedel-agent-control)
       (when (mevedel-agent-control-root-waiting-p session)
         (mevedel-agent-control-wake-root-user session))
       (message "mevedel: queued steering for this turn")
@@ -526,9 +532,6 @@ longer accepts the prepared input."
   "Queue the composer as a follow-up, or send normally while idle."
   (interactive)
   (require 'mevedel-compact-run)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (mevedel-view--ensure-interactive-chat-view)
   (when mevedel-view--side-conversation-p
     (user-error "/btw does not queue follow-ups; wait for the active response"))
@@ -574,9 +577,6 @@ longer accepts the prepared input."
 
 Each bound entry is planned and prepared as its own turn.  The queue entry is
 removed only when the resulting prompt reaches its transcript commit boundary."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (when (buffer-live-p data-buffer)
     (mevedel-session-durability-with-transaction
      (let* ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
@@ -705,7 +705,6 @@ timer, and a timer fires wherever the main loop happens to be waiting -- inside
 an unrelated remote operation started by redisplay or another package included
 -- so it waits for an idle transport rather than nesting."
   (when (buffer-live-p data-buffer)
-    (require 'mevedel-transport)
     (mevedel-transport-run-when-idle
      (list 'follow-up-drain data-buffer)
      (buffer-local-value 'default-directory data-buffer)
@@ -907,7 +906,6 @@ an unrelated remote operation started by redisplay or another package included
     (unless (buffer-live-p view)
       (user-error "No live owning view"))
     (with-current-buffer view
-      (require 'mevedel-mention-bindings)
       (when mevedel-view--pending-input-edit
         (user-error "A pending-input edit is already active"))
       (let* ((snapshot (mevedel-view--composer-snapshot session))
@@ -1007,9 +1005,6 @@ an unrelated remote operation started by redisplay or another package included
 (defun mevedel-pending-inputs-save-edit ()
   "Validate and save the active pending-input composer edit."
   (interactive)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (unless mevedel-view--pending-input-edit
     (user-error "No pending-input edit is active"))
   (let* ((state mevedel-view--pending-input-edit)
@@ -1061,9 +1056,6 @@ an unrelated remote operation started by redisplay or another package included
 
 (defun mevedel-pending-inputs--move (offset)
   "Move selected pending input by OFFSET inside its category."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
          (item (mevedel-pending-inputs--selected))
@@ -1101,7 +1093,6 @@ an unrelated remote operation started by redisplay or another package included
 
 (defun mevedel-pending-inputs--copy-input (entry)
   "Return ENTRY's propertized input copy."
-  (require 'mevedel-mention-bindings)
   (mevedel-mention-bindings-copy-text (plist-get entry :input)))
 
 (defun mevedel-pending-inputs--conversion-finished
@@ -1118,9 +1109,6 @@ an unrelated remote operation started by redisplay or another package included
 (defun mevedel-pending-inputs-make-steering ()
   "Convert the selected follow-up to steering after full preparation."
   (interactive)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
          (item (mevedel-pending-inputs--selected))
@@ -1211,7 +1199,6 @@ an unrelated remote operation started by redisplay or another package included
 (defun mevedel-pending-inputs-make-follow-up ()
   "Convert the selected steering entry to a follow-up at the target tail."
   (interactive)
-  (require 'mevedel-session-artifacts)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
          (item (mevedel-pending-inputs--selected))
@@ -1264,7 +1251,6 @@ an unrelated remote operation started by redisplay or another package included
 (defun mevedel-pending-inputs-execute-deletions ()
   "Confirm and delete every marked pending input."
   (interactive)
-  (require 'mevedel-session-artifacts)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
          (steering
@@ -1305,7 +1291,6 @@ an unrelated remote operation started by redisplay or another package included
 (defun mevedel-pending-inputs-clear ()
   "Confirm and clear all pending input in the owning root session."
   (interactive)
-  (require 'mevedel-session-artifacts)
   (let* ((context (mevedel-cockpit-current-context))
          (session (mevedel-pending-inputs--session context))
          (steering (mevedel-session-pending-steering session))
@@ -1337,7 +1322,6 @@ an unrelated remote operation started by redisplay or another package included
 (defun mevedel-pending-inputs-resume-after-failure ()
   "Clear failure pause after all failed-turn steering is resolved."
   (interactive)
-  (require 'mevedel-session-artifacts)
   (let* ((context (mevedel-cockpit-surface-context))
          (session (mevedel-pending-inputs--session context))
          (failed
@@ -1456,7 +1440,6 @@ cockpit whose banner and session disagree."
 (define-derived-mode mevedel-pending-inputs-mode tabulated-list-mode
   "mevedel-pending-inputs"
   "Major mode for inspecting and editing pending input."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-setup-tabulated-surface
    mevedel-pending-inputs--surface)
   (add-hook 'kill-buffer-hook #'mevedel-pending-inputs--on-kill-buffer nil t))
@@ -1469,7 +1452,6 @@ cockpit whose banner and session disagree."
   (when (mouse-event-p context-or-event)
     (mouse-set-point context-or-event)
     (setq context-or-event nil))
-  (require 'mevedel-cockpit)
   (let* ((context (or context-or-event
                       (mevedel-cockpit-current-context)))
          (session (mevedel-pending-inputs--session context)))
