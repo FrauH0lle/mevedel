@@ -309,6 +309,10 @@ instead of one flat dump fontified in a single mode."
    :async-p t
    :category "mevedel"
    :groups (util)
+   ;; The envelope itself never modifies state; every nested call carries
+   ;; its own authority, so read-only request rules deny mutating children
+   ;; individually rather than the envelope wholesale.
+   :read-only-p t
    :max-result-size 30000
    :renderer #'mevedel-tool-ptc--render))
 

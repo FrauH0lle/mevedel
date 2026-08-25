@@ -202,16 +202,6 @@ inside the agent can discover them."
     (:tool "InterruptAgent"))
   "Tools added to every named role that possesses Agent.")
 
-(defun mevedel-agent-filter-root-only-tools (tools)
-  "Return TOOLS without tools reserved for the root session."
-  (cl-remove-if
-   (lambda (tool)
-     (equal "ToolScript"
-            (cond
-             ((mevedel-tool-p tool) (mevedel-tool-name tool))
-             ((gptel-tool-p tool) (gptel-tool-name tool)))))
-   tools))
-
 (defun mevedel-agent--specs-contain-tool-p (specs name)
   "Return non-nil when resolved SPECS contain a tool named NAME."
   (when-let* ((resolved (ignore-errors (mevedel-tool-resolve specs))))
@@ -497,9 +487,7 @@ main session's reminder list."
   (let* ((reminders (mevedel-reminders-clone-list
                      (mevedel-agent-reminders agent)))
          (resolved (mevedel-tool-resolve (mevedel-agent--declared-specs agent)))
-         (deferred-tools
-          (mevedel-agent-filter-root-only-tools
-           (plist-get resolved :deferred)))
+         (deferred-tools (plist-get resolved :deferred))
          (deferred-set
           (mapcar (lambda (tool)
                     (cons (list (mevedel-tool-category tool)
@@ -548,10 +536,9 @@ Returns a cons (NAME . PLIST) suitable for the request-local role roster."
                 :tools `(:function
                          (lambda (_tools)
                            (cl-delete-duplicates
-                            (mevedel-agent-filter-root-only-tools
-                             (plist-get
-                              (mevedel-tool-resolve-gptel ',tool-specs)
-                              :active)))))
+                            (plist-get
+                             (mevedel-tool-resolve-gptel ',tool-specs)
+                             :active))))
                 :system system-spec))))
 
 
@@ -564,6 +551,7 @@ delegation authority."
   :tools (read edit code eval
           (:tool "Ask")
           (:tool "Skill") (:tool "ListSkills")
+          (:tool "ToolScript")
           (:tool "ToolSearch")
           (:tool "TaskCreate") (:tool "TaskUpdate")
           (:tool "TaskList") (:tool "TaskGet") (:tool "TaskNote")
@@ -588,6 +576,7 @@ modifies files."
   :tools (read
           (:tool "Ask")
           (:tool "Skill") (:tool "ListSkills")
+          (:tool "ToolScript")
           (:tool "ToolSearch")
           (:tool "TaskCreate") (:tool "TaskUpdate")
           (:tool "TaskList") (:tool "TaskGet") (:tool "TaskNote")
@@ -611,6 +600,7 @@ review.  Cannot edit, write, or create files."
   :tools (read code
           (:tool "Bash") (:tool "Eval")
           (:tool "Ask")
+          (:tool "ToolScript")
           (:tool "ToolSearch")
           (:deferred elisp))
   :system-components
@@ -624,7 +614,7 @@ review.  Cannot edit, write, or create files."
 (mevedel-define-agent reviewer
   :description "Dedicated code review agent.  Read-only -- inspects diffs and \
 returns prioritized structured findings as JSON."
-  :tools (read code (:tool "Bash"))
+  :tools (read code (:tool "Bash") (:tool "ToolScript"))
   :system-components
   '((role :file "agents/reviewer.md")
     tool-orchestration

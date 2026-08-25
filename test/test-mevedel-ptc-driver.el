@@ -20,6 +20,7 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-turn)
 (require 'mevedel-tools)
+(require 'mevedel-agents)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'helpers
@@ -313,6 +314,24 @@
        (string-match-p
         "final audit could not be persisted"
         (test-mevedel-ptc-driver--run buffer "(+ 1 2)")))))
+
+  :doc "never checkpoints a script run from a retained-agent buffer"
+  (let ((durable-session
+         (mevedel-session--create
+          :name "ptc" :workspace workspace :save-path save-path
+          :working-directory root
+          :execution-target (mevedel-execution-target-create root)
+          :permission-mode 'full-auto
+          :touched-files (make-hash-table :test #'equal)))
+        (started nil))
+    (with-current-buffer buffer
+      (setq-local mevedel--session durable-session)
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create :path "/root/worker")))
+    (cl-letf (((symbol-function 'mevedel-ptc-checkpoint-start)
+               (lambda (&rest _) (setq started t) t)))
+      (should (equal "3" (test-mevedel-ptc-driver--run buffer "(+ 1 2)")))
+      (should-not started)))
 
   :doc "checks the logical serialized size of a shared final value"
   (let ((mevedel-ptc-max-value-bytes 100))

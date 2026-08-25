@@ -430,7 +430,8 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
   ;; Read-only preset for discussion/analysis
   (mevedel-define-preset mevedel-discuss
     :description "Read-only tools for code analysis and discussion"
-    :tools (read (:tool "ToolSearch") (:deferred code) (:deferred web))
+    :tools (read (:tool "ToolScript") (:tool "ToolSearch")
+            (:deferred code) (:deferred web))
     :agents ()
     :system (lambda ()
               (mevedel-system-build-prompt

@@ -69,9 +69,12 @@ provider history. An oversized child value becomes a bounded guest error before
 the audit or its checkpoint retains it. The cumulative retained-value budget is
 also charged before parallel results enter either durable surface.
 
-The ToolScript envelope is root-session-only. Retained-agent configuration
-removes it from inherited, role-declared, and deferred tools when the agent
-request is frozen.
+The ToolScript envelope is available to the root session and to retained
+agents; every built-in role declares it. An agent-run script differs in one
+way: it never writes the durable envelope checkpoint, because an agent buffer
+resolves to the parent session, whose checkpoint recovery reconciles into the
+root transcript. After a restart an interrupted agent script settles through
+the agent's own interrupted-turn handling instead.
 
 The settled envelope's own body carries only what the script returned. Each
 nested call becomes its own collapsible row rendered by that tool's registered

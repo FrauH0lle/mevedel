@@ -58,9 +58,17 @@ The per-request ToolScript description lists the effective active and deferred
 callable roster. Direct calls and ToolScript remain available together.
 `parallel` and `parallel-map` are the only concurrency forms: each entry is one
 direct tool call, the host owns a small concurrency cap, and joined results
-preserve source order. ToolScript is root-session-only and is removed from
-inherited, role-declared, and deferred tools when a retained agent freezes its
-request configuration. Ordinary child failures are guest `(:error MESSAGE)`
+preserve source order. ToolScript was initially root-session-only; that
+restriction is lifted (amended 2026-08-25). What protected it was never the
+guest machine — it was two host seams: agent FSMs lacked the effective-roster
+description handler, and an agent buffer resolves to the parent session, so an
+agent-run script would have checkpointed into the parent sidecar and recovery
+would have reconciled the interrupted row into the root transcript. Agent FSMs
+now run the description handler, and the driver skips the durable envelope
+checkpoint when an agent invocation owns the buffer; a restarted agent script
+settles through the agent's interrupted-turn handling. Retained agents are
+exactly where multi-call orchestration pays off, so the built-in roles declare
+ToolScript directly. Ordinary child failures are guest `(:error MESSAGE)`
 values. Permission denial aborts the script and reports bounded completed work;
 user cancellation interrupts the envelope. A denial cancels sibling pipeline
 continuations where possible, and synchronous completions are admitted in
