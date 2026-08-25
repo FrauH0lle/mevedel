@@ -56,8 +56,10 @@
   :group 'mevedel)
 
 (defface mevedel-tool-task-completed
-  '((t :inherit shadow :strike-through t))
-  "Face for completed task rows."
+  '((t :inherit shadow))
+  "Face for completed task rows.
+The check glyph and the `done' section already mark these rows, so the
+face stays quiet rather than striking a whole section through."
   :group 'mevedel)
 
 (defconst mevedel-tool-task--statuses '(pending in-progress completed)
@@ -373,7 +375,6 @@ open tasks for that owner completed, propagate dependency unblocking, and
         (mevedel-tool-task--mark-write session))
       changed)))
 
-
 ;;
 ;;; Formatting helpers
 
@@ -383,45 +384,12 @@ open tasks for that owner completed, propagate dependency unblocking, and
       owner
     "Main"))
 
-(defun mevedel-tool-task--owner-sort-label (owner)
-  "Return a stable sort label for OWNER groups."
-  (downcase (mevedel-tool-task--owner-label owner)))
-
-(defun mevedel-tool-task--group-tasks (tasks)
-  "Return TASKS grouped by owner with Main first.
-Each element is (OWNER . TASK-LIST), preserving task order within each
-group and sorting agent-owned groups by owner label."
-  (let ((table (make-hash-table :test #'equal))
-        owners)
-    (dolist (task tasks)
-      (let ((owner (mevedel-task-owner task)))
-        (unless (gethash owner table)
-          (push owner owners))
-        (puthash owner (append (gethash owner table) (list task)) table)))
-    (let* ((agent-owners
-            (sort (cl-remove-if #'null owners)
-                  (lambda (a b)
-                    (string< (mevedel-tool-task--owner-sort-label a)
-                             (mevedel-tool-task--owner-sort-label b))))))
-      (mapcar (lambda (owner)
-                (cons owner (gethash owner table)))
-              (append (and (gethash nil table) (list nil))
-                      agent-owners)))))
-
-(defun mevedel-tool-task--group-header (owner tasks)
-  "Return the display header for OWNER and TASKS."
-  (let ((open 0)
-        (done 0))
-    (dolist (task tasks)
-      (if (eq (mevedel-task-status task) 'completed)
-          (cl-incf done)
-        (cl-incf open)))
-    (propertize
-     (format "%s · %d open · %d done"
-             (mevedel-tool-task--owner-label owner)
-             open
-             done)
-     'face 'font-lock-comment-face)))
+(defun mevedel-tool-task--owner-display-label (owner)
+  "Return OWNER's label as the task panel renders it.
+Canonical agent paths drop the `/root/' prefix every agent shares.
+Bucket strings and the main session's label are unchanged; tool
+feedback keeps the full label through `mevedel-tool-task--owner-label'."
+  (string-remove-prefix "/root/" (mevedel-tool-task--owner-label owner)))
 
 (defun mevedel-tool-task--metadata-get (metadata &rest keys)
   "Return the first value in METADATA matching one of KEYS."
@@ -445,7 +413,10 @@ group and sorting agent-owned groups by owner label."
     nil))
 
 (defun mevedel-tool-task--activity-summary (task)
-  "Return TASK's short display activity, or nil."
+  "Return TASK's display activity, or nil.
+Only agent-owned tasks carry one: the main session's current work is
+already visible in the transcript.  Truncation happens at the single
+row-text site in `mevedel-tool-task--format-one'."
   (when (and (eq (mevedel-task-status task) 'in-progress)
              (mevedel-task-owner task))
     (let ((activity (mevedel-tool-task--metadata-get
@@ -453,9 +424,7 @@ group and sorting agent-owned groups by owner label."
                      :activity :activeForm :active-form :active_form)))
       (when (and (stringp activity)
                  (not (string-empty-p activity)))
-        (truncate-string-to-width
-         (string-clean-whitespace activity)
-         72 nil nil t)))))
+        (string-clean-whitespace activity)))))
 
 (defun mevedel-tool-task--format-id-list (ids)
   "Return IDS as a compact task-reference list."
@@ -464,6 +433,10 @@ group and sorting agent-owned groups by owner label."
 (defun mevedel-tool-task--propertize-row-part (text face)
   "Return TEXT with FACE applied for overlay and font-lock rendering."
   (propertize text 'face face 'font-lock-face face))
+
+(defun mevedel-tool-task--dim (text)
+  "Return TEXT propertized as dim panel chrome."
+  (mevedel-tool-task--propertize-row-part text 'font-lock-comment-face))
 
 (defun mevedel-tool-task--active-p (task)
   "Return non-nil when TASK is not completed."
@@ -493,25 +466,53 @@ group and sorting agent-owned groups by owner label."
            (mevedel-tool-task--owner-has-active-p session (car entry)))
          (mevedel-session-task-status-notes session))))
 
-(defun mevedel-tool-task--format-status-note-line (session owner)
-  "Return OWNER's status note display line for SESSION, or nil."
+(defun mevedel-tool-task--format-status-note-line (session owner
+                                                          &optional standalone)
+  "Return OWNER's status note display line for SESSION, or nil.
+The note hangs off the header or row above it unless STANDALONE, which
+opens the panel with the main session's note and so has nothing to hang
+from.  A note only renders while OWNER still has an open task, so a
+completed-only owner never keeps a line on the panel."
   (when (mevedel-tool-task--owner-has-active-p session owner)
     (when-let* ((note (mevedel-tool-task--status-note session owner)))
-      (propertize (format "  └ %s" note)
+      (propertize (if standalone note (format "  └ %s" note))
                   'font-lock-face '(:inherit italic)))))
 
-(defun mevedel-tool-task--format-one (task)
-  "Format TASK as a single display line (propertized)."
+(defun mevedel-tool-task--blocked-suffix (task tasks)
+  "Return TASK's blocked-by suffix given the session's TASKS, or nil.
+Two or more blockers that are all in progress collapse to a count;
+anything else lists the blocking IDs, which a reader still has to
+resolve but at least can."
+  (when-let* ((blocked-by (mevedel-task-blocked-by task)))
+    (mevedel-tool-task--dim
+     (if (and (cdr blocked-by)
+              (cl-every
+               (lambda (id)
+                 (when-let* ((blocker (cl-find id tasks
+                                               :key #'mevedel-task-id)))
+                   (eq (mevedel-task-status blocker) 'in-progress)))
+               blocked-by))
+         (format " · blocked by %d running" (length blocked-by))
+       (format " · blocked by %s"
+               (mevedel-tool-task--format-id-list blocked-by))))))
+
+(defun mevedel-tool-task--format-one (task &optional owner-prefix tasks)
+  "Format TASK as a single display line (propertized).
+OWNER-PREFIX is a display label rendered dim ahead of the task text,
+or nil for the main session and for rows already sitting under an
+owner header.  TASKS is the session task list, used to describe
+blockers."
   (let* ((status (mevedel-task-status task))
          (id (mevedel-task-id task))
-         ;; A very long single-line subject soft-wraps past the status
-         ;; fragment's row budget; bound it the way the activity summary
-         ;; already is.
-         (subject (truncate-string-to-width
-                   (string-clean-whitespace (mevedel-task-subject task))
-                   72 nil nil t))
-         (blocked-by (mevedel-task-blocked-by task))
          (activity (mevedel-tool-task--activity-summary task))
+         ;; A running task's activeForm is the news; its subject is
+         ;; already known.  Both share one row budget, because a very
+         ;; long single line soft-wraps past the status fragment's
+         ;; height cap.
+         (text (truncate-string-to-width
+                (or activity
+                    (string-clean-whitespace (mevedel-task-subject task)))
+                72 nil nil t))
          (icon (pcase status
                  ('completed   "✔")
                  ('in-progress "→")
@@ -519,21 +520,14 @@ group and sorting agent-owned groups by owner label."
          (face (pcase status
                  ('completed   'mevedel-tool-task-completed)
                  ('in-progress 'mevedel-tool-task-in-progress)
-                 (_            'default)))
-         (suffix (concat
-                  (when blocked-by
-                    (propertize
-                     (format " · blocked by %s"
-                             (mevedel-tool-task--format-id-list blocked-by))
-                     'font-lock-face 'font-lock-comment-face))
-                  (when activity
-                    (propertize (format " · %s" activity)
-                                'font-lock-face 'font-lock-comment-face)))))
+                 (_            'default))))
     (concat (mevedel-tool-task--propertize-row-part icon face) " "
             (mevedel-tool-task--propertize-row-part
              (format "#%d " id) face)
-            (mevedel-tool-task--propertize-row-part subject face)
-            suffix)))
+            (when owner-prefix
+              (mevedel-tool-task--dim (concat owner-prefix " · ")))
+            (mevedel-tool-task--propertize-row-part text face)
+            (mevedel-tool-task--blocked-suffix task tasks))))
 
 (defun mevedel-tool-task--active-priority (task)
   "Return display priority for active TASK."
@@ -577,86 +571,129 @@ group and sorting agent-owned groups by owner label."
 
 (defun mevedel-tool-task--summary-line (open completed)
   "Return one indented summary for omitted OPEN and COMPLETED tasks."
-  (propertize
+  (mevedel-tool-task--dim
    (concat "  "
            (cond
             ((and (> open 0) (> completed 0))
              (format "… %d more open · %d completed" open completed))
             ((> open 0) (format "… %d more open" open))
-            (t (format "… %d completed" completed))))
-   'face 'font-lock-comment-face))
+            (t (format "… %d completed" completed))))))
+
+(defun mevedel-tool-task--chrome-row-p (row)
+  "Return non-nil when ROW carries no task counts of its own.
+Headers, notes, and the `done' label are chrome: they only make sense
+above the rows they introduce."
+  (and (zerop (nth 1 row)) (zerop (nth 2 row))))
+
+(defun mevedel-tool-task--render-rows (rows tasks max-lines)
+  "Join ROWS into a panel body, capping the result at MAX-LINES.
+ROWS are (TEXT OPEN-COUNT COMPLETED-COUNT) triples whose counts sum to
+the tasks a truncation drops.  TASKS is the session task list, used
+only to word the empty message."
+  (cond
+   ((null rows)
+    (mevedel-tool-task--dim (if tasks "No open tasks." "No tasks.")))
+   ((or (null max-lines) (<= (length rows) max-lines))
+    (string-join (mapcar #'car rows) "\n"))
+   (t
+    (let* ((visible (cl-subseq rows 0 (max 0 (1- max-lines))))
+           (omitted (nthcdr (length visible) rows))
+           (open (cl-loop for row in omitted sum (nth 1 row)))
+           (completed (cl-loop for row in omitted sum (nth 2 row))))
+      ;; A cut landing right after a header leaves that header with
+      ;; nothing under it; drop it rather than dangle it.
+      (while (and visible
+                  (mevedel-tool-task--chrome-row-p (car (last visible))))
+        (setq visible (butlast visible)))
+      (string-join
+       (append (mapcar #'car visible)
+               ;; An all-chrome remainder drops no tasks, so there is
+               ;; nothing to summarize.
+               (when (or (> open 0) (> completed 0))
+                 (list (mevedel-tool-task--summary-line open completed))))
+       "\n")))))
 
 (defun mevedel-tool-task--format-groups (session &optional show-completed
-                                                 active-only max-lines)
-  "Return a grouped task display string for SESSION.
-When SHOW-COMPLETED is non-nil, include completed tasks after active
-tasks.  When ACTIVE-ONLY is non-nil, omit groups with no open tasks.
+                                                 max-lines)
+  "Return the task panel body for SESSION.
+Open tasks are ordered once by `mevedel-tool-task--sort-active-tasks'.
+An owner holding a single open task renders inline behind a dim owner
+prefix; an owner holding several renders under one dim header placed
+at that owner's best-ordered task, which keeps its rows adjacent and
+so bends the global order for the rest of the group.  The main session
+renders without a prefix and never takes a header, and its status note
+opens the panel because it has no header to hang from.  With
+SHOW-COMPLETED, completed tasks follow in a single `done' section.
 MAX-LINES caps the rendered body without changing task storage."
-  (let ((groups (mevedel-tool-task--group-tasks
-                 (mevedel-session-tasks session)))
-        active-rows completed-rows)
-    (dolist (group groups)
-      (pcase-let* ((`(,owner . ,tasks) group)
-                   (active
-                    (mevedel-tool-task--sort-active-tasks
-                     (cl-remove-if-not
-                      #'mevedel-tool-task--active-p tasks)))
-                   (completed
-                    (mevedel-tool-task--sort-completed-tasks
-                     (cl-remove-if-not
-                      (lambda (task)
-                        (eq (mevedel-task-status task) 'completed))
-                      tasks))))
-        (when active
-          (push (list (mevedel-tool-task--group-header owner tasks) 0 0)
-                active-rows)
-          (when-let* ((note-line
-                       (mevedel-tool-task--format-status-note-line
-                        session owner)))
-            (push (list note-line 0 0) active-rows))
-          (dolist (task active)
-            (push (list (concat "  " (mevedel-tool-task--format-one task))
-                        1 0)
-                  active-rows)))
-        (when (and completed (not active-only))
+  (let* ((tasks (mevedel-session-tasks session))
+         (active (mevedel-tool-task--sort-active-tasks
+                  (cl-remove-if-not #'mevedel-tool-task--active-p tasks)))
+         (buckets (make-hash-table :test #'equal))
+         (grouped (make-hash-table :test #'equal))
+         rows)
+    (dolist (task active)
+      (let ((owner (mevedel-task-owner task)))
+        (puthash owner (append (gethash owner buckets) (list task))
+                 buckets)))
+    (cl-flet ((note-row (owner)
+                (when owner
+                  (when-let*
+                      ((line (mevedel-tool-task--format-status-note-line
+                              session owner)))
+                    (list line 0 0)))))
+      (when-let* ((line (mevedel-tool-task--format-status-note-line
+                         session nil t)))
+        (push (list line 0 0) rows))
+      (dolist (task active)
+        (let* ((owner (mevedel-task-owner task))
+               (bucket (gethash owner buckets)))
           (cond
-           (show-completed
-            (unless active
-              (push (list (mevedel-tool-task--group-header owner tasks) 0 0)
-                    completed-rows))
-            (dolist (task completed)
-              (push (list (concat "  "
-                                  (mevedel-tool-task--owner-label owner)
-                                  " · "
-                                  (mevedel-tool-task--format-one task))
-                          0 1)
-                    completed-rows)))
-           ((not active)
-            (push (list (mevedel-tool-task--group-header owner tasks)
-                        0 (length completed))
-                  completed-rows))))))
-    (let ((rows (append (nreverse active-rows)
-                        (nreverse completed-rows))))
-      (cond
-       ((null rows)
-        (propertize "No tasks." 'face 'font-lock-comment-face))
-       ((or (null max-lines) (<= (length rows) max-lines))
-        (string-join (mapcar #'car rows) "\n"))
-       (t
-        (let* ((visible-count (max 0 (1- max-lines)))
-               (visible (cl-subseq rows 0 visible-count))
-               (omitted (nthcdr visible-count rows))
-               (open (cl-loop for row in omitted sum (nth 1 row)))
-               (completed
-                (cl-loop for row in omitted sum (nth 2 row))))
-          (string-join
-           (append (mapcar #'car visible)
-                   (list (mevedel-tool-task--summary-line open completed)))
-           "\n")))))))
-
-(defun mevedel-tool-task-format-active-groups-for-reminder (session)
-  "Return current non-completed tasks in SESSION grouped for reminders."
-  (mevedel-tool-task--format-groups session nil t))
+           ;; The main session is the default owner, so a "Main"
+           ;; header names nothing its unprefixed rows do not already
+           ;; say; and a sole open task's header would only repeat the
+           ;; row beneath it.
+           ((or (null owner) (null (cdr bucket)))
+            (push (list (mevedel-tool-task--format-one
+                         task
+                         (and owner
+                              (mevedel-tool-task--owner-display-label owner))
+                         tasks)
+                        1 0)
+                  rows)
+            (when-let* ((row (note-row owner)))
+              (push row rows)))
+           ;; Already emitted with its group.
+           ((gethash owner grouped))
+           (t
+            (puthash owner t grouped)
+            (push (list (mevedel-tool-task--dim
+                         (mevedel-tool-task--owner-display-label owner))
+                        0 0)
+                  rows)
+            (when-let* ((row (note-row owner)))
+              (push row rows))
+            (dolist (member bucket)
+              (push (list (concat "  " (mevedel-tool-task--format-one
+                                        member nil tasks))
+                          1 0)
+                    rows)))))))
+    (when show-completed
+      (when-let* ((completed
+                   (mevedel-tool-task--sort-completed-tasks
+                    (cl-remove-if #'mevedel-tool-task--active-p tasks))))
+        (push (list (mevedel-tool-task--dim "done") 0 0) rows)
+        (dolist (task completed)
+          (let ((owner (mevedel-task-owner task)))
+            (push (list (concat "  "
+                                (mevedel-tool-task--format-one
+                                 task
+                                 (and owner
+                                      (mevedel-tool-task--owner-display-label
+                                       owner))
+                                 tasks))
+                        0 1)
+                  rows)))))
+    (mevedel-tool-task--render-rows (nreverse rows) tasks max-lines)))
 
 (defun mevedel-tool-task--format-for-llm (tasks)
   "Return a plain-text summary of TASKS for the LLM."
@@ -751,25 +788,57 @@ character so keybindings on trailing newlines still toggle the fragment."
         (mevedel-view--render-status))
     (message "No task list here")))
 
-(defun mevedel-tool-task--task-label ()
-  "Return the status-zone task label."
-  (let ((toggle-key
+(defun mevedel-tool-task--tallies (session)
+  "Return SESSION's task tallies as one compact label, or nil when empty.
+Zero terms are omitted so the separator rule stays short in the common
+case."
+  (let ((running 0)
+        (blocked 0)
+        (open 0)
+        (done 0))
+    (dolist (task (mevedel-session-tasks session))
+      (pcase (mevedel-task-status task)
+        ('completed (cl-incf done))
+        ('in-progress (cl-incf running))
+        (_ (if (mevedel-task-blocked-by task)
+               (cl-incf blocked)
+             (cl-incf open)))))
+    (when-let* ((parts
+                 (delq nil
+                       (list (and (> running 0) (format "%d running" running))
+                             (and (> blocked 0) (format "%d blocked" blocked))
+                             (and (> open 0) (format "%d open" open))
+                             (and (> done 0) (format "%d done" done))))))
+      (string-join parts " · "))))
+
+(defun mevedel-tool-task--task-label (session show-completed)
+  "Return the status-zone task label for SESSION.
+The tallies live here rather than on per-owner headers, so the panel
+states each count once.  SHOW-COMPLETED selects the toggle wording."
+  (let ((separator (propertize " · " 'face 'mevedel-view-zone-separator))
+        (tallies (mevedel-tool-task--tallies session))
+        (toggle-key
          (propertize (mevedel-tool-task--toggle-key-label)
                      'face 'help-key-binding)))
     (concat
      (propertize "tasks" 'face 'mevedel-view-zone-separator)
-     (propertize " · " 'face 'mevedel-view-zone-separator)
+     (when tallies
+       (concat separator
+               (propertize tallies 'face 'mevedel-view-zone-separator)))
+     separator
      toggle-key
-     (propertize " to toggle" 'face 'mevedel-view-zone-separator))))
+     (propertize (if show-completed " to collapse" " to expand")
+                 'face 'mevedel-view-zone-separator))))
 
 (defun mevedel-tool-task-display-string (session show-completed)
   "Return task display for SESSION.
 SHOW-COMPLETED controls whether completed task detail is included."
   (let* ((body (mevedel-tool-task--format-groups
-                session show-completed (not show-completed)
+                session show-completed
                 (mevedel-tool-task--status-line-budget)))
          (separator (mevedel-view--zone-separator
-                     (mevedel-tool-task--task-label))))
+                     (mevedel-tool-task--task-label
+                      session show-completed))))
     (concat separator body "\n\n")))
 
 (defun mevedel-tool-task-refresh-display ()

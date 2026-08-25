@@ -106,8 +106,9 @@
                   "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-tool-task'
-(declare-function mevedel-tool-task-format-active-groups-for-reminder
-                  "mevedel-tool-task" (session))
+(declare-function mevedel-tool-task--active-p "mevedel-tool-task" (task))
+(declare-function mevedel-tool-task--format-for-llm
+                  "mevedel-tool-task" (tasks))
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
@@ -1451,8 +1452,12 @@ been written for INTERVAL turns.  INTERVAL defaults to 8 turns."
               (require 'mevedel-tool-task)
               (format
                "You have active tasks that have not been updated recently. Review and update task status as you make progress (set to in_progress when starting, completed when done). Use TaskUpdate to keep task status current.\n\n%s"
-               (mevedel-tool-task-format-active-groups-for-reminder
-                session)))
+               ;; The panel rendering is a display concern; the model
+               ;; reads the same shape TaskList returns, with canonical
+               ;; owner paths and unabbreviated subjects.
+               (mevedel-tool-task--format-for-llm
+                (cl-remove-if-not #'mevedel-tool-task--active-p
+                                  (mevedel-session-tasks session)))))
    :interval nil))
 
 (defun mevedel-reminders-make-verification-suggestion ()

@@ -434,22 +434,37 @@ absent task. Tasks therefore remain stable across follow-ups and cold
 session resume.
 
 The task status fragment is compact and appears only while at least one
-task is open. Group headers keep open/done counts visible, open tasks
-are listed, and completed task details are hidden. `TAB` or `RET`
-on the fragment toggles completed task details for inspection. The
-fragment caps itself against the live window height; when rows are
-omitted, it keeps a stable prefix with open rows ahead of completed rows
-and reserves one final count row such as `... 4 completed`. A subject is
-stored as one non-blank line: whitespace runs collapse to a single space
-and a blank subject is rejected. Completed tasks are not pruned from the
-session task list.
+task is open. Open tasks are ordered once by display priority --
+in progress, then pending, then blocked -- and the separator rule
+carries the session tallies (`tasks · 3 running · 1 blocked · 6 done`),
+so each count is stated once rather than per owner. An owner holding a
+single open task renders inline behind a dim owner label with the
+`/root/` prefix stripped; an owner holding several renders under one dim
+header placed at its best-ordered task, which keeps that owner's rows
+adjacent. A running agent-owned row shows its `activeForm` in place of
+its subject. `TAB` or `RET` on the fragment toggles completed task
+details, which render in a single `done` section, each row keeping its
+owner attribution. The fragment caps itself against the live window
+height; when rows are omitted, it keeps a stable prefix with open rows
+ahead of completed rows and reserves one final count row such as
+`... 4 completed`, dropping any header left with nothing under it. A
+subject is stored as one non-blank line: whitespace runs collapse to a
+single space and a blank subject is rejected. Completed tasks are not
+pruned from the session task list.
+
+The task nudge reminder does not reuse this rendering. It sends the
+model the same shape `TaskList` returns, with canonical owner paths and
+unabbreviated subjects, so display decisions cannot alter what the model
+reads.
 
 Each owner group can also carry a short status note through `TaskNote`
 or the top-level `note`/`noteOwner` arguments on `TaskCreate` and
 `TaskUpdate`. An unknown note owner rejects the whole call; no task is
-created or updated. Notes render under the owner header and are dropped
-from view when that owner has no open tasks, so a completed-only task
-list does not keep the overlay visible.
+created or updated. Notes render under the owner's header, or under
+its single inline row; the main session's note opens the panel, having
+no header to hang from. A note is dropped from view when that owner has
+no open tasks, so a completed-only task list does not keep the overlay
+visible.
 
 ## Model tiers
 
