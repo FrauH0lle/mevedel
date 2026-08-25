@@ -284,11 +284,38 @@
                    :session session))
          (prompt (cl-letf (((symbol-function 'mcp-hub-get-servers)
                             (lambda () nil)))
-                   (mevedel-system--tool-orchestration-prompt context))))
+                   (let ((gptel-tools nil))
+                     (mevedel-system--tool-orchestration-prompt context)))))
     (should (string-match-p "Tool orchestration" prompt))
     (should (string-match-p "local://" prompt))
     (should (string-match-p "artifact://" prompt))
-    (should-not (string-match-p "{{RESOURCE_ROSTER}}" prompt))))
+    (should-not (string-match-p "{{RESOURCE_ROSTER}}" prompt))
+    (should-not (string-match-p "ToolScript" prompt))
+    (should-not (string-match-p "{{PTC_GUIDANCE}}" prompt)))
+
+  :doc "promotes ToolScript when the request has the tool active"
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project root-dir root-dir "tool-orchestration"))
+         (session (mevedel-session-create "main" workspace root-dir))
+         (buffer (generate-new-buffer " *mevedel-ptc-guidance*")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mcp-hub-get-servers)
+                   (lambda () nil)))
+          (with-current-buffer buffer
+            (setq-local gptel-tools
+                        (list (gptel-make-tool :name "ToolScript"
+                                               :function #'ignore
+                                               :description "test"))))
+          (let ((prompt (mevedel-system--tool-orchestration-prompt
+                         (mevedel-system-context--create
+                          :workspace workspace
+                          :working-directory root-dir
+                          :session session
+                          :refresh-buffer buffer))))
+            (should (string-match-p "prefer a single `ToolScript` call"
+                                    prompt))
+            (should-not (string-match-p "{{PTC_GUIDANCE}}" prompt))))
+      (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-system-build-prompt
   (:before-each (mevedel-workspace-clear-registry)

@@ -5,7 +5,7 @@ Keep calls sequential when one result determines the next action, when waiting
 or approval is required, or when mutations conflict or depend on each other.
 Inspect every result before continuing.
 
-Resource addresses name targets for filesystem-shaped tools. Pass an advertised
+{{PTC_GUIDANCE}}Resource addresses name targets for filesystem-shaped tools. Pass an advertised
 address directly to `Read`, `Glob`, `Grep`, or permitted `ApplyPatch` as the
 target or pattern argument, subject to that tool's operation rules.
 

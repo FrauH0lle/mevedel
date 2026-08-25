@@ -412,7 +412,9 @@ The built-in selection is deliberate:
 
 The shared tool-orchestration component asks models to batch independent tool
 calls within a bounded stage and keep dependencies, waits, approvals, and
-conflicting mutations sequential. It does not encode provider pricing.
+conflicting mutations sequential. When the request has ToolScript active, it
+also promotes a single ToolScript call over issuing a multi-call sequence one
+turn at a time. It does not encode provider pricing.
 
 `mevedel-gptel-stream-bridge.el` isolates private, version-sensitive gptel
 stream advice. `mevedel-view-stream.el` owns live-tail render scheduling,
