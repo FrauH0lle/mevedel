@@ -27,16 +27,22 @@
 (defvar gptel-system-prompt)
 (defvar gptel-tools)
 
+;; `json'
+(declare-function json-encode "json" (object))
+(autoload 'json-encode "json")
+
 ;; `mevedel-goal'
 (declare-function mevedel-goal-active-context "mevedel-goal" (session))
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-completion-metadata
                   "mevedel-resource" (context &optional scheme))
+(autoload 'mevedel-resource-completion-metadata "mevedel-resource")
 
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-prompt-section
                   "mevedel-skills-prompt" (session &optional buffer))
+(autoload 'mevedel-skills-prompt-section "mevedel-skills-prompt")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-deferred-pending "mevedel-structs" (cl-x) t)
@@ -56,6 +62,9 @@
 (declare-function mevedel-tool-all "mevedel-tool-registry" ())
 (declare-function mevedel-tool-gptel-tool "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-prompt-source "mevedel-tool-registry" (cl-x) t)
+(autoload 'mevedel-tool-all "mevedel-tool-registry")
+(autoload 'mevedel-tool-gptel-tool "mevedel-tool-registry")
+(autoload 'mevedel-tool-prompt-source "mevedel-tool-registry")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--environment-info-string "mevedel-utilities"
@@ -520,12 +529,9 @@ present."
   "Return resource metadata for CONTEXT, or nil when unavailable."
   (when-let* ((session (mevedel-system--context-session context)))
     (condition-case nil
-        (progn
-          (require 'mevedel-agent-control nil t)
-          (when (require 'mevedel-resource nil t)
-            (mevedel-resource-completion-metadata
-             (list :session session
-                   :workspace (mevedel-system-context-workspace context)))))
+        (mevedel-resource-completion-metadata
+         (list :session session
+               :workspace (mevedel-system-context-workspace context)))
       (error nil))))
 
 (defun mevedel-system--resource-roster (context)
@@ -574,11 +580,10 @@ present."
 
 (defun mevedel-system--skills-prompt (context)
   "Return dynamic skills prompt text for CONTEXT, or nil."
-  (when (require 'mevedel-skills-prompt nil t)
-    (when-let* ((session (mevedel-system--context-session context)))
-      (mevedel-skills-prompt-section
-       session
-       (mevedel-system-context-refresh-buffer context)))))
+  (when-let* ((session (mevedel-system--context-session context)))
+    (mevedel-skills-prompt-section
+     session
+     (mevedel-system-context-refresh-buffer context))))
 
 (defun mevedel-system--join-parts (&rest parts)
   "Join nonblank prompt PARTS with stable section spacing."
@@ -860,7 +865,6 @@ request-time context to dynamic components."
 
 (defun mevedel-system--tool-prompt-source (tool)
   "Return a human-readable prompt provenance label for gptel TOOL."
-  (require 'mevedel-tool-registry)
   (if-let* ((native
              (cl-find tool (mevedel-tool-all)
                       :key #'mevedel-tool-gptel-tool :test #'eq)))
@@ -879,9 +883,7 @@ request-time context to dynamic components."
   "Return provider-serialized tool schema text for BACKEND and TOOLS."
   (when (and backend tools)
     (condition-case nil
-        (progn
-          (require 'json)
-          (json-encode (gptel--parse-tools backend tools)))
+        (json-encode (gptel--parse-tools backend tools))
       (error nil))))
 
 (defun mevedel-system--insert-effective-prompt-report (data-buffer)
