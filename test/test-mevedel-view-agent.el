@@ -505,6 +505,42 @@
       (dolist (buffer (list data-buffer view-buffer parent-view))
         (when (buffer-live-p buffer)
           (kill-buffer buffer)))))
+  :doc "leaves an idle retained conversation buffer writable"
+  (let* ((session (mevedel-session--create
+                   :name "main" :session-id "session-retained"))
+         (data-buffer (generate-new-buffer " *agent-retained-data*"))
+         (view-buffer (generate-new-buffer " *agent-retained-view*"))
+         (parent-view (generate-new-buffer " *agent-retained-parent*"))
+         restored)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-agent-registry session)
+                (list (cons "/root/verifier"
+                            (mevedel-agent-record--create
+                             :id "storage-root-verifier"
+                             :path "/root/verifier"
+                             :parent-path "/root"
+                             :role "verifier"
+                             :conversation-buffer data-buffer))))
+          (with-current-buffer data-buffer
+            (org-mode)
+            (insert "retained conversation"))
+          (cl-letf (((symbol-function 'mevedel-view--ensure)
+                     (lambda (&rest _) view-buffer))
+                    ((symbol-function 'mevedel-view--full-rerender) #'ignore)
+                    ((symbol-function 'mevedel-transcript-restore-properties)
+                     (lambda () (setq restored t))))
+            (mevedel-view--ensure-agent-transcript-view
+             "/root/verifier"
+             (list :session session :buffer data-buffer :live-buffer nil)
+             parent-view))
+          (with-current-buffer data-buffer
+            (should-not buffer-read-only))
+          (should-not restored))
+      (dolist (buffer (list data-buffer view-buffer parent-view))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer)))))
+
   :doc "keeps equal agent paths isolated across parent sessions"
   (let* ((session-a-id (make-temp-name "session-a-"))
          (session-a (mevedel-session--create
