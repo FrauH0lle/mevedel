@@ -21,6 +21,8 @@
 (eval-when-compile (require 'cl-lib))
 
 ;; `mevedel-ptc-checkpoint'
+(declare-function mevedel-ptc-checkpoint-note
+                  "mevedel-ptc-checkpoint" (session id updates))
 (declare-function mevedel-ptc-checkpoint-start
                   "mevedel-ptc-checkpoint" (session buffer id script))
 (declare-function mevedel-ptc-checkpoint-update
@@ -383,20 +385,20 @@ ERROR-KIND is the interpreter's typed failure category when available."
                       (funcall callback
                                (list :result result :status status
                                      :render-data render-data))))))
+               ;; In-memory only: per-child sidecar writes dominated script
+               ;; runtime, serialized parallel batches, and cost one remote
+               ;; round-trip each on TRAMP targets.  Durable writes are the
+               ;; start checkpoint and the settled write in `finish'.
                (checkpoint
                 (lambda ()
-                  (unless
-                      (or (not checkpoint-session)
-                          (mevedel-ptc-checkpoint-update
-                           checkpoint-session data-buffer envelope-id
-                           (list :render-data
-                                 (list :kind 'ptc :outcome 'running
-                                       :elapsed-seconds
-                                       (- (float-time) started-at)
-                                       :nested-call-count (length audit)
-                                       :calls audit))))
-                    (error "ToolScript child audit could not be persisted"))
-                  t))
+                  (mevedel-ptc-checkpoint-note
+                   checkpoint-session envelope-id
+                   (list :render-data
+                         (list :kind 'ptc :outcome 'running
+                               :elapsed-seconds
+                               (- (float-time) started-at)
+                               :nested-call-count (length audit)
+                               :calls audit)))))
                (record
                 (lambda (task status result &optional outcome)
                   (let* ((id (plist-get task :id))

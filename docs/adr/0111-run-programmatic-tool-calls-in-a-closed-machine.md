@@ -10,11 +10,26 @@ Its JSON `script` argument runs in a fresh, in-process explicit
 continuation machine, never through host `eval` or `macroexpand-all`. Guest
 text is read into a private obarray. Special forms, syntax transformers, and
 pure primitives are closed hand-audited tables; operator resolution precedes
-argument evaluation. Step, time, input, expansion, tool-call, operand, result,
-numeric, regexp, and retained-value budgets keep the guest bounded. Atomic
-operand accounting counts each use of shared aggregates before host execution;
-final-value accounting does the same before serialization. Fuel pauses return
-control to Emacs between slices.
+argument evaluation, and a static preflight walks the parsed script before
+execution, reporting every unknown operator in one error with nearest-match
+suggestions and validating literal regexps. Step, time, input, expansion,
+tool-call, operand, result, numeric, regexp, and retained-value budgets keep
+the guest bounded. Atomic operand accounting counts each use of shared
+aggregates before host execution; final-value accounting does the same before
+serialization. Fuel pauses return control to Emacs between slices.
+
+Two boundaries were relaxed after a profiled test session (2026-08-25) showed
+the model burning full turns rediscovering them: the guest regexp subset now
+admits unnested quantifiers (`*`, `+`, `?`, `\{n,m\}` on one literal, escape,
+dot, or bracket class, capped at eight quantified atoms) while still rejecting
+quantified groups, stacked quantifiers, alternation, and backreferences.  The
+work budget conservatively raises input size to the quantified-atom count,
+backstopping the residual polynomial adjacency case; and the
+pure-primitive table gained the syntactic `file-name-*` helpers (applied with
+file-name handlers disabled), `take`, and a fixed-comparator `sort`, because
+the model hand-rolled basename/dirname from `split-string` twice in one
+session. The audit standard is unchanged; the default answer to "is this pure
+string/list manipulation?" moved to yes.
 
 The implementation keeps three ownership seams: `mevedel-ptc-interpreter.el`
 owns the pipeline-independent guest machine, `mevedel-ptc-driver.el` owns the
@@ -54,6 +69,24 @@ status are live trusted view facts. An in-flight machine is never serialized or
 resumed: after restart it is an interrupted tool call. The sidecar checkpoints
 only the envelope and bounded child audit; recovery materializes that record as
 a tool row and atomically consumes it with the repaired segment.
+
+Checkpoint durability is per script, not per nested call. The original design
+rewrote the sidecar through a full publication after every child transition;
+the profiled test session put 40 of its 58 publication generations (69%)
+inside six script windows, stored 3.72 MiB of publications for a 224 KiB
+transcript, and serialized nominally parallel children ~180-300 ms apart for
+20-30 ms of actual work — and on TRAMP targets each write is a remote round
+trip. Now the durable writes are the start checkpoint (before any child runs)
+and the settled write; between them child audit progress is journaled in the
+in-memory session checkpoint, which any unrelated autosave captures. The cost
+is recovery fidelity after a crash mid-script: the child audit restores as of
+the last autosave rather than the last child, and the row still settles as
+interrupted either way.
+
+Nested Reads bypass session-level duplicate suppression in both directions:
+the model never sees nested output, so a "reuse the previous contents" stub is
+unusable inside a script, and recording the access would poison the
+conversation's later Reads with content that never entered provider history.
 
 This rejects native Elisp evaluation, host macro expansion, property-scraped
 primitives, a JavaScript runtime, virtual transcript rows, ToolScript-only

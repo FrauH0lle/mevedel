@@ -222,6 +222,48 @@
         (should (eq 'task-background
                     (caar (plist-get (car turns) :segments)))))))
 
+(mevedel-deftest mevedel-view--directive-ranges ()
+  ,test
+  (test)
+  :doc "caches by buffer tick and request directive without exposing its memo"
+  (with-temp-buffer
+    (setq-local
+     mevedel--current-request
+     (mevedel-request--create :id "request" :directive-uuid "directive-1"))
+    (insert
+     (mevedel--format-hook-audit-record
+      '(:type directive-turn-boundary :edge start
+        :directive-id "directive-1" :action discuss :turn 1))
+     "body"
+     (mevedel--format-hook-audit-record
+      '(:type directive-turn-boundary :edge end
+        :directive-id "directive-1" :action discuss :turn 1
+        :outcome success :sequence 1)))
+    (let* ((first (car (mevedel-view--directive-ranges (current-buffer))))
+           (render-id (plist-get first :render-id))
+           (second (car (mevedel-view--directive-ranges (current-buffer)))))
+      (should (eq render-id (plist-get second :render-id)))
+      (should-not (eq first second))
+      (plist-put first :action 'mutated)
+      (should (eq 'discuss
+                  (plist-get
+                   (car (mevedel-view--directive-ranges (current-buffer)))
+                   :action)))
+      (setf (mevedel-request-directive-uuid mevedel--current-request)
+            "directive-2")
+      (let ((request-invalidated
+             (plist-get
+              (car (mevedel-view--directive-ranges (current-buffer)))
+              :render-id)))
+        (should-not (eq render-id request-invalidated))
+        (goto-char (point-max))
+        (insert "tail")
+        (should-not
+         (eq request-invalidated
+             (plist-get
+              (car (mevedel-view--directive-ranges (current-buffer)))
+              :render-id)))))))
+
 
 (mevedel-deftest mevedel-view--tool-one-liner ()
   ,test

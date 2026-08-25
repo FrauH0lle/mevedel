@@ -8,9 +8,14 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib)
-  (require 'subr-x))
+;; Required at load time, not lazily per call: the extraction and strip
+;; helpers here run per transcript segment on every streaming redraw, and
+;; even a satisfied `require' scans `features' each call.
+(require 'cl-lib)
+(require 'subr-x)
+(require 'mevedel-structs)
+(require 'mevedel-tool-media)
+(require 'mevedel-transcript-audit)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -84,7 +89,6 @@ parser and persistence).  An `:around' advice on
 the single chokepoint where tool result strings become the LLM-bound
 API message, without touching the callback that drives chat-buffer
 display."
-  (require 'cl-lib)
   (require 'mevedel-utilities)
   (let ((data (mevedel-tool-render-data--plain render-data)))
     (setq data (copy-sequence data))
@@ -105,7 +109,6 @@ display."
 
 (defun mevedel-tool-render-data--read-payload (payload)
   "Read one render-data plist from PAYLOAD or return a failure sentinel."
-  (require 'cl-lib)
   (condition-case nil
       (let* ((read-eval nil)
              (parsed (read-from-string payload))
@@ -126,7 +129,6 @@ display."
   "Return valid render-data blocks found in STRING, oldest first.
 Each entry is `(BEGIN END DATA)'.  Invalid marker-looking text is skipped.
 BEGIN and END include the formatter's optional surrounding newlines."
-  (require 'subr-x)
   (when (stringp string)
     (let ((search-start 0)
           blocks open)
@@ -212,7 +214,6 @@ Nil EXPECTED-TOOL-USE-ID selects only unbound render data."
 
 (defun mevedel-tool-render-data-without-owner (data)
   "Return a copy of DATA without its internal owner field."
-  (require 'cl-lib)
   (let ((plain (copy-sequence data)))
     (cl-remf plain :mevedel-tool-use-id)
     plain))
@@ -221,7 +222,6 @@ Nil EXPECTED-TOOL-USE-ID selects only unbound render data."
     (string &optional expected-tool-use-id)
   "Remove render-data owned by EXPECTED-TOOL-USE-ID from STRING.
 Nil EXPECTED-TOOL-USE-ID removes only unbound blocks."
-  (require 'cl-lib)
   (if-let* ((blocks
              (cl-remove-if-not
               (lambda (block)
@@ -241,7 +241,6 @@ Nil EXPECTED-TOOL-USE-ID removes only unbound blocks."
     (string &optional expected-tool-use-id)
   "Remove trusted non-media side channels from STRING.
 Render data must belong to EXPECTED-TOOL-USE-ID; nil selects unbound data."
-  (require 'mevedel-transcript-audit)
   (mevedel--strip-hook-audit-blocks
    (mevedel-tool-render-data-strip
     string expected-tool-use-id)))
@@ -370,7 +369,6 @@ result."
     (beg end &optional expected-tool-use-id)
   "Return matching render-data bounds inside BEG..END, or nil.
 The block must belong to EXPECTED-TOOL-USE-ID; nil selects unbound data."
-  (require 'cl-lib)
   (when-let* ((block
                (cl-find-if
                 (lambda (candidate)
@@ -475,7 +473,6 @@ This repairs transcript state after resume or fork.  It never attempts to
 reattach an operating-system process.  Records named by
 SUCCESSOR-EXECUTION-IDS are marked archived because a newer segment owns their
 terminal truth.  Return the number of repaired records."
-  (require 'cl-lib)
   (let (records archived-records)
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
@@ -525,7 +522,6 @@ terminal truth.  Return the number of repaired records."
                              :termination compacted :outcome nil)
                   '(:state lost :status error :live-execution-p nil
                            :termination lost :outcome failure))))))
-          (require 'mevedel-transcript-audit)
           (setq archived-records
                 (cl-remove-if-not
                  (lambda (span)
@@ -585,8 +581,6 @@ builds its message from the scrubbed values, then restores the original
 `:result' values.  Everything downstream that consumes `:tool-use' or
 `:tool-result' for display (the gptel callback feeding the chat buffer,
 the view parser, persistence) keeps seeing the full block."
-  (require 'mevedel-tool-media)
-  (require 'mevedel-structs)
   (let ((saved nil))
     (unwind-protect
         (let* ((media-by-index nil)
@@ -623,7 +617,6 @@ the view parser, persistence) keeps seeing the full block."
 (defun mevedel-tool-render-data-install-provider-adapter ()
   "Install gptel interop advice for tool-result continuation paths."
   (require 'gptel-request)
-  (require 'mevedel-tool-media)
   (advice-add 'gptel--parse-tool-results :around
               #'mevedel-tool-render-data--provider-advice))
 
@@ -642,10 +635,6 @@ nil when no valid block is present.  Unparseable payloads are treated as
 absent: the original string is returned verbatim in VISIBLE-PART.
 SESSION, EXPECTED-TOOL-USE-ID, and ALLOW-PAYLOAD-TOOL-USE-ID
 control trusted side-channel lookup."
-  (require 'cl-lib)
-  (require 'mevedel-tool-media)
-  (require 'mevedel-structs)
-  (require 'subr-x)
   (let ((tool-results-dir
          (when-let* ((save-path (and session
                                      (mevedel-session-save-path session))))

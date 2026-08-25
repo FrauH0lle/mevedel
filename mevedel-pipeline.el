@@ -184,6 +184,11 @@
 (defvar mevedel-pipeline--active-tool-use-id nil
   "Tool-use id dynamically visible while a handler starts its work.")
 
+(defvar mevedel-pipeline--active-call-source nil
+  "Call source dynamically visible while a handler starts its work.
+`ptc' names a ToolScript nested call, whose result reaches the script
+instead of the provider transcript.")
+
 (defvar mevedel-pipeline--auto-apply-edit-p nil
   "Non-nil while direct user authority auto-applies a native edit.")
 
@@ -1177,6 +1182,8 @@ buffer."
           (lambda ()
             (let ((mevedel-pipeline--active-tool-use-id
                    (plist-get context :tool-use-id))
+                  (mevedel-pipeline--active-call-source
+                   (plist-get context :call-source))
                   (mevedel-pipeline--auto-apply-edit-p
                    (plist-get context :auto-apply-edit-p))
                   (mevedel-resource-current-attempts

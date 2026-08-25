@@ -194,6 +194,17 @@ agent Read must not poison the parent's later Read calls."
   (and (boundp 'mevedel--agent-invocation)
        mevedel--agent-invocation))
 
+(defun mevedel-tool-fs-read--dedup-exempt-p ()
+  "Return non-nil when this Read must not touch duplicate-read state.
+
+Covers sub-agent calls and ToolScript nested calls.  A script sees only
+its own tool results and the model sees only the script's final value,
+so \"reuse the previous contents\" is unusable there, and recording the
+access would poison the parent conversation's later Read calls with
+content that never entered provider history."
+  (or (mevedel-tool-fs-read--agent-context-p)
+      (eq (bound-and-true-p mevedel-pipeline--active-call-source) 'ptc)))
+
 (defconst mevedel-tool-fs-read--blocked-device-paths
   '("/dev/zero" "/dev/random" "/dev/urandom" "/dev/full"
     "/dev/stdin" "/dev/tty" "/dev/console"
@@ -1126,7 +1137,7 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
             (cond
              ((and (bound-and-true-p mevedel--session)
                    (not mevedel-tool-fs-read--resource-address)
-                   (not (mevedel-tool-fs-read--agent-context-p))
+                   (not (mevedel-tool-fs-read--dedup-exempt-p))
                    (mevedel-session-read-is-duplicate-p
                     mevedel--session filename dedup-key nil))
              (format "File %s unchanged since last read.  Reuse the previous contents."
@@ -1148,7 +1159,7 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
                                     filename))))
                           (when (and (bound-and-true-p mevedel--session)
                                      (not mevedel-tool-fs-read--resource-address)
-                                     (not (mevedel-tool-fs-read--agent-context-p)))
+                                     (not (mevedel-tool-fs-read--dedup-exempt-p)))
                             (mevedel-session-record-file-access
                              mevedel--session filename 'read dedup-key nil))
                           result)
@@ -1181,7 +1192,7 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
       (cond
        ((and (bound-and-true-p mevedel--session)
              (not mevedel-tool-fs-read--resource-address)
-             (not (mevedel-tool-fs-read--agent-context-p))
+             (not (mevedel-tool-fs-read--dedup-exempt-p))
              (mevedel-session-read-is-duplicate-p
               mevedel--session filename offset limit))
         (format "File %s unchanged since last read.  Reuse the previous contents."
@@ -1189,7 +1200,7 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
        ((zerop (file-attribute-size (file-attributes filename)))
         (when (and (bound-and-true-p mevedel--session)
                    (not mevedel-tool-fs-read--resource-address)
-                   (not (mevedel-tool-fs-read--agent-context-p)))
+                   (not (mevedel-tool-fs-read--dedup-exempt-p)))
           (mevedel-session-record-file-access
            mevedel--session filename 'read offset limit))
         (format "<system-reminder>\n\
@@ -1201,7 +1212,7 @@ content, not a read failure.\n</system-reminder>"
                         filename offset limit)))
           (when (and (bound-and-true-p mevedel--session)
                      (not mevedel-tool-fs-read--resource-address)
-                     (not (mevedel-tool-fs-read--agent-context-p)))
+                     (not (mevedel-tool-fs-read--dedup-exempt-p)))
             (mevedel-session-record-file-access
              mevedel--session filename 'read offset limit))
           content)))))))

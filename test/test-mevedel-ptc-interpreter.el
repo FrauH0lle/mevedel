@@ -182,24 +182,75 @@ dispatched), and `:pauses'."
   :doc "rejects a host macro without ever running its expander"
   (progn
     (should (string-match-p
-             "Void or forbidden function"
+             "Unknown functions"
              (test-mevedel-ptc--error "(test-mevedel-ptc--effectful-macro)")))
     (should-not test-mevedel-ptc--expander-ran))
 
   :doc "rejects eval-when-compile as an unknown operator"
-  (should (string-match-p "Void or forbidden function"
+  (should (string-match-p "Unknown functions"
                           (test-mevedel-ptc--error "(eval-when-compile (+ 1 2))")))
 
   :doc "rejects host-state readers that carry the side-effect-free property"
   (progn
     (should (get 'getenv 'side-effect-free))
-    (should (string-match-p "Void or forbidden function"
+    (should (string-match-p "Unknown functions"
                             (test-mevedel-ptc--error "(getenv \"HOME\")"))))
 
   :doc "an unknown operator wrapping a tool call runs zero tool calls"
-  (let ((run (test-mevedel-ptc--run "(eval-when-compile (Bash :command \"x\"))"
+  (should (string-match-p
+           "Unknown functions"
+           (test-mevedel-ptc--error "(eval-when-compile (Bash :command \"x\"))"
                                     '("Bash"))))
+
+  :doc "preflight lists every unknown operator once with suggestions"
+  (let ((message (test-mevedel-ptc--error
+                  "(list (seq-take (list 1 2 3) 2)
+                         (cl-mapcar 'identity (list 1))
+                         (seq-take (list 4) 1))")))
+    (should (string-match-p "seq-take (try: take)" message))
+    (should (string-match-p "cl-mapcar (try: mapcar)" message))
+    (should-not (string-match-p "seq-take.*seq-take" message)))
+
+  :doc "preflight skips quoted data, binding names, and lambda parameters"
+  (progn
+    (should (equal '(seq-take 1)
+                   (test-mevedel-ptc--value "(quote (seq-take 1))")))
+    (should (equal 2 (test-mevedel-ptc--value
+                      "(let ((seq-take 2)) seq-take)")))
+    (should (equal 3 (test-mevedel-ptc--value
+                      "(funcall (lambda (cl-mapcar) cl-mapcar) 3)")))
+    (should (equal :yes (test-mevedel-ptc--value
+                         "(cond ((equal 1 2) :no) (t :yes))"))))
+
+  :doc "preflight rejects unknown operators even in never-taken branches"
+  (should (string-match-p "Unknown functions"
+                          (test-mevedel-ptc--error "(if nil (seq-take (list 1) 1) 2)")))
+
+  :doc "preflight rejects a literal unsafe regexp before any tool runs"
+  (let ((run (condition-case err
+                 (test-mevedel-ptc--run
+                  "(progn (Read :file_path \"x\")
+                          (string-match-p \"\\\\(a\\\\)+\" \"aaa\"))"
+                  '("Read"))
+               (mevedel-ptc-error (list :outcome 'error
+                                        :kind (nth 1 err)
+                                        :value (nth 2 err)
+                                        :calls nil)))))
     (should (eq 'error (plist-get run :outcome)))
+    (should (null (plist-get run :calls))))
+
+  :doc "preflight rejects a malformed literal regexp before any tool runs"
+  (let ((run (condition-case err
+                 (test-mevedel-ptc--run
+                  "(progn (Read :file_path \"x\")
+                          (string-match-p \"[\" \"x\"))"
+                  '("Read"))
+               (mevedel-ptc-error (list :outcome 'error
+                                        :kind (nth 1 err)
+                                        :value (nth 2 err)
+                                        :calls nil)))))
+    (should (eq 'error (plist-get run :outcome)))
+    (should (string-match-p "Invalid guest regexp" (plist-get run :value)))
     (should (null (plist-get run :calls))))
 
   :doc "funcall and apply reject a forbidden target before evaluating arguments"
@@ -241,6 +292,41 @@ dispatched), and `:pauses'."
     (should (equal '(10 20 30) (test-mevedel-ptc--value
                                 "(mapcar (lambda (x) (* x 10)) (list 1 2 3))")))
     (should (equal 6 (test-mevedel-ptc--value "(apply '+ 1 (list 2 3))"))))
+
+  :doc "supports pure path, take, and fixed-comparator sort primitives"
+  (progn
+    (should (equal "c.el" (test-mevedel-ptc--value
+                           "(file-name-nondirectory \"/a/b/c.el\")")))
+    (should (equal "/a/b/" (test-mevedel-ptc--value
+                            "(file-name-directory \"/a/b/c.el\")")))
+    (should (equal "/a/b/c.el" (test-mevedel-ptc--value
+                                "(file-name-concat \"/a\" \"b\" \"c.el\")")))
+    (should (equal "el" (test-mevedel-ptc--value
+                         "(file-name-extension \"/a/b/c.el\")")))
+    (should (equal "c" (test-mevedel-ptc--value
+                        "(file-name-base \"/a/b/c.el\")")))
+    (should (equal '(1 2) (test-mevedel-ptc--value
+                           "(take 2 (list 1 2 3))")))
+    (should (equal '(1 2 3) (test-mevedel-ptc--value
+                             "(sort (list 3 1 2))")))
+    (should (equal '("a" "b" "c")
+                   (test-mevedel-ptc--value
+                    "(sort (list \"c\" \"a\" \"b\"))"))))
+
+  :doc "sort does not mutate its input and rejects non-lists"
+  (progn
+    (should (equal '((3 1) (1 2 3))
+                   (test-mevedel-ptc--value
+                    "(let* ((xs (list 3 1)) (_ (sort xs)) (ys (sort (list 3 1 2)))) (list xs ys))")))
+    (should (string-match-p "expects a list"
+                            (test-mevedel-ptc--error "(sort \"abc\")"))))
+
+  :doc "file-name primitives never invoke file-name handlers"
+  (let ((file-name-handler-alist
+         (list (cons "\\`/probe:" (lambda (&rest _)
+                                    (error "Handler invoked"))))))
+    (should (equal "x.el" (test-mevedel-ptc--value
+                           "(file-name-nondirectory \"/probe:host:/x.el\")"))))
 
   :doc "canonicalizes guest nil and t to the host constants"
   (should (equal '(t :t t)
@@ -287,8 +373,8 @@ dispatched), and `:pauses'."
                             (plist-get run :value)))
     (should (null (plist-get run :calls))))
 
-  :doc "a tool absent from the roster is a forbidden function"
-  (should (string-match-p "Void or forbidden function"
+  :doc "a tool absent from the roster is an unknown function"
+  (should (string-match-p "Unknown functions: Bash"
                           (test-mevedel-ptc--error "(Bash :command \"x\")" '("Read"))))
 
   :doc "a runaway script yields fuel pauses instead of blocking"
@@ -374,7 +460,16 @@ dispatched), and `:pauses'."
   (let ((called nil)
         (state (mevedel-ptc--make-state)))
     (dolist (regexp '("\\(?:a+\\)+b"
-                      "\\(a\\|aa\\)\\(a\\|aa\\)b"))
+                      "\\(a\\|aa\\)\\(a\\|aa\\)b"
+                      "\\(a\\)+"
+                      "\\(ab\\)*c"
+                      "a+*b"
+                      "a\\|b"
+                      "\\(a\\)\\1"
+                      "*a"
+                      "a\\{2"
+                      "a\\{,2\\}"
+                      "a*a*a*a*a*a*a*a*a*b"))
       (condition-case err
           (mevedel-ptc--apply-pure
            state "string-match-p"
@@ -384,7 +479,7 @@ dispatched), and `:pauses'."
          (should (eq 'atomic-work (nth 1 err))))))
     (should-not called))
 
-  :doc "allows the documented concatenation-oriented regexp subset"
+  :doc "allows the documented linear regexp subset"
   (progn
     (should (test-mevedel-ptc--value
              "(string-match-p \"^(defcustom\" \"(defcustom x\")"))
@@ -395,6 +490,26 @@ dispatched), and `:pauses'."
     (should (equal '("a" "b")
                    (test-mevedel-ptc--value
                     "(split-string \"a\\nb\" \"\\n\")"))))
+
+  :doc "allows unnested quantifiers on single atoms and bracket classes"
+  (progn
+    (should (test-mevedel-ptc--value
+             "(string-match-p \"^[0-9]+$\" \"12345\")"))
+    (should (test-mevedel-ptc--value
+             "(string-match-p \"^a*b?c.+$\" \"aabcxy\")"))
+    (should (test-mevedel-ptc--value
+             "(string-match-p \"^[ \\t]*[0-9]+\" \"  42\")"))
+    (should (test-mevedel-ptc--value
+             "(string-match-p \"a\\\\{2,3\\\\}\" \"aaa\")"))
+    (should (equal "ab" (test-mevedel-ptc--value
+                         "(string-trim \"  ab  \" \"[ ]+\" \"[ ]+\")"))))
+
+  :doc "rejects catastrophic quantified-atom work before host matching"
+  (let ((mevedel-ptc-max-regexp-work 1000))
+    (should (string-match-p
+             "atomic work budget"
+             (test-mevedel-ptc--error
+              "(string-match-p \"a*a*a*a*a*a*a*a*b\" \"aaaaaaaaaaaaaaaaaaaa\")"))))
 
   :doc "preflights split-string amplification before host allocation"
   (let ((called nil)
@@ -414,9 +529,9 @@ dispatched), and `:pauses'."
         (state (mevedel-ptc--make-state)))
     (set-match-data before)
     (dolist (spec `(("string-trim" ,#'string-trim
-                    ("aaa" "a+" nil))
+                    ("aaa" "\\(a\\)+" nil))
                    ("split-string" ,#'mevedel-ptc--split-string
-                    ("abc" "b" nil "a+"))))
+                    ("abc" "b" nil "\\(a\\)+"))))
       (condition-case err
           (progn
             (mevedel-ptc--apply-pure
@@ -452,7 +567,7 @@ dispatched), and `:pauses'."
     (should (string-match-p "value byte budget" (plist-get run :value))))
 
   :doc "removes numeric amplification that has no orchestration need"
-  (should (string-match-p "Void or forbidden function"
+  (should (string-match-p "Unknown functions: expt"
                           (test-mevedel-ptc--error "(expt 2 1000000)")))
 
   :doc "preflights format precision before host allocation"

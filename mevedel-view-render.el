@@ -1185,7 +1185,35 @@ real user message."
       (let* ((seg (car rest))
              (type (car seg))
              (seg-start (cadr seg))
+             (seg-end (caddr seg))
              (next-type (car-safe (cadr rest)))
+             ;; One substring and one render-data extraction per segment
+             ;; feed every classification below.  The predicate wrappers
+             ;; used to extract the same span three to five times per
+             ;; segment on every streaming frame, which dominated live
+             ;; render allocation.  Properties are kept: the side-channel
+             ;; extractors authorize blocks through text properties.
+             (seg-text
+              (and data-buf
+                   (memq type '(user render-data ignored))
+                   (with-current-buffer data-buf
+                     (save-restriction
+                       (widen)
+                       (let* ((pmin (point-min))
+                              (pmax (point-max))
+                              (s (max pmin (min seg-start pmax)))
+                              (e (max pmin (min seg-end pmax))))
+                         (if (< s e) (buffer-substring s e) ""))))))
+             (seg-render-data
+              (and seg-text
+                   (cdr (mevedel-tool-render-data-extract seg-text))))
+             (seg-render-kind
+              (and (consp seg-render-data)
+                   (plist-get seg-render-data :kind)))
+             (seg-scaffolding-only-p
+              (and (memq type '(user ignored))
+                   seg-text
+                   (mevedel-view--scaffolding-only-text-p seg-text)))
              (prompt-drawer-after-user-p
               (and (eq type 'prompt)
                    (null current-role)
@@ -1193,9 +1221,8 @@ real user message."
                    (eq (plist-get (car turns) :role) 'user)))
              (hook-audit-only-p
               (and (eq type 'ignored)
-                   data-buf
-                   (mevedel-view--hook-audit-only-segment-p
-                    data-buf seg-start (caddr seg))))
+                   seg-text
+                   (mevedel-view--hook-audit-only-text-p seg-text)))
              (hook-audit-after-user-p
               (and hook-audit-only-p
                    (null current-role)
@@ -1208,17 +1235,14 @@ real user message."
                    (eq (plist-get (car turns) :role) 'user)))
              (user-display-after-user-p
               (and (eq type 'render-data)
-                   data-buf
                    (null current-role)
                    turns
                    (eq (plist-get (car turns) :role) 'user)
-                   (mevedel-view--user-turn-display-text
-                    (list seg) data-buf)))
+                   (eq seg-render-kind 'user-display)
+                   (stringp (plist-get seg-render-data :text))))
              (scaffolding-before-hook-audit-p
               (and (eq type 'user)
-                   data-buf
-                   (mevedel-view--scaffolding-only-p
-                    data-buf seg-start (caddr seg))
+                   seg-scaffolding-only-p
                    (let ((next (cadr rest)))
                      (and (eq (car-safe next) 'ignored)
                           (mevedel-view--hook-audit-only-segment-p
@@ -1227,7 +1251,7 @@ real user message."
               (and (eq type 'user)
                    data-buf
                    (mevedel-view--review-action-segment-p
-                    data-buf seg-start (caddr seg))))
+                    data-buf seg-start seg-end)))
              (agent-task-p
               (and (eq type 'user)
                    data-buf
@@ -1236,26 +1260,19 @@ real user message."
                        (goto-char seg-start)
                        (let ((case-fold-search nil))
                          (re-search-forward
-                          "^\\* Agent Task:" (caddr seg) t))))))
+                          "^\\* Agent Task:" seg-end t))))))
              (system-reminder-p (eq type 'reminder))
              (inline-skill-render-p
-              (and data-buf
-                   (memq type '(user render-data ignored))
-                   (mevedel-view--inline-skill-render-segment-p
-                    data-buf seg-start (caddr seg))))
+              (eq seg-render-kind 'inline-skill))
              (request-summary-p
-              (and data-buf
-                   (memq type '(user render-data ignored))
-                   (mevedel-view--request-summary-render-segment-p
-                    data-buf seg-start (caddr seg))))
+              (eq seg-render-kind 'request-summary))
              (render-data-only-p
-              (and data-buf
-                   (memq type '(user render-data ignored))
+              (and seg-text
                    (not (and (memq type '(render-data ignored))
-                             (mevedel-view--collaboration-event-segment-p
-                              data-buf seg-start (caddr seg))))
-                   (mevedel-view--render-data-only-segment-p
-                    data-buf seg-start (caddr seg)))))
+                             (eq seg-render-kind 'collaboration-event)
+                             (eq (plist-get seg-render-data :event)
+                                 'started)))
+                   (mevedel-view--render-data-only-text-p seg-text))))
         (cond
          (review-action-p
           nil)
@@ -1307,8 +1324,7 @@ real user message."
                    (memq prev-type '(nil user response))
                    (and (memq prev-type '(reasoning tool))
                         data-buf
-                        (not (mevedel-view--scaffolding-only-p
-                              data-buf seg-start (caddr seg)))))
+                        (not seg-scaffolding-only-p)))
                ;; Look-ahead: a scaffolding-only nil gap right after a
                ;; response is assistant-side glue.  Require DATA-BUF proof
                ;; so a real user prompt remains a user turn.
@@ -1316,12 +1332,10 @@ real user message."
                          (or (and (memq next-type
                                        '(reasoning ignored tool mailbox
                                          reminder render-data))
-                                  (mevedel-view--scaffolding-only-p
-                                   data-buf seg-start (caddr seg)))
+                                  seg-scaffolding-only-p)
                              (and (eq next-type 'response)
                                   data-buf
-                                  (mevedel-view--scaffolding-only-p
-                                   data-buf seg-start (caddr seg)))))))
+                                  seg-scaffolding-only-p)))))
           ;; Genuine user turn: either the first segment, follows a
           ;; user/response segment, or follows reasoning or tool activity.
           (progn
@@ -1352,10 +1366,7 @@ real user message."
                (request-summary-p 'response)
                (hook-audit-only-p prev-type)
                (render-data-only-p prev-type)
-               ((and (eq type 'ignored)
-                     data-buf
-                     (mevedel-view--scaffolding-only-p
-                      data-buf seg-start (caddr seg)))
+               ((and (eq type 'ignored) seg-scaffolding-only-p)
                 prev-type)
                (scaffolding-before-hook-audit-p prev-type)
                (t type)))
@@ -1378,16 +1389,37 @@ real user message."
            (cadr segment) (caddr segment))
           'directive-turn-boundary))))
 
+(defvar-local mevedel-view--directive-ranges-cache nil
+  "Memo for `mevedel-view--directive-ranges' in a data buffer.
+A list (TICK ALLOW-OPEN RANGES): TICK is the buffer's modification tick
+when RANGES were scanned and ALLOW-OPEN the flag the scan used.  The
+scan walks the whole transcript, so an unmodified redraw must not
+repeat it.")
+
 (defun mevedel-view--directive-ranges (data-buf)
-  "Return absolute directive transcript ranges in DATA-BUF."
+  "Return absolute directive transcript ranges in DATA-BUF.
+Memoized on the buffer's modification tick.  `:render-id's stay stable
+across unmodified redraws; consumers only need them unique per range
+within one buffer state.  Each call returns fresh shallow copies so a
+caller's `plist-put' cannot corrupt the memo."
   (with-current-buffer data-buf
-    (mapcar
-     (lambda (range)
-       (plist-put range :render-id
-                  (cl-gensym "mevedel-view-directive-turn-")))
-     (mevedel-transcript-buffer-directive-ranges
-      (and mevedel--current-request
-           (mevedel-request-directive-uuid mevedel--current-request))))))
+    (let ((tick (buffer-modified-tick))
+          (allow-open
+           (and mevedel--current-request
+                (mevedel-request-directive-uuid mevedel--current-request)))
+          (cache mevedel-view--directive-ranges-cache))
+      (unless (and cache
+                   (equal (nth 0 cache) tick)
+                   (equal (nth 1 cache) allow-open))
+        (setq cache
+              (list tick allow-open
+                    (mapcar
+                     (lambda (range)
+                       (plist-put range :render-id
+                                  (cl-gensym "mevedel-view-directive-turn-")))
+                     (mevedel-transcript-buffer-directive-ranges allow-open)))
+              mevedel-view--directive-ranges-cache cache))
+      (mapcar #'copy-sequence (nth 2 cache)))))
 
 (defun mevedel-view--group-transcript-turns (segments data-buf)
   "Group SEGMENTS and annotate first-class directive turns in DATA-BUF."
@@ -2593,12 +2625,6 @@ system reminder wrappers."
         (string-trim
          (mevedel-view--strip-render-data-display-text text)))))
 
-(defun mevedel-view--render-data-only-segment-p (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF's SEG-START..SEG-END is only hidden render-data."
-  (with-current-buffer data-buf
-    (mevedel-view--render-data-only-text-p
-     (buffer-substring seg-start seg-end))))
-
 (defun mevedel-view--hook-audit-only-text-p (text)
   "Return non-nil if TEXT is only hook audit scaffolding."
   (mevedel-transcript-audit-only-p text))
@@ -2688,12 +2714,16 @@ turn shows one bogus thinking summary per tool boundary."
       (let* ((pmin (point-min))
              (pmax (point-max))
              (s (max pmin (min seg-start pmax)))
-             (e (max pmin (min seg-end pmax)))
-             (text (and (< s e)
-                        (buffer-substring-no-properties s e)))
-             (cleaned (and text (mevedel-view--clean-reasoning-text text))))
-        (or (null text)
-            (string-empty-p (string-trim cleaned)))))))
+             (e (max pmin (min seg-end pmax))))
+        (mevedel-view--scaffolding-only-text-p
+         (and (< s e) (buffer-substring-no-properties s e)))))))
+
+(defun mevedel-view--scaffolding-only-text-p (text)
+  "Return non-nil if TEXT is org-only glue, or nil.
+Nil TEXT counts as glue.  See `mevedel-view--scaffolding-only-p'."
+  (or (null text)
+      (string-empty-p
+       (string-trim (mevedel-view--clean-reasoning-text text)))))
 
 (defun mevedel-view--inline-skill-render-data-from-text (text)
   "Return inline-skill render-data from TEXT, or nil."
@@ -2717,25 +2747,11 @@ turn shows one bogus thinking summary per tool boundary."
          (eq (plist-get data :kind) 'request-summary)
          data)))
 
-(defun mevedel-view--inline-skill-render-segment-p
-    (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF's SEG-START..SEG-END carries inline skill data."
-  (with-current-buffer data-buf
-    (mevedel-view--inline-skill-render-data-from-text
-     (buffer-substring seg-start seg-end))))
-
 (defun mevedel-view--collaboration-event-segment-p
     (data-buf seg-start seg-end)
   "Return non-nil when DATA-BUF's span carries a started collaboration event."
   (with-current-buffer data-buf
     (mevedel-view--collaboration-event-from-text
-     (buffer-substring seg-start seg-end))))
-
-(defun mevedel-view--request-summary-render-segment-p
-    (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF's SEG-START..SEG-END carries a request summary."
-  (with-current-buffer data-buf
-    (mevedel-view--request-summary-render-data-from-text
      (buffer-substring seg-start seg-end))))
 
 (defun mevedel-view--delete-request-summaries (data-buf start end)

@@ -1240,6 +1240,36 @@
             (should (string-match-p "unchanged since last read"
                                     after-agent))))
       (delete-file tmp)))
+  :doc "ToolScript nested reads neither consult nor record dedup state"
+  (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "ptc content\n"))
+         (ws (mevedel-workspace--create
+              :type 'file :id "read-ptc-dedup"
+              :root (file-name-directory tmp)
+              :name "test"
+              :file-cache (mevedel-test-file-cache-create)))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 1)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          ;; A script sees only its own tool results, so a reuse stub is
+          ;; unusable there even when the conversation read the file first.
+          (let ((first (mevedel-tool-fs-read--file (list :file_path tmp))))
+            (should (string-match-p "ptc content" first)))
+          (let ((mevedel-pipeline--active-call-source 'ptc))
+            (dotimes (_ 2)
+              (let ((nested (mevedel-tool-fs-read--file
+                             (list :file_path tmp))))
+                (should (string-match-p "ptc content" nested))
+                (should-not (string-match-p "unchanged since last read"
+                                            nested)))))
+          ;; The nested reads recorded nothing: the conversation's own
+          ;; dedup state is exactly what its first read left behind.
+          (let ((after (mevedel-tool-fs-read--file (list :file_path tmp))))
+            (should (string-match-p "unchanged since last read" after))))
+      (delete-file tmp)))
   :doc "does not dedupe after external modification"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "hello\n"))
          (ws (mevedel-workspace--create

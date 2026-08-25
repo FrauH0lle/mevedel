@@ -22,6 +22,15 @@ The evaluator resolves a call's operator before evaluating its arguments. An
 unknown function therefore fails without running tool calls hidden in its
 arguments.
 
+Operators additionally preflight before execution: the whole parsed script is
+walked once, and every operator outside the closed tables is reported in one
+error with nearest-match suggestions, before any nested tool runs. Because
+operators never resolve through the lexical environment, this static check is
+exact for evaluated positions; unknown names in never-taken branches are
+rejected too. Quoted data, binding names, and lambda parameter lists are
+skipped. Literal regexp arguments to the regexp primitives are validated in
+the same pass.
+
 `let` evaluates all initializer expressions in the surrounding environment:
 
 ```elisp
@@ -56,15 +65,22 @@ Closed, macro-shaped conveniences:
 (unless CONDITION BODY...)
 (push VALUE VARIABLE)
 (dolist (VARIABLE LIST) BODY...)
+(dotimes (VARIABLE COUNT) BODY...)
 ```
 
-`push` accepts only a plain bound variable as its place. `dolist` accepts only
-the two-element `(VARIABLE LIST)` specification; there is no result form. The
-dialect has no user-defined macros, `macrolet`, backquote, `cl-loop`,
+`push` accepts only a plain bound variable as its place. `dolist` and
+`dotimes` accept only the two-element specification; there is no result form.
+The dialect has no user-defined macros, `macrolet`, backquote, `cl-loop`,
 generalized places, or guest-visible macro expansion.
 
 The ToolScript tool description generates exact signatures for every pure data
-primitive from the interpreter's closed table. Nothing else is callable.
+primitive from the interpreter's closed table. Nothing else is callable. The
+table includes the syntactic path helpers (`file-name-nondirectory`,
+`file-name-directory`, `file-name-concat`, `file-name-extension`,
+`file-name-sans-extension`, `file-name-base` — file-name handlers are disabled
+so they never touch remote state), `take`, and a fixed-comparator `sort` that
+copies its list and orders ascending with `value<`. Guest closures cannot be
+comparators.
 
 ## Strings and regexps
 
@@ -95,10 +111,18 @@ uses ripgrep syntax; for example, `^[(]defcustom` matches a literal opening
 parenthesis without adding another layer of backslash escaping.
 
 Use `regexp-quote` when matching model- or tool-produced text literally.
-The guest regexp subset is deliberately linear: repetition operators,
-alternation, backreferences, and group extensions are rejected before Emacs's
-regexp matcher runs. Literals, anchors, bracket classes, and ordinary capture
-groups remain available. `split-string` also rejects an empty separator and a
+The guest regexp subset is deliberately bounded. `*`, `+`, `?`, and `\{n,m\}`
+are allowed on a single atom — one literal, one escaped character, `.`, or one
+bracket class — so `"^[0-9]+$"` and `"^[ \t]*[0-9]+"` work. Rejected before
+Emacs's backtracking matcher runs: a quantified group, a quantifier stacked on
+another quantifier, more than eight quantified atoms, alternation,
+backreferences, and group extensions. Adjacent single-atom quantifiers can
+still backtrack polynomially; the quantifier cap and the regexp work budget
+bound that residual. Literals, anchors, bracket classes, and ordinary capture
+groups remain available. The atomic-work estimate accounts conservatively for
+polynomial backtracking by raising input size to the number of quantified
+atoms; a pattern that is cheap on short text can therefore be rejected on a
+larger input before Emacs's matcher runs. `split-string` also rejects an empty separator and a
 split whose maximum output cannot fit the guest value budget. The same checks
 apply to `string-trim` and `split-string` trim regexps. An omitted split
 separator uses a fixed whitespace regexp; it never reads Emacs configuration.
@@ -113,8 +137,14 @@ that request and their exact keyword arguments:
 (Grep :pattern "TODO" :path "." :output_mode "files_with_matches")
 ```
 
-A successful nested call returns its canonical result, normally a string. A
-failed nested call returns a guest plist:
+A successful nested call returns its canonical result, normally a string —
+exactly what that tool returns in conversation, including its documented
+formatting. `Read` output carries `cat -n` style line-number prefixes and may
+end with a truncation notice; `Grep` count mode returns absolute `path:count`
+lines; `Glob` returns newline-separated absolute paths. Session-level Read
+duplicate suppression does not apply to nested calls: a script always receives
+file content, and its reads do not poison the conversation's own
+duplicate-read state. A failed nested call returns a guest plist:
 
 ```elisp
 (:error "message")
@@ -181,11 +211,17 @@ wide searches before mapping over their results.
 The interpreter yields between short computation slices, so Emacs remains
 interactive. Scripts in flight are runtime state: if Emacs exits or the session
 is recovered, the ToolScript call settles as interrupted and does not resume.
-Only the envelope call and its bounded ordered child audit are checkpointed.
-Recovery turns that checkpoint into an ordinary ToolScript tool row, marks
-queued or running children interrupted, and consumes the checkpoint with the
-repaired segment; no lexical environment, stack, timer, or continuation is
-serialized.
+Only the envelope call and its bounded ordered child audit are checkpointed,
+and the checkpoint is written durably twice per script: once before the first
+nested call and once at settlement. Between those writes, child audit progress
+is journaled in memory only (an unrelated autosave captures it
+opportunistically) — per-child sidecar writes dominated script runtime,
+serialized parallel batches, and cost one remote round-trip each on TRAMP
+targets. A crash mid-script therefore recovers the child audit as of the last
+autosave, not the last child. Recovery turns the surviving checkpoint into an
+ordinary ToolScript tool row, marks queued or running children interrupted,
+and consumes the checkpoint with the repaired segment; no lexical environment,
+stack, timer, or continuation is serialized.
 
 ## Security boundary
 

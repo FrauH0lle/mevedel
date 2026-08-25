@@ -782,6 +782,41 @@
         (should (= 1 updates))
         (should (equal before last-update)))))
 
+  :doc "journals child audit in memory and writes durably only at settlement"
+  (let* ((durable-session
+          (mevedel-session--create
+           :name "ptc" :workspace workspace :save-path save-path
+           :working-directory root
+           :execution-target (mevedel-execution-target-create root)
+           :permission-mode 'full-auto
+           :touched-files (make-hash-table :test #'equal)))
+         (request
+          (mevedel-request--create
+           :id "ptc-journal" :session durable-session
+           :file-snapshots (make-hash-table :test #'equal)))
+         (mevedel-telemetry-enabled nil)
+         (updates 0)
+         (notes 0))
+    (with-current-buffer buffer
+      (setq-local mevedel--current-request request
+                  mevedel--session durable-session))
+    (cl-letf (((symbol-function 'mevedel-ptc-checkpoint-start)
+               (lambda (&rest _) t))
+              ((symbol-function 'mevedel-ptc-checkpoint-note)
+               (lambda (&rest _) (setq notes (1+ notes)) t))
+              ((symbol-function 'mevedel-ptc-checkpoint-update)
+               (lambda (&rest _) (setq updates (1+ updates)) t)))
+      (should (equal "2"
+                     (test-mevedel-ptc-driver--run
+                      buffer
+                      (format "(length (list (Read :file_path %S) (Read :file_path %S)))"
+                              (file-name-concat root "one.txt")
+                              (file-name-concat root "two.txt")))))
+      ;; Per-child audit progress stays in memory; the sidecar is written
+      ;; once, at settlement.
+      (should (= 1 updates))
+      (should (>= notes 2))))
+
   :doc "uses child hooks and snapshots from the shared pipeline"
   (let* ((path (file-name-concat root "mutated.txt"))
          (request
@@ -865,13 +900,13 @@
   (should (string-match-p "Error:" (test-mevedel-ptc-driver--run buffer "(list (a . b))")))
 
   :doc "reports a forbidden operator as a script error"
-  (should (string-match-p "Void or forbidden function"
+  (should (string-match-p "Unknown functions: getenv"
                           (test-mevedel-ptc-driver--run buffer "(getenv \"HOME\")")))
 
   :doc "a tool outside the allowlist is not callable from a script"
   (let ((mevedel-ptc-primitive-tools '("Glob")))
     (should (string-match-p
-             "Void or forbidden function"
+             "Unknown functions: Read"
              (test-mevedel-ptc-driver--run
               buffer (format "(Read :file_path %S)" (file-name-concat root "one.txt")))))))
 
