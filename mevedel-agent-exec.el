@@ -285,9 +285,8 @@ helper buffer-locally)."
 runs the normal post-response bookkeeping before this handler persists
 the transcript.
 
-Captures a short reason (HTTP status + error type/message) onto the
-invocation's `terminal-reason' slot before finalize so the parent's
-render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
+Captures a short reason and the finalized transcript response before routing
+the terminal event through the request callback's exactly-once retry gate."
   (when (fboundp 'gptel--handle-error)
     (condition-case _ (gptel--handle-error fsm) (error nil)))
   (when-let* ((inv (mevedel-agent-exec--invocation-from-fsm fsm)))
@@ -301,7 +300,8 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
           (funcall terminal-callback
                    (list :mevedel-agent-terminal-status 'error
                          :error-details (plist-get info :error)
-                         :fallback-partial fallback-partial)))))))
+                         :fallback-partial fallback-partial)
+                   info))))))
 
 (defvar mevedel-agent-exec--handlers
   `((WAIT ,#'mevedel-reminders--handle-inject
@@ -491,11 +491,6 @@ Returns the spawned FSM."
             (mevedel-agent-exec--make-callback
              main-cb agent-type description where (list partial))))
       (setf (mevedel-agent-invocation-runtime-fsm invocation) fsm)
-      (setf (gptel-fsm-info fsm)
-            (plist-put
-             (plist-put (gptel-fsm-info fsm)
-                        :mevedel-agent-invocation invocation)
-             :mevedel-agent-terminal-callback main-cb))
       (gptel--update-status " Calling Agent..." 'font-lock-escape-face)
       ;; Install one dispatch-local copy of the frozen request state before
       ;; gptel reads it from the agent buffer or copies it to a prompt buffer.
@@ -513,8 +508,16 @@ Returns the spawned FSM."
              (gptel-cb (plist-get req-info :callback))
              (wrapped
               (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
+        ;; `gptel-request' replaces the FSM info plist wholesale, so
+        ;; every mevedel key must be installed on the plist it built.
+        ;; The terminal callback is what settles the invocation from the
+        ;; ERRS handler; losing it leaves the agent running forever
+        ;; after an error the provider callback never sees.
         (setq req-info
               (plist-put req-info :mevedel-agent-invocation invocation))
+        (setq req-info
+              (plist-put req-info
+                         :mevedel-agent-terminal-callback mevedel-cb))
         (setq req-info
               (plist-put
                req-info :mevedel-compaction-target-policy
@@ -574,6 +577,7 @@ terminal branch needs the final text.
 The dispatch table is:
 
 - nil: transport error; MAIN-CB receives a structured error event.
+- a structured mevedel terminal event: deliver it through the same retry gate.
 - `(tool-call . CALLS)': update tracking marker and hand off to
   `gptel--display-tool-calls'.
 - `(pred stringp)': accumulate into PARTIAL-CELL.  When `:stream' is
@@ -710,6 +714,11 @@ partial-len=%d :tool-use=%S :stream=%S"
             (deliver pending-terminal))
           (unless fired
             (pcase resp
+              ((pred (lambda (value)
+                       (and (listp value)
+                            (plist-member
+                             value :mevedel-agent-terminal-status))))
+               (deliver resp))
               ('nil (deliver-error))
               (`(tool-call . ,calls)
                (unless (plist-get info :tracking-marker)

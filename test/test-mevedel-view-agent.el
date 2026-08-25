@@ -339,6 +339,67 @@
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer)))))
 
+(mevedel-deftest mevedel-view-agent-live-transcript-start
+  (:doc "turns an open idle retained view into a live stream projection")
+  ,test
+  (test)
+  (let ((parent-data (generate-new-buffer " *test-agent-start-parent-data*"))
+        (parent-view (generate-new-buffer " *test-agent-start-parent-view*"))
+        (data-buffer (generate-new-buffer " *test-agent-start-data*"))
+        (view-buffer (generate-new-buffer " *test-agent-start-view*"))
+        invocation
+        scheduled)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-data
+            (org-mode))
+          (mevedel-view--setup parent-view parent-data)
+          (with-current-buffer parent-view
+            (goto-char (point-max))
+            (insert "> draft\ncontinues"))
+          (with-current-buffer data-buffer
+            (org-mode)
+            (setq invocation
+                  (mevedel-agent-invocation--create
+                   :buffer data-buffer
+                   :transcript-status 'running
+                   :call-count 2))
+            (setq-local mevedel--agent-invocation invocation)
+            (insert "Follow-up prompt\n"))
+          (mevedel-view--setup
+           view-buffer data-buffer
+           '(:agent-transcript-p t
+             :agent-path "/root/streaming"
+             :parent-view parent-view
+             :preserve-data-view-buffer t
+             :transcript-info (:live-buffer nil :status completed)))
+          (with-current-buffer view-buffer
+            (mevedel-view--full-rerender))
+          (mevedel-view-agent-live-transcript-start invocation)
+          (with-current-buffer view-buffer
+            (should (plist-get mevedel-view--agent-transcript-info
+                               :live-buffer))
+            (should (eq 'running
+                        (plist-get
+                         (mevedel-view--agent-transcript-current-info)
+                         :status)))
+            (should (mevedel-view-stream-in-flight-turn-start-position))
+            (should (eq data-buffer
+                        (marker-buffer mevedel-view--data-turn-start))))
+          (cl-letf (((symbol-function 'mevedel-view-stream-schedule)
+                     (lambda () (setq scheduled t))))
+            (with-current-buffer data-buffer
+              (mevedel-view-agent-live-transcript-stream)))
+          (should scheduled)
+          (with-current-buffer parent-view
+            (should (string-suffix-p
+                     "> draft\ncontinues"
+                     (buffer-substring-no-properties
+                      (point-min) (point-max))))))
+      (dolist (buffer (list parent-data parent-view data-buffer view-buffer))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (mevedel-deftest mevedel-view-agent-cleanup-parent
   (:doc "cleans up saved transcript views without tearing down the session")
   ,test
@@ -511,22 +572,22 @@
          (data-buffer (generate-new-buffer " *agent-retained-data*"))
          (view-buffer (generate-new-buffer " *agent-retained-view*"))
          (parent-view (generate-new-buffer " *agent-retained-parent*"))
-         restored)
+         restored
+         preserve-data-view-buffer)
     (unwind-protect
         (progn
           (setf (mevedel-session-agent-registry session)
                 (list (cons "/root/verifier"
                             (mevedel-agent-record--create
-                             :id "storage-root-verifier"
-                             :path "/root/verifier"
-                             :parent-path "/root"
-                             :role "verifier"
                              :conversation-buffer data-buffer))))
           (with-current-buffer data-buffer
             (org-mode)
-            (insert "retained conversation"))
+            (setq-local mevedel--view-buffer parent-view))
           (cl-letf (((symbol-function 'mevedel-view--ensure)
-                     (lambda (&rest _) view-buffer))
+                     (lambda (_data _name options)
+                       (setq preserve-data-view-buffer
+                             (plist-get options :preserve-data-view-buffer))
+                       view-buffer))
                     ((symbol-function 'mevedel-view--full-rerender) #'ignore)
                     ((symbol-function 'mevedel-transcript-restore-properties)
                      (lambda () (setq restored t))))
@@ -535,7 +596,9 @@
              (list :session session :buffer data-buffer :live-buffer nil)
              parent-view))
           (with-current-buffer data-buffer
-            (should-not buffer-read-only))
+            (should-not buffer-read-only)
+            (should (eq mevedel--view-buffer parent-view)))
+          (should preserve-data-view-buffer)
           (should-not restored))
       (dolist (buffer (list data-buffer view-buffer parent-view))
         (when (buffer-live-p buffer)

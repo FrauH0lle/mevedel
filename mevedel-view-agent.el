@@ -556,12 +556,35 @@ Also kill retained conversation data when KILL-RETAINED is non-nil."
             (with-current-buffer mevedel--data-buffer
               (copy-marker (point-max) nil))))))
 
+(defun mevedel-view-agent-live-transcript-start (invocation)
+  "Start live updates in open transcript views for INVOCATION."
+  (when-let* (((mevedel-agent-invocation-p invocation))
+              (agent-buf (mevedel-agent-invocation-buffer invocation))
+              ((buffer-live-p agent-buf)))
+    (let ((views (mevedel-view--agent-transcript-views-for-data agent-buf)))
+      (dolist (view views)
+        (when (buffer-live-p view)
+          (condition-case err
+              (with-current-buffer view
+                (setq mevedel-view--agent-transcript-info
+                      (plist-put
+                       (copy-sequence mevedel-view--agent-transcript-info)
+                       :live-buffer t))
+                (mevedel-view--full-rerender)
+                (mevedel-view--agent-transcript-start-streaming)
+                (force-mode-line-update t))
+            (error
+             (mevedel--warn-once
+              'view-agent-start-update
+              "Starting live agent transcript update failed: %s"
+              (error-message-string err))))))
+      views)))
+
 (defun mevedel-view-agent-live-transcript-finalize (invocation)
   "Refresh live transcript views for finalized INVOCATION.
 Returns non-nil when a live transcript view still references the
-agent buffer and should keep that buffer alive.  The view is marked
-non-live so closing it after finalization kills the retained data
-buffer."
+agent buffer and should keep that buffer alive.  The views become idle
+retained projections that can follow another turn."
   (when-let* (((mevedel-agent-invocation-p invocation))
               (agent-buf (mevedel-agent-invocation-buffer invocation))
               ((buffer-live-p agent-buf)))
@@ -597,8 +620,8 @@ buffer."
 
 (defun mevedel-view-close-agent-transcript ()
   "Close the selected transcript side window.
-Saved transcript file buffers are killed with the view.  Live running
-agent buffers are left alone."
+Saved transcript file buffers are killed with the view.  Retained
+conversation buffers are left alone."
   (interactive)
   (unless mevedel-view--agent-transcript-p
     (user-error "Not an agent transcript view"))
@@ -790,6 +813,7 @@ PARENT-VIEW is the session view that opened the transcript."
                           session
                           (plist-get info :relative-path)
                           t)))
+         (retained-p (mevedel-view--retained-agent-data-p agent-data info))
          (view-name (format "*mevedel-agent:%s:%s*"
                             session-key agent-path))
          (existing (get-buffer view-name))
@@ -811,7 +835,7 @@ PARENT-VIEW is the session view that opened the transcript."
            (list :agent-transcript-p t
                  :agent-path agent-path
                  :parent-view parent-view
-                 :preserve-data-view-buffer live-p
+                 :preserve-data-view-buffer (or live-p retained-p)
                  :transcript-info info))))
     (with-current-buffer agent-data
       (when (eq major-mode 'so-long-mode)
@@ -828,8 +852,7 @@ PARENT-VIEW is the session view that opened the transcript."
       ;; agent is idle now; freezing it makes the next gptel stream
       ;; insertion fail with buffer-read-only.  Only cold transcript
       ;; files are restored and frozen.
-      (unless (or live-p
-                  (mevedel-view--retained-agent-data-p agent-data info))
+      (unless (or live-p retained-p)
         (require 'mevedel-transcript-restore)
         (mevedel-transcript-restore-properties)
         (unless buffer-read-only
@@ -859,8 +882,8 @@ PARENT-VIEW is the session view that opened the transcript."
 Looks up the entry in the parent session's `agent-transcripts'
 slot and validates the path through
 `mevedel-agent-persistence-transcript-path-p' before opening
-completed transcripts.  Running agents open from their live invocation
-buffer."
+cold transcripts.  Resident retained agents open from their conversation
+buffer whether running or idle."
   (interactive
    (list (completing-read
           "Agent transcript: "

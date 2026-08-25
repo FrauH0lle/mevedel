@@ -281,6 +281,9 @@
                   'provider-fsm))
                ((symbol-function 'mevedel-agent-runtime--execution-live-p)
                 (lambda (_invocation) nil))
+               ((symbol-function 'mevedel-view-agent-live-transcript-start)
+                (lambda (_invocation)
+                  (push 'view-start events)))
                ((symbol-function 'mevedel-agent-runtime--finalize)
                 (lambda (invocation status)
                   (push status finalizations)
@@ -308,7 +311,7 @@
                              (mevedel-agent-invocation-path invocation)))
               (should
                (equal '(transcript-setup conversation-configure
-                         transcript-save invocation-published)
+                         transcript-save invocation-published view-start)
                       (nreverse events)))
               (with-current-buffer agent-buffer
                 (should (string-match-p "Prior context" (buffer-string)))

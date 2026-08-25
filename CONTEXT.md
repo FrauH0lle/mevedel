@@ -125,9 +125,10 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **status strip** — The mevedel-owned clickable header-line chrome in a view buffer that routes status items to session cockpit surfaces.
 - **data buffer** — The authoritative gptel/org transcript buffer backing a view buffer.
 - **agent transcript view** — A read-only projection of a sub-agent transcript,
-  backed by the live agent while it is running and by its saved transcript after
-  it reaches a terminal state. It is an observation-only view-buffer variant,
-  not a separate transcript presentation or interaction surface.
+  backed by its resident retained conversation buffer whether running or idle,
+  and otherwise by its saved cold or historical transcript. It is an
+  observation-only view-buffer variant, not a separate transcript presentation
+  or interaction surface.
 - **tool** — A model-callable operation routed through mevedel's validation, permission, execution, rendering, and persistence pipeline.
 - **tool attempt** — One validated model tool call passing through pre-use and permission gates. It receives one post-use outcome only when its handler runs; a model retry is a separate attempt.
 - **ToolScript** — The programmatic-tool-calling tool: one model-authored script evaluated by mevedel's closed orchestration machine. Internally namespaced `mevedel-ptc-*` after the original PTC acronym. It owns one provider-visible envelope and may suspend on permission-checked nested tool calls without exposing their intermediate results to the model.

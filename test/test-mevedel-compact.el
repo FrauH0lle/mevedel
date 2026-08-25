@@ -1370,7 +1370,7 @@
                 'running)
           (plist-put
            (gptel-fsm-info fsm) :mevedel-agent-terminal-callback
-           (lambda (_event)
+           (lambda (_response _info)
              (cl-incf terminal-events)
              (setf (mevedel-agent-invocation-transcript-status invocation)
                    'error)))
@@ -1447,7 +1447,7 @@
            (waits 0) (terminal-events 0) (requests 0))
       (plist-put
        (gptel-fsm-info fsm) :mevedel-agent-terminal-callback
-       (lambda (_event)
+       (lambda (_response _info)
          (cl-incf terminal-events)
          (setf (mevedel-agent-invocation-transcript-status invocation)
                'error)))

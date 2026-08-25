@@ -198,6 +198,8 @@
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-agent-live-transcript-finalize
                   "mevedel-view-agent" (invocation))
+(declare-function mevedel-view-agent-live-transcript-start
+                  "mevedel-view-agent" (invocation))
 
 (defconst mevedel-agent-runtime--partial-max-chars (* 32 1024)
   "Maximum inline partial response size for an interrupted turn.")
@@ -1083,6 +1085,8 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                   (error "Agent provider request did not start"))
                 (when on-invocation
                   (funcall on-invocation invocation))
+                (when (fboundp 'mevedel-view-agent-live-transcript-start)
+                  (mevedel-view-agent-live-transcript-start invocation))
                 (setq published-p t
                       publication-ready t)
                 (when (fboundp 'mevedel-telemetry-record)

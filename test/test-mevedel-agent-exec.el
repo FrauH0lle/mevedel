@@ -308,6 +308,8 @@ fire-count and payload."
                  :doc "a rejected terminal handoff stays pending for one later retry"
                  (let* ((attempts 0)
                         (delivered nil)
+                        (event '(:mevedel-agent-terminal-status error
+                                 :fallback-partial "partial response"))
                         scheduled
                         (main-cb
                          (lambda (value)
@@ -326,12 +328,12 @@ fire-count and payload."
                               (lambda (_delay _repeat function &rest args)
                                 (setq scheduled (cons function args))
                                 'retry-timer)))
-                     (funcall cb t info)
+                     (funcall cb event info)
                      (should (= 1 attempts))
                      (should-not delivered)
                      (apply (car scheduled) (cdr scheduled)))
                    (should (= 2 attempts))
-                   (should (equal "" delivered)))
+                   (should (equal event delivered)))
 
 
 		 )
@@ -636,7 +638,7 @@ fire-count and payload."
 			             :model gptel-model
 			             :effort gptel-reasoning-effort)))
 			     (cl-letf (((symbol-function 'gptel-request)
-					(lambda (&optional _prompt &rest _args)
+					(lambda (&optional _prompt &rest args)
 					  (setq captured-buffer (current-buffer))
 					  (setq captured-include-reasoning
 						gptel-include-reasoning
@@ -644,7 +646,13 @@ fire-count and payload."
 						captured-tools gptel-tools)
 					  (setq captured-tiers mevedel-model-tiers
 						captured-workloads
-						mevedel-model-workloads)))
+						mevedel-model-workloads)
+					  ;; The real `gptel-request' replaces
+					  ;; the FSM info plist wholesale, so
+					  ;; keys set before the call are lost.
+					  (when-let* ((fsm (plist-get args :fsm)))
+					    (setf (gptel-fsm-info fsm)
+						  (list :buffer (current-buffer))))))
 				       ((symbol-function 'gptel--update-status)
 					#'ignore))
 		       (setq captured-fsm
@@ -665,6 +673,14 @@ fire-count and payload."
 		     :request-params nil)
 		   (plist-get (gptel-fsm-info captured-fsm)
 			      :mevedel-compaction-target-policy)))
+		 (should (eq inv (plist-get (gptel-fsm-info captured-fsm)
+					    :mevedel-agent-invocation)))
+		 (should (functionp
+			  (plist-get (gptel-fsm-info captured-fsm)
+				     :mevedel-agent-terminal-callback)))
+		 (should-not (eq #'ignore
+				 (plist-get (gptel-fsm-info captured-fsm)
+					    :mevedel-agent-terminal-callback)))
 		 (with-current-buffer agent-buf
 			   (should (eq gptel-include-reasoning t))))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
@@ -759,6 +775,34 @@ fire-count and payload."
 			      (lambda (&rest args) (setq called args))))
 		     (mevedel-agent-exec--handle-tret-save fsm))
 		   (should (equal (list inv t) called))))
+
+
+(mevedel-deftest mevedel-agent-exec--handle-errs-save ()
+			 ,test
+			 (test)
+
+			 :doc "routes FSM-side errors through guarded terminal delivery"
+			 (let* ((inv (mevedel-agent-invocation--create
+				      :path "/root/test_agent"
+				      :agent (mevedel-agent--create :name "explorer")))
+				(info (list :error "compaction failed"
+					    :mevedel-agent-invocation inv))
+				(fsm (gptel-make-fsm :info info))
+				delivered)
+			   (plist-put
+			    info :mevedel-agent-terminal-callback
+			    (lambda (event callback-info)
+			      (setq delivered (cons event callback-info))))
+			   (cl-letf (((symbol-function 'gptel--handle-error) #'ignore)
+				     ((symbol-function 'mevedel-agent-conversation-final-response)
+				      (lambda (_inv) "partial response")))
+			     (mevedel-agent-exec--handle-errs-save fsm))
+			   (should (eq info (cdr delivered)))
+			   (should (equal "compaction failed"
+					  (plist-get (car delivered) :error-details)))
+			   (should (equal "partial response"
+					  (plist-get (car delivered) :fallback-partial))))
+			 )
 
 
 (mevedel-deftest mevedel-agent-exec--error-reason-from-info ()

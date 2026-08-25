@@ -1600,8 +1600,8 @@ TOOL-PROP."
             ;; Frozen evidence is plain text: a surviving `(tool . id)'
             ;; gptel property would make gptel's prompt parser read the
             ;; truncated result body as a tool-call plist.
-            (should-not (get-text-property 0 'gptel evidence))
-            (should-not (next-single-property-change 0 'gptel evidence))
+            (should-not
+             (text-property-not-all 0 (length evidence) 'gptel nil evidence))
             (should (= 1 (let ((start 0) (count 0))
                            (while (string-match
                                    "provenance: tool-call" evidence start)
