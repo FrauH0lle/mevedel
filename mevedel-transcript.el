@@ -1600,7 +1600,7 @@ invocation descriptions."
                        ('hook-context "hook-context")
                        ('task-background "task-background")
                        (_ (symbol-name type)))
-                     (substring-no-properties text))
+                     text)
                     items)))))))))
     (dolist (skill skill-provenance)
       (unless (stringp skill)
@@ -1608,7 +1608,13 @@ invocation descriptions."
       (push (mevedel-transcript--summary-evidence-item
              "skill-invocation" skill)
             items))
-    (mapconcat #'identity (nreverse items) "\n\n")))
+    ;; Tool result bodies keep their `gptel' text properties through
+    ;; media extraction and formatting.  The evidence string is later
+    ;; inserted into gptel's prompt buffer, where a stale `(tool . id)'
+    ;; span makes the provider parser `read' arbitrary result text as a
+    ;; tool-call plist and fail.  Frozen evidence is plain text.
+    (substring-no-properties
+     (mapconcat #'identity (nreverse items) "\n\n"))))
 
 (provide 'mevedel-transcript)
 ;;; mevedel-transcript.el ends here
