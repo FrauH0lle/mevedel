@@ -14,6 +14,12 @@
   (require 'mevedel-tool-registry)
   (require 'subr-x))
 
+(require 'mevedel-edit-diagnostics)
+(require 'mevedel-execution-target)
+(require 'mevedel-file-state)
+(require 'mevedel-resource)
+(require 'mevedel-utilities)
+
 ;; `diff'
 (declare-function diff-no-select "diff"
                   (old new &optional switches no-async buf))
@@ -108,7 +114,6 @@
 (defun mevedel-tool-patch-resource-address-p (value)
   "Return non-nil when VALUE is a resource-address-shaped operand."
   (and (stringp value)
-       (require 'mevedel-resource)
        (mevedel-resource-address-like-p value)))
 
 (defun mevedel-tool-patch-physical-path (operation)
@@ -195,8 +200,6 @@ local sessions untouched until permission and plan checks have completed."
     (setq session (and (boundp 'mevedel--session) mevedel--session))
     (when (and local-p materialize)
       (setq session (mevedel-tool-patch--ensure-local-session)))
-    (when operands
-      (require 'mevedel-resource))
     (dolist (entry operands)
       (pcase-let ((`(,operation ,address ,physical-key ,attempt-key ,local-key)
                    entry))
@@ -340,7 +343,6 @@ whitespace, one `*** Environment ID:' line after the opening marker is
 tolerated, and content lines are kept raw."
   (unless (stringp patch)
     (error "Parameter patch is required"))
-  (require 'mevedel-execution-target)
   (let* ((root (file-name-as-directory (expand-file-name (or root default-directory))))
          (target
           (or (and (boundp 'mevedel--session)
@@ -903,7 +905,6 @@ Returns nil when the two contents hold the same lines."
 (defun mevedel-tool-patch--write-file (path content &optional mode literal-p)
   "Replace PATH with CONTENT and restore MODE when non-nil.
 When LITERAL-P is non-nil, write CONTENT as literal bytes."
-  (require 'mevedel-utilities)
   (mevedel--write-file-atomically
    path content (and literal-p 'no-conversion) mode))
 
@@ -1122,8 +1123,6 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
 (defun mevedel-tool-patch-apply (data-buffer changes continuation)
   "Apply CHANGES for DATA-BUFFER, then call CONTINUATION.
 Refresh file tracking immediately and diagnostics before continuation."
-  (require 'mevedel-file-state)
-  (require 'mevedel-edit-diagnostics)
   (mevedel-tool-patch--assert-buffers-unmodified changes)
   (dolist (change changes)
     (unless (plist-get change :local-p)

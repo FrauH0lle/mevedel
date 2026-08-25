@@ -6,6 +6,7 @@
 
 (require 'mevedel-tool-media)
 (require 'mevedel-execution-target)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'helpers

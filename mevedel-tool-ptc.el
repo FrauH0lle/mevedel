@@ -18,6 +18,8 @@
   (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
+(require 'mevedel-system)
+
 ;; `gptel'
 (defvar gptel-tools)
 
@@ -109,19 +111,20 @@ ToolScript itself is absent, so scripts do not nest."
 
 (defun mevedel-tool-ptc--pure-primitive-reference ()
   "Return cached signatures for every allowed pure primitive."
-  (require 'mevedel-ptc-interpreter)
   (or mevedel-tool-ptc--pure-primitive-reference-cache
-      (setq mevedel-tool-ptc--pure-primitive-reference-cache
-            (string-join
-             (mapcar
-              (lambda (entry)
-                (let ((args (mevedel-tool-ptc--format-arglist
-                             (help-function-arglist (cdr entry) t))))
-                  (format "- (%s%s)"
-                          (car entry)
-                          (if (string-empty-p args) "" (concat " " args)))))
-              mevedel-ptc-pure-primitives)
-             "\n"))))
+      (progn
+        (require 'mevedel-ptc-interpreter)
+        (setq mevedel-tool-ptc--pure-primitive-reference-cache
+              (string-join
+               (mapcar
+                (lambda (entry)
+                  (let ((args (mevedel-tool-ptc--format-arglist
+                               (help-function-arglist (cdr entry) t))))
+                    (format "- (%s%s)"
+                            (car entry)
+                            (if (string-empty-p args) "" (concat " " args)))))
+                mevedel-ptc-pure-primitives)
+               "\n")))))
 
 (defun mevedel-tool-ptc--active-tool-names ()
   "Return the names of tools active in the current request."
@@ -185,7 +188,6 @@ a deferred tool executes normally."
 
 (defun mevedel-tool-ptc--request-description (fsm)
   "Return the ToolScript description for FSM's effective callable roster."
-  (require 'mevedel-system)
   (let* ((mevedel-tools--current-fsm fsm)
          (tool (mevedel-tool-ensure "ToolScript"))
          (roster (mevedel-tool-ptc--roster)))
@@ -229,7 +231,8 @@ a deferred tool executes normally."
 
 (defun mevedel-tool-ptc--handler (callback args)
   "Run the script in ARGS through the current request's nested tool roster."
-  (require 'mevedel-ptc-driver)
+  (unless (fboundp 'mevedel-ptc-driver-run)
+    (require 'mevedel-ptc-driver))
   (mevedel-ptc-driver-run
    callback (plist-get args :script) (mevedel-tool-ptc--roster)))
 
