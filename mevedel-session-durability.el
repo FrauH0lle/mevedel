@@ -8,7 +8,6 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-structs))
 
 ;; Every control operation in this file runs through the session control
@@ -59,10 +58,20 @@
                   "mevedel-session-publication" (path))
 (declare-function mevedel-session-publication-valid-head-p
                   "mevedel-session-publication" (head))
+(autoload 'mevedel-session-publication--record-pending
+  "mevedel-session-publication")
+(autoload 'mevedel-session-publication-clear-transient
+  "mevedel-session-publication")
+(autoload 'mevedel-session-publication-logical-path-p
+  "mevedel-session-publication")
+(autoload 'mevedel-session-publication-valid-head-p
+  "mevedel-session-publication")
 
 ;; `mevedel-session-transfer'
 (declare-function mevedel-session-transfer-release-fence
                   "mevedel-session-transfer" (directory generation))
+(autoload 'mevedel-session-transfer-release-fence
+  "mevedel-session-transfer")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-authority-mode-for-session
@@ -96,6 +105,7 @@
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-state-dir "mevedel-workspace" (workspace))
+(autoload 'mevedel-workspace-state-dir "mevedel-workspace")
 
 ;;
 ;;; Customization
@@ -158,7 +168,6 @@ short enough that a picker row stays readable."
 
 The acknowledgement is once per target for this Emacs process.  Local
 project sessions need no disclosure."
-  (require 'mevedel-workspace)
   (let ((target (mevedel-session-execution-target session)))
     (when (and target (mevedel-execution-target-remote-p target))
       (let ((key (mevedel-execution-target-identity target)))
@@ -645,7 +654,6 @@ every comparison, and an infinity never expires."
 
 (defun mevedel-session-durability--valid-lease-p (lease)
   "Return non-nil when LEASE has the current portable representation."
-  (require 'mevedel-session-publication)
   (and (proper-list-p lease)
        (natnump (plist-get lease :generation))
        (> (plist-get lease :generation) 0)
@@ -864,7 +872,6 @@ When SESSION is non-nil, record the resulting lease state on it."
                  (> (plist-get existing :expires-at) now))
             nil)
            ((eq 'released (plist-get existing :status))
-            (require 'mevedel-session-transfer)
             (let ((fence
                    (mevedel-session-transfer-release-fence
                     directory (plist-get existing :generation))))
@@ -930,7 +937,6 @@ When SESSION is non-nil, record the resulting lease state on it."
           ((and current
                 (eq (plist-get current :status) 'released)
                 (progn
-                  (require 'mevedel-session-transfer)
                   (mevedel-session-transfer-release-fence
                    directory (plist-get current :generation))))
            'foreign)
@@ -1142,7 +1148,6 @@ Return non-nil only when the current owned lease generation commits VALUE."
 
 Return non-nil only when SESSION's publishing generation remains the exact
 lease head through the commit."
-  (require 'mevedel-session-publication)
   (unless (mevedel-session-publication-valid-head-p head)
     (error "Publication head must name an immutable manifest"))
   (let ((expected
@@ -1221,7 +1226,6 @@ remote target each extra read is a round trip the user waits through."
    ((not (mevedel-session-durability--valid-lease-p lease))
     (error "Invalid portable session lease: %s" session-dir))
    ((eq (plist-get lease :status) 'released)
-    (require 'mevedel-session-transfer)
     (let ((fence
            (mevedel-session-transfer-release-fence
             (mevedel-session-durability--lease-path session-dir)
@@ -1279,13 +1283,11 @@ its lease state."
                   queued)))
             (setf (mevedel-session-publication-uncommitted-batches session) nil
                   (mevedel-session-publication-queue session) nil)
-            (require 'mevedel-session-publication)
             (mevedel-session-publication--record-pending
              session batches
              '(user-error
                "Session lease released before queued publication completed"))))
         (unless (mevedel-session-pending-publication session)
-          (require 'mevedel-session-publication)
           (mevedel-session-publication-clear-transient session))))))
 
 
@@ -1388,7 +1390,6 @@ function performs no target I/O and must run only after that removal."
   (setf (mevedel-session-lease session) nil
         (mevedel-session-publication session) nil
         (mevedel-session-publication-active-p session) nil)
-  (require 'mevedel-session-publication)
   (mevedel-session-publication-clear-transient session))
 
 
