@@ -27,6 +27,7 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
+(autoload 'mevedel--run-session-start-hooks "mevedel-chat")
 
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration-status
@@ -35,6 +36,9 @@
                   "mevedel-collaboration" nil)
 (declare-function mevedel-collaboration-view
                   "mevedel-collaboration" nil)
+(autoload 'mevedel-collaboration-status "mevedel-collaboration")
+(autoload 'mevedel-collaboration-stop "mevedel-collaboration")
+(autoload 'mevedel-collaboration-view "mevedel-collaboration")
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer
@@ -60,23 +64,42 @@
                   "mevedel-cockpit" (&optional selected-id))
 (declare-function mevedel-cockpit-surface-selected
                   "mevedel-cockpit" (&optional no-error))
+(autoload 'mevedel-cockpit-context-data-buffer "mevedel-cockpit")
+(autoload 'mevedel-cockpit-context-session "mevedel-cockpit")
+(autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
+(autoload 'mevedel-cockpit-format-header "mevedel-cockpit")
+(autoload 'mevedel-cockpit-open-surface "mevedel-cockpit")
+(autoload 'mevedel-cockpit-quit "mevedel-cockpit")
+(autoload 'mevedel-cockpit-setup-tabulated-surface "mevedel-cockpit")
+(autoload 'mevedel-cockpit-show-help "mevedel-cockpit")
+(autoload 'mevedel-cockpit-surface-context "mevedel-cockpit")
+(autoload 'mevedel-cockpit-surface-details "mevedel-cockpit")
+(autoload 'mevedel-cockpit-surface-key-help-text "mevedel-cockpit")
+(autoload 'mevedel-cockpit-surface-refresh "mevedel-cockpit")
+(autoload 'mevedel-cockpit-surface-selected "mevedel-cockpit")
 
 ;; `mevedel-compact'
 (declare-function mevedel-compact "mevedel-compact" (&optional aggressive instructions))
+(autoload 'mevedel-compact "mevedel-compact")
 
 ;; `mevedel-compact-estimation'
 (declare-function mevedel-compact-estimation-estimate-tokens
                   "mevedel-compact-estimation" ())
+(autoload 'mevedel-compact-estimation-estimate-tokens
+  "mevedel-compact-estimation")
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-stop-all-user
                   "mevedel-execution" (session))
 (declare-function mevedel-execution-stop-user
                   "mevedel-execution" (session execution-id))
+(autoload 'mevedel-execution-stop-all-user "mevedel-execution")
+(autoload 'mevedel-execution-stop-user "mevedel-execution")
 
 ;; `mevedel-executions-list'
 (declare-function mevedel-executions-list-open
                   "mevedel-executions-list" (&optional context))
+(autoload 'mevedel-executions-list-open "mevedel-executions-list")
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
@@ -88,6 +111,12 @@
 (declare-function mevedel-goal-start
                   "mevedel-goal"
                   (objective))
+(autoload 'mevedel-goal-clear "mevedel-goal")
+(autoload 'mevedel-goal-edit "mevedel-goal")
+(autoload 'mevedel-goal-pause "mevedel-goal")
+(autoload 'mevedel-goal-resume "mevedel-goal")
+(autoload 'mevedel-goal-set-budget "mevedel-goal")
+(autoload 'mevedel-goal-start "mevedel-goal")
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-ranges
@@ -96,10 +125,15 @@
                   "mevedel-mention-bindings" (start end binding &optional object))
 (declare-function mevedel-mention-bindings-skill-token-start-p
                   "mevedel-mention-bindings" (text start))
+(autoload 'mevedel-mention-bindings-ranges "mevedel-mention-bindings")
+(autoload 'mevedel-mention-bindings-set "mevedel-mention-bindings")
+(autoload 'mevedel-mention-bindings-skill-token-start-p
+  "mevedel-mention-bindings")
 
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-prepare-user-input
                   "mevedel-mentions" (text &optional session))
+(autoload 'mevedel-mentions-prepare-user-input "mevedel-mentions")
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu-open "mevedel-menu" (area))
@@ -114,16 +148,21 @@
 (declare-function mevedel-permission-mode-transition
                   "mevedel-permission-mode" (mode))
 (defvar mevedel-permission-mode)
+(autoload 'mevedel-permission-mode-normalize "mevedel-permission-mode")
+(autoload 'mevedel-permission-mode-transition "mevedel-permission-mode")
 
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-mode-enter
                   "mevedel-plan-mode" (&optional session))
+(autoload 'mevedel-plan-mode-enter "mevedel-plan-mode")
 
 ;; `mevedel-plugin-registry'
 (declare-function mevedel-plugin-name
                   "mevedel-plugin-registry" (cl-x) t)
 (declare-function mevedel-plugins-list
                   "mevedel-plugin-registry" (&optional workspace))
+(autoload 'mevedel-plugin-name "mevedel-plugin-registry")
+(autoload 'mevedel-plugins-list "mevedel-plugin-registry")
 
 ;; `mevedel-plugin-ui'
 (declare-function mevedel-plugins-slash-command "mevedel-plugin-ui" (args))
@@ -135,6 +174,10 @@
 (declare-function mevedel-session-artifacts-start-fresh-segment
                   "mevedel-session-artifacts"
                   (session buffer &rest keys))
+(autoload 'mevedel-session-artifacts-refresh-visited-file-modtime-or-error
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-start-fresh-segment
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
@@ -142,6 +185,7 @@
 ;; `mevedel-side-conversation'
 (declare-function mevedel-side-conversation-open
                   "mevedel-side-conversation" (&optional initial-prompt))
+(autoload 'mevedel-side-conversation-open "mevedel-side-conversation")
 
 ;; `mevedel-skills-input'
 (declare-function mevedel-skills-input-clear-pending
@@ -165,10 +209,23 @@
                   "mevedel-skills-input" (text session))
 (declare-function mevedel-skills-input-scan-tokens
                   "mevedel-skills-input" (text resolver &optional allow-root))
+(autoload 'mevedel-skills-input-clear-pending "mevedel-skills-input")
+(autoload 'mevedel-skills-input-command-delete-context "mevedel-skills-input")
+(autoload 'mevedel-skills-input-current-prompt-region "mevedel-skills-input")
+(autoload 'mevedel-skills-input-dispatch-command "mevedel-skills-input")
+(autoload 'mevedel-skills-input-dispatch-inline-attachments
+  "mevedel-skills-input")
+(autoload 'mevedel-skills-input-ensure-fresh-line "mevedel-skills-input")
+(autoload 'mevedel-skills-input-escaped-position-p "mevedel-skills-input")
+(autoload 'mevedel-skills-input-parse-prefixed-line "mevedel-skills-input")
+(autoload 'mevedel-skills-input-prepare-user-input "mevedel-skills-input")
+(autoload 'mevedel-skills-input-scan-tokens "mevedel-skills-input")
 
 ;; `mevedel-skills-preparation'
 (declare-function mevedel-skills-preparation-parse-arguments
                   "mevedel-skills-preparation" (arguments))
+(autoload 'mevedel-skills-preparation-parse-arguments
+  "mevedel-skills-preparation")
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
@@ -183,10 +240,13 @@
 
 ;; `mevedel-system'
 (declare-function mevedel-inspect-effective-prompt "mevedel-system" ())
+(autoload 'mevedel-inspect-effective-prompt "mevedel-system")
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view-refresh-input-prompt
+(declare-function mevedel-view-refresh-associated-input-prompt
                   "mevedel-view-composer" ())
+(autoload 'mevedel-view-refresh-associated-input-prompt
+  "mevedel-view-composer")
 
 ;; `tabulated-list'
 (declare-function tabulated-list-mode "tabulated-list" ())
@@ -265,7 +325,6 @@
 
 (defun mevedel-cmd--tokens (_args)
   "Print the estimated token usage of the current chat buffer."
-  (require 'mevedel-compact-estimation)
   (message "Estimated tokens in this buffer: %d"
            (mevedel-compact-estimation-estimate-tokens)))
 
@@ -311,7 +370,6 @@ ARGS is the raw slash-command argument string.
 Recognized modes: ask, edits, and full-auto.
 
 Routes through the lifecycle-aware permission transition path."
-  (require 'mevedel-permission-mode)
   (if (and args (not (string-blank-p args)))
       (let ((mode (mevedel-permission-mode-normalize args)))
         (mevedel-permission-mode-transition mode)
@@ -323,13 +381,11 @@ Routes through the lifecycle-aware permission transition path."
   "Enter Plan mode; composer-owned nonblank ARGS are submitted as a turn."
   (unless (string-blank-p (or args ""))
     (user-error "/plan takes no arguments"))
-  (require 'mevedel-plan-mode)
   (mevedel-plan-mode-enter)
   (message "mevedel: Plan mode on"))
 
 (defun mevedel-cmd--goal (args)
   "Run the `/goal' lifecycle command described by ARGS."
-  (require 'mevedel-goal)
   (let* ((args (string-trim (or args "")))
          (parts (split-string args "[ \t\n]+" t))
          (action (car parts))
@@ -349,7 +405,6 @@ Routes through the lifecycle-aware permission transition path."
 
 (defun mevedel-cmd--edits (_args)
   "Toggle edits permission mode for the current session."
-  (require 'mevedel-permission-mode)
   (unless (bound-and-true-p mevedel--session)
     (user-error "No mevedel session in this buffer"))
   (let* ((current (or (mevedel-session-permission-mode mevedel--session)
@@ -377,9 +432,6 @@ Routes through the lifecycle-aware permission transition path."
 
 (defun mevedel-cmd--clear (_args)
   "Start a new, empty chat segment."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (when (and (bound-and-true-p mevedel--session)
              (mevedel-session-pending-input-p mevedel--session))
     (user-error
@@ -511,7 +563,6 @@ Routes through the lifecycle-aware permission transition path."
 
 (defun mevedel-skills-list--header-line (&optional items context)
   "Return the skills cockpit header line for ITEMS and CONTEXT."
-  (require 'mevedel-cockpit)
   (let* ((total (length items))
          (enabled (cl-count-if #'mevedel-skills-skill-enabled-p
                                items)))
@@ -529,18 +580,15 @@ Routes through the lifecycle-aware permission transition path."
 (defun mevedel-skills-list-refresh ()
   "Refresh the current skill listing buffer."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-refresh))
 
 (defun mevedel-skills-list--skill-at-point ()
   "Return the skill at point in a skill listing buffer."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-selected))
 
 (defun mevedel-skills-list-details ()
   "Show details for the skill at point."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-details))
 
 (defun mevedel-skills-list-toggle-enabled ()
@@ -611,7 +659,6 @@ Routes through the lifecycle-aware permission transition path."
 (defun mevedel-skills-list-help ()
   "Open skills cockpit help."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-show-help
    mevedel-skills-help-buffer-name
    (mevedel-skills-list--help-text)))
@@ -619,19 +666,16 @@ Routes through the lifecycle-aware permission transition path."
 (defun mevedel-skills-list-quit ()
   "Quit the skills cockpit and return to the main session cockpit."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-quit "skills cockpit"))
 
 (define-derived-mode mevedel-skills-list-mode tabulated-list-mode
   "mevedel-skills"
   "Major mode for managing mevedel skills."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-setup-tabulated-surface
    mevedel-skills-list--surface))
 
 (defun mevedel-skills-list-open (&optional context)
   "Open the skill listing buffer for CONTEXT."
-  (require 'mevedel-cockpit)
   (let ((context (or context (mevedel-cockpit-current-context))))
     (unless (mevedel-cockpit-context-session context)
       (user-error "No mevedel session in this buffer"))
@@ -711,7 +755,6 @@ Routes through the lifecycle-aware permission transition path."
   "Open the live execution cockpit using ARGS."
   (if (string-blank-p (or args ""))
       (progn
-        (require 'mevedel-executions-list)
         (mevedel-executions-list-open))
     (message "Usage: /ps")))
 
@@ -720,7 +763,6 @@ Routes through the lifecycle-aware permission transition path."
   (let ((execution-id (string-trim (or args ""))))
     (unless (bound-and-true-p mevedel--session)
       (user-error "No mevedel session in this buffer"))
-    (require 'mevedel-execution)
     (if (string-empty-p execution-id)
         (let ((count (mevedel-execution-stop-all-user mevedel--session)))
           (message "mevedel: %d execution%s stopping"
@@ -730,18 +772,15 @@ Routes through the lifecycle-aware permission transition path."
 
 (defun mevedel-cmd--btw (args)
   "Open an ephemeral side conversation using ARGS as its first prompt."
-  (require 'mevedel-side-conversation)
   (mevedel-side-conversation-open args)
   'mevedel-view-sent)
 
 (defun mevedel-cmd--prompt (_args)
   "Inspect the current session's effective prompt and tools."
-  (require 'mevedel-system)
   (mevedel-inspect-effective-prompt))
 
 (defun mevedel-cmd--collab (args)
   "Run the `/collab' command described by ARGS."
-  (require 'mevedel-collaboration)
   (pcase (string-trim (or args ""))
     ((or "" "view") (mevedel-collaboration-view) nil)
     ("status" (mevedel-collaboration-status) nil)
@@ -791,7 +830,6 @@ Handlers have access to the buffer-local `mevedel--session'.")
 Local slash commands (`/model', `/mode', etc.) parse only the first
 whitespace-separated token from ARGS and ignore the rest, so extending
 ARGS to include subsequent lines does not change their behavior."
-  (require 'mevedel-skills-input)
   (mevedel-skills-input-parse-prefixed-line text ?/))
 
 (defun mevedel-skills--text-after-local-command-delete
@@ -799,7 +837,6 @@ ARGS to include subsequent lines does not change their behavior."
   "Return buffer text after deleting a local slash command region.
 DELETE-START and REGION-END bound the command text.  AFTER-PREFIX means
 the deleted command followed the prompt prefix."
-  (require 'mevedel-skills-input)
   (let ((text (buffer-substring-no-properties (point-min) (point-max))))
     (with-temp-buffer
       (insert text)
@@ -813,9 +850,6 @@ the deleted command followed the prompt prefix."
   "Refresh stale visited-file metadata before slash command edits.
 DELETE-START and REGION-END bound the command text.  AFTER-PREFIX means
 the deleted command followed the prompt prefix."
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-artifacts)
   (when (and buffer-file-name
              (bound-and-true-p mevedel--session)
              (mevedel-session-save-path mevedel--session))
@@ -831,7 +865,6 @@ Returns:
 - `unknown' a `/' line was present but matched nothing; caller
             should abort the send.
 - nil       no `/command' present; caller should proceed as usual."
-  (require 'mevedel-skills-input)
   (when-let* ((region (mevedel-skills-input-current-prompt-region))
               (text (buffer-substring-no-properties (car region) (cdr region)))
               (parsed (mevedel-skills-parse-slash-line text)))
@@ -877,7 +910,6 @@ the advice must not rescan their derived prompt text.  Pending-stash cleanup
 is tied to the continuation that actually resumes ORIG-FN so async shell
 preparation does not clear the stash before the request begin handler can
 drain it."
-  (require 'mevedel-skills-input)
   (if (or (not (bound-and-true-p mevedel--session))
           (and (boundp 'mevedel--view-buffer)
                (buffer-live-p mevedel--view-buffer)))
@@ -888,8 +920,6 @@ drain it."
                (apply orig-fn args)
              (mevedel-skills-input-clear-pending))))
       (when-let* ((region (mevedel-skills-input-current-prompt-region)))
-        (require 'mevedel-mention-bindings)
-        (require 'mevedel-mentions)
         (let* ((text (buffer-substring (car region) (cdr region)))
                (prepared
                 (mevedel-mentions-prepare-user-input
@@ -936,7 +966,6 @@ is available."
 Explicit `argument-hint' text is shown only before the user starts
 typing arguments.  Named `arguments' frontmatter is shown as the
 remaining positional slots after shell-style tokenization."
-  (require 'mevedel-skills-preparation)
   (let ((hint (mevedel-skill-argument-hint skill))
         (names (mevedel-skill-argument-names skill))
         (tokens (mevedel-skills-preparation-parse-arguments arguments)))
@@ -1065,7 +1094,6 @@ BUFFER and SESSION identify the current chat."
 
 (defun mevedel-skills--plugin-name-candidates ()
   "Return installed plugin names for slash command argument completion."
-  (require 'mevedel-plugin-registry)
   (sort (delete-dups
          (mapcar #'mevedel-plugin-name (mevedel-plugins-list)))
         #'string<))
@@ -1202,7 +1230,6 @@ completion exit status."
                 ((>= start (point-min)))
                 ((equal (buffer-substring-no-properties start end)
                         (concat "$" candidate))))
-      (require 'mevedel-mention-bindings)
       (mevedel-mention-bindings-set
        start end
        (list :kind 'skill
@@ -1290,7 +1317,6 @@ completed arguments before point."
 INPUT-START constrains completion to the first view-composer line.  The
 return value is a plist with :kind `root', :start, :end, and
 :inline-only."
-  (require 'mevedel-skills-input)
   (catch 'context
     (let* ((command-start (mevedel-skills--slash-command-start input-start))
            (line-start (line-beginning-position))
@@ -1326,7 +1352,6 @@ return value is a plist with :kind `root', :start, :end, and
             (let* ((line-text (buffer-substring-no-properties
                                line-start line-end))
                    (relative-dollar (- dollar-pos line-start)))
-              (require 'mevedel-mention-bindings)
               (when (and (mevedel-mention-bindings-skill-token-start-p
                           line-text relative-dollar)
                          (not (mevedel-skills-input-escaped-position-p
@@ -1423,7 +1448,6 @@ and the transcript prefix made each one cost seconds on a long session.")
 
 (defun mevedel-skills--fontify-dollar-keyword (end)
   "Find a known `$skill' mention before END for font-lock."
-  (require 'mevedel-skills-input)
   (when-let* ((session (and (bound-and-true-p mevedel--session)
                             mevedel--session))
               (origin (max (point-min)
