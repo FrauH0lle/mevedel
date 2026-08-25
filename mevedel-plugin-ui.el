@@ -7,10 +7,11 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib)
-  (require 'subr-x)
-  (require 'tabulated-list))
+(require 'subr-x)
+(require 'tabulated-list)
+(require 'mevedel-cockpit)
+(require 'mevedel-plugin-registry)
+(require 'mevedel-plugins)
 
 ;; `dired'
 (declare-function dired "dired" (dirname &optional switches))
@@ -42,6 +43,7 @@
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu-open "mevedel-menu" (area))
+(autoload 'mevedel-menu-open "mevedel-menu")
 
 ;; `mevedel-plugin-lifecycle'
 (declare-function mevedel-plugins-install
@@ -50,6 +52,9 @@
                   "mevedel-plugin-lifecycle" (name &optional workspace))
 (declare-function mevedel-plugins-update
                   "mevedel-plugin-lifecycle" (name &optional workspace))
+(autoload 'mevedel-plugins-install "mevedel-plugin-lifecycle")
+(autoload 'mevedel-plugins-remove "mevedel-plugin-lifecycle")
+(autoload 'mevedel-plugins-update "mevedel-plugin-lifecycle")
 
 ;; `mevedel-plugin-registry'
 (declare-function mevedel-plugin-description
@@ -123,6 +128,7 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
+(autoload 'mevedel--warn-once "mevedel-utilities")
 
 ;; `tabulated-list'
 (declare-function tabulated-list-get-id "tabulated-list" ())
@@ -138,7 +144,6 @@
 
 (defun mevedel-plugins-pending-consent-message (&optional workspace)
   "Return a user-facing pending hook consent message for WORKSPACE."
-  (require 'mevedel-plugin-registry)
   (when-let* ((pending (mevedel-plugins-pending-consent workspace)))
     (format "plugin hook consent pending for %s; open /plugin to review"
             (string-join (mapcar #'mevedel-plugin-name pending) ", "))))
@@ -157,7 +162,6 @@ starts log it quietly to *Messages*."
 
 (defun mevedel-plugins--reload (&optional context)
   "Reload plugin-visible skills for CONTEXT's session when possible."
-  (require 'mevedel-plugins)
   (let ((result (mevedel-plugins-refresh-session context)))
     (cond
      ((eq result t)
@@ -169,7 +173,6 @@ starts log it quietly to *Messages*."
 
 (defun mevedel-plugins--with-refresh (message)
   "Refresh current session skills and return MESSAGE."
-  (require 'mevedel-plugins)
   (mevedel-plugins-refresh-session)
   message)
 
@@ -258,7 +261,6 @@ starts log it quietly to *Messages*."
 
 (defun mevedel-plugins-list--selected-item ()
   "Return the selected plugin cockpit item, or nil."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-selected t))
 
 (defun mevedel-plugins-list--plugin-at-point ()
@@ -278,7 +280,6 @@ starts log it quietly to *Messages*."
 
 (defun mevedel-plugins-list--header-line (items context)
   "Return the plugin cockpit header line for ITEMS and CONTEXT."
-  (require 'mevedel-cockpit)
   (let ((total 0)
         (enabled 0)
         (hooks 0)
@@ -297,26 +298,21 @@ starts log it quietly to *Messages*."
 
 (defun mevedel-plugins-list--collect (context)
   "Return plugin cockpit items for CONTEXT."
-  (require 'mevedel-plugin-registry)
   (mevedel-plugins-items
    (mevedel-plugins-list--workspace context)))
 
 (defun mevedel-plugins-list-refresh ()
   "Refresh the current plugin management buffer."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-refresh))
 
 (defun mevedel-plugins-list--refresh-preserving (name)
   "Refresh the current plugin cockpit, preserving plugin NAME when possible."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-refresh name))
 
 (defun mevedel-plugins-list-toggle-enabled ()
   "Toggle activation for the plugin at point."
   (interactive)
-  (require 'mevedel-plugin-registry)
-  (require 'mevedel-plugins)
   (let* ((context (mevedel-cockpit-surface-context))
          (plugin (mevedel-plugins-list--plugin-at-point))
          (workspace (mevedel-plugins-list--workspace
@@ -335,8 +331,6 @@ starts log it quietly to *Messages*."
 (defun mevedel-plugins-list-toggle-hooks ()
   "Toggle hooks for the plugin at point."
   (interactive)
-  (require 'mevedel-plugin-registry)
-  (require 'mevedel-plugins)
   (let* ((context (mevedel-cockpit-surface-context))
          (selected (mevedel-plugins-list--plugin-at-point))
          (workspace (mevedel-plugins-list--workspace
@@ -364,8 +358,6 @@ starts log it quietly to *Messages*."
 (defun mevedel-plugins-list-update ()
   "Update the plugin at point."
   (interactive)
-  (require 'mevedel-plugin-lifecycle)
-  (require 'mevedel-plugins)
   (let* ((context (mevedel-cockpit-surface-context))
          (name (mevedel-plugins-list--selected-name))
          (workspace (mevedel-plugins-list--workspace
@@ -380,8 +372,6 @@ starts log it quietly to *Messages*."
 (defun mevedel-plugins-list-remove ()
   "Remove the plugin at point."
   (interactive)
-  (require 'mevedel-plugin-lifecycle)
-  (require 'mevedel-plugins)
   (let* ((context (mevedel-cockpit-surface-context))
          (name (mevedel-plugins-list--selected-name))
          (workspace (mevedel-plugins-list--workspace
@@ -401,9 +391,6 @@ starts log it quietly to *Messages*."
 (defun mevedel-plugins-list-install (target)
   "Install plugin TARGET and refresh the cockpit."
   (interactive (list (read-string "Install plugin OWNER/REPO: ")))
-  (require 'mevedel-cockpit)
-  (require 'mevedel-plugin-lifecycle)
-  (require 'mevedel-plugins)
   (let* ((context (mevedel-cockpit-surface-context))
          (selected (tabulated-list-get-id))
          (message (mevedel-plugins-install target))
@@ -415,8 +402,6 @@ starts log it quietly to *Messages*."
 (defun mevedel-plugins-list-reload ()
   "Reload plugin-visible session skills and refresh the cockpit."
   (interactive)
-  (require 'mevedel-cockpit)
-  (require 'mevedel-plugins)
   (let* ((context (mevedel-cockpit-surface-context))
          (name (tabulated-list-get-id))
          (message (mevedel-plugins--reload context)))
@@ -506,7 +491,6 @@ starts log it quietly to *Messages*."
 (defun mevedel-plugins-list-details ()
   "Show details for the plugin at point."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-details))
 
 (defconst mevedel-plugins-list--surface
@@ -565,7 +549,6 @@ starts log it quietly to *Messages*."
 (defun mevedel-plugins-list-help ()
   "Open plugin cockpit help."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-show-help
    mevedel-plugins-help-buffer-name
    (mevedel-plugins-list--help-text)))
@@ -573,7 +556,6 @@ starts log it quietly to *Messages*."
 (defun mevedel-plugins-list-quit ()
   "Quit the plugin cockpit and return to the main session cockpit."
   (interactive)
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-quit "plugin cockpit"))
 
 (defun mevedel-plugins-list--details-text (item context)
@@ -587,14 +569,11 @@ starts log it quietly to *Messages*."
 (define-derived-mode mevedel-plugins-list-mode tabulated-list-mode
   "mevedel-plugins"
   "Major mode for managing mevedel plugins."
-  (require 'mevedel-cockpit)
   (mevedel-cockpit-setup-tabulated-surface
    mevedel-plugins-list--surface))
 
 (defun mevedel-plugins-list-open (&optional context)
   "Open the plugin management buffer for CONTEXT."
-  (require 'mevedel-cockpit)
-  (require 'mevedel-plugin-registry)
   (let ((context (or context (mevedel-cockpit-current-context))))
     (mevedel-cockpit-open-surface mevedel-plugins-list--surface context)))
 
@@ -617,9 +596,6 @@ starts log it quietly to *Messages*."
 (defun mevedel-plugins-slash-command (args)
   "Run local `/plugin' command from ARGS.
 Return a user-facing result string."
-  (require 'mevedel-plugin-lifecycle)
-  (require 'mevedel-plugin-registry)
-  (require 'mevedel-plugins)
   (let* ((parts (split-string (string-trim (or args "")) "[ \t\n]+" t))
          (parts (pcase parts
                   (`("hooks" "enable" ,name) `("hooks" ,name "on"))
@@ -628,7 +604,6 @@ Return a user-facing result string."
          (workspace (mevedel-plugins-current-workspace)))
     (pcase parts
       ((or `() `("list"))
-       (require 'mevedel-menu)
        (mevedel-menu-open 'plugins)
        nil)
       ((and (or `("enable" ,_)
