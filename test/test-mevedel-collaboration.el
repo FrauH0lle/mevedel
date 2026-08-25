@@ -401,7 +401,6 @@
   (:doc "attributes each guest record to the nearest preceding user turn")
   (with-temp-buffer
     (insert "first prompt\nanswer\nsecond prompt\n")
-    (require 'mevedel-transcript-audit)
     (insert (mevedel--format-hook-audit-record
              (list :type 'guest-prompt :name "phone")))
     (cl-letf (((symbol-function 'mevedel-transcript-segments)
@@ -699,10 +698,8 @@
             (setq-local mevedel--view-buffer view-buffer)
             (setq-local mevedel--session
                         (mevedel-session--create :name "share")))
-          ;; The requires happen inside the handler, so they must not run
-          ;; with `write-region' stubbed.
-          (require 'mevedel-pending-inputs)
-          (require 'mevedel-view-input-files)
+          ;; The suite preloads the handler's owners before `write-region'
+          ;; is stubbed.
           (mevedel-test--with-captured-diagnostics diagnostics
             (cl-letf* (((symbol-function 'mevedel-view--media-dir)
                         (lambda () root))
