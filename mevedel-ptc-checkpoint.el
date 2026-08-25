@@ -9,17 +9,19 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib)
-  (require 'mevedel-structs))
+(require 'cl-lib)
+(require 'mevedel-structs)
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-save
                   "mevedel-session-artifacts" (session buffer &optional settled force))
+(autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
+(autoload 'mevedel-session-persistence-write-sidecar-now
+  "mevedel-session-persistence")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-ptc-checkpoints
@@ -30,9 +32,13 @@
                   "mevedel-tool-render-data" (render-data &optional tool-use-id))
 (declare-function mevedel-tool-render-data-segment-bounds
                   "mevedel-tool-render-data" (tool-use-id))
+(autoload 'mevedel-tool-render-data-format "mevedel-tool-render-data")
+(autoload 'mevedel-tool-render-data-segment-bounds
+  "mevedel-tool-render-data")
 
 ;; `org-src'
 (declare-function org-escape-code-in-string "org-src" (string))
+(autoload 'org-escape-code-in-string "org-src")
 
 ;; `seq'
 (declare-function seq-find "seq" (predicate sequence &optional default))
@@ -57,7 +63,6 @@
     (let ((before (mevedel-session-ptc-checkpoints session)))
       (condition-case err
           (progn
-            (require 'mevedel-session-artifacts)
             (mevedel-ptc-checkpoint--put
              session
              (list :id id :args (list :script script) :state 'running
@@ -106,7 +111,6 @@ Return non-nil when the checkpoint is durable or SESSION is nil."
     (let ((before (mevedel-session-ptc-checkpoints session)))
       (condition-case err
           (when (mevedel-ptc-checkpoint--merge session id updates)
-            (require 'mevedel-session-persistence)
             (or (mevedel-session-persistence-write-sidecar-now
                  session buffer)
                 (progn
@@ -147,7 +151,6 @@ The completed-turn save commits this change together with the final tool row."
 
 (defun mevedel-ptc-checkpoint--insert (checkpoint)
   "Append one recovered CHECKPOINT as a canonical Org tool block."
-  (require 'mevedel-tool-render-data)
   (let* ((id (plist-get checkpoint :id))
          (settled-p (eq (plist-get checkpoint :state) 'settled))
          (result (if settled-p
@@ -160,11 +163,9 @@ The completed-turn save commits this change together with the final tool row."
          (call (prin1-to-string
                 (list :name "ToolScript" :args (plist-get checkpoint :args))))
          (body
-          (progn
-            (require 'org)
-            (org-escape-code-in-string
-             (concat call "\n\n" result
-                     (mevedel-tool-render-data-format render-data id)))))
+          (org-escape-code-in-string
+           (concat call "\n\n" result
+                   (mevedel-tool-render-data-format render-data id))))
          (body-start nil)
          (body-end nil))
     (goto-char (point-max))
@@ -179,7 +180,6 @@ The completed-turn save commits this change together with the final tool row."
 (defun mevedel-ptc-checkpoint-reconcile (session)
   "Settle surviving SESSION ToolScript checkpoints in the current transcript.
 Return (INSERTED . CONSUMED), counting transcript rows and checkpoints."
-  (require 'mevedel-tool-render-data)
   (let* ((checkpoints (mevedel-session-ptc-checkpoints session))
          (inserted 0))
     (dolist (checkpoint (reverse checkpoints))
