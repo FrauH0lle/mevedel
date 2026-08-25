@@ -7,7 +7,7 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create
@@ -18,10 +18,15 @@
                   "mevedel-execution-target" (target path))
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
+(autoload 'mevedel-execution-target-create "mevedel-execution-target")
+(autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-data-buffer
                   "mevedel-permission-mode" ())
+(autoload 'mevedel-permission-mode-data-buffer "mevedel-permission-mode")
 
 ;; `mevedel-permission-rules'
 (declare-function mevedel-permission-rules-build-rule
@@ -31,11 +36,18 @@
                   "mevedel-permission-rules" (grants path access))
 (declare-function mevedel-permission-rules-resource-grant
                   "mevedel-permission-rules" (path access))
+(autoload 'mevedel-permission-rules-build-rule "mevedel-permission-rules")
+(autoload 'mevedel-permission-rules-merge-resource-grant
+  "mevedel-permission-rules")
+(autoload 'mevedel-permission-rules-resource-grant
+  "mevedel-permission-rules")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-publish-text
                   "mevedel-session-artifacts"
                   (session path content &optional coding))
+(autoload 'mevedel-session-artifacts-publish-text
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-make-directory
@@ -43,6 +55,10 @@
 (declare-function mevedel-session-control-fs-write-file
                   "mevedel-session-control-fs"
                   (path content &optional coding-system))
+(autoload 'mevedel-session-control-fs-make-directory
+  "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-write-file
+  "mevedel-session-control-fs")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
@@ -59,6 +75,7 @@
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-state-dir
                   "mevedel-workspace" (workspace))
+(autoload 'mevedel-workspace-state-dir "mevedel-workspace")
 
 
 ;;
@@ -66,13 +83,11 @@
 
 (defun mevedel-permission-persistence-file (workspace)
   "Return the path to WORKSPACE's persistent permission rules file."
-  (require 'mevedel-workspace)
   (file-name-concat (mevedel-workspace-state-dir workspace)
                      "permissions.el"))
 
 (defun mevedel-permission--valid-plist-p (plist allowed required)
   "Return non-nil when PLIST has unique ALLOWED keys including REQUIRED."
-  (require 'cl-lib)
   (and (proper-list-p plist)
        (zerop (% (length plist) 2))
        (let ((keys (cl-loop for (key _) on plist by #'cddr collect key)))
@@ -189,7 +204,6 @@ normalizes rule path patterns."
 
 PATTERN-P permits relative path globs.  Remote absolute paths must already
 carry TARGET's prefix so client paths cannot become target authority."
-  (require 'mevedel-execution-target)
   (when (stringp path)
     (condition-case nil
         (cond
@@ -228,7 +242,6 @@ Return nil when any entry is malformed or names another filesystem authority."
 
 PATTERN-P permits relative path globs.  Durable authority must not contain a
 client-specific remote prefix."
-  (require 'mevedel-execution-target)
   (when (and (stringp path) (not (file-remote-p path nil 'never)))
     (condition-case nil
         (cond
@@ -255,8 +268,6 @@ Return nil when any entry is malformed or contains a client-specific target."
 
 (defun mevedel-permission--workspace-target (workspace)
   "Return the live execution target for WORKSPACE when available."
-  (require 'mevedel-execution-target)
-  (require 'mevedel-permission-mode)
   (let* ((data-buffer (mevedel-permission-mode-data-buffer))
          (session (and data-buffer
                        (buffer-local-value 'mevedel--session data-buffer))))
@@ -344,8 +355,6 @@ TARGET restores portable target paths when non-nil."
 
 (defun mevedel-permission-persistence-write-store (file store &optional target)
   "Write permission STORE plist to FILE."
-  (require 'mevedel-permission-mode)
-  (require 'mevedel-session-artifacts)
   (let* ((store (if target
                     (mevedel-permission-serialize-authority
                      (plist-get store :rules)
@@ -368,7 +377,6 @@ TARGET restores portable target paths when non-nil."
             (user-error "Remote permission changes require a live session"))
           (mevedel-session-artifacts-publish-text
            session file content 'utf-8-unix))
-      (require 'mevedel-session-control-fs)
       (mevedel-session-control-fs-make-directory
        (directory-file-name (file-name-directory file)) t)
       (mevedel-session-control-fs-write-file file content 'utf-8-unix))))
@@ -415,7 +423,6 @@ qualified by any specifier (`:path', `:pattern', `:domain', `:name').
 NETWORK and FILE-SYSTEM record matching additive execution authority.
 SANDBOX-PERMISSIONS qualifies an already requested execution level.  The file
 is created if it does not exist."
-  (require 'mevedel-permission-rules)
   (let* ((file (mevedel-permission-persistence-file workspace))
          (target (mevedel-permission--workspace-target workspace))
          (store (mevedel-permission-persistence-editable-store file target))
@@ -436,7 +443,6 @@ is created if it does not exist."
 (defun mevedel-permission-persistence-save-resource-grant
     (workspace path access)
   "Persist exact PATH ACCESS for WORKSPACE."
-  (require 'mevedel-permission-rules)
   (let* ((file (mevedel-permission-persistence-file workspace))
          (target (mevedel-permission--workspace-target workspace))
          (store (mevedel-permission-persistence-editable-store file target))
@@ -451,7 +457,6 @@ is created if it does not exist."
 (defun mevedel-permission-remove-persistent-resource-grant
     (workspace path access)
   "Revoke WORKSPACE's exact PATH ACCESS resource grant."
-  (require 'mevedel-permission-rules)
   (let* ((file (mevedel-permission-persistence-file workspace))
          (target (mevedel-permission--workspace-target workspace))
          (store (mevedel-permission-persistence-editable-store file target))
