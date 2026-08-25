@@ -6,22 +6,34 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-agents)
   (require 'mevedel-structs))
 
 ;; `mevedel-agent-persistence'
 (declare-function mevedel-agent-persistence-transcript-path-p "mevedel-agent-persistence" (path save-path))
+(autoload 'mevedel-agent-persistence-transcript-path-p
+  "mevedel-agent-persistence")
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-relocate-artifacts "mevedel-execution" (session old-root new-root))
+(autoload 'mevedel-execution-relocate-artifacts "mevedel-execution")
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-native-path "mevedel-execution-target" (target path))
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
+
+;; `mevedel-plan'
+(declare-function mevedel-plan-artifact-path-p "mevedel-plan" (path))
+(declare-function mevedel-plan-hash "mevedel-plan" (body))
+(autoload 'mevedel-plan-artifact-path-p "mevedel-plan")
+(autoload 'mevedel-plan-hash "mevedel-plan")
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-clone-list "mevedel-reminders" (reminders))
+(autoload 'mevedel-reminders-clone-list "mevedel-reminders")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p "mevedel-session-artifacts" (session logical &optional committed-only))
@@ -36,16 +48,47 @@
 (declare-function mevedel-session-artifacts-segment-path "mevedel-session-artifacts" (save-path n))
 (declare-function mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts" (workspace))
 (declare-function mevedel-session-artifacts-sidecar-path "mevedel-session-artifacts" (save-path))
+(autoload 'mevedel-session-artifacts-artifact-present-p
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-assert-mutation-authority
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-build-sidecar
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-compute-id "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-printed-value
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-publish-text
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-read-artifact
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-sanitize "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-save-instructions
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-segment-path
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-sessions-dir
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-sidecar-path
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-codec'
 (declare-function mevedel-session-codec-deserialize "mevedel-session-codec" (plist workspace))
 (declare-function mevedel-session-codec-portable-authority-p "mevedel-session-codec" (session))
 (declare-function mevedel-session-codec-read "mevedel-session-codec" (path))
 (declare-function mevedel-session-codec-write "mevedel-session-codec" (path plist))
+(autoload 'mevedel-session-codec-deserialize "mevedel-session-codec")
+(autoload 'mevedel-session-codec-portable-authority-p
+  "mevedel-session-codec")
+(autoload 'mevedel-session-codec-read "mevedel-session-codec")
+(autoload 'mevedel-session-codec-write "mevedel-session-codec")
 
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability-call-with-reserved-lease "mevedel-session-durability" (session function))
 (declare-function mevedel-session-durability-forget-removed-session "mevedel-session-durability" (session))
+(autoload 'mevedel-session-durability-call-with-reserved-lease
+  "mevedel-session-durability")
+(autoload 'mevedel-session-durability-forget-removed-session
+  "mevedel-session-durability")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-allocate-session-id "mevedel-session-persistence" (name sessions-dir))
@@ -57,11 +100,33 @@
 (declare-function mevedel-session-persistence-reconcile-lost-execution-segments "mevedel-session-persistence" (session &optional exclude-path artifact-callback))
 (declare-function mevedel-session-persistence-restore "mevedel-session-persistence" (session-dir &optional lifecycle-source session-override workspace))
 (declare-function mevedel-session-persistence-write-current-buffer-atomically "mevedel-session-persistence" (path))
+(autoload 'mevedel-session-persistence-allocate-session-id
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-find-live-buffer
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-list-sessions
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-lock-acquire
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-lock-release
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-notify-session-event
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-reconcile-lost-execution-segments
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-restore
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-write-current-buffer-atomically
+  "mevedel-session-persistence")
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-discard-rolled-back "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit))
 (declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir))
+(autoload 'mevedel-session-publication-discard-rolled-back
+  "mevedel-session-publication")
+(autoload 'mevedel-session-publication-publish "mevedel-session-publication")
+(autoload 'mevedel-session-publication-read "mevedel-session-publication")
 
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-assert-stable-source "mevedel-session-rewind" (session buffer operation))
@@ -73,6 +138,22 @@
 (declare-function mevedel-session-rewind-resolve-fork-target "mevedel-session-rewind" (session target))
 (declare-function mevedel-session-rewind-rewind-publication-artifacts "mevedel-session-rewind" (session buffer staging-path &optional state))
 (declare-function mevedel-session-rewind-state-at-turn "mevedel-session-rewind" (session cum-turn &optional before-turn))
+(autoload 'mevedel-session-rewind-assert-stable-source
+  "mevedel-session-rewind")
+(autoload 'mevedel-session-rewind-load-rewind-target
+  "mevedel-session-rewind")
+(autoload 'mevedel-session-rewind-read-backup "mevedel-session-rewind")
+(autoload 'mevedel-session-rewind-reduce-agent-transcripts
+  "mevedel-session-rewind")
+(autoload 'mevedel-session-rewind-reduce-file-snapshots
+  "mevedel-session-rewind")
+(autoload 'mevedel-session-rewind-reduce-prompt-index
+  "mevedel-session-rewind")
+(autoload 'mevedel-session-rewind-resolve-fork-target
+  "mevedel-session-rewind")
+(autoload 'mevedel-session-rewind-rewind-publication-artifacts
+  "mevedel-session-rewind")
+(autoload 'mevedel-session-rewind-state-at-turn "mevedel-session-rewind")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session--create "mevedel-structs" (&rest slots))
@@ -113,9 +194,12 @@
 (declare-function mevedel-tool-render-data-reconcile-lost-executions
                   "mevedel-tool-render-data"
                   (buffer &optional successor-execution-ids))
+(autoload 'mevedel-tool-render-data-reconcile-lost-executions
+  "mevedel-tool-render-data")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text "mevedel-utilities" (text))
+(autoload 'mevedel--normalize-message-text "mevedel-utilities")
 
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
@@ -127,6 +211,9 @@
 (declare-function mevedel-worktree-fork-create "mevedel-worktree" (reservation))
 (declare-function mevedel-worktree-fork-reservation "mevedel-worktree" (session &optional preflight))
 (declare-function mevedel-worktree-fork-validate-reservation "mevedel-worktree" (session reservation))
+(autoload 'mevedel-worktree-fork-create "mevedel-worktree")
+(autoload 'mevedel-worktree-fork-reservation "mevedel-worktree")
+(autoload 'mevedel-worktree-fork-validate-reservation "mevedel-worktree")
 
 ;; `org'
 (defvar org-agenda-file-menu-enabled)
@@ -145,7 +232,6 @@ copied transcript set is derived from concrete segment ranges:
 predecessor segments are copied whole; the picked segment is copied
 only through PICKED-CUM-TURN.  Entries with non-integer
 `:parent-turn' are excluded."
-  (require 'cl-lib)
   (let ((ranges nil))
     (dolist (seg-entry prompt-index)
       (let ((seg (car seg-entry))
@@ -204,7 +290,6 @@ only through PICKED-CUM-TURN.  Entries with non-integer
 
 (defun mevedel-session-fork--assert-clone-slot-completeness ()
   "Signal when the session clone policy no longer covers the struct."
-  (require 'cl-lib)
   (let ((actual
          (mapcar #'car
                  (cdr (cl-struct-slot-info 'mevedel-session))))
@@ -225,13 +310,9 @@ because they are immutable authority identities owned outside the session.
 Every other slot is decided here: durable logical containers are copied,
 fork-only projections are reduced, and runtime/control state starts empty.
 The identity and timestamp keywords describe the new materialized child."
-  (require 'cl-lib)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
   (mevedel-session-fork--assert-clone-slot-completeness)
   (unless (memq policy '(fork save-as))
     (error "Unknown session clone policy: %S" policy))
-  (require 'mevedel-reminders)
   (let* ((fork-p (eq policy 'fork))
          (turn (if fork-p
                    forked-from-turn
@@ -402,7 +483,6 @@ The identity and timestamp keywords describe the new materialized child."
 Return non-nil when the artifact was materialized.  When REQUIRED is non-nil,
 signal if LOGICAL is absent.  Literal resolver bytes are used so remote fixed
 caches never become fork authority."
-  (require 'mevedel-session-artifacts)
   (if (mevedel-session-artifacts-artifact-present-p source logical t)
       (let ((destination (expand-file-name logical staging-path))
             (content
@@ -418,12 +498,6 @@ caches never become fork authority."
     (child buffer staging-buffer parent-save-path staging-path
            picked-segment picked-cum-turn &optional additional-roots)
   "Materialize CHILD under STAGING-PATH using STAGING-BUFFER."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
-  (require 'mevedel-agent-persistence)
-  (require 'mevedel-plan)
   (let ((source (buffer-local-value 'mevedel--session buffer)))
     (unless source
       (error "Fork source buffer has no session"))
@@ -484,7 +558,6 @@ caches never become fork authority."
             (mevedel-session-artifacts-segment-path
              staging-path picked-segment)
             buffer-file-truename nil)
-      (require 'mevedel-tool-render-data)
       (mevedel-tool-render-data-reconcile-lost-executions staging-buffer)
       (set-buffer-modified-p t)
       (save-buffer))
@@ -531,9 +604,6 @@ caches never become fork authority."
     (child buffer staging-buffer parent-save-path staging-path new-save-path
            picked-segment picked-cum-turn additional-roots)
   "Stage, publish, and restore CHILD as one session-artifact transaction."
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
   (let ((portable-p
          (mevedel-session-codec-portable-authority-p child))
         child-buffer published committed)
@@ -547,8 +617,6 @@ caches never become fork authority."
            picked-segment picked-cum-turn additional-roots)
           (if portable-p
               (progn
-                (require 'mevedel-session-durability)
-                (require 'mevedel-session-publication)
                 ;; A fork starts a new publication history.  Publish its
                 ;; complete staged snapshot before the owned lease and
                 ;; immutable control state move together into discoverability.
@@ -621,7 +689,6 @@ caches never become fork authority."
 
 (defun mevedel-session-fork--fork-child-name (session fork-type)
   "Return the first unused direct-child name for SESSION and FORK-TYPE."
-  (require 'mevedel-session-persistence)
   (let* ((source-id (mevedel-session-session-id session))
          (source-name (mevedel-session-name session))
          (type-name (symbol-name fork-type))
@@ -779,9 +846,6 @@ Return descriptions of malformed grants and rules dropped from the child."
 (defun mevedel-session-fork--restore-worktree-files
     (source child cum-turn)
   "Restore SOURCE's captured repository files into CHILD at CUM-TURN."
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
   (let* ((source-root
           (file-name-as-directory
            (expand-file-name
@@ -937,9 +1001,6 @@ Return descriptions of malformed grants and rules dropped from the child."
 The child receives truncated conversation history and the Source working
 directory.  Working files are neither restored nor copied.  Return the new
 child data buffer without mutating the Source buffer, session, or lock."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
   (let* ((session (buffer-local-value 'mevedel--session buffer))
          (_ (unless session
               (user-error "Active buffer has no mevedel session")))
@@ -1017,9 +1078,6 @@ child data buffer without mutating the Source buffer, session, or lock."
 
 (defun mevedel-session-fork-worktree-fork (buffer target)
   "Create and open a Worktree Fork of BUFFER at stable TARGET."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-persistence)
-  (require 'mevedel-session-rewind)
   (let* ((session (buffer-local-value 'mevedel--session buffer))
          (_ (unless session
               (user-error "Active buffer has no mevedel session")))
@@ -1038,10 +1096,8 @@ child data buffer without mutating the Source buffer, session, or lock."
           (mevedel-session-artifacts-sessions-dir
            (mevedel-session-workspace session)))
          (reservation
-          (progn
-            (require 'mevedel-worktree)
-            (or (plist-get target :worktree-reservation)
-                (mevedel-worktree-fork-reservation session))))
+          (or (plist-get target :worktree-reservation)
+              (mevedel-worktree-fork-reservation session)))
          (_ (mevedel-worktree-fork-validate-reservation
              session reservation))
          (child-name
@@ -1144,10 +1200,6 @@ BUFFER is SESSION's root data buffer.  NEW-ID and NEW-SAVE-PATH name the moved
 session tree.  Return a post-commit lease error, or nil.  A failure before the
 sidecar marker CAS rolls the directory and in-memory paths back while the same
 lease generation remains owned."
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-execution)
-  (require 'mevedel-session-durability)
-  (require 'mevedel-session-publication)
   (let* ((old-save-path (mevedel-session-save-path session))
          (old-id (mevedel-session-session-id session))
          (old-name (mevedel-session-name session))
@@ -1254,9 +1306,6 @@ buffer per `mevedel-session-buffer-name'.
 
 Works from a chat buffer or a view buffer."
   (interactive "sNew session name: ")
-  (require 'mevedel-session-artifacts)
-  (require 'mevedel-session-codec)
-  (require 'mevedel-session-persistence)
   (let* ((data-buf
           (cond
            ((and (boundp 'mevedel--session) mevedel--session) (current-buffer))
@@ -1306,7 +1355,6 @@ Works from a chat buffer or a view buffer."
                      session data-buf sanitized new-id new-save-path))
             (rename-file (directory-file-name old-save-path)
                          (directory-file-name new-save-path))
-            (require 'mevedel-execution)
             (mevedel-execution-relocate-artifacts
              session old-save-path new-save-path)
             (setf (mevedel-session-save-path session) new-save-path
