@@ -91,10 +91,6 @@
 (declare-function mevedel-execution-telemetry-sandbox-summary-class
                   "mevedel-execution-telemetry" (summary))
 
-;; `mevedel-execution-target'
-(declare-function mevedel-execution-target-remote-p
-                  "mevedel-execution-target" (target))
-
 ;; `mevedel-execution-transcript'
 (declare-function mevedel-execution-transcript-retry-terminals
                   "mevedel-execution-transcript" (&rest args))
@@ -114,6 +110,10 @@
 (declare-function mevedel-session-artifacts-strip-gptel-config-properties
                   "mevedel-session-artifacts" nil)
 
+;; `mevedel-session-codec'
+(declare-function mevedel-session-codec-portable-authority-p
+                  "mevedel-session-codec" (session))
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-update-transcript-entry
                   "mevedel-session-persistence" (session agent-id updates))
@@ -125,8 +125,6 @@
                   "mevedel-skills-prompt" ())
 
 ;; `mevedel-structs'
-(declare-function mevedel-session-execution-target
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
@@ -829,11 +827,7 @@ Return nil when INVOCATION has no live conversation buffer."
                   (when (buffer-modified-p)
                     (when (bound-and-true-p gptel-mode)
                       (gptel--save-state))
-                    (let* ((target (mevedel-session-execution-target session))
-                           (remote (and target
-                                        (mevedel-execution-target-remote-p
-                                         target)))
-                           (coding-system-for-write 'utf-8-unix)
+                    (let* ((coding-system-for-write 'utf-8-unix)
                            (save-silently t)
                            (inhibit-message t)
                            (message-log-max nil)
@@ -843,7 +837,10 @@ Return nil when INVOCATION has no live conversation buffer."
                            (write-file-functions
                             (remq 'undo-tree-save-history-from-hook
                                   write-file-functions)))
-                      (if remote
+                      ;; Portable authority resolves this transcript
+                      ;; through the publication, so a direct write would
+                      ;; leave resume unable to see it.
+                      (if (mevedel-session-codec-portable-authority-p session)
                           (progn
                             (run-hooks 'before-save-hook)
                             (mevedel-session-artifacts-publish-text

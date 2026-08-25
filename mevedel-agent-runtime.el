@@ -123,10 +123,6 @@
 (declare-function mevedel-execution-stop-owner
                   "mevedel-execution" (session owner))
 
-;; `mevedel-execution-target'
-(declare-function mevedel-execution-target-remote-p
-                  "mevedel-execution-target" (target))
-
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-context-audit-records
                   "mevedel-hooks" (decision event type &optional omit-context))
@@ -150,6 +146,10 @@
                   (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-publish-agent-terminal-state
                   "mevedel-session-artifacts" (invocation))
+
+;; `mevedel-session-codec'
+(declare-function mevedel-session-codec-portable-authority-p
+                  "mevedel-session-codec" (session))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-record-running-transcript
@@ -205,7 +205,7 @@
   "Maximum inline partial response size for an interrupted turn.")
 
 (defvar mevedel-agent-runtime--defer-terminal-publication-p nil
-  "Non-nil while remote terminal agent state is being assembled in memory.")
+  "Non-nil while published terminal agent state is assembled in memory.")
 
 
 ;;
@@ -503,14 +503,14 @@
            (committed-p
             (and (listp pending)
                  (eq 'committed (plist-get pending :phase))))
-           status visible transaction remote-terminal-publication-p)
+           status visible transaction terminal-publication-p)
       (if committed-p
           (setq response (plist-get pending :response)
                 event (plist-get pending :event)
                 status (plist-get pending :status)
                 visible (plist-get pending :visible)
                 transaction (plist-get pending :transaction)
-                remote-terminal-publication-p (plist-get pending :remote))
+                terminal-publication-p (plist-get pending :published))
         (when (and (listp pending) (plist-member pending :response))
           (setq response (plist-get pending :response)
                 event (plist-get pending :event)))
@@ -541,7 +541,7 @@
                         "interrupted")))
                   (_ (mevedel-agent-runtime--with-execution-results
                       invocation response)))
-                remote-terminal-publication-p
+                terminal-publication-p
                 (and session
                      save-path
                      (progn
@@ -553,19 +553,20 @@
                       (mevedel-agent-invocation-buffer invocation))
                      (buffer-live-p
                       (mevedel-agent-invocation-parent-data-buffer invocation))
-                     (when-let* ((target
-                                  (mevedel-session-execution-target session)))
-                       (require 'mevedel-execution-target)
-                       (mevedel-execution-target-remote-p target))))
+                     (mevedel-session-execution-target session)
+                     ;; Portable authority resolves the transcript through
+                     ;; the publication, local target included: a direct
+                     ;; write would leave resume unable to see it.
+                     (mevedel-session-codec-portable-authority-p session)))
           (let ((mevedel-agent-runtime--defer-terminal-publication-p
-                 remote-terminal-publication-p))
+                 terminal-publication-p))
             (mevedel-agent-runtime--finalize invocation status))
           (when callback
             (let ((mevedel-agent-control-suppress-persistence t))
               (setq transaction
                     (funcall callback invocation visible event))))
           (condition-case err
-              (if remote-terminal-publication-p
+              (if terminal-publication-p
                   (progn
                     (mevedel-session-artifacts-publish-agent-terminal-state
                      invocation))
@@ -579,7 +580,7 @@
                 (list :response response :event event :phase 'committed
                       :status status :visible visible
                       :transaction transaction
-                      :remote remote-terminal-publication-p))
+                      :published terminal-publication-p))
           (setf (mevedel-agent-invocation-runtime-pending-response invocation)
                 pending)))
       (when (functionp (cdr-safe transaction))

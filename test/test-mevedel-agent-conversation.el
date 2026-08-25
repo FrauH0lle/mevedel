@@ -884,7 +884,19 @@
 			   (set-visited-file-name absolute t t)
 			   (set-buffer-modified-p t))
                          (mevedel-session-artifacts-install-gptel-save-state-advice)
-			 (should (mevedel-agent-conversation-save invocation))
+			 ;; A portable session resolves this transcript through its
+			 ;; publication, so a local target must publish it too.
+			 (let ((publications 0))
+			   (cl-letf* ((published
+				       (symbol-function
+					'mevedel-session-artifacts-publish-text))
+				      ((symbol-function
+					'mevedel-session-artifacts-publish-text)
+				       (lambda (&rest args)
+					 (cl-incf publications)
+					 (apply published args))))
+			     (should (mevedel-agent-conversation-save invocation)))
+			   (should (= 1 publications)))
 			 (with-temp-buffer
 			   (insert-file-contents absolute)
 			   (org-mode)
