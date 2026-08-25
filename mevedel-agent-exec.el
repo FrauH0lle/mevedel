@@ -726,7 +726,9 @@ partial-len=%d :tool-use=%S :stream=%S"
           (unless fired
             (pcase resp
               ((pred (lambda (value)
-                       (and (listp value)
+                       ;; Stream events like (reasoning . t) are improper
+                       ;; lists; plist-member signals on those.
+                       (and (proper-list-p value)
                             (plist-member
                              value :mevedel-agent-terminal-status))))
                (deliver resp))
