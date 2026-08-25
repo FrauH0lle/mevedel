@@ -6,8 +6,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-agents)
   (require 'mevedel-structs))
 
@@ -15,6 +16,12 @@
 (declare-function mevedel-agent-persistence-deserialize-registry "mevedel-agent-persistence" (raw))
 (declare-function mevedel-agent-persistence-sanitize-mailbox "mevedel-agent-persistence" (raw recipient))
 (declare-function mevedel-agent-persistence-serialize-registry "mevedel-agent-persistence" (session))
+(autoload 'mevedel-agent-persistence-deserialize-registry
+  "mevedel-agent-persistence")
+(autoload 'mevedel-agent-persistence-sanitize-mailbox
+  "mevedel-agent-persistence")
+(autoload 'mevedel-agent-persistence-serialize-registry
+  "mevedel-agent-persistence")
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create "mevedel-execution-target" (workspace-root))
@@ -23,6 +30,13 @@
 (declare-function mevedel-execution-target-native-path "mevedel-execution-target" (target path))
 (declare-function mevedel-execution-target-native-root "mevedel-execution-target" (cl-x))
 (declare-function mevedel-execution-target-restore-incarnation "mevedel-execution-target" (target incarnation))
+(autoload 'mevedel-execution-target-create "mevedel-execution-target")
+(autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-incarnation "mevedel-execution-target")
+(autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
+(autoload 'mevedel-execution-target-native-root "mevedel-execution-target")
+(autoload 'mevedel-execution-target-restore-incarnation
+  "mevedel-execution-target")
 
 ;; `mevedel-permission-mode'
 (defvar mevedel-permission-mode)
@@ -30,6 +44,10 @@
 ;; `mevedel-permission-persistence'
 (declare-function mevedel-permission-deserialize-authority "mevedel-permission-persistence" (rules grants target))
 (declare-function mevedel-permission-serialize-authority "mevedel-permission-persistence" (rules grants target))
+(autoload 'mevedel-permission-deserialize-authority
+  "mevedel-permission-persistence")
+(autoload 'mevedel-permission-serialize-authority
+  "mevedel-permission-persistence")
 
 ;; `mevedel-sandbox'
 (defvar mevedel-sandbox-mode)
@@ -39,8 +57,15 @@
 (declare-function mevedel-session-control-fs-physical-path "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-write-file "mevedel-session-control-fs" (path content))
+(autoload 'mevedel-session-control-fs-path-exists-p
+  "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-physical-path
+  "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-read-file "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-write-file "mevedel-session-control-fs")
 
 ;; `mevedel-structs'
+(declare-function mevedel-agent-path-p "mevedel-structs" (path))
 (declare-function mevedel-goal--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-goal-created-at "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x))
@@ -100,15 +125,18 @@
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x))
+(autoload 'mevedel-agent-path-p "mevedel-structs")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--plain-data-p "mevedel-utilities" (value))
+(autoload 'mevedel--plain-data-p "mevedel-utilities")
 
 ;; `mevedel-workspace'
 (defvar mevedel-workspace-additional-roots)
 
 ;; `mevedel-workspace-identity'
 (declare-function mevedel-workspace-identity-read "mevedel-workspace-identity" (root))
+(autoload 'mevedel-workspace-identity-read "mevedel-workspace-identity")
 
 ;;
 ;;; Constants
@@ -179,7 +207,6 @@ artifact.  Existing control artifacts are only a narrow cold-start fallback
 for callers that intentionally operate before hydration; contradictory
 artifacts fail closed.  A fresh path without a session or explicit profile is
 an error rather than an implicit PID-lock fallback."
-  (require 'mevedel-session-control-fs)
   (unless (and (stringp session-dir)
                (file-name-absolute-p session-dir))
     (error "Session path is unavailable: %S" session-dir))
@@ -255,8 +282,6 @@ The project-owned identity and target-native root are portable across
 client-specific TRAMP spellings.  The process-local workspace id and file
 cache are not persisted."
   (when workspace
-    (require 'mevedel-execution-target)
-    (require 'mevedel-workspace-identity)
     (let* ((root (mevedel-workspace-root workspace))
            (identity (mevedel-workspace-identity-read root))
            (target (mevedel-execution-target-create root)))
@@ -277,7 +302,6 @@ to the workspace through which the user opened the session.  Return
 identity requires confirmation so callers can discard copied authority."
   (unless (and (proper-list-p plist) workspace)
     (error "Invalid persisted workspace"))
-  (require 'mevedel-workspace-identity)
   (let ((saved-identity (plist-get plist :workspace-id))
         (saved-root (plist-get plist :target-native-root))
         (current-identity
@@ -312,7 +336,6 @@ identity requires confirmation so callers can discard copied authority."
 (defun mevedel-session-codec--filter-permission-rules (rules)
   "Drop RULES whose `:action' is unrecognised.
 A rule is `(TOOL-NAME &rest PLIST)' with `:action SYMBOL'."
-  (require 'cl-lib)
   (cl-remove-if-not
    (lambda (rule)
      (and (consp rule)
@@ -324,7 +347,6 @@ A rule is `(TOOL-NAME &rest PLIST)' with `:action SYMBOL'."
 (defun mevedel-session-codec--filter-resource-grants (grants)
   "Keep well-formed exact resource GRANTS.
 A grant is `(:path ABSOLUTE-PATH :access read-or-write)'."
-  (require 'cl-lib)
   (cl-remove-if-not
    (lambda (grant)
      (and (proper-list-p grant)
@@ -393,7 +415,6 @@ are mapped below the opened workspace root before containment is checked."
 
 (defun mevedel-session-codec--goal-from-plist (plist)
   "Reconstruct a `mevedel-goal' from PLIST, or nil."
-  (require 'cl-lib)
   (when plist
     (let ((keys '(:id :objective :status :reason :token-budget :tokens-used
                   :time-used-seconds :turns-run :plan-reference
@@ -497,10 +518,6 @@ ADDITIONAL-ROOTS is the buffer-local value of
 
 The resulting plist is round-trippable via
 `mevedel-session-codec-deserialize'."
-  (require 'mevedel-agent-persistence)
-  (require 'mevedel-execution-target)
-  (require 'mevedel-permission-mode)
-  (require 'mevedel-permission-persistence)
   (let* ((execution-target (mevedel-session-execution-target session))
          (authority-mode
           (mevedel-session-codec-authority-mode session))
@@ -628,7 +645,6 @@ the round trip but are ignored when rendered."
 
 (defun mevedel-session-codec--sanitize-ptc-checkpoints (raw)
   "Return closed, read-safe ToolScript checkpoints from sidecar value RAW."
-  (require 'mevedel-utilities)
   (cl-loop
    for checkpoint in (and (proper-list-p raw) raw)
    for id = (and (proper-list-p checkpoint) (plist-get checkpoint :id))
@@ -651,7 +667,6 @@ the round trip but are ignored when rendered."
 
 (defun mevedel-session-codec-validate-current-sidecar (plist)
   "Return PLIST when it contains every current-version sidecar key."
-  (require 'cl-lib)
   (unless (proper-list-p plist)
     (error "Invalid session sidecar"))
   (dolist (key mevedel-session-codec--required-sidecar-keys)
@@ -721,9 +736,6 @@ their hygiene filters."
     (error "Unsupported session version: %s"
            (or (plist-get plist :version) "missing")))
   (mevedel-session-codec-validate-current-sidecar plist)
-  (require 'mevedel-agent-persistence)
-  (require 'mevedel-execution-target)
-  (require 'mevedel-permission-persistence)
   (let* ((workspace-binding
           (mevedel-session-codec--workspace-from-plist
            (plist-get plist :workspace) workspace))
@@ -876,9 +888,8 @@ their hygiene filters."
   "Write sidecar PLIST to PATH atomically.
 Uses a temp file created in PATH's own directory so the final
   `rename-file' stays within the same filesystem and is POSIX-atomic
-  even on setups where the workspace lives on a different mount from
-  the system temp directory."
-  (require 'mevedel-session-control-fs)
+even on setups where the workspace lives on a different mount from
+the system temp directory."
   (with-temp-buffer
     (let ((print-length nil)
           (print-level nil)
@@ -893,7 +904,6 @@ Uses a temp file created in PATH's own directory so the final
   "Read sidecar plist from PATH.
 Returns the raw plist.  Caller is responsible for passing it through
 `mevedel-session-codec-deserialize' for validation and hygiene."
-  (require 'mevedel-session-control-fs)
   (with-temp-buffer
     (insert (mevedel-session-control-fs-read-file
              (mevedel-session-control-fs-physical-path path)))
