@@ -67,13 +67,9 @@ recommends those elements while leaving Codex room to choose the next action.
 
 - Consider making mevedel's data buffers hidden
 
-- A just expanded tool call in the view buffer can get swallowed/disappears when the view buffer updates
-  - reappears on next view buffer render
-- Expanded tools can get collapsed when re-render or update happens
-
 - Allow activation and deactivation of skills per project
 - Allow activation and deactivation of plugins per project
-- In Ask mode, ApplyPatch should expand the first one or two hunks
+
 - Residual watch after the 2026-08-23 interaction rebuild fix (cursor jumps
   at tick rate + garbled ApplyPatch feedback both traced to the 5s
   control-transfer poll rebuilding the interaction zone through an
@@ -83,15 +79,7 @@ recommends those elements while leaving Codex room to choose the next action.
   `mevedel-view--call-preserving-window-state`. If cursor drift reappears
   during heavy history-live streaming with point on interaction text,
   convert those captures to markers.
-
-- Collapse multiple sequential tool calls (more than three), for example:
-  - Searched for 5 patterns, read 1 file, ran 5 shell commands
-  - Ran 5 commands
-  - Expandable, use similar/same layout as ToolScript when it runs things parallel
-
-- Collapse long input, for example
-  - [Pasted text #1 +83 lines]
-
+  
 - Deferred from the 2026-08-25 PTC profiling session (the big levers —
   segment-classification memoization, hot-path `require` hoisting,
   `directive-ranges` caching, `audit-spans` string scan, per-script

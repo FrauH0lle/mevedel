@@ -757,5 +757,113 @@ the preceding header."
              (should-not (string-match-p "Assistant" header-text)))))))))
 
 
+(mevedel-deftest mevedel-view-disclosure-state-key/anchors ()
+  ,test
+  (test)
+  :doc "an empty-string tool id never becomes the source anchor"
+  (mevedel-view-test--with-buffers
+    (let (start end)
+      (with-current-buffer data-buf
+        (setq start (point-max))
+        (goto-char start)
+        (insert "restored tool block text\n")
+        (setq end (point))
+        (put-text-property start end 'gptel '(tool . "")))
+      (with-current-buffer view-buf
+        (let ((key (mevedel-view-disclosure-state-key
+                    (cons start end) 'tool-summary)))
+          (should key)
+          (should-not (equal (nth 3 key) '(tool "")))))))
+  :doc "a real tool id anchors the key"
+  (mevedel-view-test--with-buffers
+    (let (start end)
+      (with-current-buffer data-buf
+        (setq start (point-max))
+        (goto-char start)
+        (insert "tool block text\n")
+        (setq end (point))
+        (put-text-property start end 'gptel '(tool . "call_9")))
+      (with-current-buffer view-buf
+        (should (equal '(tool "call_9")
+                       (nth 3 (mevedel-view-disclosure-state-key
+                               (cons start end) 'tool-summary))))))))
+
+(mevedel-deftest mevedel-view-disclosure-restore-state ()
+  ,test
+  (test)
+  :doc "returns non-nil only when a section was actually toggled"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/f.el\"))\n\nrestorable body\n"
+     '(tool . "call_restore"))
+    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer data-buf
+      (mevedel-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (search-forward "Read: ")
+      (goto-char (match-beginning 0))
+      (let ((key (get-text-property (point) 'mevedel-view-source-key)))
+        (should key)
+        ;; Matching state toggles nothing.
+        (should-not (mevedel-view-disclosure-restore-state
+                     (point-min)
+                     (marker-position mevedel-view--input-marker)
+                     (list (cons key t))))
+        ;; A mismatch toggles the section and reports it.
+        (should (mevedel-view-disclosure-restore-state
+                 (point-min)
+                 (marker-position mevedel-view--input-marker)
+                 (list (cons key nil))))
+        (should (string-match-p
+                 "restorable body"
+                 (buffer-substring-no-properties
+                  (point-min) mevedel-view--input-marker)))))))
+
+(mevedel-deftest mevedel-view-toggle-section/live-tail ()
+  ,test
+  (test)
+  :doc "a toggle drops the retained live tail"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/f.el\"))\n\ntail body\n"
+     '(tool . "call_tail"))
+    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer data-buf
+      (mevedel-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (setq mevedel-view--live-data-tail-start
+            (with-current-buffer data-buf (copy-marker (point-min) nil)))
+      (setq mevedel-view--live-view-tail-start
+            (copy-marker (point-min) nil))
+      (goto-char (point-min))
+      (search-forward "Read: ")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (should-not mevedel-view--live-data-tail-start)
+      (should-not mevedel-view--live-view-tail-start)))
+  :doc "an interior in-flight marker re-anchors at the section start"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Read\" :args (:file_path \"/tmp/f.el\"))\n\nanchored body\n"
+     '(tool . "call_anchor"))
+    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer data-buf
+      (mevedel-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (search-forward "Read: ")
+      (goto-char (match-beginning 0))
+      (let ((section-start (car (mevedel-view-disclosure-section-bounds))))
+        ;; Park the in-flight marker inside the collapsed row.
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker (+ (point) 2) nil))
+        (mevedel-view-toggle-section)
+        (should (= section-start
+                   (mevedel-view-stream-in-flight-turn-start-position)))))))
+
 (provide 'test-mevedel-view-disclosure)
 ;;; test-mevedel-view-disclosure.el ends here

@@ -293,6 +293,7 @@
                   (source vtype &optional previous-key))
 (declare-function mevedel-view-disclosure-truncate-line
                   "mevedel-view-disclosure" (text limit))
+(defvar mevedel-view-disclosure--settling-p)
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-rebuild
@@ -384,6 +385,20 @@ reproducing a view-rendering bug."
 (defcustom mevedel-view-mailbox-collapse-line-threshold 0
   "Mailbox delivery bodies longer than this many lines start collapsed.
 Shorter bodies render fully expanded."
+  :type 'integer
+  :group 'mevedel)
+
+(defcustom mevedel-view-user-input-collapse-line-threshold 15
+  "User prompts longer than this many lines fold to a one-line summary.
+The folded line shows the truncated first line and the hidden line
+count, and expands in place.  Zero disables folding."
+  :type 'integer
+  :group 'mevedel)
+
+(defcustom mevedel-view-tool-group-collapse-threshold 3
+  "Runs of more than this many consecutive tool rows fold into one group.
+The group renders as a one-line activity summary that expands into the
+individual tool rows.  Zero disables grouping."
   :type 'integer
   :group 'mevedel)
 
@@ -1531,6 +1546,8 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
 ;;
 ;;   (:header STRING            ; one-line collapsed summary
 ;;    :body STRING              ; full expanded body text
+;;    :preview-body STRING      ; body shown when the row renders expanded
+;;                              ; by default; explicit expansion shows :body
 ;;    :body-mode SYMBOL         ; major-mode symbol for fontification (or nil)
 ;;    :status SYMBOL            ; optional visual status, e.g. success/error
 ;;    :expandable-p BOOL        ; nil means render as a compact event line
@@ -1638,6 +1655,7 @@ renderer to fall back to the bare `Tool' one-liner."
 Requires:
   `:header'               -- a string (required).
   `:body' (if present)    -- must be a string.
+  `:preview-body' (if present) -- must be a string.
   `:body-mode' (if present) -- must be a symbol.
   `:status' (if present) -- must be a symbol.
   `:expandable-p' (if present) -- must be a boolean.
@@ -1649,6 +1667,7 @@ insert a non-string or `funcall' a non-symbol."
   (and (listp p)
        (stringp (plist-get p :header))
        (let ((body (plist-get p :body))
+             (preview (plist-get p :preview-body))
              (mode (plist-get p :body-mode))
              (status (plist-get p :status))
              (expandable (plist-get p :expandable-p))
@@ -1656,6 +1675,7 @@ insert a non-string or `funcall' a non-symbol."
              (children (plist-get p :child-calls))
              (coalesce-key (plist-get p :coalesce-key)))
          (and (or (null body) (stringp body))
+              (or (null preview) (stringp preview))
               (or (null children)
                   (and (listp children)
                        (seq-every-p (lambda (child)
@@ -2163,7 +2183,15 @@ the raw tool segment.  When `:hidden-p' is non-nil, insert nothing."
         (if (plist-member rendering :initially-collapsed-p)
             (if (plist-get rendering :initially-collapsed-p)
                 (mevedel-view--render-collapsed-header rendering source)
-              (mevedel-view--render-expanded-body rendering source))
+              ;; `:preview-body' replaces `:body' for this initial
+              ;; expansion only.  A later explicit expansion goes
+              ;; through the disclosure path, which re-invokes the
+              ;; renderer and inserts the complete `:body'.
+              (mevedel-view--render-expanded-body
+               (if-let* ((preview (plist-get rendering :preview-body)))
+                   (plist-put (copy-sequence rendering) :body preview)
+                 rendering)
+               source))
           ;; Default: collapsed.
           (mevedel-view--render-collapsed-header rendering source)))
       (when hook-audits
@@ -3087,8 +3115,8 @@ from the data buffer should be filtered."
       (goto-char pos)
       (skip-chars-backward " \t\n")
       (and (> (point) (point-min))
-           (eq (get-text-property (1- (point)) 'mevedel-view-type)
-               'user)))))
+           (memq (get-text-property (1- (point)) 'mevedel-view-type)
+                 '(user user-input-summary))))))
 
 (defun mevedel-view--render-live-region (data-buf settle-p &optional start end)
   "Render the in-flight turn from DATA-BUF, settling it when SETTLE-P.
@@ -3257,7 +3285,8 @@ the render so user toggles survive streaming ticks."
                   (when (and replace-p capture-p)
                     (mevedel-view-disclosure-capture-state
                      delete-start
-                     rebuild-end-pos))))
+                     rebuild-end-pos)))
+                 (render-start nil))
             (mevedel-view--debug-log
              'incremental-decision
            :replace-p replace-p
@@ -3283,8 +3312,8 @@ the render so user toggles survive streaming ticks."
             ;; at the status boundary so any real-text status/interaction
             ;; UI below that boundary remains below the transcript.
             (let ((mevedel-view--render-insertion-marker rebuild-end)
-                  (render-start (marker-position rebuild-end))
                   (continuation-p retained-p))
+              (setq render-start (marker-position rebuild-end))
               (dolist (turn turns)
                 (mevedel-view--render-turn
                  turn data-buf nil nil
@@ -3294,25 +3323,36 @@ the render so user toggles survive streaming ticks."
               (when pending
                 (let* ((cap mevedel-view-pending-tools-visible-max)
                        (visible (cl-subseq pending 0 (min cap (length pending)))))
-                  (mevedel-view--insert-pending-tool-lines visible)))
-              (if settle-p
-                  (mevedel-view-render-invalidate-live-tail)
-                (mevedel-view--retain-last-live-render-unit
-                 data-buf render-start (marker-position rebuild-end))))
+                  (mevedel-view--insert-pending-tool-lines visible))))
             (mevedel-view--debug-log
              'incremental-after-insert
              :state (mevedel-view--debug-state data-buf data-from data-to)))
           ;; Restore user-toggled collapse/expand state that the delete
           ;; above just wiped.  Walk the freshly rendered span and toggle
           ;; only sections whose saved state differs from the default.
-          (when (and saved-states
-                     delete-start
-                     rebuild-end
-                     (marker-position rebuild-end))
-            (mevedel-view-disclosure-restore-state
-             delete-start
-             (marker-position rebuild-end)
-             saved-states))
+          (let ((restore-toggled
+                 (when (and saved-states
+                            delete-start
+                            rebuild-end
+                            (marker-position rebuild-end))
+                   (mevedel-view-disclosure-restore-state
+                    delete-start
+                    (marker-position rebuild-end)
+                    saved-states))))
+            ;; Retain the live tail only after the restore above, and
+            ;; only when the restore rewrote nothing: a restored toggle
+            ;; splits the freshly marked render unit, leaving the
+            ;; retained view marker mid-unit relative to its data-buffer
+            ;; twin, and the next retained render then deletes or
+            ;; duplicates content its narrowed reparse cannot
+            ;; regenerate.  Skipping retention costs one full-turn
+            ;; reparse per tick exactly while a live-tail section holds
+            ;; non-default state.
+            (when replace-p
+              (if (or settle-p restore-toggled)
+                  (mevedel-view-render-invalidate-live-tail)
+                (mevedel-view--retain-last-live-render-unit
+                 data-buf render-start (marker-position rebuild-end)))))
           (mevedel-view--ensure-request-progress data-buf)
           (unless mevedel-view--agent-transcript-p
             (mevedel-view--render-agent-status)
@@ -3325,9 +3365,15 @@ the render so user toggles survive streaming ticks."
   (mevedel-view--render-live-region data-buf nil))
 
 (defun mevedel-view-render-settle (data-buf start end)
-  "Exactly reconcile DATA-BUF's completed response from START through END."
+  "Exactly reconcile DATA-BUF's completed response from START through END.
+Disclosure state keys are computed with their durable post-settle
+anchors: this render runs before the stream clears the in-flight turn
+markers, and keys captured or stamped under the temporary `(in-flight)'
+anchor here would be orphaned the moment those markers clear, collapsing
+sections the user expanded during the turn on the next render."
   (mevedel-view-render-invalidate-live-tail)
-  (mevedel-view--render-live-region data-buf t start end))
+  (let ((mevedel-view-disclosure--settling-p t))
+    (mevedel-view--render-live-region data-buf t start end)))
 
 (defun mevedel-view--conversation-variant-button
     (data-buf source-start source-end &optional session)
@@ -4177,6 +4223,120 @@ the contiguous run of audit blocks that follows it."
                  when (and (>= position start) (< position strip-end))
                  return name)))))
 
+(defun mevedel-view--user-input-line-count (text)
+  "Return the number of lines in user input TEXT."
+  (length (split-string (string-trim-right text "\n+") "\n")))
+
+(defun mevedel-view--user-input-fold-p (text)
+  "Return non-nil when user input TEXT should render folded.
+Org block markers keep the text unfolded: their spans get their own
+decorations, which a plain-text fold would hide undecorated."
+  (and (> mevedel-view-user-input-collapse-line-threshold 0)
+       (not (string-match-p "^#\\+begin_" text))
+       (> (mevedel-view--user-input-line-count text)
+          mevedel-view-user-input-collapse-line-threshold)))
+
+(defun mevedel-view--user-input-fold-summary (text)
+  "Return the one-line folded summary for user input TEXT."
+  (let* ((hidden (1- (mevedel-view--user-input-line-count text)))
+         (first-line (car (split-string text "\n"))))
+    (concat
+     (mevedel-view-disclosure-truncate-line first-line 80)
+     " "
+     (propertize (format "(+%d line%s)" hidden (if (= hidden 1) "" "s"))
+                 'font-lock-face 'mevedel-view-tool-metadata))))
+
+(defun mevedel-view--insert-user-input-fold (text &optional source)
+  "Insert user input TEXT folded to an expandable one-line summary.
+SOURCE, when available, is the data-buffer range backing the turn so the
+fold state survives re-renders; the send-path echo has none and loses
+its fold state to the next full rerender, which re-folds from source."
+  (let ((start (point)))
+    (insert (mevedel-view--user-input-fold-summary text))
+    (unless (eq (char-before) ?\n)
+      (insert "\n"))
+    (add-text-properties
+     start (point)
+     `(mevedel-view-type user-input-summary
+       mevedel-view-collapsed t
+       mevedel-view-user-input-text ,text))
+    (when source
+      (add-text-properties
+       start (point)
+       `(mevedel-view-source ,source
+         mevedel-view-source-key
+         ,(mevedel-view-disclosure-state-key source 'user-input-summary))))
+    (mevedel-view-render-add-display-properties
+     start (point) 'user-input-summary)))
+
+(defun mevedel-view--user-input-fold-bounds ()
+  "Return bounds of the contiguous user-input fold section at point."
+  (when (eq (get-text-property (point) 'mevedel-view-type)
+            'user-input-summary)
+    (let ((start (or (previous-single-property-change
+                      (point) 'mevedel-view-type)
+                     (point-min)))
+          (end (or (next-single-property-change
+                    (point) 'mevedel-view-type)
+                   (point-max))))
+      ;; `previous-single-property-change' lands in the previous run
+      ;; when point sits at the start of this one.
+      (when (and (< start (point))
+                 (not (eq (get-text-property start 'mevedel-view-type)
+                          'user-input-summary)))
+        (setq start (or (next-single-property-change
+                         start 'mevedel-view-type)
+                        (point))))
+      (cons start end))))
+
+(defun mevedel-view-render-toggle-user-input ()
+  "Toggle the folded user input section at point.
+The full input travels in a text property rather than being re-read
+from the data buffer, so the send-path echo -- which has no source
+coordinates yet -- folds and expands the same way as a rendered turn."
+  (let* ((bounds (mevedel-view--user-input-fold-bounds))
+         (start (car-safe bounds)))
+    (unless bounds
+      (user-error "No collapsible section at point"))
+    (let* ((inhibit-read-only t)
+           (end (cdr bounds))
+           (collapsed (get-text-property start 'mevedel-view-collapsed))
+           (source (get-text-property start 'mevedel-view-source))
+           (source-key (get-text-property start 'mevedel-view-source-key))
+           (turn-id (get-text-property start 'mevedel-view-turn-id))
+           (text (or (get-text-property start 'mevedel-view-user-input-text)
+                     (buffer-substring-no-properties start end))))
+      (save-excursion
+        (goto-char start)
+        (delete-region start end)
+        (let ((ins-start (point)))
+          (if collapsed
+              (progn
+                (insert text)
+                (unless (eq (char-before) ?\n)
+                  (insert "\n")))
+            (insert (mevedel-view--user-input-fold-summary text))
+            (insert "\n"))
+          (add-text-properties
+           ins-start (point)
+           `(mevedel-view-type user-input-summary
+             mevedel-view-collapsed ,(not collapsed)
+             mevedel-view-user-input-text ,text))
+          (when source
+            (let ((key (mevedel-view-disclosure-state-key
+                        source 'user-input-summary source-key)))
+              (add-text-properties
+               ins-start (point)
+               `(mevedel-view-source ,source
+                 mevedel-view-source-key ,key))
+              (mevedel-view-disclosure-record-state-for-key
+               key (not collapsed))))
+          (when turn-id
+            (put-text-property
+             ins-start (point) 'mevedel-view-turn-id turn-id))
+          (mevedel-view-render-add-display-properties
+           ins-start (point) 'user-input-summary))))))
+
 (defun mevedel-view--render-user-turn (segments data-buf &optional directive)
   "Render user SEGMENTS from DATA-BUF, with optional DIRECTIVE metadata."
   (let* ((raw-text (mevedel-view--user-turn-text segments data-buf))
@@ -4236,9 +4396,22 @@ the contiguous run of audit blocks that follows it."
                  'help-echo "RET: directive actions"))))
       (setq text-start (point))
       (unless (string-empty-p text)
-        (insert text)
-        (unless (eq (char-before) ?\n)
-          (insert "\n")))
+        (if (and (null prompt-drawers)
+                 (not directive)
+                 (mevedel-view--user-input-fold-p text))
+            (mevedel-view--insert-user-input-fold
+             text
+             (when-let* ((user-segs
+                          (cl-remove-if-not
+                           (lambda (seg) (eq (car seg) 'user))
+                           segments)))
+               (mevedel-view-disclosure-source-range
+                data-buf
+                (cadr (car user-segs))
+                (caddr (car (last user-segs))))))
+          (insert text)
+          (unless (eq (char-before) ?\n)
+            (insert "\n"))))
       ;; Decorate mailbox blocks that appear inside mixed user text.
       (mevedel-view--decorate-agent-result-blocks text-start (point))
       (mevedel-view--decorate-agent-message-blocks text-start (point))
@@ -4742,6 +4915,144 @@ inserted beside the header.  CONTINUATION-P suppresses that header."
        (t
         (push seg out))))))
 
+(defconst mevedel-view--tool-group-verbs
+  '(("Grep" "searched %d pattern" "searched %d patterns")
+    ("Glob" "matched %d glob" "matched %d globs")
+    ("Read" "read %d file" "read %d files")
+    ("Bash" "ran %d command" "ran %d commands")
+    ("Eval" "evaluated %d form" "evaluated %d forms")
+    ("WebFetch" "fetched %d page" "fetched %d pages")
+    ("WebSearch" "ran %d web search" "ran %d web searches"))
+  "Verb phrases for grouped tool run summaries, per tool name.
+Each entry is (NAME SINGULAR PLURAL) with a `%d' count slot.  Tools
+without an entry -- MCP tools included -- fall back to \"NAME xN\".")
+
+(defun mevedel-view--tool-group-header (children)
+  "Return the one-line activity summary for grouped CHILDREN."
+  (let (names counts)
+    (dolist (child children)
+      (let ((name (or (plist-get child :tool) "Tool")))
+        (unless (member name names)
+          (push name names))
+        (cl-incf (alist-get name counts 0 nil #'equal))))
+    (setq names (nreverse names))
+    (let* ((parts
+            (mapcar
+             (lambda (name)
+               (let ((count (alist-get name counts 0 nil #'equal))
+                     (verb (assoc name mevedel-view--tool-group-verbs)))
+                 (cond
+                  (verb
+                   (format (if (= count 1) (nth 1 verb) (nth 2 verb))
+                           count))
+                  ((= count 1) name)
+                  (t (format "%s ×%d" name count)))))
+             names))
+           (summary (string-join parts ", ")))
+      ;; Capitalize only a verb phrase; a leading tool name keeps its
+      ;; own casing.
+      (if (and (not (string-empty-p summary))
+               (assoc (car names) mevedel-view--tool-group-verbs))
+          (concat (upcase (substring summary 0 1))
+                  (substring summary 1))
+        summary))))
+
+(defun mevedel-view--tool-group-child (data-buf seg index)
+  "Return the nested-call plist for tool SEG in DATA-BUF, or nil.
+INDEX discriminates the row's disclosure key from its siblings.  A
+segment whose own rendering is hidden yields nil so grouping does not
+resurrect rows the renderer suppressed."
+  (let* ((seg-start (cadr seg))
+         (seg-end (caddr seg))
+         (collapsed-rendering
+          (mevedel-view--segment-rendering data-buf seg-start seg-end t)))
+    (unless (plist-get collapsed-rendering :hidden-p)
+      (when-let* ((parsed (mevedel-view--tool-call-parse
+                           data-buf seg-start seg-end)))
+        (list :id (format "%d" index)
+              :order index
+              :tool (plist-get parsed :name)
+              :args (plist-get parsed :args)
+              :status (mevedel-view--tool-render-status
+                       (plist-get parsed :result)
+                       (plist-get parsed :render-data))
+              :result (plist-get parsed :result)
+              :render-data (plist-get parsed :render-data))))))
+
+(defun mevedel-view--tool-group-rendering (data-buf start end)
+  "Return the grouped rendering for the tool run in START..END, or nil.
+The result reuses the compound-tool row machinery: each grouped call is
+a `:child-calls' entry rendered by its own tool's renderer, so the
+expanded group has the same layout, per-row disclosure, and toggles as a
+ToolScript block.  A run with any failed call renders expanded with a
+warning marker."
+  (let* ((segments
+          (with-current-buffer data-buf
+            (save-restriction
+              (widen)
+              (let* ((pmin (point-min))
+                     (pmax (point-max))
+                     (s (max pmin (min start pmax)))
+                     (e (max pmin (min end pmax))))
+                (when (< s e)
+                  (mevedel-transcript-segments s e))))))
+         (tool-segments
+          (mevedel-view--merge-tool-hook-audit-segments
+           (cl-remove-if-not (lambda (seg) (eq (car seg) 'tool)) segments)
+           data-buf))
+         (children
+          (let ((index 0)
+                out)
+            (dolist (seg tool-segments (nreverse out))
+              (when-let* ((child (mevedel-view--tool-group-child
+                                  data-buf seg index)))
+                (push child out))
+              (cl-incf index))))
+         (failed-p
+          (cl-some (lambda (child)
+                     (not (eq (plist-get child :status) 'success)))
+                   children)))
+    (when children
+      (list :header (mevedel-view--tool-group-header children)
+            :vtype 'tool-group
+            :expandable-p t
+            :child-calls children
+            :status (and failed-p 'warning)
+            :initially-collapsed-p (not failed-p)))))
+
+(defun mevedel-view--tool-group-entry-p (entry)
+  "Return non-nil when ENTRY may fold into a grouped activity row.
+Rows that demand individual presentation stay out: agent handles and
+other non-tool vtypes, compound tools with their own nested rows, rows
+carrying hook audits or a sandbox disclosure, rows their renderer wants
+expanded or compact, coalesced rows, and renderer fallbacks."
+  (let ((rendering (plist-get entry :rendering)))
+    (and rendering
+         (= (plist-get entry :count) 1)
+         (eq (or (plist-get rendering :vtype) 'tool-summary) 'tool-summary)
+         (null (plist-get rendering :child-calls))
+         (null (plist-get rendering :hook-audits))
+         (null (plist-get rendering :sandbox-summary))
+         (not (plist-get rendering :force-expanded-p))
+         (not (and (plist-member rendering :expandable-p)
+                   (not (plist-get rendering :expandable-p))))
+         (not (and (plist-member rendering :initially-collapsed-p)
+                   (not (plist-get rendering :initially-collapsed-p)))))))
+
+(defun mevedel-view--insert-tool-group (entries data-buf)
+  "Insert grouped ENTRIES from DATA-BUF as one expandable activity row.
+Return non-nil when the group row was inserted."
+  (let* ((group-start (plist-get (car entries) :start))
+         (group-end (plist-get (car (last entries)) :end))
+         (rendering (mevedel-view--tool-group-rendering
+                     data-buf group-start group-end))
+         (source (and rendering
+                      (mevedel-view-disclosure-source-range
+                       data-buf group-start group-end))))
+    (when rendering
+      (mevedel-view--insert-rendered-tool rendering source)
+      t)))
+
 (defun mevedel-view--render-tool-group (tool-segments data-buf)
   "Render consecutive TOOL-SEGMENTS from DATA-BUF.
 Each tool call gets its own collapsible entry.  A registered
@@ -4749,7 +5060,9 @@ Each tool call gets its own collapsible entry.  A registered
 side-channel, falling back to the default one-liner otherwise.
 Adjacent visible renderings with equal `:coalesce-key' values keep
 only the final row and show the number of combined calls.  Hook audits
-from every combined call remain in source order."
+from every combined call remain in source order.  Runs of more than
+`mevedel-view-tool-group-collapse-threshold' plain rows fold into one
+grouped activity row that expands into compound-tool nested rows."
   (let* ((unit-start (point))
          (unit-source (cadr (car tool-segments)))
          (tool-segments
@@ -4811,43 +5124,71 @@ from every combined call remain in source order."
         (rendered 0)
         (fallbacks 0))
     (unwind-protect
-        (dolist (entry entries)
-          (let* ((seg-start (plist-get entry :start))
-                 (seg-end (plist-get entry :end))
-                 (source (plist-get entry :source))
-                 (count (plist-get entry :count))
-                 (rendering (plist-get entry :rendering)))
-            (when (and rendering (> count 1))
-              (setq rendering
-                    (plist-put
-                     (copy-sequence rendering)
-                     :header
-                     (format "%s ×%d"
-                             (plist-get rendering :header)
-                             count))))
-            (if rendering
-                (progn
-                  (unless inserted-rule
-                    (mevedel-view--insert-activity-rule-after-response)
-                    (setq inserted-rule t))
-                  (cl-incf rendered)
-                  (mevedel-view--insert-rendered-tool rendering source))
-              (when-let* ((summary (mevedel-view--tool-one-liner
-                                    data-buf seg-start seg-end)))
-                (unless inserted-rule
-                  (mevedel-view--insert-activity-rule-after-response)
-                  (setq inserted-rule t))
-                (cl-incf fallbacks)
-                (let ((ins-start (point)))
-                  (mevedel-view--insert-summary-region
-                   (mevedel-view--summary-with-face
-                    summary 'mevedel-view-tool-summary)
-                   `(mevedel-view-type tool-summary
-                     mevedel-view-collapsed t
-                     mevedel-view-source ,source
-                     mevedel-view-source-key ,(mevedel-view-disclosure-state-key
-                                               source 'tool-summary)))
-                  (mevedel-view--decorate-markdown-in-range ins-start (point)))))))
+        (cl-flet*
+            ((insert-entry
+               (entry)
+               (let* ((seg-start (plist-get entry :start))
+                      (seg-end (plist-get entry :end))
+                      (source (plist-get entry :source))
+                      (count (plist-get entry :count))
+                      (rendering (plist-get entry :rendering)))
+                 (when (and rendering (> count 1))
+                   (setq rendering
+                         (plist-put
+                          (copy-sequence rendering)
+                          :header
+                          (format "%s ×%d"
+                                  (plist-get rendering :header)
+                                  count))))
+                 (if rendering
+                     (progn
+                       (unless inserted-rule
+                         (mevedel-view--insert-activity-rule-after-response)
+                         (setq inserted-rule t))
+                       (cl-incf rendered)
+                       (mevedel-view--insert-rendered-tool rendering source))
+                   (when-let* ((summary (mevedel-view--tool-one-liner
+                                         data-buf seg-start seg-end)))
+                     (unless inserted-rule
+                       (mevedel-view--insert-activity-rule-after-response)
+                       (setq inserted-rule t))
+                     (cl-incf fallbacks)
+                     (let ((ins-start (point)))
+                       (mevedel-view--insert-summary-region
+                        (mevedel-view--summary-with-face
+                         summary 'mevedel-view-tool-summary)
+                        `(mevedel-view-type tool-summary
+                          mevedel-view-collapsed t
+                          mevedel-view-source ,source
+                          mevedel-view-source-key
+                          ,(mevedel-view-disclosure-state-key
+                            source 'tool-summary)))
+                       (mevedel-view--decorate-markdown-in-range
+                        ins-start (point)))))))
+             (flush-run
+               (run)
+               (let ((run-entries (nreverse run)))
+                 (if (and (> mevedel-view-tool-group-collapse-threshold 0)
+                          (> (length run-entries)
+                             mevedel-view-tool-group-collapse-threshold)
+                          (progn
+                            (unless inserted-rule
+                              (mevedel-view--insert-activity-rule-after-response)
+                              (setq inserted-rule t))
+                            (mevedel-view--insert-tool-group
+                             run-entries data-buf)))
+                     (cl-incf rendered (length run-entries))
+                   (mapc #'insert-entry run-entries)))))
+          (let (run)
+            (dolist (entry entries)
+              (if (mevedel-view--tool-group-entry-p entry)
+                  (push entry run)
+                (when run
+                  (flush-run run)
+                  (setq run nil))
+                (insert-entry entry)))
+            (when run
+              (flush-run run))))
       (mevedel-view--debug-log
        'render-tool-group
        :segments (length tool-segments)
@@ -5009,12 +5350,15 @@ Return the normalized source coordinates used for the insertion."
          (data-start (car source))
          (data-end (cdr source))
          (rendering
-          (let ((candidate
-                 (mevedel-view--segment-rendering
-                  data-buf data-start data-end)))
-            (and (eq vtype
-                     (or (plist-get candidate :vtype) 'tool-summary))
-                 candidate)))
+          (if (eq vtype 'tool-group)
+              (mevedel-view--tool-group-rendering
+               data-buf data-start data-end)
+            (let ((candidate
+                   (mevedel-view--segment-rendering
+                    data-buf data-start data-end)))
+              (and (eq vtype
+                       (or (plist-get candidate :vtype) 'tool-summary))
+                   candidate))))
          (start (point)))
     (if rendering
         (progn
@@ -5100,12 +5444,15 @@ The result contains normalized `:source', `:summary', and `:face' values."
          (data-start (car source))
          (data-end (cdr source))
          (rendering
-          (let ((candidate
-                 (mevedel-view--segment-rendering
-                  data-buf data-start data-end t)))
-            (and (eq vtype
-                     (or (plist-get candidate :vtype) 'tool-summary))
-                 candidate)))
+          (if (eq vtype 'tool-group)
+              (mevedel-view--tool-group-rendering
+               data-buf data-start data-end)
+            (let ((candidate
+                   (mevedel-view--segment-rendering
+                    data-buf data-start data-end t)))
+              (and (eq vtype
+                       (or (plist-get candidate :vtype) 'tool-summary))
+                   candidate))))
          (summary
           (if rendering
               (mevedel-view--rendering-header-block rendering)
@@ -5132,7 +5479,7 @@ The result contains normalized `:source', `:summary', and `:face' values."
                 data-buf data-start data-end)))))
          (face
           (pcase vtype
-            ((or 'tool-summary 'agent-handle 'prompt-summary)
+            ((or 'tool-summary 'tool-group 'agent-handle 'prompt-summary)
              'mevedel-view-tool-summary)
             ('thinking-summary 'mevedel-view-thinking-summary)
             ('response 'mevedel-view-response-summary)
@@ -6353,16 +6700,22 @@ marker at the end of the inserted block."
     (mevedel-view-render--with-boundaries-advancing
       (let ((inhibit-read-only t)
             (start (point))
+            (fold-start nil)
             user-end)
         (insert (propertize (if guest-name
                                 (format "%s (guest)\n" guest-name)
                               "You\n")
                             'font-lock-face 'mevedel-view-user-header))
-        (insert (if (eq kind 'directive)
-                    (mevedel-view--fontify-directive-display-text text)
-                  text))
-        (unless (eq (char-before) ?\n)
-          (insert "\n"))
+        (if (and (not (eq kind 'directive))
+                 (mevedel-view--user-input-fold-p text))
+            (progn
+              (setq fold-start (point))
+              (mevedel-view--insert-user-input-fold text))
+          (insert (if (eq kind 'directive)
+                      (mevedel-view--fontify-directive-display-text text)
+                    text))
+          (unless (eq (char-before) ?\n)
+            (insert "\n")))
         (setq user-end (point))
         (when-let* ((events (mevedel-view--hook-context-events-from-text
                              hook-context)))
@@ -6389,6 +6742,11 @@ marker at the end of the inserted block."
                                front-sticky (read-only keymap)
                                rear-nonsticky (read-only keymap)))
         (put-text-property start user-end 'mevedel-view-type 'user)
+        ;; The blanket `user' stamp above overwrites the fold's own
+        ;; vtype, which is what its toggle dispatches on.
+        (when fold-start
+          (put-text-property fold-start user-end
+                             'mevedel-view-type 'user-input-summary))
         (setq mevedel-view--user-pre-rendered t)
         (copy-marker (point) nil)))))
 

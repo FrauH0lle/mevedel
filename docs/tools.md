@@ -489,12 +489,15 @@ the generic renderer. Explicit pipeline status also overrides a custom
 rendering plist's visual `:status`; without explicit status, the rendering
 plist controls only the visual marker and does not participate in dispatch.
 
-Rendering plist: `(:header STRING :body STRING :body-mode SYMBOL
-:status SYMBOL :expandable-p BOOL :hidden-p BOOL
+Rendering plist: `(:header STRING :body STRING :preview-body STRING
+:body-mode SYMBOL :status SYMBOL :expandable-p BOOL :hidden-p BOOL
 :coalesce-key STRING :child-calls LIST
 :initially-collapsed-p BOOL)`.
-`:status`, `:expandable-p`, `:hidden-p`, `:coalesce-key`, and `:child-calls`
-are optional. `:child-calls` belongs to a compound tool that runs other tools:
+`:preview-body`, `:status`, `:expandable-p`, `:hidden-p`, `:coalesce-key`,
+and `:child-calls` are optional. `:preview-body` replaces `:body` only when
+the row renders expanded by default (`:initially-collapsed-p` nil); an
+explicit user expansion re-invokes the renderer and shows the complete
+`:body`. ApplyPatch uses it to open a reviewed patch on its first changes. `:child-calls` belongs to a compound tool that runs other tools:
 each entry is `(:id ID :tool NAME :args PLIST :result STRING :status SYMBOL
 :batch ID :render-data DATA)` and becomes its own collapsible row rendered by
 that tool's own renderer, inserted only while the owning block is expanded.

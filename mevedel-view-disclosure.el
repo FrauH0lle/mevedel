@@ -41,6 +41,8 @@
                   "mevedel-view-render" (data-buf source vtype))
 (declare-function mevedel-view-render-insert-expanded-disclosure
                   "mevedel-view-render" (data-buf source vtype header))
+(declare-function mevedel-view-render-invalidate-live-tail
+                  "mevedel-view-render" ())
 (declare-function mevedel-view-render-section-body-end
                   "mevedel-view-render" (start limit))
 (declare-function mevedel-view-render-toggle-child-call
@@ -49,15 +51,19 @@
                   "mevedel-view-render" ())
 (declare-function mevedel-view-render-toggle-turn
                   "mevedel-view-render" (collapsed))
+(declare-function mevedel-view-render-toggle-user-input
+                  "mevedel-view-render" ())
 (autoload 'mevedel-view-render-add-display-properties "mevedel-view-render")
 (autoload 'mevedel-view-render-child-calls-end "mevedel-view-render")
 (autoload 'mevedel-view-render-collapsed-disclosure "mevedel-view-render")
 (autoload 'mevedel-view-render-insert-expanded-disclosure
   "mevedel-view-render")
+(autoload 'mevedel-view-render-invalidate-live-tail "mevedel-view-render")
 (autoload 'mevedel-view-render-section-body-end "mevedel-view-render")
 (autoload 'mevedel-view-render-toggle-child-call "mevedel-view-render")
 (autoload 'mevedel-view-render-toggle-hook-context "mevedel-view-render")
 (autoload 'mevedel-view-render-toggle-turn "mevedel-view-render")
+(autoload 'mevedel-view-render-toggle-user-input "mevedel-view-render")
 
 ;; `mevedel-view-segments'
 (declare-function mevedel-view-segments-display-buffer
@@ -112,10 +118,19 @@
   (setq mevedel-view-disclosure--source-states
         (make-hash-table :test #'equal)))
 
+(defvar mevedel-view-disclosure--settling-p nil
+  "Non-nil while the terminal settle render is computing state keys.
+The settle render runs before the stream clears the in-flight turn
+markers, so without this flag every key it computes would still carry
+the temporary `(in-flight)' anchor and be orphaned the moment those
+markers clear.  Bound by `mevedel-view-render-settle' so capture,
+restore, and freshly stamped keys all use the durable post-settle
+anchor instead.")
+
 (defvar mevedel-view-disclosure--collapsible-vtypes
-  '(thinking-summary tool-summary response request-failure agent-handle
-    prompt-summary hook-context hook-audit tool-child
-    system-reminder-summary)
+  '(thinking-summary tool-summary tool-group response request-failure
+    agent-handle prompt-summary hook-context hook-audit tool-child
+    user-input-summary system-reminder-summary)
   "View types that `mevedel-view-toggle-section' treats as section folds.
 Turn-level folds (`turn-header', `turn-summary') are handled
 separately.  Regions with other vtypes are navigable but not
@@ -146,7 +161,8 @@ toggleable.")
 
 (defun mevedel-view-disclosure--in-flight-source-p (source)
   "Return non-nil when SOURCE belongs to the active in-flight turn."
-  (when-let* ((start (mevedel-view-disclosure-source-start source))
+  (when-let* (((not mevedel-view-disclosure--settling-p))
+              (start (mevedel-view-disclosure-source-start source))
               (turn-start (cond
                            ((markerp mevedel-view--data-turn-start)
                             (marker-position mevedel-view--data-turn-start))
@@ -182,7 +198,12 @@ place, but change when a later rewrite reuses the same numeric start."
                    tool-id)
                (while (and (< pos end) (not tool-id))
                  (let ((prop (get-text-property pos 'gptel)))
-                   (when (and (consp prop) (eq (car prop) 'tool))
+                   ;; Restored transcripts stamp id-less tool blocks with
+                   ;; an empty-string id where the live buffer had nil;
+                   ;; treating "" as an id would give the same section
+                   ;; two different anchors across a property restore.
+                   (when (and (consp prop) (eq (car prop) 'tool)
+                              (not (equal (cdr prop) "")))
                      (setq tool-id (cdr prop))))
                  (setq pos (or (next-single-property-change
                                 pos 'gptel nil end)
@@ -369,11 +390,14 @@ STATES is an alist from `mevedel-view-disclosure-capture-state'.
 Sections whose current state already matches are left alone; only
 mismatches are toggled, via `mevedel-view-disclosure--expand-section' /
 `--collapse-section' or the mailbox card toggle.  Upper bound is held as
-a marker so toggles that change buffer length do not invalidate the walk."
+a marker so toggles that change buffer length do not invalidate the walk.
+Return non-nil when at least one section was toggled, so the caller
+knows the freshly rendered span was rewritten after insertion."
   (when states
     (save-excursion
       (let ((mailbox-counts (make-hash-table :test 'equal))
-            (to-marker (copy-marker to t)))
+            (to-marker (copy-marker to t))
+            (toggled nil))
         (unwind-protect
             (progn
               (let ((pos from))
@@ -414,12 +438,15 @@ a marker so toggles that change buffer length do not invalidate the walk."
                     (when-let* (((not force-expanded))
                                 (entry (and key (assoc key states)))
                                 ((not (eq collapsed (cdr entry)))))
+                      (setq toggled t)
                       (goto-char pos)
                       (cond
                        ((eq vtype 'mailbox-delivery)
                         (mevedel-view-disclosure--toggle-mailbox))
                        ((eq vtype 'tool-child)
                         (mevedel-view-render-toggle-child-call))
+                       ((eq vtype 'user-input-summary)
+                        (mevedel-view-render-toggle-user-input))
                        ((cdr entry)
                         (mevedel-view-disclosure--collapse-section source vtype))
                        (t
@@ -431,7 +458,8 @@ a marker so toggles that change buffer length do not invalidate the walk."
                                              pos))
                                        (cdr mailbox-bounds)))
                             (mevedel-view-disclosure--next-state-change
-                             pos (marker-position to-marker))))))))
+                             pos (marker-position to-marker)))))))
+              toggled)
           (set-marker to-marker nil))))))
 
 
@@ -472,25 +500,38 @@ section only."
   (let ((collapsed (get-text-property (point) 'mevedel-view-collapsed))
         (source (get-text-property (point) 'mevedel-view-source))
         (vtype (get-text-property (point) 'mevedel-view-type)))
-    (cond
-     ((mevedel-view-disclosure--toggle-fragment)
-      t)
-     ((memq vtype '(turn-header turn-summary))
-      (mevedel-view-render-toggle-turn collapsed))
-     ((eq vtype 'mailbox-delivery)
-      (mevedel-view-disclosure--toggle-mailbox))
-     ((eq vtype 'hook-context)
-      (mevedel-view-render-toggle-hook-context))
-     ((eq vtype 'hook-audit)
-      (mevedel-view-audit-toggle-hook-audit))
-     ((eq vtype 'tool-child)
-      (mevedel-view-render-toggle-child-call))
-     ((and source (memq vtype mevedel-view-disclosure--collapsible-vtypes))
-      (if collapsed
-          (mevedel-view-disclosure--expand-section source vtype)
-        (mevedel-view-disclosure--collapse-section source vtype)))
-     (t
-      (user-error "No collapsible section at point")))))
+    (if (mevedel-view-disclosure--toggle-fragment)
+        t
+      (prog1
+          (cond
+           ((memq vtype '(turn-header turn-summary))
+            (mevedel-view-render-toggle-turn collapsed))
+           ((eq vtype 'mailbox-delivery)
+            (mevedel-view-disclosure--toggle-mailbox))
+           ((eq vtype 'hook-context)
+            (mevedel-view-render-toggle-hook-context))
+           ((eq vtype 'hook-audit)
+            (mevedel-view-audit-toggle-hook-audit))
+           ((eq vtype 'tool-child)
+            (mevedel-view-render-toggle-child-call))
+           ((eq vtype 'user-input-summary)
+            (mevedel-view-render-toggle-user-input))
+           ((and source
+                 (memq vtype mevedel-view-disclosure--collapsible-vtypes))
+            (if collapsed
+                (mevedel-view-disclosure--expand-section source vtype)
+              (mevedel-view-disclosure--collapse-section source vtype)))
+           (t
+            (user-error "No collapsible section at point")))
+        ;; A toggle deletes and re-inserts view text.  The retained
+        ;; live-tail view marker can be dragged backwards by that
+        ;; delete relative to its data-buffer twin, after which the
+        ;; next retained render deletes rendered history its narrowed
+        ;; reparse cannot regenerate -- the section visibly vanishes
+        ;; until a later full render.  Dropping the retained pair
+        ;; sends the next update down the non-retained path, whose
+        ;; capture/restore preserves this toggle.
+        (mevedel-view-render-invalidate-live-tail)))))
 
 (defun mevedel-view-disclosure--mailbox-bounds ()
   "Return bounds of the mailbox card at point, or nil."
@@ -666,10 +707,8 @@ from signalling `args-out-of-range' on stale source coordinates."
              (source-key
               (get-text-property view-start 'mevedel-view-source-key))
              (turn-id (get-text-property view-start 'mevedel-view-turn-id))
-             (in-flight-after-section-p
-              (when-let* ((pos
-                           (mevedel-view-stream-in-flight-turn-start-position)))
-                (<= view-start pos view-end))))
+             (in-flight-pos
+              (mevedel-view-stream-in-flight-turn-start-position)))
         (save-excursion
           (goto-char view-start)
           (set-marker-insertion-type mevedel-view--input-marker t)
@@ -694,7 +733,16 @@ from signalling `args-out-of-range' on stale source coordinates."
                   (when turn-id
                     (put-text-property
                      view-start body-end 'mevedel-view-turn-id turn-id)))
-                (when in-flight-after-section-p
+                ;; The delete above collapsed an in-flight marker that
+                ;; sat inside the section to VIEW-START, which is where
+                ;; the turn content still starts, so only a marker that
+                ;; sat exactly at the old section end -- meaning the
+                ;; turn begins after this section -- must be moved past
+                ;; the re-inserted text.  Re-anchoring an interior
+                ;; marker at the end instead would leave everything
+                ;; above it stale for the next incremental render.
+                (when (and in-flight-pos
+                           (= in-flight-pos view-end))
                   (mevedel-view-stream-set-in-flight-turn-start (point))))
             (set-marker-insertion-type mevedel-view--input-marker nil)))))))
 
@@ -716,10 +764,8 @@ from signalling `args-out-of-range' on stale source coordinates."
              (turn-id (get-text-property view-start 'mevedel-view-turn-id))
              (source-key
               (get-text-property view-start 'mevedel-view-source-key))
-             (in-flight-after-section-p
-              (when-let* ((pos
-                           (mevedel-view-stream-in-flight-turn-start-position)))
-                (<= view-start pos view-end))))
+             (in-flight-pos
+              (mevedel-view-stream-in-flight-turn-start-position)))
         (save-excursion
           (goto-char view-start)
           (set-marker-insertion-type mevedel-view--input-marker t)
@@ -745,7 +791,12 @@ from signalling `args-out-of-range' on stale source coordinates."
                   (when turn-id
                     (put-text-property
                      ins-start (point) 'mevedel-view-turn-id turn-id))
-                  (when in-flight-after-section-p
+                  ;; See the matching comment in `--expand-section': an
+                  ;; interior in-flight marker already collapsed to
+                  ;; VIEW-START; only a marker at the old section end
+                  ;; belongs after the re-inserted summary.
+                  (when (and in-flight-pos
+                             (= in-flight-pos view-end))
                     (mevedel-view-stream-set-in-flight-turn-start (point)))))
             (set-marker-insertion-type mevedel-view--input-marker nil)))))))
 (provide 'mevedel-view-disclosure)

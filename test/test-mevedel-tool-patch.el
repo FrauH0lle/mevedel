@@ -1223,6 +1223,19 @@
     (should (string-search "Applied: a hunk 1" text))
     (should (string-search "Rejected: a hunk 2" text)))
 
+  :doc "Marks a reviewed settlement in its render data"
+  (let ((proposal '(:operations ((:kind update :rel-path "a"
+                                  :hunks ((:selected t
+                                           :diff-lines ("-x" "+y"))))))))
+    (should (plist-get
+             (plist-get (mevedel-tool-patch-result proposal '((:action write)) t)
+                        :render-data)
+             :reviewed))
+    (should-not (plist-get
+                 (plist-get (mevedel-tool-patch-result proposal '((:action write)))
+                            :render-data)
+                 :reviewed)))
+
   :doc "Reports fuzzy matches for applied hunks as result notes"
   (let ((result (mevedel-tool-patch-result
                  '(:operations
@@ -1367,7 +1380,70 @@
     (should (equal "ApplyPatch: revision requested · 1 comment sent"
                    (plist-get rendered :header)))
     (should (equal "Rejected: a.el hunk 1\nFeedback: a.el hunk 1: why"
-                   (plist-get rendered :body)))))
+                   (plist-get rendered :body))))
+
+  :doc "A reviewed applied patch opens on a leading-changes preview"
+  (let ((rendered (mevedel-tool-patch--render
+                   "ApplyPatch" nil nil
+                   '(:kind patch :reviewed t
+                     :applied 3 :total 3 :comments 0
+                     :files ((:path "a" :kind update :added 2 :deleted 1
+                              :diff "@@ one\n-x\n+y\n@@ two\n+z\n@@ three\n+w"))))))
+    (should (null (plist-get rendered :initially-collapsed-p)))
+    (should (plist-member rendered :initially-collapsed-p))
+    (let ((preview (plist-get rendered :preview-body)))
+      (should (string-search "M a · +2 −1" preview))
+      (should (string-search "+y" preview))
+      (should (string-search "+z" preview))
+      (should-not (string-search "+w" preview))
+      (should (string-search "… 1 more change" preview)))
+    ;; The complete diff stays in :body for explicit expansion.
+    (should (string-search "+w" (plist-get rendered :body))))
+
+  :doc "An unreviewed or comment-only patch stays collapsed"
+  (dolist (render-data
+           '((:kind patch :applied 1 :total 1 :comments 0
+              :files ((:path "a" :kind update :added 1 :deleted 0
+                       :diff "@@\n+x")))
+             (:kind patch :reviewed t :applied 0 :total 1 :comments 1
+              :files nil :notes ("Rejected: a hunk 1"))))
+    (let ((rendered (mevedel-tool-patch--render
+                     "ApplyPatch" nil nil render-data)))
+      (should (plist-get rendered :initially-collapsed-p))
+      (should-not (plist-get rendered :preview-body)))))
+
+(mevedel-deftest mevedel-tool-patch--diff-hunks
+  (:doc "Splits a diff into chunks on hunk headers") ,test (test)
+  (should (equal '("@@ one\n-x\n+y" "@@ two\n+z")
+                 (mevedel-tool-patch--diff-hunks "@@ one\n-x\n+y\n@@ two\n+z")))
+
+  :doc "A headerless diff is one chunk"
+  (should (equal '("+one\n+two")
+                 (mevedel-tool-patch--diff-hunks "+one\n+two"))))
+
+(mevedel-deftest mevedel-tool-patch--preview-body
+  (:doc "Caps the preview at the change limit across files") ,test (test)
+  (let ((preview (mevedel-tool-patch--preview-body
+                  '(:files ((:path "a" :kind update :added 1 :deleted 0
+                             :diff "@@ one\n+x")
+                            (:path "b" :kind update :added 2 :deleted 0
+                             :diff "@@ two\n+y\n@@ three\n+z"))))))
+    (should (string-search "M a" preview))
+    (should (string-search "M b" preview))
+    (should (string-search "+y" preview))
+    (should-not (string-search "+z" preview))
+    (should (string-search "… 1 more change" preview)))
+
+  :doc "Truncates an oversized change to the line limit"
+  (let* ((mevedel-tool-patch--preview-line-limit 20)
+         (lines (mapconcat (lambda (i) (format "+line %d" i))
+                           (number-sequence 1 30) "\n"))
+         (preview (mevedel-tool-patch--preview-body
+                   `(:files ((:path "big" :kind add :added 30 :deleted 0
+                              :diff ,lines))))))
+    (should (string-search "+line 20" preview))
+    (should-not (string-search "+line 21" preview))
+    (should (string-search "…" preview))))
 
 (provide 'test-mevedel-tool-patch)
 ;;; test-mevedel-tool-patch.el ends here
