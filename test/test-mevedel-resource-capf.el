@@ -177,18 +177,24 @@
                         (mevedel-resource-capf-test--candidates result)))
                   (should (member "skill://local-mevedel/" candidates))
                   (should (member "skill://plugin/" candidates))
-                  (should (member exact candidates))
-                  (should (member plugin-exact candidates))
-                  (should (< (cl-position "skill://local-mevedel/" candidates
-                                          :test #'equal)
-                             (cl-position exact candidates :test #'equal)))
-                  (should (string-match-p
-                           "\\[exact\\]"
-                           (mevedel-resource-capf-test--annotation
-                            result exact)))
+                  ;; A unique readable alias covers the skill, so the
+                  ;; hashed locator is not offered beside it.
+                  (should-not (member exact candidates))
+                  (should-not (member plugin-exact candidates))
                   (dolist (candidate candidates)
                     (should-not (get-text-property
                                  0 'mevedel-mention-binding candidate)))))
+              (with-temp-buffer
+                (setq mevedel--session session)
+                (insert "skill://alpha@")
+                (let ((result (mevedel-resource-capf)))
+                  (should (member exact
+                                  (mevedel-resource-capf-test--candidates
+                                   result)))
+                  (should (string-match-p
+                           "\\[exact\\]"
+                           (mevedel-resource-capf-test--annotation
+                            result exact)))))
               (with-temp-buffer
                 (setq mevedel--session session)
                 (insert "skill://local-mevedel/")
@@ -356,7 +362,22 @@
             (should
              (member (format "memory://%s/nested/deep.md" key)
                      (mevedel-resource-capf-test--candidates
-                      (mevedel-resource-capf))))))
+                      (mevedel-resource-capf)))))
+          ;; A configured `.mevedel' root has a unique readable key, which
+          ;; replaces its digest in completion.
+          (let* ((relative (file-name-concat ".mevedel" "memory"))
+                 (memory-dir (file-name-concat root relative))
+                 (mevedel-memory-dirs (list relative)))
+            (make-directory memory-dir t)
+            (with-temp-file (file-name-concat memory-dir "MEMORY.md")
+              (insert "index"))
+            (with-temp-buffer
+              (setq mevedel--session session)
+              (insert "memory://local-mevedel/")
+              (should
+               (member "memory://local-mevedel/MEMORY.md"
+                       (mevedel-resource-capf-test--candidates
+                        (mevedel-resource-capf)))))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-resource-capf-mcp

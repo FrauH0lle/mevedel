@@ -224,8 +224,13 @@ KIND labels the readable alias or exact locator."
                entries)))))))))
 
 (defun mevedel-resource-capf--skills (address-tail metadata)
-  "Complete staged skill aliases, exact skills, and bounded descendants."
+  "Complete staged skill aliases, exact skills, and bounded descendants.
+
+A skill reachable through a unique readable alias offers its full-hash
+locator only once the typed tail already names one, so the roster is not
+doubled by digests nobody reads."
   (let ((alias-counts (make-hash-table :test #'equal))
+        (exact-typed-p (string-match-p "@" address-tail))
         aliases
         exacts)
     (dolist (entry (plist-get metadata :skills))
@@ -234,10 +239,12 @@ KIND labels the readable alias or exact locator."
     (dolist (entry (plist-get metadata :skills))
       (let* ((skill (plist-get entry :skill))
              (exact (plist-get entry :address))
-             (alias (plist-get entry :alias)))
-        (when (and alias (= 1 (gethash alias alias-counts)))
+             (alias (plist-get entry :alias))
+             (aliased-p (and alias (= 1 (gethash alias alias-counts)))))
+        (when aliased-p
           (push (list :skill skill :address alias) aliases))
-        (push (list :skill skill :address exact) exacts)))
+        (when (or exact-typed-p (not aliased-p))
+          (push (list :skill skill :address exact) exacts))))
     (setq aliases (nreverse aliases)
           exacts (nreverse exacts))
     (append
