@@ -516,13 +516,14 @@ hunk and surfaced in the review and the tool result.")
     ('whitespace "ignoring surrounding whitespace")
     ('punctuation "normalizing typographic punctuation")))
 
-(defun mevedel-tool-patch--sequence-match-p (lines pattern start normalize)
-  "Return non-nil when PATTERN matches LINES at START under NORMALIZE."
-  (and (<= (+ start (length pattern)) (length lines))
-       (cl-loop for expected in pattern
-                for actual in (nthcdr start lines)
-                always (string= (funcall normalize actual)
-                                (funcall normalize expected)))))
+(defun mevedel-tool-patch--sequence-match-p (norm-lines norm-pattern start)
+  "Return non-nil when NORM-PATTERN matches NORM-LINES at START.
+NORM-LINES is a vector and NORM-PATTERN a list; both hold lines already
+normalized by the active matching pass."
+  (and (<= (+ start (length norm-pattern)) (length norm-lines))
+       (cl-loop for expected in norm-pattern
+                for index from start
+                always (string= (aref norm-lines index) expected))))
 
 (defun mevedel-tool-patch--candidate-starts
     (lines hunk normalize &optional ignore-eof)
@@ -530,26 +531,36 @@ hunk and surfaced in the review and the tool result.")
 IGNORE-EOF drops the end-of-file anchoring requirement of an
 `*** End of File' hunk."
   (let* ((pattern (plist-get hunk :old-lines))
+         (pattern-length (length pattern))
          (context (plist-get hunk :context))
-         (limit (- (length lines) (length pattern)))
+         (limit (- (length lines) pattern-length))
          starts)
     (when (>= limit 0)
-      (dotimes (start (1+ limit))
-        (when (and (or (null context)
-                       (cl-loop for anchor from 0 below start
-                                thereis
-                                (string= (funcall normalize
-                                                  (nth anchor lines))
-                                         (funcall normalize context))))
-                   (mevedel-tool-patch--sequence-match-p
-                    lines pattern start normalize)
-                   (or ignore-eof
-                       (not (plist-get hunk :eof))
-                       (= (+ start (length pattern))
+      ;; Normalizing is the dominant cost of a matching pass, so every
+      ;; line is normalized exactly once per call instead of once per
+      ;; candidate start.
+      (let ((norm-lines (vconcat (mapcar normalize lines)))
+            (norm-pattern (mapcar normalize pattern))
+            (norm-context (and context (funcall normalize context)))
+            ;; The @@ context anchor must appear strictly before the
+            ;; candidate; track it incrementally as starts advance.
+            (context-seen (null context))
+            (eof-end (and (plist-get hunk :eof)
+                          (not ignore-eof)
                           (if (string-empty-p (car (last lines)))
                               (1- (length lines))
                             (length lines)))))
-          (push start starts))))
+        (dotimes (start (1+ limit))
+          (when (and (not context-seen)
+                     (> start 0)
+                     (string= (aref norm-lines (1- start)) norm-context))
+            (setq context-seen t))
+          (when (and context-seen
+                     (mevedel-tool-patch--sequence-match-p
+                      norm-lines norm-pattern start)
+                     (or (not eof-end)
+                         (= (+ start pattern-length) eof-end)))
+            (push start starts)))))
     (nreverse starts)))
 
 (defun mevedel-tool-patch--match-start

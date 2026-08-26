@@ -879,11 +879,12 @@
               (mevedel-tool-patch-kind-face 'update))))
 
 (mevedel-deftest mevedel-tool-patch--sequence-match-p
-  (:doc "Matches sequences under the given line normalizer") ,test (test)
-  (should (mevedel-tool-patch--sequence-match-p
-           '("a  ") '("a") 0 #'mevedel-tool-patch--rstrip))
-  (should-not (mevedel-tool-patch--sequence-match-p
-               '("a  ") '("a") 0 #'identity)))
+  (:doc "Matches pre-normalized pattern lines against the line vector")
+  ,test (test)
+  (should (mevedel-tool-patch--sequence-match-p ["a" "b"] '("b") 1))
+  (should-not (mevedel-tool-patch--sequence-match-p ["a" "b"] '("a") 1))
+  :doc "rejects a pattern running past the end of the lines"
+  (should-not (mevedel-tool-patch--sequence-match-p ["a"] '("a" "b") 0)))
 
 (mevedel-deftest mevedel-tool-patch--normalize-line
   (:doc "Folds typographic punctuation to ASCII and trims") ,test (test)
