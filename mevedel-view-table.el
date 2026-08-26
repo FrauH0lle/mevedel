@@ -370,29 +370,62 @@ and the cell wrapper hard-breaks long words."
 ;;
 ;;; Cell wrapping
 
-(defun mevedel-view-table--wrap-char-width (text pos &optional window)
+(defun mevedel-view-table--wrap-char-width
+    (text pos &optional window char-px)
   "Return the display width contribution of the char at POS in TEXT.
 U+FE0F VARIATION SELECTOR-16 counts as 1 so an emoji presentation
 sequence totals its rendered two cells.  In a graphic WINDOW, faced
-text and a remapped default face use their actual pixel width."
+text and a remapped default face use their actual pixel width.
+CHAR-PX is the window's space width when the caller already measured
+it, which keeps that measurement out of a per-character loop."
   (let ((ch (aref text pos)))
     (cond
      ((= ch #xFE0F) 1)
-     ((mevedel-view-table--pixel-width-needed-p
-       (substring text pos (1+ pos)) window)
-      (condition-case nil
-          (/ (float (mevedel-view-table--measure-string
-                     (substring text pos (1+ pos)) window))
-             (mevedel-view-table--char-pixel-width window))
-        (error (char-width ch))))
-     (t (char-width ch)))))
+     (t
+      (let ((single (substring text pos (1+ pos))))
+        (if (not (mevedel-view-table--pixel-width-needed-p single window))
+            (char-width ch)
+          (condition-case nil
+              (/ (float (mevedel-view-table--measure-string single window))
+                 (or char-px
+                     (mevedel-view-table--char-pixel-width window)))
+            (error (char-width ch)))))))))
+
+(defun mevedel-view-table--char-widths (text &optional window)
+  "Return a vector of per-character display widths for TEXT.
+
+Pure ASCII text with no face and no remapped default face needs no
+measurement at all, so it takes a path that allocates nothing per
+character.  Anything else is measured once per character here rather
+than on each visit: the wrapping loop asks for a character's width
+twice, and measuring in place turned one table redraw into hundreds of
+megabytes of substrings and `window-font-width' calls."
+  (let* ((len (length text))
+         (widths (make-vector len 0)))
+    ;; Callers may hand over nil or empty text; asking the predicate about
+    ;; it would fail where the old per-character loop simply did nothing.
+    (if (or (zerop len)
+            (not (mevedel-view-table--pixel-width-needed-p text window)))
+        (dotimes (index len)
+          (aset widths index (char-width (aref text index))))
+      ;; Measuring can fail -- no graphic window, no live buffer -- and
+      ;; the per-character path treated that as "use `char-width'".
+      ;; Hoisting the measurement has to keep that tolerance, or one
+      ;; failure escapes where it used to be absorbed per character.
+      (let ((char-px (condition-case nil
+                         (mevedel-view-table--char-pixel-width window)
+                       (error nil))))
+        (dotimes (index len)
+          (aset widths index
+                (if char-px
+                    (mevedel-view-table--wrap-char-width
+                     text index window char-px)
+                  (char-width (aref text index)))))))
+    widths))
 
 (defun mevedel-view-table--wrap-string-width (text &optional window)
   "Return the VS-16-aware display width of TEXT in columns."
-  (let ((sum 0))
-    (dotimes (i (length text))
-      (setq sum (+ sum (mevedel-view-table--wrap-char-width text i window))))
-    sum))
+  (seq-reduce #'+ (mevedel-view-table--char-widths text window) 0))
 
 (defun mevedel-view-table--break-after-p (text i)
   "Return non-nil when a wrapped line may break after index I in TEXT.
@@ -410,44 +443,47 @@ point splits at the width limit.  WINDOW supplies pixel metrics when
 the text or the buffer's default face needs them."
   (cond
    ((or (null text) (string-empty-p text)) (list ""))
-   ((<= (mevedel-view-table--wrap-string-width text window)
-        (- width (seq-count (lambda (c) (= c #xFE0F)) text)))
-    (list text))
    (t
-    (let ((lines nil)
-          (pos 0)
-          (len (length text)))
-      (while (< pos len)
-        (let ((end-pos pos)
-              (line-width 0))
-          (while (and (< end-pos len)
-                      (<= (+ line-width
-                             (mevedel-view-table--wrap-char-width
-                              text end-pos window))
-                          width))
-            (setq line-width (+ line-width
-                                (mevedel-view-table--wrap-char-width
-                                 text end-pos window)))
-            (setq end-pos (1+ end-pos)))
-          (when (= end-pos pos)
-            (setq end-pos (1+ pos)))
-          (let ((break-pos end-pos))
-            (when (< end-pos len)
-              (let ((scan (1- end-pos)))
-                (while (and (>= scan pos)
-                            (not (and (> scan pos)
-                                      (memq (aref text scan) '(?\s ?\t))))
-                            (not (mevedel-view-table--break-after-p
-                                  text scan)))
-                  (setq scan (1- scan)))
-                (when (>= scan pos)
-                  (setq break-pos (1+ scan)))))
-            (push (string-trim-right (substring text pos break-pos)) lines)
-            (setq pos break-pos)
-            (while (and (< pos len)
-                        (memq (aref text pos) '(?\s ?\t)))
-              (setq pos (1+ pos))))))
-      (nreverse lines)))))
+    ;; One width vector for both the fits-on-one-line test and the
+    ;; wrapping loop: measuring in place asked for each character's width
+    ;; three times, once for the test and twice per loop visit.
+    (let* ((widths (mevedel-view-table--char-widths text window))
+           (total (seq-reduce #'+ widths 0)))
+      (if (<= total (- width (seq-count (lambda (c) (= c #xFE0F)) text)))
+          (list text)
+        (mevedel-view-table--wrap-with-widths text width widths))))))
+
+(defun mevedel-view-table--wrap-with-widths (text width widths)
+  "Wrap TEXT to WIDTH columns using precomputed per-character WIDTHS."
+  (let ((lines nil)
+        (pos 0)
+      (len (length text)))
+    (while (< pos len)
+      (let ((end-pos pos)
+            (line-width 0))
+        (while (and (< end-pos len)
+                    (<= (+ line-width (aref widths end-pos)) width))
+          (setq line-width (+ line-width (aref widths end-pos)))
+          (setq end-pos (1+ end-pos)))
+        (when (= end-pos pos)
+          (setq end-pos (1+ pos)))
+        (let ((break-pos end-pos))
+          (when (< end-pos len)
+            (let ((scan (1- end-pos)))
+              (while (and (>= scan pos)
+                          (not (and (> scan pos)
+                                    (memq (aref text scan) '(?\s ?\t))))
+                          (not (mevedel-view-table--break-after-p
+                                text scan)))
+                (setq scan (1- scan)))
+              (when (>= scan pos)
+                (setq break-pos (1+ scan)))))
+          (push (string-trim-right (substring text pos break-pos)) lines)
+          (setq pos break-pos)
+          (while (and (< pos len)
+                      (memq (aref text pos) '(?\s ?\t)))
+            (setq pos (1+ pos))))))
+    (nreverse lines)))
 
 
 ;;

@@ -212,18 +212,54 @@
                                       'mevedel-view-table-width)))))
 
   :doc "variable-pitch ASCII uses the window pixel measurement path"
+  ;; `window-font-width' signals in batch, so the space measurement that
+  ;; scales pixels back into columns has to be stubbed as well.  Without
+  ;; it the pixel path cannot complete at all, and asserting on
+  ;; measurement counts would only witness measurements whose result the
+  ;; caller discards.
   (mevedel-test--with-displayed-buffer
     (let ((measurements 0))
       (variable-pitch-mode 1)
       (insert "| Name | Role |\n|---|---|\n| millie | reviewer |\n")
       (cl-letf (((symbol-function 'display-graphic-p)
                  (lambda (&optional _display) t))
+                ((symbol-function 'window-font-width)
+                 (lambda (&rest _) 10))
                 ((symbol-function 'buffer-text-pixel-size)
                  (lambda (&rest _)
                    (cl-incf measurements)
-                   (cons (string-width (buffer-string)) 1))))
+                   (cons (* 10 (string-width (buffer-string))) 1))))
         (mevedel-view-table-decorate (point-min) (point-max) nil))
       (should (> measurements 0))))
+
+  :doc "plain ASCII column widths need no measurement at all"
+  (mevedel-test--with-displayed-buffer
+    (let ((measurements 0))
+      (cl-letf (((symbol-function 'display-graphic-p)
+                 (lambda (&optional _display) t))
+                ((symbol-function 'window-font-width)
+                 (lambda (&rest _) 10))
+                ((symbol-function 'buffer-text-pixel-size)
+                 (lambda (&rest _)
+                   (cl-incf measurements)
+                   (cons (* 10 (string-width (buffer-string))) 1))))
+        (should (equal [1 1 1 1]
+                       (mevedel-view-table--char-widths
+                        "Name" (selected-window))))
+        (should (= 4 (mevedel-view-table--wrap-string-width
+                      "Name" (selected-window)))))
+      (should (= 0 measurements))))
+
+  :doc "a measurement failure falls back to character widths"
+  (mevedel-test--with-displayed-buffer
+    (variable-pitch-mode 1)
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&optional _display) t))
+              ((symbol-function 'window-font-width)
+               (lambda (&rest _) (error "No font in batch"))))
+      (should (equal [1 1 1 1]
+                     (mevedel-view-table--char-widths
+                      "Name" (selected-window))))))
 
   :doc "a line-prefix inset narrows the usable width"
   (mevedel-test--with-displayed-buffer
