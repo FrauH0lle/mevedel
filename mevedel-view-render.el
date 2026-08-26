@@ -28,12 +28,6 @@
 ;; `gptel'
 (defvar gptel-display-buffer-action)
 
-;; `mevedel-agent-control'
-(declare-function mevedel-agent-record-activity
-		  "mevedel-agent-control" (cl-x) t)
-(declare-function mevedel-agent-record-conversation-location
-		  "mevedel-agent-control" (cl-x) t)
-
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-transcript-status
@@ -133,8 +127,6 @@
 (declare-function mevedel-request-active-elapsed-seconds
                   "mevedel-structs" (request &optional now))
 (declare-function mevedel-request-directive-uuid "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-agent-registry "mevedel-structs"
-		  (cl-x) t)
 (declare-function mevedel-session-current-segment "mevedel-structs"
                   (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
@@ -1100,6 +1092,13 @@ through font-lock refontification cycles.  Returns S."
         (and (> (length text) 32)
              (substring text (- (length text) 16)))))
 
+(defun mevedel-view--source-position (pos)
+  "Return POS as an integer so markers and integers key identically.
+The targeted agent refresh passes markers where the full render passes
+integers; a marker never `equal's its position, so the same segment
+would otherwise occupy two cache entries."
+  (if (markerp pos) (marker-position pos) pos))
+
 (defun mevedel-view--cache-put (table key value counter-symbol)
   "Put VALUE in TABLE under KEY and bump COUNTER-SYMBOL.
 Clear TABLE before adding beyond `mevedel-view-render-cache-max-entries'."
@@ -1866,21 +1865,21 @@ buffer's font-lock refontification cycles."
           queue))
 
 (defun mevedel-view--session-render-state-fingerprint (session)
-  "Return state from SESSION that can affect cached tool renderings."
+  "Return state from SESSION that can affect cached tool renderings.
+
+Agent registry state is deliberately absent: agent handle status
+reaches a rendering only through render-data blocks patched into the
+transcript text, which the content term of the cache key already
+invalidates, while registry activity changes on every agent tick and
+would defeat the cache exactly when it matters.  New live-state
+dependencies must either ride a text patch or clear
+`mevedel-view--tool-rendering-cache' at the mutation point."
   (when session
     (list :permission-origins
           (mevedel-view--queue-origin-fingerprint
            (mevedel-session-permission-queue session))
           :plan-pending
-          (and (mevedel-session-pending-plan-approval session) t)
-          :agent-registry
-          (mapcar (lambda (entry)
-                    (let ((record (cdr entry)))
-                      (list (car entry)
-                            (mevedel-agent-record-activity record)
-                            (mevedel-agent-record-conversation-location
-                             record))))
-                  (mevedel-session-agent-registry session)))))
+          (and (mevedel-session-pending-plan-approval session) t))))
 
 (defun mevedel-view--stamp-agent-handle (start end rendering)
   "Stamp START..END with handle properties from RENDERING."
@@ -2351,7 +2350,10 @@ COLLAPSED-ONLY records whether only collapsed rendering is needed.
 Unrelated appends to DATA-BUF should not invalidate completed tool segment
 renderings, but changes to the segment text itself should."
   (with-current-buffer data-buf
-    (list data-buf seg-start seg-end (mevedel-view--render-cache-key raw)
+    (list data-buf
+          (mevedel-view--source-position seg-start)
+          (mevedel-view--source-position seg-end)
+          (mevedel-view--render-cache-key raw)
           (and (boundp 'mevedel--session)
                (mevedel-view--session-render-state-fingerprint mevedel--session))
           (and collapsed-only t))))
@@ -4907,14 +4909,41 @@ tool form itself when it is present inside RAW."
        (replace-regexp-in-string "\n*#\\+end_tool[^\n]*\\'" "" text t t))
     text))
 
+(defvar-local mevedel-view--tool-block-bounds-memo nil
+  "Data-buffer memo for `mevedel-view--tool-block-bounds'.
+Keys are (SEG-START SEG-END TICK) integers with TICK from
+`buffer-modified-tick': bounds depend on buffer text and gptel text
+properties, and transcript restoration stamps properties without
+character changes, so the chars tick would serve stale bounds.
+Bounded through `mevedel-view--cache-put'.")
+
+(defvar-local mevedel-view--tool-block-bounds-memo-entries 0
+  "Entry count backing `mevedel-view--tool-block-bounds-memo'.")
+
 (defun mevedel-view--tool-block-bounds (seg-start seg-end)
   "Return org tool-block bounds overlapping SEG-START..SEG-END, or nil.
 
 Restored `GPTEL_BOUNDS' can drift into the `#+begin_tool' line or
 past `#+end_tool' when older transcripts are opened.  The org block
 markers remain structural anchors, so use them to recover the whole
-tool block before parsing the tool plist and render-data side channel."
-  (mevedel-transcript--tool-block-bounds-for-run seg-start seg-end))
+tool block before parsing the tool plist and render-data side channel.
+
+The underlying search is unbounded in both directions, so the result
+is memoized per segment and buffer tick; segment text parsing asks for
+the same bounds several times per redraw."
+  (let* ((key (list (mevedel-view--source-position seg-start)
+                    (mevedel-view--source-position seg-end)
+                    (buffer-modified-tick)))
+         (memo (or mevedel-view--tool-block-bounds-memo
+                   (setq mevedel-view--tool-block-bounds-memo
+                         (make-hash-table :test #'equal))))
+         (cached (gethash key memo 'mevedel--miss)))
+    (if (not (eq cached 'mevedel--miss))
+        cached
+      (mevedel-view--cache-put
+       memo key
+       (mevedel-transcript--tool-block-bounds-for-run seg-start seg-end)
+       'mevedel-view--tool-block-bounds-memo-entries))))
 
 (defun mevedel-view--tool-segment-text (seg-start seg-end)
   "Return raw tool text for SEG-START..SEG-END.

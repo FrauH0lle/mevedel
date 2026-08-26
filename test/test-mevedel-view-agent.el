@@ -15,6 +15,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
+(require 'mevedel-tool-render-data)
 (require 'mevedel-tool-ui)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
@@ -884,10 +885,44 @@
             (should-error (insert "  ") :type 'text-read-only)
             (should (equal before (buffer-string)))))))))
 
+(mevedel-deftest mevedel-view--agent-source-present-p
+  (:doc "answers Agent-source presence from the render-data side channel")
+  ,test
+  (test)
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-view-agent-test--session))
+          (record (mevedel-view-agent-test--record "/root/worker_1"
+                                                   'running)))
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/worker_1" record)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        ;; No render-data block in the transcript yet.
+        (should-not
+         (mevedel-view--agent-source-present-p "/root/worker_1")))
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat
+        mevedel-tool-render-data-open "\n"
+        (format
+         (concat "(:kind collaboration-event :event started :agent-id %S"
+                 " :status running :mevedel-tool-use-id \"tool-agent\")\n")
+         (mevedel-agent-record-id record))
+        mevedel-tool-render-data-close "\n")
+       '(tool . "tool-agent"))
+      (with-current-buffer view-buf
+        (should (mevedel-view--agent-source-present-p "/root/worker_1"))
+        ;; A path without a registry record has no discoverable source.
+        (should-not
+         (mevedel-view--agent-source-present-p "/root/other"))))))
+
 (mevedel-deftest mevedel-view-refresh-agent-rendering
   (:doc "coalesces canonical-path refreshes without altering the composer")
   ,test
   (test)
+
+  :doc "no handle and no source leaves the draft untouched"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (goto-char (point-max))
@@ -897,6 +932,25 @@
                    (lambda (_path) '(nil . nil)))
                   ((symbol-function 'mevedel-view--render-agent-status)
                    (lambda () nil)))
+          (mevedel-view-refresh-agent-rendering
+           view-buf "/root/spec_review")))
+      (should (string-suffix-p "> draft\ncontinues"
+                               (buffer-substring-no-properties
+                                (point-min) (point-max))))))
+
+  :doc "the stale-source full rerender preserves a multiline draft"
+  ;; An unrendered handle whose source exists falls back to a full
+  ;; rerender; the composer draft, whose first editable character is
+  ;; `>', must survive that path too.
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (point-max))
+      (insert "> draft\ncontinues")
+      (let ((mevedel-view-agent-refresh-delay 0))
+        (cl-letf (((symbol-function 'mevedel-view--agent-handle-refresh-points)
+                   (lambda (_path) '(nil . nil)))
+                  ((symbol-function 'mevedel-view--agent-source-present-p)
+                   (lambda (_path) t)))
           (mevedel-view-refresh-agent-rendering
            view-buf "/root/spec_review")))
       (should (string-suffix-p "> draft\ncontinues"

@@ -5861,5 +5861,94 @@
               (should (equal "plain media" (plist-get parsed :result))))))
       (delete-directory tmpdir t))))
 
+(mevedel-deftest mevedel-view--source-position
+  (:doc "keys markers and integers identically")
+  ,test
+  (test)
+  (should (= 3 (mevedel-view--source-position 3)))
+  (with-temp-buffer
+    (insert "abcdef")
+    (should (= 2 (mevedel-view--source-position (copy-marker 2))))))
+
+(mevedel-deftest mevedel-view--tool-cache-key ()
+  ,test
+  (test)
+
+  :doc "marker positions and integer positions build equal keys"
+  (with-temp-buffer
+    (insert "#+begin_tool (Read)\n#+end_tool\n")
+    (let ((buf (current-buffer)))
+      (should (equal (mevedel-view--tool-cache-key buf 2 9 nil "raw")
+                     (mevedel-view--tool-cache-key
+                      buf (copy-marker 2) (copy-marker 9) nil "raw")))
+      :doc "collapsed-only still discriminates"
+      (should-not (equal (mevedel-view--tool-cache-key buf 2 9 nil "raw")
+                         (mevedel-view--tool-cache-key buf 2 9 t "raw"))))))
+
+(mevedel-deftest mevedel-view--session-render-state-fingerprint ()
+  ,test
+  (test)
+
+  :doc "agent activity changes leave the fingerprint stable"
+  ;; Agent status reaches renderings only through render-data text
+  ;; patches; folding registry activity into the fingerprint made every
+  ;; cached tool rendering miss on every agent tick.
+  (let ((session (mevedel-session--create :name "main"))
+        (record (mevedel-agent-record--create
+                 :id "agent-1" :path "/root/worker" :parent-path "/root"
+                 :role "default" :activity 'running)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/worker" record)))
+    (let ((before (mevedel-view--session-render-state-fingerprint session)))
+      (setf (mevedel-agent-record-activity record) 'waiting)
+      (should (equal before
+                     (mevedel-view--session-render-state-fingerprint
+                      session)))
+      :doc "permission queue entries change the fingerprint"
+      (setf (mevedel-session-permission-queue session)
+            (list '(:origin "/root/worker")))
+      (should-not (equal before
+                         (mevedel-view--session-render-state-fingerprint
+                          session))))))
+
+(mevedel-deftest mevedel-view--tool-block-bounds ()
+  ,test
+  (test)
+
+  :doc "memoizes bounds per segment and buffer tick"
+  (let* ((real (symbol-function 'mevedel-transcript--tool-block-bounds-for-run))
+         (computations 0))
+    (cl-letf (((symbol-function 'mevedel-transcript--tool-block-bounds-for-run)
+               (lambda (start end)
+                 (cl-incf computations)
+                 (funcall real start end))))
+      (with-temp-buffer
+        (insert "#+begin_tool (Read :file_path \"x\")\nbody\n#+end_tool\n")
+        (put-text-property (point-min) (point-max) 'gptel '(tool . "c1"))
+        (let ((bounds (mevedel-view--tool-block-bounds
+                       (point-min) (point-max))))
+          (should (equal bounds (mevedel-view--tool-block-bounds
+                                 (point-min) (point-max))))
+          (should (= 1 computations))
+          :doc "a text change recomputes"
+          (goto-char (point-max))
+          (insert "tail\n")
+          (mevedel-view--tool-block-bounds (point-min) (point-max))
+          (should (= 2 computations))
+          :doc "a property-only change bumps the tick and recomputes"
+          (put-text-property (point-min) (1+ (point-min))
+                             'mevedel-test 'stamp)
+          (mevedel-view--tool-block-bounds (point-min) (point-max))
+          (should (= 3 computations))))
+      :doc "nil bounds memoize"
+      (with-temp-buffer
+        (insert "no tool block here\n")
+        (let ((before computations))
+          (should-not (mevedel-view--tool-block-bounds
+                       (point-min) (point-max)))
+          (should-not (mevedel-view--tool-block-bounds
+                       (point-min) (point-max)))
+          (should (= (1+ before) computations)))))))
+
 (provide 'test-mevedel-view-render)
 ;;; test-mevedel-view-render.el ends here
