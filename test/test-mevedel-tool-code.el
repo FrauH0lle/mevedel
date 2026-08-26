@@ -6,6 +6,7 @@
 
 (require 'cl-lib)
 (require 'gptel)
+(require 'imenu)
 (require 'xref)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-code)
@@ -710,7 +711,6 @@ formatter without a compiled grammar."
             (insert ";; line 1\n"
                     ";; line 2\n"
                     ";; line 3\n"))
-          (require 'imenu)
           (cl-letf (((symbol-function 'imenu--make-index-alist)
                      (lambda (&optional _noerror)
                        (setq imenu--index-alist
@@ -741,7 +741,6 @@ formatter without a compiled grammar."
           (with-temp-file tmp
             (insert ";; line 1\n"
                     ";; line 2\n"))
-          (require 'imenu)
           (cl-letf (((symbol-function 'imenu--make-index-alist)
                      (lambda (&optional _noerror)
                        (setq imenu--index-alist
@@ -770,7 +769,6 @@ formatter without a compiled grammar."
           (let ((buffer (find-file-noselect tmp)))
             (with-current-buffer buffer
               (narrow-to-region 11 (point-max)))
-            (require 'imenu)
             (cl-letf (((symbol-function 'imenu--make-index-alist)
                        (lambda (&optional _noerror)
                          (setq imenu--index-alist
@@ -791,7 +789,6 @@ formatter without a compiled grammar."
           (with-temp-file tmp
             (insert ";; line 1\n"
                     ";; line 2\n"))
-          (require 'imenu)
           (cl-letf (((symbol-function 'imenu--make-index-alist)
                      (lambda (&optional _noerror)
                        (setq imenu--index-alist
