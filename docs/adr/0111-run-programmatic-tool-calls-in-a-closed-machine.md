@@ -99,6 +99,19 @@ conversation's later Reads with content that never entered provider history.
 This rejects native Elisp evaluation, host macro expansion, property-scraped
 primitives, a JavaScript runtime, virtual transcript rows, ToolScript-only
 modes, futures, resumable cells, guest notifications, cross-call storage, and
-guest media-emission helpers. Child media references remain in the user-visible
+guest media-emission helpers.
+
+It also rejects the obvious alternative of running full Elisp in a child
+`emacs -Q --batch` confined by an OS sandbox, which is what the Eval tool's
+batch mode does. That boundary is conditional: `mevedel-sandbox-mode` defaults
+to `best-effort`, so a failed Bubblewrap probe -- no `bwrap`, no user
+namespaces, macOS or Windows, or a TRAMP target that lacks it -- runs the child
+unconfined with a disclosure rather than refusing. A process boundary without a
+working sandbox isolates crashes and host data structures, not authority: the
+child still reads the user's credentials and reaches the network. Eval accepts
+that trade because it is permission-gated per call and the user chooses the
+mode. Orchestration cannot: scripts are authored from context that includes
+tool output, so their boundary has to hold on every platform without a probe.
+The interpreter's does. Child media references remain in the user-visible
 audit with payload bytes removed. Those broader mechanisms add lifecycle or
 trust boundaries that the measured orchestration use case does not require.
