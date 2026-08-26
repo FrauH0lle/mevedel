@@ -1021,9 +1021,11 @@ possible boundary rather than creating a mailbox message.
 
 A plain send refused because the workflow is occupied names the occupying
 cause: a retained accepted-plan implementation hints
-`mevedel-retry-plan-implementation`, an unfinished Goal hints `/goal resume`,
-and a pending plan proposal points at its approval. Resuming a session that
-holds an implementation retry record also echoes the retry command.
+`mevedel-retry-plan-implementation`, a normal unfinished Goal hints
+`/goal resume`, a budget-limited Goal hints `/goal budget`, a preconstruction
+Goal handoff says to wait, and a pending plan proposal points at its approval.
+Resuming a mutable session that holds an implementation retry record also
+echoes the retry command; read-only inspection does not.
 
 `C-c TAB` while the session is occupied accepts a queued follow-up. Each
 follow-up later starts one normal user turn. Steering always has delivery

@@ -9,8 +9,7 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib)
-  (require 'gptel))
+  (require 'cl-lib))
 
 ;; `gptel'
 (declare-function gptel-backend-name "ext:gptel" (backend))

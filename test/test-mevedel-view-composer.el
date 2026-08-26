@@ -481,14 +481,25 @@
     (setf (mevedel-session-plan-mode mevedel--session) nil)
     (should-not (mevedel-view--plan-mode-p))))
 
-(mevedel-deftest mevedel-view--occupied-root-workflow-p ()
+(mevedel-deftest mevedel-view--occupied-root-workflow ()
   ,test
   (test)
 
   :doc "idle session is not occupied"
-  (should-not (mevedel-view--occupied-root-workflow-p
+  (should-not (mevedel-view--occupied-root-workflow
                (mevedel-session--create :authority-mode 'pid-lock
                                         :name "main")))
+
+  :doc "plan approval and directive planning name their causes"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+                                          :name "main")))
+    (setf (mevedel-session-pending-plan-approval session) 'pending)
+    (should (eq 'plan-approval
+                (mevedel-view--occupied-root-workflow session)))
+    (setf (mevedel-session-pending-plan-approval session) nil
+          (mevedel-session-directive-planning session) 'planning)
+    (should (eq 'directive-planning
+                (mevedel-view--occupied-root-workflow session))))
 
   :doc "retained implementation retry names its cause"
   (let ((session (mevedel-session--create :authority-mode 'pid-lock
@@ -496,16 +507,28 @@
     (setf (mevedel-session-plan-metadata session)
           '(:implementation-retry (:selection (:location here))))
     (should (eq 'implementation-retry
-                (mevedel-view--occupied-root-workflow-p session))))
+                (mevedel-view--occupied-root-workflow session))))
+
+  :doc "reserved Goal handoff names its cause"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock
+                                          :name "main")))
+    (setf (mevedel-session-plan-metadata session)
+          '(:implementation-goal-id "g1"))
+    (should (eq 'goal-handoff
+                (mevedel-view--occupied-root-workflow session))))
 
   :doc "unfinished goal names its cause; complete goal does not occupy"
   (let ((session (mevedel-session--create :authority-mode 'pid-lock
                                           :name "main")))
     (setf (mevedel-session-goal session)
           (mevedel-goal--create :id "g1" :objective "obj" :status 'paused))
-    (should (eq 'goal (mevedel-view--occupied-root-workflow-p session)))
+    (should (eq 'goal (mevedel-view--occupied-root-workflow session)))
+    (setf (mevedel-goal-status (mevedel-session-goal session))
+          'budget-limited)
+    (should (eq 'goal-budget
+                (mevedel-view--occupied-root-workflow session)))
     (setf (mevedel-goal-status (mevedel-session-goal session)) 'complete)
-    (should-not (mevedel-view--occupied-root-workflow-p session))))
+    (should-not (mevedel-view--occupied-root-workflow session))))
 
 (mevedel-deftest mevedel-view--occupied-root-workflow-error ()
   ,test
@@ -516,7 +539,33 @@
            "mevedel-retry-plan-implementation"
            (cadr (should-error
                   (mevedel-view--occupied-root-workflow-error
-                   'implementation-retry)
+                  'implementation-retry)
+                  :type 'user-error))))
+
+  :doc "plan approval points at the pending approval"
+  (should (string-match-p
+           "approval"
+           (cadr (should-error
+                  (mevedel-view--occupied-root-workflow-error 'plan-approval)
+                  :type 'user-error))))
+
+  :doc "ordinary and budget-limited Goals name valid commands"
+  (should (string-match-p
+           "/goal resume"
+           (cadr (should-error
+                  (mevedel-view--occupied-root-workflow-error 'goal)
+                  :type 'user-error))))
+  (should (string-match-p
+           "/goal budget"
+           (cadr (should-error
+                  (mevedel-view--occupied-root-workflow-error 'goal-budget)
+                  :type 'user-error))))
+
+  :doc "preconstruction Goal handoff says to wait"
+  (should (string-match-p
+           "wait"
+           (cadr (should-error
+                  (mevedel-view--occupied-root-workflow-error 'goal-handoff)
                   :type 'user-error))))
 
   :doc "unknown cause keeps the generic follow-up hint"

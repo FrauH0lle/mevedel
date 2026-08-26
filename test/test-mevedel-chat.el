@@ -523,7 +523,11 @@
 			(session (mevedel-session-create "main" workspace root))
 		 notified-workspace
 		 probed-session
-		 validated-workspace)
+		 validated-workspace
+		 mutable-messages
+		 inspection-messages)
+		   (setf (mevedel-session-plan-metadata session)
+		         '(:implementation-retry (:selection (:location here))))
 		   (unwind-protect
 		       (with-temp-buffer
 			 (setq-local mevedel--session session)
@@ -559,8 +563,12 @@
 				     'mevedel-plugins-notify-pending-consent)
 				    (lambda (workspace)
 				      (setq notified-workspace workspace))))
-			   (mevedel--chat-buffer-init-common
-			    (current-buffer) workspace "resume"))
+			   (mevedel-test--with-captured-messages mutable-messages
+			     (mevedel--chat-buffer-init-common
+			      (current-buffer) workspace "resume")))
+			 (should (string-match-p
+			          "mevedel-retry-plan-implementation"
+			          mutable-messages))
 			 (should (= 1 (length
 			               (mevedel-session-pending-reminders session))))
 			 (should (string-match-p
@@ -586,7 +594,15 @@
 			 (should (memq #'mevedel-view-stream-schedule
 				       gptel-post-stream-hook))
 			 (should (memq #'mevedel-tool-repair-clear-ledger
-				       kill-buffer-hook)))
+				       kill-buffer-hook))
+			 (with-temp-buffer
+			   (setq-local mevedel--session session)
+			   (mevedel-test--with-captured-messages inspection-messages
+			     (mevedel--chat-buffer-init-common
+			      (current-buffer) workspace "resume" t)))
+			 (should-not (string-match-p
+			              "mevedel-retry-plan-implementation"
+			              inspection-messages)))
 		     (delete-directory root t)))
 
 		 :doc "watcher warnings do not derail view creation"

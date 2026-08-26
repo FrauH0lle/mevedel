@@ -168,11 +168,10 @@
                (lambda (workload &rest _)
                  (should (eq workload 'summarization))
                  '(:backend summary-backend :model summary-model
-                   :effort high)))
+                   :effort high :max-tokens 321
+                   :request-params (:temperature 0.2))))
               ((symbol-function 'mevedel-model-usable-input-tokens)
                (lambda (_policy) 100000))
-              ((symbol-function 'gptel-get-preset)
-               (lambda (&rest _) '(:description "test")))
               ((symbol-function 'gptel-request)
                (lambda (prompt &rest args)
                  (setq captured
@@ -232,20 +231,31 @@
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                (lambda (&rest _)
                  '(:backend summary-backend :model summary-model
-                   :effort high)))
+                   :effort high :max-tokens 321
+                   :request-params (:temperature 0.2))))
               ((symbol-function 'mevedel-model-usable-input-tokens)
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-request)
                (lambda (_prompt &rest args)
                  (let ((buffer (plist-get args :buffer)))
                    (setq captured
-                         (list :model (buffer-local-value 'gptel-model buffer)
-                               :backend (buffer-local-value 'gptel-backend
-                                                            buffer)
-                               :use-tools (buffer-local-value 'gptel-use-tools
-                                                              buffer)
-                               :stream (buffer-local-value 'gptel-stream
-                                                           buffer))))
+                         (list
+                          :model (buffer-local-value 'gptel-model buffer)
+                          :backend (buffer-local-value 'gptel-backend buffer)
+                          :effort
+                          (buffer-local-value 'gptel-reasoning-effort buffer)
+                          :max-tokens
+                          (buffer-local-value 'gptel-max-tokens buffer)
+                          :request-params
+                          (buffer-local-value 'gptel--request-params buffer)
+                          :system
+                          (buffer-local-value 'gptel-system-prompt buffer)
+                          :use-tools
+                          (buffer-local-value 'gptel-use-tools buffer)
+                          :tools (buffer-local-value 'gptel-tools buffer)
+                          :use-context
+                          (buffer-local-value 'gptel-use-context buffer)
+                          :stream (buffer-local-value 'gptel-stream buffer))))
                  (funcall (plist-get args :callback)
                           test-mevedel-context-summary--continuation nil)
                  'request-fsm)))
@@ -255,7 +265,15 @@
         (mevedel-context-summary-generate "evidence" 'continuation #'ignore)))
     (should (eq (plist-get captured :model) 'summary-model))
     (should (eq (plist-get captured :backend) 'summary-backend))
+    (should (eq (plist-get captured :effort) 'high))
+    (should (= (plist-get captured :max-tokens) 321))
+    (should (equal (plist-get captured :request-params)
+                   '(:temperature 0.2)))
+    (should (string-match-p "untrusted evidence"
+                            (plist-get captured :system)))
     (should-not (plist-get captured :use-tools))
+    (should-not (plist-get captured :tools))
+    (should-not (plist-get captured :use-context))
     (should-not (plist-get captured :stream)))
 
   :doc "resolves nested Agent summaries from the owning root session"
@@ -281,8 +299,6 @@
             (cl-letf (((symbol-function
                         'mevedel-model-usable-input-tokens)
                        (lambda (_policy) 100000))
-                      ((symbol-function 'gptel-get-preset)
-                       (lambda (&rest _) '(:description "test")))
                       ((symbol-function 'gptel-request)
                        (lambda (_prompt &rest args)
                          (setq captured-model gptel-model)
@@ -304,8 +320,6 @@
                  '(:backend test-backend :model test-model)))
               ((symbol-function 'mevedel-model-usable-input-tokens)
                (lambda (_policy) 100000))
-              ((symbol-function 'gptel-get-preset)
-               (lambda (&rest _) '(:description "test")))
               ((symbol-function 'gptel-request)
                (lambda (_prompt &rest args)
                  (funcall
@@ -362,8 +376,6 @@
                  '(:backend test-backend :model test-model)))
               ((symbol-function 'mevedel-model-usable-input-tokens)
                (lambda (_policy) 100000))
-              ((symbol-function 'gptel-get-preset)
-               (lambda (&rest _) '(:description "test")))
               ((symbol-function 'gptel-request)
                (lambda (_prompt &rest args)
                  (push (plist-get args :callback) provider-callbacks)
@@ -392,8 +404,6 @@
                (lambda (_policy) 100000))
               ((symbol-function 'gptel-backend-name)
                (lambda (_backend) "summary-provider"))
-              ((symbol-function 'gptel-get-preset)
-               (lambda (&rest _) '(:description "test")))
               ((symbol-function 'mevedel-telemetry-start)
                (lambda (&rest args)
                  (setq started args)
@@ -428,8 +438,6 @@
                  '(:backend test-backend :model test-model)))
               ((symbol-function 'mevedel-model-usable-input-tokens)
                (lambda (_policy) 100000))
-              ((symbol-function 'gptel-get-preset)
-               (lambda (&rest _) '(:description "test")))
               ((symbol-function 'gptel-request)
                (lambda (_prompt &rest args)
                  (setq provider-callback (plist-get args :callback)
@@ -460,8 +468,6 @@
                      (lambda (&rest _) '(:backend b :model m :effort nil)))
                     ((symbol-function 'mevedel-model-usable-input-tokens)
                      (lambda (_policy) 100000))
-                    ((symbol-function 'gptel-get-preset)
-                     (lambda (&rest _) '(:description "test")))
                     ((symbol-function 'gptel-request)
                      (lambda (_prompt &rest args)
                        (setq provider-callback (plist-get args :callback))
