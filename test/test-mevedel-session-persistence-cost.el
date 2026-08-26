@@ -12,7 +12,6 @@
 ;;; Code:
 
 (require 'ert)
-(require 'mevedel)
 (require 'mevedel-session-control-fs)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
