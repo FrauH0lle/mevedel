@@ -432,7 +432,6 @@
   ,test
   (test)
   :doc "allow git inspection while denying other Bash commands"
-  (require 'mevedel-permission-rules)
   (let ((rules (mevedel-review--permission-rules)))
     (should (eq 'allow
                 (mevedel-permission-rules-action
@@ -442,7 +441,6 @@
                  rules "Bash" :pattern "make test"))))
 
   :doc "verify grants git inspection without denying validation commands"
-  (require 'mevedel-permission-rules)
   (let ((rules (mevedel-review--verify-permission-rules)))
     (should (eq 'allow
                 (mevedel-permission-rules-action
