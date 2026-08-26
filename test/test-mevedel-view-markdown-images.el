@@ -9,6 +9,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-view)
 (require 'mevedel-view-markdown)
 
 (mevedel-deftest mevedel-view--image-sizing ()
