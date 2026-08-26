@@ -36,6 +36,18 @@
 (declare-function mevedel-sandbox-probe "mevedel-sandbox" ())
 (autoload 'mevedel-sandbox-probe "mevedel-sandbox")
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-save
+                  "mevedel-session-artifacts"
+                  (session buffer &optional settled force))
+(autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-root-buffer-for-session
+                  "mevedel-session-persistence" (session &optional buffer))
+(autoload 'mevedel-session-persistence-root-buffer-for-session
+  "mevedel-session-persistence")
+
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-append-diagnostic
                   "mevedel-session-publication" (session path content))
@@ -700,10 +712,20 @@ MODE defaults to `cpu+mem'.  Interactively with a prefix argument, prompt for
         (mode (or mode 'cpu+mem)))
     (unless session
       (user-error "No mevedel session in the current buffer"))
-    (unless (mevedel-session-save-path session)
-      (user-error "Materialize the mevedel session before profiling"))
     (when mevedel-telemetry--profiler-session
       (user-error "A mevedel profiler run is already active"))
+    ;; A cold session has no directory yet, so the run would have nowhere to
+    ;; put its artifacts.  Materialize it here rather than making the user
+    ;; send a throwaway turn first.
+    (unless (mevedel-session-save-path session)
+      (mevedel-session-artifacts-save
+       session
+       (or (mevedel-session-persistence-root-buffer-for-session
+            session (current-buffer))
+           (current-buffer))
+       nil t)
+      (unless (mevedel-session-save-path session)
+        (user-error "Could not materialize the mevedel session for profiling")))
     (require 'profiler)
     (setq mevedel-telemetry--profiler-run-id
           (format "run-%s-%s"
