@@ -31,9 +31,6 @@
 (declare-function mevedel-session-publication-append-diagnostic
                   "mevedel-session-publication" (session path content))
 
-;; `mevedel-structs'
-(declare-function mevedel-session-audit-target "mevedel-structs" (session))
-
 ;; `mevedel-tool-repair'
 (defvar mevedel-tool-repair--in-flight)
 (defvar mevedel-tool-repair--max-audit-records)
@@ -44,7 +41,6 @@
 (defvar mevedel-tool-repair-persist-log)
 
 ;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
 (declare-function mevedel-telemetry-record-audit
                   "mevedel-telemetry" (session event &rest props))
 
@@ -293,8 +289,8 @@
   (condition-case nil
       (when session
         (let* ((event (mevedel-tool-repair--safe-event event))
-               (log (append (mevedel-session-repair-log session) (list event)))
-               (audit-session (mevedel-session-audit-target session)))
+               (log (append (mevedel-session-repair-log session)
+                            (list event))))
           (when (> (length log) mevedel-tool-repair-log-limit)
             (setq log (last log mevedel-tool-repair-log-limit)))
           (setf (mevedel-session-repair-log session) log)
@@ -310,8 +306,9 @@
                          (mevedel-tool-repair--persist-event session event)))
                 (setf (mevedel-session-repair-log-pending session)
                       (append pending (list event))))))
-          (when (or (mevedel-telemetry-detailed-p audit-session)
-                    (not (eq (plist-get event :outcome) 'valid))
+          ;; A valid no-op repair carries no information in any tier;
+          ;; detailed profiler runs get no exception.
+          (when (or (not (eq (plist-get event :outcome) 'valid))
                     (plist-get event :rules)
                     (plist-get event :issue-kinds))
             (apply #'mevedel-telemetry-record-audit

@@ -58,17 +58,24 @@ permission profiles, and justifications are not forwarded.
 
 Normal sessions keep tool-, request-, interaction-, execution-, agent-, Goal-,
 and other outcome-level events. They omit routine per-pipeline-step spans,
-per-hook-handler lifecycle spans, hook-event spans with no matching handlers,
-valid input-validation spans, and no-op valid repair events. Hook events that
-actually run handlers and nontrivial repair outcomes remain visible. A
-compaction attempt refused before admission is not measured at all; one
-rejected after measurement starts closes its span as rejected, so every
-recorded start has a finish.
+per-hook-handler lifecycle spans, and hook-event spans with no matching
+handlers. Hook events that actually run handlers and nontrivial repair
+outcomes remain visible. A compaction attempt refused before admission is not
+measured at all; one rejected after measurement starts closes its span as
+rejected, so every recorded start has a finish.
+
+Valid no-op input-validation and repair events are never recorded in any
+tier, detailed profiler runs included: a validation that changed nothing and
+raised nothing carries no information, and a profiled session emits hundreds
+of them. Input validation therefore records one settled
+`tool-input-validation-repair` event carrying its own `:duration-ms` instead
+of a start/finish span, and only for outcomes with repairs, issues, or
+errors.
 
 An active `mevedel-telemetry-profiler-start` run records the full detailed
-stream for its owning session. `mevedel-session-debug` starts that same
-profiler, so it also enables full telemetry. Other concurrently live sessions
-remain on the normal tier.
+stream for its owning session, minus those no-op validation and repair
+events. `mevedel-session-debug` starts that same profiler, so it also enables
+full telemetry. Other concurrently live sessions remain on the normal tier.
 
 ## Covered lifecycle boundaries
 

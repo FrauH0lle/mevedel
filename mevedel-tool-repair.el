@@ -25,8 +25,7 @@
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-detailed-p "mevedel-telemetry" (session))
-(declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
-(declare-function mevedel-telemetry-start
+(declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-tool-registry'
@@ -767,27 +766,39 @@ with `Error:' so gptel settles the call without invoking its handler."
          (args (plist-get info :args))
          (tool (and name (mevedel-tool-get name)))
          (session (and tool (mevedel-tool-repair--current-session)))
-         (telemetry-span
+         ;; A span cannot express "record only when interesting": the
+         ;; outcome is unknown at start time and every recorded start
+         ;; must have a finish.  Record one settled event instead, and
+         ;; only for outcomes that carried repairs or issues -- a valid
+         ;; no-op says nothing worth a log line in any tier.
+         (telemetry-started
           (and session
                (fboundp 'mevedel-telemetry-detailed-p)
                (mevedel-telemetry-detailed-p session)
-               (fboundp 'mevedel-telemetry-start)
-               (mevedel-telemetry-start
-                session 'tool-input-validation-repair
-                :tool-name name))))
+               (fboundp 'mevedel-telemetry-record)
+               (float-time))))
     (when tool
       (condition-case err
           (let* ((outcome (mevedel-tool-repair-attempt tool args))
                  (status (plist-get outcome :status))
                  (final-args (plist-get outcome :args))
-                 (abandoned (plist-get outcome :abandoned-repairs)))
-            (when telemetry-span
-              (mevedel-telemetry-finish
-               telemetry-span
+                 (abandoned (plist-get outcome :abandoned-repairs))
+                 (repair-count
+                  (length (or (plist-get outcome :repairs) abandoned)))
+                 (issue-count (length (plist-get outcome :issues))))
+            (when (and telemetry-started
+                       (or (not (eq status 'valid))
+                           (> repair-count 0)
+                           (> issue-count 0)))
+              (mevedel-telemetry-record
+               session 'tool-input-validation-repair
+               :stage 'settled
+               :tool-name name
                :outcome status
-               :repair-count
-               (length (or (plist-get outcome :repairs) abandoned))
-               :issue-count (length (plist-get outcome :issues))))
+               :repair-count repair-count
+               :issue-count issue-count
+               :duration-ms
+               (round (* 1000 (- (float-time) telemetry-started)))))
             (mevedel-tool-repair--record-call
              (mevedel-tool-repair--make-entry
               name status args final-args
@@ -807,10 +818,15 @@ with `Error:' so gptel settles the call without invoking its handler."
                       (mevedel-tool-repair-format-audit-block
                        'abandoned abandoned)))))))
         (error
-         (when telemetry-span
-           (mevedel-telemetry-finish
-            telemetry-span :outcome 'internal-error
-            :error-class (car-safe err)))
+         (when telemetry-started
+           (mevedel-telemetry-record
+            session 'tool-input-validation-repair
+            :stage 'settled
+            :tool-name name
+            :outcome 'internal-error
+            :error-class (car-safe err)
+            :duration-ms
+            (round (* 1000 (- (float-time) telemetry-started)))))
          (mevedel-tool-repair--record-call
           (mevedel-tool-repair--make-entry
            name 'internal-error args nil nil

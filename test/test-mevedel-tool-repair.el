@@ -736,6 +736,36 @@
           (should (eq 'wrap-array-singleton
                       (plist-get (car (plist-get entry :repairs)) :rule)))))))
 
+  :doc "records one settled telemetry event only for interesting outcomes"
+  (let ((tool
+         (mevedel-tool--create
+          :name "Collect"
+          :category "mevedel"
+          :args '((names array :required "Names" :items (:type string)))))
+        (session (mevedel-session--create :name "main"))
+        captured)
+    (mevedel-tool-register tool)
+    (cl-letf (((symbol-function 'mevedel-telemetry-detailed-p)
+               (lambda (_session) t))
+              ((symbol-function 'mevedel-telemetry-record)
+               (lambda (_session event &rest props)
+                 (push (cons event props) captured))))
+      (with-temp-buffer
+        (setq-local mevedel--session session)
+        (mevedel-tool-repair-pre-tool-call
+         '(:name "Collect" :args (:names ["alice"])))
+        ;; Valid no-op input: nothing recorded even in a detailed run.
+        (should-not captured)
+        (mevedel-tool-repair-pre-tool-call
+         '(:name "Collect" :args (:names "alice")))
+        (should (= 1 (length captured)))
+        (let ((props (cdr (car captured))))
+          (should (eq 'tool-input-validation-repair (car (car captured))))
+          (should (eq 'settled (plist-get props :stage)))
+          (should (eq 'repaired (plist-get props :outcome)))
+          (should (= 1 (plist-get props :repair-count)))
+          (should (numberp (plist-get props :duration-ms)))))))
+
   :doc "settles invalid input with a direct leading Error result"
   (let ((tool
          (mevedel-tool--create
@@ -773,44 +803,20 @@
       (should (equal '(wrap-array-singleton) (plist-get event :rules)))
       (should (equal '((names) (count)) (plist-get event :paths)))))
 
-  :doc "pairs pre-pipeline validation and repair telemetry"
-  (let ((session (mevedel-session--create :name "main"))
-        (tool (mevedel-tool--create
-               :name "TelemetryRepair" :category "mevedel"
-               :args '((name string :required "Name"))))
-        started finished)
-    (mevedel-tool-register tool)
-    (with-temp-buffer
-      (setq-local mevedel--session session)
-      (cl-letf (((symbol-function 'mevedel-telemetry-detailed-p)
-                 (lambda (_session) t))
-                ((symbol-function 'mevedel-telemetry-start)
-                 (lambda (_session event &rest props)
-                   (setq started (cons event props))
-                   '(:span repair)))
-                ((symbol-function 'mevedel-telemetry-finish)
-                 (lambda (_span &rest props) (setq finished props))))
-        (mevedel-tool-repair-pre-tool-call
-         '(:name "TelemetryRepair" :args (:name "ok")))))
-    (should (eq 'tool-input-validation-repair (car started)))
-    (should (eq 'valid (plist-get finished :outcome)))
-    (should (= 0 (plist-get finished :repair-count)))
-    (should (= 0 (plist-get finished :issue-count))))
-
-  :doc "omits validation spans for normal sessions"
+  :doc "omits validation events for normal sessions"
   (let ((session (mevedel-session--create :name "main"))
         (tool (mevedel-tool--create
                :name "NormalValidation" :category "mevedel"
                :args '((name string :required "Name"))))
-        started)
+        recorded)
     (mevedel-tool-register tool)
     (with-temp-buffer
       (setq-local mevedel--session session)
-      (cl-letf (((symbol-function 'mevedel-telemetry-start)
-                 (lambda (&rest _) (setq started t))))
+      (cl-letf (((symbol-function 'mevedel-telemetry-record)
+                 (lambda (&rest _) (setq recorded t))))
         (mevedel-tool-repair-pre-tool-call
          '(:name "NormalValidation" :args (:name "ok")))))
-    (should-not started))
+    (should-not recorded))
 
   :doc "consumes identical final args in original call order"
   (let ((tool
