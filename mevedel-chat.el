@@ -614,8 +614,9 @@ mutation lease."
     (mevedel-reminders-install-defaults mevedel--session)
     (when (equal source "resume")
       (mevedel--queue-reconciliation-reminder mevedel--session)
-      (when (plist-get (mevedel-session-plan-metadata mevedel--session)
-                       :implementation-retry)
+      (when (and (not inspection-p)
+                 (plist-get (mevedel-session-plan-metadata mevedel--session)
+                            :implementation-retry))
         (message "mevedel: accepted plan implementation is pending; \
 M-x mevedel-retry-plan-implementation resumes it")))
     (require 'mevedel-goal)

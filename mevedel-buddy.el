@@ -27,10 +27,11 @@
 (declare-function gptel-make-fsm "ext:gptel-request" (&rest slots))
 (declare-function gptel-request "ext:gptel-request" (&optional prompt &rest keys))
 (defvar gptel-backend)
-(defvar gptel-request--handlers)
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
+(defvar gptel-request--handlers)
 (defvar gptel-stream)
+(defvar gptel-system-prompt)
 (defvar gptel-tools)
 (defvar gptel-use-context)
 (defvar gptel-use-tools)
@@ -679,19 +680,6 @@ started by the idle timer, which an explicit request may preempt."
     (unless (plist-get policy :model)
       (kill-buffer request-buffer)
       (user-error "No model resolves for the buddy workload"))
-    (with-current-buffer request-buffer
-      (setq default-directory
-            (buffer-local-value 'default-directory source))
-      ;; gptel snapshots request configuration from the :buffer with
-      ;; `buffer-local-value', which falls back to global defaults and
-      ;; never sees dynamic let bindings made in a buffer holding these
-      ;; variables buffer-locally.  The policy must live on the request
-      ;; buffer itself.
-      (setq-local gptel-backend (plist-get policy :backend)
-                  gptel-model (plist-get policy :model)
-                  gptel-reasoning-effort (plist-get policy :effort)
-                  gptel-use-context nil
-                  gptel-use-tools t))
     (setq mevedel-buddy--running scope-key
           mevedel-buddy--running-automatic automatic
           mevedel-buddy--request-buffer request-buffer
@@ -725,34 +713,50 @@ started by the idle timer, which an explicit request may preempt."
                            (setq mevedel-buddy--timeout-timer nil)
                            (mevedel-buddy--abandon 'timeout))))
       (condition-case nil
-          (progn
+          (let ((stream gptel-stream)
+                (system
+                 (mevedel-system-build-prompt
+                  profile
+                  :workspace (mevedel-buddy--workspace)
+                  :working-directory default-directory)))
             (with-current-buffer request-buffer
-              (setq-local gptel-tools
+              ;; gptel snapshots request configuration from the :buffer
+              ;; with `buffer-local-value', which never sees a source
+              ;; buffer's local settings.  Keep the whole request policy
+              ;; together on the request buffer.
+              (setq-local default-directory
+                          (buffer-local-value 'default-directory source)
+                          gptel-backend (plist-get policy :backend)
+                          gptel-model (plist-get policy :model)
+                          gptel-reasoning-effort (plist-get policy :effort)
+                          gptel-system-prompt system
+                          gptel-use-context nil
+                          gptel-use-tools t
+                          gptel-stream stream
+                          gptel-tools
                           (mevedel-buddy-note-tools
                            (lambda ()
                              (mevedel-buddy--current-generation-p
-                              generation)))))
-            (gptel-request
-             (concat payload (mevedel-buddy-note-serialize))
-             :buffer request-buffer
-             :fsm (mevedel-buddy--request-fsm #'finish)
-             ;; Follow the user's streaming setting rather than forcing it
-             ;; off.  Buddy has no use for streamed prose, but some
-             ;; providers reject a request with `stream' false outright.
-             :stream gptel-stream
-             :transforms nil
-             :system (mevedel-system-build-prompt
-                      profile
-                      :workspace (mevedel-buddy--workspace)
-                      :working-directory default-directory)
-             :callback
-             (lambda (response _info)
-               (when (eq (mevedel-buddy--response-action response) 'tool-round)
-                 (setq rounds (1+ rounds))
-                 (when (> rounds mevedel-buddy-max-iterations)
-                   ;; Aborting reaches the machine's ABRT state, which
-                   ;; settles the review without retiring its changes.
-                   (ignore-errors (gptel-abort request-buffer)))))))
+                              generation))))
+              (gptel-request
+               (concat payload (mevedel-buddy-note-serialize))
+               :buffer request-buffer
+               :fsm (mevedel-buddy--request-fsm #'finish)
+               ;; Follow the user's streaming setting rather than forcing it
+               ;; off.  Buddy has no use for streamed prose, but some
+               ;; providers reject a request with `stream' false outright.
+               :stream stream
+               :transforms nil
+               :system system
+               :callback
+               (lambda (response _info)
+                 (when (eq (mevedel-buddy--response-action response)
+                           'tool-round)
+                   (setq rounds (1+ rounds))
+                   (when (> rounds mevedel-buddy-max-iterations)
+                     ;; Aborting reaches the machine's ABRT state, which
+                     ;; settles the review without retiring its changes.
+                     (ignore-errors (gptel-abort request-buffer))))))))
         (error (finish nil))))))
 
 (defun mevedel-buddy--workspace ()

@@ -176,7 +176,7 @@
 (declare-function mevedel-view--ensure-interactive-chat-view
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--input-text "mevedel-view-composer" ())
-(declare-function mevedel-view--occupied-root-workflow-p
+(declare-function mevedel-view--occupied-root-workflow
                   "mevedel-view-composer" (session))
 (declare-function mevedel-view--queued-scope
                   "mevedel-view-composer" (&optional scope))
@@ -547,7 +547,7 @@ longer accepts the prepared input."
            (or (buffer-local-value 'mevedel--current-request
                                    mevedel--data-buffer)
                (mevedel-session-pending-follow-ups session)
-               (mevedel-view--occupied-root-workflow-p session)
+               (mevedel-view--occupied-root-workflow session)
                mevedel-view--prompt-hook-pending
                mevedel-view--pending-skill-submission
                (buffer-local-value 'mevedel-compact-run-in-flight

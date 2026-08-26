@@ -1483,11 +1483,11 @@ When FORCE is non-nil, replace the current draft unconditionally."
   (mevedel-plan-handoff-reserved-goal-id
    (or session (mevedel-view--session))))
 
-(defun mevedel-view--occupied-root-workflow-p (session)
+(defun mevedel-view--occupied-root-workflow (session)
   "Return a symbol naming SESSION's occupying workflow, or nil.
 Non-nil means later input is a follow-up.  The symbol is one of
 `plan-approval', `directive-planning', `implementation-retry',
-`goal-handoff', or `goal'."
+`goal-handoff', `goal-budget', or `goal'."
   (cond
    ((mevedel-session-pending-plan-approval session) 'plan-approval)
    ((mevedel-session-directive-planning session) 'directive-planning)
@@ -1496,8 +1496,10 @@ Non-nil means later input is a follow-up.  The symbol is one of
     'implementation-retry)
    ((mevedel-view--reserved-goal-handoff-id session) 'goal-handoff)
    ((when-let* ((goal (mevedel-session-goal session)))
-      (not (eq (mevedel-goal-status goal) 'complete)))
-    'goal)))
+      (pcase (mevedel-goal-status goal)
+        ('complete nil)
+        ('budget-limited 'goal-budget)
+        (_ 'goal))))))
 
 (defun mevedel-view--occupied-root-workflow-error (occupied)
   "Signal the user error for the OCCUPIED root workflow symbol."
@@ -1508,7 +1510,11 @@ Non-nil means later input is a follow-up.  The symbol is one of
       "An accepted plan implementation is pending -- M-x mevedel-retry-plan-implementation resumes it")
      ('plan-approval
       "A plan proposal is awaiting approval -- respond to it first")
-     ((or 'goal-handoff 'goal)
+     ('goal-handoff
+      "An accepted-plan Goal handoff is being prepared -- wait for it to finish")
+     ('goal-budget
+      "The unfinished Goal has exhausted its token budget -- /goal budget N or /goal budget none continues it")
+     ('goal
       "An unfinished Goal owns this session -- /goal resume continues it")
      (_ "The workflow is occupied -- use C-c TAB for a follow-up"))))
 
@@ -2062,7 +2068,7 @@ SNAPSHOT is the exact Source composer state transferred on publication."
   (let ((session (mevedel-view--session)))
     (when (or (buffer-local-value 'mevedel--current-request
                                   mevedel--data-buffer)
-              (and (mevedel-view--occupied-root-workflow-p session)
+              (and (mevedel-view--occupied-root-workflow session)
                    (not (eq (plist-get mevedel-view--composer-scope :action)
                             'plan))))
       (user-error "The workflow is occupied -- use C-c TAB to queue this directive follow-up"))
@@ -2120,16 +2126,17 @@ their local dispatch path."
              (fork-target mevedel-view--armed-session-fork)
              (active-request
               (buffer-local-value 'mevedel--current-request
-                                  mevedel--data-buffer)))
+                                  mevedel--data-buffer))
+             (occupied
+              (and (not slash-parsed)
+                   (mevedel-view--occupied-root-workflow session))))
 	(when (and slash-parsed (mevedel-view-historical-segment-p))
           (user-error
            "Slash commands are unavailable while viewing a historical segment"))
 	(when (and fork-target (not slash-parsed))
           (mevedel-session-rewind-assert-stable-source
            session mevedel--data-buffer "forking"))
-	(if (or active-request
-		(and (not slash-parsed)
-                     (mevedel-view--occupied-root-workflow-p session)))
+	(if (or active-request occupied)
             (let ((restore
                    (lambda ()
                      (when snapshot
@@ -2154,7 +2161,7 @@ their local dispatch path."
                ((not active-request)
 		(funcall restore)
 		(mevedel-view--occupied-root-workflow-error
-		 (mevedel-view--occupied-root-workflow-p session)))
+		 occupied))
                ((not (mevedel-view--steerable-root-request-p active-request))
 		(funcall restore)
 		(user-error

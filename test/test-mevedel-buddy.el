@@ -702,6 +702,62 @@
     (should-not (assq 'buddy gptel--request-alist))
     (should-not (buffer-live-p request-buffer)))
 
+  :doc "the request buffer owns the complete Buddy request policy"
+  (let* ((source (mevedel-test--buddy-buffer "buddy-policy.el" "alpha\n"))
+         (gptel-stream nil)
+         captured)
+    (with-current-buffer source
+      (setq-local gptel-stream t
+                  gptel-system-prompt "source-system")
+      (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                 (lambda (&rest _)
+                   '(:backend buddy-backend :model buddy-model
+                     :effort high)))
+                ((symbol-function 'mevedel-buddy-note-capture-markers)
+                 #'ignore)
+                ((symbol-function 'mevedel-buddy-note-serialize)
+                 (lambda () ""))
+                ((symbol-function 'mevedel-buddy-note-tools)
+                 (lambda (_) '(buddy-tool)))
+                ((symbol-function 'mevedel-buddy--telemetry) #'ignore)
+                ((symbol-function 'mevedel-buddy--workspace) #'ignore)
+                ((symbol-function 'mevedel-system-build-prompt)
+                 (lambda (&rest _) "buddy-system"))
+                ((symbol-function 'gptel-request)
+                 (lambda (_prompt &rest keys)
+                   (let ((buffer (plist-get keys :buffer)))
+                     (should (eq (current-buffer) buffer))
+                     (setq captured
+                           (list
+                            :backend
+                            (buffer-local-value 'gptel-backend buffer)
+                            :model (buffer-local-value 'gptel-model buffer)
+                            :effort
+                            (buffer-local-value 'gptel-reasoning-effort buffer)
+                            :system
+                            (buffer-local-value 'gptel-system-prompt buffer)
+                            :use-context
+                            (buffer-local-value 'gptel-use-context buffer)
+                            :use-tools
+                            (buffer-local-value 'gptel-use-tools buffer)
+                            :tools (buffer-local-value 'gptel-tools buffer)
+                            :stream (buffer-local-value 'gptel-stream buffer)
+                            :stream-arg (plist-get keys :stream)
+                            :system-arg (plist-get keys :system)))))))
+        (mevedel-buddy--request
+         "scope" 'buddy "payload" '("buddy-policy.el")
+         (current-time) nil)))
+    (should (eq (plist-get captured :backend) 'buddy-backend))
+    (should (eq (plist-get captured :model) 'buddy-model))
+    (should (eq (plist-get captured :effort) 'high))
+    (should (equal (plist-get captured :system) "buddy-system"))
+    (should-not (plist-get captured :use-context))
+    (should (plist-get captured :use-tools))
+    (should (equal (plist-get captured :tools) '(buddy-tool)))
+    (should (plist-get captured :stream))
+    (should (plist-get captured :stream-arg))
+    (should (equal (plist-get captured :system-arg) "buddy-system")))
+
   :doc "the Buddy tool-round cap uses the same exact request identity"
   (let* ((source (mevedel-test--buddy-buffer "buddy-cap.el" "alpha\n"))
          (ordinary-fsm (gptel-make-fsm :info (list :buffer source)))
