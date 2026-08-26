@@ -306,6 +306,8 @@ When NAME is nil, clear all prompt component cache entries."
                              family
                              "memory"))
                  " "))
+         (alias (and family
+                     (concat (if global "global" "local") "-" family)))
          (root (file-name-as-directory
                 (expand-file-name
                  dir
@@ -314,7 +316,8 @@ When NAME is nil, clear all prompt component cache entries."
          (file (file-name-concat root "MEMORY.md")))
     (list :dir root
           :file file
-          :label label)))
+          :label label
+          :alias alias)))
 
 (defun mevedel-system--memory-roots (workspace)
   "Return configured memory root metadata for WORKSPACE."
@@ -579,7 +582,12 @@ present."
       (push "- `agent://` - retained agent results for this session." lines)
       (push "- `history://` - retained agent conversation history for this session." lines))
     (when memory
-      (push "- `memory://` - existing configured persistent-memory roots." lines))
+      (push (concat "- `memory://` - existing configured persistent-memory "
+                    "roots. `memory://root` reads the ordered union; a topic "
+                    "is `memory://ROOT-KEY/RELATIVE-PATH`, where ROOT-KEY is "
+                    "the readable key listings and search results disclose, "
+                    "such as `local-mevedel` or `global-agents`.")
+            lines))
     (when (plist-get metadata :mcp-servers)
       (push "- `mcp://` - configured MCP servers and their resources." lines))
     (string-join (nreverse lines) "\n")))

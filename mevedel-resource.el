@@ -18,6 +18,7 @@
 (defvar remote-file-name-inhibit-cache)
 
 ;; `cl-lib'
+(declare-function cl-count-if "cl-lib" (predicate sequence &rest args))
 (declare-function cl-find-if "cl-lib" (predicate sequence &rest args))
 (declare-function cl-remove-if-not "cl-lib" (predicate sequence &rest args))
 
@@ -116,6 +117,10 @@
     ("managed" . managed)
     ("plugin" . plugin))
   "Closed readable source names accepted by `skill://' aliases.")
+
+(defconst mevedel-resource--memory-alias-keys
+  '("local-mevedel" "local-agents" "global-mevedel" "global-agents")
+  "Closed readable root keys accepted by `memory://' aliases.")
 
 (defvar mevedel-resource--source-dir
   (file-name-directory
@@ -411,11 +416,13 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
      ((equal components '("root"))
       (list :components components :dynamic-p t))
      ((and (>= (length components) 2)
-           (mevedel-resource--lowercase-digest-p (car components)))
+           (or (mevedel-resource--lowercase-digest-p (car components))
+               (member (car components)
+                       mevedel-resource--memory-alias-keys)))
       (list :components components :dynamic-p nil))
      (t
       (signal 'mevedel-resource-error
-              (list "Memory address requires 'root' or a root digest and path"))))))
+              (list "Memory address requires 'root' or a root key and path"))))))
 
 (defun mevedel-resource--parse-agent-history-tail (tail)
   "Parse canonical retained-agent TAIL for agent or history resources."
@@ -488,6 +495,20 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
    (if (listp root)
        root
      (list :dir root))))
+
+(defun mevedel-resource--memory-root-address-key (root roots)
+  "Return ROOT's readable alias key, or its digest.
+
+The alias is used only when it names exactly one root among ROOTS; the
+digest remains the authority a readable key resolves to."
+  (let ((alias (plist-get root :alias)))
+    (if (and alias
+             (member alias mevedel-resource--memory-alias-keys)
+             (= 1 (cl-count-if
+                   (lambda (other) (equal alias (plist-get other :alias)))
+                   roots)))
+        alias
+      (mevedel-resource--memory-root-key root))))
 
 (defun mevedel-resource--skill-list (session context)
   "Return currently discoverable skills for SESSION and CONTEXT."
@@ -659,16 +680,27 @@ SCHEME is nil, include metadata for every scheme."
                                           (plist-get root :dir))))
                             (list
                              :root root
-                             :key (mevedel-resource--memory-root-key root))))
+                             :key (mevedel-resource--memory-root-address-key
+                                   root memory-roots))))
                         memory-roots))
           :mcp-servers servers)))
 
 (defun mevedel-resource--memory-root-for-key (key context session)
-  "Return the configured memory root whose digest is KEY."
-  (cl-find-if
-   (lambda (root)
-     (equal key (mevedel-resource--memory-root-key root)))
-   (mevedel-resource--memory-roots context session)))
+  "Return the configured memory root whose digest or alias is KEY."
+  (let ((roots (mevedel-resource--memory-roots context session)))
+    (if (mevedel-resource--lowercase-digest-p key)
+        (cl-find-if
+         (lambda (root)
+           (equal key (mevedel-resource--memory-root-key root)))
+         roots)
+      (let ((matches
+             (cl-remove-if-not
+              (lambda (root) (equal key (plist-get root :alias)))
+              roots)))
+        (when (cdr matches)
+          (signal 'mevedel-resource-error
+                  (list "Memory root alias is ambiguous")))
+        (car matches)))))
 
 (defun mevedel-resource--canonical-relative (path root)
   "Return PATH relative to ROOT with canonical slash separators."
@@ -1165,15 +1197,17 @@ parent is discarded."
 
 Configured roots whose directory does not exist are excluded, matching
 the union index read, which already tolerates missing roots."
-  (mapcar
-   (lambda (root)
-     (list :path (plist-get root :dir)
-           :address-prefix
-           (concat "memory://" (mevedel-resource--memory-root-key root))
-           :label (plist-get root :label)))
-   (cl-remove-if-not
-    (lambda (root) (file-directory-p (plist-get root :dir)))
-    (mevedel-resource--memory-roots context session))))
+  (let ((roots (mevedel-resource--memory-roots context session)))
+    (mapcar
+     (lambda (root)
+       (list :path (plist-get root :dir)
+             :address-prefix
+             (concat "memory://"
+                     (mevedel-resource--memory-root-address-key root roots))
+             :label (plist-get root :label)))
+     (cl-remove-if-not
+      (lambda (root) (file-directory-p (plist-get root :dir)))
+      roots))))
 
 (defun mevedel-resource--execute-logical (data options)
   "Execute virtual resource DATA using OPTIONS and return text."

@@ -936,6 +936,7 @@
                  (root (car (mevedel-system--memory-roots workspace)))
                  (key (mevedel-resource-memory-root-key root))
                  (topic (format "memory://%s/topic.md" key))
+                 (alias-topic "memory://local-mevedel/topic.md")
                  (index
                   (mevedel-resource-execute
                    (mevedel-resource-prepare
@@ -951,16 +952,32 @@
                    (lambda (path _address)
                      (with-temp-buffer
                        (insert-file-contents path)
+                       (buffer-string)))))
+                 (read-alias-topic
+                  (mevedel-resource-execute
+                   (mevedel-resource-prepare 'read alias-topic context)
+                   (lambda (path _address)
+                     (with-temp-buffer
+                       (insert-file-contents path)
                        (buffer-string))))))
             (should (string-match-p "Index entry" (plist-get index :result)))
             ;; The missing `.agents/memory' root is excluded from search.
             (should (= 1 (length (plist-get glob :resource-search-roots))))
+            ;; A unique readable root key replaces the digest in
+            ;; disclosed addresses, and both forms resolve the same root.
             (should (equal
-                     (concat "memory://" key)
+                     "memory://local-mevedel"
                      (plist-get
                       (car (plist-get glob :resource-search-roots))
                       :address-prefix)))
-            (should (equal "remember this fact" read-topic))))
+            (should (equal "remember this fact" read-topic))
+            (should (equal "remember this fact" read-alias-topic))
+            (should (plist-get
+                     (gethash
+                      (mevedel-resource-prepare
+                       'read "memory://global-agents/topic.md" context)
+                      mevedel-resource--attempt-table)
+                     :unavailable-p))))
       (delete-directory workspace-root t))))
 
 (mevedel-deftest mevedel-resource-mcp-provider ()

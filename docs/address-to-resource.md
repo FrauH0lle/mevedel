@@ -87,7 +87,12 @@ The address forms have these identity rules:
   agent path without its leading slash. Caller-relative paths and opaque
   storage IDs are rejected.
 - `memory://root` is a dynamic union/index query. A listed topic uses its
-  root's full lowercase SHA-256 key in `memory://ROOT-KEY/RELATIVE-PATH`.
+  root's key in `memory://ROOT-KEY/RELATIVE-PATH`. A configured `.mevedel` or
+  `.agents` root that is the only one of its kind uses the readable key
+  `local-mevedel`, `local-agents`, `global-mevedel`, or `global-agents`; every
+  other root, and any readable key claimed twice, uses the root's full
+  lowercase SHA-256 digest. Both key forms resolve to the same root, and the
+  digest remains the authority a readable key resolves to.
 - `mcp://ENCODED-SERVER/ENCODED-URI` encodes the complete server name and
   native resource URI as separate components. Internal slashes, colons,
   fragments, percent signs, spaces, and Unicode are encoded.
@@ -214,8 +219,9 @@ roots. Its bare read uses the same ordered and labeled index content as the
 system prompt. `Glob` and `Grep` inspect every existing configured root; collision
 precedence remains the existing local/global and `.mevedel`/`.agents` policy,
 while search results disclose root-bound addresses and source labels for
-shadowed matches. Listed topics use stable root keys, but the union query
-itself is never atomically bound.
+shadowed matches. Listed topics and disclosed search results use the readable
+root key when the configured roots make it unambiguous, and the digest key
+otherwise; the union query itself is never atomically bound.
 
 Memory reads are fresh against the configured roots. Addressing memory does
 not choose a write scope or resource family; memory mutation continues through
@@ -274,6 +280,12 @@ text. Completion does not read content, bind a mention, attach context, invoke
 a skill, delegate an agent, make a network request, materialize a session, or
 change durable state. MCP completion uses metadata already held by the current
 connection and never starts or refreshes a connection.
+Where a family has both a readable and a hashed key for the same resource,
+completion offers only the readable one: `skill://` exposes a skill's exact
+`NAME@SOURCE-KEY` locator once the typed tail already contains `@`, or when
+the skill has no unique alias, and `memory://` offers a root's digest key only
+when it has no unique readable key. Both hashed forms remain valid input.
+
 Once a scheme prefix is present, completion constructs only that scheme's
 metadata. Remote backing roots are not enumerated during completion; their
 bare prefix remains usable until an explicit resource operation resolves it.
