@@ -769,13 +769,12 @@ with `Error:' so gptel settles the call without invoking its handler."
          ;; A span cannot express "record only when interesting": the
          ;; outcome is unknown at start time and every recorded start
          ;; must have a finish.  Record one settled event instead, and
-         ;; only for outcomes that carried repairs or issues -- a valid
-         ;; no-op says nothing worth a log line in any tier.
-         (telemetry-started
+         ;; only for non-valid outcomes -- a valid no-op says nothing
+         ;; worth a log line in any tier.
+         (telemetry-start-time
           (and session
                (fboundp 'mevedel-telemetry-detailed-p)
                (mevedel-telemetry-detailed-p session)
-               (fboundp 'mevedel-telemetry-record)
                (float-time))))
     (when tool
       (condition-case err
@@ -786,10 +785,7 @@ with `Error:' so gptel settles the call without invoking its handler."
                  (repair-count
                   (length (or (plist-get outcome :repairs) abandoned)))
                  (issue-count (length (plist-get outcome :issues))))
-            (when (and telemetry-started
-                       (or (not (eq status 'valid))
-                           (> repair-count 0)
-                           (> issue-count 0)))
+            (when (and telemetry-start-time (not (eq status 'valid)))
               (mevedel-telemetry-record
                session 'tool-input-validation-repair
                :stage 'settled
@@ -798,7 +794,7 @@ with `Error:' so gptel settles the call without invoking its handler."
                :repair-count repair-count
                :issue-count issue-count
                :duration-ms
-               (round (* 1000 (- (float-time) telemetry-started)))))
+               (round (* 1000 (- (float-time) telemetry-start-time)))))
             (mevedel-tool-repair--record-call
              (mevedel-tool-repair--make-entry
               name status args final-args
@@ -818,7 +814,7 @@ with `Error:' so gptel settles the call without invoking its handler."
                       (mevedel-tool-repair-format-audit-block
                        'abandoned abandoned)))))))
         (error
-         (when telemetry-started
+         (when telemetry-start-time
            (mevedel-telemetry-record
             session 'tool-input-validation-repair
             :stage 'settled
@@ -826,7 +822,7 @@ with `Error:' so gptel settles the call without invoking its handler."
             :outcome 'internal-error
             :error-class (car-safe err)
             :duration-ms
-            (round (* 1000 (- (float-time) telemetry-started)))))
+            (round (* 1000 (- (float-time) telemetry-start-time)))))
          (mevedel-tool-repair--record-call
           (mevedel-tool-repair--make-entry
            name 'internal-error args nil nil

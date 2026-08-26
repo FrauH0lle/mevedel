@@ -278,8 +278,11 @@
 (declare-function mevedel-session-transfer-request "mevedel-session-transfer" (session &optional label))
 
 ;; `mevedel-transport'
+(declare-function mevedel-transport-cancel-pending
+                  "mevedel-transport" (&optional key))
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport" (owner remote-path function))
+(autoload 'mevedel-transport-cancel-pending "mevedel-transport")
 (autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `mevedel-structs'
@@ -774,7 +777,69 @@ or root autosave."
   (when-let* ((buffer (mevedel-session-root-buffer session))
               ((buffer-live-p buffer)))
     (let ((mevedel-session-artifacts-require-agent-commit-p t))
-      (mevedel-session-artifacts-save session buffer nil t))))
+      (when (mevedel-session-artifacts-save session buffer nil t)
+        ;; The committed sidecar already carries the current registry,
+        ;; so a pending observational save is absorbed.
+        (mevedel-session-persistence-cancel-deferred-agent-save session)
+        t))))
+
+(defcustom mevedel-session-persistence-agent-save-debounce 2.0
+  "Seconds to coalesce best-effort agent-state saves before publishing.
+Observational agent persists -- activity transitions, mailbox
+consumption -- fire in bursts, and each forced publication of the
+session sidecar is a full synchronous target transaction.  Inside this
+window they collapse into one non-forced save, and a synchronous
+acknowledged commit absorbs a pending one entirely."
+  :type 'number
+  :group 'mevedel)
+
+(defvar mevedel-session-persistence--deferred-agent-saves
+  (make-hash-table :test #'eq)
+  "Sessions with a pending debounced agent-state save, mapped to timers.")
+
+(defun mevedel-session-persistence-save-agent-state-soon (session)
+  "Schedule one coalesced best-effort agent-state save for SESSION.
+Unlike `mevedel-session-persistence-save-agent-state', the deferred
+save is neither forced nor an acknowledged agent commit: it enjoys the
+byte-comparison no-op elision, may be queued behind an active
+publication, and is cancelled outright when a synchronous commit lands
+first."
+  (when (and (mevedel-session-save-path session)
+             (not (gethash session
+                           mevedel-session-persistence--deferred-agent-saves)))
+    (puthash session
+             (run-at-time mevedel-session-persistence-agent-save-debounce nil
+                          #'mevedel-session-persistence--deferred-agent-save
+                          session)
+             mevedel-session-persistence--deferred-agent-saves)))
+
+(defun mevedel-session-persistence--deferred-agent-save (session)
+  "Run the debounced best-effort agent-state save for SESSION."
+  (if-let* ((save-path (mevedel-session-save-path session)))
+      (mevedel-transport-run-when-idle
+       (list 'agent-state-save session) save-path
+       (lambda ()
+         ;; Keep SESSION registered while transport work is deferred so
+         ;; the exit hook can still flush it inline.
+         (remhash session mevedel-session-persistence--deferred-agent-saves)
+         (if (mevedel-session-publication-active-p session)
+             ;; Timer callbacks perform no target I/O while a critical
+             ;; publication is active; re-arm and try again after it.
+             (mevedel-session-persistence-save-agent-state-soon session)
+           (when-let* ((buffer (mevedel-session-root-buffer session))
+                       ((buffer-live-p buffer)))
+             (condition-case nil
+                 (mevedel-session-artifacts-save session buffer)
+               (error nil))))))
+    (remhash session mevedel-session-persistence--deferred-agent-saves)))
+
+(defun mevedel-session-persistence-cancel-deferred-agent-save (session)
+  "Cancel any pending debounced agent-state save for SESSION."
+  (when-let* ((timer (gethash session
+                              mevedel-session-persistence--deferred-agent-saves)))
+    (cancel-timer timer)
+    (remhash session mevedel-session-persistence--deferred-agent-saves))
+  (mevedel-transport-cancel-pending (list 'agent-state-save session)))
 
 
 ;;
@@ -2479,6 +2544,17 @@ that wrote them.  Best-effort: individual errors are swallowed so one
 bad buffer can't block exit."
   (when (fboundp 'mevedel-execution-teardown-all)
     (ignore-errors (mevedel-execution-teardown-all)))
+  ;; A debounced agent-state save left in its window would be lost, and
+  ;; registry mutations do not mark the root buffer modified, so the
+  ;; modified-only save loop below cannot cover them.
+  (maphash (lambda (session timer)
+             (cancel-timer timer)
+             (ignore-errors
+               (when-let* ((buffer (mevedel-session-root-buffer session))
+                           ((buffer-live-p buffer)))
+                 (mevedel-session-artifacts-save session buffer))))
+           mevedel-session-persistence--deferred-agent-saves)
+  (clrhash mevedel-session-persistence--deferred-agent-saves)
   (let (lock-dirs)
     (dolist (buf (buffer-list))
       (when (buffer-live-p buf)

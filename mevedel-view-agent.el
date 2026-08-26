@@ -48,6 +48,10 @@
 (declare-function mevedel-agent-invocation-call-count "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-description "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-render-data-end-marker
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-render-data-start-marker
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-started-at "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-status "mevedel-agents" (cl-x) t)
@@ -76,10 +80,6 @@
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
-
-;; `mevedel-tool-render-data'
-(declare-function mevedel-tool-render-data-find-agent-block
-                  "mevedel-tool-render-data" (agent-id))
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties
@@ -1133,18 +1133,26 @@ collapsed marker; expanded row content is rendered from Agent handles."
 (defun mevedel-view--agent-source-present-p (agent-path)
   "Return non-nil if the data buffer has an Agent source for AGENT-PATH.
 
-The Agent tool result carries a render-data block keyed by the
-record's agent id -- the same block the background handle patch path
-locates -- so presence is one bounded search instead of parsing every
-tool segment in the transcript.  This runs per refresh tick while the
-handle is not yet rendered."
+The agent conversation owns markers around the render-data block it
+patches for live updates.  Reuse those markers so this per-tick check
+does not search the transcript."
   (when-let* ((record (mevedel-view--agent-record agent-path))
-              (id (mevedel-agent-record-id record))
+              (invocation (mevedel-agent-record-invocation record))
+              ((mevedel-agent-invocation-p invocation))
+              (start
+               (mevedel-agent-invocation-render-data-start-marker
+                invocation))
+              (end
+               (mevedel-agent-invocation-render-data-end-marker
+                invocation))
               (data-buf (and (boundp 'mevedel--data-buffer)
                              mevedel--data-buffer))
-              ((buffer-live-p data-buf)))
-    (with-current-buffer data-buf
-      (and (mevedel-tool-render-data-find-agent-block id) t))))
+              ((buffer-live-p data-buf))
+              ((markerp start))
+              ((markerp end)))
+    (and (eq (marker-buffer start) data-buf)
+         (eq (marker-buffer end) data-buf)
+         (< start end))))
 
 (defun mevedel-view--agent-handle-refresh-points (agent-path)
   "Return source-backed visible handle positions for AGENT-PATH.

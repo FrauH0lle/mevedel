@@ -4415,9 +4415,149 @@
       (mevedel-workspace-clear-registry))))
 
 
+(mevedel-deftest mevedel-session-persistence-save-agent-state-soon ()
+  ,test
+  (test)
+
+  :doc "coalesces repeated scheduling into one pending save"
+  (let ((session (mevedel-session--create :name "debounce")))
+    (setf (mevedel-session-save-path session) temporary-file-directory)
+    (unwind-protect
+        (progn
+          (mevedel-session-persistence-save-agent-state-soon session)
+          (let ((timer (gethash
+                        session
+                        mevedel-session-persistence--deferred-agent-saves)))
+            (should (timerp timer))
+            (mevedel-session-persistence-save-agent-state-soon session)
+            (should (eq timer
+                        (gethash
+                         session
+                         mevedel-session-persistence--deferred-agent-saves)))))
+      (mevedel-session-persistence-cancel-deferred-agent-save session))
+    (should-not (gethash
+                 session
+                 mevedel-session-persistence--deferred-agent-saves))))
+
+(mevedel-deftest mevedel-session-persistence--deferred-agent-save ()
+  ,test
+  (test)
+
+  :doc "the deferred save is neither forced nor an agent commit"
+  (let ((session (mevedel-session--create :name "debounce"))
+        (buffer (generate-new-buffer " *debounce-root*"))
+        captured required)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) temporary-file-directory)
+          (setf (mevedel-session-root-buffer session) buffer)
+          (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
+                     (lambda (_key _path thunk) (funcall thunk)))
+                    ((symbol-function 'mevedel-session-artifacts-save)
+                     (lambda (seen-session seen-buffer
+                                           &optional settled force)
+                       (setq captured (list seen-session seen-buffer
+                                            settled force)
+                             required
+                             mevedel-session-artifacts-require-agent-commit-p)
+                       t)))
+            (mevedel-session-persistence--deferred-agent-save session))
+          (should (eq session (car captured)))
+          (should (eq buffer (cadr captured)))
+          (should-not (nth 2 captured))
+          (should-not (nth 3 captured))
+          (should-not required))
+      (when (buffer-live-p buffer) (kill-buffer buffer))))
+
+  :doc "stays visible to exit flushing while transport defers the save"
+  (let ((session (mevedel-session--create :name "debounce"))
+        (buffer (generate-new-buffer " *debounce-root*"))
+        deferred
+        saved)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) temporary-file-directory)
+          (setf (mevedel-session-root-buffer session) buffer)
+          (mevedel-session-persistence-save-agent-state-soon session)
+          (cancel-timer
+           (gethash session
+                    mevedel-session-persistence--deferred-agent-saves))
+          (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
+                     (lambda (_key _path thunk) (setq deferred thunk)))
+                    ((symbol-function 'mevedel-session-artifacts-save)
+                     (lambda (&rest _) (setq saved t))))
+            (mevedel-session-persistence--deferred-agent-save session)
+            (should (gethash
+                     session
+                     mevedel-session-persistence--deferred-agent-saves))
+            (should-not saved)
+            (funcall deferred)
+            (should saved)
+            (should-not (gethash
+                         session
+                         mevedel-session-persistence--deferred-agent-saves))))
+      (mevedel-session-persistence-cancel-deferred-agent-save session)
+      (when (buffer-live-p buffer) (kill-buffer buffer))))
+
+  :doc "re-arms instead of writing while a publication is active"
+  (let ((session (mevedel-session--create :name "debounce"))
+        saved)
+    (setf (mevedel-session-save-path session) temporary-file-directory)
+    (setf (mevedel-session-publication-active-p session) t)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
+                     (lambda (_key _path thunk) (funcall thunk)))
+                    ((symbol-function 'mevedel-session-artifacts-save)
+                     (lambda (&rest _) (setq saved t))))
+            (mevedel-session-persistence--deferred-agent-save session))
+          (should-not saved)
+          (should (gethash
+                   session
+                   mevedel-session-persistence--deferred-agent-saves)))
+      (mevedel-session-persistence-cancel-deferred-agent-save session))))
+
+(mevedel-deftest mevedel-session-persistence-cancel-deferred-agent-save ()
+  ,test
+  (test)
+  :doc "cancels both debounce and transport retry state"
+  (let ((session (mevedel-session--create :name "debounce"))
+        cancelled)
+    (setf (mevedel-session-save-path session) temporary-file-directory)
+    (mevedel-session-persistence-save-agent-state-soon session)
+    (should (gethash
+             session mevedel-session-persistence--deferred-agent-saves))
+    (cl-letf (((symbol-function 'mevedel-transport-cancel-pending)
+               (lambda (key) (setq cancelled key))))
+      (mevedel-session-persistence-cancel-deferred-agent-save session))
+    (should-not (gethash
+                 session mevedel-session-persistence--deferred-agent-saves))
+    (should (equal (list 'agent-state-save session) cancelled))))
+
 (mevedel-deftest mevedel-session-persistence-save-agent-state ()
   ,test
   (test)
+
+  :doc "a synchronous agent commit absorbs the pending save"
+  (let ((session (mevedel-session--create :name "debounce"))
+        (buffer (generate-new-buffer " *debounce-root*")))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) temporary-file-directory)
+          (setf (mevedel-session-root-buffer session) buffer)
+          (mevedel-session-persistence-save-agent-state-soon session)
+          (should (gethash
+                   session
+                   mevedel-session-persistence--deferred-agent-saves))
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-save)
+                     (lambda (&rest _) t)))
+            (should (mevedel-session-persistence-save-agent-state session)))
+          (should-not (gethash
+                       session
+                       mevedel-session-persistence--deferred-agent-saves)))
+      (mevedel-session-persistence-cancel-deferred-agent-save session)
+      (when (buffer-live-p buffer) (kill-buffer buffer))))
+
   :doc "forces a full save through the authoritative root buffer"
   (let* ((tempdir (file-name-as-directory
                    (make-temp-file "mevedel-agent-state-" t)))

@@ -147,6 +147,16 @@ before the operation ran."
    "      mv -fT -- \"$temporary\" \"$leaf\" || exit 67\n"
    "      trap - EXIT\n"
    "      ;;\n"
+   ;; ponytail: no temp+rename, so a crash mid-append can tear one
+   ;; trailing line.  Acceptable: append serves single-writer
+   ;; line-oriented diagnostic streams never read at resume; upgrade to
+   ;; write-to-temp + cat-merge if a consumer ever parses strictly.
+   "    append)\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      exec 8>>\"$leaf\" || exit 67\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      printf '%s' \"$payload\" | base64 -d >&8 || exit 67\n"
+   "      ;;\n"
    "    create)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
@@ -321,6 +331,7 @@ parent must not turn into a `Setting current directory' failure."
   '((read . "read")
     (verify . "verify")
     (write . "write")
+    (append . "append")
     (create . "create")
     (make-directory . "mkdir")
     (path-exists-p . "probe")
@@ -710,6 +721,15 @@ CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes."
   "Atomically replace target control file PATH with CONTENT.
 CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes."
   (mevedel-session-control-fs--run-1 'write path content coding-system)
+  t)
+
+(defun mevedel-session-control-fs-append-file
+    (path content &optional coding-system)
+  "Append CONTENT to target control file PATH, creating it when absent.
+CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes.
+Unlike `write', append works in place: a crash mid-operation can leave a
+torn trailing line, which its diagnostic-stream consumers tolerate."
+  (mevedel-session-control-fs--run-1 'append path content coding-system)
   t)
 
 (defun mevedel-session-control-fs-create-file

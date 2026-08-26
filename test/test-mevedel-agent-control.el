@@ -420,18 +420,45 @@
 (mevedel-deftest mevedel-agent-control--persist-session ()
   ,test
   (test)
+  :doc "debounces observational persists instead of committing each"
+  (let ((session (mevedel-agent-control-test--session))
+        committed)
+    (setf (mevedel-session-save-path session) temporary-file-directory)
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-session-persistence-save-agent-state)
+                   (lambda (_session) (setq committed t))))
+          (mevedel-agent-control--persist-session session)
+          (should-not committed)
+          (should (gethash
+                   session
+                   mevedel-session-persistence--deferred-agent-saves))
+          ;; Repeated transitions coalesce into the one pending save.
+          (mevedel-agent-control--persist-session session)
+          (should (timerp
+                   (gethash
+                    session
+                    mevedel-session-persistence--deferred-agent-saves))))
+      (mevedel-session-persistence-cancel-deferred-agent-save session))
+    (should-not (gethash
+                 session
+                 mevedel-session-persistence--deferred-agent-saves)))
   :doc "keeps observational persistence best effort"
   (let ((session (mevedel-agent-control-test--session)))
     (setf (mevedel-session-save-path session) temporary-file-directory)
-    (cl-letf (((symbol-function 'mevedel-agent-control-commit-session)
-               (lambda (_session) (error "Commit unavailable"))))
+    (cl-letf (((symbol-function
+                'mevedel-session-persistence-save-agent-state-soon)
+               (lambda (_session) (error "Scheduling unavailable"))))
       (should-not (mevedel-agent-control--persist-session session))))
   :doc "does nothing before session materialization or while suppressed"
   (let ((session (mevedel-agent-control-test--session)))
     (should-not (mevedel-agent-control--persist-session session))
     (setf (mevedel-session-save-path session) temporary-file-directory)
     (let ((mevedel-agent-control-suppress-persistence t))
-      (should-not (mevedel-agent-control--persist-session session)))))
+      (should-not (mevedel-agent-control--persist-session session))
+      (should-not (gethash
+                   session
+                   mevedel-session-persistence--deferred-agent-saves)))))
 
 
 (mevedel-deftest mevedel-agent-control-recover-interrupted ()

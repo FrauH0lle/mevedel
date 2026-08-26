@@ -23,15 +23,15 @@
 (defvar remote-file-name-inhibit-cache)
 
 ;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-append-file
+                  "mevedel-session-control-fs"
+                  (path content &optional coding-system))
 (declare-function mevedel-session-control-fs-make-directory
                   "mevedel-session-control-fs" (path &optional parents))
 (declare-function mevedel-session-control-fs-physical-path
                   "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-program-value
                   "mevedel-session-control-fs" (result))
-(declare-function mevedel-session-control-fs-read-file
-                  "mevedel-session-control-fs"
-                  (path &optional coding-system))
 (declare-function mevedel-session-control-fs-run-program
                   "mevedel-session-control-fs" (operations))
 
@@ -1002,15 +1002,18 @@ state or publication head."
   t)
 
 (defun mevedel-session-publication-append-diagnostic (session path content)
-  "Atomically append diagnostic CONTENT to PATH for portable project SESSION.
+  "Append diagnostic CONTENT to PATH for portable project SESSION.
 
 Return nil when the lease cannot carry a diagnostic right now -- a critical
 publication is active or pending, renewal is momentarily unavailable, or the
 lease is waiting to be reacquired -- so the caller retains CONTENT for a
 later retry.  A diagnostic is best-effort data nothing reads live, so an
 unavailable moment is a quiet retry, not an error echoed per attempt.
-Diagnostic failure never creates critical pending publication; any local
-staging bytes are discarded before the error is returned to the caller."
+Diagnostic failure never creates critical pending publication.
+
+The append is one pinned target operation carrying only the delta.
+Republishing the whole file per flush was quadratic in stream size and
+dominated remote-save allocations once a log grew to megabytes."
   (unless (and (stringp path) (stringp content))
     (error "Diagnostic publication requires string path and content"))
   (mevedel-session-recovery-refresh session)
@@ -1021,60 +1024,45 @@ staging bytes are discarded before the error is returned to the caller."
         (not (mevedel-session-durability-lease-owned-p session)))
     nil)
    (t
-    (let (batch diagnostic-error published result)
-      (unwind-protect
-          (progn
-            (condition-case err
-                (setq result
-                      (mevedel-session-durability-call-with-reserved-lease
-                       session
-                       (lambda ()
-                         (condition-case diagnostic-err
-                             (let ((replacement
-                                    (concat
-                                     (condition-case nil
-                                         (mevedel-session-control-fs-read-file
-                                          path)
-                                       (mevedel-session-control-fs-absent ""))
-                                     content)))
-                               (setq batch
-                                     (mevedel-session-publication--stage-artifacts
-                                      session
-                                      (list (list :path path
-                                                  :content replacement))))
-                               (mevedel-session-publication--publish-batch
-                                session batch)
-                               (setq published t))
-                           (error
-                            (setq diagnostic-error diagnostic-err)))
-                         ;; A critical publisher may have queued while TRAMP
-                         ;; handled the diagnostic I/O.  It retains precedence.
-                         (when (mevedel-session-publication-queue session)
-                           (mevedel-session-publication--drain session nil))
-                         published)))
-              (error
-               (unless (mevedel-session-pending-publication session)
-                 (let ((recovery
-                        (cl-remove-if-not
-                         #'mevedel-session-publication--batch-live-p
-                         (delete-dups
-                          (append
-                           (mevedel-session-publication-uncommitted-batches
-                            session)
-                           (mevedel-session-publication-queue session))))))
-                   (setf
-                    (mevedel-session-publication-uncommitted-batches session)
-                    nil
-                    (mevedel-session-publication-queue session) nil)
-                   (when recovery
-                     (mevedel-session-publication--record-pending
-                      session recovery err))))
-               (signal (car err) (cdr err))))
-            (when diagnostic-error
-              (signal (car diagnostic-error) (cdr diagnostic-error)))
-            result)
-        (when batch
-          (mevedel-session-publication--delete-batch batch)))))))
+    ;; Validate that the path stays inside the session before any
+    ;; target I/O; :content is not staged, only checked for shape.
+    (mevedel-session-publication--artifact-for-session
+     session (list :path path :content content))
+    (let (diagnostic-error)
+      (prog1
+          (condition-case err
+              (mevedel-session-durability-call-with-reserved-lease
+               session
+               (lambda ()
+                 (condition-case diagnostic-err
+                     (mevedel-session-control-fs-append-file path content)
+                   (error
+                    (setq diagnostic-error diagnostic-err)))
+                 ;; A critical publisher may have queued while TRAMP
+                 ;; handled the diagnostic I/O.  It retains precedence.
+                 (when (mevedel-session-publication-queue session)
+                   (mevedel-session-publication--drain session nil))
+                 (not diagnostic-error)))
+            (error
+             (unless (mevedel-session-pending-publication session)
+               (let ((recovery
+                      (cl-remove-if-not
+                       #'mevedel-session-publication--batch-live-p
+                       (delete-dups
+                        (append
+                         (mevedel-session-publication-uncommitted-batches
+                          session)
+                         (mevedel-session-publication-queue session))))))
+                 (setf
+                  (mevedel-session-publication-uncommitted-batches session)
+                  nil
+                  (mevedel-session-publication-queue session) nil)
+                 (when recovery
+                   (mevedel-session-publication--record-pending
+                    session recovery err))))
+             (signal (car err) (cdr err))))
+        (when diagnostic-error
+          (signal (car diagnostic-error) (cdr diagnostic-error))))))))
 
 (defun mevedel-session-publication-status (session)
   "Return SESSION's stable read-only publication status plist."
