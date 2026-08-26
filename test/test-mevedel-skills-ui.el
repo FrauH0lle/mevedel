@@ -22,6 +22,7 @@
 (require 'mevedel-file-state)
 (require 'mevedel-goal)
 (require 'mevedel-hooks)
+(require 'mevedel-menu)
 (require 'mevedel-models)
 (require 'mevedel-mention-bindings)
 (require 'mevedel-mentions)
@@ -51,7 +52,6 @@
 A save on a manually materialized session reads the project-owned
 workspace identity from the workspace root, so the root must be a real
 per-test directory rather than the shared synthetic helper path."
-  (require 'mevedel-workspace-identity)
   (let ((root (file-name-as-directory
                (file-name-concat tempdir "workspace"))))
     (make-directory root t)
@@ -493,7 +493,6 @@ spanning lines")))
         messages)
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands mevedel-slash-commands))
-        (require 'mevedel-menu)
         (dolist (command '("/plugin" "/plugin list"))
           (setq opened nil
                 messages nil)
@@ -2274,7 +2273,6 @@ spanning lines")))
                   (mevedel-session-permission-mode session)))))
   :doc "bare command opens the Goal cockpit with a current Goal"
   (with-temp-buffer
-    (require 'mevedel-menu)
     (let* ((goal (mevedel-goal--create
                   :objective "Fix it" :status 'active))
            (session (mevedel-session--create :name "main" :goal goal))
