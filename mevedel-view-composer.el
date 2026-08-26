@@ -46,9 +46,11 @@
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--safe-accepted-prompt
                   "mevedel-collaboration" (data-buffer))
+(autoload 'mevedel-collaboration--safe-accepted-prompt
+  "mevedel-collaboration")
 
 ;; `mevedel-compact-run'
-(defvar mevedel-compact-run-in-flight)
+(defvar mevedel-compact-run-in-flight nil)
 
 ;; `mevedel-directive'
 (declare-function mevedel-directive-actions "mevedel-directive" (directive))

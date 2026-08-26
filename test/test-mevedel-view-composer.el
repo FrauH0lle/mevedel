@@ -37,7 +37,6 @@
 (require 'mevedel-persistence)
 (require 'mevedel-review)
 (require 'mevedel-goal)
-(require 'mevedel)
 (require 'mevedel-agents)
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-runtime)
