@@ -6,7 +6,6 @@
 
 ;;; Code:
 
-(require 'mevedel)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -25,6 +24,7 @@
 (require 'mevedel-session-publication)
 (require 'mevedel-transcript-restore)
 (require 'mevedel-structs)
+(require 'mevedel-workspace)
 
 (require 'mevedel-transport)
 
