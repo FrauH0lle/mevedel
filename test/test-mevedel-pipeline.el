@@ -1377,7 +1377,6 @@ cover, so the permission step's warning about it is captured here."
   ,test
   (test)
   :doc "delegates generic context fields and forwards the policy result"
-  (require 'mevedel-specialist-nudges)
   (let* ((tool (mevedel-tool--create :name "AnyTool"))
          (session (mevedel-session--create :name "main"))
          (invocation 'invocation)
