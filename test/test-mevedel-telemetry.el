@@ -9,6 +9,7 @@
 (require 'gptel)
 (require 'mevedel-execution-target)
 (require 'mevedel-session-durability)
+(require 'mevedel-session-persistence)
 (require 'mevedel-session-publication)
 (require 'mevedel-structs)
 (require 'mevedel-telemetry)
@@ -238,7 +239,6 @@
   (let* ((root (make-temp-file "mevedel-flush-defer-" t))
          (session (test-mevedel-telemetry--session root))
          (flushes 0))
-    (require 'mevedel-session-persistence)
     (unwind-protect
         (cl-letf (((symbol-function
                     'mevedel-session-persistence--flush-diagnostic-logs-now)
