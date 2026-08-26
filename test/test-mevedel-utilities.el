@@ -791,5 +791,19 @@ rejects trailing binary operators"
     (should (equal '("site" "site a" "site b" "other c" "site" "site a")
                    (nreverse warnings)))))
 
+(mevedel-deftest mevedel--with-gc-batched ()
+  ,test
+  (test)
+  :doc "raises the GC threshold for the dynamic extent of the body"
+  (let ((gc-cons-threshold 800000))
+    (mevedel--with-gc-batched
+      (should (>= gc-cons-threshold (* 64 1024 1024))))
+    (should (= gc-cons-threshold 800000)))
+
+  :doc "never lowers an already higher threshold"
+  (let ((gc-cons-threshold (* 128 1024 1024)))
+    (mevedel--with-gc-batched
+      (should (= gc-cons-threshold (* 128 1024 1024))))))
+
 (provide 'test-mevedel-utilities)
 ;;; test-mevedel-utilities.el ends here

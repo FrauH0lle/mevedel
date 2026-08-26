@@ -1102,16 +1102,17 @@ refresh; a full request upgrades a pending incremental refresh."
                 mevedel-view--pending-render-kind nil
                 mevedel-view--pending-render-data-buffer nil)
           (condition-case err
-              (if (mevedel-view-historical-segment-p)
-                  (progn
-                    (mevedel-view--render-status data-buffer)
-                    (mevedel-view--interaction-rebuild)
-                    (mevedel-view--ensure-request-progress data-buffer))
-                (pcase kind
-                  ('full (mevedel-view--full-rerender))
-                  ('incremental
-                   (when (buffer-live-p data-buffer)
-                     (mevedel-view--render-stream-update data-buffer)))))
+              (mevedel--with-gc-batched
+                (if (mevedel-view-historical-segment-p)
+                    (progn
+                      (mevedel-view--render-status data-buffer)
+                      (mevedel-view--interaction-rebuild)
+                      (mevedel-view--ensure-request-progress data-buffer))
+                  (pcase kind
+                    ('full (mevedel-view--full-rerender))
+                    ('incremental
+                     (when (buffer-live-p data-buffer)
+                       (mevedel-view--render-stream-update data-buffer))))))
             (error
              (message "mevedel: view refresh failed: %s"
                       (error-message-string err)))))))))
