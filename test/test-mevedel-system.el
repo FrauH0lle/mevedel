@@ -85,6 +85,8 @@
                              prompt))
       (should (string-match-p "user-composer syntax and[[:space:]]+do not execute"
                              prompt))
+      (should (string-match-p "mevedel://" prompt))
+      (should-not (string-match-p "mevedel://docs" prompt))
       (dolist (scheme '("local://" "artifact://" "skill://" "agent://"
                         "history://" "memory://" "mcp://"))
         (should-not (string-match-p (regexp-quote scheme) prompt)))
@@ -205,6 +207,18 @@
                  (delete-directory root-dir t)))
   ,test
   (test)
+  :doc "always advertises packaged Mevedel documentation without a session"
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project root-dir root-dir "resource-roster"))
+         (context (mevedel-system-context--create
+                   :workspace workspace
+                   :working-directory root-dir))
+         (roster (mevedel-system--resource-roster context)))
+    (should (string-match-p "mevedel://" roster))
+    (should-not (string-match-p "mevedel://docs" roster))
+    (should (string-match-p "packaged documentation" roster))
+    (should (string-match-p "Read.*Glob.*Grep" roster)))
+
   :doc "advertises only resource families usable by the request context"
   (let* ((workspace (mevedel-workspace-get-or-create
                      'project root-dir root-dir "resource-roster"))
@@ -220,6 +234,9 @@
         (let ((roster (mevedel-system--resource-roster context)))
           (dolist (scheme '("local://" "artifact://"))
             (should (string-match-p (regexp-quote scheme) roster)))
+          (should (string-match-p "writable session scratchpad" roster))
+          (should (string-match-p "ApplyPatch" roster))
+          (should (string-match-p "mevedel://" roster))
           (dolist (scheme '("skill://" "agent://" "history://"
                             "memory://" "mcp://"))
             (should-not (string-match-p (regexp-quote scheme) roster)))))))
@@ -259,8 +276,16 @@
                        :working-directory root-dir
                        :session session))))
                 (dolist (scheme '("local://" "artifact://" "skill://"
-                                  "memory://" "mcp://"))
+                                  "memory://" "mcp://" "mevedel://"))
                   (should (string-match-p (regexp-quote scheme) roster)))
+                (dolist (alias '("skill://local-mevedel/SKILL"
+                                 "skill://local-agents/SKILL"
+                                 "skill://global-mevedel/SKILL"
+                                 "skill://global-agents/SKILL"
+                                 "skill://bundled/SKILL"
+                                 "skill://managed/SKILL"
+                                 "skill://plugin/PLUGIN/SKILL"))
+                  (should (string-match-p (regexp-quote alias) roster)))
                 (dolist (scheme '("agent://" "history://"))
                   (should-not (string-match-p (regexp-quote scheme) roster)))))))
       (delete-directory save-path t))))

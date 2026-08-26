@@ -8,14 +8,23 @@ Resource addresses
   Read supports `local://`, `artifact://`,
   `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]`, `agent://`, `history://`,
   `memory://root` or `memory://ROOT-KEY/RELATIVE-PATH`, and
-  `mcp://` or `mcp://ENCODED-SERVER[/ENCODED-RESOURCE-URI]`. Examples:
+  `mcp://` or `mcp://ENCODED-SERVER[/ENCODED-RESOURCE-URI]`, plus packaged
+  documentation at `mevedel://` or `mevedel://RELATIVE-PATH`. Examples:
   `local://notes.md`, `artifact://result.txt`,
   `skill://lint@0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/README.md`,
   `agent://root/reviewer#/findings/0/path`, and
-  `mcp://default/urn%3Aexample%3Areadme`.
+  `mcp://default/urn%3Aexample%3Areadme`, and `mevedel://architecture.md`.
+- Skill aliases use the discovered origin instead of a hash:
+  `skill://local-mevedel/SKILL`, `skill://local-agents/SKILL`,
+  `skill://global-mevedel/SKILL`, `skill://global-agents/SKILL`,
+  `skill://bundled/SKILL`, `skill://managed/SKILL`, or
+  `skill://plugin/PLUGIN/SKILL`, each with optional descendants. An alias
+  resolves to the exact current full-hash locator while results and errors
+  preserve the authored alias.
 - Bare `local://`, `artifact://`, `skill://`, `agent://`, `history://`, and
-  `mcp://` list current entries; `mcp://ENCODED-SERVER` lists that server's
-  advertised resources, and `memory://root` returns the current memory index.
+  `mcp://` list current entries; bare `mevedel://` lists packaged Markdown
+  documentation, `mcp://ENCODED-SERVER` lists that server's advertised
+  resources, and `memory://root` returns the current memory index.
 - Use canonical `scheme://` text. Resource addresses name a tool target only:
   they do not attach content, invoke skills, or delegate agents. `@file` and
   `@mcp` attach content, `$skill` invokes instructions, and `@agent` delegates

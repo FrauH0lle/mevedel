@@ -548,10 +548,15 @@ present."
                             (plist-get (plist-get entry :root) :dir))
                        (throw 'found t)))))
          (lines nil))
+    (push (concat "- `mevedel://` - packaged documentation for Mevedel; use "
+                  "Read, Glob, or Grep. This family is available without a "
+                  "session and exposes no package source code.")
+          lines)
     (when session
-      (push (concat "- `local://` - shared durable space for the parent and "
-                    "retained agents; use it for durable notes, findings, "
-                    "contracts, and handoffs.")
+      (push (concat "- `local://` - writable session scratchpad shared by the "
+                    "parent and retained agents. Use Read, Glob, and Grep to "
+                    "inspect it and ApplyPatch to keep notes, findings, "
+                    "contracts, and handoffs outside workspace source files.")
             lines))
     (when session
       (push (concat "- `artifact://` - session-owned persisted tool and "
@@ -559,7 +564,17 @@ present."
                     "evidence.")
             lines))
     (when (plist-get metadata :skills)
-      (push "- `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]` - an enabled, discoverable skill package; read its files when needed." lines))
+      (push (concat "- `skill://` - enabled, discoverable skill packages. "
+                    "Bare listings show readable aliases and exact hashed "
+                    "addresses. Aliases are `skill://local-mevedel/SKILL`, "
+                    "`skill://local-agents/SKILL`, "
+                    "`skill://global-mevedel/SKILL`, "
+                    "`skill://global-agents/SKILL`, "
+                    "`skill://bundled/SKILL`, `skill://managed/SKILL`, and "
+                    "`skill://plugin/PLUGIN/SKILL`, each with optional "
+                    "descendants; each resolves to an exact "
+                    "`skill://NAME@SOURCE-KEY` locator.")
+            lines))
     (when retained
       (push "- `agent://` - retained agent results for this session." lines)
       (push "- `history://` - retained agent conversation history for this session." lines))
@@ -567,9 +582,7 @@ present."
       (push "- `memory://` - existing configured persistent-memory roots." lines))
     (when (plist-get metadata :mcp-servers)
       (push "- `mcp://` - configured MCP servers and their resources." lines))
-    (if lines
-        (string-join (nreverse lines) "\n")
-      "No resource address families are currently available in this request.")))
+    (string-join (nreverse lines) "\n")))
 
 (defconst mevedel-system--ptc-guidance
   (concat

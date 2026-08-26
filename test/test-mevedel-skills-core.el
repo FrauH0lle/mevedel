@@ -230,7 +230,11 @@ description: From project
             (should (equal "From project"
                            (mevedel-skill-description project)))
             (should (equal "From user"
-                           (mevedel-skill-description user)))))
+                           (mevedel-skill-description user)))
+            (should (equal "shared" (mevedel-skill-raw-name project)))
+            (should (equal "shared" (mevedel-skill-raw-name user)))
+            (should-not (mevedel-skill-plugin-name project))
+            (should-not (mevedel-skill-plugin-name user))))
       (delete-directory root t)
       (delete-directory user-dir t)))
 
@@ -401,6 +405,42 @@ paths:
                  (lambda (s) (eq 'bundled (mevedel-skill-source s)))
                  skills)))
 
+  :doc "bundled discovery preserves raw identity through conflict qualification"
+  (let* ((dir (make-temp-file "mevedel-bundled-identity-" t))
+         (mevedel-skill-dirs (list dir)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "remember" "description: User remember\n" "Body")
+          (let ((skill (cl-find "bundled:remember"
+                                (mevedel-skills-scan nil nil)
+                                :key #'mevedel-skill-name :test #'equal)))
+            (should skill)
+            (should (equal "remember" (mevedel-skill-raw-name skill)))
+            (should-not (mevedel-skill-plugin-name skill))))
+      (delete-directory dir t)))
+
+  :doc "managed discovery preserves raw identity through conflict qualification"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-managed-identity-" t))
+         (user-dir (file-name-concat root "user"))
+         (managed-dir (file-name-concat root "managed")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           user-dir "shared" "description: User shared\n" "Body")
+          (mevedel-skills-test--write-skill
+           managed-dir "shared" "description: Managed shared\n" "Body")
+          (let ((skill (cl-find
+                        "managed:shared"
+                        (mevedel-skills-scan
+                         nil (list user-dir (cons managed-dir 'managed)))
+                        :key #'mevedel-skill-name :test #'equal)))
+            (should skill)
+            (should (equal "shared" (mevedel-skill-raw-name skill)))
+            (should-not (mevedel-skill-plugin-name skill))))
+      (delete-directory root t)))
+
   :doc "enabled plugin skills are discovered with plugin-prefixed names"
   (let* ((mevedel-skills-include-bundled nil)
          (mevedel-skill-dirs nil)
@@ -428,6 +468,8 @@ description: Plugin skill
                                  :key #'mevedel-skill-name :test #'equal)))
             (should skill)
             (should (eq 'plugin (mevedel-skill-source skill)))
+            (should (equal "from-plugin" (mevedel-skill-raw-name skill)))
+            (should (equal "demo" (mevedel-skill-plugin-name skill)))
             (should (equal "Plugin skill"
                            (mevedel-skill-description skill)))
             (should-not (cl-find "from-plugin" skills

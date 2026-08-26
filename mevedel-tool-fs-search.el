@@ -113,7 +113,13 @@ output, used by Glob; content output keeps its match suffixes."
              (lambda (path)
                (mevedel-tool-fs-search--resource-search-rewrite-path
                 address root path))
-             (split-string output "\0" t) "\n")
+             (let ((paths (split-string output "\0" t)))
+               (if (string-prefix-p "mevedel://" address)
+                   (cl-remove-if-not
+                    (lambda (path) (string-suffix-p ".md" path))
+                    paths)
+                 paths))
+             "\n")
           (let ((scan 0)
                 (copy-start 0)
                 pieces)

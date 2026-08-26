@@ -118,10 +118,13 @@ path that crosses the handler result boundary is the authored address."
     (mevedel-resource-current-attempt address)))
 
 (defun mevedel-tool-fs-resource-rg-exclusions (address)
-  "Return private-resource exclusions for ADDRESS's helper invocation."
-  (when (and (stringp address)
-             (string-prefix-p "artifact://" address))
-    '("--glob=!**/.mevedel-pending-executions/**")))
+  "Return resource-specific ripgrep glob arguments for ADDRESS."
+  (when (stringp address)
+    (cond
+     ((string-prefix-p "artifact://" address)
+      '("--glob=!**/.mevedel-pending-executions/**"))
+     ((string-prefix-p "mevedel://" address)
+      '("--glob=**/*.md")))))
 
 (defun mevedel-tool-fs-resource-child-address
     (address root path &optional address-prefix)
@@ -142,13 +145,14 @@ addressable locator."
                (components (and parsed
                                 (copy-sequence
                                  (plist-get parsed :components))))
-               (relative (file-relative-name path root)))
+               (relative (file-relative-name path root))
+               (relative-components
+                (unless (string= relative ".")
+                  (file-name-split relative))))
           (unless (string= relative ".")
-            (let ((relative-components
-                   (file-name-split relative)))
-              (if address-prefix
-                  (setq components relative-components)
-                (setq components (append components relative-components)))))
+            (if address-prefix
+                (setq components relative-components)
+              (setq components (append components relative-components))))
           (if address-prefix
               (concat address-prefix
                       (unless (string= relative ".")
@@ -156,20 +160,27 @@ addressable locator."
                                 (mapconcat
                                  #'mevedel-resource-encode-component
                                  components "/"))))
-            (concat (symbol-name scheme) "://"
-                    (if (eq scheme 'skill)
-                        (concat (mevedel-resource-encode-component
-                                 (plist-get parsed :name))
-                                "@" (plist-get parsed :source-key)
-                                (if components
-                                    (concat "/"
-                                            (mapconcat
-                                             #'mevedel-resource-encode-component
-                                             components
-                                             "/"))
-                                  ""))
-                      (mapconcat #'mevedel-resource-encode-component
-                                 components "/")))))))))
+            (if (eq (plist-get parsed :locator-class) 'alias)
+                (concat (plist-get parsed :canonical)
+                        (when relative-components
+                          (concat
+                           "/"
+                           (mapconcat #'mevedel-resource-encode-component
+                                      relative-components "/"))))
+              (concat (symbol-name scheme) "://"
+                      (if (eq scheme 'skill)
+                          (concat (mevedel-resource-encode-component
+                                   (plist-get parsed :name))
+                                  "@" (plist-get parsed :source-key)
+                                  (if components
+                                      (concat "/"
+                                              (mapconcat
+                                               #'mevedel-resource-encode-component
+                                               components
+                                               "/"))
+                                    ""))
+                        (mapconcat #'mevedel-resource-encode-component
+                                   components "/"))))))))))
 
 (defun mevedel-tool-fs-strip-system-reminders (result)
   "Return RESULT without a trailing appended system-reminder block."

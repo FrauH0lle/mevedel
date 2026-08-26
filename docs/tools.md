@@ -286,12 +286,21 @@ handler instead of leaving a stale `gptel-tool` captured by an older preset.
 
 ## Resource addresses in filesystem-shaped tools
 
-The closed resource resolver accepts the seven documented `scheme://` families
+The closed resource resolver accepts the eight documented `scheme://` families
 without adding a model-facing tool. The operation matrix is deliberately
 narrow: `Read` accepts every family; `Glob` and `Grep` accept `local://`,
-`artifact://`, `skill://`, and `memory://`; `ApplyPatch` accepts `local://` and
-ordinary filesystem paths. Unsupported combinations fail explicitly. Bare
-addresses list only when the family defines a discovery listing.
+`artifact://`, `skill://`, `memory://`, and `mevedel://`; `ApplyPatch` accepts
+`local://` and ordinary filesystem paths. Unsupported combinations fail
+explicitly. Bare addresses list only when the family defines a discovery
+listing. `mevedel://` is always available, including without a session, and
+exposes only packaged Markdown documentation.
+
+Skill tools accept exact `skill://NAME@SOURCE-KEY` locators and explicit
+origin aliases for local Mevedel, local agents, global Mevedel, global agents,
+bundled, managed, and plugin sources. Bare skill listings expose both forms.
+An alias resolves to the exact current full-hash locator for authority while
+transcripts, errors, and results keep the address the model authored; there is
+no unqualified `skill://NAME` alias.
 
 Resource preparation runs after repair, final validation, `PreToolUse`, and
 hook-rewrite validation, but before permission, snapshots, helper execution,

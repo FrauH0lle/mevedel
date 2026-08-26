@@ -11,6 +11,7 @@
 (require 'mevedel-tool-media)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-permissions)
+(require 'mevedel-skills-core)
 (require 'mevedel-execution)
 (require 'mevedel-execution-target)
 (require 'mevedel-tool-exec)
@@ -44,6 +45,7 @@
 
 (defvar gptel--known-tools)
 (defvar mevedel-bash-dangerous-commands)
+(defvar mevedel-resource--attempt-table)
 (defvar mevedel-tool--registry)
 (defvar warning-minimum-level)
 
@@ -2034,6 +2036,122 @@ cover, so the permission step's warning about it is captured here."
           (should (string-prefix-p "prepared" result))
           (should attempt-seen)))
       (delete-directory save-path t)))
+
+  :doc "pre-tool skill aliases resolve before permission without replacing authored input"
+  (let* ((root (make-temp-file "mevedel-pipeline-skill-alias-" t))
+         (skill-dir (file-name-concat root "demo"))
+         (skill-file (file-name-concat skill-dir "SKILL.md"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id root :root root
+                     :name "pipeline-skill-alias"))
+         (skill (mevedel-skill--create
+                 :name "demo" :raw-name "demo" :source 'project
+                 :source-family 'mevedel :source-file skill-file
+                 :source-dir skill-dir))
+         (session (mevedel-session--create
+                   :workspace workspace :skills (list skill)))
+         (alias "skill://local-mevedel/demo")
+         (digest (mevedel-resource-skill-digest skill-file))
+         (exact (format "skill://demo@%s" digest))
+         permission-data permission-input permission-attempt
+         handler-input handler-attempt pre-input post-input result
+         (tool (mevedel-tool--create
+                :name "Read"
+                :handler
+                (lambda (args)
+                  (setq handler-input (plist-get args :file_path)
+                        handler-attempt
+                        (mevedel-resource-current-attempt handler-input))
+                  '(:result "prepared"))
+                :args '((file_path path-or-resource :required "Path"))
+                :read-only-p t
+                :async-p nil)))
+    (unwind-protect
+        (progn
+          (make-directory skill-dir t)
+          (with-temp-file skill-file (insert "skill body\n"))
+          (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                     (lambda (event payload callback &rest _)
+                       (pcase event
+                         ('PreToolUse
+                          (setq pre-input (plist-get payload :tool-input))
+                          (funcall callback
+                                   (list :updated-input
+                                         (list :file_path alias))))
+                         ('PostToolUse
+                          (setq post-input (plist-get payload :tool-input))
+                          (funcall callback nil))
+                         (_ (funcall callback nil)))))
+                    ((symbol-function 'mevedel-tool-permission-step)
+                     (lambda (context next _fail)
+                       (setq permission-input (plist-get context :args)
+                             permission-attempt
+                             (cdr (assoc alias
+                                         (plist-get context
+                                                    :resource-attempts)))
+                             permission-data
+                             (copy-tree
+                              (gethash permission-attempt
+                                       mevedel-resource--attempt-table)))
+                       (funcall next context))))
+            (with-temp-buffer
+              (setq-local mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-pipeline-run-tool
+               tool (lambda (value) (setq result value))
+               '(:file_path "plain.txt"))))
+          (should (string-prefix-p "prepared" result))
+          (should (equal '(:file_path "plain.txt") pre-input))
+          (should (equal (list :file_path alias) permission-input))
+          (should (equal alias handler-input))
+          (should (equal (list :file_path alias) post-input))
+          (should (eq permission-attempt handler-attempt))
+          (should (equal alias (plist-get permission-data :address)))
+          (should (equal skill-file (plist-get permission-data :source-file)))
+          (should (equal digest (plist-get permission-data :source-key)))
+          (should (equal exact (plist-get permission-data :exact-address))))
+      (delete-directory root t)))
+
+  :doc "unknown and ambiguous skill aliases stop before permission, handler, or post-use"
+  (let* ((first (mevedel-skill--create
+                 :name "demo" :raw-name "demo" :source 'project
+                 :source-family 'mevedel
+                 :source-file "/tmp/pipeline-first/SKILL.md"
+                 :source-dir "/tmp/pipeline-first"))
+         (second (mevedel-skill--create
+                  :name "mevedel:demo" :raw-name "demo" :source 'project
+                  :source-family 'mevedel
+                  :source-file "/tmp/pipeline-second/SKILL.md"
+                  :source-dir "/tmp/pipeline-second"))
+         (tool (mevedel-tool--create
+                :name "Read"
+                :handler (lambda (_args)
+                           (ert-fail "Unresolved alias reached handler"))
+                :args '((file_path path-or-resource :required "Path"))
+                :read-only-p t
+                :async-p nil)))
+    (dolist (case
+             (list
+              (list "skill://local-mevedel/missing" (list first))
+              (list "skill://local-mevedel/demo" (list first second))))
+      (let ((session (mevedel-session--create :skills (cadr case)))
+            permission-called post-called result)
+        (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (event _payload callback &rest _)
+                     (when (memq event '(PostToolUse PostToolUseFailure))
+                       (setq post-called t))
+                     (funcall callback nil)))
+                  ((symbol-function 'mevedel-tool-permission-step)
+                   (lambda (_context _next _fail)
+                     (setq permission-called t))))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (mevedel-pipeline-run-tool
+             tool (lambda (value) (setq result value))
+             (list :file_path (car case)))))
+        (should (string-prefix-p "Error:" result))
+        (should-not permission-called)
+        (should-not post-called))))
 
   :doc "Read authorizes a workspace symlink as its outside target"
   (let* ((root (file-name-as-directory

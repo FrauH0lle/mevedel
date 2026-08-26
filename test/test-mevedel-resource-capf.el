@@ -27,6 +27,10 @@
   (when result
     (all-completions "" (nth 2 result))))
 
+(defun mevedel-resource-capf-test--annotation (result candidate)
+  "Return RESULT's annotation for CANDIDATE."
+  (funcall (plist-get (nthcdr 3 result) :annotation-function) candidate))
+
 (defun mevedel-resource-capf-test--session (save-path)
   "Return a throwaway session rooted at SAVE-PATH."
   (mevedel-session--create
@@ -123,36 +127,165 @@
       (delete-directory save-path t))))
 
 (mevedel-deftest mevedel-resource-capf-skills
-  (:doc "completes canonical skills and immediate package descendants")
+  (:doc "stages readable skill aliases before exact bounded candidates")
   (let* ((root (make-temp-file "mevedel-resource-capf-skill-" t))
          (skill-dir (file-name-concat root "alpha"))
          (skill-file (file-name-concat skill-dir "SKILL.md"))
+         (plugin-dir (file-name-concat root "beta"))
+         (plugin-file (file-name-concat plugin-dir "SKILL.md"))
          (session (mevedel-resource-capf-test--session nil))
          (skill (mevedel-skill--create
-                 :name "alpha" :source-file skill-file
-                 :source-dir skill-dir :description "Alpha skill"))
-         (digest (mevedel-resource-skill-digest skill-file)))
+                 :name "alpha" :raw-name "alpha"
+                 :source-file skill-file :source-dir skill-dir
+                 :source 'project :source-family 'mevedel
+                 :description "Alpha skill"))
+         (plugin-skill (mevedel-skill--create
+                        :name "demo:beta" :raw-name "beta"
+                        :plugin-name "demo" :source-file plugin-file
+                        :source-dir plugin-dir :source 'plugin
+                        :description "Beta skill")))
     (unwind-protect
         (progn
           (make-directory skill-dir t)
+          (make-directory plugin-dir t)
           (with-temp-file skill-file (insert "skill"))
           (with-temp-file (file-name-concat skill-dir "template.txt")
             (insert "template"))
-          (setf (mevedel-session-skills session) (list skill))
-          (with-temp-buffer
-            (setq mevedel--session session)
-            (insert "skill://")
-            (should
-             (member (format "skill://alpha@%s" digest)
+          (make-directory (file-name-concat skill-dir "nested"))
+          (with-temp-file (file-name-concat skill-dir "nested" "deep.txt")
+            (insert "deep"))
+          (with-temp-file plugin-file (insert "skill"))
+          (with-temp-file (file-name-concat plugin-dir "prompt.md")
+            (insert "prompt"))
+          (setf (mevedel-session-skills session) (list skill plugin-skill))
+          (let ((exact (format "skill://alpha@%s"
+                               (mevedel-resource-skill-digest skill-file)))
+                (plugin-exact
+                 (format "skill://demo%%3Abeta@%s"
+                         (mevedel-resource-skill-digest plugin-file))))
+            (cl-letf (((symbol-function 'mevedel-skill-load-body)
+                       (lambda (&rest _)
+                         (error "Skill body must not be loaded")))
+                      ((symbol-function 'mevedel-mention-bindings-set)
+                       (lambda (&rest _)
+                         (error "Mention binding must not be created"))))
+              (with-temp-buffer
+                (setq mevedel--session session)
+                (insert "skill://")
+                (let* ((result (mevedel-resource-capf))
+                       (candidates
+                        (mevedel-resource-capf-test--candidates result)))
+                  (should (member "skill://local-mevedel/" candidates))
+                  (should (member "skill://plugin/" candidates))
+                  (should (member exact candidates))
+                  (should (member plugin-exact candidates))
+                  (should (< (cl-position "skill://local-mevedel/" candidates
+                                          :test #'equal)
+                             (cl-position exact candidates :test #'equal)))
+                  (should (string-match-p
+                           "\\[exact\\]"
+                           (mevedel-resource-capf-test--annotation
+                            result exact)))
+                  (dolist (candidate candidates)
+                    (should-not (get-text-property
+                                 0 'mevedel-mention-binding candidate)))))
+              (with-temp-buffer
+                (setq mevedel--session session)
+                (insert "skill://local-mevedel/")
+                (let ((result (mevedel-resource-capf)))
+                  (should
+                   (member "skill://local-mevedel/alpha"
+                           (mevedel-resource-capf-test--candidates result)))
+                  (should
+                   (string-match-p
+                    "\\[local-mevedel\\].*Alpha skill"
+                    (mevedel-resource-capf-test--annotation
+                     result "skill://local-mevedel/alpha")))))
+              (with-temp-buffer
+                (setq mevedel--session session)
+                (insert "skill://plugin/")
+                (should
+                 (equal '("skill://plugin/demo/")
+                        (mevedel-resource-capf-test--candidates
+                         (mevedel-resource-capf)))))
+              (with-temp-buffer
+                (setq mevedel--session session)
+                (insert "skill://plugin/demo/")
+                (should
+                 (equal '("skill://plugin/demo/beta")
+                        (mevedel-resource-capf-test--candidates
+                         (mevedel-resource-capf)))))
+              (with-temp-buffer
+                (setq mevedel--session session)
+                (insert "skill://local-mevedel/alpha/")
+                (let* ((result (mevedel-resource-capf))
+                       (candidates
+                        (mevedel-resource-capf-test--candidates result)))
+                  (should
+                   (member "skill://local-mevedel/alpha/template.txt"
+                           candidates))
+                  (should
+                   (string-match-p
+                    "\\[local-mevedel\\].*Alpha skill"
+                    (mevedel-resource-capf-test--annotation
+                     result "skill://local-mevedel/alpha/template.txt")))
+                  (should (member "skill://local-mevedel/alpha/nested"
+                                  candidates))
+                  (should-not
+                   (member "skill://local-mevedel/alpha/nested/deep.txt"
+                           candidates))))
+              (with-temp-buffer
+                (setq mevedel--session session)
+                (insert "skill://plugin/demo/beta/")
+                (should
+                 (member "skill://plugin/demo/beta/prompt.md"
+                         (mevedel-resource-capf-test--candidates
+                          (mevedel-resource-capf)))))
+              (with-temp-buffer
+                (setq mevedel--session session)
+                (insert (concat exact "/"))
+                (should
+                 (member (concat exact "/template.txt")
+                         (mevedel-resource-capf-test--candidates
+                          (mevedel-resource-capf))))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-resource-capf-mevedel
+  (:doc "completes documentation one level using directories and Markdown")
+  (let ((root (make-temp-file "mevedel-resource-capf-docs-" t)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat root "nested"))
+          (with-temp-file (file-name-concat root "guide.md")
+            (insert "guide"))
+          (with-temp-file (file-name-concat root "notes.txt")
+            (insert "notes"))
+          (with-temp-file (file-name-concat root "image.png")
+            (insert "image"))
+          (with-temp-file (file-name-concat root "upper.MD")
+            (insert "upper"))
+          (with-temp-file (file-name-concat root "nested" "deep.md")
+            (insert "deep"))
+          (cl-letf (((symbol-function 'mevedel-resource--root)
+                     (lambda (scheme _session)
+                       (and (eq scheme 'mevedel) root))))
+            (with-temp-buffer
+              (insert "mevedel://")
+              (let ((candidates
                      (mevedel-resource-capf-test--candidates
-                      (mevedel-resource-capf)))))
-          (with-temp-buffer
-            (setq mevedel--session session)
-            (insert (format "skill://alpha@%s/" digest))
-            (should
-             (member (format "skill://alpha@%s/template.txt" digest)
-                     (mevedel-resource-capf-test--candidates
-                      (mevedel-resource-capf))))))
+                      (mevedel-resource-capf))))
+                (should (member "mevedel://guide.md" candidates))
+                (should (member "mevedel://nested" candidates))
+                (should-not (member "mevedel://notes.txt" candidates))
+                (should-not (member "mevedel://image.png" candidates))
+                (should-not (member "mevedel://upper.MD" candidates))
+                (should-not (member "mevedel://nested/deep.md" candidates))))
+            (with-temp-buffer
+              (insert "mevedel://nested/")
+              (should
+               (equal '("mevedel://nested/deep.md")
+                      (mevedel-resource-capf-test--candidates
+                       (mevedel-resource-capf)))))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-resource-capf-agents

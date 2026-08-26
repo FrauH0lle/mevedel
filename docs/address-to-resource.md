@@ -28,11 +28,13 @@ resource URI.
 | Retained history | `history://`, `history://root/PATH` | yes | no | no | no |
 | Persistent memory | `memory://root`, `memory://ROOT-KEY/RELATIVE-PATH` | yes | yes | yes | no |
 | MCP resource | `mcp://`, `mcp://ENCODED-SERVER`, `mcp://ENCODED-SERVER/ENCODED-URI` | yes | no | no | no |
+| Packaged documentation | `mevedel://`, `mevedel://RELATIVE-PATH` | yes | yes | yes | no |
 
 ## Prompt availability
 
-The main and built-in agent prompts render a compact request-time
-roster. A valid request session advertises `local://` and `artifact://` as
+The main and built-in agent prompts render a compact request-time roster.
+`mevedel://` is always advertised because packaged documentation needs no
+session. A valid request session advertises `local://` and `artifact://` as
 normal session capabilities: local state is materialized on its first write,
 and artifact output may arise during the request, so neither family requires
 an existing save path. The remaining families are advertised only when the
@@ -44,10 +46,10 @@ current resource metadata has a usable surface:
   exists; and
 - `mcp://` requires at least one configured MCP server.
 
-With no valid request session, the roster contains no session-owned families.
-An omitted family is not usable in that request and must not be inferred from
-the closed family list above. The roster does not change the operation matrix,
-permissions, or lifecycle rules below.
+With no valid request session, the roster still contains `mevedel://` but no
+session-owned families. An omitted family is not usable in that request and
+must not be inferred from the closed family list above. The roster does not
+change the operation matrix, permissions, or lifecycle rules below.
 
 Unsupported scheme/operation pairs fail explicitly. Ordinary target-native
 filesystem paths retain their existing operation behavior. A bare address is a
@@ -56,7 +58,7 @@ invocation, or mutation.
 
 ## Canonical addresses and locator classes
 
-Only the seven exact `scheme://` prefixes above are internal addresses. An
+Only the eight exact `scheme://` prefixes above are internal addresses. An
 unknown `scheme://` prefix, malformed known address, traversal, or containment
 failure is a validation error and is not treated as a filesystem path. Other
 strings containing a colon remain ordinary tool input.
@@ -75,7 +77,12 @@ The address forms have these identity rules:
   persisted output; there is no artifact index or generated ID allocator.
 - `skill://NAME@SOURCE-KEY` uses the full lowercase SHA-256 digest of the
   canonical skill source key. `NAME` labels the source; the digest is the
-  authority. Descendants stay inside that package.
+  authority. Readable aliases are `skill://local-mevedel/SKILL`,
+  `skill://local-agents/SKILL`, `skill://global-mevedel/SKILL`,
+  `skill://global-agents/SKILL`, `skill://bundled/SKILL`,
+  `skill://managed/SKILL`, and `skill://plugin/PLUGIN/SKILL`, each with optional
+  descendants. An alias resolves to the exact current full-hash locator without
+  changing the authored address shown in transcripts, errors, or results.
 - `agent://root/PATH` and `history://root/PATH` name the canonical retained
   agent path without its leading slash. Caller-relative paths and opaque
   storage IDs are rejected.
@@ -84,6 +91,8 @@ The address forms have these identity rules:
 - `mcp://ENCODED-SERVER/ENCODED-URI` encodes the complete server name and
   native resource URI as separate components. Internal slashes, colons,
   fragments, percent signs, spaces, and Unicode are encoded.
+- `mevedel://RELATIVE-PATH` names a packaged Markdown document relative to the
+  installed `docs/` root. Bare `mevedel://` is a dynamic documentation listing.
 
 Exact locators may be atomically bound and later resolve current content.
 Session-relative locators are stable only within their owning root session.
@@ -127,11 +136,12 @@ broadens roots, authorizes another tool, or bypasses permission mode.
 
 ### `local://`
 
-The session owns a lazily materialized `local/` directory. The empty address
-lists it; descendants are relative files beneath it. The root and every
-retained agent in the tree share the directory. Local content is available to
-`Read`, `Glob`, and `Grep`; `ApplyPatch` is the only mutation surface and may
-combine local and ordinary targets atomically.
+`local://` is the writable session scratchpad for work that should not become
+workspace source. The session owns its lazily materialized `local/` directory.
+The empty address lists it; descendants are relative files beneath it. The root
+and every retained agent in the tree share the directory. Local content is
+available to `Read`, `Glob`, and `Grep`; `ApplyPatch` is the only mutation
+surface and may combine local and ordinary targets atomically.
 
 The first local write materializes durable session persistence. Local state
 survives save, resume, and session rename. Session Fork copies it into an
@@ -172,6 +182,11 @@ does not fall back to a different same-named skill. Hot reload may change
 content at that source without retargeting the address. Missing, disabled,
 changed, or no-longer-discoverable sources fail as unavailable; package
 descendants remain contained by the selected skill root.
+
+Bare skill listings expose both readable origin aliases and exact full-hash
+addresses. Aliases are conveniences for the currently discovered source: the
+resolver still authorizes the resulting exact source identity, and a missing
+or conflicting origin/name pair does not fall back to another skill.
 
 ### `agent://` and `history://`
 
@@ -217,6 +232,18 @@ MCP reads are fresh on every call and use the current connection. Unknown,
 disconnected, or failed resources return no content and follow ordinary tool
 failure handling. MCP addresses are read-only and create no filesystem grant,
 cache, or server mutation route.
+
+### `mevedel://`
+
+`mevedel://` is a read-only view of the Markdown files packaged under `docs/`.
+It is available without a session. Bare Read returns a sorted recursive listing
+of canonical documentation addresses; descendant Read, Glob, and Grep stay
+contained under the packaged documentation root and report logical addresses.
+Each operation observes the installed files at execution time.
+
+The family exposes no package source files, generated source index, compression
+layer, registry, or aliases beyond the relative documentation paths. It cannot
+be used with ApplyPatch.
 
 ## Mentions and addresses
 

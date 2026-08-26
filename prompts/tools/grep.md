@@ -3,13 +3,21 @@ A powerful search tool built on ripgrep.
 Resource addresses
 - `path` accepts a raw filesystem path or canonical `local://`,
   `artifact://`, `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]`, or
-  `memory://root`/`memory://ROOT-KEY/RELATIVE-PATH` address. These are the only
+  `memory://root`/`memory://ROOT-KEY/RELATIVE-PATH` address, or packaged
+  documentation at `mevedel://`/`mevedel://RELATIVE-PATH`. These are the only
   resource families supported by Grep. Examples include `local://notes`,
-  `artifact://tool-result.txt`, and `memory://root`.
+  `artifact://tool-result.txt`, `memory://root`, and `mevedel://`.
 - Bare `local://` and `artifact://` search current entries;
-  `memory://root` searches the configured memory roots. A skill search must
-  name an exact `skill://NAME@SOURCE-KEY` source. Agent, history, MCP,
-  and other unsupported scheme/operation pairs are rejected explicitly.
+  `memory://root` searches the configured memory roots, and `mevedel://`
+  searches packaged Markdown documentation. Skill searches accept exact
+  `skill://NAME@SOURCE-KEY` locators or the readable origin aliases
+  `skill://local-mevedel/SKILL`, `skill://local-agents/SKILL`,
+  `skill://global-mevedel/SKILL`, `skill://global-agents/SKILL`,
+  `skill://bundled/SKILL`, `skill://managed/SKILL`, and
+  `skill://plugin/PLUGIN/SKILL`, each with optional descendants. Aliases
+  resolve to exact full-hash locators while output preserves the authored
+  address. Agent, history, MCP, and other unsupported scheme/operation pairs
+  are rejected explicitly.
 - Use canonical `scheme://` text. Resource addresses name a tool target only:
   they do not attach content, invoke skills, or delegate agents. `@file` and
   `@mcp` attach content, `$skill` invokes instructions, and `@agent` delegates
