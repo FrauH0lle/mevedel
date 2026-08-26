@@ -13,6 +13,7 @@
           "helpers"))
 (require 'gptel)
 (require 'gptel-openai)
+(require 'mevedel-agent-control)
 (require 'mevedel-agents)
 (require 'mevedel-bash-analysis)
 (require 'mevedel-hooks)
@@ -1106,7 +1107,6 @@ hooks:
   ,test
   (test)
   :doc "spawns one retained fork and maps its canonical RESULT"
-  (require 'mevedel-agent-control)
   (let* ((session (mevedel-skills-test--make-session))
          (agent (mevedel-agent--create :name "explorer"))
          (skill (mevedel-skill--create
@@ -1180,7 +1180,6 @@ hooks:
                    (plist-get outcome :hook-audits))))
 
   :doc "maps a non-completed RESULT to a normalized skill error"
-  (require 'mevedel-agent-control)
   (let* ((session (mevedel-skills-test--make-session))
          (agent (mevedel-agent--create :name "explorer"))
          (skill (mevedel-skill--create
@@ -1223,7 +1222,6 @@ hooks:
   ,test
   (test)
   :doc "forwards prompt context, description, and invocation callback"
-  (require 'mevedel-agent-control)
   (let* ((session (mevedel-skills-test--make-session))
          (agent (mevedel-agent--create :name "explorer"))
          (skill (mevedel-skill--create
@@ -1276,7 +1274,6 @@ hooks:
     (should (eq 'unknown-agent (plist-get outcome :reason))))
 
   :doc "omitted roles spawn a parent-inherited synthetic agent"
-  (require 'mevedel-agent-control)
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
                  :name "demo" :context 'fork :body "Body"))
@@ -1494,7 +1491,6 @@ description: Yell
     (setf (mevedel-session-skills session) (list skill))
     (with-temp-buffer
       (setq mevedel--session session)
-      (require 'mevedel-agent-control)
       (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
                  (lambda (_session _task _message callback &rest keys)
                    (let ((record
