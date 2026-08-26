@@ -37,9 +37,6 @@
 (require 'mevedel-view)
 (require 'mevedel-workspace)
 (require 'mevedel-worktree)
-(require 'mevedel-tools-list)
-(require 'mevedel-executions-list)
-(require 'mevedel-skills-ui)
 (require 'mevedel-plugin-ui)
 
 ;; `gptel'
