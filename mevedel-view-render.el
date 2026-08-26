@@ -103,7 +103,7 @@
 
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-rewind
-                  "mevedel-session-rewind" (buffer target))
+                  "mevedel-session-rewind" (buffer target &optional boundary))
 (declare-function mevedel-session-rewind-rewind-checkpoint
                   "mevedel-session-rewind"
                   (workspace checkpoint &optional buffer))
@@ -1299,7 +1299,19 @@ real user message."
                              (eq seg-render-kind 'collaboration-event)
                              (eq (plist-get seg-render-data :event)
                                  'started)))
-                   (mevedel-view--render-data-only-text-p seg-text))))
+                   (mevedel-view--render-data-only-text-p seg-text)))
+             ;; Assistant-side glue with no turn before it has nothing to
+             ;; join and nothing to draw.  Rewinding to before the first
+             ;; turn leaves exactly this: leading whitespace still
+             ;; carrying tool or audit properties.  An in-flight turn
+             ;; always follows a user turn, so it is never dropped here.
+             (leading-assistant-residue-p
+              (and (null current-role)
+                   (null turns)
+                   (memq type '(ignored tool reasoning))
+                   data-buf
+                   (mevedel-view--blank-segment-p
+                    data-buf seg-start seg-end))))
         (cond
          (review-action-p
           nil)
@@ -1331,6 +1343,8 @@ real user message."
             (setq turn (plist-put turn :end (caddr seg)))
             (setcar turns turn)))
          (render-data-only-p
+          nil)
+         (leading-assistant-residue-p
           nil)
          ((eq type 'task-background)
           (when current-segs
@@ -1393,6 +1407,7 @@ real user message."
                (request-summary-p 'response)
                (hook-audit-only-p prev-type)
                (render-data-only-p prev-type)
+               (leading-assistant-residue-p prev-type)
                ((and (eq type 'ignored) seg-scaffolding-only-p)
                 prev-type)
                (scaffolding-before-hook-audit-p prev-type)
@@ -2466,6 +2481,15 @@ RAW is an optional precomputed expanded tool segment text."
                     (plist-get call :hook-audits)
                     (plist-get rendering :hook-audits))))
         (setq rendering (plist-put rendering :hook-audits audits)))
+      ;; Grouping needs the same normalized result and render data.  Carry
+      ;; them with this one computation; the cache drops the payload below
+      ;; so a collapsed header does not retain a large result indefinitely.
+      (setq rendering
+            (plist-put
+             rendering :group-child
+             (list :tool name :args args :result result :render-data render-data
+                   :status (mevedel-view--tool-render-status
+                            result render-data))))
       (if collapsed-only
           (mevedel-view--omit-rendering-body-for-cache rendering)
         rendering))))
@@ -2523,10 +2547,12 @@ bodies for initially collapsed tools."
       (or (and key (gethash key cache))
           (let ((rendering (mevedel-view--compute-segment-rendering
                             data-buf seg-start seg-end collapsed-only raw)))
-            (if (and key rendering)
-                (mevedel-view--cache-put cache key rendering
-                                         'mevedel-view--render-cache-entries)
-              rendering))))))
+            (when (and key rendering)
+              (mevedel-view--cache-put
+               cache key
+               (plist-put (copy-sequence rendering) :group-child nil)
+               'mevedel-view--render-cache-entries))
+            rendering)))))
 
 (defun mevedel-view--tool-row-region (data-buffer tool-use-id)
   "Return the visible source-backed row for TOOL-USE-ID in DATA-BUFFER.
@@ -2754,6 +2780,22 @@ turn shows one bogus thinking summary per tool boundary."
              (e (max pmin (min seg-end pmax))))
         (mevedel-view--scaffolding-only-text-p
          (and (< s e) (buffer-substring-no-properties s e)))))))
+
+(defun mevedel-view--blank-segment-p (data-buf seg-start seg-end)
+  "Return non-nil when DATA-BUF's SEG-START..SEG-END holds only whitespace.
+
+Unlike `mevedel-view--scaffolding-only-p', this judges the text as it
+stands rather than as glue: a tool or reasoning block with a body is
+never blank, however much of it is marker lines."
+  (with-current-buffer data-buf
+    (save-restriction
+      (widen)
+      (let* ((pmin (point-min))
+             (pmax (point-max))
+             (s (max pmin (min seg-start pmax)))
+             (e (max pmin (min seg-end pmax))))
+        (or (>= s e)
+            (string-blank-p (buffer-substring-no-properties s e)))))))
 
 (defun mevedel-view--scaffolding-only-text-p (text)
   "Return non-nil if TEXT is org-only glue, or nil.
@@ -4960,55 +5002,41 @@ without an entry -- MCP tools included -- fall back to \"NAME xN\".")
                   (substring summary 1))
         summary))))
 
-(defun mevedel-view--tool-group-child (data-buf seg index)
-  "Return the nested-call plist for tool SEG in DATA-BUF, or nil.
+(defun mevedel-view--tool-group-child (entry data-buf index)
+  "Return the nested-call plist for tool ENTRY in DATA-BUF, or nil.
 INDEX discriminates the row's disclosure key from its siblings.  A
 segment whose own rendering is hidden yields nil so grouping does not
 resurrect rows the renderer suppressed."
-  (let* ((seg-start (cadr seg))
-         (seg-end (caddr seg))
-         (collapsed-rendering
-          (mevedel-view--segment-rendering data-buf seg-start seg-end t)))
-    (unless (plist-get collapsed-rendering :hidden-p)
-      (when-let* ((parsed (mevedel-view--tool-call-parse
-                           data-buf seg-start seg-end)))
-        (list :id (format "%d" index)
-              :order index
-              :tool (plist-get parsed :name)
-              :args (plist-get parsed :args)
-              :status (mevedel-view--tool-render-status
-                       (plist-get parsed :result)
-                       (plist-get parsed :render-data))
-              :result (plist-get parsed :result)
-              :render-data (plist-get parsed :render-data))))))
+  (when-let* ((child
+               (or (plist-get entry :group-child)
+                   (when-let* ((parsed
+                                (mevedel-view--tool-call-parse
+                                 data-buf
+                                 (plist-get entry :start)
+                                 (plist-get entry :end))))
+                     (list :tool (plist-get parsed :name)
+                           :args (plist-get parsed :args)
+                           :status
+                           (mevedel-view--tool-render-status
+                            (plist-get parsed :result)
+                            (plist-get parsed :render-data))
+                           :result (plist-get parsed :result)
+                           :render-data (plist-get parsed :render-data))))))
+    (append (list :id (format "%d" index) :order index) child)))
 
-(defun mevedel-view--tool-group-rendering (data-buf start end)
-  "Return the grouped rendering for the tool run in START..END, or nil.
+(defun mevedel-view--tool-group-rendering (entries data-buf)
+  "Return the grouped rendering for tool ENTRIES in DATA-BUF, or nil.
 The result reuses the compound-tool row machinery: each grouped call is
 a `:child-calls' entry rendered by its own tool's renderer, so the
 expanded group has the same layout, per-row disclosure, and toggles as a
 ToolScript block.  A run with any failed call renders expanded with a
 warning marker."
-  (let* ((segments
-          (with-current-buffer data-buf
-            (save-restriction
-              (widen)
-              (let* ((pmin (point-min))
-                     (pmax (point-max))
-                     (s (max pmin (min start pmax)))
-                     (e (max pmin (min end pmax))))
-                (when (< s e)
-                  (mevedel-transcript-segments s e))))))
-         (tool-segments
-          (mevedel-view--merge-tool-hook-audit-segments
-           (cl-remove-if-not (lambda (seg) (eq (car seg) 'tool)) segments)
-           data-buf))
-         (children
+  (let* ((children
           (let ((index 0)
                 out)
-            (dolist (seg tool-segments (nreverse out))
+            (dolist (entry entries (nreverse out))
               (when-let* ((child (mevedel-view--tool-group-child
-                                  data-buf seg index)))
+                                  entry data-buf index)))
                 (push child out))
               (cl-incf index))))
          (failed-p
@@ -5022,6 +5050,23 @@ warning marker."
             :child-calls children
             :status (and failed-p 'warning)
             :initially-collapsed-p (not failed-p)))))
+
+(defun mevedel-view--tool-group-rendering-from-source
+    (data-buf start end)
+  "Rebuild a grouped tool rendering for DATA-BUF's START..END disclosure."
+  (let ((entries
+         (with-current-buffer data-buf
+           (save-restriction
+             (widen)
+             (mapcar
+              (lambda (segment)
+                (list :start (cadr segment) :end (caddr segment)))
+              (mevedel-view--merge-tool-hook-audit-segments
+               (cl-remove-if-not
+                (lambda (segment) (eq (car segment) 'tool))
+                (mevedel-transcript-segments start end))
+               data-buf))))))
+    (mevedel-view--tool-group-rendering entries data-buf)))
 
 (defun mevedel-view--tool-group-entry-p (entry)
   "Return non-nil when ENTRY may fold into a grouped activity row.
@@ -5048,7 +5093,7 @@ Return non-nil when the group row was inserted."
   (let* ((group-start (plist-get (car entries) :start))
          (group-end (plist-get (car (last entries)) :end))
          (rendering (mevedel-view--tool-group-rendering
-                     data-buf group-start group-end))
+                     entries data-buf))
          (source (and rendering
                       (mevedel-view-disclosure-source-range
                        data-buf group-start group-end))))
@@ -5091,10 +5136,16 @@ grouped activity row that expands into compound-tool nested rows."
                         (or (mevedel-view--segment-rendering
                              data-buf seg-start seg-end)
                             rendering)))
+                (let ((group-child (plist-get rendering :group-child)))
+                  (when group-child
+                    (setq rendering
+                          (plist-put (copy-sequence rendering)
+                                     :group-child nil)))
                 (unless (plist-get rendering :hidden-p)
                   (let* ((entry
                           (list :start seg-start :end seg-end
                                 :source source :rendering rendering
+                                :group-child group-child
                                 :count 1))
                          (key (plist-get rendering :coalesce-key))
                          (previous (car out)))
@@ -5121,7 +5172,7 @@ grouped activity row that expands into compound-tool nested rows."
                                  :count
                                  (1+ (plist-get previous :count))))
                           (setcar out entry))
-                      (push entry out))))))))
+                      (push entry out)))))))))
         (start-time (float-time))
         (inserted-rule nil)
         (rendered 0)
@@ -5354,7 +5405,7 @@ Return the normalized source coordinates used for the insertion."
          (data-end (cdr source))
          (rendering
           (if (eq vtype 'tool-group)
-              (mevedel-view--tool-group-rendering
+              (mevedel-view--tool-group-rendering-from-source
                data-buf data-start data-end)
             (let ((candidate
                    (mevedel-view--segment-rendering
@@ -5448,7 +5499,7 @@ The result contains normalized `:source', `:summary', and `:face' values."
          (data-end (cdr source))
          (rendering
           (if (eq vtype 'tool-group)
-              (mevedel-view--tool-group-rendering
+              (mevedel-view--tool-group-rendering-from-source
                data-buf data-start data-end)
             (let ((candidate
                    (mevedel-view--segment-rendering
@@ -5927,10 +5978,16 @@ continuation context."
    (plist-get (mevedel-view-fork-point-at-point) :fork-point-id)))
 
 (defun mevedel-view-rewind-at-point ()
-  "Rewind the current session to the settled assistant turn at point."
+  "Rewind the session keeping the settled assistant turn at point.
+
+The turn under point is the last one kept: everything after it is
+discarded.  Point names a response you are looking at, so the boundary
+falls after it; `mevedel-rewind' instead picks one of your prompts and
+returns to just before it."
   (interactive)
   (when (mevedel-session-rewind-rewind
-         mevedel--data-buffer (mevedel-view--settled-response-at-point))
+         mevedel--data-buffer (mevedel-view--settled-response-at-point)
+         'after)
     (mevedel-view-return-to-latest-segment)
     t))
 

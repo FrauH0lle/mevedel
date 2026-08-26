@@ -221,10 +221,10 @@ Chat / view
   mevedel-session-durability.el lease and storage primitives
   mevedel-session-recovery.el  specialized recovery protocol and markers
   mevedel-session-transfer.el  durable cooperative control transfer protocol
-  mevedel-session-publication.el immutable publication and diagnostics
+  mevedel-session-publication.el immutable publication, generation collection, diagnostics
   mevedel-session-save-as.el portable Save As transaction and adoption
   mevedel-session-persistence.el  lifecycle/resume/listing/locking/cleanup facade
-  mevedel-session-rewind.el   restore plans and transactional Rewind
+  mevedel-session-rewind.el   restore plans, transactional Rewind, published-head redo
   mevedel-session-fork.el     Fork/Worktree projection, publication, and rename
   mevedel-session-control-fs.el   pinned target-side session control filesystem
   mevedel-session-control-transfer.el  control-transfer state, drains, descriptors
@@ -356,7 +356,8 @@ warnings.
 - `mevedel-implement-directive` / `mevedel-discuss-directive` /
   `mevedel-request-directive-changes` / `mevedel-retry-directive`
 - `mevedel`
-- `mevedel-rewind` / `mevedel-save-session` / `mevedel-rename-session`
+- `mevedel-rewind` / `mevedel-redo` / `mevedel-save-session` /
+  `mevedel-rename-session`
 - `mevedel-take-control` / `mevedel-release-control` /
   `mevedel-toggle-follow` / `mevedel-refresh-session`
 - `mevedel-process-directives`, `mevedel-next/previous-instruction`

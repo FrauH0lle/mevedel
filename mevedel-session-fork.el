@@ -44,6 +44,7 @@
 (declare-function mevedel-session-artifacts-publish-text "mevedel-session-artifacts" (session path content &optional coding))
 (declare-function mevedel-session-artifacts-read-artifact "mevedel-session-artifacts" (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-sanitize "mevedel-session-artifacts" (name))
+(declare-function mevedel-session-artifacts-save-buffer-silently "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-save-instructions "mevedel-session-artifacts" (session buffer &optional current-only))
 (declare-function mevedel-session-artifacts-segment-path "mevedel-session-artifacts" (save-path n))
 (declare-function mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts" (workspace))
@@ -62,6 +63,8 @@
 (autoload 'mevedel-session-artifacts-read-artifact
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-sanitize "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-save-buffer-silently
+  "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-save-instructions
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-segment-path
@@ -199,9 +202,7 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text "mevedel-utilities" (text))
-(declare-function mevedel--save-buffer-silently "mevedel-utilities" ())
 (autoload 'mevedel--normalize-message-text "mevedel-utilities")
-(autoload 'mevedel--save-buffer-silently "mevedel-utilities")
 
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
@@ -562,7 +563,7 @@ caches never become fork authority."
             buffer-file-truename nil)
       (mevedel-tool-render-data-reconcile-lost-executions staging-buffer)
       (set-buffer-modified-p t)
-      (mevedel--save-buffer-silently))
+      (mevedel-session-artifacts-save-buffer-silently))
     (mevedel-session-persistence-reconcile-lost-execution-segments
      child (mevedel-session-artifacts-segment-path
             staging-path picked-segment))

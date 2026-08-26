@@ -79,7 +79,7 @@ recommends those elements while leaving Codex room to choose the next action.
   `mevedel-view--call-preserving-window-state`. If cursor drift reappears
   during heavy history-live streaming with point on interaction text,
   convert those captures to markers.
-  
+
 - Deferred from the 2026-08-25 PTC profiling session (the big levers —
   segment-classification memoization, hot-path `require` hoisting,
   `directive-ranges` caching, `audit-spans` string scan, per-script

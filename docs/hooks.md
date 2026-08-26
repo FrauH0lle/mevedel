@@ -98,7 +98,7 @@ boundaries:
 
 | Event | Fires | Matcher | Control |
 | --- | --- | --- | --- |
-| `SessionStart` | root context epoch begins | source (`startup`, `resume`, `clear`, `compact`) | add context only |
+| `SessionStart` | root context epoch begins | source (`startup`, `resume`, `clear`, `compact`, `rewind`, `restore`) | add context only |
 | `UserPromptSubmit` | before a root or retained-agent task input is sent | none | block, add context |
 | `UserPromptExpansion` | before a user `$skill` expansion reaches the model | none | block, add context, rewrite prompt |
 | `PreToolUse` | after validation, before permission | tool name | deny, ask, add context, rewrite args |

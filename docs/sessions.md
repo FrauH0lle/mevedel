@@ -583,11 +583,39 @@ such as target-side copy, restore, and rename.  It suppresses timer target I/O
 and checks final ownership but does not itself publish, commit, or drain queued
 artifacts.
 
-`ponytail:` v1 retains every committed and orphaned immutable publication
-generation until the whole session directory is removed.  This makes reads
-pin-free and crash recovery straightforward at the cost of storage proportional
-to all committed snapshots; garbage collection and read pins remain deferred
-until real storage use justifies them.
+A generation is written on every committed save, so a turn that streamed for a
+minute leaves dozens of them; one day of one session measured 101 generations
+and 67 MB, of which 54 MB was superseded copies of a growing transcript.  A
+settled turn is where the generations that turn published stop being anyone's
+recovery state -- until settlement they are what a crashed owner resumes from,
+and afterwards nothing resolves through them -- so
+`mevedel-session-publication-collect-generations` runs there, best-effort,
+under the owner's lease.
+
+Collection is a mark-and-sweep, never an age cap, because manifests are
+chained: a committed manifest carries unchanged entries forward verbatim rather
+than copying their bytes, so a retained head resolves artifacts through the
+generations that first wrote them.  Deleting by age would break the current
+head.  Three kinds of generation are retained: one per distinct settled turn
+state, which is what a restore targets; the newest
+`mevedel-session-publication-keep-recent-generations` regardless; and the
+reference closure of both.  A generation captured mid-turn is not a settled
+state -- its latest prompt is one turn ahead of its turn count -- so it is
+collectable once its turn settles, and orphaned generations from failed
+publishes fall out of the same closure test.
+
+The retained count therefore floors above the number of turns rather than at
+it: the measured session collects 88 of 101 generations and keeps 13, because
+retained blobs keep their original directories alive.  Making it exactly one
+directory per turn would mean rewriting each retained head as self-contained,
+which is the copying that carry-forward exists to avoid.
+
+`ponytail:` collection has no read pins.  The grace window covers the race it
+replaces them for -- a follower re-reads the owner's current head rather than
+pinning it, and the newest generations are retained regardless -- but a reader
+that resolved an older non-boundary head can still lose its bytes, and will see
+a hash or absence failure rather than silent corruption.  Add pins if
+cross-client following of superseded heads ever becomes a real access pattern.
 
 Terminal retained-agent state in an already-materialized portable project session uses
 the same seam: finalization first updates the in-memory transcript metadata and
@@ -874,20 +902,35 @@ no-op Rewind remain on the archived projection.
 
 ### Rewind
 
-`mevedel-rewind` picks a settled assistant response across all segments.
-`mevedel-view-rewind-at-point`, also available as `R` in the session cockpit,
-uses the response at point. Both routes show the same impact and require
-explicit confirmation.
+Rewind removes everything after a boundary, and each entry point places that
+boundary on the side that matches what it names. `mevedel-view-rewind-at-point`,
+also available as `R` in the session cockpit, names the assistant response at
+point: that turn is the last one **kept**. `mevedel-rewind` picks one of the
+user's own prompts across all segments and returns to just **before** it, so
+the prompt and its answer are discarded and it can be asked again -- which is
+the reason to select a prompt at all. The directive **Rewind before this
+implementation...** action is a `before` boundary for the same reason.
+
+Coverage is complementary rather than duplicated: the point route reaches every
+boundary that follows a response but cannot empty a session, since no response
+precedes the first prompt, while the prompt picker reaches every boundary before
+a prompt including the first, which is the empty state. Both routes show the
+same impact, name the boundary and both sides of it, and require explicit
+confirmation.
 
 The Navigate submenu's `n`/`p` actions move through rendered displays for
 inspection, while `C-n`/`C-p` move through user queries. These navigation actions change
 neither transcript nor session state; Rewind remains a separate explicit
 operation.
 
-Rewind is an in-place logical transaction. It discards the selected turn and
-every later transcript and session artifact, restores every captured
-working-tree file to immediately before the selected turn, and keeps the same
-session identity, name, directory, working directory, and lineage.
+Rewind is an in-place logical transaction. It discards every transcript and
+session artifact after the boundary, restores every captured working-tree file
+to the state that boundary owned, and keeps the same session identity, name,
+directory, working directory, and lineage. The candidate session state is the
+single place the boundary is decided; the transcript cutoff, instruction
+snapshot pruning, and remote staging pruning all derive their answers from its
+surviving turn count, and the file plan reads a turn's pre-turn checkpoint for a
+`before` boundary and its post-turn checkpoint for `after`.
 File-workspace sessions stage and swap a session directory with a rollback
 tree.  Portable project sessions leave the directory and control state in
 place and commit one complete replacement manifest through the owned lease
@@ -906,8 +949,9 @@ promotes its temporary repair directory to the target-side specialized
 recovery marker and bytes described above; a successful Rewind removes those
 rollback bytes and does not create a recovery tree. Every settled model turn, including the first, owns a durable pre-turn
 checkpoint. The impact marks coverage as complete or lists known gaps; gaps do
-not disable Rewind and are never presented as restored paths. Rewind creates
-neither a child session nor a redo variant. Existing
+not disable Rewind and are never presented as restored paths. Rewind creates no child session. A portable
+session's superseded head stays published, so `mevedel-redo` can restore its
+conversation as described below; a PID-lock session has no redo. Existing
 child sessions and worktrees are not removed; children forked after the target
 become detached from the Source's visible history.
 
@@ -927,8 +971,9 @@ this same Rewind transaction and impact confirmation.
 Only a committed Rewind emits `SessionStart(rewind)`; it does not emit
 `SessionEnd`. Any context produced by that event belongs to the next accepted
 prompt. Cancellation, rollback, and an empty impact emit no Rewind lifecycle
-event. Selecting the latest response discards that response and its prompt,
-even when it is the first turn in the session.
+event. Selecting the first prompt in the picker discards that prompt and its
+answer, which empties the session; selecting the latest response at point keeps
+everything and reports an empty impact instead.
 
 Current session settings survive. Tasks, Goal, retained agents and mailboxes,
 pending Plan state, permission queues, and execution state are cleared because
@@ -942,6 +987,61 @@ session ownership boundary.
 Rewind and `/clear` also refuse while either pending-input category is nonempty.
 The user must resolve the entries in the Pending Inputs cockpit or explicitly
 clear them with `C-c C-q` before a destructive transcript operation.
+
+### Redo
+
+`mevedel-redo` restores a portable session's conversation to one of its
+superseded published heads. Every committed head is immutable, so the state a
+Rewind moved away from is still on disk as a complete, hash-verified
+generation; redo is an exposure of that state rather than a new mechanism.
+
+The picker lists turn states, not generations. A generation is written on every
+committed save, so `mevedel-session-rewind-published-heads` groups them by the
+turn count and fork point their published sidecar records, offers the newest
+generation of each state, drops the state the session is already in, and drops
+heads captured mid-turn -- a head whose latest prompt is one turn ahead of its
+turn count restores a half-arrived response, which is a recovery state rather
+than a choice. Rows are labelled with segment, turn, and that turn's prompt
+through `mevedel-session-rewind--prompt-label`, the same label the Rewind
+picker uses, so undo and redo read as one vocabulary over turns. On the
+measured session this turned 100 generation rows into 5 turn rows.
+
+Restoring republishes the chosen generation as a **new** committed head under
+the session's reserved lease: the artifacts are materialized into a temporary
+staging root, the staged sidecar becomes the candidate logical state, and the
+whole set is published exactly as a Rewind publishes its replacement. Because
+the restore is an ordinary publication and not a rollback, the head it moves
+away from stays published in turn, so redo composes in both directions instead
+of consuming history. Where a session lives and what it talks to -- save path,
+execution target, working directory -- stays live and is never adopted from the
+snapshot.
+
+Redo returns the transcript, sidecar state, instruction snapshots, retained
+agent transcripts, and persisted tool results, and it restores captured
+working-tree files in the same transaction. Captured bytes live in published
+`file-history` artifacts indexed by the sidecar's per-turn snapshots: a Rewind
+trims that index while republishing the bytes, so the head being restored still
+names its own captured file state. Coverage is Rewind's coverage -- uncaptured
+filesystem effects remain -- and workspace directive records a Rewind pruned do
+not come back.
+
+Because files are involved, redo is a two-phase transaction and follows
+Rewind's ordering. Preparation reads only immutable published bytes, so
+materialization, the file plan, the modified-buffer prompt, and the
+confirmation all run with no lease held. The confirmation names the turns and
+captured files the restore returns, plus any captured file whose current
+contents changed externally and would be overwritten. One reserved-lease
+operation then rechecks that the current head is still the one the caller saw,
+rechecks the confirmed file plan, backs up current contents, and restores the
+files; the head CAS follows, and any failure before it rolls those files back.
+Declining the confirmation mutates nothing.
+
+A PID-lock file session publishes no immutable heads and therefore has no redo,
+which is why the Rewind confirmation promises conversation and captured-file
+redo for a portable session and none for a file session. Redo refuses under the same
+stable-source conditions as Rewind, and a failed buffer install degrades to a
+warning naming its own frame rather than abandoning the refreshes that follow
+a committed head.
 
 ### Fork
 

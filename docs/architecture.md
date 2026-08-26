@@ -557,9 +557,10 @@ canonical spans directly.
 neutral labelled evidence for `mevedel-context-summary.el`. The projection
 preserves ordering while excluding hidden UI/audit spans, bounding tool
 content, and replacing native media with textual metadata. The stateless
-generator owns the isolated non-streaming request, `summarization` workload,
-preflight, heading validation, cancellation, and request telemetry; consumers
-retain source selection, hooks, retries, persistence, and mutation.
+generator owns the isolated request, inherits the session's streaming choice,
+accepts both streamed and one-shot delivery, and owns the `summarization`
+workload, preflight, heading validation, cancellation, and request telemetry;
+consumers retain source selection, hooks, retries, persistence, and mutation.
 Plan feeds both Summary locations the same handoff evidence and exact relevance
 focus. Here applies the result through root compaction; Worktree generates once,
 caches it in retry state, and applies path portability before target insertion.

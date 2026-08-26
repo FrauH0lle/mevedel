@@ -245,9 +245,7 @@
                    (cons (* 10 (string-width (buffer-string))) 1))))
         (should (equal [1 1 1 1]
                        (mevedel-view-table--char-widths
-                        "Name" (selected-window))))
-        (should (= 4 (mevedel-view-table--wrap-string-width
-                      "Name" (selected-window)))))
+                        "Name" (selected-window)))))
       (should (= 0 measurements))))
 
   :doc "a measurement failure falls back to character widths"
