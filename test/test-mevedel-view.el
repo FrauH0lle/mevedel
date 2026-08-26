@@ -6,7 +6,6 @@
 
 ;;; Code:
 
-(require 'ert)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -14,38 +13,23 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+(require 'mevedel-agent-control)
+(require 'mevedel-agents)
 (require 'mevedel-execution)
 (require 'mevedel-execution-target)
 (require 'mevedel-executions-list)
 (require 'mevedel-view)
 (require 'mevedel-view-stream)
 (require 'mevedel-menu)
-(require 'mevedel-transcript)
-(require 'mevedel-transcript-restore)
 (require 'mevedel-transport)
 (require 'mevedel-structs)
-(require 'mevedel-pipeline)
-(require 'mevedel-tool-media)
-(require 'mevedel-tool-registry)
-(require 'mevedel-mentions)
-(require 'mevedel-skills-ui)
+(require 'mevedel-skills-core)
 (require 'mevedel-workspace)
-(require 'mevedel-file-state)
 (require 'mevedel-plan-mode)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-publication)
 (require 'mevedel-session-recovery)
-(require 'mevedel-tool-ui)
 (require 'mevedel-permission-queue)
-(require 'mevedel-tool-exec)
-(require 'mevedel-goal)
-(require 'mevedel-tool-task)
-(require 'mevedel-agents)
-(require 'mevedel-agent-runtime)
-(require 'mevedel-hooks)
-(require 'mevedel-review)
-(require 'mevedel-view-zone)
-(require 'mevedel-view-history)
 
 (defvar org-mode-hook)
 (declare-function gptel-menu "ext:gptel-transient" ())
@@ -798,7 +782,6 @@
             (org-mode)
             (setq-local mevedel--session session))
           (mevedel-view--setup view-buf data-buf)
-          (require 'gptel-agent-tools)
           (require 'mevedel-interaction-prompt)
           (with-current-buffer data-buf
             (mevedel--prompt-user-with-overlay
