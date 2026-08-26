@@ -961,6 +961,37 @@
       (should-not (string-match-p "main pending three" text))
       (should-not (string-match-p "main done" text)))))
 
+(mevedel-deftest mevedel-tool-task--render-list
+  (:doc "`mevedel-tool-task--render-list' names the filter it actually used")
+  ,test
+  (test)
+  :doc "counts tasks without a filter clause when none was given"
+  (let ((result "#1 [pending] first\n#2 [completed] second"))
+    (dolist (args (list nil (list :status "") (list :status :json-false)))
+      (let ((rendering
+             (mevedel-tool-task--render-list "TaskList" args result nil)))
+        ;; A blank status used to render as `TaskList: , 2 tasks'.
+        (should (equal "TaskList: 2 tasks"
+                       (plist-get rendering :header)))
+        (should (equal result (plist-get rendering :body)))
+        (should (plist-get rendering :initially-collapsed-p)))))
+
+  :doc "names the filter and agrees in number with one task"
+  (let* ((result "Tasks with status completed:\n#2 [completed] second")
+         (rendering
+          (mevedel-tool-task--render-list
+           "TaskList" (list :status "completed") result nil)))
+    (should (equal "TaskList: completed, 1 task"
+                   (plist-get rendering :header)))
+    (should-not (plist-get rendering :status)))
+
+  :doc "reports an error result with error status"
+  (let* ((result "Error: Invalid task status: \"done\"")
+         (rendering
+          (mevedel-tool-task--render-list
+           "TaskList" (list :status "done") result nil)))
+    (should (eq 'error (plist-get rendering :status)))))
+
 (mevedel-deftest mevedel-tool-task--status-line-budget
   (:doc "`mevedel-tool-task--status-line-budget' always widens when expanded")
   ,test
@@ -1400,6 +1431,23 @@
     (let ((result (plist-get (mevedel-tool-task--handle-list nil) :result)))
       (should (string-match-p "one" result))
       (should (string-match-p "two" result))))
+
+  :doc "treats a blank or placeholder status as no filter at all"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "done1" :status "completed")
+                          (list :subject "pending1" :status "pending"))))
+    ;; An empty string used to reach `--parse-status', which reads it as
+    ;; `pending' -- so the model asked for every task and silently got a
+    ;; subset under a "Tasks with status pending" heading.
+    (dolist (placeholder (list "" :json-false nil))
+      (let ((result (plist-get
+                     (mevedel-tool-task--handle-list
+                      (list :status placeholder))
+                     :result)))
+        (should (string-match-p "done1" result))
+        (should (string-match-p "pending1" result))
+        (should-not (string-match-p "Tasks with status" result)))))
 
   :doc "filters by status"
   (test-mevedel-tool-task--with-session session

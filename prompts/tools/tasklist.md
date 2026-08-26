@@ -19,7 +19,8 @@ list.
 ### How to use `TaskList`
 
 - `status` — optional filter: `"pending"`, `"in_progress"`, or
-  `"completed"`. Omit to see all tasks.
+  `"completed"`. Omit the argument to see all tasks; an empty string
+  counts as omitting it, not as a filter.
 
 ### Examples of good usage
 
@@ -38,6 +39,14 @@ TaskList(status="done")
 <reasoning>
 Invalid filter value. The status filter accepts "pending",
 "in_progress", or "completed".
+</reasoning>
+</example>
+
+<example>
+TaskList(status="")
+<reasoning>
+An empty filter is the same as no filter, so this returns every task.
+Write TaskList() instead and say what you meant.
 </reasoning>
 </example>
 
