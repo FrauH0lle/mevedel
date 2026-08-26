@@ -305,9 +305,6 @@
                            :turn-count 4))
                  (markdown "# Plan\n\nDo it.")
                  (publishes 0)
-                 ;; Load the exact-autoload owner before capturing its real
-                 ;; function definition.
-                 (_ (require 'mevedel-session-artifacts))
                  (real (symbol-function
                         'mevedel-session-artifacts-publish-text)))
             (setf (mevedel-session-plan-metadata session)
