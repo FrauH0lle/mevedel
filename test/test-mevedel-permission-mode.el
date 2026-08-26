@@ -10,6 +10,7 @@
 (require 'mevedel-permission-mode)
 (require 'mevedel-plan-mode)
 (require 'mevedel-reminders)
+(require 'mevedel-skills-ui)
 (require 'mevedel-structs)
 (require 'mevedel-view-composer)
 (require 'helpers
@@ -58,8 +59,6 @@
       (should (eq 'ask (mevedel-session-permission-mode session)))))
 
   :doc "keeps a committed transition when an incomplete view cannot repaint"
-  (require 'mevedel-skills-ui)
-  (require 'mevedel-view-composer)
   (let ((data-buffer (generate-new-buffer " *mev-mode-data*"))
         (view-buffer (generate-new-buffer " *mev-mode-view*")))
     (unwind-protect
