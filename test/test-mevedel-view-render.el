@@ -9,9 +9,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
-(require 'gptel-agent-tools)
 (require 'mevedel-agent-conversation)
-(require 'mevedel-chat)
 (require 'mevedel-directive)
 (require 'mevedel-view)
 (require 'mevedel-view-audit)
@@ -20,7 +18,6 @@
 
 ;; Focused dependencies moved with the rendering tests.
 (require 'mevedel-view-stream)
-(require 'mevedel-menu)
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-restore)
 (require 'mevedel-structs)
@@ -28,22 +25,13 @@
 (require 'mevedel-tool-media)
 (require 'mevedel-tool-render-data)
 (require 'mevedel-tool-registry)
-(require 'mevedel-tool-repair)
-(require 'mevedel-mentions)
-(require 'mevedel-skills-ui)
-(require 'mevedel-workspace)
-(require 'mevedel-file-state)
+(require 'mevedel-tool-repair-diagnostics)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-ui)
-(require 'mevedel-permission-queue)
 (require 'mevedel-tool-exec)
-(require 'mevedel-goal)
 (require 'mevedel-tool-task)
 (require 'mevedel-agents)
 (require 'mevedel-hooks)
-(require 'mevedel-review)
-(require 'mevedel-view-zone)
-(require 'mevedel-view-history)
 
 
 
@@ -3380,7 +3368,6 @@
             :path "/root/timer_patch_review"))))
       (with-current-buffer view-buf
         (goto-char (+ (mevedel-view--input-start) 4)))
-      (require 'mevedel-transcript-restore)
       (cl-letf (((symbol-function 'mevedel-transcript-restore-properties)
                 #'ignore)
                 ((symbol-function 'mevedel-view-rerender)
