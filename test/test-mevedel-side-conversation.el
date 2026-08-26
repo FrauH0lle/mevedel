@@ -16,7 +16,6 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-execution-test-helpers"))
-(require 'mevedel-execution-process)
 
 (defvar org-mode-hook)
 
@@ -24,10 +23,7 @@
 (require 'gptel-openai)
 (require 'gptel-request)
 (require 'mevedel)
-(require 'mevedel-session-persistence)
 (require 'mevedel-view)
-(require 'mevedel-view-composer)
-(require 'mevedel-bash-policy)
 
 (declare-function gptel-make-openai "ext:gptel-openai" (name &rest args))
 
@@ -341,7 +337,6 @@
                   (mevedel-view-send)
                   (should formatter-callback)
                   (should (file-exists-p frozen-path))
-                  (require 'mevedel-utilities)
                   (let ((mode-function
                          (symbol-function 'mevedel--transcript-org-mode)))
                     (cl-letf
