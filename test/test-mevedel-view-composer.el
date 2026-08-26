@@ -41,6 +41,7 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-hooks)
+(require 'mevedel-view-disclosure)
 (require 'mevedel-view-zone)
 (require 'mevedel-view-history)
 (require 'mevedel-resource-capf)
@@ -1402,7 +1403,116 @@
       (should mark-active)
       (should (equal "selection"
                      (buffer-substring-no-properties
-                      (region-beginning) (region-end)))))))
+                      (region-beginning) (region-end))))))
+
+  :doc "restores point into re-rendered content via its source anchor"
+  (with-temp-buffer
+    (insert "head ")
+    (insert (propertize "rendered run" 'mevedel-view-source '(40 . 90)))
+    ;; Point 4 chars into the run, on the second "e" of "rendered".
+    (goto-char (+ (point-min) (length "head ") 4))
+    (mevedel-view--call-preserving-window-state
+     (lambda ()
+       (delete-region (point-min) (point-max))
+       (insert "a much longer head this time ")
+       (insert (propertize "rendered run" 'mevedel-view-source '(40 . 90)))))
+    (should (= (point)
+               (+ (point-min) (length "a much longer head this time ") 4)))
+    (should (eq (char-after) ?e))))
+
+(mevedel-deftest mevedel-view--position-render-anchor ()
+  ,test
+  (test)
+  :doc "captures fragment coordinates inside a managed zone"
+  (with-temp-buffer
+    (setq-local mevedel-view--status-marker (copy-marker (point-min) t))
+    (setq-local mevedel-view--interaction-marker (copy-marker (point-min) t))
+    (setq-local mevedel-view--input-marker (copy-marker (point-min) nil))
+    (mevedel-view-zone-reconcile
+     'status (point-min) (point-min)
+     '((:namespace status :id tasks :body "abcdef")))
+    (should (equal '(fragment status tasks 3)
+                   (mevedel-view--position-render-anchor
+                    (+ (point-min) 3)))))
+
+  :doc "captures the source map for rendered transcript text"
+  (with-temp-buffer
+    (insert "head ")
+    (insert (propertize "rendered run" 'mevedel-view-source '(40 . 90)))
+    (insert " tail\n")
+    (should (equal '(source 40 0 4)
+                   (mevedel-view--position-render-anchor
+                    (+ (point-min) (length "head ") 4)))))
+
+  :doc "counts earlier runs sharing the same source start"
+  (with-temp-buffer
+    (insert (propertize "header" 'mevedel-view-source '(40 . 90)))
+    (insert "\n")
+    (let ((body-start (point)))
+      (insert (propertize "body text" 'mevedel-view-source (cons 40 90)))
+      (insert "\n")
+      (should (equal '(source 40 1 2)
+                     (mevedel-view--position-render-anchor
+                      (+ body-start 2))))))
+
+  :doc "returns nil for unannotated text and out-of-buffer positions"
+  (with-temp-buffer
+    (insert "plain text\n")
+    (should-not (mevedel-view--position-render-anchor (point-min)))
+    (should-not (mevedel-view--position-render-anchor (point-max)))))
+
+(mevedel-deftest mevedel-view--render-anchor-position ()
+  ,test
+  (test)
+  :doc "resolves a fragment anchor and clamps into a shrunken fragment"
+  (with-temp-buffer
+    (setq-local mevedel-view--status-marker (copy-marker (point-min) t))
+    (setq-local mevedel-view--interaction-marker (copy-marker (point-min) t))
+    (setq-local mevedel-view--input-marker (copy-marker (point-min) nil))
+    (mevedel-view-zone-reconcile
+     'status (point-min) (point-min)
+     '((:namespace status :id tasks :body "abcdef")))
+    (should (= (+ (point-min) 3)
+               (mevedel-view--render-anchor-position
+                '(fragment status tasks 3))))
+    (mevedel-view-zone-reconcile
+     'status (point-min) (point-min)
+     '((:namespace status :id tasks :body "ab")))
+    (should (= (+ (point-min) 2)
+               (mevedel-view--render-anchor-position
+                '(fragment status tasks 5)))))
+
+  :doc "resolves a source anchor to the run containing the data position"
+  (with-temp-buffer
+    (insert "a different head ")
+    (let ((run-start (point)))
+      (insert (propertize "rendered run" 'mevedel-view-source '(40 . 90)))
+      (insert " tail\n")
+      (should (= (+ run-start 4)
+                 (mevedel-view--render-anchor-position '(source 40 0 4))))
+      ;; Offsets past the run clamp to its last character.
+      (should (= (+ run-start (1- (length "rendered run")))
+                 (mevedel-view--render-anchor-position '(source 40 0 99))))))
+
+  :doc "the ordinal selects among runs sharing one source start"
+  (with-temp-buffer
+    (insert (propertize "header" 'mevedel-view-source '(40 . 90)))
+    (insert "\n")
+    (let ((body-start (point)))
+      (insert (propertize "body text" 'mevedel-view-source (cons 40 90)))
+      (insert "\n")
+      (should (= (+ (point-min) 2)
+                 (mevedel-view--render-anchor-position '(source 40 0 2))))
+      (should (= (+ body-start 2)
+                 (mevedel-view--render-anchor-position '(source 40 1 2))))))
+
+  :doc "returns nil for unresolvable anchors"
+  (with-temp-buffer
+    (insert "plain text\n")
+    (should-not (mevedel-view--render-anchor-position '(source 40 0 4)))
+    (should-not (mevedel-view--render-anchor-position
+                 '(fragment status tasks 0)))
+    (should-not (mevedel-view--render-anchor-position nil))))
 
 (mevedel-deftest mevedel-view--input-text ()
   ,test

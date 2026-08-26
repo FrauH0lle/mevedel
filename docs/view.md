@@ -710,6 +710,26 @@ interaction rebuilds, status/task rows, spinner ticks, pending-tool live
 lines, and targeted agent refreshes should preserve both composer text
 and point while suppressing modification hooks for view-owned changes.
 
+`mevedel-view--call-preserving-window-state` restores point, window points,
+and window starts through semantic render anchors rather than raw buffer
+positions: a composer position by its input offset, a managed-fragment
+position by zone namespace, fragment id, and offset, and rendered transcript
+text by its `mevedel-view-source` data start (plus an ordinal, since a fold
+header and its body can share one source start) and offset into the run. A
+raw position saved across a delete-and-re-render lands in different content
+whenever lengths shift — the cursor visibly drifted through live Bash output
+on every tick, and window starts jumped into unrelated turns after full
+rerenders. Anchors that cannot be resolved after the redraw fall back to the
+clamped raw position.
+
+The allocation-heavy chokepoints run with garbage collection batched
+(`mevedel--with-gc-batched`, a direct `gc-cons-threshold` binding with no
+external GC-tuning dependency): full and incremental transcript renders,
+session save transactions, every tool-pipeline step chain, and the gptel
+stream filter/cleanup advice. An unattended session otherwise runs at
+whatever low threshold the user's idle GC tuning left behind, paying many
+long collections inside a single redraw or settlement.
+
 A send that fails or is interrupted before the provider starts gets no
 terminal callback, so that boundary settles the turn itself: it keeps the
 committed user turn, records a retryable failure summary while the request
@@ -736,6 +756,17 @@ Full rerenders rebuild the zone markers from the header, skip leading
 compaction summaries, and re-anchor the in-flight assistant turn. Without
 a valid in-flight anchor, the next incremental render can erase freshly
 rendered history or duplicate a preserved live tail.
+
+The reanchor also repairs `mevedel-view--data-turn-start`, the data-buffer
+marker that bounds what incremental renders re-render. A whole-buffer
+rewrite of the data buffer — compaction application, segment rotation —
+goes through `erase-buffer` and collapses every marker to `point-min`; left
+unrepaired, each later incremental render extracted and re-rendered the
+entire transcript (a 54-minute debug capture showed the accepted-plan turn
+re-inserted into the live tail on every tick). When the projection found an
+assistant turn to anchor to, the data marker moves to that turn's data
+start; otherwise it parks at the data buffer's end, since everything before
+it was just rendered as settled history.
 
 Temporary buffers used only to fontify or render view text must suppress
 user major-mode hooks and local variables. Use
