@@ -1741,7 +1741,6 @@ this collapses both shapes to the delivered text."
   (test)
 
   :doc "xref availability accepts eglot, lsp, elisp, and readable etags backends"
-  (require 'xref)
   (dolist (backend '(eglot lsp elisp))
     (cl-letf (((symbol-function 'xref-find-backend)
                (lambda () backend)))
@@ -1760,7 +1759,6 @@ this collapses both shapes to the delivered text."
       (delete-file tags-file-name)))
 
   :doc "Imenu availability requires a non-empty user-visible index"
-  (require 'imenu)
   (let ((imenu--index-alist nil))
     (cl-letf (((symbol-function 'imenu--make-index-alist)
                (lambda (&optional _noerror)
