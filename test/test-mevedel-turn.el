@@ -7,7 +7,6 @@
 ;;; Code:
 
 (require 'gptel)
-(require 'mevedel)
 (require 'mevedel-hooks)
 (require 'mevedel-permission-queue)
 (require 'mevedel-session-persistence)
