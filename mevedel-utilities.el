@@ -961,6 +961,18 @@ after BODY."
   `(let ((gc-cons-threshold (max gc-cons-threshold (* 64 1024 1024))))
      ,@body))
 
+(defun mevedel--save-buffer-silently ()
+  "Save the current buffer without echoing or logging a save message.
+Programmatic session and segment saves run on every turn boundary, so
+the standard save echo -- and any user `after-save-hook' that reprints
+it, such as a vim-style \"NL, NC written\" message -- floods the echo
+area and *Messages*.  `save-silently' quiets Emacs's own message;
+`inhibit-message' and a nil `message-log-max' quiet hook-driven ones."
+  (let ((save-silently t)
+        (inhibit-message t)
+        (message-log-max nil))
+    (save-buffer)))
+
 (defun mevedel--write-file-atomically (path content &optional coding mode)
   "Replace PATH with string CONTENT through a same-directory rename.
 
