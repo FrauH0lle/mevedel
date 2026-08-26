@@ -6,11 +6,19 @@
 
 ;;; Code:
 
-(require 'mevedel)
-(require 'mevedel-turn)
+(require 'mevedel-agents)
+(require 'mevedel-execution-target)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permissions)
 (require 'mevedel-plan-mode)
 (require 'mevedel-queue)
+(require 'mevedel-session-artifacts)
+(require 'mevedel-session-codec)
+(require 'mevedel-session-durability)
+(require 'mevedel-session-persistence)
+(require 'mevedel-session-publication)
+(require 'mevedel-turn)
+(require 'mevedel-workspace)
 (require 'mevedel-workspace-identity)
 (require 'helpers
          (file-name-concat
