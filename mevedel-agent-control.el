@@ -110,9 +110,17 @@
 (autoload 'mevedel-model-resolve-workload "mevedel-models")
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-cancel-deferred-agent-save
+                  "mevedel-session-persistence" (session))
 (declare-function mevedel-session-persistence-save-agent-state
                   "mevedel-session-persistence" (session))
+(declare-function mevedel-session-persistence-save-agent-state-soon
+                  "mevedel-session-persistence" (session))
+(autoload 'mevedel-session-persistence-cancel-deferred-agent-save
+  "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-save-agent-state
+  "mevedel-session-persistence")
+(autoload 'mevedel-session-persistence-save-agent-state-soon
   "mevedel-session-persistence")
 
 ;; `mevedel-structs'
@@ -249,12 +257,18 @@ Return the normalized payload stored in the record."
   t)
 
 (defun mevedel-agent-control--persist-session (session)
-  "Best-effort persist SESSION's changed agent state."
+  "Best-effort persist SESSION's changed agent state.
+
+Observational transitions -- blocked/waiting activity flavors, mailbox
+consumption -- debounce into one non-forced save instead of a full
+synchronous publication each; the next acknowledged commit absorbs a
+pending one.  Recovery treats every active activity identically, so a
+crash inside the window costs at most a stale activity flavor and an
+already-possible mail re-delivery."
   (unless mevedel-agent-control-suppress-persistence
-    (when (mevedel-session-save-path session)
-      (condition-case nil
-          (mevedel-agent-control-commit-session session)
-        (error nil)))))
+    (condition-case nil
+        (mevedel-session-persistence-save-agent-state-soon session)
+      (error nil))))
 
 (defun mevedel-agent-control-block-turn (session path activity)
   "Block PATH's current turn in SESSION with durable ACTIVITY.
@@ -314,6 +328,9 @@ blockers compose and stale releases cannot alter a later follow-up."
 (defun mevedel-agent-control-teardown-session (session)
   "Kill every retained conversation buffer owned by SESSION."
   (when (mevedel-session-p session)
+    ;; The caller owns final persistence; a debounced save firing into
+    ;; killed buffers would only race it.
+    (mevedel-session-persistence-cancel-deferred-agent-save session)
     (mevedel-session--set-agent-reservations session nil)
     (mevedel-agent-control-cancel-wait session "/root")
     (dolist (entry (mevedel-session-agent-registry session))

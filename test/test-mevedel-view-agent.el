@@ -15,7 +15,6 @@
 (require 'mevedel-agents)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
-(require 'mevedel-tool-render-data)
 (require 'mevedel-tool-ui)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
@@ -886,36 +885,33 @@
             (should (equal before (buffer-string)))))))))
 
 (mevedel-deftest mevedel-view--agent-source-present-p
-  (:doc "answers Agent-source presence from the render-data side channel")
+  (:doc "answers Agent-source presence from invocation-owned markers")
   ,test
   (test)
   (mevedel-view-test--with-buffers
-    (let ((session (mevedel-view-agent-test--session))
-          (record (mevedel-view-agent-test--record "/root/worker_1"
-                                                   'running)))
+    (let* ((session (mevedel-view-agent-test--session))
+           (invocation (mevedel-agent-invocation--create))
+           (record (mevedel-view-agent-test--record
+                    "/root/worker_1" 'running invocation)))
       (setf (mevedel-session-agent-registry session)
             (list (cons "/root/worker_1" record)))
       (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        ;; No render-data block in the transcript yet.
-        (should-not
-         (mevedel-view--agent-source-present-p "/root/worker_1")))
-      (mevedel-view-test--insert-data
-       data-buf
-       (concat
-        mevedel-tool-render-data-open "\n"
-        (format
-         (concat "(:kind collaboration-event :event started :agent-id %S"
-                 " :status running :mevedel-tool-use-id \"tool-agent\")\n")
-         (mevedel-agent-record-id record))
-        mevedel-tool-render-data-close "\n")
-       '(tool . "tool-agent"))
+        (setq-local mevedel--session session)
+        (insert "agent render data")
+        (setf (mevedel-agent-invocation-render-data-start-marker invocation)
+              (copy-marker (point-min))
+              (mevedel-agent-invocation-render-data-end-marker invocation)
+              (copy-marker (point-max) t)))
       (with-current-buffer view-buf
         (should (mevedel-view--agent-source-present-p "/root/worker_1"))
         ;; A path without a registry record has no discoverable source.
         (should-not
-         (mevedel-view--agent-source-present-p "/root/other"))))))
+         (mevedel-view--agent-source-present-p "/root/other"))
+        ;; Markers in another buffer are not this view's source.
+        (setf (mevedel-agent-invocation-render-data-start-marker invocation)
+              (with-temp-buffer (copy-marker (point-min))))
+        (should-not
+         (mevedel-view--agent-source-present-p "/root/worker_1"))))))
 
 (mevedel-deftest mevedel-view-refresh-agent-rendering
   (:doc "coalesces canonical-path refreshes without altering the composer")

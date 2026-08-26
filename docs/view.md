@@ -834,7 +834,9 @@ targeted agent refreshes and full renders share entries, and tool
 block bounds are memoized per segment in a data-buffer-local table
 keyed on `buffer-modified-tick` (property-only changes included, since
 restored transcripts stamp gptel properties without character
-changes).
+changes). Agent-source presence checks reuse the invocation-owned
+render-data markers maintained by the live update path and never scan
+the transcript.
 
 `mevedel-view-disclosure.el` keys source-backed disclosure state from
 data-buffer coordinates and stable source anchors, not view-buffer positions.

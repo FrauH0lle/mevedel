@@ -3346,7 +3346,7 @@
   (:quiet t)
   ,test
   (test)
-  :doc "retries a failed remote diagnostic atomically without blocking mutation"
+  :doc "retries a failed remote diagnostic append without blocking mutation"
   (let* ((host "diagnostic-retry-host")
          (local-root
           (file-name-as-directory
@@ -3366,9 +3366,9 @@
             (let* ((save-path (mevedel-session-save-path session))
                    (log-path (file-name-concat save-path "hook-log.el"))
                    (entry '(:event Stop :status completed))
-                   (publish-artifact
+                   (append-file
                     (symbol-function
-                     'mevedel-session-publication--publish-artifact))
+                     'mevedel-session-control-fs-append-file))
                    (diagnostic-publications 0)
                    warning)
               (make-directory log-path)
@@ -3394,11 +3394,11 @@
               (delete-directory log-path)
               (cl-letf
                   (((symbol-function
-                     'mevedel-session-publication--publish-artifact)
-                    (lambda (artifact)
-                      (when (equal log-path (plist-get artifact :path))
+                     'mevedel-session-control-fs-append-file)
+                    (lambda (path content &optional coding-system)
+                      (when (equal log-path path)
                         (cl-incf diagnostic-publications))
-                      (funcall publish-artifact artifact))))
+                      (funcall append-file path content coding-system))))
                 (should (mevedel-session-artifacts-save
                          session (current-buffer)))
                 (let ((deadline (+ (float-time) 2)))
@@ -3464,8 +3464,8 @@
          (session
           (test-mevedel-session-durability--remote-session host local-root))
          (mevedel-session-durability--client-id (make-string 64 ?a))
-         (publish-artifact
-          (symbol-function 'mevedel-session-publication--publish-artifact))
+         (append-file
+          (symbol-function 'mevedel-session-control-fs-append-file))
          (finish-publication
           (symbol-function
            'mevedel-session-durability--finish-publication-lease))
@@ -3479,9 +3479,9 @@
           (should (mevedel-session-durability-lease-acquire
                    session-dir "*diagnostic*" session))
           (cl-letf
-              (((symbol-function 'mevedel-session-publication--publish-artifact)
-                (lambda (artifact)
-                  (prog1 (funcall publish-artifact artifact)
+              (((symbol-function 'mevedel-session-control-fs-append-file)
+                (lambda (path content &optional coding-system)
+                  (prog1 (funcall append-file path content coding-system)
                     (unless injected
                       (setq injected t
                             fail-finish t)

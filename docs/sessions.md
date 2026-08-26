@@ -605,6 +605,21 @@ caller returns only after that batch changes the immutable head.  Once the head
 has changed, later lease normalization or buffer save-hook failures are
 diagnostic cleanup failures rather than grounds to roll live agent state back.
 
+Observational agent persists are not acknowledged mutations.  Activity
+transitions (blocked/waiting flavors and their release) and mailbox
+consumption debounce into one non-forced save
+(`mevedel-session-persistence-save-agent-state-soon`); a synchronous
+acknowledged commit absorbs a pending one, and Emacs exit flushes the rest.
+Recovery treats every active activity identically and mail delivery is
+at-least-once, so a crash inside the debounce window costs at most a stale
+activity flavor and an already-possible re-delivery.  See ADR 0112.
+
+Diagnostic streams (telemetry, hook, permission, and repair logs) reach a
+remote target as one pinned `append` operation carrying only the delta;
+republishing the whole file per flush was quadratic in stream size.  The
+append works in place, so a crash mid-operation can tear one trailing line of
+a stream nothing reads at resume.
+
 Local Fork and Rewind retain their same-filesystem directory transactions and
 rollback trees.  Portable project lifecycle commits use the immutable
 publication head instead.  A portable project fork acquires one fresh child
@@ -780,9 +795,9 @@ back into live session state on resume.  Pre-materialization entries wait in
 a transient session queue and flush with the other diagnostic logs.  Failed
 hook, repair, permission, and telemetry appends stay queued and retry after
 the next successful session save; they never block critical publication.
-Portable project hook and repair appends share the session publication serializer and
-replace their target logs atomically, while failed diagnostic staging is
-discarded and the in-memory entries remain queued.
+Portable project diagnostic appends share the session publication serializer
+and send only their queued delta. A crash may tear the final line; failed
+appends leave the in-memory entries queued.
 
 For mevedel chat buffers, save-time advice around `gptel--save-state`
 strips every gptel request-config Org property (`GPTEL_BACKEND`,

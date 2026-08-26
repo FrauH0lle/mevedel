@@ -118,6 +118,28 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(mevedel-deftest mevedel-session-control-fs-append-file
+  (:doc "appends deltas in order and refuses symlink leaves")
+  (let* ((root (make-temp-file "mevedel-control-fs-append-" t))
+         (path (file-name-concat root "stream.el")))
+    (unwind-protect
+        (progn
+          ;; First append creates the file; later appends keep order and
+          ;; multibyte content intact.
+          (should (mevedel-session-control-fs-append-file path "one\n"))
+          (should (mevedel-session-control-fs-append-file
+                   path "zwei \u00e4\u754c\n"))
+          (should (equal "one\nzwei \u00e4\u754c\n"
+                         (mevedel-session-control-fs-read-file path)))
+          ;; A symlink leaf is refused before any write.
+          (let ((link (file-name-concat root "link")))
+            (make-symbolic-link path link)
+            (should-error
+             (mevedel-session-control-fs-append-file link "x\n"))
+            (should (equal "one\nzwei \u00e4\u754c\n"
+                           (mevedel-session-control-fs-read-file path)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-control-fs--programs ()
   ,test
   (test)

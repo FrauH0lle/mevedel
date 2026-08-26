@@ -250,9 +250,10 @@ prompts, schemas, validation messages, and results are excluded. The in-memory
 `mevedel-tool-repair-persist-log` is non-nil, materialized sessions also append
 events to `<session>/repair-log.el`; bounded events recorded before first
 materialization are backfilled when the session directory is created.
-Remote callback entries wait for session settlement and publish through an
-atomic replacement. Failed appends warn, remain queued, and retry after the
-next successful session save. Telemetry failures never block tool execution.
+Remote callback entries wait for session settlement and append only their
+queued delta. A crash may tear the final line; failed appends warn, remain
+queued, and retry after the next successful session save. Telemetry failures
+never block tool execution.
 `mevedel-tool-input-repair-enabled` disables mutation while retaining
 validation and telemetry.
 
