@@ -148,6 +148,20 @@ those the same as omitted arguments."
        (let ((value (plist-get args key)))
          (not (or (null value) (eq value :json-false))))))
 
+(defun mevedel-tool-task--optional-argument (args key)
+  "Return ARGS' KEY value, or nil when the caller meant to omit it.
+An empty string and `:json-false' both read as absent.  This is the
+opposite of `mevedel-tool-task--argument-value-present-p', whose callers
+give a blank value a meaning of its own: an empty owner selects Main and
+an empty note clears one.  Here a blank is a placeholder for an argument
+the caller did not supply, and reading it as a value silently answers a
+different question than the one asked."
+  (let ((value (plist-get args key)))
+    (unless (or (null value)
+                (eq value :json-false)
+                (and (stringp value) (string-empty-p value)))
+      value)))
+
 (defun mevedel-tool-task--owner-from-args (session args keys)
   "Return a normalized owner in SESSION from ARGS using KEYS.
 When none of KEYS has a value, default to the current caller owner.
@@ -307,12 +321,10 @@ Returns the updated task.  Signals an error if ID is unknown."
         (let ((d (plist-get p :description)))
           (setq description (and (stringp d) d)
                 description-p t)))
-      (let ((status-raw (mevedel-tool-task--plist-get-any p :status)))
-        (when (and status-raw
-                   (not (and (stringp status-raw)
-                             (string-empty-p status-raw))))
-          (setq new-status (mevedel-tool-task--parse-status status-raw)
-                status-p t)))
+      (when-let* ((status-raw (mevedel-tool-task--optional-argument
+                               p :status)))
+        (setq new-status (mevedel-tool-task--parse-status status-raw)
+              status-p t))
       (when (plist-member p :owner)
         (setq owner (mevedel-task-normalize-owner
                      (plist-get p :owner)
@@ -1010,7 +1022,7 @@ this runs after the task mutation it accompanies."
 (defun mevedel-tool-task--handle-list (args)
   "Handler for TaskList.  ARGS may include :status filter."
   (let* ((session (mevedel-tool-task--session))
-         (filter-raw (plist-get args :status))
+         (filter-raw (mevedel-tool-task--optional-argument args :status))
          (filter (and filter-raw
                       (mevedel-tool-task--parse-status filter-raw)))
          (tasks (mevedel-session-tasks session))
@@ -1123,7 +1135,8 @@ this runs after the task mutation it accompanies."
 (defun mevedel-tool-task--render-list (name args result _render-data)
   "Return rendering plist for TaskList NAME, ARGS, and RESULT."
   (when (stringp result)
-    (let* ((status-filter (plist-get args :status))
+    (let* ((status-filter (mevedel-tool-task--optional-argument
+                           args :status))
            (count (mevedel-tool-task--task-line-count result))
            (suffix (if status-filter
                        (format "%s, %d %s"
