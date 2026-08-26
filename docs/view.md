@@ -820,8 +820,21 @@ one tool retain independent collapse state across rerenders.
 
 Tool-rendering caches are disposable UI caches, not just text caches.
 Cache keys must include session-side state that changes visible
-headers/status, and collapsed-header cache entries should omit large
-bodies so expansion can recompute body content when needed.
+headers/status — currently permission-queue origins and pending plan
+approval — and collapsed-header cache entries should omit large bodies
+so expansion can recompute body content when needed. Agent registry
+activity is deliberately excluded from the key: agent handle status
+reaches a rendering only through render-data blocks patched into the
+transcript text, which the content term already invalidates, while
+registry activity changes on every agent tick and would defeat the
+cache exactly during agent runs. A new live-state dependency must
+either ride a text patch or clear the tool-rendering cache at its
+mutation point. Cache keys normalize marker positions to integers so
+targeted agent refreshes and full renders share entries, and tool
+block bounds are memoized per segment in a data-buffer-local table
+keyed on `buffer-modified-tick` (property-only changes included, since
+restored transcripts stamp gptel properties without character
+changes).
 
 `mevedel-view-disclosure.el` keys source-backed disclosure state from
 data-buffer coordinates and stable source anchors, not view-buffer positions.

@@ -77,8 +77,9 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 
-;; `mevedel-transcript'
-(declare-function mevedel-transcript-segments "mevedel-transcript" (start end))
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-find-agent-block
+                  "mevedel-tool-render-data" (agent-id))
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties
@@ -125,7 +126,6 @@
 (declare-function mevedel-view--full-rerender "mevedel-view-render" ())
 (declare-function mevedel-view--insert-rendered-tool "mevedel-view-render" (rendering source))
 (declare-function mevedel-view--segment-rendering "mevedel-view-render" (data-buf seg-start seg-end &optional collapsed-only))
-(declare-function mevedel-view--tool-call-parse "mevedel-view-render" (data-buf seg-start seg-end &optional raw))
 (declare-function mevedel-view-next-display "mevedel-view-render" ())
 (declare-function mevedel-view-previous-display "mevedel-view-render" ())
 (declare-function mevedel-view-render-add-display-properties
@@ -1131,24 +1131,20 @@ collapsed marker; expanded row content is rendered from Agent handles."
        (eq (get-text-property pos 'mevedel-view-zone-id) 'agents)))
 
 (defun mevedel-view--agent-source-present-p (agent-path)
-  "Return non-nil if the data buffer has an Agent source for AGENT-PATH."
-  (when (and (boundp 'mevedel--data-buffer)
-             (buffer-live-p mevedel--data-buffer))
-    (let ((data-buf mevedel--data-buffer))
-      (with-current-buffer data-buf
-        (save-restriction
-          (widen)
-          (catch 'found
-            (dolist (seg (mevedel-transcript-segments (point-min) (point-max)))
-              (when (eq (car seg) 'tool)
-                (when-let* ((call (mevedel-view--tool-call-parse
-                                   data-buf (cadr seg) (caddr seg))))
-                  (when (and (equal (plist-get call :name) "Agent")
-                             (equal (plist-get (plist-get call :render-data)
-                                               :path)
-                                    agent-path))
-                    (throw 'found t)))))
-            nil))))))
+  "Return non-nil if the data buffer has an Agent source for AGENT-PATH.
+
+The Agent tool result carries a render-data block keyed by the
+record's agent id -- the same block the background handle patch path
+locates -- so presence is one bounded search instead of parsing every
+tool segment in the transcript.  This runs per refresh tick while the
+handle is not yet rendered."
+  (when-let* ((record (mevedel-view--agent-record agent-path))
+              (id (mevedel-agent-record-id record))
+              (data-buf (and (boundp 'mevedel--data-buffer)
+                             mevedel--data-buffer))
+              ((buffer-live-p data-buf)))
+    (with-current-buffer data-buf
+      (and (mevedel-tool-render-data-find-agent-block id) t))))
 
 (defun mevedel-view--agent-handle-refresh-points (agent-path)
   "Return source-backed visible handle positions for AGENT-PATH.
