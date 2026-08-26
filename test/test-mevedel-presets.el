@@ -901,6 +901,7 @@
   (:before-each (progn (mevedel-tool-fs--register)
                        (mevedel-tool-code--register)
                        (mevedel-tool-exec--register)
+                       (mevedel-tool-ptc--register)
                        (mevedel-tool-ui--register)
                        (mevedel-tool-task--register)
                        (mevedel-tool-introspect--register)
