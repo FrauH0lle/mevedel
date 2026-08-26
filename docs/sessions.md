@@ -607,12 +607,16 @@ diagnostic cleanup failures rather than grounds to roll live agent state back.
 
 Observational agent persists are not acknowledged mutations.  Activity
 transitions (blocked/waiting flavors and their release) and mailbox
-consumption debounce into one non-forced save
-(`mevedel-session-persistence-save-agent-state-soon`); a synchronous
-acknowledged commit absorbs a pending one, and Emacs exit flushes the rest.
-Recovery treats every active activity identically and mail delivery is
-at-least-once, so a crash inside the debounce window costs at most a stale
-activity flavor and an already-possible re-delivery.  See ADR 0112.
+consumption debounce into one sidecar-only registry save
+(`mevedel-session-persistence-save-agent-state-soon`, landing as
+`mevedel-session-artifacts-save-agent-registry`): the sidecar carries the
+agent registry the persist is about, and the transcript segment is committed
+at settlement, so the observational path never saves the segment or scans
+snapshots.  A synchronous acknowledged commit absorbs a pending one, and
+Emacs exit flushes the rest.  Recovery treats every active activity
+identically and mail delivery is at-least-once, so a crash inside the
+debounce window costs at most a stale activity flavor and an
+already-possible re-delivery.  See ADR 0112.
 
 Diagnostic streams (telemetry, hook, permission, and repair logs) reach a
 remote target as one pinned `append` operation carrying only the delta;
