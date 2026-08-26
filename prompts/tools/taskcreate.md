@@ -33,7 +33,9 @@ Pass `tasks` as an array. Each task object may contain:
   deliberate user-defined bucket. Omit it for your own tasks. Use
   subjects/descriptions for workstream names; use the actual retained path
   instead of inventing a proxy owner for an agent.
-- `blockedBy` — optional array of task IDs that must complete first
+- `blockedBy` — optional array of task IDs that must complete first.
+  IDs that are unknown or already completed are dropped, so the created
+  task comes back unblocked rather than waiting on finished work
 - `metadata` — optional free-form object for extra data
 
 Top-level `note` may be passed with the create call to update the

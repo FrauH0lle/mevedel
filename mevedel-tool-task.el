@@ -244,7 +244,13 @@ The JSON object from gptel may arrive as either form; normalize once."
   (mevedel-current-turn session))
 
 (defun mevedel-tool-task--mark-write (session)
-  "Record a successful task write on SESSION."
+  "Record a successful task write on SESSION.
+Also drops dependency edges the write resolved.  Every task mutation
+lands here, which is why the invariant lives here: a task created
+blocked by an already-completed ID, or updated into one, would otherwise
+keep that edge forever -- nothing clears it, because unblocking only
+ever fired on a task's transition to completed."
+  (mevedel-task-prune-resolved-dependencies (mevedel-session-tasks session))
   (setf (mevedel-session-last-task-write-turn session)
         (mevedel-tool-task--write-turn session)))
 
@@ -333,8 +339,7 @@ Returns the updated task.  Signals an error if ID is unknown."
           (when (and (eq new-status 'completed)
                      (not (eq old-status 'completed)))
             (setf (mevedel-task-completed-turn task)
-                  (mevedel-tool-task--write-turn session))
-            (mevedel-tool-task--propagate-completion session task))))
+                  (mevedel-tool-task--write-turn session)))))
       (when owner-p
         (setf (mevedel-task-owner task) owner))
       (when blocked-by-p
@@ -343,19 +348,12 @@ Returns the updated task.  Signals an error if ID is unknown."
         (setf (mevedel-task-metadata task) metadata)))
     task))
 
-(defun mevedel-tool-task--propagate-completion (session task)
-  "Remove TASK's ID from blocked tasks in SESSION."
-  (let ((id (mevedel-task-id task)))
-    (dolist (other (mevedel-session-tasks session))
-      (when (memq id (mevedel-task-blocked-by other))
-        (setf (mevedel-task-blocked-by other)
-              (delq id (mevedel-task-blocked-by other)))))))
-
 (defun mevedel-tool-task-finalize-owner (session owner status)
   "Reconcile SESSION tasks owned by OWNER for terminal agent STATUS.
 When STATUS is `completed' and OWNER is a canonical non-root path, mark all
-open tasks for that owner completed, propagate dependency unblocking, and
-  clear that owner's task status note.  Return non-nil when SESSION changed."
+open tasks for that owner completed and clear that owner's task status
+note.  Dependents unblock through `mevedel-tool-task--mark-write'.
+Return non-nil when SESSION changed."
   (when (and (eq status 'completed)
              (mevedel-agent-path-p owner)
              (not (equal owner "/root")))
@@ -366,7 +364,6 @@ open tasks for that owner completed, propagate dependency unblocking, and
                    (mevedel-tool-task--active-p task))
           (setf (mevedel-task-status task) 'completed)
           (setf (mevedel-task-completed-turn task) turn)
-          (mevedel-tool-task--propagate-completion session task)
           (setq changed t)))
       (when (mevedel-tool-task--status-note-entry session owner)
         (mevedel-tool-task--set-status-note session owner nil)

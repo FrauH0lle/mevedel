@@ -215,7 +215,7 @@
   :doc "rejects non-string owner values"
   (should-error (mevedel-task-normalize-owner 42 nil)))
 
-(mevedel-deftest mevedel-task-prune-dangling-dependencies ()
+(mevedel-deftest mevedel-task-prune-resolved-dependencies ()
   ,test
   (test)
   :doc "removes missing IDs from task dependencies"
@@ -226,9 +226,23 @@
           (mevedel-task--create
            :id 3 :blocked-by '(1 2)))
          (tasks (list first third)))
-    (should (eq tasks (mevedel-task-prune-dangling-dependencies tasks)))
+    (should (eq tasks (mevedel-task-prune-resolved-dependencies tasks)))
     (should (equal '(3) (mevedel-task-blocked-by first)))
-    (should (equal '(1) (mevedel-task-blocked-by third)))))
+    (should (equal '(1) (mevedel-task-blocked-by third))))
+
+  :doc "removes completed blockers, which nothing else would ever clear"
+  (let* ((done
+          (mevedel-task--create
+           :id 1 :status 'completed))
+         (running
+          (mevedel-task--create
+           :id 2 :status 'in-progress))
+         (waiting
+          (mevedel-task--create
+           :id 3 :status 'pending :blocked-by '(1 2)))
+         (tasks (list done running waiting)))
+    (mevedel-task-prune-resolved-dependencies tasks)
+    (should (equal '(2) (mevedel-task-blocked-by waiting)))))
 
 
 ;;

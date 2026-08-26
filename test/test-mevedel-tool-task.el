@@ -227,6 +227,23 @@
                (substring-no-properties
                 (mevedel-tool-task--format-groups session t))))))
 
+  :doc "drops a blockedBy edge to an already-completed task"
+  (test-mevedel-tool-task--with-session session
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "groundwork"))))
+    (mevedel-tool-task--handle-update (list :id 1 :status "completed"))
+    (mevedel-tool-task--handle-create
+     (list :tasks (vector (list :subject "follow-up" :blockedBy (vector 1)))))
+    (let ((follow-up (cadr (mevedel-session-tasks session))))
+      ;; Nothing else would ever clear it: unblocking only fires on a
+      ;; task's transition to completed, and #1 completed before #2 existed.
+      (should (equal "follow-up" (mevedel-task-subject follow-up)))
+      (should-not (mevedel-task-blocked-by follow-up))
+      (should-not (string-match-p
+                   "blocked by"
+                   (substring-no-properties
+                    (mevedel-tool-task--format-groups session))))))
+
   :doc "preserves blockedBy and owner fields"
   (test-mevedel-tool-task--with-session session
     (mevedel-tool-task--handle-create
