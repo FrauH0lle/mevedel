@@ -41,14 +41,14 @@
 ;;; Completion
 
 (mevedel-deftest mevedel-resource-capf-prefixes
-  (:doc "offers the seven canonical scheme prefixes without a session")
+  (:doc "offers the eight canonical scheme prefixes without a session")
   (with-temp-buffer
     (let ((mevedel--session nil))
       (insert "")
       (let ((result (mevedel-resource-capf)))
         (should (equal
                  '("agent://" "artifact://" "history://" "local://"
-                   "mcp://" "memory://" "skill://")
+                   "mcp://" "memory://" "mevedel://" "skill://")
                  (sort (mevedel-resource-capf-test--candidates result)
                        #'string-lessp)))
         (dolist (candidate (mevedel-resource-capf-test--candidates result))
