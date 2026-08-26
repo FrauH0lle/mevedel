@@ -473,7 +473,6 @@
          entry
          next-called
          fail-reason)
-    (require 'mevedel-sandbox)
     (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
                (lambda (&rest _) facts))
               ((symbol-function 'mevedel-permission--enqueue)
