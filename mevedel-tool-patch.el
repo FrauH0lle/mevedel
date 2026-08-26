@@ -1230,10 +1230,13 @@ Refresh file tracking immediately and diagnostics before continuation."
                     (plist-get operation :modified))
            (cl-incf count)))))))
 
-(defun mevedel-tool-patch-result (proposal changes)
+(defun mevedel-tool-patch-result (proposal changes &optional reviewed)
   "Return the aggregate handler result for PROPOSAL and CHANGES.
 Rejected and feedback detail lines double as render-data notes so the
-settled transcript badge stays expandable without applied diffs."
+settled transcript badge stays expandable without applied diffs.
+REVIEWED marks a result settled through the interactive review; its
+transcript row then opens on the first changes so the user sees what
+the review just applied."
   (let (details notes)
     (cl-flet ((note (line)
                 (push line details)
@@ -1342,6 +1345,7 @@ settled transcript badge stays expandable without applied diffs."
                   :applied (if changes (plist-get stats :selected) 0)
                   :total (plist-get stats :total)
                   :comments (plist-get stats :comments)
+                  :reviewed (and reviewed t)
                   :notes (nreverse notes)
                   :files
                   (delq nil
@@ -1523,9 +1527,97 @@ has added private physical paths to their operation records."
                    (mevedel-tool-patch--physical-move-path operation)))))
     (plist-get proposal :operations))))
 
+(defun mevedel-tool-patch--file-heading (file)
+  "Return the one-line heading for per-file render data FILE."
+  (let ((path (if-let* ((destination (plist-get file :move-path)))
+                  (format "%s → %s" (plist-get file :path) destination)
+                (plist-get file :path))))
+    (concat
+     (propertize (mevedel-tool-patch-status file)
+                 'font-lock-face
+                 (mevedel-tool-patch-kind-face (plist-get file :kind)))
+     " " path " · "
+     (propertize (format "+%d" (plist-get file :added))
+                 'font-lock-face 'mevedel-view-tool-diff-added)
+     " "
+     (propertize (format "−%d" (plist-get file :deleted))
+                 'font-lock-face 'mevedel-view-tool-diff-removed))))
+
+(defun mevedel-tool-patch--diff-hunks (diff)
+  "Split DIFF into per-change chunks on `@@' hunk headers.
+A diff without hunk headers -- a whole added or deleted file -- is one
+chunk."
+  (if (string-match-p "^@@" diff)
+      (let (chunks current)
+        (dolist (line (split-string diff "\n"))
+          (when (and current (string-prefix-p "@@" line))
+            (push (string-join (nreverse current) "\n") chunks)
+            (setq current nil))
+          (push line current))
+        (when current
+          (push (string-join (nreverse current) "\n") chunks))
+        (nreverse chunks))
+    (list diff)))
+
+(defconst mevedel-tool-patch--preview-change-limit 2
+  "How many leading changes a reviewed patch row shows expanded.")
+
+(defconst mevedel-tool-patch--preview-line-limit 20
+  "Maximum diff lines one previewed change may occupy.")
+
+(defun mevedel-tool-patch--preview-body (render-data)
+  "Return the leading-changes preview body for RENDER-DATA.
+Shows the first `mevedel-tool-patch--preview-change-limit' changes with
+their file headings and a trailing count of everything omitted."
+  (let ((budget mevedel-tool-patch--preview-change-limit)
+        (shown 0)
+        (total 0)
+        blocks)
+    (dolist (file (plist-get render-data :files))
+      (let* ((diff (plist-get file :diff))
+             (hunks (unless (string-empty-p diff)
+                      (mevedel-tool-patch--diff-hunks diff))))
+        (cl-incf total (length hunks))
+        (when (and hunks (> budget 0))
+          (let ((take (min budget (length hunks))))
+            (push (string-join
+                   (cons
+                    (mevedel-tool-patch--file-heading file)
+                    (mapcar
+                     (lambda (hunk)
+                       (let ((lines (split-string hunk "\n")))
+                         (mevedel-tool-patch--fontify-diff
+                          (if (<= (length lines)
+                                  mevedel-tool-patch--preview-line-limit)
+                              hunk
+                            (concat
+                             (string-join
+                              (seq-take
+                               lines mevedel-tool-patch--preview-line-limit)
+                              "\n")
+                             "\n…")))))
+                     (seq-take hunks take)))
+                   "\n")
+                  blocks)
+            (cl-incf shown take)
+            (cl-decf budget take)))))
+    (string-join
+     (delq nil
+           (list (string-join (nreverse blocks) "\n\n")
+                 (when (> total shown)
+                   (propertize
+                    (format "… %d more change%s"
+                            (- total shown)
+                            (if (= (- total shown) 1) "" "s"))
+                    'font-lock-face 'shadow))))
+     "\n")))
+
 (defun mevedel-tool-patch--render
     (name _args _result render-data)
-  "Render an ApplyPatch result named NAME from RENDER-DATA."
+  "Render an ApplyPatch result named NAME from RENDER-DATA.
+A reviewed, applied patch renders initially expanded on a preview of
+its first changes; collapsing and re-expanding shows the complete
+diff."
   (when (eq (plist-get render-data :kind) 'patch)
     (let* ((files (plist-get render-data :files))
            (added (cl-loop for file in files sum (plist-get file :added)))
@@ -1536,68 +1628,49 @@ has added private physical paths to their operation records."
            (comments (or (plist-get render-data :comments) 0)))
       ;; "Name: arg (+N -M)" is the view's tool summary grammar; the
       ;; trailing count group picks up the green/red summary faces.
-      (list :header
-            (concat
-             (or name "ApplyPatch") ": "
-             (if (zerop applied)
-                 "revision requested"
-               (format "%d %s · %s"
-                       file-count (if (= file-count 1) "file" "files")
-                       (if (= applied total)
-                           (format "%d change%s" applied
-                                   (if (= applied 1) "" "s"))
-                         (format "%d/%d changes" applied total))))
-             (when (> comments 0)
-               (format " · %d comment%s sent"
-                       comments (if (= comments 1) "" "s")))
-             (unless (zerop applied)
-               (format " (+%d -%d)" added deleted)))
-            :body
-            (string-join
-             (delq nil
-                   (list
-                    (and files
-                         (mapconcat
-                          (lambda (file)
-                            (let ((path (if-let* ((destination
-                                                   (plist-get file
-                                                              :move-path)))
-                                            (format "%s → %s"
-                                                    (plist-get file :path)
-                                                    destination)
-                                          (plist-get file :path))))
-                              (string-join
-                               (delq nil
-                                     (list
-                                      (concat
-                                       (propertize
-                                        (mevedel-tool-patch-status file)
-                                        'font-lock-face
-                                        (mevedel-tool-patch-kind-face
-                                         (plist-get file :kind)))
-                                       " " path " · "
-                                       (propertize
-                                        (format "+%d" (plist-get file :added))
-                                        'font-lock-face
-                                        'mevedel-view-tool-diff-added)
-                                       " "
-                                       (propertize
-                                        (format "−%d"
-                                                (plist-get file :deleted))
-                                        'font-lock-face
-                                        'mevedel-view-tool-diff-removed))
-                                      (unless (string-empty-p
-                                               (plist-get file :diff))
-                                        (mevedel-tool-patch--fontify-diff
-                                         (plist-get file :diff)))))
-                               "\n")))
-                          files "\n\n"))
-                    (when-let* ((notes (plist-get render-data :notes)))
-                      (propertize (string-join notes "\n")
-                                  'font-lock-face 'shadow))))
-             "\n\n")
-            :expandable-p t
-            :initially-collapsed-p t))))
+      (append
+       (list :header
+             (concat
+              (or name "ApplyPatch") ": "
+              (if (zerop applied)
+                  "revision requested"
+                (format "%d %s · %s"
+                        file-count (if (= file-count 1) "file" "files")
+                        (if (= applied total)
+                            (format "%d change%s" applied
+                                    (if (= applied 1) "" "s"))
+                          (format "%d/%d changes" applied total))))
+              (when (> comments 0)
+                (format " · %d comment%s sent"
+                        comments (if (= comments 1) "" "s")))
+              (unless (zerop applied)
+                (format " (+%d -%d)" added deleted)))
+             :body
+             (string-join
+              (delq nil
+                    (list
+                     (and files
+                          (mapconcat
+                           (lambda (file)
+                             (string-join
+                              (delq nil
+                                    (list
+                                     (mevedel-tool-patch--file-heading file)
+                                     (unless (string-empty-p
+                                              (plist-get file :diff))
+                                       (mevedel-tool-patch--fontify-diff
+                                        (plist-get file :diff)))))
+                              "\n"))
+                           files "\n\n"))
+                     (when-let* ((notes (plist-get render-data :notes)))
+                       (propertize (string-join notes "\n")
+                                   'font-lock-face 'shadow))))
+              "\n\n")
+             :expandable-p t)
+       (if (and (plist-get render-data :reviewed) (> applied 0))
+           (list :initially-collapsed-p nil
+                 :preview-body (mevedel-tool-patch--preview-body render-data))
+         (list :initially-collapsed-p t))))))
 
 (defun mevedel-tool-patch-register ()
   "Register the ApplyPatch tool."

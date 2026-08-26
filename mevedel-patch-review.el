@@ -93,7 +93,7 @@
 (declare-function mevedel-tool-patch-resource-address-p
                   "mevedel-tool-patch" (value))
 (declare-function mevedel-tool-patch-result
-                  "mevedel-tool-patch" (proposal changes))
+                  "mevedel-tool-patch" (proposal changes &optional reviewed))
 (declare-function mevedel-tool-patch-sanitize-error
                   "mevedel-tool-patch" (message proposal))
 (declare-function mevedel-tool-patch-status
@@ -1283,7 +1283,7 @@ the edit moved the region it matches."
                                 0))
                  (result
                   (if (or changes feedback-p)
-                      (mevedel-tool-patch-result proposal changes)
+                      (mevedel-tool-patch-result proposal changes t)
                     (list :result "Error: Patch rejected" :status 'error)))
                  (overlay (plist-get proposal :overlay)))
             (overlay-put overlay 'mevedel--remote

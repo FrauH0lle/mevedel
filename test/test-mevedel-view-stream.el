@@ -3020,23 +3020,24 @@
                      "#\\+begin_tool\\|#\\+end_tool\\|n_tool" text)))))
 
   :doc "renders repeated read calls as individual tool rows"
-  (mevedel-view-stream-test--with-buffers
-    (dotimes (i 4)
-      (mevedel-view-stream-test--insert-data
-       data-buf
-       (format "(:name \"Read\" :args (:file_path \"/tmp/file%d.el\"))\n\ncontent %d\n"
-               i i)
-       `(tool . ,(format "call_%d" i))))
-    (with-current-buffer data-buf
-      (mevedel-view-stream-render-response (point-min) (point-max)))
-    (with-current-buffer view-buf
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should-not (string-match-p "Reading 4 files" text))
-        (dolist (file '("file0.el" "file1.el" "file2.el" "file3.el"))
-          (should (string-match-p
-                   (format "Read: .*%s" (regexp-quote file))
-                   text))))))
+  (let ((mevedel-view-tool-group-collapse-threshold 0))
+    (mevedel-view-stream-test--with-buffers
+      (dotimes (i 4)
+        (mevedel-view-stream-test--insert-data
+         data-buf
+         (format "(:name \"Read\" :args (:file_path \"/tmp/file%d.el\"))\n\ncontent %d\n"
+                 i i)
+         `(tool . ,(format "call_%d" i))))
+      (with-current-buffer data-buf
+        (mevedel-view-stream-render-response (point-min) (point-max)))
+      (with-current-buffer view-buf
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should-not (string-match-p "Reading 4 files" text))
+          (dolist (file '("file0.el" "file1.el" "file2.el" "file3.el"))
+            (should (string-match-p
+                     (format "Read: .*%s" (regexp-quote file))
+                     text)))))))
 
   :doc "renders user turn when in-flight marker outlives echoed user block"
   (mevedel-view-stream-test--with-buffers

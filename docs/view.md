@@ -192,6 +192,34 @@ Non-empty agent-message and agent-result mailbox bodies start collapsed by
 default; `mevedel-view-mailbox-collapse-line-threshold` can raise that
 threshold.
 
+Long user prompts fold to a one-line summary — the truncated first line plus
+a hidden line count such as `Please analyze this trace... (+83 lines)` —
+once they exceed `mevedel-view-user-input-collapse-line-threshold` (default
+15, 0 disables). The fold expands in place. The full text travels in a text
+property rather than being re-read from the data buffer, so the send-path
+echo folds identically before the turn has data-buffer coordinates; only
+the source-backed fold keeps its state across full rerenders. Prompts
+containing org block markers stay unfolded so their block decorations
+remain visible.
+
+Runs of more than `mevedel-view-tool-group-collapse-threshold` (default 3)
+consecutive plain tool rows fold into one grouped activity row such as
+`Searched 5 patterns, read 1 file, ran 5 commands`; tools without a verb
+mapping — MCP tools included — appear as `NAME ×N`. The expanded group
+reuses the compound-tool nested-row machinery: each call is a `tool-child`
+row rendered by its own tool's renderer with its own collapse state, and
+collapsing the group takes its rows with it. Rows that demand individual
+presentation — agent handles, compound tools, rows carrying hook audits or
+a sandbox line, rows their renderer wants expanded or compact, and
+coalesced rows — never fold into a group; they split the run around
+themselves. A group containing a failed call renders expanded with a
+warning marker.
+
+After an interactive ApplyPatch review settles, the applied patch row opens
+expanded on a preview of its first two changes with an `… N more changes`
+tail (the rendering's `:preview-body`); collapsing and re-expanding shows
+the complete diff. Unreviewed edits/full-auto applications stay collapsed.
+
 ## Zones
 
 The view buffer is split into vertically ordered regions. The data buffer
@@ -875,6 +903,23 @@ Rerenders should capture
 and reapply collapse state, including temporary in-flight anchors that later
 settle, so expanded tool/response sections do not collapse again during
 live refreshes.
+`mevedel-view-render-settle` computes those keys with their durable
+post-settle anchors (`mevedel-view-disclosure--settling-p`): it runs before
+the stream clears the in-flight turn markers, and keys captured or stamped
+under the temporary `(in-flight)` anchor there would be orphaned the moment
+those markers clear. Empty-string tool ids — restored transcripts stamp
+them where the live buffer had nil — never become key anchors, so a
+property restore does not change a section's identity.
+
+A user toggle deletes and re-inserts view text, which can drag the retained
+live-tail view marker away from its data-buffer twin; `mevedel-view-toggle-
+section` therefore invalidates the retained tail, sending the next update
+down the non-retained path whose capture/restore preserves the toggle. For
+the same reason the live renderer retains the tail only after collapse-state
+restoration, and skips retention entirely on a tick whose restore actually
+toggled a section. A toggle that finds the in-flight marker inside the
+section re-anchors it at the section start — never the end, which would
+leave everything above it stale for the next incremental render.
 
 Live-tail duplicate detection should compare literal lines while skipping
 volatile spinner/tool/agent rows. Avoid building one large regexp from

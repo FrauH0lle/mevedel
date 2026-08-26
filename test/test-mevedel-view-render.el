@@ -6060,5 +6060,262 @@
                        (point-min) (point-max)))
           (should (= (1+ before) computations)))))))
 
+(mevedel-deftest mevedel-view--user-input-fold-p ()
+  ,test
+  (test)
+  :doc "folds only past the line threshold"
+  (let ((mevedel-view-user-input-collapse-line-threshold 3))
+    (should-not (mevedel-view--user-input-fold-p "a\nb\nc"))
+    (should (mevedel-view--user-input-fold-p "a\nb\nc\nd")))
+  :doc "zero disables folding"
+  (let ((mevedel-view-user-input-collapse-line-threshold 0))
+    (should-not (mevedel-view--user-input-fold-p
+                 (mapconcat #'number-to-string (number-sequence 1 40) "\n"))))
+  :doc "org block markers keep the text unfolded"
+  (let ((mevedel-view-user-input-collapse-line-threshold 1))
+    (should-not (mevedel-view--user-input-fold-p
+                 "intro\n#+begin_src elisp\n(x)\n#+end_src\nmore\n"))))
+
+(mevedel-deftest mevedel-view--user-input-fold-summary ()
+  ,test
+  (test)
+  :doc "shows the first line and the hidden line count"
+  (should (equal "first line (+2 lines)"
+                 (substring-no-properties
+                  (mevedel-view--user-input-fold-summary
+                   "first line\nsecond\nthird"))))
+  :doc "uses the singular for one hidden line"
+  (should (equal "only (+1 line)"
+                 (substring-no-properties
+                  (mevedel-view--user-input-fold-summary "only\nrest"))))
+  :doc "truncates a long first line"
+  (let ((summary (substring-no-properties
+                  (mevedel-view--user-input-fold-summary
+                   (concat (make-string 120 ?x) "\ny")))))
+    (should (string-match-p "\\.\\.\\. (\\+1 line)\\'" summary))
+    (should (< (length summary) 100))))
+
+(mevedel-deftest mevedel-view-render-toggle-user-input ()
+  ,test
+  (test)
+  :doc "a long rendered user turn folds, expands, and refolds"
+  (let ((mevedel-view-user-input-collapse-line-threshold 3))
+    (mevedel-view-test--with-buffers
+      (mevedel-view-test--insert-data
+       data-buf "*** line one\nline two\nline three\nline four\nline five\n"
+       nil)
+      (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+      (with-current-buffer data-buf
+        (mevedel-view-stream-render-response (point-min) (point-max)))
+      (with-current-buffer view-buf
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "You" text))
+          (should (string-match-p "line one (\\+4 lines)" text))
+          (should-not (string-match-p "line five" text)))
+        (goto-char (point-min))
+        (search-forward "line one")
+        (goto-char (match-beginning 0))
+        (should (eq 'user-input-summary
+                    (get-text-property (point) 'mevedel-view-type)))
+        (mevedel-view-toggle-section)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "line five" text)))
+        (goto-char (point-min))
+        (search-forward "line five")
+        (goto-char (match-beginning 0))
+        (mevedel-view-toggle-section)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "line one (\\+4 lines)" text))
+          (should-not (string-match-p "line five" text))))))
+  :doc "the send-path echo folds without source coordinates"
+  (let ((mevedel-view-user-input-collapse-line-threshold 2))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (mevedel-view--insert-user-message "one\ntwo\nthree\nfour")
+        (goto-char (point-min))
+        (search-forward "one")
+        (goto-char (match-beginning 0))
+        (should (eq 'user-input-summary
+                    (get-text-property (point) 'mevedel-view-type)))
+        (should-not (get-text-property (point) 'mevedel-view-source))
+        (mevedel-view-toggle-section)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "four" text))))))
+  :doc "a short prompt renders unfolded"
+  (let ((mevedel-view-user-input-collapse-line-threshold 15))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (mevedel-view--insert-user-message "one\ntwo")
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "one\ntwo" text)))))))
+
+(mevedel-deftest mevedel-view--tool-group-header ()
+  ,test
+  (test)
+  :doc "verb map summarizes known tools in first-appearance order"
+  (should (equal "Searched 2 patterns, read 1 file, ran 2 commands"
+                 (mevedel-view--tool-group-header
+                  '((:tool "Grep") (:tool "Grep") (:tool "Read")
+                    (:tool "Bash") (:tool "Bash")))))
+  :doc "unknown tools fall back to name and count without recasing"
+  (should (equal "mcp_linear ×2, read 1 file"
+                 (mevedel-view--tool-group-header
+                  '((:tool "mcp_linear") (:tool "mcp_linear")
+                    (:tool "Read")))))
+  :doc "a single unknown tool shows its bare name"
+  (should (equal "Read 2 files, LspRename"
+                 (mevedel-view--tool-group-header
+                  '((:tool "Read") (:tool "LspRename") (:tool "Read"))))))
+
+(mevedel-deftest mevedel-view--tool-group-entry-p ()
+  ,test
+  (test)
+  :doc "plain collapsed tool rows are groupable"
+  (should (mevedel-view--tool-group-entry-p
+           '(:count 1 :rendering (:header "Read: f (1 line)"))))
+  :doc "rows demanding individual presentation are not"
+  (dolist (rendering
+           '(nil
+             (:header "h" :vtype agent-handle)
+             (:header "h" :child-calls ((:id "1")))
+             (:header "h" :hook-audits ((:type x)))
+             (:header "h" :sandbox-summary (:sandbox refused))
+             (:header "h" :force-expanded-p t)
+             (:header "h" :expandable-p nil)
+             (:header "h" :initially-collapsed-p nil)))
+    (should-not (mevedel-view--tool-group-entry-p
+                 (list :count 1 :rendering rendering))))
+  :doc "coalesced rows are not groupable"
+  (should-not (mevedel-view--tool-group-entry-p
+               '(:count 2 :rendering (:header "h")))))
+
+(mevedel-deftest mevedel-view--insert-tool-group ()
+  ,test
+  (test)
+  :doc "a run past the threshold folds into one expandable activity row"
+  (mevedel-view-test--with-buffers
+    (dotimes (i 4)
+      (mevedel-view-test--insert-data
+       data-buf
+       (format
+        "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\ncontent %d\n"
+        i i)
+       `(tool . ,(format "call_%d" i))))
+    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer data-buf
+      (mevedel-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Read 4 files" text))
+        (should-not (string-match-p "f0\\.el" text)))
+      ;; Expand the group: rows are compound-tool nested rows.
+      (goto-char (point-min))
+      (search-forward "Read 4 files")
+      (goto-char (match-beginning 0))
+      (should (eq 'tool-group
+                  (get-text-property (point) 'mevedel-view-type)))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Read: .*f0\\.el" text))
+        (should (string-match-p "Read: .*f3\\.el" text)))
+      (goto-char (point-min))
+      (search-forward "f0.el")
+      (should (eq 'tool-child
+                  (get-text-property (match-beginning 0)
+                                     'mevedel-view-type)))
+      ;; Expand one row without disturbing its siblings.
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "content 0" text))
+        (should-not (string-match-p "content 1" text)))
+      ;; Collapsing the group takes every row with it.
+      (goto-char (point-min))
+      (search-forward "Read 4 files")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Read 4 files" text))
+        (should-not (string-match-p "f0\\.el\\|content 0" text)))))
+  :doc "a failed call renders the group expanded with a warning marker"
+  (mevedel-view-test--with-buffers
+    (dotimes (i 3)
+      (mevedel-view-test--insert-data
+       data-buf
+       (format
+        "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\ncontent %d\n"
+        i i)
+       `(tool . ,(format "call_%d" i))))
+    (mevedel-view-test--insert-data
+     data-buf
+     "(:name \"Bash\" :args (:command \"false\"))\n\nError: command failed\n"
+     '(tool . "call_fail"))
+    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer data-buf
+      (mevedel-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p
+                 "! Read 3 files, ran 1 command" text))
+        (should (string-match-p "Error: command failed" text)))))
+  :doc "a short run and a zero threshold keep individual rows"
+  (let ((mevedel-view-tool-group-collapse-threshold 0))
+    (mevedel-view-test--with-buffers
+      (dotimes (i 4)
+        (mevedel-view-test--insert-data
+         data-buf
+         (format
+          "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\ncontent %d\n"
+          i i)
+         `(tool . ,(format "call_%d" i))))
+      (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+      (with-current-buffer data-buf
+        (mevedel-view-stream-render-response (point-min) (point-max)))
+      (with-current-buffer view-buf
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should-not (string-match-p "Read 4 files" text))
+          (should (string-match-p "Read: .*f0\\.el" text))
+          (should (string-match-p "Read: .*f3\\.el" text)))))))
+
+(mevedel-deftest mevedel-view--insert-rendered-tool/preview-body ()
+  ,test
+  (test)
+  :doc "the initial expansion shows the preview body, not the full body"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((rendering '(:header "ApplyPatch: 1 file · 5 changes"
+                       :body "FULL BODY"
+                       :preview-body "PREVIEW BODY"
+                       :expandable-p t
+                       :initially-collapsed-p nil))
+          (inhibit-read-only t))
+      (mevedel-view--insert-rendered-tool rendering (cons 1 10))
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (should (string-match-p "PREVIEW BODY" text))
+        (should-not (string-match-p "FULL BODY" text)))))
+  :doc "a collapsed rendering ignores the preview body"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((rendering '(:header "ApplyPatch: 1 file · 5 changes"
+                       :body "FULL BODY"
+                       :preview-body "PREVIEW BODY"
+                       :expandable-p t
+                       :initially-collapsed-p t))
+          (inhibit-read-only t))
+      (mevedel-view--insert-rendered-tool rendering (cons 1 10))
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (should-not (string-match-p "PREVIEW BODY\\|FULL BODY" text))))))
+
 (provide 'test-mevedel-view-render)
 ;;; test-mevedel-view-render.el ends here
