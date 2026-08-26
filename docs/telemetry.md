@@ -133,6 +133,13 @@ buffer point, selected-window point/start, composer-relative offsets, and
 managed-fragment coordinates around interaction registration, full rerenders,
 and zone reconciliation.
 
+While the capture is active, `gptel--log` is advised to append entries raw
+instead of pretty-printing them: a capture's streamed response bodies are
+multi-megabyte payloads in a log buffer that grows for the whole capture, and
+a profiled capture spent a third of its CPU inside `json-pretty-print`,
+freezing the session it was meant to observe. Raw entries are also what the
+reproduction procedure consumes.
+
 Each profiler run gets a directory containing:
 
 ```text
