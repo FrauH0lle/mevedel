@@ -857,6 +857,16 @@
 			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t))))
 
+(mevedel-deftest mevedel-telemetry--gptel-log-raw ()
+  ,test
+  (test)
+  :doc "forces raw log entries so payloads are never pretty-printed"
+  (let (seen)
+    (mevedel-telemetry--gptel-log-raw
+     (lambda (data type no-json) (setq seen (list data type no-json)))
+     "{\"a\":1}" "response body" nil)
+    (should (equal seen '("{\"a\":1}" "response body" t)))))
+
 (mevedel-deftest mevedel-session-debug
   (:quiet t :doc "toggles profiling and persists captured gptel and view debug logs")
   (let* ((root (make-temp-file "mevedel-session-debug-" t))
@@ -895,6 +905,8 @@
             (should started)
             (should (eq 'debug gptel-log-level))
             (should mevedel-view-render-debug)
+            (should (advice-member-p #'mevedel-telemetry--gptel-log-raw
+                                     'gptel--log))
             (with-current-buffer log-buffer
               (insert
                "{\n"
@@ -934,6 +946,8 @@
             (should (eq 'info gptel-log-level))
             (should-not mevedel-view-render-debug)
             (should-not mevedel-telemetry--session-debug-marker)
+            (should-not (advice-member-p #'mevedel-telemetry--gptel-log-raw
+                                         'gptel--log))
             (with-current-buffer log-buffer
               (should (string-match-p "auth-secret" (buffer-string))))
             (let ((gptel-file

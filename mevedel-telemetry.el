@@ -908,6 +908,15 @@ so version control never hears about any of it."
             (replace-match "\\1<redacted>\\2" nil nil)))))
       (forward-line 1))))
 
+(defun mevedel-telemetry--gptel-log-raw (orig data &optional type _no-json)
+  "Append gptel log entries raw during a session debug capture.
+ORIG is `gptel--log', which pretty-prints every DATA entry of TYPE.
+On a debug capture the streamed response bodies are multi-megabyte
+payloads in a log buffer that grows for the whole capture, and a
+profiled capture spent a third of its CPU inside `json-pretty-print'.
+Raw entries are also what reproduction tooling wants."
+  (funcall orig data type t))
+
 ;;;###autoload
 (defun mevedel-session-debug ()
   "Toggle profiler and gptel debug-log capture for the current session.
@@ -948,6 +957,7 @@ connection settings."
                        directory))
           (when mevedel-telemetry--profiler-session
             (ignore-errors (mevedel-telemetry-profiler-stop)))
+          (advice-remove 'gptel--log #'mevedel-telemetry--gptel-log-raw)
           (setq gptel-log-level
                 mevedel-telemetry--session-debug-previous-log-level
                 mevedel-telemetry--session-debug-previous-log-level nil
@@ -975,6 +985,7 @@ connection settings."
               (copy-marker (point-max)))
             gptel-log-level 'debug
             mevedel-view-render-debug t)
+      (advice-add 'gptel--log :around #'mevedel-telemetry--gptel-log-raw)
       (message "mevedel: session debug capture started"))))
 
 (provide 'mevedel-telemetry)
