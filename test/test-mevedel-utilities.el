@@ -4,8 +4,11 @@
 
 ;;; Code:
 
-(require 'mevedel)
+(require 'mevedel-execution-target)
+(require 'mevedel-structs)
 (require 'mevedel-tool-render-data)
+(require 'mevedel-transcript)
+(require 'mevedel-utilities)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -329,7 +332,6 @@
 
   :doc "preserves generated render provenance but not literal marker text"
   (with-temp-buffer
-    (require 'mevedel-pipeline)
     (let (start block-start block-end literal-start literal-end)
       (setq start (point))
       (insert (propertize "Expanded prompt\n"
