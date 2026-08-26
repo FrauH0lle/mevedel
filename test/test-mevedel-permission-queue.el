@@ -28,6 +28,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-permissions)
 (require 'mevedel-permission-log)
+(require 'mevedel-permission-prompt)
 (require 'mevedel-permission-queue)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-durability)
@@ -158,7 +159,6 @@
            :invocation invocation)))
     (setf (mevedel-session-agent-registry session)
           (list (cons "/root/worker" record)))
-    (require 'mevedel-permission-prompt)
     (cl-letf (((symbol-function 'mevedel-permission--prompt-async-attributed)
                (lambda (&rest _args) nil)))
       (mevedel-permission--enqueue
