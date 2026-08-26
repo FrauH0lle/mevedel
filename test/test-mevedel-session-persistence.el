@@ -4443,7 +4443,7 @@
   ,test
   (test)
 
-  :doc "the deferred save is neither forced nor an agent commit"
+  :doc "the deferred save is a sidecar-only registry save, not a commit"
   (let ((session (mevedel-session--create :name "debounce"))
         (buffer (generate-new-buffer " *debounce-root*"))
         captured required)
@@ -4453,19 +4453,16 @@
           (setf (mevedel-session-root-buffer session) buffer)
           (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
                      (lambda (_key _path thunk) (funcall thunk)))
-                    ((symbol-function 'mevedel-session-artifacts-save)
-                     (lambda (seen-session seen-buffer
-                                           &optional settled force)
-                       (setq captured (list seen-session seen-buffer
-                                            settled force)
+                    ((symbol-function
+                      'mevedel-session-artifacts-save-agent-registry)
+                     (lambda (seen-session seen-buffer)
+                       (setq captured (list seen-session seen-buffer)
                              required
                              mevedel-session-artifacts-require-agent-commit-p)
                        t)))
             (mevedel-session-persistence--deferred-agent-save session))
           (should (eq session (car captured)))
           (should (eq buffer (cadr captured)))
-          (should-not (nth 2 captured))
-          (should-not (nth 3 captured))
           (should-not required))
       (when (buffer-live-p buffer) (kill-buffer buffer))))
 
@@ -4484,7 +4481,8 @@
                     mevedel-session-persistence--deferred-agent-saves))
           (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
                      (lambda (_key _path thunk) (setq deferred thunk)))
-                    ((symbol-function 'mevedel-session-artifacts-save)
+                    ((symbol-function
+                      'mevedel-session-artifacts-save-agent-registry)
                      (lambda (&rest _) (setq saved t))))
             (mevedel-session-persistence--deferred-agent-save session)
             (should (gethash
@@ -4508,7 +4506,8 @@
         (progn
           (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
                      (lambda (_key _path thunk) (funcall thunk)))
-                    ((symbol-function 'mevedel-session-artifacts-save)
+                    ((symbol-function
+                      'mevedel-session-artifacts-save-agent-registry)
                      (lambda (&rest _) (setq saved t))))
             (mevedel-session-persistence--deferred-agent-save session))
           (should-not saved)

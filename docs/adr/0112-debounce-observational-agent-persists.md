@@ -23,20 +23,27 @@ Agent persistence splits along the seam the code already had:
   reentrant queueing.  Their contract (this repository's `docs/sessions.md`
   and ADR 0064) is unchanged: the caller returns only after the batch changes
   the immutable head.
-- **Observational persists debounce.**  `mevedel-agent-control--persist-session`
-  — reached from activity transitions, mailbox consumption, reservation
-  rollback, and follow-up dispatch failure, all already best-effort with
-  swallowed errors — schedules
-  `mevedel-session-persistence-save-agent-state-soon`: one timer per session
-  (`mevedel-session-persistence-agent-save-debounce`, 2s), handed to
-  `mevedel-transport-run-when-idle`, landing as one plain non-forced
-  `mevedel-session-artifacts-save`.  The non-forced save keeps the
-  byte-comparison elision, so a pending save whose content a synchronous
-  commit already published costs no target transaction; the synchronous
-  commit also cancels a pending one outright.  The deferred thunk re-arms
-  instead of writing while a critical publication is active, and the
-  kill-emacs hook flushes pending saves inline because registry mutations do
-  not mark the root buffer modified.
+- **Observational persists debounce, and write only the sidecar.**
+  `mevedel-agent-control--persist-session` — reached from activity
+  transitions, mailbox consumption, reservation rollback, and follow-up
+  dispatch failure, all already best-effort with swallowed errors —
+  schedules `mevedel-session-persistence-save-agent-state-soon`: one timer
+  per session (`mevedel-session-persistence-agent-save-debounce`, 2s),
+  handed to `mevedel-transport-run-when-idle`, landing as one
+  `mevedel-session-artifacts-save-agent-registry`.  The registry save
+  rewrites the sidecar (which carries the agent registry the persist is
+  about) and nothing else: no segment `save-buffer`, no snapshot scan, no
+  prompt-index update.  The transcript segment is committed at settlement
+  anyway, so during an active turn the full save wrote a perpetually
+  modified segment every debounce tick — a follow-up profile (2026-08-26)
+  attributed over 2GB of a session's allocation to the deferred full saves
+  and showed one visible whole-segment write every few seconds.  Portable
+  sessions keep the full save, whose remote transaction already elides
+  byte-identical durable state; a synchronous commit still cancels a
+  pending registry save outright.  The deferred thunk re-arms instead of
+  writing while a critical publication is active, and the kill-emacs hook
+  flushes pending saves inline because registry mutations do not mark the
+  root buffer modified.
 
 Crash inside the debounce window loses only observational flavor:
 `mevedel-agent-control-recover-interrupted` treats every active activity

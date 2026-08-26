@@ -171,6 +171,7 @@
 (declare-function mevedel-session-artifacts-reconcile-relocation "mevedel-session-artifacts" (session saved-workspace-plist))
 (declare-function mevedel-session-artifacts-sanitize "mevedel-session-artifacts" (name))
 (declare-function mevedel-session-artifacts-save "mevedel-session-artifacts" (session buffer &optional settled force))
+(declare-function mevedel-session-artifacts-save-agent-registry "mevedel-session-artifacts" (session buffer))
 (declare-function mevedel-session-artifacts-segment-path "mevedel-session-artifacts" (save-path n))
 (declare-function mevedel-session-artifacts-self-heal-segment-counter "mevedel-session-artifacts" (session save-path &optional defer-finalization-p))
 (declare-function mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts" (workspace))
@@ -786,10 +787,9 @@ or root autosave."
 (defcustom mevedel-session-persistence-agent-save-debounce 2.0
   "Seconds to coalesce best-effort agent-state saves before publishing.
 Observational agent persists -- activity transitions, mailbox
-consumption -- fire in bursts, and each forced publication of the
-session sidecar is a full synchronous target transaction.  Inside this
-window they collapse into one non-forced save, and a synchronous
-acknowledged commit absorbs a pending one entirely."
+consumption -- fire in bursts.  Inside this window they collapse into
+one sidecar-only save, and a synchronous acknowledged commit absorbs a
+pending one entirely."
   :type 'number
   :group 'mevedel)
 
@@ -800,10 +800,10 @@ acknowledged commit absorbs a pending one entirely."
 (defun mevedel-session-persistence-save-agent-state-soon (session)
   "Schedule one coalesced best-effort agent-state save for SESSION.
 Unlike `mevedel-session-persistence-save-agent-state', the deferred
-save is neither forced nor an acknowledged agent commit: it enjoys the
-byte-comparison no-op elision, may be queued behind an active
-publication, and is cancelled outright when a synchronous commit lands
-first."
+save is not an acknowledged agent commit: it rewrites only the session
+sidecar (the transcript segment is committed at settlement), may be
+queued behind an active publication, and is cancelled outright when a
+synchronous commit lands first."
   (when (and (mevedel-session-save-path session)
              (not (gethash session
                            mevedel-session-persistence--deferred-agent-saves)))
@@ -829,7 +829,8 @@ first."
            (when-let* ((buffer (mevedel-session-root-buffer session))
                        ((buffer-live-p buffer)))
              (condition-case nil
-                 (mevedel-session-artifacts-save session buffer)
+                 (mevedel-session-artifacts-save-agent-registry
+                  session buffer)
                (error nil))))))
     (remhash session mevedel-session-persistence--deferred-agent-saves)))
 

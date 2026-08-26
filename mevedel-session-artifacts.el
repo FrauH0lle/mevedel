@@ -11,7 +11,8 @@
 (eval-when-compile
   (require 'mevedel-agents)
   (require 'mevedel-structs)
-  (require 'mevedel-transport))
+  (require 'mevedel-transport)
+  (require 'mevedel-utilities))
 
 ;; `gptel'
 (declare-function gptel--get-buffer-bounds "ext:gptel" nil)
@@ -1825,6 +1826,7 @@ must materialize a snapshot rather than record a change."
       ;; command in between consumes the reply we are waiting for, so the
       ;; transaction holds the connection rather than merely refusing to nest
       ;; inside somebody else's.
+      (mevedel--with-gc-batched
       (mevedel-transport-with-exclusive-connection
         ;; A save is a real durable mutation even for file-workspace sessions.
         ;; Probe the target before any branch constructs serialized bytes.
@@ -1863,7 +1865,52 @@ must materialize a snapshot rather than record a change."
               (mevedel-session-persistence-notify-session-event
                session 'save-history)
               (mevedel-session-save-path session))
-          (mevedel-session-persistence-flush-diagnostic-logs session))))))
+          (mevedel-session-persistence-flush-diagnostic-logs session)))))))
+
+(defun mevedel-session-artifacts-save-agent-registry (session buffer)
+  "Persist SESSION's sidecar from BUFFER without touching the segment.
+
+Observational agent-state saves -- activity transitions, mailbox
+consumption -- need only the sidecar's agent registry: the transcript
+segment is committed at request settlement anyway.  The full save
+transaction wrote the whole segment and scanned snapshots on every
+debounced tick, which dominated a profiled multi-agent session's
+allocation and produced a visible segment write every few seconds.
+
+Portable sessions keep the full save, whose remote transaction already
+elides byte-identical durable state.
+
+Returns SESSION's save path on success, nil when SESSION is not yet
+materialized."
+  (when (mevedel-session-save-path session)
+    (if (mevedel-session-codec-portable-authority-p session)
+        (mevedel-session-artifacts-save session buffer)
+      (when-let* ((buffer (mevedel-session-persistence-authoritative-buffer
+                           buffer)))
+        (let ((mevedel-session-recovery--mutation-cache
+               (or (bound-and-true-p mevedel-session-recovery--mutation-cache)
+                   (list nil)))
+              (mevedel-session-durability--transaction-clock
+               (or (bound-and-true-p
+                    mevedel-session-durability--transaction-clock)
+                   (list nil)))
+              (mevedel-session-durability--asserted-directories
+               (or (bound-and-true-p
+                    mevedel-session-durability--asserted-directories)
+                   (list nil))))
+          (mevedel--with-gc-batched
+            (mevedel-transport-with-exclusive-connection
+              (mevedel-session-artifacts-assert-mutation-authority
+               session buffer)
+              (setf (mevedel-session-updated-at session)
+                    (format-time-string "%FT%H-%M-%S"))
+              (mevedel-session-codec-write
+               (mevedel-session-artifacts-sidecar-path
+                (mevedel-session-save-path session))
+               (mevedel-session-artifacts-build-sidecar session buffer))
+              (mevedel-session-persistence-notify-session-event
+               session 'save-history)
+              (mevedel-session-save-path session))))))))
 
 
 ;;

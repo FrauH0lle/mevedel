@@ -662,6 +662,73 @@
       (mevedel-workspace-clear-registry))))
 
 
+(mevedel-deftest mevedel-session-artifacts-save-agent-registry (:quiet t)
+  ,test
+  (test)
+  :doc "rewrites the sidecar without touching the segment"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf (generate-new-buffer "*test-registry-save*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (mevedel-test--with-shifted-clock
+                  (insert "First prompt\n")
+                  (mevedel-session-artifacts-save session buf)
+                  (let* ((segment (buffer-file-name))
+                         (segment-text
+                          (with-temp-buffer
+                            (insert-file-contents segment)
+                            (buffer-string)))
+                         (first-updated
+                          (mevedel-session-updated-at session)))
+                    (setq mevedel-test--timestamp-offset 2)
+                    (insert "Streamed text not yet settled\n")
+                    (should
+                     (equal (mevedel-session-artifacts-save-agent-registry
+                             session buf)
+                            (mevedel-session-save-path session)))
+                    ;; The segment on disk stays as the last settlement
+                    ;; wrote it, and the buffer keeps its unsaved
+                    ;; modification for the next settlement save.
+                    (should (buffer-modified-p))
+                    (should (equal segment-text
+                                   (with-temp-buffer
+                                     (insert-file-contents segment)
+                                     (buffer-string))))
+                    ;; The sidecar itself was rewritten.
+                    (should-not (equal first-updated
+                                       (mevedel-session-updated-at session)))
+                    (should
+                     (equal (mevedel-session-updated-at session)
+                            (plist-get
+                             (mevedel-session-codec-read
+                              (mevedel-session-artifacts-sidecar-path
+                               (mevedel-session-save-path session)))
+                             :updated-at))))))
+            (kill-buffer buf)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "does nothing for an unmaterialized session"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf (generate-new-buffer "*test-registry-cold*")))
+          (unwind-protect
+              (with-current-buffer buf
+                (org-mode)
+                (should-not (mevedel-session-artifacts-save-agent-registry
+                             session buf))
+                (should-not (mevedel-session-save-path session)))
+            (kill-buffer buf)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry))))
+
+
 (mevedel-deftest mevedel-session-artifacts-instruction-snapshots (:quiet t)
   ,test
   (test)
