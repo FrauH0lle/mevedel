@@ -29,6 +29,57 @@
         (throw 'found t)))
     nil))
 
+(mevedel-deftest mevedel--replace-transcript-contents ()
+  ,test
+  (test)
+  :doc "swaps a large transcript for a blank one without an optimal diff"
+  ;; `replace-buffer-contents' with no cost limit spends around a minute
+  ;; on this pair, which is what made Rewind and redo look hung.  The
+  ;; ceiling is deliberately loose: the bounded path needs well under a
+  ;; second, and the unbounded one cannot pass it on any machine.
+  (let ((source (generate-new-buffer " *replace-source*"))
+        (target (generate-new-buffer " *replace-target*"))
+        (bulk (mapconcat (lambda (index)
+                           (format "line %06d of a long transcript\n" index))
+                         (number-sequence 1 8000) "")))
+    (unwind-protect
+        (progn
+          (with-current-buffer source (insert "\n\n"))
+          (with-current-buffer target
+            (insert bulk)
+            (let ((started (float-time)))
+              (mevedel--replace-transcript-contents source)
+              (should (equal "\n\n" (buffer-string)))
+              (should (< (- (float-time) started) 10))))
+          ;; And the reverse direction, which redo takes.
+          (with-current-buffer source
+            (erase-buffer)
+            (insert bulk))
+          (with-current-buffer target
+            (let ((started (float-time)))
+              (mevedel--replace-transcript-contents source)
+              (should (equal bulk (buffer-string)))
+              (should (< (- (float-time) started) 10)))))
+      (kill-buffer source)
+      (kill-buffer target)))
+
+  :doc "keeps unchanged text and its markers when the texts are close"
+  (let ((source (generate-new-buffer " *replace-source*"))
+        (target (generate-new-buffer " *replace-target*"))
+        marker)
+    (unwind-protect
+        (progn
+          (with-current-buffer source
+            (insert "alpha\nbeta\ngamma\n"))
+          (with-current-buffer target
+            (insert "alpha\nbeta\n")
+            (setq marker (copy-marker 3))
+            (mevedel--replace-transcript-contents source)
+            (should (equal "alpha\nbeta\ngamma\n" (buffer-string)))
+            (should (= 3 (marker-position marker)))))
+      (kill-buffer source)
+      (kill-buffer target))))
+
 (mevedel-deftest mevedel--plain-data-p ()
   ,test
   (test)

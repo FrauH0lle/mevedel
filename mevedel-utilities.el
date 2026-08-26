@@ -973,6 +973,35 @@ area and *Messages*.  `save-silently' quiets Emacs's own message;
         (message-log-max nil))
     (save-buffer)))
 
+(defconst mevedel--transcript-replace-max-secs 5.0
+  "Seconds `mevedel--replace-transcript-contents' may spend diffing.
+
+A last-resort ceiling only.  Reaching it falls back to a plain
+replacement, which is correct but drops marker positions, so it is set
+far above any diff a transcript swap needs.")
+
+(defconst mevedel--transcript-replace-max-costs 8000
+  "Cost limit for `mevedel--replace-transcript-contents'.
+
+This is what keeps a wholesale swap cheap: above the limit the
+comparison stays heuristic instead of optimal, which is the right trade
+when the two texts have little in common.")
+
+(defun mevedel--replace-transcript-contents (source)
+  "Replace the current buffer's text with SOURCE's text.
+
+`replace-buffer-contents' computes an optimal diff, whose cost explodes
+when the two texts share little: replacing a 530 KB transcript with an
+empty one measured 54 seconds, and the reverse 50, against 0.07 with a
+cost limit and the same resulting text.  Bounding the cost keeps the
+edit-based, marker-preserving path; the time ceiling is a last resort
+whose plain-replacement fallback the callers here follow with a full
+rerender.  Use this for a wholesale transcript swap, not for a patch
+whose precise diff a caller depends on."
+  (replace-buffer-contents source
+                           mevedel--transcript-replace-max-secs
+                           mevedel--transcript-replace-max-costs))
+
 (defun mevedel--write-file-atomically (path content &optional coding mode)
   "Replace PATH with string CONTENT through a same-directory rename.
 
