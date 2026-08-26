@@ -16,7 +16,10 @@
 (require 'mevedel-plugin-ui)
 (require 'mevedel-plugins)
 (require 'mevedel-session-persistence)
+(require 'mevedel-skills-core)
 (require 'mevedel-structs)
+(require 'mevedel-view)
+(require 'mevedel-view-composer)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -246,9 +249,6 @@
   :doc "every cockpit mutation refreshes its owner without changing its draft"
   (let ((plugin-user-dir user-dir)
         (state-file (mevedel-plugins-state-file workspace)))
-    (require 'mevedel-skills-core)
-    (require 'mevedel-view)
-    (require 'mevedel-view-composer)
     (dolist (scenario '(enable disable hooks update remove install reload))
       (let* ((root (mevedel-plugins-test--plugin-root
                     plugin-user-dir "repo"))
