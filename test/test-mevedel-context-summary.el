@@ -176,7 +176,7 @@
 (mevedel-deftest mevedel-context-summary-generate ()
   ,test
   (test)
-  :doc "dispatches one isolated non-streaming continuation request"
+  :doc "dispatches one isolated streaming continuation request"
   (let (captured callback-result)
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                (lambda (workload &rest _)
@@ -224,7 +224,8 @@
                             (plist-get captured :prompt)))
     (should (string-match-p "untrusted evidence"
                             (plist-get captured :system)))
-    (should-not (plist-get captured :stream))
+    ;; Streaming is inherited from the caller, not chosen here.
+    (should (eq gptel-stream (plist-get captured :stream)))
     (should-not (plist-get captured :transforms))
     (should (equal (plist-get captured :context)
                    '(:mevedel-context-summary t :purpose continuation)))
@@ -278,7 +279,8 @@
                  'request-fsm)))
       (with-temp-buffer
         (setq-local gptel-model 'caller-local-model
-                    gptel-backend 'caller-local-backend)
+                    gptel-backend 'caller-local-backend
+                    gptel-stream 'caller-stream)
         (mevedel-context-summary-generate "evidence" 'continuation #'ignore)))
     (should (eq (plist-get captured :model) 'summary-model))
     (should (eq (plist-get captured :backend) 'summary-backend))
@@ -291,8 +293,37 @@
     (should-not (plist-get captured :use-tools))
     (should-not (plist-get captured :tools))
     (should-not (plist-get captured :use-context))
-    (should-not (plist-get captured :stream))
+    ;; The caller's streaming choice carries into the request buffer.
+    (should (eq 'caller-stream (plist-get captured :stream)))
     (should-not (plist-get captured :track-response)))
+
+  :doc "accumulates streamed chunks and validates the joined summary"
+  (let (callback-result)
+    (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (&rest _)
+                 '(:backend summary-backend :model summary-model
+                   :effort high)))
+              ((symbol-function 'mevedel-model-usable-input-tokens)
+               (lambda (_policy) 100000))
+              ((symbol-function 'gptel-request)
+               (lambda (_prompt &rest args)
+                 (let ((callback (plist-get args :callback))
+                       (info '(:stream t))
+                       (text test-mevedel-context-summary--continuation))
+                   ;; Streamed delivery: chunks, an interleaved
+                   ;; reasoning event, then the terminal `t'.
+                   (funcall callback
+                            (substring text 0 40) info)
+                   (funcall callback '(reasoning . t) info)
+                   (funcall callback (substring text 40) info)
+                   (funcall callback t info))
+                 'request-fsm)))
+      (mevedel-context-summary-generate
+       "evidence" 'continuation
+       (lambda (result) (setq callback-result result))))
+    (should (equal (plist-get callback-result :outcome) 'success))
+    (should (equal (plist-get callback-result :summary)
+                   test-mevedel-context-summary--continuation)))
 
   :doc "resolves nested Agent summaries from the owning root session"
   (let ((session (mevedel-session--create :name "main"))
