@@ -8,7 +8,13 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+;; `cl-lib' is a runtime dependency, not a compile-time one: these owners
+;; call `cl-lib' functions -- `cl-remove', `cl-some', `cl-find' -- and
+;; `cl-lib' autoloads none of them.  Loading this module compiled and
+;; without the umbrella, as the split-owner contract allows, then hit a
+;; void-function; loading it as source only worked because
+;; `eval-when-compile' degrades to `progn' in interpreted code.
+(require 'cl-lib)
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-create

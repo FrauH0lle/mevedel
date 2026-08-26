@@ -6,7 +6,13 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+;; `cl-lib' is a runtime dependency, not a compile-time one: these owners
+;; call `cl-lib' functions -- `cl-remove', `cl-some', `cl-find' -- and
+;; `cl-lib' autoloads none of them.  Loading this module compiled and
+;; without the umbrella, as the split-owner contract allows, then hit a
+;; void-function; loading it as source only worked because
+;; `eval-when-compile' degrades to `progn' in interpreted code.
+(require 'cl-lib)
 
 ;; `mevedel-directive'
 (declare-function mevedel-workspace-set-directives
@@ -222,10 +228,16 @@ handles all the internal bookkeeping and cleanup."
                      (and (null (overlay-buffer instr))
                           (not (overlay-get instr 'mevedel-marked-for-deletion))))
                    (clean-alist-entry (cons)
+                     ;; `seq-remove' and `seq-filter', not their `cl-lib'
+                     ;; equivalents: these calls survive macro expansion
+                     ;; into every caller, and `cl-remove-if' is a
+                     ;; function `cl-lib' does not autoload -- a compiled
+                     ;; caller loaded without `cl-lib' hit a
+                     ;; void-function at runtime.
                      (mapc (lambda (instr)
                              (mevedel--delete-instruction instr (car cons)))
-                           (cl-remove-if-not #'trashp (cdr cons)))
-                     (let ((instrs (cl-remove-if #'trashp (cdr cons))))
+                           (seq-filter #'trashp (cdr cons)))
+                     (let ((instrs (seq-remove #'trashp (cdr cons))))
                        (setf (cdr cons) instrs))))
          (let ((,specific-buffer ,(if (listp binding) (cadr binding) nil)))
            (mevedel--instruction-activate-workspace
@@ -245,9 +257,9 @@ handles all the internal bookkeeping and cleanup."
              (when-let* ((cons (assoc ,specific-buffer (mevedel--instruction-alist))))
                (clean-alist-entry cons)))
            ;; Remove empty cons cells from the alist.
-           (setf (mevedel--instruction-alist) (cl-remove-if (lambda (cons)
-                                                       (null (cdr cons)))
-                                                     (mevedel--instruction-alist)))
+           (setf (mevedel--instruction-alist)
+                 (seq-remove (lambda (cons) (null (cdr cons)))
+                             (mevedel--instruction-alist)))
            ;; The instructions alist should now be cleaned of deleted
            ;; instructions.
            (cl-loop for ,instr
