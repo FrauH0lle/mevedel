@@ -1395,7 +1395,6 @@
           (let ((data (current-buffer)))
             (with-current-buffer view
               (setq-local mevedel--data-buffer data))
-            (require 'mevedel-session-control-transfer)
             (let ((observer
                    (lambda (event &rest args)
                      (when (eq event 'rebase-data-sources)
