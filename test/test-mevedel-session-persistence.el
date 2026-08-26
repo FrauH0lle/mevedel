@@ -678,7 +678,6 @@
               (org-mode)
               (setq-local mevedel--session session)
               (insert "Prompt before interrupted ToolScript\n")
-              (require 'mevedel-ptc-checkpoint)
               (should
                (mevedel-ptc-checkpoint-start
                 session buffer "ptc-recovery"
@@ -696,7 +695,6 @@
                   restored
                   (mevedel-session-persistence-restore session-dir))
             (with-current-buffer restored
-              (require 'mevedel-ptc-checkpoint)
               (should (string-match-p
                        "script interrupted by Emacs restart" (buffer-string)))
               (should
@@ -1764,7 +1762,6 @@
                         (mevedel-session-persistence-restore
                          session-dir nil nil workspace)))
                 (with-current-buffer restored
-                  (require 'mevedel-execution)
                   (should
                    (mevedel-execution-mutation-blocked-p mevedel--session))
                   (mevedel-execution-acknowledge-unknown mevedel--session)
