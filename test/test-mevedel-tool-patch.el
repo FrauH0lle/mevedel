@@ -6,7 +6,9 @@
 
 ;;; Code:
 
-(require 'mevedel)
+(require 'gptel-request)
+(require 'mevedel-pipeline)
+(require 'mevedel-reminders)
 (require 'mevedel-tool-patch)
 (require 'mevedel-view)
 (require 'mevedel-view-interaction)
