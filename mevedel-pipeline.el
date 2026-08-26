@@ -498,6 +498,11 @@ latch instead would deadlock here, since the latch correctly suppresses
 a second outcome on a step that already fired NEXT.
 
 CONTEXT is the initial plist."
+  ;; Every synchronous step chain -- including a chain resumed by an
+  ;; async step's continuation, which re-enters here -- runs with GC
+  ;; batched: the pipeline dominated a profiled session's allocation,
+  ;; and each collection paid there blocks the whole UI.
+  (mevedel--with-gc-batched
   (if (null steps)
       (progn
         (when-let* ((cancel-cell (plist-get context :cancel-cell)))
@@ -636,7 +641,7 @@ ignoring duplicate outcome"
             (funcall callback
                      (mevedel-pipeline--settlement
                       context 'pipeline-error
-                      (error-message-string err))))))))))
+                      (error-message-string err)))))))))))
 
 
 ;;

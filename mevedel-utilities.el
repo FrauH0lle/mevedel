@@ -947,6 +947,20 @@ Signals an error when the query is malformed."
 
 
 
+(defmacro mevedel--with-gc-batched (&rest body)
+  "Run BODY with garbage collection deferred until after it returns.
+
+Allocation-heavy asynchronous work -- transcript redraws, persistence
+transactions -- otherwise runs at whatever `gc-cons-threshold' the
+user's idle GC tuning left behind; a profiled unattended session sat at
+the 800KB default and paid dozens of ~135ms collections inside single
+redraws and save transactions.  Raising the threshold for the dynamic
+extent of BODY trades those for one collection at the next allocation
+after BODY."
+  (declare (indent 0) (debug t))
+  `(let ((gc-cons-threshold (max gc-cons-threshold (* 64 1024 1024))))
+     ,@body))
+
 (defun mevedel--write-file-atomically (path content &optional coding mode)
   "Replace PATH with string CONTENT through a same-directory rename.
 

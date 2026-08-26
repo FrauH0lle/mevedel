@@ -34,6 +34,7 @@
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 (autoload 'mevedel--warn-once "mevedel-utilities")
+(eval-when-compile (require 'mevedel-utilities))
 
 (defcustom mevedel-gptel-stream-bridge-insert-batch-delay 0.04
   "Seconds to batch consecutive string stream inserts in data buffers.
@@ -205,7 +206,12 @@ chunk when that stale transformer fails."
 
 (defun mevedel-gptel-stream-bridge--gptel-stream-cleanup-advice (orig-fn process status)
   "Call ORIG-FN after wrapping stream transformers for PROCESS.
-STATUS is passed through unchanged."
+STATUS is passed through unchanged.
+
+Runs with GC batched: the cleanup drives the terminal settlement --
+response parsing, FSM transitions, and the renders they trigger -- and
+was a leading allocator in a profiled session."
+  (mevedel--with-gc-batched
   (let* ((entry (alist-get process gptel--request-alist))
          (fsm (car-safe entry))
          (info (and fsm (fboundp 'gptel-fsm-info)
@@ -226,7 +232,7 @@ STATUS is passed through unchanged."
            (mevedel-agent-invocation-path invocation))
          :provider-status status
          :first-byte-seen
-         (and (process-get process 'mevedel-telemetry-first-byte) t))))))
+         (and (process-get process 'mevedel-telemetry-first-byte) t)))))))
 
 (defun mevedel-gptel-stream-bridge--gptel-stream-filter-registered-p (process)
   "Return non-nil when PROCESS has a registered gptel FSM."
@@ -309,7 +315,10 @@ chunk and replay it once the request entry exists."
             (setq output (concat pending output))
             (process-put process 'mevedel-gptel-stream-bridge--pending-output nil))
           (process-put process 'mevedel-gptel-stream-bridge--filter-retries nil)
-          (funcall orig-fn process output))
+          ;; Chunk parsing and insertion is steady allocation for the
+          ;; whole stream; batch its collections.
+          (mevedel--with-gc-batched
+            (funcall orig-fn process output)))
       (process-put process 'mevedel-gptel-stream-bridge--pending-output
                    (concat pending output))
       (mevedel-gptel-stream-bridge--schedule-gptel-stream-filter-flush process))))
