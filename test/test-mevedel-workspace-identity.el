@@ -6,7 +6,6 @@
 
 ;;; Code:
 
-(require 'ert)
 (require 'mevedel-workspace-identity)
 (require 'helpers
          (file-name-concat
