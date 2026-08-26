@@ -207,8 +207,18 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
          ;; restore the caller's buffer before settling.  Consumers resume
          ;; session-local work (dispatch, buffer-local state) from here.
          (caller-buffer (current-buffer))
+         ;; Streaming is a session choice, not this request's: some
+         ;; providers reject stream false outright, others cannot
+         ;; stream, and the session already holds the working value.
+         ;; The callback accepts both delivery shapes.
+         (stream (condition-case nil
+                     (buffer-local-value
+                      'gptel-stream
+                      (mevedel-context-summary--policy-buffer session))
+                   (error gptel-stream)))
          (settled nil)
          (request-started nil)
+         (chunks nil)
          span
          (settle
           (lambda (result &optional info)
@@ -239,24 +249,31 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
          (provider-callback
           (lambda (response info)
             (pcase response
+              (`(reasoning . ,_))
               ('abort
                (funcall settle '(:outcome aborted) info))
-              ((pred stringp)
-               (condition-case err
-                   (funcall
-                    settle
-                    (list :outcome 'success
-                          :summary
-                          (mevedel-context-summary--validate-output
-                           response purpose))
-                    info)
-                 (error
-                  (funcall
-                   settle
-                   (list :outcome 'error
-                         :error (error-message-string err)
-                         :error-class 'validation)
-                   info))))
+              ((and (pred stringp)
+                    (guard (plist-get info :stream)))
+               (push response chunks))
+              ((or 't (pred stringp))
+               (let ((text (if (stringp response)
+                               response
+                             (apply #'concat (nreverse chunks)))))
+                 (condition-case err
+                     (funcall
+                      settle
+                      (list :outcome 'success
+                            :summary
+                            (mevedel-context-summary--validate-output
+                             text purpose))
+                      info)
+                   (error
+                    (funcall
+                     settle
+                     (list :outcome 'error
+                           :error (error-message-string err)
+                           :error-class 'validation)
+                     info)))))
               (_
                (funcall
                 settle
@@ -323,7 +340,7 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
                             gptel-use-tools nil
                             gptel-tools nil
                             gptel-use-context nil
-                            gptel-stream nil
+                            gptel-stream stream
                             ;; The prompt parser must treat the evidence
                             ;; as plain text: with response tracking on,
                             ;; a stray gptel text property makes it
@@ -335,7 +352,7 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
                  input
                  :system system
                  :buffer request-buffer
-                 :stream nil
+                 :stream stream
                  :transforms nil
                  :context
                  (list :mevedel-context-summary t :purpose purpose)
