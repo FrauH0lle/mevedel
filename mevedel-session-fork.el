@@ -199,7 +199,9 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text "mevedel-utilities" (text))
+(declare-function mevedel--save-buffer-silently "mevedel-utilities" ())
 (autoload 'mevedel--normalize-message-text "mevedel-utilities")
+(autoload 'mevedel--save-buffer-silently "mevedel-utilities")
 
 ;; `mevedel-view'
 (defvar mevedel--data-buffer)
@@ -560,7 +562,7 @@ caches never become fork authority."
             buffer-file-truename nil)
       (mevedel-tool-render-data-reconcile-lost-executions staging-buffer)
       (set-buffer-modified-p t)
-      (save-buffer))
+      (mevedel--save-buffer-silently))
     (mevedel-session-persistence-reconcile-lost-execution-segments
      child (mevedel-session-artifacts-segment-path
             staging-path picked-segment))
