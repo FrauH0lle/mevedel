@@ -944,6 +944,42 @@
       (should-not (string-match-p "main pending three" text))
       (should-not (string-match-p "main done" text)))))
 
+(mevedel-deftest mevedel-tool-task--status-line-budget
+  (:doc "`mevedel-tool-task--status-line-budget' always widens when expanded")
+  ,test
+  (test)
+  :doc "expanding never budgets fewer lines than collapsing"
+  (let ((buffer (generate-new-buffer " *task-budget-test*")))
+    (unwind-protect
+        (save-window-excursion
+          (set-window-buffer (selected-window) buffer)
+          (with-current-buffer buffer
+            (let ((collapsed (mevedel-tool-task--status-line-budget))
+                  (expanded (mevedel-tool-task--status-line-budget t)))
+              (should (integerp collapsed))
+              (should (integerp expanded))
+              ;; A truncation reserves one line for its summary, so an
+              ;; equal budget would drop an open row on expand.
+              (should (> expanded collapsed)))))
+      (kill-buffer buffer)))
+
+  :doc "a window too short to widen still gains a line when expanded"
+  (let ((buffer (generate-new-buffer " *task-budget-test*")))
+    (unwind-protect
+        (save-window-excursion
+          (set-window-buffer (selected-window) buffer)
+          (with-current-buffer buffer
+            (cl-letf (((symbol-function 'window-body-height)
+                       (lambda (&rest _) 8)))
+              (should (= (1+ (mevedel-tool-task--status-line-budget))
+                         (mevedel-tool-task--status-line-budget t))))))
+      (kill-buffer buffer)))
+
+  :doc "returns nil when no window shows the buffer"
+  (with-temp-buffer
+    (should-not (mevedel-tool-task--status-line-budget))
+    (should-not (mevedel-tool-task--status-line-budget t))))
+
 (mevedel-deftest mevedel-tool-task--render-rows
   (:doc "`mevedel-tool-task--render-rows' caps rows without dangling chrome")
   ,test

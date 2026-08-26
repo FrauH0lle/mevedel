@@ -723,12 +723,27 @@ MAX-LINES caps the rendered body without changing task storage."
 (defconst mevedel-tool-task--status-max-body-lines 12
   "Maximum body lines reserved for task status.")
 
-(defun mevedel-tool-task--status-line-budget ()
-  "Return the current task status body-line budget, or nil."
+(defconst mevedel-tool-task--status-expanded-max-body-lines 40
+  "Maximum body lines reserved for task status while expanded.")
+
+(defun mevedel-tool-task--status-line-budget (&optional expanded)
+  "Return the current task status body-line budget, or nil.
+EXPANDED widens the budget to make room for the completed section.  It
+always exceeds the collapsed budget, because the expanded row list is
+the collapsed one plus a `done' suffix and a truncation reserves a line
+for its summary -- an equal budget would make expanding drop an open row
+and reveal no completed row at all."
   (when-let* ((window (get-buffer-window (current-buffer) t)))
-    (let ((budget (floor (* (window-body-height window) 0.25))))
-      (min mevedel-tool-task--status-max-body-lines
-           (max mevedel-tool-task--status-min-body-lines budget)))))
+    (let* ((height (window-body-height window))
+           (collapsed
+            (min mevedel-tool-task--status-max-body-lines
+                 (max mevedel-tool-task--status-min-body-lines
+                      (floor (* height 0.25))))))
+      (if expanded
+          (max (1+ collapsed)
+               (min mevedel-tool-task--status-expanded-max-body-lines
+                    (floor (* height 0.6))))
+        collapsed))))
 
 (defvar mevedel-tool-task-status-keymap
   (define-keymap
@@ -833,7 +848,7 @@ states each count once.  SHOW-COMPLETED selects the toggle wording."
 SHOW-COMPLETED controls whether completed task detail is included."
   (let* ((body (mevedel-tool-task--format-groups
                 session show-completed
-                (mevedel-tool-task--status-line-budget)))
+                (mevedel-tool-task--status-line-budget show-completed)))
          (separator (mevedel-view--zone-separator
                      (mevedel-tool-task--task-label
                       session show-completed))))
