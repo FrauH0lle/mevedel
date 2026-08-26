@@ -6,15 +6,18 @@
 
 ;;; Code:
 
-(require 'mevedel)
+(require 'gptel-request)
+(require 'mevedel-agent-control)
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-recovery)
 (require 'mevedel-session-transfer)
 (require 'mevedel-session-publication)
+(require 'mevedel-session-fork)
 (require 'mevedel-execution-target)
 (require 'mevedel-hooks)
 (require 'mevedel-structs)
+(require 'mevedel-workspace)
 (require 'mevedel-workspace-identity)
 (require 'helpers
          (file-name-concat
