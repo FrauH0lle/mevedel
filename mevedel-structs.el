@@ -429,14 +429,19 @@ Canonical non-root paths must name a retained agent in AGENT-REGISTRY."
       (error "Unknown canonical task owner: %s" owner))
     owner)))
 
-(defun mevedel-task-prune-dangling-dependencies (tasks)
-  "Remove dependency edges from TASKS to task IDs absent from TASKS.
-Return TASKS after updating `blocked-by' in place."
-  (let ((ids (mapcar #'mevedel-task-id tasks)))
+(defun mevedel-task-prune-resolved-dependencies (tasks)
+  "Remove resolved dependency edges from TASKS.
+An edge is resolved when its target is absent from TASKS or already
+completed; either way nothing will ever clear it later, so a task
+carrying one would stay blocked for the rest of the session.  Return
+TASKS after updating `blocked-by' in place."
+  (let ((open (cl-loop for task in tasks
+                       unless (eq (mevedel-task-status task) 'completed)
+                       collect (mevedel-task-id task))))
     (dolist (task tasks)
       (setf (mevedel-task-blocked-by task)
             (cl-loop for id in (mevedel-task-blocked-by task)
-                     when (memq id ids)
+                     when (memq id open)
                      collect id))))
   tasks)
 

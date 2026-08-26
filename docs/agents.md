@@ -432,9 +432,10 @@ non-path owner strings remain available as user-defined task buckets.
 Resume validates persisted task and status-note owners against the restored
 registry and drops entries carrying opaque IDs, malformed paths, or unknown
 canonical paths before they can reach model-visible task state. `blockedBy`
-is the only dependency edge, and it propagates completion; edges to dropped
-tasks are pruned, so resume cannot leave a surviving task blocked by an
-absent task. Tasks therefore remain stable across follow-ups and cold
+is the only dependency edge. Every task write drops the edges it resolved:
+an edge to a task that is absent or already completed is removed, so
+neither a task created blocked by finished work nor a resume can leave a
+surviving task blocked by something that will never clear. Tasks therefore remain stable across follow-ups and cold
 session resume.
 
 The task status fragment is compact and appears only while at least one

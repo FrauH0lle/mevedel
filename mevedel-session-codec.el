@@ -119,7 +119,7 @@
 (declare-function mevedel-task-metadata "mevedel-structs" (cl-x))
 (declare-function mevedel-task-normalize-owner "mevedel-structs" (owner agent-registry))
 (declare-function mevedel-task-owner "mevedel-structs" (cl-x))
-(declare-function mevedel-task-prune-dangling-dependencies "mevedel-structs" (tasks))
+(declare-function mevedel-task-prune-resolved-dependencies "mevedel-structs" (tasks))
 (declare-function mevedel-task-status "mevedel-structs" (cl-x))
 (declare-function mevedel-task-subject "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x))
@@ -774,7 +774,7 @@ their hygiene filters."
          (agent-registry
           (mevedel-agent-persistence-deserialize-registry raw-agent-registry))
          (tasks
-          (mevedel-task-prune-dangling-dependencies
+          (mevedel-task-prune-resolved-dependencies
            (delq
             nil
             (mapcar
