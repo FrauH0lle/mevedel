@@ -38,6 +38,8 @@
 (declare-function mevedel-session-artifacts-read-artifact
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-replace-transcript-contents
+                  "mevedel-session-artifacts" (source))
 (declare-function mevedel-session-artifacts-save
                   "mevedel-session-artifacts"
                   (session buffer &optional settled force))
@@ -48,6 +50,8 @@
 (autoload 'mevedel-session-artifacts-load-instructions
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-read-artifact
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-replace-transcript-contents
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-segment-path
@@ -176,11 +180,6 @@
 (declare-function mevedel-transport-busy-p
                   "mevedel-transport" (&optional path))
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
-
-;; `mevedel-utilities'
-(declare-function mevedel--replace-transcript-contents
-                  "mevedel-utilities" (source))
-(autoload 'mevedel--replace-transcript-contents "mevedel-utilities")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-active-p
@@ -488,7 +487,8 @@ owner's side repoints the visited file here too."
                           buffer-file-coding-system
                           (buffer-local-value
                            'buffer-file-coding-system staging-buffer))
-                    (mevedel--replace-transcript-contents staging-buffer)
+                    (mevedel-session-artifacts-replace-transcript-contents
+                     staging-buffer)
                     (set-buffer-modified-p nil)
                     (set-visited-file-modtime))))
             (error
@@ -501,7 +501,8 @@ owner's side repoints the visited file here too."
                          buffer-file-truename file-truename
                          default-directory directory
                          buffer-file-coding-system coding)
-                   (mevedel--replace-transcript-contents original)
+                   (mevedel-session-artifacts-replace-transcript-contents
+                    original)
                    (set-buffer-modified-p modified)
                    (set-visited-file-modtime modtime)
                    (when narrowing

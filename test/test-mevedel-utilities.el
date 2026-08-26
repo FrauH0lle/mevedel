@@ -29,57 +29,6 @@
         (throw 'found t)))
     nil))
 
-(mevedel-deftest mevedel--replace-transcript-contents ()
-  ,test
-  (test)
-  :doc "swaps a large transcript for a blank one without an optimal diff"
-  ;; `replace-buffer-contents' with no cost limit spends around a minute
-  ;; on this pair, which is what made Rewind and redo look hung.  The
-  ;; ceiling is deliberately loose: the bounded path needs well under a
-  ;; second, and the unbounded one cannot pass it on any machine.
-  (let ((source (generate-new-buffer " *replace-source*"))
-        (target (generate-new-buffer " *replace-target*"))
-        (bulk (mapconcat (lambda (index)
-                           (format "line %06d of a long transcript\n" index))
-                         (number-sequence 1 8000) "")))
-    (unwind-protect
-        (progn
-          (with-current-buffer source (insert "\n\n"))
-          (with-current-buffer target
-            (insert bulk)
-            (let ((started (float-time)))
-              (mevedel--replace-transcript-contents source)
-              (should (equal "\n\n" (buffer-string)))
-              (should (< (- (float-time) started) 10))))
-          ;; And the reverse direction, which redo takes.
-          (with-current-buffer source
-            (erase-buffer)
-            (insert bulk))
-          (with-current-buffer target
-            (let ((started (float-time)))
-              (mevedel--replace-transcript-contents source)
-              (should (equal bulk (buffer-string)))
-              (should (< (- (float-time) started) 10)))))
-      (kill-buffer source)
-      (kill-buffer target)))
-
-  :doc "keeps unchanged text and its markers when the texts are close"
-  (let ((source (generate-new-buffer " *replace-source*"))
-        (target (generate-new-buffer " *replace-target*"))
-        marker)
-    (unwind-protect
-        (progn
-          (with-current-buffer source
-            (insert "alpha\nbeta\ngamma\n"))
-          (with-current-buffer target
-            (insert "alpha\nbeta\n")
-            (setq marker (copy-marker 3))
-            (mevedel--replace-transcript-contents source)
-            (should (equal "alpha\nbeta\ngamma\n" (buffer-string)))
-            (should (= 3 (marker-position marker)))))
-      (kill-buffer source)
-      (kill-buffer target))))
-
 (mevedel-deftest mevedel--plain-data-p ()
   ,test
   (test)
@@ -732,43 +681,6 @@ rejects trailing binary operators"
     (should
      (equal "@@ -1 +1 @@\n-old\n+new\n \n"
             (mevedel-generate-diff "old\n\n" "new\n\n" "file.el")))))
-
-(mevedel-deftest mevedel--save-buffer-silently ()
-  ,test
-  (test)
-  :doc "writes the file while suppressing save and hook messages"
-  (let* ((file (make-temp-file "mevedel-silent-save-"))
-         (buffer (find-file-noselect file))
-         (noise-suppressed 'unseen))
-    (unwind-protect
-        (with-current-buffer buffer
-          (insert "content")
-          ;; A user `after-save-hook' that reprints the save (a
-          ;; vim-style "written" echo) must reach `message' with both
-          ;; suppressors bound, or every programmatic session save
-          ;; floods the echo area and *Messages*.
-          (cl-letf (((symbol-function 'message)
-                     (lambda (&optional fmt &rest _args)
-                       (when (and fmt (string-search "NOISE" fmt))
-                         (setq noise-suppressed
-                               (and inhibit-message
-                                    (null message-log-max))))
-                       nil)))
-            (let ((after-save-hook
-                   (cons (lambda () (message "NOISE written"))
-                         after-save-hook)))
-              (mevedel--save-buffer-silently)))
-          (should (eq noise-suppressed t))
-          (should-not (buffer-modified-p))
-          (should (equal "content"
-                         (with-temp-buffer
-                           (insert-file-contents file)
-                           (buffer-string)))))
-      (when (buffer-live-p buffer)
-        (set-buffer-modified-p nil)
-        (kill-buffer buffer))
-      (when (file-exists-p file)
-        (delete-file file)))))
 
 (mevedel-deftest mevedel--write-file-atomically ()
   ,test

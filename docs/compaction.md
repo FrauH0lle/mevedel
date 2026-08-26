@@ -266,11 +266,12 @@ removed with it by normal session cleanup.  Session Forks copy only canonical
 agent transcripts referenced by the fork's sidecar; they do not copy numbered
 archives.
 
-Context-summary requests disable tools, force non-streaming operation, and use
-the `summarization` workload policy from the current session's
-`mevedel-model-workloads`. Failures retry up to three attempts with exponential
-backoff. Every retry reacquires current `PreCompact` policy before sending the
-otherwise identical summary request. After repeated failures,
+Context-summary requests disable tools, inherit the current session's streaming
+choice, accept both streamed and one-shot provider delivery, and use the
+`summarization` workload policy from the session's `mevedel-model-workloads`.
+Failures retry up to three attempts with exponential backoff. Every retry
+reacquires current `PreCompact` policy before sending the otherwise identical
+summary request. After repeated failures,
 `mevedel--compact-auto-disabled` prevents further automatic attempts in
 that buffer.
 

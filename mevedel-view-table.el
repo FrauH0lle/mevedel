@@ -423,10 +423,6 @@ megabytes of substrings and `window-font-width' calls."
                   (char-width (aref text index)))))))
     widths))
 
-(defun mevedel-view-table--wrap-string-width (text &optional window)
-  "Return the VS-16-aware display width of TEXT in columns."
-  (seq-reduce #'+ (mevedel-view-table--char-widths text window) 0))
-
 (defun mevedel-view-table--break-after-p (text i)
   "Return non-nil when a wrapped line may break after index I in TEXT.
 I + 1 must be a valid index.  Breaks are allowed after a line-breakable

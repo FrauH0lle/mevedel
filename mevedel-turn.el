@@ -112,6 +112,12 @@
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session--save-failed)
 
+;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-collect-generations
+                  "mevedel-session-publication" (session))
+(autoload 'mevedel-session-publication-collect-generations
+  "mevedel-session-publication")
+
 ;; `mevedel-structs'
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
 (declare-function mevedel-request-origin "mevedel-structs" (cl-x))
@@ -499,6 +505,22 @@ Signal when the request is missing or its reservation is not the next turn."
                                  "Session auto-save failed: %s" err)
              (setq-local mevedel-session--save-failed t)
              (force-mode-line-update)))
+          (when saved
+            ;; A settled turn is where the generations this turn
+            ;; published mid-stream stop being anyone's recovery state:
+            ;; until settlement they are what a crashed owner resumes
+            ;; from, and afterwards nothing resolves through them.
+            ;; Best-effort by construction -- a turn must not fail
+            ;; because storage could not be reclaimed.
+            (condition-case error
+                (mevedel-session-publication-collect-generations
+                 mevedel--session)
+              (error
+               (display-warning
+                'mevedel
+                (format "Could not collect published generations: %s"
+                        (error-message-string error))
+                :warning))))
           (when (and saved (buffer-live-p mevedel--view-buffer))
             (mevedel-view-rerender mevedel--view-buffer)))))))
 

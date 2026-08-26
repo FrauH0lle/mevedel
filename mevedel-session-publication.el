@@ -35,6 +35,11 @@
 (declare-function mevedel-session-control-fs-run-program
                   "mevedel-session-control-fs" (operations))
 
+;; `mevedel-session-codec'
+(declare-function mevedel-session-codec-portable-authority-p
+                  "mevedel-session-codec" (session))
+(autoload 'mevedel-session-codec-portable-authority-p "mevedel-session-codec")
+
 ;; `mevedel-session-durability'
 (declare-function mevedel-session-durability--assert-no-pid-lock
                   "mevedel-session-durability" (session-dir))
@@ -446,8 +451,283 @@ a payload."
             :sidecar (plist-get sidecar :published)
             :artifacts artifacts))))
 
-(defun mevedel-session-publication-read (session-dir)
+(defcustom mevedel-session-publication-keep-recent-generations 3
+  "How many newest published generations a collection always retains.
+
+Collection keeps every settled-turn head, but a reader that resolved a
+head moments before it stopped being current still needs its bytes: a
+follower re-reads the owner's current head rather than pinning it.  This
+grace window is what makes that race harmless in practice; it is not a
+lock, and a reader holding an older non-boundary head can still lose it."
+  :type 'integer
+  :group 'mevedel)
+
+(defcustom mevedel-session-publication-collect-max 32
+  "How many published generations one collection may delete.
+
+Each deletion is its own target program, so a first collection over a
+long remote session would otherwise spend hundreds of round trips inside
+one turn settlement.  What the bound leaves behind is collected at the
+next settlement; nothing depends on a single pass reclaiming everything."
+  :type 'integer
+  :group 'mevedel)
+
+(defcustom mevedel-session-publication-summary-scan-max 40
+  "How many published sidecars a summary scan reads, newest first.
+
+A sidecar carries the turn count and prompt index a turn-shaped picker
+needs, and it is the largest artifact in a generation.  Generations past
+this bound are summarized from their file facts alone."
+  :type 'integer
+  :group 'mevedel)
+
+(defun mevedel-session-publication--generation-names (session-dir)
+  "Return SESSION-DIR's published generation directory names, newest first."
+  (let* ((root (file-name-concat session-dir ".publications"))
+         (paths (mevedel-session-control-fs-list-directory
+                 root "\\`generation-[0-9a-f]+\\'")))
+    (sort
+     (delq nil
+           (mapcar
+            (lambda (path)
+              (let* ((name (file-name-nondirectory
+                            (directory-file-name path)))
+                     (manifest (file-name-concat path "manifest.el"))
+                     (attributes (file-attributes manifest)))
+                (when attributes
+                  (list :name name
+                        :head (file-name-concat
+                               ".publications" name "manifest.el")
+                        :time (file-attribute-modification-time attributes)))))
+            paths))
+     (lambda (left right)
+       ;; Target filesystems report coarse timestamps, so publishes inside
+       ;; one second would otherwise order arbitrarily from run to run.
+       ;; Any of them is an equally valid representative of the same
+       ;; state; the name only makes the choice reproducible.
+       (if (time-equal-p (plist-get left :time) (plist-get right :time))
+           (string> (plist-get left :name) (plist-get right :name))
+         (time-less-p (plist-get right :time) (plist-get left :time)))))))
+
+(defun mevedel-session-publication--manifest-references (manifest)
+  "Return generation names MANIFEST resolves artifacts through.
+
+A committed manifest carries unchanged entries forward verbatim, so it
+points into the generations that first wrote those bytes.  Those
+generations are as live as the head itself."
+  (let (names)
+    (dolist (entry (plist-get manifest :artifacts) (delete-dups names))
+      (when-let* ((published (plist-get (cdr entry) :published))
+                  ((string-match
+                    "\\`\\.publications/\\(generation-[0-9a-f]+\\)/"
+                    published)))
+        (push (match-string 1 published) names)))))
+
+(defun mevedel-session-publication--sidecar-facts
+    (session-dir manifest)
+  "Return MANIFEST's turn facts, or nil when its sidecar is unreadable.
+
+The returned plist carries `:turn-count', `:segment', `:turn',
+`:preview', and `:fork-point-id' for the head's latest prompt."
+  (when-let*
+      ((entry (cdr (assoc "session.meta.el"
+                          (plist-get manifest :artifacts))))
+       (published (plist-get entry :published))
+       (sidecar (ignore-errors
+                  (mevedel-session-durability--read-plist
+                   (mevedel-session-publication--publication-path
+                    session-dir published)))))
+    (let (latest)
+      (dolist (segment (plist-get sidecar :prompt-index))
+        (dolist (prompt (cdr segment))
+          (when (or (null latest)
+                    (> (or (plist-get prompt :cum-turn) 0)
+                       (or (plist-get latest :cum-turn) 0)))
+            (setq latest (append prompt (list :segment (car segment)))))))
+      (list :turn-count (or (plist-get sidecar :total-turn-count) 0)
+            :segment (or (plist-get latest :segment)
+                         (plist-get sidecar :current-segment))
+            :turn (plist-get latest :turn)
+            ;; The whole prompt travels with the summary so a picker can
+            ;; label a published head exactly as it labels a live turn.
+            :prompt latest
+            :fork-point-id (plist-get latest :fork-point-id)))))
+
+(defun mevedel-session-publication-head-facts (session-dir head)
+  "Return HEAD's turn facts, or nil when its publication is unreadable."
+  (when-let* ((manifest
+               (ignore-errors
+                 (mevedel-session-publication--read-publication-raw
+                  session-dir head))))
+    (mevedel-session-publication--sidecar-facts
+     session-dir manifest)))
+
+(defun mevedel-session-publication-generation-summaries
+    (session-dir &optional limit)
+  "Return newest-first summaries of SESSION-DIR's published generations.
+
+Each summary carries `:head', `:time', `:transcript-bytes', the manifest's
+generation `:references', and -- for
+the newest LIMIT generations, whose sidecars are read -- the turn facts
+from `mevedel-session-publication--sidecar-facts'.  LIMIT defaults to
+`mevedel-session-publication-summary-scan-max'; a sidecar is the largest
+artifact in a generation, so scanning every one of them is a cost a
+listing does not need to pay."
+  (let ((limit (or limit mevedel-session-publication-summary-scan-max))
+        (index 0)
+        summaries)
+    (dolist (generation (mevedel-session-publication--generation-names
+                         session-dir)
+                        (nreverse summaries))
+      (let* ((head (plist-get generation :head))
+             (manifest
+              (ignore-errors
+                (mevedel-session-publication--read-publication-raw
+                 session-dir head)))
+             (facts (when (< index limit)
+                      (and manifest
+                           (mevedel-session-publication--sidecar-facts
+                            session-dir manifest)))))
+        (setq index (1+ index))
+        (push (append (list :head head
+                            :name (plist-get generation :name)
+                            :time (plist-get generation :time)
+                            :manifest-readable-p (and manifest t)
+                            :transcript-bytes
+                            (and manifest
+                                 (mevedel-session-publication--transcript-bytes
+                                  session-dir manifest))
+                            :references
+                            (and manifest
+                                 (mevedel-session-publication--manifest-references
+                                  manifest)))
+                      facts)
+              summaries)))))
+
+(defun mevedel-session-publication--transcript-bytes (session-dir manifest)
+  "Return the byte size of MANIFEST's segment transcript, or nil."
+  (when-let*
+      ((entry (cdr (assoc "segment-0001.chat.org"
+                          (plist-get manifest :artifacts))))
+       (published (plist-get entry :published))
+       (attributes
+        (file-attributes (mevedel-session-publication--publication-path
+                          session-dir published))))
+    (file-attribute-size attributes)))
+
+(defun mevedel-session-publication-settled-summary-p (summary)
+  "Return non-nil when SUMMARY names a settled turn state.
+
+A prompt is recorded when its turn is admitted and the turn count when
+that turn settles, so a generation published while a response streamed
+carries a latest prompt one turn ahead of its count.  Such a head
+restores a half-arrived turn: it is the state a crashed owner resumes
+from, never a state anyone chooses."
+  (let ((turn-count (plist-get summary :turn-count))
+        (prompt (plist-get summary :prompt)))
+    (and turn-count
+         (or (null prompt)
+             (= (or (plist-get prompt :cum-turn) 0) turn-count)))))
+
+(defun mevedel-session-publication--retained-generations (summaries)
+  "Return generation names a collection must keep, given SUMMARIES.
+
+Three kinds of head are retained: the newest generation per distinct
+settled turn state, which is what a restore targets; the newest
+`mevedel-session-publication-keep-recent-generations' regardless, which
+covers a reader that resolved a head just before it stopped being
+current; and every generation those heads resolve artifacts through,
+because a manifest carries unchanged entries forward rather than copying
+their bytes."
+  (let ((seen (make-hash-table :test #'equal))
+        (index 0)
+        heads)
+    (dolist (summary summaries)
+      (let* ((settled (mevedel-session-publication-settled-summary-p summary))
+             (turn-count (plist-get summary :turn-count))
+             (key (and settled
+                       (list turn-count (plist-get summary :fork-point-id)))))
+        (when (or (< index mevedel-session-publication-keep-recent-generations)
+                  (null turn-count)
+                  (and settled (not (gethash key seen))))
+          (when key (puthash key t seen))
+          (push summary heads))
+        (setq index (1+ index))))
+    (let ((names (mapcar (lambda (summary) (plist-get summary :name)) heads)))
+      (dolist (summary heads (delete-dups names))
+        (setq names
+              (append names (plist-get summary :references)))))))
+
+(defun mevedel-session-publication-collect-generations (session)
+  "Delete SESSION's published generations no retained head needs.
+
+Retention is `mevedel-session-publication--retained-generations' plus
+the session's current head and everything it resolves through.  Only a
+portable session owning its lease may collect: the deletion is a target
+mutation, and the current head must not move underneath it.  Returns the
+number of generations deleted."
+  (when (and (mevedel-session-codec-portable-authority-p session)
+             (mevedel-session-durability-lease-owned-p session)
+             (not (mevedel-session-pending-publication session))
+             (null (mevedel-session-publication-queue session))
+             (not (mevedel-session-publication-active-p session)))
+    (let* ((session-dir (mevedel-session-save-path session))
+           (current (or (plist-get (mevedel-session-publication session) :head)
+                        (mevedel-session-durability-publication-head
+                         session-dir))))
+      (when (and session-dir current)
+        (let* ((summaries
+                ;; A picker may bound sidecar reads, but collection needs
+                ;; turn facts for every candidate or an unscanned generation
+                ;; would be retained forever as an unknown state.
+                (mevedel-session-publication-generation-summaries
+                 session-dir most-positive-fixnum))
+               (current-name
+                (file-name-nondirectory
+                 (directory-file-name (file-name-directory current))))
+               (current-summary
+                (seq-find
+                 (lambda (summary)
+                   (equal current-name (plist-get summary :name)))
+                 summaries))
+               (deleted 0))
+          (when (plist-get current-summary :manifest-readable-p)
+            (let ((retained
+                   (append
+                    (list current-name)
+                    (plist-get current-summary :references)
+                    (mevedel-session-publication--retained-generations
+                     summaries))))
+              (dolist (generation
+                       (mevedel-session-publication--generation-names
+                        session-dir)
+                       deleted)
+                (let ((name (plist-get generation :name)))
+                  (unless
+                      (or (member name retained)
+                          (>= deleted
+                              mevedel-session-publication-collect-max))
+                    (condition-case error
+                        (progn
+                          (mevedel-session-control-fs-delete-directory
+                           (mevedel-session-publication--publication-path
+                            session-dir
+                            (file-name-concat ".publications" name)))
+                          (setq deleted (1+ deleted)))
+                      (error
+                       (display-warning
+                        'mevedel
+                        (format
+                         "Could not collect publication generation %s: %s"
+                         name (error-message-string error))
+                        :warning)))))))))))))
+
+(defun mevedel-session-publication-read (session-dir &optional head)
   "Return SESSION-DIR's captured immutable publication, or nil.
+
+HEAD reads that published generation instead of the session's current
+lease head; every published head remains immutable, so an older one reads
+exactly as it was committed.
 
 Manifest structure and control paths are validated uncached.  Only the
 sidecar bytes are verified eagerly; consumers verify other artifact hashes
@@ -455,7 +735,8 @@ when they read those artifacts."
   (let* ((remote-file-name-inhibit-cache t)
          (_ (mevedel-session-durability--assert-no-pid-lock session-dir))
          (publication
-          (mevedel-session-publication--read-publication-raw session-dir))
+          (mevedel-session-publication--read-publication-raw
+           session-dir head))
          (captured
           (mevedel-session-publication--capture-publication
            session-dir publication)))

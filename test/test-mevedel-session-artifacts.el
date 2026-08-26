@@ -12,6 +12,79 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 
+(mevedel-deftest mevedel-session-artifacts-replace-transcript-contents ()
+  ,test
+  (test)
+  :doc "bounds wholesale swaps and preserves markers for close texts"
+  (let ((source (generate-new-buffer " *replace-source*"))
+        (target (generate-new-buffer " *replace-target*"))
+        (bulk (mapconcat (lambda (index)
+                           (format "line %06d of a long transcript\n" index))
+                         (number-sequence 1 8000) ""))
+        marker)
+    (unwind-protect
+        (progn
+          (with-current-buffer source (insert "\n\n"))
+          (with-current-buffer target
+            (insert bulk)
+            (let ((started (float-time)))
+              (mevedel-session-artifacts-replace-transcript-contents source)
+              (should (equal "\n\n" (buffer-string)))
+              (should (< (- (float-time) started) 10))))
+          (with-current-buffer source
+            (erase-buffer)
+            (insert bulk))
+          (with-current-buffer target
+            (let ((started (float-time)))
+              (mevedel-session-artifacts-replace-transcript-contents source)
+              (should (equal bulk (buffer-string)))
+              (should (< (- (float-time) started) 10))))
+          (with-current-buffer source
+            (erase-buffer)
+            (insert "alpha\nbeta\ngamma\n"))
+          (with-current-buffer target
+            (erase-buffer)
+            (insert "alpha\nbeta\n")
+            (setq marker (copy-marker 3))
+            (mevedel-session-artifacts-replace-transcript-contents source)
+            (should (equal "alpha\nbeta\ngamma\n" (buffer-string)))
+            (should (= 3 (marker-position marker)))))
+      (kill-buffer source)
+      (kill-buffer target))))
+
+(mevedel-deftest mevedel-session-artifacts-save-buffer-silently ()
+  ,test
+  (test)
+  :doc "writes the file while suppressing save and hook messages"
+  (let* ((file (make-temp-file "mevedel-silent-save-"))
+         (buffer (find-file-noselect file))
+         (noise-suppressed 'unseen))
+    (unwind-protect
+        (with-current-buffer buffer
+          (insert "content")
+          (cl-letf (((symbol-function 'message)
+                     (lambda (&optional fmt &rest _args)
+                       (when (and fmt (string-search "NOISE" fmt))
+                         (setq noise-suppressed
+                               (and inhibit-message
+                                    (null message-log-max))))
+                       nil)))
+            (let ((after-save-hook
+                   (cons (lambda () (message "NOISE written"))
+                         after-save-hook)))
+              (mevedel-session-artifacts-save-buffer-silently)))
+          (should (eq noise-suppressed t))
+          (should-not (buffer-modified-p))
+          (should (equal "content"
+                         (with-temp-buffer
+                           (insert-file-contents file)
+                           (buffer-string)))))
+      (when (buffer-live-p buffer)
+        (set-buffer-modified-p nil)
+        (kill-buffer buffer))
+      (when (file-exists-p file)
+        (delete-file file)))))
+
 
 (mevedel-deftest mevedel-session-artifacts--set-visited-segment-file ()
   ,test

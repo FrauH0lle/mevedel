@@ -1160,7 +1160,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
    (mevedel-menu--context) #'mevedel-refresh-session))
 
 (defun mevedel-menu--rewind-here ()
-  "Rewind to the settled assistant turn at point in the view buffer."
+  "Rewind keeping the settled assistant turn at point in the view buffer."
   (interactive)
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-view-rewind-at-point))

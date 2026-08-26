@@ -357,8 +357,8 @@
                   '(("S1 T4" . (:segment 1 :turn 4 :cum-turn 4
                                   :fork-point-id "point")))))
                ((symbol-function 'mevedel-session-rewind-rewind)
-                (lambda (selected target)
-                  (setq rewound (list selected target))
+                (lambda (selected target &optional boundary)
+                  (setq rewound (list selected target boundary))
                   t)))
             (should
              (mevedel-session-rewind-rewind-checkpoint
@@ -369,7 +369,9 @@
           (should (cl-every (lambda (records) (equal (list record) records))
                             reset-records))
           (should (eq buffer (car rewound)))
-          (should (= 4 (plist-get (cadr rewound) :cum-turn))))
+          (should (= 4 (plist-get (cadr rewound) :cum-turn)))
+          ;; Rewinding before an implementation discards that attempt.
+          (should (eq 'before (nth 2 rewound))))
       (kill-buffer buffer))))
 
 
@@ -593,6 +595,66 @@
              buffer session)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
+  :doc "keeps the selected turn and discards only what follows"
+  ;; The view's Rewind names a response the user is looking at, so that
+  ;; turn is the last one kept and only later turns go.
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "main" workspace))
+           (data-buf (generate-new-buffer " *test-keep-turn-data*")))
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (org-mode)
+              (setq-local mevedel--session session)
+              (setq-local mevedel--workspace workspace)
+              (setq-local gptel-backend
+                          (test-mevedel-session-persistence--agent-backend))
+              (setq-local gptel-model 'test-model)
+              (gptel-mode 1)
+              (mevedel-session-artifacts-save session data-buf)
+              (goto-char (point-max))
+              (insert "First prompt\n")
+              (let ((start (point)))
+                (insert "First reply.\n")
+                (put-text-property start (point) 'gptel 'response))
+              (setf (mevedel-session-turn-count session) 1)
+              (mevedel-session-artifacts-save session data-buf t)
+              (goto-char (point-max))
+              (insert "Second prompt\n")
+              (let ((start (point)))
+                (insert "Second reply.\n")
+                (put-text-property start (point) 'gptel 'response))
+              (setf (mevedel-session-turn-count session) 2)
+              (mevedel-session-artifacts-save session data-buf t))
+            (let* ((target
+                    (copy-sequence
+                     (cdr (cl-find-if
+                           (lambda (entry)
+                             (= 1 (plist-get (cdr entry) :cum-turn)))
+                           (mevedel-session-rewind--prompt-candidates
+                            session))))))
+              (should target)
+              (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                        ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                        ((symbol-function 'mevedel--run-session-start-hooks)
+                         #'ignore))
+                (should (mevedel-session-rewind-rewind
+                         data-buf target 'after)))
+              ;; Turn 1 survives with its reply; turn 2 is gone.
+              (should (= 1 (mevedel-session-turn-count session)))
+              (with-current-buffer data-buf
+                (should (string-match-p "First prompt" (buffer-string)))
+                (should (string-match-p "First reply" (buffer-string)))
+                (should-not
+                 (string-match-p "Second prompt" (buffer-string)))
+                (should-not
+                 (string-match-p "Second reply" (buffer-string))))))
+        (test-mevedel-session-persistence--release-and-kill
+         data-buf session)
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry))))
+
   :doc "rewinds before a saved first gptel turn without exposing metadata"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -667,6 +729,83 @@
          data-buf session)
         (delete-directory tempdir t)
         (mevedel-workspace-clear-registry))))
+  :doc "leaves no transcript residue when rewinding before the first turn"
+  ;; The transcript's leading newlines carry the discarded turns'
+  ;; properties, and the folded property drawer starts at point-min.  Org
+  ;; walks one character back from a folded region on every change, so a
+  ;; wholesale buffer replacement there used to signal `beginning-of-buffer'
+  ;; and abort the Rewind; what survived it projected a turn with no
+  ;; content and hid the retained lines behind an invisibility ellipsis.
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "main" workspace))
+           (data-buf (generate-new-buffer " *test-rewind-residue-data*"))
+           (view-buf (generate-new-buffer " *test-rewind-residue-view*")))
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (org-mode)
+              (setq-local mevedel--session session)
+              (setq-local mevedel--workspace workspace)
+              (setq-local gptel-backend
+                          (test-mevedel-session-persistence--agent-backend))
+              (setq-local gptel-model 'test-model)
+              (gptel-mode 1)
+              (mevedel-session-artifacts-save session data-buf)
+              (goto-char (point-max))
+              (let ((start (point)))
+                (insert "\n")
+                (put-text-property start (point) 'gptel
+                                   (cons 'tool "call-residue")))
+              (let ((start (point)))
+                (insert "\n")
+                (put-text-property start (point) 'gptel 'mevedel-hook-audit)
+                (put-text-property start (point) 'mevedel-hook-audit t)
+                (put-text-property start (point) 'invisible t))
+              (insert "First prompt\n")
+              (let ((start (point)))
+                (insert "assistant text\n")
+                (put-text-property start (point) 'gptel 'response))
+              (setf (mevedel-session-turn-count session) 1)
+              (mevedel-session-artifacts-save session data-buf t))
+            (mevedel-view--setup view-buf data-buf)
+            (with-current-buffer view-buf
+              (mevedel-view--full-rerender))
+            (let ((target
+                   (copy-sequence
+                    (cdar (mevedel-session-rewind--prompt-candidates
+                           session)))))
+              (cl-letf (((symbol-function 'display-buffer) #'ignore)
+                        ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                        ((symbol-function 'mevedel--run-session-start-hooks)
+                         #'ignore))
+                (should (mevedel-session-rewind-rewind data-buf target))))
+            (with-current-buffer data-buf
+              (should (string-blank-p
+                       (buffer-substring-no-properties
+                        (point-min) (point-max))))
+              (should-not (buffer-modified-p))
+              (should-not
+               (mevedel-transcript-restore-properties-present-p
+                (point-min) (point-max)))
+              (should-not (text-property-not-all (point-min) (point-max)
+                                                 'invisible nil))
+              (should-not
+               (mevedel-view--group-into-turns
+                (cl-remove-if-not
+                 (lambda (segment) (memq (car segment) '(ignored tool)))
+                 (mevedel-transcript-segments (point-min) (point-max)))
+                data-buf)))
+            (with-current-buffer view-buf
+              (should-not (string-match-p "^Assistant$" (buffer-string)))))
+        (when-let* ((impact (get-buffer "*mevedel-rewind-impact*")))
+          (kill-buffer impact))
+        (when (buffer-live-p view-buf)
+          (kill-buffer view-buf))
+        (test-mevedel-session-persistence--release-and-kill data-buf session)
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry))))
+
   :doc "rewinds a later turn while preserving the preceding turn"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -1301,6 +1440,40 @@
       (delete-directory tempdir t))))
 
 
+(mevedel-deftest mevedel-session-rewind-materialize-publication ()
+  ,test
+  (test)
+  :doc "writes committed artifacts into a staging root that does not exist yet"
+  (let* ((tempdir (make-temp-file "mevedel-materialize-" t))
+         (published (file-name-concat tempdir "published-0001"))
+         (staging (file-name-concat tempdir "temporary" "staging"))
+         (logical "tool-results/ToolScript-aA1b2c.txt")
+         (content "returned value\n")
+         (publication
+          (list :head ".publications/0001/manifest.el"
+                :artifacts
+                (list (cons logical
+                            (list :published published
+                                  :sha256 (secure-hash 'sha256 content))))))
+         (session (mevedel-session--create
+                   :authority-mode 'portable
+                   :save-path (file-name-as-directory tempdir)
+                   :publication publication)))
+    (unwind-protect
+        (progn
+          (write-region content nil published nil 'silent)
+          ;; Rewind hands over `<temporary-root>/staging', which nothing
+          ;; creates before materialization.
+          (should-not (file-directory-p staging))
+          (mevedel-session-rewind-materialize-publication
+           session publication staging)
+          (should (equal content
+                         (with-temp-buffer
+                           (insert-file-contents
+                            (file-name-concat staging logical))
+                           (buffer-string)))))
+      (delete-directory tempdir t))))
+
 (mevedel-deftest mevedel-session-rewind--commit-remote-rewind ()
   ,test
   (test)
@@ -1395,6 +1568,113 @@
                 (should (= 0 (mevedel-session-turn-count session)))
                 (with-current-buffer buffer
                   (should (equal "Rewound transcript\n" (buffer-string))))))))
+      (when (buffer-live-p buffer)
+        (let ((session (buffer-local-value 'mevedel--session buffer)))
+          (when (and session
+                     (mevedel-session-durability-lease-owned-p session))
+            (mevedel-session-durability-lease-release
+             (mevedel-session-save-path session) session)))
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))
+      (mevedel-workspace-clear-registry)))
+  :doc "keeps a committed head and refreshes on when the buffer install fails"
+  (let* ((host "remote-rewind-install-fail")
+         (local-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-remote-rewind-" t)))
+         buffer)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (cl-destructuring-bind (workspace session session-dir segment)
+              (test-mevedel-session-persistence--make-remote-restore-fixture
+               host local-root "Original transcript\n")
+            (let* ((mevedel-session-durability--client-id
+                    (make-string 64 ?d))
+                   (mevedel-session-durability--disclosed-targets
+                    (make-hash-table :test #'equal))
+                   (target '(:segment 1 :turn 1 :cum-turn 1
+                             :fork-point-id "remote-point")))
+              (puthash
+               (mevedel-execution-target-identity
+                (mevedel-session-execution-target session))
+               t mevedel-session-durability--disclosed-targets)
+              (should
+               (mevedel-session-durability-lease-acquire
+                session-dir "*remote-rewind-install*" session))
+              (setf (mevedel-session-publication session)
+                    (mevedel-session-publication-read session-dir)
+                    (mevedel-session-turn-count session) 1
+                    (mevedel-session-prompt-index session)
+                    `((1 . (,target))))
+              (setq buffer (generate-new-buffer " *remote-rewind-live*"))
+              (with-current-buffer buffer
+                (org-mode)
+                (insert "Original transcript\n")
+                (setq-local mevedel--session session)
+                (setq buffer-file-name segment))
+              (let ((generation
+                     (plist-get (mevedel-session-lease session) :generation))
+                    (old-head
+                     (plist-get (mevedel-session-publication session) :head))
+                    (followed nil)
+                    (warning nil))
+                (cl-letf
+                    (((symbol-function
+                       'mevedel-session-rewind--stage-rewind)
+                      (lambda (_session candidate actual-target staging-path
+                               staging-buffer &rest _)
+                        (make-directory staging-path t)
+                        (with-current-buffer staging-buffer
+                          (erase-buffer)
+                          (insert "Rewound transcript\n")
+                          (setq buffer-file-name
+                                (mevedel-session-artifacts-segment-path
+                                 staging-path
+                                 (plist-get actual-target :segment)))
+                          (write-region (point-min) (point-max)
+                                        buffer-file-name nil 'silent))
+                        candidate))
+                     ((symbol-function
+                       'mevedel-session-rewind-restore-plan)
+                      (lambda (&rest _) nil))
+                     ((symbol-function
+                       'mevedel-session-rewind--install-rewind-buffer)
+                      (lambda (&rest _)
+                        (signal 'beginning-of-buffer nil)))
+                     ((symbol-function
+                       'mevedel-session-artifacts-load-instructions)
+                      (lambda (&rest _) (push 'instructions followed) t))
+                     ((symbol-function 'mevedel-workspace-rewind-directives)
+                      (lambda (&rest _) (push 'directives followed)))
+                     ((symbol-function 'mevedel--restore-preserved-directives)
+                      #'ignore)
+                     ((symbol-function
+                       'mevedel-session-rewind--refresh-restored-buffers)
+                      (lambda (&rest _) (push 'buffers followed))))
+                  (mevedel-test--with-captured-diagnostics warning
+                    (should
+                     (mevedel-session-rewind--commit-remote-rewind
+                      session buffer target nil))))
+                ;; The head is committed, so the failed install degrades to
+                ;; a warning that names its own frame, and every later
+                ;; local refresh still runs.
+                (should-not
+                 (equal old-head
+                        (plist-get (mevedel-session-publication session)
+                                   :head)))
+                (should (equal generation
+                               (plist-get (mevedel-session-lease session)
+                                          :generation)))
+                (should (equal '(instructions directives buffers)
+                               (nreverse followed)))
+                (should (string-match-p "did not install" warning))
+                (should (string-match-p "Beginning of buffer" warning))
+                (should
+                 (string-match-p
+                  "mevedel-session-rewind--install-rewind-buffer" warning))))))
       (when (buffer-live-p buffer)
         (let ((session (buffer-local-value 'mevedel--session buffer)))
           (when (and session
@@ -1514,6 +1794,554 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry))))
+
+
+(mevedel-deftest mevedel-session-rewind--rewind-confirmation ()
+  ,test
+  (test)
+  :doc "names the boundary and both sides of it"
+  (let ((session (mevedel-session--create :name "main"
+                                          :authority-mode 'portable))
+        (target '(:segment 1 :turn 2 :cum-turn 2)))
+    (should
+     (equal
+      "Rewind main to before S1 T2: keep 1 turn, discard 3 (0 files; conversation and captured-file redo)? "
+      (mevedel-session-rewind--rewind-confirmation
+       session (list :target target :boundary 'before
+                     :surviving-turns 1 :discarded-turns 3 :file-plan nil))))
+    (should
+     (equal
+      "Rewind main keeping S1 T2: keep 2 turns, discard 2 (1 file; conversation and captured-file redo)? "
+      (mevedel-session-rewind--rewind-confirmation
+       session (list :target target :boundary 'after
+                     :surviving-turns 2 :discarded-turns 2
+                     :file-plan (list (list :action 'restore
+                                            :path "/tmp/a"))))))))
+
+(mevedel-deftest mevedel-session-rewind--restore-confirmation ()
+  ,test
+  (test)
+  :doc "names the turns and captured files a restore returns"
+  (let ((session (mevedel-session--create :name "main"))
+        (entry (list :head ".publications/generation-abc/manifest.el"
+                     :time '(0 0) :turn-count 4 :transcript-bytes 2048)))
+    (should
+     (string-match-p
+      "4 turns, 2 captured files, 1 externally changed; uncaptured effects remain"
+      (mevedel-session-rewind--restore-confirmation
+       session entry
+       (list :restored-turns 4
+             :file-plan (list (list :action 'restore :path "/tmp/a")
+                              (list :action 'overwrite :path "/tmp/b"))
+             :external-overwrites 1))))
+    ;; A restore with no captured files promises nothing about files.
+    (let ((prompt (mevedel-session-rewind--restore-confirmation
+                   session entry
+                   (list :restored-turns 1 :file-plan nil
+                         :external-overwrites 0))))
+      (should (string-match-p "1 turns, 0 captured files" prompt))
+      (should-not (string-match-p "uncaptured" prompt)))))
+
+(mevedel-deftest mevedel-redo ()
+  ,test
+  (test)
+  :doc "selects and restores one published head, then starts a restore epoch"
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create
+                     :name "main" :authority-mode 'portable))
+           (entry '(:head ".publications/generation-abc/manifest.el"))
+           restored hook-source)
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-session-rewind-published-heads)
+                 (lambda (_session) (list entry)))
+                ((symbol-function
+                  'mevedel-session-rewind--published-head-label)
+                 (lambda (_entry) "published state"))
+                ((symbol-function 'completing-read)
+                 (lambda (&rest _) "published state"))
+                ((symbol-function 'yes-or-no-p) (lambda (_prompt) t))
+                ((symbol-function 'mevedel-session-rewind-restore-head)
+                 (lambda (seen-session seen-buffer head confirm)
+                   (setq restored (list seen-session seen-buffer head))
+                   (funcall confirm
+                            '(:restored-turns 1 :file-plan nil
+                              :external-overwrites 0))))
+                ((symbol-function 'mevedel--run-session-start-hooks)
+                 (lambda (source) (setq hook-source source)))
+                ((symbol-function 'message) #'ignore))
+        (should (mevedel-redo)))
+      (should (equal (list session (current-buffer) (plist-get entry :head))
+                     restored))
+      (should (equal "restore" hook-source)))))
+
+(mevedel-deftest mevedel-session-rewind--redo-availability ()
+  ,test
+  (test)
+  :doc "promises captured-state redo exactly where heads stay published"
+  (should (equal "conversation and captured-file redo"
+                 (mevedel-session-rewind--redo-availability
+                  (mevedel-session--create :authority-mode 'portable))))
+  :doc "promises no redo for a PID-lock session"
+  (should (equal "no redo"
+                 (mevedel-session-rewind--redo-availability
+                  (mevedel-session--create :authority-mode 'pid-lock))))
+  :doc "promises no redo when no authority mode is recorded yet"
+  (should (equal "no redo"
+                 (mevedel-session-rewind--redo-availability
+                  (mevedel-session--create)))))
+
+(mevedel-deftest mevedel-session-rewind-published-heads ()
+  ,test
+  (test)
+  :doc "lists one head per settled turn state, newest first"
+  (let* ((host "published-heads")
+         (local-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-published-heads-" t))))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (cl-destructuring-bind (_workspace session session-dir segment)
+              (test-mevedel-session-persistence--make-remote-restore-fixture
+               host local-root "Original transcript\n")
+            (let ((mevedel-session-durability--client-id (make-string 64 ?e))
+                  (mevedel-session-durability--disclosed-targets
+                   (make-hash-table :test #'equal)))
+              (puthash
+               (mevedel-execution-target-identity
+                (mevedel-session-execution-target session))
+               t mevedel-session-durability--disclosed-targets)
+              (should
+               (mevedel-session-durability-lease-acquire
+                session-dir "*published-heads*" session))
+              (unwind-protect
+                  (cl-labels
+                      ((publish (transcript turns)
+                         (setf (mevedel-session-turn-count session) turns)
+                         (mevedel-session-publication-publish
+                          session
+                          (list
+                           (list :path segment :content transcript)
+                           (list :path
+                                 (mevedel-session-artifacts-sidecar-path
+                                  session-dir)
+                                 :content
+                                 (mevedel-session-artifacts-printed-value
+                                  (mevedel-session-artifacts-build-sidecar
+                                   session (current-buffer)))
+                                 :commit-marker t
+                                 :replace t)))
+                         (plist-get (mevedel-session-publication session)
+                                    :head))
+                       (heads ()
+                         (mapcar (lambda (entry) (plist-get entry :head))
+                                 (mevedel-session-rewind-published-heads
+                                  session))))
+                    (setf (mevedel-session-publication session)
+                          (mevedel-session-publication-read session-dir))
+                    (let ((settled (publish "Turn one transcript\n" 1)))
+                      ;; The state the session is already in is not a
+                      ;; restore target.
+                      (should-not (member settled (heads)))
+                      ;; A later save publishes another generation for the
+                      ;; same settled state; it stands for the earlier one
+                      ;; rather than adding a second row.
+                      (let ((mid (publish "Turn one transcript, more\n" 1)))
+                        (should-not (member mid (heads)))
+                        (should-not (member settled (heads)))
+                        ;; Rewinding moves the turn count, so the state it
+                        ;; left becomes restorable -- once.  Which of its
+                        ;; generations stands for it is not the contract:
+                        ;; they restore the same conversation.
+                        (let ((rewound (publish "Rewound transcript\n" 0)))
+                          (should-not (member rewound (heads)))
+                          (should
+                           (= 1 (length (seq-filter
+                                         (lambda (head) (member head (heads)))
+                                         (list settled mid)))))
+                          (should
+                           (= 1 (cl-count
+                                 1
+                                 (mapcar
+                                  (lambda (entry)
+                                    (plist-get entry :turn-count))
+                                  (mevedel-session-rewind-published-heads
+                                   session)))))))))
+                (mevedel-session-durability-lease-release
+                 session-dir session)))))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))
+      (mevedel-workspace-clear-registry)))
+
+  :doc "returns nothing for a PID-lock session"
+  (should-not
+   (mevedel-session-rewind-published-heads
+    (mevedel-session--create :authority-mode 'pid-lock))))
+
+(mevedel-deftest mevedel-session-rewind-restore-head ()
+  ,test
+  (test)
+  :doc "republishes a superseded head as the live conversation"
+  (let* ((host "restore-head")
+         (local-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-restore-head-" t)))
+         buffer)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (cl-destructuring-bind (_workspace session session-dir segment)
+              (test-mevedel-session-persistence--make-remote-restore-fixture
+               host local-root "Original transcript\n")
+            (let ((mevedel-session-durability--client-id (make-string 64 ?f))
+                  (mevedel-session-durability--disclosed-targets
+                   (make-hash-table :test #'equal)))
+              (puthash
+               (mevedel-execution-target-identity
+                (mevedel-session-execution-target session))
+               t mevedel-session-durability--disclosed-targets)
+              (should
+               (mevedel-session-durability-lease-acquire
+                session-dir "*restore-head*" session))
+              (unwind-protect
+                  (cl-labels
+                      ((publish (transcript turns)
+                         (setf (mevedel-session-turn-count session) turns)
+                         (mevedel-session-publication-publish
+                          session
+                          (list
+                           (list :path segment :content transcript)
+                           (list :path
+                                 (mevedel-session-artifacts-sidecar-path
+                                  session-dir)
+                                 :content
+                                 (mevedel-session-artifacts-printed-value
+                                  (mevedel-session-artifacts-build-sidecar
+                                   session (current-buffer)))
+                                 :commit-marker t
+                                 :replace t)))
+                         (plist-get (mevedel-session-publication session)
+                                    :head)))
+                    (setf (mevedel-session-publication session)
+                          (mevedel-session-publication-read session-dir))
+                    (let* ((restorable (publish "Original transcript\n" 1))
+                           (rewound (publish "Rewound transcript\n" 0)))
+                      (setq buffer (generate-new-buffer " *restore-live*"))
+                      (with-current-buffer buffer
+                        (org-mode)
+                        (insert "Rewound transcript\n")
+                        (setq-local mevedel--session session)
+                        (setq buffer-file-name segment))
+                      (cl-letf
+                          (((symbol-function
+                             'mevedel-session-artifacts-load-instructions)
+                            (lambda (&rest _) t))
+                           ((symbol-function
+                             'mevedel-session-recovery-refresh-session-buffers)
+                            #'ignore))
+                        (should
+                         (mevedel-session-rewind-restore-head
+                          session buffer restorable)))
+                      ;; The restore is itself a new committed head, and
+                      ;; the superseded transcript and turn count are live
+                      ;; again.
+                      (let ((head (plist-get
+                                   (mevedel-session-publication session)
+                                   :head)))
+                        (should-not (equal head rewound))
+                        (should-not (equal head restorable)))
+                      (should (= 1 (mevedel-session-turn-count session)))
+                      (should
+                       (equal "Original transcript\n"
+                              (mevedel-session-artifacts-read-artifact
+                               session "segment-0001.chat.org" t)))
+                      (with-current-buffer buffer
+                        (should (equal "Original transcript\n"
+                                       (buffer-string))))
+                      ;; Restoring consumes nothing: the state it moved
+                      ;; away from is restorable in turn.
+                      (should
+                       (member rewound
+                               (mapcar (lambda (entry) (plist-get entry :head))
+                                       (mevedel-session-rewind-published-heads
+                                        session))))))
+                (mevedel-session-durability-lease-release
+                 session-dir session)))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))
+      (mevedel-workspace-clear-registry)))
+
+  :doc "restores captured files from the published head's file history"
+  ;; The pre-Rewind file bytes stay published under `file-history', and
+  ;; the restored sidecar reinstates the snapshot index that names them,
+  ;; so a restore returns captured working-tree state as well.
+  (let* ((host "restore-head-files")
+         (local-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-restore-files-" t)))
+         buffer)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (cl-destructuring-bind (_workspace session session-dir segment)
+              (test-mevedel-session-persistence--make-remote-restore-fixture
+               host local-root "Original transcript\n")
+            (let ((mevedel-session-durability--client-id (make-string 64 ?a))
+                  (mevedel-session-durability--disclosed-targets
+                   (make-hash-table :test #'equal))
+                  (tracked (file-name-concat local-root "tracked.el")))
+              (puthash
+               (mevedel-execution-target-identity
+                (mevedel-session-execution-target session))
+               t mevedel-session-durability--disclosed-targets)
+              (should
+               (mevedel-session-durability-lease-acquire
+                session-dir "*restore-files*" session))
+              (unwind-protect
+                  (progn
+                    (write-region "captured bytes\n" nil tracked nil 'silent)
+                    (setf (mevedel-session-publication session)
+                          (mevedel-session-publication-read session-dir)
+                          (mevedel-session-turn-count session) 1
+                          (mevedel-session-file-snapshots session)
+                          `((1 . ((,tracked . (:backup-name "000001"
+                                               :pre-backup-name "000001"
+                                               :version 1))))))
+                    ;; Publish the head that owns both the transcript and
+                    ;; the captured file bytes.
+                    (mevedel-session-publication-publish
+                     session
+                     (list
+                      (list :path (file-name-concat
+                                   session-dir "file-history" "000001")
+                            :content "captured bytes\n")
+                      (list :path segment :content "Original transcript\n")
+                      (list :path (mevedel-session-artifacts-sidecar-path
+                                   session-dir)
+                            :content
+                            (mevedel-session-artifacts-printed-value
+                             (mevedel-session-artifacts-build-sidecar
+                              session (current-buffer)))
+                            :commit-marker t
+                            :replace t)))
+                    (let ((restorable
+                           (plist-get (mevedel-session-publication session)
+                                      :head)))
+                      ;; Supersede it the way a Rewind does: no turns, no
+                      ;; snapshots, and the working tree moved on.
+                      (setf (mevedel-session-turn-count session) 0
+                            (mevedel-session-file-snapshots session) nil)
+                      (write-region "rewound bytes\n" nil tracked nil 'silent)
+                      (mevedel-session-publication-publish
+                       session
+                       (list
+                        (list :path segment :content "Rewound transcript\n")
+                        (list :path (mevedel-session-artifacts-sidecar-path
+                                     session-dir)
+                              :content
+                              (mevedel-session-artifacts-printed-value
+                               (mevedel-session-artifacts-build-sidecar
+                                session (current-buffer)))
+                              :commit-marker t
+                              :replace t)))
+                      (setq buffer (generate-new-buffer " *restore-files*"))
+                      (with-current-buffer buffer
+                        (org-mode)
+                        (insert "Rewound transcript\n")
+                        (setq-local mevedel--session session)
+                        (setq buffer-file-name segment))
+                      (let (impact)
+                        (cl-letf
+                            (((symbol-function
+                               'mevedel-session-artifacts-load-instructions)
+                              (lambda (&rest _) t))
+                             ((symbol-function
+                               'mevedel-session-recovery-refresh-session-buffers)
+                              #'ignore))
+                          (should
+                           (mevedel-session-rewind-restore-head
+                            session buffer restorable
+                            (lambda (actual) (setq impact actual) t))))
+                        ;; The impact named the captured file before any
+                        ;; mutation, and the file came back with the turns.
+                        (should (= 1 (plist-get impact :restored-turns)))
+                        (should (= 1 (length (plist-get impact :file-plan))))
+                        (should (= 1 (plist-get impact
+                                                :external-overwrites))))
+                      (should
+                       (equal "captured bytes\n"
+                              (mevedel-session-artifacts--file-text tracked)))
+                      (should (= 1 (mevedel-session-turn-count session)))
+                      (with-current-buffer buffer
+                        (should (equal "Original transcript\n"
+                                       (buffer-string))))))
+                (mevedel-session-durability-lease-release
+                 session-dir session)))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))
+      (mevedel-workspace-clear-registry)))
+
+  :doc "abandons everything when the confirmation declines"
+  (let* ((host "restore-head-declined")
+         (local-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-restore-declined-" t)))
+         buffer)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (cl-destructuring-bind (_workspace session session-dir segment)
+              (test-mevedel-session-persistence--make-remote-restore-fixture
+               host local-root "Original transcript\n")
+            (let ((mevedel-session-durability--client-id (make-string 64 ?c))
+                  (mevedel-session-durability--disclosed-targets
+                   (make-hash-table :test #'equal)))
+              (puthash
+               (mevedel-execution-target-identity
+                (mevedel-session-execution-target session))
+               t mevedel-session-durability--disclosed-targets)
+              (should
+               (mevedel-session-durability-lease-acquire
+                session-dir "*restore-declined*" session))
+              (unwind-protect
+                  (progn
+                    (setf (mevedel-session-publication session)
+                          (mevedel-session-publication-read session-dir))
+                    (let ((restorable
+                           (plist-get (mevedel-session-publication session)
+                                      :head)))
+                      (mevedel-session-publication-publish
+                       session
+                       (list
+                        (list :path segment :content "Rewound transcript\n")
+                        (list :path (mevedel-session-artifacts-sidecar-path
+                                     session-dir)
+                              :content
+                              (mevedel-session-artifacts-read-file-raw
+                               (mevedel-session-artifacts-sidecar-path
+                                session-dir))
+                              :commit-marker t
+                              :replace t)))
+                      (setq buffer (generate-new-buffer " *restore-declined*"))
+                      (with-current-buffer buffer
+                        (org-mode)
+                        (insert "Rewound transcript\n")
+                        (setq-local mevedel--session session)
+                        (setq buffer-file-name segment))
+                      (let ((rewound-head
+                             (plist-get (mevedel-session-publication session)
+                                        :head)))
+                        (should-not
+                         (mevedel-session-rewind-restore-head
+                          session buffer restorable (lambda (_impact) nil)))
+                        (should
+                         (equal rewound-head
+                                (plist-get
+                                 (mevedel-session-publication session)
+                                 :head)))
+                        (should-not
+                         (mevedel-session-pending-publication session))
+                        (with-current-buffer buffer
+                          (should (equal "Rewound transcript\n"
+                                         (buffer-string)))))))
+                (mevedel-session-durability-lease-release
+                 session-dir session)))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))
+      (mevedel-workspace-clear-registry)))
+
+  :doc "rolls a pre-CAS file restore back under a fresh lease reservation"
+  (let* ((root (make-temp-file "mevedel-restore-rollback-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "restore"))
+         (session (mevedel-session--create
+                   :workspace workspace :authority-mode 'portable
+                   :save-path root
+                   :publication '(:head "current")))
+         (candidate (mevedel-session--create :workspace workspace))
+         (buffer (generate-new-buffer " *restore-rollback*"))
+         (plan '((:path "/tmp/captured" :action overwrite)))
+         (backups '((:path "/tmp/captured" :existed nil)))
+         (reservations 0)
+         rolled-back)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-session-rewind-assert-stable-source)
+              #'ignore)
+             ((symbol-function 'mevedel-session-publication-read)
+              (lambda (_path &optional head)
+                (if head '(:head "target") '(:head "current"))))
+             ((symbol-function
+               'mevedel-session-rewind-materialize-publication)
+              #'ignore)
+             ((symbol-function 'mevedel-session-codec-read)
+              (lambda (_path) '(:sidecar t)))
+             ((symbol-function 'mevedel-session-codec-deserialize)
+              (lambda (_raw _workspace) (list :session candidate)))
+             ((symbol-function 'mevedel-session-set-execution-target)
+              #'ignore)
+             ((symbol-function
+               'mevedel-session-rewind--load-restored-transcript)
+              #'ignore)
+             ((symbol-function 'mevedel-session-rewind--restore-file-plan)
+              (lambda (_candidate) plan))
+             ((symbol-function
+               'mevedel-session-rewind--prepare-buffers-for-restore)
+              (lambda (_candidate _turn actual-plan &rest _) actual-plan))
+             ((symbol-function
+               'mevedel-session-rewind--backup-restore-files)
+              (lambda (_plan _directory) backups))
+             ((symbol-function 'mevedel-session-rewind-execute-restore)
+              (lambda (_candidate _plan) '(:succeeded 1)))
+             ((symbol-function
+               'mevedel-session-rewind-rewind-publication-artifacts)
+              (lambda (&rest _) nil))
+             ((symbol-function 'mevedel-session-publication-publish)
+              (lambda (actual-session &rest _)
+                (setf (mevedel-session-pending-publication actual-session)
+                      '(:batches nil))
+                (error "Injected pre-CAS failure")))
+             ((symbol-function
+               'mevedel-session-durability-call-with-reserved-lease)
+              (lambda (_session function)
+                (cl-incf reservations)
+                (funcall function)))
+             ((symbol-function
+               'mevedel-session-rewind--rollback-restore-files)
+              (lambda (actual-backups)
+                (setq rolled-back actual-backups)
+                nil))
+             ((symbol-function
+               'mevedel-session-publication-discard-rolled-back)
+              (lambda (actual-session)
+                (setf (mevedel-session-pending-publication actual-session)
+                      nil))))
+          (let ((raised
+                 (should-error
+                  (mevedel-session-rewind-restore-head
+                   session buffer "target" (lambda (_impact) t)))))
+            (should (string-match-p "Injected pre-CAS failure"
+                                    (error-message-string raised)))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (file-directory-p root) (delete-directory root t)))
+    (should (= 2 reservations))
+    (should (equal backups rolled-back))
+    (should-not (mevedel-session-pending-publication session)))
+
+  :doc "refuses a PID-lock session"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock)))
+    (should-error
+     (mevedel-session-rewind-restore-head
+      session (current-buffer) ".publications/generation-x/manifest.el")
+     :type 'user-error)))
 
 
 (mevedel-deftest mevedel-session-rewind--rollback-restore-files ()

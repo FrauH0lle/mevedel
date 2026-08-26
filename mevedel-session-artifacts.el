@@ -233,14 +233,12 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--forget-place "mevedel-utilities" nil)
-(declare-function mevedel--save-buffer-silently "mevedel-utilities" ())
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 (declare-function mevedel--write-file-atomically
                   "mevedel-utilities" (path content &optional coding mode))
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
 (autoload 'mevedel--forget-place "mevedel-utilities")
-(autoload 'mevedel--save-buffer-silently "mevedel-utilities")
 (autoload 'mevedel--warn-once "mevedel-utilities")
 (autoload 'mevedel--write-file-atomically "mevedel-utilities")
 (autoload 'mevedel-version "mevedel-utilities")
@@ -273,6 +271,26 @@
 
 (defvar mevedel-session-artifacts-require-agent-commit-p nil
   "Non-nil while an acknowledged agent mutation requires immediate commit.")
+
+;;
+;;; Buffer persistence
+
+(defun mevedel-session-artifacts-save-buffer-silently ()
+  "Save the current session buffer without save or hook messages."
+  (let ((save-silently t)
+        (inhibit-message t)
+        (message-log-max nil))
+    (save-buffer)))
+
+(defun mevedel-session-artifacts-replace-transcript-contents (source)
+  "Replace the current transcript with SOURCE without an unbounded diff.
+
+The cost bound preserves markers through ordinary edits without spending
+minutes comparing unrelated large transcripts.  The generous time bound
+is a last-resort plain replacement; callers follow either path with a full
+rerender."
+  (replace-buffer-contents source 5.0 8000))
+
 
 ;;
 ;;; Session id and paths
@@ -900,7 +918,7 @@ Returns SESSION's `save-path' (allocated or existing)."
         (unless (file-exists-p segment-path)
           (set-buffer-modified-p t)
           (unless (mevedel-session-codec-portable-authority-p session)
-            (mevedel--save-buffer-silently))))
+            (mevedel-session-artifacts-save-buffer-silently))))
       save-path))
 
 (defvar mevedel-session-artifacts--checking-incarnation nil
@@ -1847,7 +1865,7 @@ must materialize a snapshot rather than record a change."
                  session buffer))
               (with-current-buffer buffer
                 (when (buffer-modified-p)
-                  (mevedel--save-buffer-silently)))
+                  (mevedel-session-artifacts-save-buffer-silently)))
               (mevedel-session-artifacts-update-prompt-index session buffer)
               ;; Snapshot files modified during the just-completed turn.
               (when (and (boundp 'mevedel--current-request)
@@ -2338,7 +2356,8 @@ nil if SESSION is not yet materialized."
               (if portable-p
                   (setq old-publish-text
                         (buffer-substring (point-min) (point-max)))
-                (when (buffer-modified-p) (mevedel--save-buffer-silently)))
+                (when (buffer-modified-p)
+                  (mevedel-session-artifacts-save-buffer-silently)))
               (when (fboundp 'mevedel-telemetry-record)
                 (mevedel-telemetry-record
                  session 'segment-rotation-stage :stage 'old-saved
@@ -2480,7 +2499,8 @@ absolute path on success, nil if SESSION is not yet materialized."
               (if portable-p
                   (setq old-publish-text
                         (buffer-substring (point-min) (point-max)))
-                (when (buffer-modified-p) (mevedel--save-buffer-silently)))
+                (when (buffer-modified-p)
+                  (mevedel-session-artifacts-save-buffer-silently)))
               (mevedel-session-artifacts-update-prompt-index
                session buffer)
               (cl-incf (mevedel-session-current-segment session))

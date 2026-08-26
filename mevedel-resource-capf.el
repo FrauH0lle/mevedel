@@ -89,12 +89,11 @@ name without treating an encoded slash as a path separator."
           (mapconcat #'mevedel-resource-encode-component components "/")))
 
 (defun mevedel-resource-capf--path-entries
-    (scheme root tail metadata &optional address-prefix annotation include-p)
+    (scheme root tail metadata &optional address-prefix annotation)
   "Complete one directory level below ROOT for SCHEME and TAIL.
 
 TAIL is the path below ADDRESS-PREFIX.  Only directory metadata is
-consulted; no candidate file is opened.  When INCLUDE-P is non-nil, it
-must accept the physical path of every candidate that should be exposed."
+consulted; no candidate file is opened."
   (when (and root
              (not (file-remote-p root))
              (file-directory-p root))
@@ -138,7 +137,10 @@ must accept the physical path of every candidate that should be exposed."
                                  root components)
                       (error nil))))
               (when (and safe
-                         (or (null include-p) (funcall include-p file))
+                         (or (not (eq scheme 'mevedel))
+                             (file-directory-p file)
+                             (and (file-regular-p file)
+                                  (equal (file-name-extension file) "md")))
                          (not (and (eq scheme 'artifact)
                                    (string= (car components)
                                             ".mevedel-pending-executions")))
@@ -149,12 +151,6 @@ must accept the physical path of every candidate that should be exposed."
                                (or annotation (format "[%s]" scheme))
                                (if (file-directory-p file) "dir" "file")))
                  entries)))))))))
-
-(defun mevedel-resource-capf--documentation-entry-p (file)
-  "Return non-nil when FILE is a documentation directory or Markdown file."
-  (or (file-directory-p file)
-      (and (file-regular-p file)
-           (equal (file-name-extension file) "md"))))
 
 (defun mevedel-resource-capf--skill-annotation (skill kind)
   "Return completion annotation for SKILL labeled with KIND."
@@ -407,15 +403,10 @@ History candidates are limited to records with retained conversations."
                         (list :session session) scheme)))
         (setq entries
               (pcase scheme
-                ((or 'local 'artifact)
+                ((or 'local 'artifact 'mevedel)
                  (mevedel-resource-capf--path-entries
                   scheme (cdr (assq scheme (plist-get metadata :roots)))
                   tail metadata))
-                ('mevedel
-                 (mevedel-resource-capf--path-entries
-                  scheme (cdr (assq scheme (plist-get metadata :roots)))
-                  tail metadata
-                  nil nil #'mevedel-resource-capf--documentation-entry-p))
                 ('skill (mevedel-resource-capf--skills tail metadata))
                 ('agent (mevedel-resource-capf--agents tail metadata))
                 ('history (mevedel-resource-capf--agents tail metadata t))

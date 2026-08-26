@@ -63,6 +63,23 @@
     (should (= 1 (length turns)))
     (should (eq 'user (plist-get (car turns) :role))))
 
+  :doc "drops leading assistant-side residue with nothing to render"
+  ;; Rewinding to before the first turn leaves whitespace still carrying
+  ;; tool and audit properties; it must not project an empty turn.
+  (with-temp-buffer
+    (insert "\n\n")
+    (should-not
+     (mevedel-view--group-into-turns
+      '((tool 1 2) (ignored 2 3)) (current-buffer))))
+
+  :doc "keeps a leading assistant segment that has visible content"
+  (with-temp-buffer
+    (insert "tool output\n")
+    (let ((turns (mevedel-view--group-into-turns
+                  '((tool 1 13)) (current-buffer))))
+      (should (= 1 (length turns)))
+      (should (eq 'assistant (plist-get (car turns) :role)))))
+
   :doc "user then assistant turn"
   (let* ((segs '((user 1 10) (response 10 30) (tool 30 50)))
          (turns (mevedel-view-test--group-synthetic-segments segs)))
@@ -430,7 +447,7 @@
             :authority-mode 'pid-lock
             :name "rewind-point"
             :current-segment 1))
-          called-buffer called-target returned-latest)
+          called-buffer called-target called-boundary returned-latest)
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (insert "Prompt\n")
@@ -446,15 +463,18 @@
         (search-forward "Assistant")
         (cl-letf
             (((symbol-function 'mevedel-session-rewind-rewind)
-              (lambda (buffer target)
+              (lambda (buffer target &optional boundary)
                 (setq called-buffer buffer
-                      called-target target)
+                      called-target target
+                      called-boundary boundary)
                 t))
              ((symbol-function 'mevedel-view-return-to-latest-segment)
               (lambda (&optional _event)
                 (setq returned-latest t))))
           (mevedel-view-rewind-at-point)))
       (should (eq data-buf called-buffer))
+      ;; Point names a response the user is looking at, so it survives.
+      (should (eq 'after called-boundary))
       (should returned-latest)
       (should (equal "rewind-point-1"
                      (plist-get called-target :fork-point-id))))))
@@ -6217,8 +6237,17 @@
         i i)
        `(tool . ,(format "call_%d" i))))
     (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
-    (with-current-buffer data-buf
-      (mevedel-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (clrhash mevedel-view--tool-rendering-cache))
+    (let ((parse (symbol-function 'mevedel-view--tool-call-parse))
+          (parse-count 0))
+      (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)
+                 (lambda (&rest arguments)
+                   (cl-incf parse-count)
+                   (apply parse arguments))))
+        (with-current-buffer data-buf
+          (mevedel-view-stream-render-response (point-min) (point-max))))
+      (should (<= 1 parse-count 4)))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
