@@ -591,7 +591,11 @@
       (should (> (plist-get executions :priority)
                  (plist-get agents :priority)))
       (should (string-match-p "Executions: 2 live"
-                              (plist-get executions :body)))))))
+                              (plist-get executions :body)))
+      ;; The row needs a blank line under it or it reads as a caption
+      ;; for the agents separator that follows.  A zone trims `:body'
+      ;; to one newline, so the blank has to travel as a suffix.
+      (should (equal "\n" (plist-get executions :body-suffix)))))))
 
 (mevedel-deftest mevedel-view--execution-state-changed ()
   ,test
