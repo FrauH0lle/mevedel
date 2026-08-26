@@ -88,7 +88,21 @@
                 "source" 'continuation "previous" "focus" "guidance")))
     (dolist (text '("source" "previous" "focus" "guidance"
                     "frozen untrusted evidence"))
-      (should (string-match-p text input)))))
+      (should (string-match-p text input))))
+
+  :doc "strips text properties from every input"
+  ;; Buffer-lifted inputs can carry gptel spans that gptel's prompt
+  ;; parser would interpret as transcript structure.
+  (let ((input (mevedel-context-summary--input
+                (propertize "source" 'gptel '(tool . "1"))
+                'continuation
+                (propertize "previous" 'gptel 'response)
+                (propertize "focus" 'gptel 'response)
+                "guidance")))
+    (should-not (text-properties-at
+                 (string-match "source" input) input))
+    (should-not (text-properties-at
+                 (string-match "previous" input) input))))
 
 (mevedel-deftest mevedel-context-summary--estimated-tokens ()
   ,test
@@ -255,7 +269,10 @@
                           :tools (buffer-local-value 'gptel-tools buffer)
                           :use-context
                           (buffer-local-value 'gptel-use-context buffer)
-                          :stream (buffer-local-value 'gptel-stream buffer))))
+                          :stream (buffer-local-value 'gptel-stream buffer)
+                          :track-response
+                          (buffer-local-value 'gptel-track-response
+                                              buffer))))
                  (funcall (plist-get args :callback)
                           test-mevedel-context-summary--continuation nil)
                  'request-fsm)))
@@ -274,7 +291,8 @@
     (should-not (plist-get captured :use-tools))
     (should-not (plist-get captured :tools))
     (should-not (plist-get captured :use-context))
-    (should-not (plist-get captured :stream)))
+    (should-not (plist-get captured :stream))
+    (should-not (plist-get captured :track-response)))
 
   :doc "resolves nested Agent summaries from the owning root session"
   (let ((session (mevedel-session--create :name "main"))

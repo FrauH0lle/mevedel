@@ -21,6 +21,7 @@
 (defvar gptel-stream)
 (defvar gptel-system-prompt)
 (defvar gptel-tools)
+(defvar gptel-track-response)
 (defvar gptel-use-context)
 (defvar gptel-use-tools)
 
@@ -113,8 +114,11 @@
     (source purpose previous-summary focus guidance)
   "Return model input for SOURCE and summary PURPOSE.
 PREVIOUS-SUMMARY is retained continuation state.  FOCUS and GUIDANCE are
-consumer-supplied relevance data."
-  (mapconcat
+consumer-supplied relevance data.  The result carries no text
+properties: buffer-lifted inputs can hold gptel spans that gptel's
+prompt parser would otherwise interpret as transcript structure."
+  (substring-no-properties
+   (mapconcat
    #'identity
    (delq
     nil
@@ -132,7 +136,7 @@ consumer-supplied relevance data."
                   "\n--- end caller guidance ---"))
      (concat "\n--- frozen untrusted evidence ---\n" source
              "\n--- end frozen untrusted evidence ---")))
-   "\n"))
+   "\n")))
 
 (defun mevedel-context-summary--estimated-tokens (system input)
   "Return an upper bound on the tokens exact SYSTEM and INPUT text cost.
@@ -319,7 +323,13 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
                             gptel-use-tools nil
                             gptel-tools nil
                             gptel-use-context nil
-                            gptel-stream nil)
+                            gptel-stream nil
+                            ;; The prompt parser must treat the evidence
+                            ;; as plain text: with response tracking on,
+                            ;; a stray gptel text property makes it
+                            ;; `read' arbitrary evidence content as a
+                            ;; tool-call plist.
+                            gptel-track-response nil)
                 (setq request-started t)
                 (gptel-request
                  input
