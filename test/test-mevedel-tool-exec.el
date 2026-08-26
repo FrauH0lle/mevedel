@@ -9,9 +9,11 @@
 (require 'mevedel-tool-exec)
 (require 'cl-lib)
 (require 'seq)
+(require 'mevedel-agent-control)
 (require 'mevedel-bash-analysis)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
+(require 'mevedel-tools)
 (require 'mevedel-execution)
 (require 'mevedel-execution-target)
 (require 'mevedel-pipeline)
@@ -381,7 +383,6 @@
   :doc "registered dispatch completes through the full pipeline"
   (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test"))
         result)
-    (require 'mevedel-tools)
     (mevedel-tool-exec--register)
     (with-temp-buffer
       (setq-local mevedel--session session)
@@ -427,7 +428,6 @@
   ,test
   (test)
   :doc "queues unread output and final facts for an independent completion"
-  (require 'mevedel-agent-control)
   (let ((session (mevedel-session--create :authority-mode 'pid-lock :name "test")))
     (should
      (mevedel-tool-exec-handle-execution-event
@@ -1164,7 +1164,6 @@ the execution boundary owns the session's single unavailable warning"
       result)))
   :doc "pipeline settles both batch launch failure forms as errors"
   (progn
-    (require 'mevedel-tools)
     (let* ((workspace (mevedel-workspace--create :root default-directory))
            (mevedel--session
             (mevedel-session--create :name "main" :workspace workspace)))
