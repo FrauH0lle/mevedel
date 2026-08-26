@@ -7,13 +7,12 @@
 ;;; Code:
 
 (require 'mevedel-worktree)
-(require 'mevedel)
 (require 'mevedel-chat)
 (require 'mevedel-cockpit)
-(require 'mevedel-mentions)
 (require 'mevedel-session-persistence)
+(require 'mevedel-structs)
 (require 'mevedel-view)
-(require 'tabulated-list)
+(require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory

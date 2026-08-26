@@ -181,6 +181,8 @@
 		  "mevedel-skills-prompt" nil)
 (declare-function mevedel-skills-install-reminder
 		  "mevedel-skills-prompt" (session))
+(autoload 'mevedel-skills-install-activation-hook "mevedel-skills-prompt")
+(autoload 'mevedel-skills-install-reminder "mevedel-skills-prompt")
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-slash-capf "mevedel-skills-ui" nil)
