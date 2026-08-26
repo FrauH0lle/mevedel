@@ -4,7 +4,6 @@
 
 ;;; Code:
 
-(require 'mevedel)
 (require 'mevedel-structs)
 (require 'mevedel-execution-target)
 (require 'mevedel-permissions)
