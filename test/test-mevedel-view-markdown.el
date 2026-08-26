@@ -868,7 +868,6 @@
   (test)
   :doc "a region overlapping a rendered table yields canonical Markdown"
   (with-temp-buffer
-    (require 'mevedel-view-table)
     (let ((source "| a | b |\n|---|---|\n| 1 | 2 |"))
       (insert "before\n" source "\nafter\n")
       (mevedel-view-table-decorate (point-min) (point-max) nil)
@@ -879,7 +878,6 @@
 
   :doc "a partial table region yields the complete table source"
   (with-temp-buffer
-    (require 'mevedel-view-table)
     (let ((source "| a | b |\n|---|---|\n| 1 | 2 |"))
       (insert source "\n")
       (mevedel-view-table-decorate (point-min) (point-max) nil)
@@ -892,7 +890,6 @@
 
   :doc "table links keep canonical source and activation across rerenders"
   (mevedel-test--with-displayed-buffer
-    (require 'mevedel-view-table)
     (let ((source (concat "| Person | Site |\n"
                           "|---|---|\n"
                           "| Ada | [Home](https://example.test) |")))
