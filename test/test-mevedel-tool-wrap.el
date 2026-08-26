@@ -14,8 +14,11 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-agents)
 (require 'mevedel-tool-registry)
 (require 'mevedel-pipeline)
+(require 'mevedel-presets)
+(require 'mevedel-structs)
 (require 'mevedel-tools)
 (require 'gptel-request)
 (require 'helpers
@@ -403,8 +406,6 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
          (src (test-mevedel-tool-wrap--make-source
                :name extra-name
                :description "extra desc")))
-    (require 'mevedel-presets)
-    (require 'mevedel-structs)
     (mevedel-define-tool :wrap src :groups (xtra) :read-only-p t)
     (let* ((session (mevedel-session--create
                      :workspace (mevedel-workspace--create :root "/tmp")))
@@ -433,7 +434,6 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
   (test)
 
   :doc "effective specs append extras from defcustom"
-  (require 'mevedel-agents)
   (let* ((agent (mevedel-agent--create
                  :name "e-agent"
                  :tools '(read (:tool "Bash"))))
