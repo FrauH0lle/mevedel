@@ -19,7 +19,6 @@
   (let ((data-buffer (generate-new-buffer " *mevedel-realign-data*")))
     (unwind-protect
         (mevedel-test--with-displayed-buffer
-          (require 'mevedel-view-table)
           (setq-local mevedel--data-buffer data-buffer)
           (with-current-buffer data-buffer
             (insert "authoritative transcript\n"))
@@ -64,7 +63,6 @@
 
   :doc "is a no-op for an undisplayed buffer"
   (with-temp-buffer
-    (require 'mevedel-view-table)
     (insert "| a | b |\n|---|---|\n| 1 | 2 |\n")
     (mevedel-view-table-decorate (point-min) (point-max) nil)
     (let ((before (buffer-string)))
@@ -78,7 +76,6 @@
 
   :doc "lays out for the window whose change scheduled the job"
   (mevedel-test--with-displayed-buffer
-    (require 'mevedel-view-table)
     (let* ((cell (mapconcat #'identity (make-list 30 "word") " "))
            (buffer (current-buffer))
            ;; A side-by-side split gives the two windows different
