@@ -11,8 +11,6 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
-(require 'mevedel-chat)
-(require 'mevedel-pipeline)
 (require 'mevedel-session-artifacts)
 (require 'mevedel-structs)
 (require 'mevedel-tool-render-data)
