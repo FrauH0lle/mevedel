@@ -94,7 +94,7 @@
   ,test
   (test)
   :doc "recognizes supported schemes and ordinary native paths"
-  (dolist (scheme '(local artifact skill agent history memory mcp))
+  (dolist (scheme '(local artifact skill agent history memory mcp mevedel))
     (should (mevedel-resource-supported-scheme-p scheme)))
   (should-not (mevedel-resource-address-p "ordinary/path:with-colon"))
   (should (mevedel-resource-address-p "artifact://result.txt")))
@@ -153,7 +153,25 @@
     (should-not (plist-get without :fragment-p))
     (should (plist-get empty :fragment-p))
     (should (equal "" (plist-get empty :fragment)))
-    (should-not (plist-get empty :pointer))))
+    (should-not (plist-get empty :pointer)))
+  :doc "parses readable standard and plugin skill aliases"
+  (let ((ordinary
+         (mevedel-resource-parse-address
+          "skill://local-agents/demo/templates/prompt.tmpl"))
+        (plugin
+         (mevedel-resource-parse-address
+          "skill://plugin/superpowers/brainstorming/references/guide.md")))
+    (should (eq 'alias (plist-get ordinary :locator-class)))
+    (should (eq 'local-agents (plist-get ordinary :alias-source)))
+    (should (equal "demo" (plist-get ordinary :raw-name)))
+    (should (equal '("templates" "prompt.tmpl")
+                   (plist-get ordinary :components)))
+    (should (eq 'alias (plist-get plugin :locator-class)))
+    (should (eq 'plugin (plist-get plugin :alias-source)))
+    (should (equal "superpowers" (plist-get plugin :plugin-name)))
+    (should (equal "brainstorming" (plist-get plugin :raw-name)))
+    (should (equal '("references" "guide.md")
+                   (plist-get plugin :components)))))
 
 (mevedel-deftest mevedel-resource-completion-metadata ()
   ,test
@@ -167,7 +185,7 @@
                    :workspace workspace))
          (resource-root-function
           (symbol-function 'mevedel-resource--root)))
-    (dolist (scheme '(local artifact skill agent history memory mcp))
+    (dolist (scheme '(local artifact skill agent history memory mcp mevedel))
       (cl-letf (((symbol-function 'mevedel-resource--root)
                  (lambda (root-scheme owner)
                    (unless (eq root-scheme scheme)
@@ -195,7 +213,8 @@
            (equal (mapcar #'car (plist-get metadata :roots))
                   (pcase scheme
                     ('local '(local))
-                    ('artifact '(artifact)))))))))
+                    ('artifact '(artifact))
+                    ('mevedel '(mevedel)))))))))
   :doc "drops remote skill and memory roots before identity lookup"
   (let* ((remote "/ssh:example.invalid:/tmp/resource")
          (mevedel-memory-dirs (list remote))
@@ -468,6 +487,67 @@
              :type 'mevedel-resource-error)))
       (delete-directory save-path t))))
 
+(mevedel-deftest mevedel-resource-mevedel-provider ()
+  ,test
+  (test)
+  :doc "lists current installed Markdown docs without a session or source paths"
+  (let* ((root (make-temp-file "mevedel-resource-installed-" t))
+         (docs (file-name-concat root "docs"))
+         (nested (file-name-concat docs "nested"))
+         (private (file-name-concat root "private.md"))
+         (mevedel-resource--source-dir root))
+    (unwind-protect
+        (progn
+          (make-directory nested t)
+          (with-temp-file (file-name-concat root "mevedel-resource.el")
+            (insert ";; Package source must not be addressable.\n"))
+          (with-temp-file (file-name-concat docs "z.md")
+            (insert "zeta\n"))
+          (with-temp-file (file-name-concat nested "a.md")
+            (insert "alpha\n"))
+          (with-temp-file (file-name-concat docs "ignored.txt")
+            (insert "not Markdown\n"))
+          (with-temp-file private
+            (insert "private package content\n"))
+          (let ((attempt (mevedel-resource-prepare 'read "mevedel://" nil)))
+            (with-temp-file (file-name-concat docs "current.md")
+              (insert "created after preparation\n"))
+            (make-symbolic-link private (file-name-concat docs "private.md"))
+            (let ((result (plist-get (mevedel-resource-execute attempt) :result)))
+              (should
+               (equal (string-join '("mevedel://current.md"
+                                     "mevedel://nested/a.md"
+                                     "mevedel://z.md")
+                                   "\n")
+                      result))
+              (should-not (string-match-p (regexp-quote root) result))
+              (should-not (string-match-p "mevedel-resource\\.el" result))))
+          (let ((parsed (mevedel-resource-parse-address
+                         "mevedel://nested/a.md")))
+            (should (eq 'exact (plist-get parsed :locator-class)))
+            (should (equal '("nested" "a.md")
+                           (plist-get parsed :components))))
+          (should-error
+           (mevedel-resource-prepare 'read "mevedel://private.md" nil)
+           :type 'mevedel-resource-error)
+          (dolist (address '("mevedel://ignored.txt"
+                             "mevedel://missing.md"))
+            (should-error
+             (mevedel-resource-execute
+              (mevedel-resource-prepare 'read address nil)
+              (lambda (_path _authored) t))
+             :type 'mevedel-resource-unavailable))
+          (should-error
+           (mevedel-resource-prepare 'apply-patch
+                                     "mevedel://nested/a.md" nil)
+           :type 'mevedel-resource-error)
+          (delete-directory docs t)
+          (should-error
+           (mevedel-resource-execute
+            (mevedel-resource-prepare 'read "mevedel://" nil))
+           :type 'mevedel-resource-unavailable))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-resource--session ()
   ,test
   (test)
@@ -556,6 +636,137 @@
                (setq grep-path (list path authored))))
             (should (equal (list skill-dir address) glob-path))
             (should (equal (list skill-dir address) grep-path))))
+      (delete-directory root t)))
+
+  :doc "resolves readable aliases once while preserving the authored address"
+  (let* ((root (make-temp-file "mevedel-resource-skill-alias-" t))
+         (skill-dir (file-name-concat root "demo"))
+         (skill-file (file-name-concat skill-dir "SKILL.md"))
+         (replacement-dir (file-name-concat root "replacement"))
+         (replacement-file (file-name-concat replacement-dir "SKILL.md"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id root :root root
+                     :name "resource-skill-alias"))
+         (skill (mevedel-skill--create
+                 :name "demo" :raw-name "demo" :source 'project
+                 :source-family 'agents :source-file skill-file
+                 :source-dir skill-dir :description "A project skill"))
+         (replacement (mevedel-skill--create
+                       :name "demo" :raw-name "demo" :source 'project
+                       :source-family 'agents :source-file replacement-file
+                       :source-dir replacement-dir))
+         (session (mevedel-session--create
+                   :workspace workspace :skills (list skill)))
+         (alias "skill://local-agents/demo")
+         (exact (format "skill://demo@%s"
+                        (mevedel-resource-skill-digest skill-file))))
+    (unwind-protect
+        (progn
+          (make-directory skill-dir t)
+          (make-directory replacement-dir t)
+          (make-directory (file-name-concat skill-dir "templates") t)
+          (with-temp-file skill-file (insert "original\n"))
+          (with-temp-file (file-name-concat skill-dir "templates" "prompt.tmpl")
+            (insert "prompt\n"))
+          (with-temp-file replacement-file (insert "replacement\n"))
+          (let* ((listing
+                  (mevedel-resource-execute
+                   (mevedel-resource-prepare
+                    'read "skill://" (list :session session))))
+                 (attempt
+                  (mevedel-resource-prepare
+                   'read alias (list :session session)))
+                 (data (gethash attempt mevedel-resource--attempt-table))
+                 seen)
+            (should (string-match-p (regexp-quote alias)
+                                    (plist-get listing :result)))
+            (should (string-match-p (regexp-quote exact)
+                                    (plist-get listing :result)))
+            (should (equal exact (plist-get data :exact-address)))
+            (mevedel-resource-execute
+             attempt
+             (lambda (path authored)
+               (setq seen (list path authored))))
+            (should (equal (list skill-file alias) seen)))
+          (let* ((descendant (concat alias "/templates/prompt.tmpl"))
+                 (attempt (mevedel-resource-prepare
+                           'read descendant (list :session session)))
+                 (data (gethash attempt mevedel-resource--attempt-table)))
+            (should (equal (concat exact "/templates/prompt.tmpl")
+                           (plist-get data :exact-address)))
+            (mevedel-resource-execute attempt (lambda (_path _authored) t)))
+          (let ((attempt
+                 (mevedel-resource-prepare
+                  'read alias (list :session session))))
+            (delete-file skill-file)
+            (should-error (mevedel-resource-execute attempt)
+                          :type 'mevedel-resource-unavailable)
+            (with-temp-file skill-file (insert "original\n")))
+          (let ((attempt
+                 (mevedel-resource-prepare
+                  'read alias (list :session session))))
+            (setf (mevedel-session-skills session) (list replacement))
+            (should-error (mevedel-resource-execute attempt)
+                          :type 'mevedel-resource-unavailable)))
+      (delete-directory root t)))
+
+  :doc "rejects unknown and ambiguous readable aliases during preparation"
+  (let* ((first (mevedel-skill--create
+                 :name "demo" :raw-name "demo" :source 'project
+                 :source-family 'agents :source-file "/tmp/first/SKILL.md"
+                 :source-dir "/tmp/first"))
+         (second (mevedel-skill--create
+                  :name "agents:demo" :raw-name "demo" :source 'project
+                  :source-family 'agents :source-file "/tmp/second/SKILL.md"
+                  :source-dir "/tmp/second"))
+         (session (mevedel-session--create :skills (list first second))))
+    (should-error
+     (mevedel-resource-prepare
+      'read "skill://local-agents/missing" (list :session session))
+     :type 'mevedel-resource-error)
+    (should-error
+     (mevedel-resource-prepare
+      'read "skill://local-agents/demo" (list :session session))
+     :type 'mevedel-resource-error))
+
+  :doc "resolves every supported readable origin alias to its own source"
+  (let* ((root (make-temp-file "mevedel-resource-skill-origins-" t))
+         (specs '(("local-mevedel" project mevedel nil)
+                  ("local-agents" project agents nil)
+                  ("global-mevedel" user mevedel nil)
+                  ("global-agents" user agents nil)
+                  ("bundled" bundled nil nil)
+                  ("managed" managed nil nil)
+                  ("plugin/demo-plugin" plugin nil "demo-plugin")))
+         skills)
+    (unwind-protect
+        (progn
+          (dolist (spec specs)
+            (let* ((label (car spec))
+                   (dir (file-name-concat root label))
+                   (source-file (file-name-concat dir "SKILL.md")))
+              (make-directory dir t)
+              (with-temp-file source-file (insert label "\n"))
+              (push (mevedel-skill--create
+                     :name (concat label ":demo")
+                     :raw-name "demo"
+                     :plugin-name (nth 3 spec)
+                     :source-file source-file
+                     :source-dir dir
+                     :source (nth 1 spec)
+                     :source-family (nth 2 spec))
+                    skills)))
+          (let ((session (mevedel-session--create :skills skills)))
+            (dolist (spec specs)
+              (let* ((alias (format "skill://%s/demo" (car spec)))
+                     (expected (file-name-concat root (car spec) "SKILL.md"))
+                     seen)
+                (mevedel-resource-execute
+                 (mevedel-resource-prepare
+                  'read alias (list :session session))
+                 (lambda (path authored)
+                   (setq seen (list path authored))))
+                (should (equal (list expected alias) seen))))))
       (delete-directory root t)))
 
 (mevedel-deftest mevedel-resource-agent-provider ()

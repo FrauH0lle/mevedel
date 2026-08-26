@@ -281,6 +281,62 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
 (mevedel-deftest mevedel-tool-fs-search-glob ()
   ,test
   (test)
+  :doc "globs current installed docs without a session or backing paths"
+  (let* ((root (make-temp-file "mevedel-glob-installed-" t))
+         (docs (file-name-concat root "docs"))
+         (address "mevedel://")
+         (mevedel-resource--source-dir root))
+    (unwind-protect
+        (progn
+          (make-directory docs t)
+          (with-temp-file (file-name-concat root "mevedel-resource.el")
+            (insert ";; Adjacent package source.\n"))
+          (with-temp-file (file-name-concat docs "first.md")
+            (insert "first\n"))
+          (with-temp-file (file-name-concat docs "ignored.txt")
+            (insert "ignored\n"))
+          (let* ((attempt (mevedel-resource-prepare 'glob address nil))
+                 (mevedel-resource-current-attempts
+                  (list (cons address attempt))))
+            (with-temp-file (file-name-concat docs "current.md")
+              (insert "current\n"))
+            (let ((result
+                   (test-mevedel-tool-fs-search--await-callback
+                    #'mevedel-tool-fs-search-glob
+                    (list :pattern "*" :path address))))
+              (should (string-match-p "mevedel://current\\.md" result))
+              (should (string-match-p "mevedel://first\\.md" result))
+              (should-not (string-match-p "ignored\\.txt" result))
+              (should-not (string-match-p (regexp-quote root) result)))))
+      (delete-directory root t)))
+  :doc "globs a readable skill alias and preserves it in result paths"
+  (let* ((root (make-temp-file "mevedel-glob-skill-alias-" t))
+         (skill-dir (file-name-concat root "demo"))
+         (skill-file (file-name-concat skill-dir "SKILL.md"))
+         (child (file-name-concat skill-dir "prompt.md"))
+         (address "skill://local-agents/demo")
+         (skill (mevedel-skill--create
+                 :name "demo" :raw-name "demo" :source 'project
+                 :source-family 'agents :source-file skill-file
+                 :source-dir skill-dir))
+         (session (mevedel-session--create :skills (list skill))))
+    (unwind-protect
+        (progn
+          (make-directory skill-dir t)
+          (with-temp-file skill-file (insert "skill\n"))
+          (with-temp-file child (insert "prompt\n"))
+          (let* ((attempt (mevedel-resource-prepare
+                           'glob address (list :session session)))
+                 (mevedel-resource-current-attempts
+                  (list (cons address attempt)))
+                 (result
+                  (test-mevedel-tool-fs-search--await-callback
+                   #'mevedel-tool-fs-search-glob
+                   (list :pattern "*.md" :path address))))
+            (should (string-match-p
+                     "skill://local-agents/demo/prompt\\.md" result))
+            (should-not (string-match-p (regexp-quote root) result))))
+      (delete-directory root t)))
   :doc "searches every configured memory root and rewrites paths with root identities"
   (let* ((workspace-root (make-temp-file "mevedel-memory-search-" t))
          (first-root (file-name-concat workspace-root "first"))
@@ -519,6 +575,64 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
 (mevedel-deftest mevedel-tool-fs-search-grep ()
   ,test
   (test)
+  :doc "greps current installed docs without a session or backing paths"
+  (let* ((root (make-temp-file "mevedel-grep-installed-" t))
+         (docs (file-name-concat root "docs"))
+         (file (file-name-concat docs "guide.md"))
+         (address "mevedel://")
+         (mevedel-resource--source-dir root))
+    (unwind-protect
+        (progn
+          (make-directory docs t)
+          (with-temp-file (file-name-concat root "mevedel-resource.el")
+            (insert ";; Adjacent package source contains private needle.\n"))
+          (with-temp-file file (insert "old text\n"))
+          (with-temp-file (file-name-concat docs "ignored.txt")
+            (insert "private needle\n"))
+          (let* ((attempt (mevedel-resource-prepare 'grep address nil))
+                 (mevedel-resource-current-attempts
+                  (list (cons address attempt))))
+            (with-temp-file file (insert "public needle\n"))
+            (let ((result
+                   (test-mevedel-tool-fs-search--await-callback
+                    #'mevedel-tool-fs-search-grep
+                    (list :pattern "needle" :path address
+                          :output_mode "content"))))
+              (should (string-match-p "mevedel://guide\\.md" result))
+              (should (string-match-p "1:public needle" result))
+              (should-not (string-match-p "private needle" result))
+              (should-not (string-match-p "ignored\\.txt" result))
+              (should-not (string-match-p (regexp-quote root) result)))))
+      (delete-directory root t)))
+  :doc "greps a readable skill alias and preserves it in result paths"
+  (let* ((root (make-temp-file "mevedel-grep-skill-alias-" t))
+         (skill-dir (file-name-concat root "demo"))
+         (skill-file (file-name-concat skill-dir "SKILL.md"))
+         (child (file-name-concat skill-dir "prompt.md"))
+         (address "skill://local-agents/demo")
+         (skill (mevedel-skill--create
+                 :name "demo" :raw-name "demo" :source 'project
+                 :source-family 'agents :source-file skill-file
+                 :source-dir skill-dir))
+         (session (mevedel-session--create :skills (list skill))))
+    (unwind-protect
+        (progn
+          (make-directory skill-dir t)
+          (with-temp-file skill-file (insert "skill\n"))
+          (with-temp-file child (insert "public needle\n"))
+          (let* ((attempt (mevedel-resource-prepare
+                           'grep address (list :session session)))
+                 (mevedel-resource-current-attempts
+                  (list (cons address attempt)))
+                 (result
+                  (test-mevedel-tool-fs-search--await-callback
+                   #'mevedel-tool-fs-search-grep
+                   (list :pattern "needle" :path address
+                         :output_mode "content"))))
+            (should (string-match-p
+                     "skill://local-agents/demo/prompt\\.md" result))
+            (should-not (string-match-p (regexp-quote root) result))))
+      (delete-directory root t)))
   :doc "runs ripgrep in a remote target and returns target-native paths"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-remote-grep-" t)))

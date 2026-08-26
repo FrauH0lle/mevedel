@@ -7,8 +7,9 @@ directory unless absolute.
 - Creating, editing, deleting, moving, or renaming text files
 - Batching the related file operations of one coherent change into a
   single atomic proposal
-- Editing `local://` session scratch content; it is the only resource
-  family writable by ApplyPatch
+- Editing the `local://` writable session scratchpad; it is the only resource
+  family writable by ApplyPatch and keeps working notes outside workspace
+  source files
 
 ### When NOT to use `ApplyPatch`
 
@@ -25,8 +26,8 @@ directory unless absolute.
 Resource addresses
 - File operands may use ordinary paths or canonical `local://` addresses.
 - `local://notes.md` names session scratch content; it is the only resource
-  family writable by ApplyPatch. Bare addresses and other resource schemes
-  are not patch targets.
+  family writable by ApplyPatch. Bare addresses and other resource schemes,
+  including `mevedel://`, are not patch targets.
 - Keep authored addresses in patch markers. ApplyPatch resolves them once,
   keeps local and ordinary operations in one atomic proposal, and presents
   the authored address in review and results.

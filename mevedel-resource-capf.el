@@ -89,11 +89,12 @@ name without treating an encoded slash as a path separator."
           (mapconcat #'mevedel-resource-encode-component components "/")))
 
 (defun mevedel-resource-capf--path-entries
-    (scheme root tail metadata &optional address-prefix annotation)
+    (scheme root tail metadata &optional address-prefix annotation include-p)
   "Complete one directory level below ROOT for SCHEME and TAIL.
 
 TAIL is the path below ADDRESS-PREFIX.  Only directory metadata is
-consulted; no candidate file is opened."
+consulted; no candidate file is opened.  When INCLUDE-P is non-nil, it
+must accept the physical path of every candidate that should be exposed."
   (when (and root
              (not (file-remote-p root))
              (file-directory-p root))
@@ -137,6 +138,7 @@ consulted; no candidate file is opened."
                                  root components)
                       (error nil))))
               (when (and safe
+                         (or (null include-p) (funcall include-p file))
                          (not (and (eq scheme 'artifact)
                                    (string= (car components)
                                             ".mevedel-pending-executions")))
@@ -148,37 +150,114 @@ consulted; no candidate file is opened."
                                (if (file-directory-p file) "dir" "file")))
                  entries)))))))))
 
-(defun mevedel-resource-capf--skills (address-tail metadata)
-  "Complete exact skills and one package level below ADDRESS-TAIL."
+(defun mevedel-resource-capf--documentation-entry-p (file)
+  "Return non-nil when FILE is a documentation directory or Markdown file."
+  (or (file-directory-p file)
+      (and (file-regular-p file)
+           (equal (file-name-extension file) "md"))))
+
+(defun mevedel-resource-capf--skill-annotation (skill kind)
+  "Return completion annotation for SKILL labeled with KIND."
+  (format " [%s] %s%s"
+          kind
+          (mevedel-skill-name skill)
+          (if-let ((description (mevedel-skill-description skill)))
+              (format " - %s" description)
+            "")))
+
+(defun mevedel-resource-capf--skill-alias-origin (address)
+  "Return the readable source portion of skill alias ADDRESS."
+  (let ((components
+         (split-string
+          (substring address (length "skill://")) "/" t)))
+    (if (equal (car components) "plugin")
+        (string-join (list (car components) (cadr components)) "/")
+      (car components))))
+
+(defun mevedel-resource-capf--skill-descendants
+    (tail metadata skill address kind)
+  "Complete package descendants below skill ADDRESS matching TAIL.
+
+KIND labels the readable alias or exact locator."
+  (let ((locator (substring address (length "skill://"))))
+    (when (string-prefix-p (concat locator "/") tail)
+      (mevedel-resource-capf--path-entries
+       'skill (mevedel-skill-source-dir skill)
+       (substring tail (1+ (length locator))) metadata address
+       (string-trim-left
+        (mevedel-resource-capf--skill-annotation skill kind))))))
+
+(defun mevedel-resource-capf--skill-aliases (tail metadata aliases)
+  "Return staged readable skill ALIASES matching TAIL."
   (let (entries)
+    (dolist (entry aliases (nreverse entries))
+      (let* ((skill (plist-get entry :skill))
+             (address (plist-get entry :address))
+             (locator (substring address (length "skill://")))
+             (components (split-string locator "/" nil))
+             (component-count (length components))
+             (stage (length (split-string tail "/" nil))))
+        (cond
+         ((string-prefix-p (concat locator "/") tail)
+          (dolist (descendant
+                   (mevedel-resource-capf--skill-descendants
+                    tail metadata skill address
+                    (mevedel-resource-capf--skill-alias-origin address)))
+            (push descendant entries)))
+         ((<= stage component-count)
+          (let* ((directory-p (< stage component-count))
+                 (candidate-tail
+                  (concat
+                   (string-join
+                    (butlast components (- component-count stage)) "/")
+                   (and directory-p "/"))))
+            (when (string-prefix-p tail candidate-tail)
+              (push
+               (cons (concat "skill://" candidate-tail)
+                     (if directory-p
+                         (if (= stage 1)
+                             " [skill] aliases"
+                           " [skill] plugin")
+                       (mevedel-resource-capf--skill-annotation
+                        skill
+                        (mevedel-resource-capf--skill-alias-origin address))))
+               entries)))))))))
+
+(defun mevedel-resource-capf--skills (address-tail metadata)
+  "Complete staged skill aliases, exact skills, and bounded descendants."
+  (let ((alias-counts (make-hash-table :test #'equal))
+        aliases
+        exacts)
+    (dolist (entry (plist-get metadata :skills))
+      (when-let ((alias (plist-get entry :alias)))
+        (puthash alias (1+ (gethash alias alias-counts 0)) alias-counts)))
     (dolist (entry (plist-get metadata :skills))
       (let* ((skill (plist-get entry :skill))
-             (address (plist-get entry :address)))
-        (if (string-match-p "/" address-tail)
-            (let ((slash (string-match "/" address-tail)))
-              (when (string=
-                     (substring address-tail 0 slash)
-                     (substring address (length "skill://")))
-                (setq entries
-                      (append
-                       (mevedel-resource-capf--path-entries
-                        'skill (mevedel-skill-source-dir skill)
-                        (substring address-tail (1+ slash)) metadata address
-                        (format "[skill] %s"
-                                (mevedel-skill-name skill)))
-                       entries))))
-          (when (string-prefix-p
-                 address-tail (substring address (length "skill://")))
-            (push
-             (cons address
-                   (format " [skill] %s%s"
-                           (mevedel-skill-name skill)
-                           (if-let ((description
-                                     (mevedel-skill-description skill)))
-                               (format " - %s" description)
-                             "")))
-             entries)))))
-    (nreverse entries)))
+             (exact (plist-get entry :address))
+             (alias (plist-get entry :alias)))
+        (when (and alias (= 1 (gethash alias alias-counts)))
+          (push (list :skill skill :address alias) aliases))
+        (push (list :skill skill :address exact) exacts)))
+    (setq aliases (nreverse aliases)
+          exacts (nreverse exacts))
+    (append
+     (mevedel-resource-capf--skill-aliases address-tail metadata aliases)
+     (let (entries)
+       (dolist (entry exacts (nreverse entries))
+         (let* ((skill (plist-get entry :skill))
+                (address (plist-get entry :address))
+                (locator (substring address (length "skill://"))))
+           (cond
+            ((string-prefix-p (concat locator "/") address-tail)
+             (dolist (descendant
+                      (mevedel-resource-capf--skill-descendants
+                       address-tail metadata skill address "exact"))
+               (push descendant entries)))
+            ((string-prefix-p address-tail locator)
+             (push (cons address
+                         (mevedel-resource-capf--skill-annotation
+                          skill "exact"))
+                   entries)))))))))
 
 (defun mevedel-resource-capf--agents (tail metadata &optional history)
   "Complete retained agent paths for TAIL and METADATA.
@@ -313,7 +392,7 @@ History candidates are limited to records with retained conversations."
             (push (cons address (format " [%s] resource" scheme)) entries))))
       (mevedel-resource-capf--result start end (nreverse entries)))
      ((string-match
-       "\\`\\(local\\|artifact\\|skill\\|agent\\|history\\|memory\\|mcp\\)://\\(.*\\)\\'"
+       "\\`\\(local\\|artifact\\|skill\\|agent\\|history\\|memory\\|mcp\\|mevedel\\)://\\(.*\\)\\'"
        token)
       (let* ((scheme (intern (match-string 1 token)))
              (tail (match-string 2 token))
@@ -325,6 +404,11 @@ History candidates are limited to records with retained conversations."
                  (mevedel-resource-capf--path-entries
                   scheme (cdr (assq scheme (plist-get metadata :roots)))
                   tail metadata))
+                ('mevedel
+                 (mevedel-resource-capf--path-entries
+                  scheme (cdr (assq scheme (plist-get metadata :roots)))
+                  tail metadata
+                  nil nil #'mevedel-resource-capf--documentation-entry-p))
                 ('skill (mevedel-resource-capf--skills tail metadata))
                 ('agent (mevedel-resource-capf--agents tail metadata))
                 ('history (mevedel-resource-capf--agents tail metadata t))

@@ -345,6 +345,7 @@
                      prompt))
             (dolist (scheme '("agent://" "history://" "mcp://"))
               (should-not (string-match-p (regexp-quote scheme) prompt)))
+            (should (string-match-p "mevedel://" prompt))
             (dolist (scheme '("local://" "artifact://"))
               (should (string-match-p (regexp-quote scheme) prompt)))
             (dolist (scheme '("skill://" "memory://"))

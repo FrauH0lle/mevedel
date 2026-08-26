@@ -65,7 +65,11 @@
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-description "mevedel-skills-core" (skill) t)
 (declare-function mevedel-skill-name "mevedel-skills-core" (skill) t)
+(declare-function mevedel-skill-plugin-name "mevedel-skills-core" (skill) t)
+(declare-function mevedel-skill-raw-name "mevedel-skills-core" (skill) t)
+(declare-function mevedel-skill-source "mevedel-skills-core" (skill) t)
 (declare-function mevedel-skill-source-dir "mevedel-skills-core" (skill) t)
+(declare-function mevedel-skill-source-family "mevedel-skills-core" (skill) t)
 (declare-function mevedel-skill-source-file "mevedel-skills-core" (skill) t)
 (declare-function mevedel-skills-skill-enabled-p "mevedel-skills-core" (skill))
 (declare-function mevedel-skills-source-key "mevedel-skills-core" (source-file))
@@ -96,12 +100,29 @@
 (autoload 'mevedel--transcript-org-mode "mevedel-utilities")
 
 (defconst mevedel-resource-supported-schemes
-  '(local artifact skill agent history memory mcp)
+  '(local artifact skill agent history memory mcp mevedel)
   "Closed set of resource address schemes understood by mevedel.")
 
 (defconst mevedel-resource--unreserved
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
   "RFC 3986 unreserved bytes.")
+
+(defconst mevedel-resource--skill-alias-sources
+  '(("local-mevedel" . local-mevedel)
+    ("local-agents" . local-agents)
+    ("global-mevedel" . global-mevedel)
+    ("global-agents" . global-agents)
+    ("bundled" . bundled)
+    ("managed" . managed)
+    ("plugin" . plugin))
+  "Closed readable source names accepted by `skill://' aliases.")
+
+(defvar mevedel-resource--source-dir
+  (file-name-directory
+   (file-truename
+    (or load-file-name buffer-file-name
+        (locate-library "mevedel-resource"))))
+  "Directory containing the loaded Mevedel resource implementation.")
 
 (defvar mevedel-resource-current-attempts nil
   "Dynamically bound resource attempts for the active pipeline handler.
@@ -346,24 +367,42 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
       (list :components nil :name nil :source-key nil :dynamic-p t)
     (let* ((slash (string-match "/" tail))
            (head (if slash (substring tail 0 slash) tail))
-           (path (and slash (substring tail (1+ slash))))
-           (at (string-match "@" head)))
-      (when (or (null at)
-                (= at 0)
-                (= (1+ at) (length head))
-                (string-match "@" (substring head (1+ at)))
-                (not (mevedel-resource--lowercase-digest-p
-                      (substring head (1+ at)))))
-        (signal 'mevedel-resource-error
-                (list "Skill address requires a name and lowercase source digest")))
-      (let* ((name (mevedel-resource--decode-component
-                    (substring head 0 at)))
-             (source-key (substring head (1+ at)))
-             (components (if slash
-                            (mevedel-resource--parse-components path)
-                          nil)))
-        (list :components components :name name :source-key source-key
-              :dynamic-p nil)))))
+           (alias-source
+            (cdr (assoc head mevedel-resource--skill-alias-sources))))
+      (if alias-source
+          (let* ((parts (mevedel-resource--parse-components tail))
+                 (plugin-p (eq alias-source 'plugin))
+                 (minimum (if plugin-p 3 2)))
+            (when (< (length parts) minimum)
+              (signal 'mevedel-resource-error
+                      (list "Skill alias is missing its skill name")))
+            (list :components (nthcdr minimum parts)
+                  :alias-source alias-source
+                  :plugin-name (and plugin-p (cadr parts))
+                  :raw-name (nth (1- minimum) parts)
+                  :canonical-tail
+                  (mevedel-resource--canonical-components parts)
+                  :locator-class 'alias
+                  :dynamic-p nil))
+        (let* ((path (and slash (substring tail (1+ slash))))
+               (at (string-match "@" head)))
+          (when (or (null at)
+                    (= at 0)
+                    (= (1+ at) (length head))
+                    (string-match "@" (substring head (1+ at)))
+                    (not (mevedel-resource--lowercase-digest-p
+                          (substring head (1+ at)))))
+            (signal
+             'mevedel-resource-error
+             (list "Skill address requires a name and lowercase source digest")))
+          (let* ((name (mevedel-resource--decode-component
+                        (substring head 0 at)))
+                 (source-key (substring head (1+ at)))
+                 (components (if slash
+                                 (mevedel-resource--parse-components path)
+                               nil)))
+            (list :components components :name name :source-key source-key
+                  :dynamic-p nil)))))))
 
 (defun mevedel-resource--parse-memory-tail (tail)
   "Parse the memory-specific TAIL and return its locator fields."
@@ -470,19 +509,73 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
                 (mevedel-skills-skill-enabled-p skill)))))
    (mevedel-resource--skill-list session context)))
 
+(defun mevedel-resource--skill-alias-source (skill)
+  "Return SKILL's readable alias source, or nil when it has none."
+  (pcase (mevedel-skill-source skill)
+    ('project
+     (pcase (mevedel-skill-source-family skill)
+       ('mevedel 'local-mevedel)
+       ('agents 'local-agents)))
+    ('user
+     (pcase (mevedel-skill-source-family skill)
+       ('mevedel 'global-mevedel)
+       ('agents 'global-agents)))
+    ((or 'bundled 'managed 'plugin)
+     (mevedel-skill-source skill))))
+
+(defun mevedel-resource--skill-alias-address (skill)
+  "Return SKILL's readable alias address, or nil when incomplete."
+  (when-let* ((source (mevedel-resource--skill-alias-source skill))
+              (raw-name (mevedel-skill-raw-name skill))
+              ((or (not (eq source 'plugin))
+                   (mevedel-skill-plugin-name skill))))
+    (concat "skill://" (symbol-name source) "/"
+            (if (eq source 'plugin)
+                (concat
+                 (mevedel-resource-encode-component
+                  (mevedel-skill-plugin-name skill)) "/")
+              "")
+            (mevedel-resource-encode-component raw-name))))
+
+(defun mevedel-resource--skill-for-alias (parsed session context)
+  "Resolve PARSED readable skill alias uniquely in SESSION and CONTEXT."
+  (let (matches)
+    (dolist (skill (mevedel-resource--skill-list session context))
+      (when (and
+             (eq (plist-get parsed :alias-source)
+                 (mevedel-resource--skill-alias-source skill))
+             (equal (plist-get parsed :raw-name)
+                    (mevedel-skill-raw-name skill))
+             (equal (plist-get parsed :plugin-name)
+                    (mevedel-skill-plugin-name skill))
+             (or (not (fboundp 'mevedel-skills-skill-enabled-p))
+                 (mevedel-skills-skill-enabled-p skill)))
+        (push skill matches)))
+    (cond
+     ((null matches)
+      (signal 'mevedel-resource-error
+              (list "Skill alias does not name an enabled skill")))
+     ((cdr matches)
+      (signal 'mevedel-resource-error
+              (list "Skill alias is ambiguous")))
+     (t (car matches)))))
+
 (defun mevedel-resource--skill-root (skill)
   "Return SKILL's package root, deriving it from its source when needed."
   (or (mevedel-skill-source-dir skill)
       (when-let ((source (mevedel-skill-source-file skill)))
         (file-name-directory source))))
 
-(defun mevedel-resource--skill-address (skill)
-  "Return the canonical address for SKILL's exact source."
-  (format "skill://%s@%s"
-          (mevedel-resource-encode-component
-           (mevedel-skill-name skill))
-          (mevedel-resource-skill-digest
-           (mevedel-skill-source-file skill))))
+(defun mevedel-resource--skill-address (skill &optional components)
+  "Return the canonical exact address for SKILL and COMPONENTS."
+  (concat
+   (format "skill://%s@%s"
+           (mevedel-resource-encode-component
+            (mevedel-skill-name skill))
+           (mevedel-resource-skill-digest
+            (mevedel-skill-source-file skill)))
+   (when components
+     (concat "/" (mevedel-resource--canonical-components components)))))
 
 (defun mevedel-resource--memory-roots (context session)
   "Return configured memory root metadata for CONTEXT and SESSION."
@@ -531,7 +624,10 @@ SCHEME is nil, include metadata for every scheme."
                             (mevedel-resource--root 'local session)))
                  (and (memq scheme '(nil artifact))
                       (cons 'artifact
-                            (mevedel-resource--root 'artifact session)))))
+                            (mevedel-resource--root 'artifact session)))
+                 (and (memq scheme '(nil mevedel))
+                      (cons 'mevedel
+                            (mevedel-resource--root 'mevedel nil)))))
           :decode-component #'mevedel-resource--decode-component
           :safe-path #'mevedel-resource--safe-path
           :skills
@@ -542,7 +638,10 @@ SCHEME is nil, include metadata for every scheme."
                                (condition-case nil
                                    (mevedel-resource--skill-address skill)
                                  (error nil))))
-                     (list :skill skill :address address)))
+                     (list :skill skill
+                           :address address
+                           :alias
+                           (mevedel-resource--skill-alias-address skill))))
                  skills))
           :agents
           (mapcar
@@ -598,7 +697,8 @@ or permission callback sees a target."
 Directory traversal never follows symlinks.  Paths whose final target is
 outside ROOT are discarded as well, covering symlinked files reported by the
 directory walker.  Pending execution spools are private until execution
-yield makes them public under `executions/'."
+yield makes them public under `executions/'; the installed documentation
+listing includes only Markdown files."
   (let ((root (and root (file-name-as-directory (expand-file-name root)))))
     (if (or (null root)
             (not (file-directory-p root))
@@ -612,10 +712,12 @@ yield makes them public under `executions/'."
                            (mevedel-resource-within-root-p path root))
                   (let ((relative (mevedel-resource--canonical-relative
                                    path root)))
-                    (unless (and (eq scheme 'artifact)
-                                 (string-match-p
-                                  "\\`\\.mevedel-pending-executions\\(?:/\\|\\'\\)"
-                                  relative))
+                    (unless (or (and (eq scheme 'artifact)
+                                     (string-match-p
+                                      "\\`\\.mevedel-pending-executions\\(?:/\\|\\'\\)"
+                                      relative))
+                                (and (eq scheme 'mevedel)
+                                     (not (string-suffix-p ".md" relative))))
                       relative))))
               (directory-files-recursively root "." nil nil nil)))
        #'string-lessp))))
@@ -641,8 +743,8 @@ yield makes them public under `executions/'."
   "Parse canonical ADDRESS and return a locator plist.
 
 The plist contains decoded `:components', canonical `:canonical', and
-`:locator-class' (`exact', `session-relative', or `dynamic').  Physical
-resolution is intentionally not performed here."
+`:locator-class' (`exact', `alias', `session-relative', or `dynamic').
+Physical resolution is intentionally not performed here."
   (unless (stringp address)
     (signal 'mevedel-resource-error (list "Resource address must be text")))
   (when (string-match-p "\\?" address)
@@ -683,7 +785,10 @@ resolution is intentionally not performed here."
              (canonical-tail
               (cond
                ((eq scheme 'skill)
-                (if (plist-get specific :name)
+                (cond
+                 ((plist-get specific :canonical-tail)
+                  (plist-get specific :canonical-tail))
+                 ((plist-get specific :name)
                     (concat (mevedel-resource-encode-component
                              (plist-get specific :name)) "@"
                             (plist-get specific :source-key)
@@ -691,8 +796,8 @@ resolution is intentionally not performed here."
                                 (concat "/"
                                         (mevedel-resource--canonical-components
                                          components))
-                              ""))
-                  ""))
+                              "")))
+                 (t "")))
                ((eq scheme 'mcp)
                 (mevedel-resource--canonical-components components))
                (t (mevedel-resource--canonical-components components))))
@@ -701,11 +806,12 @@ resolution is intentionally not performed here."
                                     (concat "#" (plist-get fragment-data :raw))
                                   "")))
              (class
-              (cond
-               ((plist-get specific :dynamic-p) 'dynamic)
-               ((memq scheme '(local artifact agent history))
-                'session-relative)
-               (t 'exact))))
+              (or (plist-get specific :locator-class)
+                  (cond
+                   ((plist-get specific :dynamic-p) 'dynamic)
+                   ((memq scheme '(local artifact agent history))
+                    'session-relative)
+                   (t 'exact)))))
         (when (and (eq scheme 'agent)
                    fragment-p
                    (null components))
@@ -723,6 +829,9 @@ resolution is intentionally not performed here."
               :components components
               :name (plist-get specific :name)
               :source-key (plist-get specific :source-key)
+              :alias-source (plist-get specific :alias-source)
+              :plugin-name (plist-get specific :plugin-name)
+              :raw-name (plist-get specific :raw-name)
               :fragment fragment
               :fragment-p fragment-p
               :pointer (and fragment-data
@@ -733,11 +842,31 @@ resolution is intentionally not performed here."
 
 (defun mevedel-resource--root (scheme session)
   "Return the physical root for SCHEME and SESSION, without creating it."
-  (let ((save-path (and session (mevedel-session-save-path session))))
-    (and save-path
-         (pcase scheme
-           ('local (file-name-concat save-path "local"))
-           ('artifact (file-name-concat save-path "tool-results"))))))
+  (if (eq scheme 'mevedel)
+      (file-name-concat mevedel-resource--source-dir "docs")
+    (let ((save-path (and session (mevedel-session-save-path session))))
+      (and save-path
+           (pcase scheme
+             ('local (file-name-concat save-path "local"))
+             ('artifact (file-name-concat save-path "tool-results")))))))
+
+(defun mevedel-resource--mevedel-path-available-p
+    (root path components operation)
+  "Return non-nil when PATH is an exposed Mevedel document scope.
+
+ROOT must be the installed documentation directory.  Bare addresses expose
+the corpus, Markdown files are exact resources, and directories are valid only
+as Glob or Grep scopes."
+  (and root
+       (file-directory-p root)
+       (not (file-symlink-p (directory-file-name root)))
+       (or (null components)
+           (and path
+                (cond
+                 ((file-directory-p path)
+                  (memq operation '(glob grep)))
+                 ((file-regular-p path)
+                  (string-suffix-p ".md" path)))))))
 
 (defun mevedel-resource--mcp-servers ()
   "Return current MCP server metadata, or signal when mcp.el is absent."
@@ -1012,16 +1141,23 @@ parent is discarded."
                 (mevedel-skills-skill-enabled-p skill)))
           (mevedel-resource--skill-list session context))))
     (if skills
-        (string-join
-         (mapcar (lambda (skill)
-                   (format "%s\t%s"
-                           (mevedel-resource--skill-address skill)
-                           (or (mevedel-skill-description skill) "")))
-                 (sort (copy-sequence skills)
-                       (lambda (left right)
-                         (string-lessp (mevedel-resource--skill-address left)
-                                       (mevedel-resource--skill-address right)))))
-         "\n")
+        (let ((alias-counts (make-hash-table :test #'equal))
+              rows)
+          (dolist (skill skills)
+            (when-let ((alias (mevedel-resource--skill-alias-address skill)))
+              (puthash alias (1+ (gethash alias alias-counts 0)) alias-counts)))
+          (dolist (skill skills)
+            (let ((description (or (mevedel-skill-description skill) ""))
+                  (alias (mevedel-resource--skill-alias-address skill)))
+              (push (cons (mevedel-resource--skill-address skill) description)
+                    rows)
+              (when (and alias (= 1 (gethash alias alias-counts)))
+                (push (cons alias description) rows))))
+          (string-join
+           (mapcar (lambda (row) (format "%s\t%s" (car row) (cdr row)))
+                   (sort rows (lambda (left right)
+                                (string-lessp (car left) (car right)))))
+           "\n"))
       "No discoverable skills")))
 
 (defun mevedel-resource--memory-search-roots (context session)
@@ -1066,6 +1202,11 @@ the union index read, which already tolerates missing roots."
                      (list "Artifact search requires a file-backed directory")))
          (signal 'mevedel-resource-unavailable
                  (list "Artifact resource is file-backed"))))
+      ('mevedel
+       (if (null components)
+           (mevedel-resource--directory-list-result 'mevedel root)
+         (signal 'mevedel-resource-unavailable
+                 (list "Mevedel documentation is file-backed"))))
       ('skill
        (if (null (plist-get data :source-file))
            (mevedel-resource--skill-list-result session context)
@@ -1178,21 +1319,32 @@ before an authorized handler receives a backing path or virtual record."
       (when (and (eq scheme 'artifact)
                  (member ".mevedel-pending-executions" components))
         (setq data (plist-put data :unavailable-p t))))
+     ((eq scheme 'mevedel)
+      (setq root (mevedel-resource--root scheme nil)
+            physical (mevedel-resource--safe-path root components))
+      (unless (mevedel-resource--mevedel-path-available-p
+               root physical components operation)
+        (setq data (plist-put data :unavailable-p t))))
      ((eq scheme 'skill)
       (unless (plist-get data :dynamic-p)
         (let ((skill (mevedel-resource--skill-for-digest
                       (plist-get data :source-key) session context)))
           (if (not skill)
               (setq data (plist-put data :unavailable-p t))
-            (setq root (mevedel-resource--skill-root skill)
-                  data (plist-put
-                        data :source-file
-                        (mevedel-skill-source-file skill))
-                  physical
-                  (if (memq operation '(glob grep))
-                      (mevedel-resource--safe-path root components)
-                    (mevedel-resource--skill-physical-path
-                     skill root components)))))))
+            (let ((source-file (mevedel-skill-source-file skill)))
+              (setq root (mevedel-resource--skill-root skill)
+                    data (plist-put data :source-file source-file)
+                    physical
+                    (if (memq operation '(glob grep))
+                        (mevedel-resource--safe-path root components)
+                      (mevedel-resource--skill-physical-path
+                       skill root components)))
+              (unless (and (file-regular-p source-file)
+                           (file-directory-p root)
+                           (if (eq operation 'read)
+                               (file-regular-p physical)
+                             (file-exists-p physical)))
+                (setq data (plist-put data :unavailable-p t))))))))
      ((memq scheme '(agent history))
       (when components
         (let ((record
@@ -1248,7 +1400,7 @@ errors before any content or handler is reached."
            physical root logical-p)
       (unless (or (eq operation 'read)
                   (and (memq operation '(glob grep))
-                       (memq scheme '(local artifact skill memory)))
+                       (memq scheme '(local artifact skill memory mevedel)))
                   (and (eq operation 'apply-patch)
                        (eq scheme 'local)))
         (signal 'mevedel-resource-error
@@ -1275,30 +1427,45 @@ errors before any content or handler is reached."
         (when (and (eq scheme 'artifact)
                    (member ".mevedel-pending-executions" components))
           (setq data (plist-put data :unavailable-p t))))
+       ((eq scheme 'mevedel)
+        (setq root (mevedel-resource--root scheme nil)
+              physical (and root
+                            (mevedel-resource--safe-path root components))
+              logical-p (and (null components)
+                             (eq operation 'read)))
+        (unless (mevedel-resource--mevedel-path-available-p
+                 root physical components operation)
+          (setq data (plist-put data :unavailable-p t))))
        ((eq scheme 'skill)
         (if (plist-get parsed :dynamic-p)
             (setq logical-p t)
-          (let ((skill
-                 (mevedel-resource--skill-for-digest
-                  (plist-get parsed :source-key) session context)))
+          (let* ((alias-p (eq (plist-get parsed :locator-class) 'alias))
+                 (skill
+                  (if alias-p
+                      (mevedel-resource--skill-for-alias
+                       parsed session context)
+                    (mevedel-resource--skill-for-digest
+                     (plist-get parsed :source-key) session context))))
             (if (not skill)
                 (setq data (plist-put data :unavailable-p t))
-              (setq root (mevedel-resource--skill-root skill)
+              (let* ((source-file (mevedel-skill-source-file skill))
+                     (source-key (mevedel-resource-skill-digest source-file))
+                     (exact-address
+                      (mevedel-resource--skill-address skill components)))
+                (setq root (mevedel-resource--skill-root skill)
+                    data (plist-put data :source-key source-key)
                     data (plist-put
                           data :source-file
-                          (mevedel-skill-source-file skill))
+                          source-file)
                     data (plist-put
-                          data :skill-address
-                          (format "skill://%s@%s"
-                                  (mevedel-resource-encode-component
-                                   (plist-get parsed :name))
-                                  (plist-get parsed :source-key))))
-              (if (memq operation '(glob grep))
-                  (setq physical (mevedel-resource--safe-path root components)
-                        logical-p nil)
-                (setq physical
-                      (mevedel-resource--skill-physical-path
-                       skill root components)))))))
+                          data :exact-address exact-address))
+                (if (memq operation '(glob grep))
+                    (setq physical
+                          (mevedel-resource--safe-path root components)
+                          logical-p nil)
+                  (setq physical
+                        (mevedel-resource--skill-physical-path
+                         skill root components))))))))
        ((memq scheme '(agent history))
         (setq logical-p t)
         (if (null components)

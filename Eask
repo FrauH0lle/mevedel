@@ -18,7 +18,9 @@
        '("skills/remember" "skills/remember/SKILL.md")
        '("skills/review" "skills/review/SKILL.md")
        '("collaboration" "collaboration/*")
-       '("docs/ptc-dialect.md")
+       '("docs" "docs/*.md")
+       '("docs/adr" "docs/adr/*.md")
+       '("docs/agents" "docs/agents/*.md")
        '("prompts/tools" "prompts/tools/*.md"))
 
 (script "test" "echo \"Error: no test specified\" && exit 1")

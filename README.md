@@ -96,7 +96,9 @@ Github using [straight.el](https://github.com/radian-software/straight.el).
                    "agents"
                    "prompts"
                    "skills"
-                   "docs/ptc-dialect.md"
+                   "docs/*.md"
+                   "docs/adr/*.md"
+                   "docs/agents/*.md"
                    "tools")))
 
 (use-package mevedel

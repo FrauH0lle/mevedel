@@ -67,12 +67,6 @@ recommends those elements while leaving Codex room to choose the next action.
 
 - Consider making mevedel's data buffers hidden
 
-- investigate and test address to resources, preferably in mevedel itself
-  - are the hashes necessary? Don't they prohibit the model from calling the correct address?
-  - The local:// scratchpad should be clearly promoted in the instructions
-  - add mevedel://<doc> for internal docs (maybe even sourcecode?)
-    - Internal harness documentation — versioned with the binary.
-
 - A just expanded tool call in the view buffer can get swallowed/disappears when the view buffer updates
   - reappears on next view buffer render
 - Expanded tools can get collapsed when re-render or update happens
@@ -93,6 +87,7 @@ recommends those elements while leaving Codex room to choose the next action.
 - Collapse multiple sequential tool calls (more than three), for example:
   - Searched for 5 patterns, read 1 file, ran 5 shell commands
   - Ran 5 commands
+  - Expandable, use similar/same layout as ToolScript when it runs things parallel
 
 - Collapse long input, for example
   - [Pasted text #1 +83 lines]

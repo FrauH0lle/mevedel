@@ -113,8 +113,11 @@ the same name take precedence.")
 
 NAME is the invocation identifier (the string typed after `/' and
 matched by `Skill(name=...)').  Resolution: frontmatter `name' if
-present and valid, otherwise the skill directory name.  Raw skill names
-must match `[a-z0-9-]+' and be 1-64 chars.  Discovery may later prefix
+present and valid, otherwise the skill directory name.  RAW-NAME
+immutably records that validated identifier before discovery qualifies
+NAME.  Raw skill names must match `[a-z0-9-]+' and be 1-64 chars.
+PLUGIN-NAME immutably records the owning plugin name for plugin skills
+and is nil otherwise.  Discovery may later prefix
 conflicting local names with `source:name'.  Plugin skills are
 namespaced after loading as `plugin-name:skill-name'.  Invalid skills
 are skipped at scan time with a warning.  DISPLAY-NAME is the
@@ -147,6 +150,8 @@ WARNINGS holds configuration diagnostics exposed by skill inspection.
 ACTIVE-P records the current activation state for path-scoped
 skills."
   name
+  (raw-name nil :read-only t)
+  (plugin-name nil :read-only t)
   display-name
   description
   body
@@ -469,14 +474,15 @@ YAML parsing fails."
 
 (defun mevedel-skills--from-plist
     (name plist source-file source
-          &optional source-family project-hooks-trusted-p)
+          &optional source-family project-hooks-trusted-p plugin-name)
   "Build a `mevedel-skill' from NAME and PLIST parsed from SOURCE-FILE.
 SOURCE is the origin tag symbol.  SOURCE-FAMILY is `mevedel', `agents',
 or nil.  PROJECT-HOOKS-TRUSTED-P authorizes executable hooks from a
 project manifest.  NAME is the resolved invocation identifier (already
 validated by the caller).  Description fallback from the body is the
 caller's responsibility -- anything in PLIST's `:description' wins over
-the fallback."
+the fallback.  PLUGIN-NAME records plugin ownership when SOURCE is
+`plugin'."
   (let* ((description (plist-get plist :description))
          (display-name (plist-get plist :display-name))
          (disable-model (plist-get plist :disable-model-invocation))
@@ -508,6 +514,8 @@ the fallback."
     (mevedel-skills--warn-shell shell source-file)
     (mevedel-skill--create
      :name name
+     :raw-name name
+     :plugin-name plugin-name
      :display-name (or (and (stringp display-name) display-name) name)
      :description (and (stringp description) description)
      :source-file source-file
@@ -592,7 +600,7 @@ relative and WORKSPACE-ROOT is nil."
                              (cdr source)))
          skills)
     (dolist (skill (mevedel-skills--scan-dir
-                    dir source-tag source-family workspace)
+                    dir source-tag source-family workspace plugin-name)
                    (nreverse skills))
       (push (if plugin-name
                 (mevedel-skills--namespace-plugin-skill plugin-name skill)
@@ -632,11 +640,12 @@ relative and WORKSPACE-ROOT is nil."
     skill))
 
 (defun mevedel-skills--build-skill
-    (skill-file source &optional source-family workspace)
+    (skill-file source &optional source-family workspace plugin-name)
   "Build a `mevedel-skill' for SKILL-FILE with SOURCE origin tag.
 SOURCE-FAMILY distinguishes `.mevedel' and `.agents' resource roots.
 Performs name resolution (frontmatter `:name' > directory name) and
-validation.  WORKSPACE owns project hook trust.  Returns nil with a
+validation.  WORKSPACE owns project hook trust.  PLUGIN-NAME records
+plugin ownership.  Returns nil with a
 warning when the skill is invalid \\(bad name, etc.).  Computes
 description fallback from the body when frontmatter omits `description'."
   (let* ((snapshot
@@ -667,14 +676,14 @@ description fallback from the body when frontmatter omits `description'."
               (setq plist (plist-put plist :description fallback))))
           (mevedel-skills--from-plist
            raw-name plist skill-file source source-family
-           (plist-get snapshot :trusted-p))))))))
+           (plist-get snapshot :trusted-p) plugin-name)))))))
 
 (defun mevedel-skills--scan-dir
-    (dir source &optional source-family workspace)
+    (dir source &optional source-family workspace plugin-name)
   "Return a list of `mevedel-skill' structs found under DIR.
 SOURCE is the origin tag applied to every skill scanned from DIR.
 SOURCE-FAMILY distinguishes `.mevedel' and `.agents' resource roots.
-WORKSPACE owns project hook trust.
+WORKSPACE owns project hook trust.  PLUGIN-NAME records plugin ownership.
 Each SKILL.md is wrapped in `condition-case' so a single bad skill
 does not abort the whole scan."
   (when (file-directory-p dir)
@@ -683,7 +692,7 @@ does not abort the whole scan."
                            dir "\\`SKILL\\.md\\'" nil nil nil))
         (let ((skill (condition-case err
                          (mevedel-skills--build-skill
-                          skill-file source source-family workspace)
+                          skill-file source source-family workspace plugin-name)
                        (error
                         (mevedel--warn-once
                          (list 'skill-load-failed skill-file)

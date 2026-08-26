@@ -154,6 +154,15 @@ different same-named skill. Hot reload may change content at the same source,
 and skill addresses retain their client-local origin rather than becoming
 execution-target paths. See [`address-to-resource.md`](address-to-resource.md#skill).
 
+Bare `skill://` listings also expose readable origin aliases alongside exact
+addresses: `skill://local-mevedel/SKILL`, `skill://local-agents/SKILL`,
+`skill://global-mevedel/SKILL`, `skill://global-agents/SKILL`,
+`skill://bundled/SKILL`, `skill://managed/SKILL`, and
+`skill://plugin/PLUGIN/SKILL`, each with optional descendants. An alias resolves
+to the exact current full-hash locator; the exact locator remains the authority,
+while transcripts, errors, and results preserve the alias the model authored.
+There is no unqualified `skill://NAME` alias.
+
 Remote skill directories use TRAMP file notifications when the execution
 target provides either `inotifywait` or `gio`.  Without either program,
 mevedel reports the limitation once per target capability state and leaves

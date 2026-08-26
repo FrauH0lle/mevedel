@@ -474,13 +474,15 @@ ones.
 
 ## Resource addressing
 
-Filesystem-shaped tools consume one closed set of seven resource-address
+Filesystem-shaped tools consume one closed set of eight resource-address
 families: `local://`, `artifact://`, `skill://`, `agent://`, `history://`,
-`memory://`, and `mcp://`. `Read` supports all seven; `Glob` and `Grep`
-support `local://`, `artifact://`, `skill://`, and `memory://`; `ApplyPatch`
-supports `local://` alongside ordinary filesystem paths. Addresses serialize
-canonical resource locators and do not replace target-native paths, mentions,
-or permissions.
+`memory://`, `mcp://`, and `mevedel://`. `Read` supports all eight; `Glob` and
+`Grep` support `local://`, `artifact://`, `skill://`, `memory://`, and
+`mevedel://`; `ApplyPatch` supports `local://` alongside ordinary filesystem
+paths. Addresses serialize canonical resource locators and do not replace
+target-native paths, mentions, or permissions. `mevedel://` is an always-
+available, read-only view of packaged Markdown documentation and exposes no
+Elisp source.
 
 The resolver prepares an opaque attempt and logical authority facts after
 repair, final validation, and pre-use hooks, then permission and any review

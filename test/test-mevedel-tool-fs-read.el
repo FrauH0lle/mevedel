@@ -431,6 +431,29 @@
                   (should-not (string-match-p (regexp-quote save-path)
                                               result)))))))
       (delete-directory save-path t)))
+  :doc "reads current installed documentation without a session or source path"
+  (let* ((root (make-temp-file "mevedel-read-installed-" t))
+         (docs (file-name-concat root "docs"))
+         (file (file-name-concat docs "guide.md"))
+         (address "mevedel://guide.md")
+         (mevedel-resource--source-dir root))
+    (unwind-protect
+        (progn
+          (make-directory docs t)
+          (with-temp-file (file-name-concat root "mevedel-resource.el")
+            (insert ";; Adjacent package source.\n"))
+          (with-temp-file file (insert "old documentation\n"))
+          (let* ((attempt (mevedel-resource-prepare 'read address nil))
+                 (mevedel-resource-current-attempts
+                  (list (cons address attempt))))
+            (with-temp-file file (insert "current documentation\n"))
+            (let ((result (plist-get
+                           (mevedel-tool-fs-read (list :file_path address))
+                           :result)))
+              (should (string-match-p "1\11current documentation" result))
+              (should-not (string-match-p "old documentation" result))
+              (should-not (string-match-p (regexp-quote root) result)))))
+      (delete-directory root t)))
   :doc "rejects binary and media reads through memory addresses"
   (let* ((workspace-root (make-temp-file "mevedel-memory-media-" t))
          (memory-root (file-name-concat workspace-root "memory"))
