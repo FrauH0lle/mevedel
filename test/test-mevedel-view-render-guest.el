@@ -14,8 +14,6 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
-(require 'cl-lib)
-(require 'mevedel-utilities)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-view-render)
 
