@@ -177,6 +177,11 @@
                   "mevedel-transport" (&optional path))
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
 
+;; `mevedel-utilities'
+(declare-function mevedel--replace-transcript-contents
+                  "mevedel-utilities" (source))
+(autoload 'mevedel--replace-transcript-contents "mevedel-utilities")
+
 ;; `mevedel-turn'
 (declare-function mevedel-request-active-p
                   "mevedel-turn" (&optional buffer))
@@ -483,7 +488,7 @@ owner's side repoints the visited file here too."
                           buffer-file-coding-system
                           (buffer-local-value
                            'buffer-file-coding-system staging-buffer))
-                    (replace-buffer-contents staging-buffer)
+                    (mevedel--replace-transcript-contents staging-buffer)
                     (set-buffer-modified-p nil)
                     (set-visited-file-modtime))))
             (error
@@ -496,7 +501,7 @@ owner's side repoints the visited file here too."
                          buffer-file-truename file-truename
                          default-directory directory
                          buffer-file-coding-system coding)
-                   (replace-buffer-contents original)
+                   (mevedel--replace-transcript-contents original)
                    (set-buffer-modified-p modified)
                    (set-visited-file-modtime modtime)
                    (when narrowing
