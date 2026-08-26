@@ -239,13 +239,25 @@ a deferred tool executes normally."
 
 ;;;; Rendering
 
+(defcustom mevedel-tool-ptc-result-collapse-line-threshold 10
+  "ToolScript returned values longer than this many lines fold to a row.
+The folded `Returned' row follows the nested call rows, defaults to
+collapsed, and expands to the complete returned value.  Zero keeps
+every returned value inline in the block body."
+  :type 'integer
+  :group 'mevedel)
+
 (defun mevedel-tool-ptc--render (_name _args result render-data)
   "Render a settled ToolScript call.
 
 The body carries only what the script returned.  Every nested call
 becomes a `:child-calls' row that the view renders through that tool's
 own renderer, so a nested Grep gets Grep's header and `grep-mode' body
-instead of one flat dump fontified in a single mode."
+instead of one flat dump fontified in a single mode.  A completed
+script's returned value longer than
+`mevedel-tool-ptc-result-collapse-line-threshold' lines moves out of
+the body into a trailing collapsed `Returned' row that reuses the same
+nested-row machinery."
   (when (eq (plist-get render-data :kind) 'ptc)
     (let* ((calls (plist-get render-data :calls))
            (live-p (plist-get render-data :live-p))
@@ -257,7 +269,16 @@ instead of one flat dump fontified in a single mode."
            (error-count
             (cl-count-if (lambda (call)
                            (memq (plist-get call :status) '(error denied)))
-                         calls)))
+                         calls))
+           (returned-value
+            (and (not live-p)
+                 (if (stringp result) result (format "%S" result))))
+           (fold-returned-p
+            (and returned-value
+                 (eq outcome 'completed)
+                 (> mevedel-tool-ptc-result-collapse-line-threshold 0)
+                 (> (length (split-string returned-value "\n"))
+                    mevedel-tool-ptc-result-collapse-line-threshold))))
       (list :header (if live-p
                         (format "ToolScript: %d%s completed%s%s%s"
                                 (or (plist-get render-data :completed-count)
@@ -283,12 +304,19 @@ instead of one flat dump fontified in a single mode."
                                   (format " \u00b7 %d failed" error-count)
                                 "")
                               outcome))
-            :body (and (not live-p)
+            :body (and returned-value
+                       (not fold-returned-p)
                        (concat (if (eq outcome 'completed) "Returned:\n" "")
-                               (if (stringp result)
-                                   result
-                                 (format "%S" result))))
-            :child-calls (and (not live-p) calls)
+                               returned-value))
+            :child-calls (and (not live-p)
+                              (append calls
+                                      (when fold-returned-p
+                                        (list
+                                         (list :id "returned"
+                                               :order (length calls)
+                                               :tool "Returned"
+                                               :status 'success
+                                               :result returned-value)))))
             :status (if live-p 'running
                       (if (eq outcome 'completed) 'success 'error))
             :initially-collapsed-p t))))

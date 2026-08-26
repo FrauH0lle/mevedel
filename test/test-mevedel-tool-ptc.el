@@ -82,6 +82,40 @@
                      (plist-get (car children) :result)))
       (should (equal '(:file_path "a") (plist-get (car children) :args)))))
 
+  :doc "folds a long returned value into a trailing collapsed row"
+  (with-temp-buffer
+    (let* ((value (mapconcat (lambda (i) (format "line %d" i))
+                             (number-sequence 1 12) "\n"))
+           (rendering
+            (mevedel-tool-ptc--render
+             "ToolScript" nil value
+             '(:kind ptc :outcome completed
+               :calls ((:id "ptc/1" :tool "Read" :status success
+                        :args (:file_path "a") :result "child output")))))
+           (returned (car (last (plist-get rendering :child-calls)))))
+      (should-not (plist-get rendering :body))
+      (should (equal "returned" (plist-get returned :id)))
+      (should (equal "Returned" (plist-get returned :tool)))
+      (should (equal value (plist-get returned :result)))
+      ;; A zero threshold keeps the value inline.
+      (let* ((mevedel-tool-ptc-result-collapse-line-threshold 0)
+             (inline (mevedel-tool-ptc--render
+                      "ToolScript" nil value
+                      '(:kind ptc :outcome completed :calls nil))))
+        (should (string-match-p "line 12" (plist-get inline :body)))
+        (should-not (plist-get inline :child-calls)))))
+
+  :doc "a failed script keeps its returned value visible inline"
+  (with-temp-buffer
+    (let* ((value (mapconcat (lambda (i) (format "err %d" i))
+                             (number-sequence 1 12) "\n"))
+           (rendering
+            (mevedel-tool-ptc--render
+             "ToolScript" nil value
+             '(:kind ptc :outcome error :calls nil))))
+      (should (string-match-p "err 12" (plist-get rendering :body)))
+      (should-not (plist-get rendering :child-calls))))
+
   :doc "shows failures and permission waits in live progress"
   (with-temp-buffer
     (let ((header
