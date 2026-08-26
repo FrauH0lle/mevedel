@@ -4029,15 +4029,18 @@ hint.  Searches that region."
                             (t "✉ message "))
                            'font-lock-face 'mevedel-view-attribution
                            'mevedel-view-mailbox t))
-                  (if bash-summary
-                      (insert sender)
-                    (if (eq kind 'agent-result)
+                  ;; The bash and result cards name their sender
+                  ;; directly; only a plain message reads as "from
+                  ;; PATH".  All three take the attribution string, so
+                  ;; the sender keeps its face and click target -- the
+                  ;; bash card used to insert it bare.
+                  (if (or bash-summary (eq kind 'agent-result))
                       (let ((label-start (point)))
                         (insert attribution)
                         (when (string-prefix-p "from " attribution)
                           (delete-region label-start
                                          (+ label-start (length "from ")))))
-                      (insert attribution)))
+                    (insert attribution))
                   (insert "\n")
                   (let ((body-start (point)))
                     (when-let* ((close

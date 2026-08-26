@@ -5451,7 +5451,17 @@
         (should-not (string-match-p "spoofed" text))
         (should-not (string-match-p "message from /root" text))
         (should-not (string-match-p "│ \\[sandbox: bubblewrap" text))
-        (should-not (string-match-p "<bash-execution" text)))))
+        (should-not (string-match-p "<bash-execution" text)))
+      ;; The sender used to be inserted bare, so it rendered in the
+      ;; default face between two styled runs.
+      (goto-char (point-min))
+      (search-forward "Bash completed")
+      (search-forward "/root")
+      (goto-char (match-beginning 0))
+      (should (eq 'mevedel-view-attribution
+                  (get-text-property (point) 'font-lock-face)))
+      (should (equal "/root"
+                     (get-text-property (point) 'mevedel-view-agent-path)))))
 
   :doc "Bash completion keeps following reasoning on a separate line"
   (mevedel-view-test--with-buffers
