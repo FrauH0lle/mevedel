@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'gptel)
+(require 'mevedel-agents)
 (require 'mevedel-execution-target)
 (require 'mevedel-session-durability)
 (require 'mevedel-session-persistence)
@@ -628,6 +629,77 @@
 			 (should-not mevedel-telemetry--profiler-session)
 			 (should-not mevedel-telemetry--profiler-run-id)
 			 (should (= 16 profiler-max-stack-depth)))
+		     (setq mevedel-telemetry--profiler-session nil
+			   mevedel-telemetry--profiler-run-id nil)
+		     (delete-directory root t)))
+
+		 :doc "materializes a session that has not hit disk yet"
+		 (let* ((root (make-temp-file "mevedel-telemetry-profiler-cold-" t))
+			(session (test-mevedel-telemetry--session root))
+			(mevedel-telemetry--profiler-session nil)
+			(mevedel-telemetry--profiler-run-id nil)
+			(mevedel-telemetry--profiler-prior-stack-depth nil)
+			(profiler-max-stack-depth 16)
+			started)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (org-mode)
+			 (setq-local mevedel--session session)
+			 (cl-letf
+			     (((symbol-function 'profiler-start)
+			       (lambda (mode) (setq started mode)))
+			      ((symbol-function 'mevedel-telemetry--install-prompt-guard)
+			       (lambda () t))
+			      ((symbol-function 'mevedel-telemetry--record-environment)
+			       (lambda (_session _boundary) t)))
+			   (mevedel-telemetry-profiler-start 'cpu))
+			 (should (eq 'cpu started))
+			 (should (file-directory-p
+				  (mevedel-session-save-path session)))
+			 (should (file-exists-p
+				  (file-name-concat
+				   (mevedel-session-save-path session)
+				   "session.meta.el"))))
+		     (setq mevedel-telemetry--profiler-session nil
+			   mevedel-telemetry--profiler-run-id nil)
+		     (delete-directory root t)))
+
+		 :doc "refuses when the session cannot be materialized"
+		 (let* ((root (make-temp-file "mevedel-telemetry-profiler-nodisk-" t))
+			(session (test-mevedel-telemetry--session root))
+			(invocation
+			 (mevedel-agent-invocation--create
+			  :parent-session session))
+			(mevedel-telemetry--profiler-session nil)
+			(mevedel-telemetry--profiler-run-id nil)
+			started)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (setq-local mevedel--agent-invocation invocation)
+			 (cl-letf
+			     (((symbol-function 'profiler-start)
+			       (lambda (mode) (setq started mode))))
+			   (should-error (mevedel-telemetry-profiler-start 'cpu)
+					 :type 'user-error))
+			 (should-not started)
+			 (should-not mevedel-telemetry--profiler-session))
+		     (setq mevedel-telemetry--profiler-session nil
+			   mevedel-telemetry--profiler-run-id nil)
+		     (delete-directory root t)))
+
+		 :doc "does not materialize a cold session while another run is active"
+		 (let* ((root (make-temp-file "mevedel-telemetry-profiler-active-" t))
+			(session (test-mevedel-telemetry--session root))
+			(owner (test-mevedel-telemetry--session root))
+			(mevedel-telemetry--profiler-session owner)
+			(mevedel-telemetry--profiler-run-id "run-active"))
+		   (unwind-protect
+		       (with-temp-buffer
+			 (org-mode)
+			 (setq-local mevedel--session session)
+			 (should-error (mevedel-telemetry-profiler-start 'cpu)
+				       :type 'user-error)
+			 (should-not (mevedel-session-save-path session)))
 		     (setq mevedel-telemetry--profiler-session nil
 			   mevedel-telemetry--profiler-run-id nil)
 		     (delete-directory root t))))

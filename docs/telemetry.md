@@ -106,8 +106,10 @@ active elapsed time instead and exclude actionable user-input waits.
 
 ## Reproducing a Goal run
 
-Start from the materialized root data or view buffer immediately before
-creating the Goal:
+Start from the root data or view buffer immediately before creating the Goal.
+The session does not have to have hit disk yet: profiler start materializes a
+cold session itself, so a run can begin without sending a throwaway turn
+first.
 
 1. Run `M-x mevedel-telemetry-profiler-start`. Combined CPU and memory
    profiling is the default. With a prefix argument, choose a single mode.
