@@ -394,6 +394,8 @@
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-disclosure-source-range
                   "mevedel-view-disclosure" (data-buffer start end))
+(declare-function mevedel-view-disclosure-source-start
+                  "mevedel-view-disclosure" (source))
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add "mevedel-view-history"
@@ -466,6 +468,12 @@
 (declare-function mevedel-view-stream-stop "mevedel-view-stream" ())
 (defvar mevedel-view--data-turn-start)
 (defvar mevedel-view--in-flight-turn-start)
+
+;; `mevedel-view-zone'
+(declare-function mevedel-view-zone-bounds-at "mevedel-view-zone"
+                  (&optional position))
+(declare-function mevedel-view-zone-fragment-bounds "mevedel-view-zone"
+                  (zone id))
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-fork-preflight
@@ -889,6 +897,84 @@ late callback accidentally inserts transcript content below the prompt."
             (insert text)))))
     result))
 
+(defun mevedel-view--position-render-anchor (pos)
+  "Return a semantic anchor for POS that survives a re-render, or nil.
+
+Redraws delete and re-insert view text, so a raw buffer position saved
+across one lands in different content whenever lengths shift above or
+around it.  A managed fragment (zone namespace, fragment id, offset
+into the fragment) or the transcript source map (data-buffer position
+plus offset into its rendered run) identifies the same content after
+the redraw.  Composer positions are handled by input offsets and
+return nil here."
+  (when (and (integer-or-marker-p pos)
+             (>= pos (point-min))
+             (< pos (point-max))
+             (not (mevedel-view--position-in-input-region-p pos)))
+    (or
+     (when-let* ((bounds (mevedel-view-zone-bounds-at pos)))
+       (list 'fragment
+             (plist-get bounds :namespace)
+             (plist-get bounds :id)
+             (- pos (plist-get bounds :start))))
+     (when-let* ((source (get-text-property pos 'mevedel-view-source))
+                 ((consp source))
+                 (data-start (mevedel-view-disclosure-source-start source)))
+       (let ((run-start (previous-single-property-change
+                         (min (1+ pos) (point-max))
+                         'mevedel-view-source nil (point-min)))
+             (nth 0)
+             (scan (point-min)))
+         ;; Several runs can share one source start -- a fold header and
+         ;; its body, or a turn whose first segment starts the turn.  The
+         ;; ordinal picks the same run back out after the redraw instead
+         ;; of the first one that happens to match.
+         (while (< scan run-start)
+           (let ((next (or (next-single-property-change
+                            scan 'mevedel-view-source nil run-start)
+                           run-start))
+                 (other (get-text-property scan 'mevedel-view-source)))
+             (when (and (consp other)
+                        (eql (mevedel-view-disclosure-source-start other)
+                             data-start))
+               (setq nth (1+ nth)))
+             (setq scan next)))
+         (list 'source data-start nth (- pos run-start)))))))
+
+(defun mevedel-view--render-anchor-position (anchor)
+  "Return the buffer position ANCHOR identifies after a redraw, or nil.
+ANCHOR comes from `mevedel-view--position-render-anchor'.  The result
+is clamped into the re-rendered fragment or source run, so a position
+whose content shrank stays inside the same content instead of drifting
+into a neighbor."
+  (pcase anchor
+    (`(fragment ,namespace ,id ,offset)
+     (when-let* ((bounds (mevedel-view-zone-fragment-bounds namespace id)))
+       (min (max (plist-get bounds :start)
+                 (1- (plist-get bounds :end)))
+            (+ (plist-get bounds :start) offset))))
+    (`(source ,data-start ,nth ,offset)
+     (let ((limit (if (and (markerp mevedel-view--input-marker)
+                           (marker-buffer mevedel-view--input-marker))
+                     (mevedel-view--input-start)
+                    (point-max)))
+           (pos (point-min))
+           (count 0)
+           found)
+       (while (and (not found) (< pos limit))
+         (let ((next (or (next-single-property-change
+                          pos 'mevedel-view-source nil limit)
+                         limit))
+               (source (get-text-property pos 'mevedel-view-source)))
+           (when (and (consp source)
+                      (eql (mevedel-view-disclosure-source-start source)
+                           data-start))
+             (if (= count nth)
+                 (setq found (min (max pos (1- next)) (+ pos offset)))
+               (setq count (1+ count))))
+           (setq pos next)))
+       found))))
+
 (defun mevedel-view--call-preserving-window-state (thunk)
   "Call THUNK while preserving each displayed window's browsing state.
 Preserves those values for every window displaying the current buffer.
@@ -897,16 +983,20 @@ windows browsing older content retain their point and start.
 
 Used to wrap delete-and-re-render operations so the user's scroll
 position and caret do not jump back to the edit site on every
-progress tick.  Positions that are no longer valid after BODY (e.g.
-point was inside the deleted region) are quietly clamped to the
-buffer.  The buffer mark, active-region state, and selection direction
-are preserved with point.  When either endpoint is in the editable
-composer, preserve it by offset from `mevedel-view--input-start' so
-streaming text inserted above the composer does not strand it in
-rendered transcript text."
+progress tick.  Point, window points, and window starts are restored
+through semantic render anchors (`mevedel-view--position-render-anchor')
+so a position inside re-rendered text returns to the same content
+rather than to the same numeric offset; a position whose anchor cannot
+be resolved after BODY is quietly clamped to the buffer.  The buffer
+mark, active-region state, and selection direction are preserved with
+point.  When either endpoint is in the editable composer, preserve it
+by offset from `mevedel-view--input-start' so streaming text inserted
+above the composer does not strand it in rendered transcript text."
   (let* ((mevedel-view--pww-selected-window (selected-window))
           (mevedel-view--pww-current-buffer (current-buffer))
           (mevedel-view--pww-current-point (point))
+          (mevedel-view--pww-current-anchor
+           (mevedel-view--position-render-anchor (point)))
           (mevedel-view--pww-current-mark (mark t))
           (mevedel-view--pww-mark-active mark-active)
           (mevedel-view--pww-deactivate-mark deactivate-mark)
@@ -929,33 +1019,45 @@ rendered transcript text."
                                ws
                                (and (mevedel-view--position-in-input-region-p wp)
                                     (- wp (mevedel-view--input-start)))
-                               (= wp (point-max))))))
+                               (= wp (point-max))
+                               (mevedel-view--position-render-anchor wp)
+                               (mevedel-view--position-render-anchor ws)))))
                    (get-buffer-window-list (current-buffer) nil t))))
      (prog1 (funcall thunk)
        (let ((restored-current-point
-              (if (and mevedel-view--pww-current-input-offset
-                       (markerp mevedel-view--input-marker)
-                       (marker-buffer mevedel-view--input-marker))
-                  (+ (mevedel-view--input-start)
-                     (max 0 mevedel-view--pww-current-input-offset))
-                mevedel-view--pww-current-point)))
+              (cond
+               ((and mevedel-view--pww-current-input-offset
+                     (markerp mevedel-view--input-marker)
+                     (marker-buffer mevedel-view--input-marker))
+                (+ (mevedel-view--input-start)
+                   (max 0 mevedel-view--pww-current-input-offset)))
+               ((mevedel-view--render-anchor-position
+                 mevedel-view--pww-current-anchor))
+               (t mevedel-view--pww-current-point))))
          (goto-char (min (point-max) restored-current-point)))
        (dolist (entry mevedel-view--pww-saved)
-         (pcase-let ((`(,w ,wp ,ws ,input-offset ,at-bottom) entry))
+         (pcase-let ((`(,w ,wp ,ws ,input-offset ,at-bottom
+                        ,wp-anchor ,ws-anchor)
+                      entry))
            (when (window-live-p w)
              (let ((restored-point
-                    (if (and input-offset
-                             (markerp mevedel-view--input-marker)
-                             (marker-buffer mevedel-view--input-marker))
-                        (+ (mevedel-view--input-start)
-                           (max 0 input-offset))
-                      wp)))
+                    (cond
+                     ((and input-offset
+                           (markerp mevedel-view--input-marker)
+                           (marker-buffer mevedel-view--input-marker))
+                      (+ (mevedel-view--input-start)
+                         (max 0 input-offset)))
+                     ((mevedel-view--render-anchor-position wp-anchor))
+                     (t wp))))
                (when restored-point
                  (set-window-point w (min (point-max) restored-point)))
                (when (eq w mevedel-view--pww-selected-window)
                  (goto-char (window-point w))))
-             (when (and ws (<= ws (point-max)))
-               (set-window-start w ws t))
+             (let ((restored-start
+                    (or (mevedel-view--render-anchor-position ws-anchor)
+                        ws)))
+               (when (and restored-start (<= restored-start (point-max)))
+                 (set-window-start w restored-start t)))
              (when (and at-bottom (not input-offset))
                (save-selected-window
                  (select-window w)

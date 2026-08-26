@@ -840,8 +840,31 @@
           (should (markerp
                    (plist-get rendering :last-assistant-turn-end)))
           (should (< (plist-get rendering :last-assistant-turn-start)
-                     (plist-get rendering :last-assistant-turn-end)))))
-      (should (string-match-p "Response" (buffer-string))))))
+                     (plist-get rendering :last-assistant-turn-end)))
+          (should (integerp
+                   (plist-get rendering :last-assistant-turn-data-start)))
+          (should (with-current-buffer data-buf
+                    (<= (point-min)
+                        (plist-get rendering :last-assistant-turn-data-start)
+                        (point-max))))))
+      (should (string-match-p "Response" (buffer-string)))))
+
+  :doc "reports the current assistant turn's data start for reanchoring"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Response\n" 'response)
+    (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (mevedel-view--full-rerender-reset data-buf data-buf nil nil)
+        (let ((rendering
+               (mevedel-view--full-rerender-project
+                data-buf data-buf view-buf nil 1 nil)))
+          (should
+           (integerp
+            (plist-get rendering :last-current-assistant-turn-data-start)))
+          (should
+           (= (plist-get rendering :last-current-assistant-turn-data-start)
+              (plist-get rendering :last-assistant-turn-data-start))))))))
 
 (mevedel-deftest mevedel-view--full-rerender-reanchor ()
   ,test
@@ -857,7 +880,64 @@
                :last-turn-role 'assistant)
          t 1 nil)
         (should (= (marker-position mevedel-view--in-flight-turn-start)
-                   (marker-position assistant-start)))))))
+                   (marker-position assistant-start))))))
+
+  :doc "repairs the data anchor to the projected turn's data start"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\nfiller\n" nil)
+    (with-current-buffer view-buf
+      ;; Simulate a whole-buffer rewrite that collapsed the marker.
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-min) nil)))
+      (let ((assistant-start (copy-marker (point-min) nil))
+            (data-start (with-current-buffer data-buf (1- (point-max)))))
+        (mevedel-view--full-rerender-reanchor
+         data-buf
+         (list :view-buffer view-buf
+               :last-current-assistant-turn-start assistant-start
+               :last-current-assistant-turn-data-start data-start
+               :last-turn-role 'assistant)
+         t 1 nil)
+        (should (markerp mevedel-view--data-turn-start))
+        (should (eq (marker-buffer mevedel-view--data-turn-start) data-buf))
+        (should (= (marker-position mevedel-view--data-turn-start)
+                   data-start)))))
+
+  :doc "parks the data anchor at the data end when no assistant turn exists"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\nfiller\n" nil)
+    (with-current-buffer view-buf
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-min) nil)))
+      (mevedel-view--full-rerender-reanchor
+       data-buf
+       (list :view-buffer view-buf :last-turn-role 'user)
+       t nil nil)
+      (should (markerp mevedel-view--data-turn-start))
+      (should (= (marker-position mevedel-view--data-turn-start)
+                 (with-current-buffer data-buf (point-max)))))))
+
+(mevedel-deftest mevedel-view--reanchor-data-turn-start ()
+  ,test
+  (test)
+  :doc "points the data anchor at a position in the data buffer"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (with-current-buffer view-buf
+      (mevedel-view--reanchor-data-turn-start data-buf 3)
+      (should (markerp mevedel-view--data-turn-start))
+      (should (eq (marker-buffer mevedel-view--data-turn-start) data-buf))
+      (should (= (marker-position mevedel-view--data-turn-start) 3))))
+
+  :doc "releases the previous marker and ignores a nil position"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((old (with-current-buffer data-buf (copy-marker 1 nil))))
+        (setq mevedel-view--data-turn-start old)
+        (mevedel-view--reanchor-data-turn-start data-buf nil)
+        (should (eq mevedel-view--data-turn-start old))
+        (mevedel-view--reanchor-data-turn-start data-buf 1)
+        (should-not (marker-buffer old))))))
 
 (mevedel-deftest mevedel-view--full-rerender-finish ()
   ,test
@@ -910,6 +990,36 @@
         (let ((text2 (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
           (should (string-match-p "What is 2\\+2" text2))
           (should (string-match-p "answer is 4" text2))))))
+
+  :doc "repairs a data anchor collapsed by a whole-buffer rewrite"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+    (mevedel-view-test--insert-data data-buf "Response\n" 'response)
+    (with-current-buffer view-buf
+      ;; Compaction and segment rotation rewrite the data buffer through
+      ;; `erase-buffer', which moves every marker to `point-min'.  A stale
+      ;; anchor made every later incremental render re-render the entire
+      ;; transcript, so the rebuild must re-derive it from the projection.
+      (mevedel-view-stream-set-in-flight-turn-start (point-min))
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-min) nil)))
+      (mevedel-view--full-rerender)
+      (should (markerp mevedel-view--data-turn-start))
+      (should (> (marker-position mevedel-view--data-turn-start)
+                 (with-current-buffer data-buf (point-min))))
+      ;; The repaired anchor points at the assistant turn, so the
+      ;; response body is inside the live range it delimits.
+      (should (with-current-buffer data-buf
+                (save-excursion
+                  (goto-char (point-min))
+                  (let ((response-at (search-forward "Response" nil t)))
+                    (and response-at
+                         (>= response-at
+                             (marker-position
+                              (buffer-local-value
+                               'mevedel-view--data-turn-start view-buf)))))))))
+    (with-current-buffer view-buf
+      (mevedel-view-stream-stop)))
 
   :doc "preserves an active transcript selection"
   (mevedel-view-test--with-buffers

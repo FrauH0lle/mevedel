@@ -6081,7 +6081,9 @@ turn.  SAVED-STATES restores matching disclosure state."
                      (mevedel-session-workspace session) 'cached))))
                last-assistant-turn-start
                last-assistant-turn-end
+               last-assistant-turn-data-start
                last-current-assistant-turn-start
+               last-current-assistant-turn-data-start
                last-turn-role)
           (with-current-buffer view-buf
             (dolist (turn turns)
@@ -6089,13 +6091,17 @@ turn.  SAVED-STATES restores matching disclosure state."
               (when (eq last-turn-role 'assistant)
                 (let ((view-turn-start
                        (copy-marker mevedel-view--input-marker nil)))
-                  (setq last-assistant-turn-start view-turn-start)
+                  (setq last-assistant-turn-start view-turn-start
+                        last-assistant-turn-data-start
+                        (plist-get turn :start))
                   (when (and data-turn-start-pos
                              (plist-get turn :end)
                              (> (plist-get turn :end)
                                 data-turn-start-pos))
                     (setq last-current-assistant-turn-start
-                          view-turn-start))))
+                          view-turn-start
+                          last-current-assistant-turn-data-start
+                          (plist-get turn :start)))))
               (mevedel-view--render-turn turn data-buf t session)
               (when (eq last-turn-role 'assistant)
                 (setq last-assistant-turn-end
@@ -6110,9 +6116,22 @@ turn.  SAVED-STATES restores matching disclosure state."
            :view-buffer view-buf
            :last-assistant-turn-start last-assistant-turn-start
            :last-assistant-turn-end last-assistant-turn-end
+           :last-assistant-turn-data-start last-assistant-turn-data-start
            :last-current-assistant-turn-start
            last-current-assistant-turn-start
+           :last-current-assistant-turn-data-start
+           last-current-assistant-turn-data-start
            :last-turn-role last-turn-role)))))))
+
+(defun mevedel-view--reanchor-data-turn-start (data-buf position)
+  "Point `mevedel-view--data-turn-start' at POSITION in DATA-BUF.
+Call from the view buffer.  POSITION nil leaves the marker untouched."
+  (when position
+    (when (markerp mevedel-view--data-turn-start)
+      (set-marker mevedel-view--data-turn-start nil))
+    (setq mevedel-view--data-turn-start
+          (with-current-buffer data-buf
+            (copy-marker position nil)))))
 
 (defun mevedel-view--full-rerender-reanchor
     (data-buf rendering in-flight-was data-turn-start-pos preserved-live-tail)
@@ -6146,7 +6165,10 @@ PRESERVED-LIVE-TAIL contains any view-only streamed text."
              :data-turn-start data-turn-start-pos
              :state (mevedel-view--debug-state data-buf))
             (mevedel-view-stream-set-in-flight-turn-start
-             last-current-assistant))
+             last-current-assistant)
+            (mevedel-view--reanchor-data-turn-start
+             data-buf
+             (plist-get rendering :last-current-assistant-turn-data-start)))
            ((and (not data-turn-start-pos)
                  (eq last-role 'assistant)
                  last-assistant)
@@ -6156,7 +6178,10 @@ PRESERVED-LIVE-TAIL contains any view-only streamed text."
              :last-turn-role last-role
              :last-assistant-turn-start last-assistant
              :state (mevedel-view--debug-state data-buf))
-            (mevedel-view-stream-set-in-flight-turn-start last-assistant))
+            (mevedel-view-stream-set-in-flight-turn-start last-assistant)
+            (mevedel-view--reanchor-data-turn-start
+             data-buf
+             (plist-get rendering :last-assistant-turn-data-start)))
            (tail-start
             (mevedel-view--debug-log
              'full-rerender-reanchor
@@ -6184,7 +6209,22 @@ PRESERVED-LIVE-TAIL contains any view-only streamed text."
              :last-turn-role last-role
              :state (mevedel-view--debug-state data-buf))
             (mevedel-view-stream-set-in-flight-turn-start
-             mevedel-view--input-marker))))))))
+             mevedel-view--input-marker)))
+          ;; The projection just rendered everything up to the data
+          ;; buffer's end as settled history.  When no assistant turn
+          ;; anchored the data marker above, park it at that end so the
+          ;; next incremental render extracts only content that arrives
+          ;; later, instead of re-rendering from a stale position -- a
+          ;; whole-buffer rewrite (compaction, segment rotation)
+          ;; collapses the old marker to `point-min', which made every
+          ;; incremental render re-render the entire transcript.
+          (unless (or last-current-assistant
+                      (and (not data-turn-start-pos)
+                           (eq last-role 'assistant)
+                           last-assistant))
+            (mevedel-view--reanchor-data-turn-start
+             data-buf
+             (with-current-buffer data-buf (point-max)))))))))
 
 (defun mevedel-view--full-rerender-finish
     (data-buf live-data-buf rendering historical-p start-time)
