@@ -4,13 +4,9 @@
 
 ;;; Code:
 
-(require 'ert)
 (require 'mevedel-execution-target)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
-
-;; Defined in mevedel-chat.el; declared here so dynamic binding works
-;; without pulling in the full chat module at test time.
 
 (require 'helpers
          (file-name-concat
