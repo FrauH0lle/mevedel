@@ -1300,6 +1300,11 @@ the editable composer signal instead of settling queued interactions."
                     :id 'executions
                     :priority 50
                     :body body
+                    ;; Without this the row sits flush against the
+                    ;; agents separator below it and reads as that
+                    ;; rule's caption.  A blank line cannot go in
+                    ;; `:body' -- the zone trims it to one newline.
+                    :body-suffix "\n"
                     :keymap (mevedel-view--display-fragment-keymap)
                     :navigatable t
                     :activate #'mevedel-view-open-executions
