@@ -2501,6 +2501,12 @@ RAW is an optional precomputed expanded tool segment text."
              (list :tool name :args args :result result :render-data render-data
                    :status (mevedel-view--tool-render-status
                             result render-data))))
+      ;; Whether the tool runs nested rows has to outlive the cache, which
+      ;; drops `:child-calls' from a collapsed header: grouping reads it to
+      ;; keep compound tools out of an activity run.
+      (setq rendering
+            (plist-put rendering :compound-p
+                       (and (plist-get rendering :child-calls) t)))
       (if collapsed-only
           (mevedel-view--omit-rendering-body-for-cache rendering)
         rendering))))
@@ -5091,6 +5097,7 @@ expanded or compact, coalesced rows, and renderer fallbacks."
          (= (plist-get entry :count) 1)
          (eq (or (plist-get rendering :vtype) 'tool-summary) 'tool-summary)
          (null (plist-get rendering :child-calls))
+         (null (plist-get rendering :compound-p))
          (null (plist-get rendering :hook-audits))
          (null (plist-get rendering :sandbox-summary))
          (not (plist-get rendering :force-expanded-p))
