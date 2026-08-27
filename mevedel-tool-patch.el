@@ -264,24 +264,28 @@ local sessions untouched until permission and plan checks have completed."
   "Parse update payload LINES beginning at FIRST-LINE into hunks.
 A hunk's `@@' anchor is either a context line or a bare positive line
 number; the latter becomes `:line-hint' and only breaks ties between
-otherwise ambiguous matches."
-  (let (hunks current changed-p)
+otherwise ambiguous matches.  A hunk made of context lines alone is a
+valid locator: it pins the position of the hunks after it and applies
+as a no-op.  Each hunk records the patch line of its `@@' marker (or
+first content line) as `:at-line' for error reporting."
+  (let (hunks current)
     (cl-labels
-        ((new-hunk (anchor)
+        ((new-hunk (anchor at-line)
            (let ((numeric (and anchor
                                (string-match-p "\\`[1-9][0-9]*\\'" anchor))))
              (list :context (unless numeric anchor)
                    :line-hint (and numeric (string-to-number anchor))
+                   :at-line at-line
                    :old-lines nil :new-lines nil
                    :diff-lines nil :eof nil :selected t)))
-         (ensure-current ()
+         (ensure-current (at-line)
            (unless current
-             (setq current (new-hunk nil))))
+             (setq current (new-hunk nil at-line))))
          (finish-current ()
            (when current
-             (unless changed-p
-               (error "Invalid patch at line %d: Update hunk has no changes"
-                      first-line))
+             (unless (plist-get current :diff-lines)
+               (error "Invalid patch at line %d: Update hunk is empty"
+                      (plist-get current :at-line)))
              (setq current
                    (plist-put current :old-lines
                               (nreverse (plist-get current :old-lines))))
@@ -292,7 +296,7 @@ otherwise ambiguous matches."
                    (plist-put current :diff-lines
                               (nreverse (plist-get current :diff-lines))))
              (push current hunks)
-             (setq current nil changed-p nil))))
+             (setq current nil))))
       (cl-loop for line in lines
                for line-number from first-line
                ;; Codex matches update markers after stripping trailing
@@ -305,19 +309,20 @@ otherwise ambiguous matches."
                  (finish-current)
                  (setq current
                        (new-hunk (unless (string= marker "@@")
-                                   (substring marker 3)))))
+                                   (substring marker 3))
+                                 line-number)))
                 ((string= marker mevedel-tool-patch--eof)
-                 (ensure-current)
+                 (ensure-current line-number)
                  (setq current (plist-put current :eof t)))
                 ((string-empty-p line)
                  ;; Codex leniency: a bare empty line is an empty context
                  ;; line whose space marker the model dropped.
-                 (ensure-current)
+                 (ensure-current line-number)
                  (push " " (plist-get current :diff-lines))
                  (push "" (plist-get current :old-lines))
                  (push "" (plist-get current :new-lines)))
                 ((memq (aref line 0) '(?\s ?+ ?-))
-                 (ensure-current)
+                 (ensure-current line-number)
                  (let ((text (substring line 1)))
                    (push line (plist-get current :diff-lines))
                    (pcase (aref line 0)
@@ -325,16 +330,22 @@ otherwise ambiguous matches."
                       (push text (plist-get current :old-lines))
                       (push text (plist-get current :new-lines)))
                      (?+
-                      (push text (plist-get current :new-lines))
-                      (setq changed-p t))
+                      (push text (plist-get current :new-lines)))
                      (?-
-                      (push text (plist-get current :old-lines))
-                      (setq changed-p t)))))
+                      (push text (plist-get current :old-lines))))))
                 (t
                  (error "Invalid patch at line %d: Invalid update line"
                         line-number))))
       (finish-current))
     (nreverse hunks)))
+
+(defun mevedel-tool-patch-hunk-changes-p (hunk)
+  "Return non-nil when HUNK adds or removes at least one line.
+A hunk without changes is a locator: it anchors the position of the
+hunks after it and applies as a no-op."
+  (cl-some (lambda (line)
+             (memq (aref line 0) '(?+ ?-)))
+           (plist-get hunk :diff-lines)))
 
 (defun mevedel-tool-patch-parse (patch &optional root)
   "Parse PATCH relative to ROOT and return a patch proposal plist.
@@ -433,15 +444,24 @@ tolerated, and content lines are kept raw."
               (when (and (null move-rel) (null payload))
                 (error "Invalid patch at line %d: Update File requires a hunk"
                        line-number))
-              (push (list :kind (if move-rel 'move 'update)
-                          :path path :rel-path rel-path
-                          :move-path (and move-rel (funcall resolve move-rel))
-                          :move-rel-path move-rel
-                          :hunks (and payload
-                                      (mevedel-tool-patch-parse-update-lines
-                                       payload payload-first-line))
-                          :selected t)
-                    operations))))
+              (let ((hunks (and payload
+                                (mevedel-tool-patch-parse-update-lines
+                                 payload payload-first-line))))
+                ;; Locator hunks are valid, but an Update built from
+                ;; them alone would rewrite the file byte-identically;
+                ;; a Move without changes is still a real operation.
+                (when (and (null move-rel) hunks
+                           (not (cl-some #'mevedel-tool-patch-hunk-changes-p
+                                         hunks)))
+                  (error "Invalid patch at line %d: Update for %s has no changes"
+                         line-number rel-path))
+                (push (list :kind (if move-rel 'move 'update)
+                            :path path :rel-path rel-path
+                            :move-path (and move-rel (funcall resolve move-rel))
+                            :move-rel-path move-rel
+                            :hunks hunks
+                            :selected t)
+                      operations)))))
          (t
           (error "Invalid patch at line %d: Expected a file operation"
                  line-number)))))
@@ -553,7 +573,10 @@ IGNORE-EOF drops the end-of-file anchoring requirement of an
         (dotimes (start (1+ limit))
           (when (and (not context-seen)
                      (> start 0)
-                     (string= (aref norm-lines (1- start)) norm-context))
+                     ;; An anchor names a line or its prefix, so
+                     ;; "@@ def load_config" finds "def load_config(path):".
+                     (string-prefix-p norm-context
+                                      (aref norm-lines (1- start))))
             (setq context-seen t))
           (when (and context-seen
                      (mevedel-tool-patch--sequence-match-p
@@ -604,11 +627,14 @@ its own.  The winning pass label is recorded on HUNK as `:match-pass'
         (when (= 1 (length nearest))
           (setq starts nearest))))
     (plist-put hunk :match-pass (and starts pass))
-    (pcase (length starts)
-      (0 (error "Patch hunk does not match %s" path))
-      (1 (car starts))
-      (_ (error "Patch hunk is ambiguous in %s; anchor it with @@ LINE or add context"
-                path)))))
+    (let ((where (if-let* ((at-line (plist-get hunk :at-line)))
+                     (format " at line %d" at-line)
+                   "")))
+      (pcase (length starts)
+        (0 (error "Patch hunk%s does not match %s" where path))
+        (1 (car starts))
+        (_ (error "Patch hunk%s is ambiguous in %s; anchor it with @@ LINE or add context"
+                  where path))))))
 
 (defun mevedel-tool-patch--section-label (lines start)
   "Return a diff-style section label for a hunk at START in LINES.
@@ -857,7 +883,13 @@ Returns nil when the two contents hold the same lines."
            ;; Pass every hunk: deselected ones advance the ordering
            ;; cursor inside `mevedel-tool-patch-apply-hunks' so the
            ;; apply-time disambiguation window matches the preview's.
-           (when (cl-some (lambda (hunk) (plist-get hunk :selected)) hunks)
+           ;; Selected locator hunks alone plan no write: they change
+           ;; nothing, so rewriting the file byte-identically would
+           ;; only bump its mtime.
+           (when (cl-some (lambda (hunk)
+                            (and (plist-get hunk :selected)
+                                 (mevedel-tool-patch-hunk-changes-p hunk)))
+                          hunks)
              (pcase-let* ((`(,content . ,coding)
                            (mevedel-tool-patch--read-file path t))
                           (updated
@@ -1161,23 +1193,34 @@ Refresh file tracking immediately and diagnostics before continuation."
     (finish changes)))
 
 (defun mevedel-tool-patch--selected-count (proposal)
-  "Return the number of selected user-visible changes in PROPOSAL."
+  "Return the number of selected user-visible changes in PROPOSAL.
+Locator hunks position other hunks without changing anything, so they
+are not changes."
   (cl-loop for operation in (plist-get proposal :operations)
            sum (if (eq (plist-get operation :kind) 'update)
-                   (cl-count-if (lambda (hunk) (plist-get hunk :selected))
+                   (cl-count-if (lambda (hunk)
+                                  (and (plist-get hunk :selected)
+                                       (mevedel-tool-patch-hunk-changes-p
+                                        hunk)))
                                 (plist-get operation :hunks))
                  (if (plist-get operation :selected) 1 0))))
 
 (defun mevedel-tool-patch--selected-file-data (operation)
   "Return persisted per-file data for selected OPERATION changes."
   (let* ((kind (plist-get operation :kind))
+         ;; Locator hunks are positioning aids, not changes; the
+         ;; persisted diff shows only what the patch did.
          (hunks (pcase kind
                   ('update
-                   (seq-filter (lambda (hunk) (plist-get hunk :selected))
+                   (seq-filter (lambda (hunk)
+                                 (and (plist-get hunk :selected)
+                                      (mevedel-tool-patch-hunk-changes-p
+                                       hunk)))
                                (plist-get operation :hunks)))
                   ('move
                    (and (plist-get operation :selected)
-                        (plist-get operation :hunks)))))
+                        (seq-filter #'mevedel-tool-patch-hunk-changes-p
+                                    (plist-get operation :hunks))))))
          (selected-p (if (eq kind 'update)
                          hunks
                        (plist-get operation :selected)))
@@ -1273,7 +1316,12 @@ the review just applied."
         (if (eq (plist-get operation :kind) 'update)
             (progn
               (revision operation)
-              (cl-loop for hunk in (plist-get operation :hunks)
+              ;; Locator hunks are invisible here: they carry no change
+              ;; to report, and skipping them keeps hunk numbers aligned
+              ;; with the review's rows.
+              (cl-loop for hunk in (seq-filter
+                                    #'mevedel-tool-patch-hunk-changes-p
+                                    (plist-get operation :hunks))
                        for number from 1
                        do
                        (when (plist-get hunk :selected)
@@ -1387,14 +1435,17 @@ whole-operation kinds always report their full size."
              (cl-incf deleted d)))
          (list :selected selected-p :total 1 :added added :deleted deleted)))
       ('update
+       ;; Locator hunks position other hunks; they are not changes.
        (let ((selected 0) (total 0) (added 0) (deleted 0))
          (dolist (hunk (plist-get operation :hunks))
-           (cl-incf total)
-           (when (plist-get hunk :selected)
-             (cl-incf selected)
-             (pcase-let ((`(,a . ,d) (mevedel-tool-patch-hunk-counts hunk)))
-               (cl-incf added a)
-               (cl-incf deleted d))))
+           (when (mevedel-tool-patch-hunk-changes-p hunk)
+             (cl-incf total)
+             (when (plist-get hunk :selected)
+               (cl-incf selected)
+               (pcase-let ((`(,a . ,d)
+                            (mevedel-tool-patch-hunk-counts hunk)))
+                 (cl-incf added a)
+                 (cl-incf deleted d)))))
          (list :selected selected :total total
                :added added :deleted deleted))))))
 

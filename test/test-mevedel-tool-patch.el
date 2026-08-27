@@ -390,7 +390,18 @@
     (should (equal "keep \u2013 this\nnew\ntail\n"
                    (mevedel-tool-patch-apply-hunks
                     "keep \u2013 this\n  old\ntail\n"
-                    (list hunk) "file.txt")))))
+                    (list hunk) "file.txt"))))
+
+  :doc "A locator hunk changes nothing and pins the hunk after it"
+  ;; Without the locator the "x" hunk would be ambiguous; matching the
+  ;; locator advances the cursor past the first "x".
+  (let ((hunks '((:old-lines ("a" "x") :new-lines ("a" "x") :selected t
+                  :diff-lines (" a" " x"))
+                 (:old-lines ("x") :selected t
+                  :diff-lines ("-x" "+X")))))
+    (should (equal "x\na\nx\nX\n"
+                   (mevedel-tool-patch-apply-hunks
+                    "x\na\nx\nx\n" hunks "file.txt")))))
 
 (mevedel-deftest mevedel-tool-patch-hunks-from-content ()
   ,test
@@ -729,7 +740,40 @@
     (let ((hunk (car (mevedel-tool-patch-parse-update-lines
                       (list (concat "@@ " anchor) "-old" "+new") 2))))
       (should (equal anchor (plist-get hunk :context)))
-      (should-not (plist-get hunk :line-hint)))))
+      (should-not (plist-get hunk :line-hint))))
+
+  :doc "accepts a context-only hunk as a locator"
+  (let ((hunk (car (mevedel-tool-patch-parse-update-lines
+                    '("@@" " kept" " also kept") 2))))
+    (should (equal '("kept" "also kept") (plist-get hunk :old-lines)))
+    (should (equal (plist-get hunk :old-lines) (plist-get hunk :new-lines)))
+    (should-not (mevedel-tool-patch-hunk-changes-p hunk)))
+
+  :doc "parses a locator section before an anchored change"
+  (let ((hunks (mevedel-tool-patch-parse-update-lines
+                '("@@ outer" " scope line" "@@" " context" "+new") 2)))
+    (should (= 2 (length hunks)))
+    (should-not (mevedel-tool-patch-hunk-changes-p (car hunks)))
+    (should (mevedel-tool-patch-hunk-changes-p (cadr hunks))))
+
+  :doc "records each hunk's @@ marker line as :at-line"
+  (let ((hunks (mevedel-tool-patch-parse-update-lines
+                '("@@" "-old" "+new" "@@" " kept") 3)))
+    (should (equal '(3 6) (mapcar (lambda (hunk) (plist-get hunk :at-line))
+                                  hunks))))
+
+  :doc "rejects a hunk with no lines at its own @@ line"
+  (let ((err (should-error (mevedel-tool-patch-parse-update-lines
+                            '("@@" "-old" "+new" "@@" "@@" " kept") 3)
+                           :type 'error)))
+    (should (string-match-p "line 6.*hunk is empty"
+                            (error-message-string err)))))
+
+(mevedel-deftest mevedel-tool-patch-hunk-changes-p
+  (:doc "Distinguishes changing hunks from locators") ,test (test)
+  (should (mevedel-tool-patch-hunk-changes-p '(:diff-lines ("-old" "+new"))))
+  (should (mevedel-tool-patch-hunk-changes-p '(:diff-lines (" kept" "+new"))))
+  (should-not (mevedel-tool-patch-hunk-changes-p '(:diff-lines (" kept" " ")))))
 
 (mevedel-deftest mevedel-tool-patch-parse
   (:doc "Parses a complete multi-operation envelope") ,test (test)
@@ -794,7 +838,46 @@
             "+x\n"
             "*** End Patch")
     "/ssh:user@host:/srv/project/")
-   :type 'mevedel-execution-target-error))
+   :type 'mevedel-execution-target-error)
+
+  :doc "accepts locator hunks in an update that also changes something"
+  (let* ((proposal (mevedel-tool-patch-parse
+                    (concat "*** Begin Patch\n"
+                            "*** Update File: a\n"
+                            "@@\n"
+                            " scope line\n"
+                            "@@\n"
+                            "-old\n"
+                            "+new\n"
+                            "*** End Patch")
+                    "/tmp/"))
+         (hunks (plist-get (car (plist-get proposal :operations)) :hunks)))
+    (should (= 2 (length hunks))))
+
+  :doc "rejects an update whose hunks are all locators"
+  (let ((err (should-error
+              (mevedel-tool-patch-parse
+               (concat "*** Begin Patch\n"
+                       "*** Update File: a\n"
+                       "@@\n"
+                       " only context\n"
+                       "*** End Patch")
+               "/tmp/")
+              :type 'error)))
+    (should (string-match-p "Update for a has no changes"
+                            (error-message-string err))))
+
+  :doc "a move with locator hunks alone stays a real operation"
+  (let ((proposal (mevedel-tool-patch-parse
+                   (concat "*** Begin Patch\n"
+                           "*** Update File: a\n"
+                           "*** Move to: b\n"
+                           "@@\n"
+                           " kept\n"
+                           "*** End Patch")
+                   "/tmp/")))
+    (should (eq 'move (plist-get (car (plist-get proposal :operations))
+                                 :kind)))))
 
 (mevedel-deftest mevedel-tool-patch--read-file
   (:doc "Reads regular files and rejects missing paths") ,test (test)
@@ -906,7 +989,25 @@
                '("a" "b" "") '(:old-lines ("a") :eof t) #'identity))
   (should (equal '(0) (mevedel-tool-patch--candidate-starts
                        '("a" "b" "") '(:old-lines ("a") :eof t)
-                       #'identity t))))
+                       #'identity t)))
+
+  :doc "a context anchor matches a full line or its prefix"
+  (should (equal '(2) (mevedel-tool-patch--candidate-starts
+                       '("body" "def load_config(path):" "body")
+                       '(:old-lines ("body") :context "def load_config")
+                       #'identity)))
+  (should (equal '(2) (mevedel-tool-patch--candidate-starts
+                       '("body" "def load_config(path):" "body")
+                       '(:old-lines ("body")
+                         :context "def load_config(path):")
+                       #'identity)))
+
+  :doc "a context anchor gates strictly before the hunk"
+  (should-not (mevedel-tool-patch--candidate-starts
+               '("def load_config(path):" "tail")
+               '(:old-lines ("def load_config(path):")
+                 :context "def load_config")
+               #'identity)))
 
 (mevedel-deftest mevedel-tool-patch--match-start
   (:doc "Requires one unambiguous hunk start") ,test (test)
@@ -1177,9 +1278,16 @@
 (mevedel-deftest mevedel-tool-patch--selected-count
   (:doc "Counts Update hunks and whole operations as user changes") ,test (test)
   (should (= 2 (mevedel-tool-patch--selected-count
-                '(:operations ((:kind update :hunks ((:selected t)
-                                                      (:selected nil)))
-                               (:kind move :selected t)))))))
+                '(:operations ((:kind update
+                                :hunks ((:selected t :diff-lines ("-x" "+y"))
+                                        (:selected nil :diff-lines ("-a" "+b"))))
+                               (:kind move :selected t))))))
+  :doc "Locator hunks are not changes"
+  (should (= 1 (mevedel-tool-patch--selected-count
+                '(:operations ((:kind update
+                                :hunks ((:selected t :diff-lines (" kept"))
+                                        (:selected t
+                                         :diff-lines ("-x" "+y"))))))))))
 
 (mevedel-deftest mevedel-tool-patch--selected-file-data
   (:doc "Builds a selected-only Update file block") ,test (test)
@@ -1213,7 +1321,15 @@
                '(:kind delete :rel-path "empty" :selected t
                  :baseline-content ""))))
     (should (= 0 (plist-get file :deleted)))
-    (should (string-empty-p (plist-get file :diff)))))
+    (should (string-empty-p (plist-get file :diff))))
+  :doc "Omits locator hunks from the persisted diff"
+  (let ((file (mevedel-tool-patch--selected-file-data
+               '(:kind update :rel-path "a"
+                 :hunks ((:selected t :context "scope"
+                          :diff-lines (" locator line"))
+                         (:selected t :diff-lines ("-x" "+y")))))))
+    (should-not (string-search "locator line" (plist-get file :diff)))
+    (should (string-search "+y" (plist-get file :diff)))))
 
 (mevedel-deftest mevedel-tool-patch-result
   (:doc "Reports applied and rejected choices") ,test (test)
@@ -1267,7 +1383,19 @@
            '((:action write)))
           :result)))
     (should (string-search "+chosen" text))
-    (should-not (string-search "+discarded" text))))
+    (should-not (string-search "+discarded" text)))
+
+  :doc "Skips locator hunks so hunk numbers name changes only"
+  (let ((text (plist-get
+               (mevedel-tool-patch-result
+                '(:operations ((:kind update :rel-path "a"
+                                :hunks ((:selected t :diff-lines (" locator"))
+                                        (:selected t
+                                         :diff-lines ("-x" "+y"))))))
+                '((:action write)))
+               :result)))
+    (should (string-search "Applied: a hunk 1" text))
+    (should-not (string-search "hunk 2" text))))
 
 (mevedel-deftest mevedel-tool-patch-hunk-counts
   (:doc "Counts added and deleted diff lines in one hunk") ,test (test)
@@ -1292,7 +1420,13 @@
   (should (equal '(:selected 1 :total 1 :added 1 :deleted 1)
                  (mevedel-tool-patch-operation-stats
                   '(:kind move :selected t
-                    :hunks ((:diff-lines ("-x" "+y"))))))))
+                    :hunks ((:diff-lines ("-x" "+y")))))))
+  :doc "Locator hunks count as neither total nor selected changes"
+  (should (equal '(:selected 1 :total 1 :added 1 :deleted 1)
+                 (mevedel-tool-patch-operation-stats
+                  '(:kind update
+                    :hunks ((:selected t :diff-lines (" kept"))
+                            (:selected t :diff-lines ("-x" "+y"))))))))
 
 (mevedel-deftest mevedel-tool-patch-proposal-stats
   (:doc "Aggregates selected changes, files, and comments") ,test (test)

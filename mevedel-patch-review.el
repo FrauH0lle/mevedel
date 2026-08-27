@@ -74,6 +74,8 @@
                   "mevedel-tool-patch" (proposal))
 (declare-function mevedel-tool-patch-content-lines
                   "mevedel-tool-patch" (content))
+(declare-function mevedel-tool-patch-hunk-changes-p
+                  "mevedel-tool-patch" (hunk))
 (declare-function mevedel-tool-patch-hunk-counts
                   "mevedel-tool-patch" (hunk))
 (declare-function mevedel-tool-patch-hunks-from-content
@@ -432,8 +434,12 @@ OPERATION owns TARGET and is retained as interaction metadata."
               (when expanded
                 (pcase kind
                   ('update
+                   ;; Locator hunks position other hunks without
+                   ;; changing anything; they are not reviewable rows.
                    (cl-loop
-                    for hunk in (plist-get operation :hunks)
+                    for hunk in (seq-filter
+                                 #'mevedel-tool-patch-hunk-changes-p
+                                 (plist-get operation :hunks))
                     for number from 1
                     do (let* ((selected (plist-get hunk :selected))
                               (hdim (not selected))
