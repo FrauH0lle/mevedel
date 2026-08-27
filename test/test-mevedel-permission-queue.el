@@ -129,6 +129,53 @@
     (should (null rendered))
     (should (eq 'aborted outcome)))
 
+  :doc "the notify function fires once per admitted card with its entry"
+  (let* ((session (test-pq--make-session))
+         (mevedel--session session)
+         (notified nil)
+         (mevedel-permission-notify-function
+          (lambda (entry) (push entry notified))))
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               #'ignore))
+      (mevedel-permission--enqueue
+       (list :kind 'generic :tool-name "Read"
+             :origin "/root" :callback #'ignore))
+      ;; A sibling re-renders the head but notifies only for itself.
+      (mevedel-permission--enqueue
+       (list :kind 'bash :command "git add ." :origin "/root"
+             :callback #'ignore)))
+    (should (= 2 (length notified)))
+    (should (equal "Read" (plist-get (cadr notified) :tool-name)))
+    (should (equal "git add ." (plist-get (car notified) :command)))
+    (should (eq session (plist-get (car notified) :session))))
+
+  :doc "the notify function never fires for a no-session abort"
+  (let ((mevedel--session nil)
+        (notified 0)
+        (mevedel-permission-notify-function
+         (lambda (_entry) (cl-incf notified))))
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               #'ignore))
+      (mevedel-permission--enqueue
+       (list :kind 'generic :tool-name "Read"
+             :origin "/root" :callback #'ignore)))
+    (should (= 0 notified)))
+
+  :doc "a signaling notify function does not break admission"
+  (let* ((session (test-pq--make-session))
+         (mevedel--session session)
+         (mevedel-permission-notify-function
+          (lambda (_entry) (error "Notifier broke")))
+         captured)
+    (mevedel-test--with-captured-diagnostics captured
+      (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                 #'ignore))
+        (mevedel-permission--enqueue
+         (list :kind 'generic :tool-name "Read"
+               :origin "/root" :callback #'ignore))))
+    (should (= 1 (length (mevedel-session-permission-queue session))))
+    (should (string-match-p "permission notify failed" captured)))
+
   :doc "enqueue rejects a missing origin"
   (let ((session (test-pq--make-session)))
     (should-error

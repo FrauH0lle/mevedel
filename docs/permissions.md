@@ -336,6 +336,40 @@ The permission hook boundary precedes queue admission. An admitted entry has
 already fired `PermissionRequest`; rendering the head, redrawing it, and
 coalescing siblings by re-running policy never fire that hook again.
 
+`mevedel-permission-notify-function` (default nil) is called once per admitted
+card with its entry plist, at admission -- never for decisions the rule chain
+or hooks settle without prompting, and never again on head redraw, coalesce,
+or resolution. Interactive cards are rare (a real two-day session made 988
+permission decisions but queued only a handful of cards), so a notifier fires
+a few times per session, not per tool call. It fires at enqueue rather than
+after an unanswered delay because the machine is certainly awake then; an
+idle-escalation timer dies with a suspend, which is exactly the situation --
+the user stepped away, the machine slept on an open prompt -- the hook exists
+for. Errors are demoted so a broken notifier cannot break admission.
+
+```elisp
+;; Desktop notification:
+(setq mevedel-permission-notify-function
+      (lambda (entry)
+        (notifications-notify
+         :title "mevedel needs permission"
+         :body (format "%s %s"
+                       (or (plist-get entry :tool-name)
+                           (plist-get entry :kind))
+                       (or (plist-get entry :command)
+                           (plist-get entry :specifier-value)
+                           "")))))
+
+;; Phone push through ntfy:
+(setq mevedel-permission-notify-function
+      (lambda (entry)
+        (call-process "curl" nil 0 nil "-s"
+                      "-d" (format "Permission prompt: %s"
+                                   (or (plist-get entry :tool-name)
+                                       (plist-get entry :kind)))
+                      "https://ntfy.sh/YOUR-TOPIC")))
+```
+
 `mevedel-permission-prompt.el` is the focused UI owner for all four entry
 kinds. It owns generic permission controls, agent attribution, Bash guardian
 and dangerous-command presentation, and Eval presentation. The queue retains

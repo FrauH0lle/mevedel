@@ -114,6 +114,29 @@
                   "mevedel-workspace" (&optional buffer))
 (autoload 'mevedel--all-allowed-roots "mevedel-workspace")
 
+(defcustom mevedel-permission-notify-function nil
+  "Function called when an interactive permission card enters the queue.
+
+Called once per card, at admission -- never for decisions the rule
+chain or hooks settle without prompting, and never again when the card
+is re-rendered, coalesced, or resolved.  Cards are rare (a handful per
+long session), so no rate limiting is applied.  Firing at enqueue is
+deliberate: the machine is certainly awake then, while an idle timer
+would die with a suspend.
+
+The single argument is the card's entry plist.  Stable keys: `:kind'
+(`generic' / `bash' / `eval' / `sandbox'), `:tool-name',
+`:specifier-value' (display path, pattern, domain, or name),
+`:command' (bash), `:expression' (eval), `:detail' and
+`:justification' (sandbox), `:origin' (requesting agent path), and
+`:session'.
+
+Errors are demoted: a broken notifier must not break admission.  Point
+it at `notifications-notify' for a desktop notification, or at a
+wrapper around a push service such as ntfy to reach a phone."
+  :type '(choice (const :tag "Disabled" nil) function)
+  :group 'mevedel)
+
 (defvar mevedel-permission-queue--settled-cells
   (make-hash-table :test #'eq :weakness 'key)
   "Entry identity table for exactly-once permission settlement.")
@@ -306,6 +329,9 @@ ENTRY plist keys:
             (mevedel-permission-queue--set
              (append (mevedel-permission-queue--get session) (list entry))
              session)
+            (when mevedel-permission-notify-function
+              (with-demoted-errors "mevedel: permission notify failed: %S"
+                (funcall mevedel-permission-notify-function entry)))
             ;; Re-render the head so its pending count includes new siblings.
             (mevedel-permission-queue--render-head session))
         (error
