@@ -218,6 +218,46 @@
             (should-not (nth 4 failure))))
       (kill-buffer chat-buf))))
 
+(mevedel-deftest mevedel--turn-settled-p ()
+  ,test
+  (test)
+  :doc "a turn with a live request still has settlement work"
+  (let* ((session (mevedel-session--create :turn-count 0))
+         (chat-buf (generate-new-buffer " *mevedel-turn-settled*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :session session :turn 1)))
+          (should-not (mevedel--turn-settled-p fsm)))
+      (kill-buffer chat-buf)))
+
+  :doc "a second terminal transition finds the request already ended"
+  (let* ((session (mevedel-session--create :turn-count 1))
+         (chat-buf (generate-new-buffer " *mevedel-turn-resettled*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request nil))
+          (should (mevedel--turn-settled-p fsm))
+          ;; The commit fence still signals for a direct caller; the
+          ;; terminal entry points return before reaching it.
+          (mevedel--fail-turn fsm 'error)
+          (mevedel--complete-turn fsm)
+          (should (= 1 (mevedel-session-turn-count session))))
+      (kill-buffer chat-buf)))
+
+  :doc "a dead request buffer has nothing to settle"
+  (let* ((chat-buf (generate-new-buffer " *mevedel-turn-dead*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
+    (kill-buffer chat-buf)
+    (should-not (mevedel--turn-settled-p fsm))))
+
+
 (mevedel-deftest mevedel--turn-commit
   (:before-each (mevedel-workspace-clear-registry)
    :after-each (mevedel-workspace-clear-registry))
