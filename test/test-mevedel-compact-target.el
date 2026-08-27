@@ -44,12 +44,12 @@
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
 
-(mevedel-deftest mevedel-compact-target--queue-file-reference-reminder
+(mevedel-deftest mevedel-compact-target-file-reference-reminder-body
   (:after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
 
-  :doc "queues touched file references whose turns fall outside the preserved tail"
+  :doc "lists touched file references whose turns fall outside the preserved tail"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws)))
     (let ((mevedel-compact-evidence-tail-turns 2))
@@ -66,13 +66,13 @@
                (mevedel-file-interaction--create
                 :path "/tmp/p/recent.el" :read-turn 9)
                (mevedel-session-touched-files session))
-      (mevedel-compact-target--queue-file-reference-reminder session 2)
-      (let ((body (car (mevedel-session-pending-reminders session))))
+      (let ((body (mevedel-compact-target-file-reference-reminder-body
+                   session 2 nil)))
         (should (string-match-p "/tmp/p/old.el" body))
         (should-not (string-match-p "/tmp/p/boundary.el" body))
         (should-not (string-match-p "/tmp/p/recent.el" body)))))
 
-  :doc "aggressive compaction queues even recent touched file references"
+  :doc "aggressive compaction lists even recent touched file references"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/q/" "/tmp/q/" "q"))
          (session (mevedel-session-create "main" ws)))
     (setf (mevedel-session-turn-count session) 10)
@@ -80,9 +80,27 @@
              (mevedel-file-interaction--create
               :path "/tmp/q/recent.el" :read-turn 9)
              (mevedel-session-touched-files session))
-    (mevedel-compact-target--queue-file-reference-reminder session 0)
-    (let ((body (car (mevedel-session-pending-reminders session))))
-      (should (string-match-p "/tmp/q/recent.el" body)))))
+    (let ((body (mevedel-compact-target-file-reference-reminder-body
+                 session 0 nil)))
+      (should (string-match-p "/tmp/q/recent.el" body))))
+
+  :doc "auto compaction lists files stamped with the in-flight reserved turn"
+  ;; Mid-request file access is stamped with the reserved turn, one
+  ;; above the committed count; a mid-request compaction summarizes
+  ;; exactly that evidence, so auto includes it and manual does not.
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/r/" "/tmp/r/" "r"))
+         (session (mevedel-session-create "main" ws)))
+    (setf (mevedel-session-turn-count session) 10)
+    (puthash "/tmp/r/in-flight.el"
+             (mevedel-file-interaction--create
+              :path "/tmp/r/in-flight.el" :modified-turn 11)
+             (mevedel-session-touched-files session))
+    (should (string-match-p
+             "/tmp/r/in-flight.el"
+             (mevedel-compact-target-file-reference-reminder-body
+              session 2 t)))
+    (should-not (mevedel-compact-target-file-reference-reminder-body
+                 session 2 nil))))
 
 (mevedel-deftest mevedel-compact-target-agent-target ()
   ,test
@@ -392,7 +410,7 @@
                (lambda (&rest args) (setq applied args)))
               ((symbol-function
                 'mevedel-compact-target-file-reference-reminder-body)
-               (lambda (_session _turns) "remember files"))
+               (lambda (_session _turns _auto) "remember files"))
               ((symbol-function 'mevedel-session-enqueue-pending-reminder)
                (lambda (_session reminder) (push reminder queued))))
       (let ((mevedel-compact-target-current-request-reminder nil))

@@ -156,7 +156,10 @@ guidance in the rejection reminder.
   configured reminder threshold.
 - **Compact file-reference:** compaction queues reminders for file
   references whose contents were not retained; the `pending-events`
-  reminder consumes the session FIFO on the next prompt.
+  reminder consumes the session FIFO on the next prompt.  Auto
+  compaction instead injects the reminder into the current request and
+  also lists files touched during the in-flight turn, whose evidence a
+  mid-request compaction summarizes away.
 - **Goal objective update:** `/goal edit` queues one event containing the
   revised objective and its authority over conflicting accepted-plan text.
 - **Goal token budget:** turn settlement queues one-shot 50%, 80%, and 100%

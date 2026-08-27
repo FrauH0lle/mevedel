@@ -189,10 +189,15 @@ hidden execution records replacing compacted tool rows."
      :archive-text archive-text)))
 
 
-(defun mevedel-compact-target--omitted-file-references (session preserved-tail-turns)
+(defun mevedel-compact-target--omitted-file-references
+    (session preserved-tail-turns auto)
   "Return touched files likely omitted from SESSION's compacted history.
 PRESERVED-TAIL-TURNS is the actual number of complete recent user turns
-retained after tail-budget and aggressive-compaction decisions."
+retained after tail-budget and aggressive-compaction decisions.  AUTO
+non-nil marks a mid-request compaction: files touched during the
+in-flight turn carry the reserved turn number above the committed
+count, and their evidence is exactly what a mid-request compaction
+summarizes away, so they are included rather than assumed visible."
   (when-let* ((table (and session (mevedel-session-touched-files session)))
               ((hash-table-p table)))
     (let* ((turn (or (mevedel-session-turn-count session) 0))
@@ -205,18 +210,21 @@ retained after tail-budget and aggressive-compaction decisions."
                               (mevedel-file-interaction-read-turn
                                interaction)
                               0)))
-          (when (< last-turn cutoff)
+          (when (or (< last-turn cutoff)
+                    (and auto (> last-turn turn)))
             (push path files))))
       table)
       (sort files #'string<))))
 
 (defun mevedel-compact-target-file-reference-reminder-body
-    (session preserved-tail-turns)
+    (session preserved-tail-turns auto)
   "Return reminder body for SESSION file references omitted by compaction.
 PRESERVED-TAIL-TURNS is the actual count returned by
-`mevedel-compact-evidence-preserved-tail-turn-count'."
+`mevedel-compact-evidence-preserved-tail-turn-count'.  AUTO non-nil
+marks a mid-request compaction, which also lists files touched during
+the in-flight turn."
   (when-let* ((files (mevedel-compact-target--omitted-file-references
-                      session preserved-tail-turns)))
+                      session preserved-tail-turns auto)))
     (let* ((limit mevedel-compact-target-file-reference-reminder-limit)
            (shown (cl-subseq files 0 (min limit (length files))))
            (omitted (- (length files) (length shown))))
@@ -225,17 +233,6 @@ PRESERVED-TAIL-TURNS is the actual count returned by
        (mapconcat (lambda (path) (format "- %s" path)) shown "\n")
        (when (> omitted 0)
          (format "\n- ... %d more file references omitted" omitted))))))
-
-(defun mevedel-compact-target--queue-file-reference-reminder
-    (session preserved-tail-turns)
-  "Queue a reminder for SESSION file references omitted by compaction.
-Return the queued reminder body, or nil when no reminder was queued.
-PRESERVED-TAIL-TURNS is the actual count returned by
-`mevedel-compact-evidence-preserved-tail-turn-count'."
-  (when-let* ((body (mevedel-compact-target-file-reference-reminder-body
-                    session preserved-tail-turns)))
-    (mevedel-session-enqueue-pending-reminder session body)
-    body))
 
 (defun mevedel-compact-target-hook-audit-records (decision)
   "Return PreCompact audit records for hook DECISION."
@@ -398,7 +395,7 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
     (mevedel-compact-target--commit-execution-row-archive target)
     (let ((reminder
            (mevedel-compact-target-file-reference-reminder-body
-            session preserved-tail-turns)))
+            session preserved-tail-turns auto)))
       (cond
        (auto
         (setq mevedel-compact-target-current-request-reminder reminder))
