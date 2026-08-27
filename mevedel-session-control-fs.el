@@ -788,6 +788,17 @@ Symlink entries fail closed before their names can be handed to a caller."
   (mevedel-session-control-fs--run-1 'delete-directory path)
   t)
 
+(defun mevedel-session-control-fs-delete-directories (paths)
+  "Recursively delete the target control directories PATHS in one program.
+Each deletion is independent: a failure neither stops the program nor
+signals here.  Returns the per-path result plists in PATHS order, each
+carrying `:path' and `:status' for the caller to classify."
+  (when paths
+    (mevedel-session-control-fs-run-program
+     (mapcar (lambda (path)
+               (list :op 'delete-directory :path path :optional t))
+             paths))))
+
 (defun mevedel-session-control-fs-target-time (directory)
   "Return target filesystem seconds from a descriptor-relative marker.
 

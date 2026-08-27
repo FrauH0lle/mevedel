@@ -437,6 +437,44 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(mevedel-deftest mevedel-session-control-fs-delete-directories
+  ()
+  ,test
+  (test)
+
+  :doc "deletes every directory in one program, independently"
+  (let* ((root (make-temp-file "mevedel-control-fs-batch-" t))
+         (one (file-name-concat root "one"))
+         (two (file-name-concat root "two"))
+         (absent (file-name-concat root "absent"))
+         (calls 0)
+         results)
+    (unwind-protect
+        (progn
+          (make-directory one)
+          (with-temp-file (file-name-concat one "data") (insert "x"))
+          (make-directory two)
+          (setq results
+                (cl-letf* ((original (symbol-function 'process-file))
+                           ((symbol-function 'process-file)
+                            (lambda (&rest args)
+                              (setq calls (1+ calls))
+                              (apply original args))))
+                  (mevedel-session-control-fs-delete-directories
+                   (list one absent two))))
+          (should (= 1 calls))
+          ;; Deletion is idempotent: an already-absent directory
+          ;; reports ok and never stops the deletions after it.
+          (should (equal '(ok ok ok)
+                         (mapcar (lambda (r) (plist-get r :status)) results)))
+          (should-not (file-exists-p one))
+          (should-not (file-exists-p two)))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "an empty path list runs no program"
+  (should-not (mevedel-session-control-fs-delete-directories nil)))
+
 (mevedel-deftest mevedel-session-control-fs-program-parent-swap
   (:doc "keeps a program's write in the opened directory when its pathname is swapped")
   (let* ((root (make-temp-file "mevedel-control-fs-root-" t))

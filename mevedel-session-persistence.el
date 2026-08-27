@@ -248,6 +248,7 @@
 
 
 ;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-collect-generations "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-committed-p "mevedel-session-publication" (session artifacts))
 (declare-function mevedel-session-publication-discard-rolled-back "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-logical-path-p "mevedel-session-publication" (path))
@@ -255,6 +256,8 @@
 (declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit))
 (declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir))
 (declare-function mevedel-session-publication-uncommitted-artifact "mevedel-session-publication" (session logical))
+(autoload 'mevedel-session-publication-collect-generations
+  "mevedel-session-publication")
 (autoload 'mevedel-session-publication-publish "mevedel-session-publication")
 (autoload 'mevedel-session-publication-read "mevedel-session-publication")
 
@@ -1770,6 +1773,22 @@ mentions-shown reset to empty hash tables on load."
                                (and sidecar-current-n
                                     (not (= sidecar-current-n segment-n)))))))
                  (nreverse repair-artifacts))
+                ;; A turn that never settled -- crash, suspend, lost
+                ;; provider callback -- orphans the generations it
+                ;; published mid-stream, and settlement-time collection
+                ;; never sees them again.  Opening under a freshly
+                ;; acquired lease is where that debt drains; a restore
+                ;; must not fail because storage could not be reclaimed.
+                (when (and acquired (not live))
+                  (condition-case error
+                      (mevedel-session-publication-collect-generations
+                       session)
+                    (error
+                     (display-warning
+                      'mevedel
+                      (format "Could not collect published generations: %s"
+                              (error-message-string error))
+                      :warning))))
                 (setq setup-done t)
                 buf))
           ;; Any failure after acquisition releases the session lease and
