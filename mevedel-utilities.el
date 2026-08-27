@@ -993,6 +993,29 @@ created when missing."
         (when (file-exists-p temporary)
           (delete-file temporary))))))
 
+
+;;
+;;; so-long
+
+;; `so-long'
+(defvar so-long-predicate)
+
+;; The opt-out has to survive a later major-mode change, which is exactly
+;; when `so-long' would otherwise reconsider the buffer.  `so-long' marks
+;; its own internal inhibit flag the same way.
+(put 'so-long-predicate 'permanent-local t)
+
+(defun mevedel--inhibit-so-long ()
+  "Keep `so-long' from replacing the current mevedel buffer's major mode.
+
+A session data buffer holds very long org property lines -- GPTEL_BOUNDS
+gains a range per tool call and reaches tens of kilobytes on one line --
+which is expected data, not a file to degrade.  Letting `so-long' swap
+`org-mode' out breaks every `org-element' caller in the buffer, gptel
+state restoration, and the segment write path, and it does so silently
+until something warns from the wrong major mode."
+  (setq-local so-long-predicate #'ignore))
+
 (provide 'mevedel-utilities)
 
 ;;; mevedel-utilities.el ends here.

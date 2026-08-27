@@ -404,9 +404,11 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--forget-place "mevedel-utilities" nil)
+(declare-function mevedel--inhibit-so-long "mevedel-utilities" nil)
 (declare-function mevedel--normalize-message-text "mevedel-utilities" (text))
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
 (autoload 'mevedel--forget-place "mevedel-utilities")
+(autoload 'mevedel--inhibit-so-long "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" nil)
@@ -1228,11 +1230,15 @@ Persisted chat and agent transcript files may contain very long org
 property lines, especially GPTEL_BOUNDS.  Those lines are expected
 data, and letting `so-long' replace `org-mode' breaks gptel/org state
 restoration and reveal timers."
-  (let* ((so-long-predicate (lambda () nil))
+  (let* ((so-long-predicate #'ignore)
          ;; Bound around the visit so a stale entry cannot move point either.
          (save-place-mode nil)
          (buffer (find-file-noselect file)))
     (with-current-buffer buffer
+      ;; The let-binding only covers the visit.  `so-long' reconsiders the
+      ;; buffer at every later major-mode change, so the opt-out has to
+      ;; outlive this call.
+      (mevedel--inhibit-so-long)
       (mevedel--forget-place))
     buffer))
 
