@@ -2229,12 +2229,9 @@ and `grep-mode' body without the compound tool formatting anything
 itself.  A failed row renders expanded: its output is the reason the
 reader opened the block.
 
-`:child-calls' is dropped from the result, so a nested compound call
-shows what it returned rather than opening a second level of rows.  A
-compound renderer may have moved its output into those rows and left the
-body empty -- ToolScript folds a long returned value into a `Returned'
-row -- so the returned value stands in for the dropped rows rather than
-leaving the reader an expansion with nothing in it."
+A nested compound call keeps its own `:child-calls', so expanding it
+inside a block or an activity group shows the calls it ran rather than
+the text it returned."
   (let* ((name (plist-get child :tool))
          (args (plist-get child :args))
          (result (plist-get child :result))
@@ -2248,18 +2245,10 @@ leaving the reader an expansion with nothing in it."
                name args result nil render-data))))
     (when rendering
       (setq rendering (copy-sequence rendering))
-      (when (and (plist-get rendering :child-calls)
-                 (let ((body (plist-get rendering :body)))
-                   (or (null body) (string-empty-p body)))
-                 result)
-        (setq rendering
-              (plist-put rendering :body
-                         (if (stringp result) result (format "%S" result)))))
       (dolist (cell (list (cons :vtype 'tool-child)
                           (cons :hidden-p nil)
                           (cons :expandable-p t)
                           (cons :coalesce-key nil)
-                          (cons :child-calls nil)
                           (cons :hook-audits nil)
                           (cons :force-expanded-p nil)
                           (cons :initially-collapsed-p (not failed))))
@@ -2501,12 +2490,6 @@ RAW is an optional precomputed expanded tool segment text."
              (list :tool name :args args :result result :render-data render-data
                    :status (mevedel-view--tool-render-status
                             result render-data))))
-      ;; Whether the tool runs nested rows has to outlive the cache, which
-      ;; drops `:child-calls' from a collapsed header: grouping reads it to
-      ;; keep compound tools out of an activity run.
-      (setq rendering
-            (plist-put rendering :compound-p
-                       (and (plist-get rendering :child-calls) t)))
       (if collapsed-only
           (mevedel-view--omit-rendering-body-for-cache rendering)
         rendering))))
@@ -5097,7 +5080,6 @@ expanded or compact, coalesced rows, and renderer fallbacks."
          (= (plist-get entry :count) 1)
          (eq (or (plist-get rendering :vtype) 'tool-summary) 'tool-summary)
          (null (plist-get rendering :child-calls))
-         (null (plist-get rendering :compound-p))
          (null (plist-get rendering :hook-audits))
          (null (plist-get rendering :sandbox-summary))
          (not (plist-get rendering :force-expanded-p))
