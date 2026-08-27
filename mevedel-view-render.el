@@ -2230,7 +2230,11 @@ itself.  A failed row renders expanded: its output is the reason the
 reader opened the block.
 
 `:child-calls' is dropped from the result, so a nested compound call
-shows what it returned rather than opening a second level of rows."
+shows what it returned rather than opening a second level of rows.  A
+compound renderer may have moved its output into those rows and left the
+body empty -- ToolScript folds a long returned value into a `Returned'
+row -- so the returned value stands in for the dropped rows rather than
+leaving the reader an expansion with nothing in it."
   (let* ((name (plist-get child :tool))
          (args (plist-get child :args))
          (result (plist-get child :result))
@@ -2244,6 +2248,13 @@ shows what it returned rather than opening a second level of rows."
                name args result nil render-data))))
     (when rendering
       (setq rendering (copy-sequence rendering))
+      (when (and (plist-get rendering :child-calls)
+                 (let ((body (plist-get rendering :body)))
+                   (or (null body) (string-empty-p body)))
+                 result)
+        (setq rendering
+              (plist-put rendering :body
+                         (if (stringp result) result (format "%S" result)))))
       (dolist (cell (list (cons :vtype 'tool-child)
                           (cons :hidden-p nil)
                           (cons :expandable-p t)

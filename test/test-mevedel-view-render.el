@@ -4284,6 +4284,30 @@
       (should-not (plist-get rendering :child-calls))
       (should-not (plist-get rendering :coalesce-key))))
 
+  :doc "stands the returned value in for a compound child's dropped rows"
+  (progn
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "ToolScript"
+      :category "mevedel"
+      ;; A long returned value gets folded into a `Returned' row, which
+      ;; leaves the body empty -- the shape that rendered an empty expansion.
+      :renderer (lambda (_name _args result _data)
+                  (list :header "ToolScript: 2 calls (completed)"
+                        :body nil
+                        :child-calls (list '(:id "x" :tool "Read")
+                                           (list :id "returned"
+                                                 :tool "Returned"
+                                                 :result result))
+                        :initially-collapsed-p t))))
+    (let ((rendering
+           (mevedel-view--child-call-rendering
+            '(:id "ptc/1" :tool "ToolScript" :status success
+              :args (:script "(Read :file_path \"a\")")
+              :result "folded output"))))
+      (should-not (plist-get rendering :child-calls))
+      (should (equal "folded output" (plist-get rendering :body)))))
+
   :doc "keeps media references on the row without payload bytes"
   (let ((rendering
          (mevedel-view--child-call-rendering
