@@ -602,24 +602,92 @@ this waits."
   (unless (mevedel--turn-publication-pending-p fsm)
     (funcall function fsm)))
 
+(defun mevedel--turn-stamp-settled (fsm)
+  "Mark FSM\='s turn as settled on its own info plist.
+The stamp is monotone: nothing clears it, so a repeated terminal
+transition on the same machine is recognized as already settled even
+after the request slot has been emptied."
+  (condition-case nil
+      (setf (gptel-fsm-info fsm)
+            (plist-put (gptel-fsm-info fsm) :mevedel-turn-settled t))
+    (error nil)))
+
 (defun mevedel--turn-settled-p (fsm)
   "Return non-nil when FSM\='s turn has nothing left to settle.
 
 A terminal transition can arrive twice.  gptel drives settlement from the
 curl process sentinel, and a request that already failed -- a dropped
 connection when the machine suspends, say -- settles once on the failure
-and then again when Emacs reaps the dead process on resume.  The second
-arrival has no matching request: the first one ended it, along with the
-cancellers, pending steering, and permission mode that a turn teardown exists
-to release.  A later request may already be active, so identity rather than
-mere presence is the settlement fence."
+and then again when Emacs reaps the dead process on resume.  The first
+settlement stamps FSM, and the stamp rather than an empty request slot
+is what marks the repeat: an empty slot with no stamp is a lost turn
+(`mevedel--turn-lost-p'), not a settled one.  A delayed transition whose
+buffer already runs a newer request also settles nothing; that turn was
+cancelled with its own teardown when the newer request replaced it."
   (when-let* ((info (condition-case nil (gptel-fsm-info fsm) (error nil)))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
+    (or (plist-get info :mevedel-turn-settled)
+        (with-current-buffer chat-buffer
+          (and mevedel--current-request
+               (not (equal (plist-get info :mevedel-request-id)
+                           (mevedel-request-id mevedel--current-request))))))))
+
+(defun mevedel--turn-lost-p (fsm)
+  "Return non-nil when FSM\='s turn was lost without settling.
+The request slot is empty and FSM carries no settled stamp: something
+cleared the request without running its settlement, which is the state
+a terminal transition lost with its process leaves behind."
+  (when-let* ((info (condition-case nil (gptel-fsm-info fsm) (error nil)))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (and (not (plist-get info :mevedel-turn-settled))
+         (with-current-buffer chat-buffer
+           (null mevedel--current-request)))))
+
+(defun mevedel--turn-record-lost-settlement (fsm)
+  "Record a lost-turn settlement from FSM\='s own request identity.
+The request is gone, so unlike `mevedel--turn-record-settlement' the
+identity comes from the info plist and no duration or token facts are
+available."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
-      (or (null mevedel--current-request)
-          (not (equal (plist-get info :mevedel-request-id)
-                      (mevedel-request-id mevedel--current-request)))))))
+      (when (and (bound-and-true-p mevedel--session)
+                 (fboundp 'mevedel-telemetry-record))
+        (mevedel-telemetry-record
+         mevedel--session 'request-settled
+         :request-id (plist-get info :mevedel-request-id)
+         :origin "/root"
+         :outcome 'lost
+         :provider-status (plist-get info :status))))))
+
+(defun mevedel--turn-settle-lost (fsm)
+  "Run the degraded settlement for FSM\='s lost turn.
+
+The turn's request disappeared without settling, so the full
+transaction cannot run: there is no reservation to commit and no
+request to end.  What still can run does: the settlement telemetry the
+lost teardown never recorded, the autosave that publishes the
+transcript, the StopFailure hook, the permission-mode restore, and
+idling the root roster that only `mevedel-request-end' would otherwise
+touch."
+  (mevedel--turn-stamp-settled fsm)
+  (mevedel--defer-turn-steps
+   fsm
+   (list #'mevedel--turn-record-lost-settlement
+         #'mevedel--turn-autosave
+         (lambda (machine)
+           (mevedel--run-turn-terminal-hook machine 'StopFailure 'lost))
+         #'mevedel--turn-restore-permission-mode
+         (lambda (machine)
+           (when-let* ((buffer (mevedel--turn-buffer machine)))
+             (with-current-buffer buffer
+               (when (bound-and-true-p mevedel--session)
+                 (setf (mevedel-session-agent-root-activity
+                        mevedel--session)
+                       'idle))))))))
 
 (defun mevedel--complete-turn (fsm)
   "Run the canonical successful top-level turn transaction for FSM.
@@ -635,8 +703,13 @@ command.
 The whole chain defers as one unit rather than step by step, because its order
 is load-bearing: `mevedel--turn-end-request\=' follows the autosave, and
 inverting them drops the turn's file-history checkpoints."
-  (unless (mevedel--turn-settled-p fsm)
+  (cond
+   ((mevedel--turn-settled-p fsm) nil)
+   ((mevedel--turn-lost-p fsm)
+    (mevedel--turn-settle-lost fsm))
+   (t
     (mevedel--turn-commit fsm)
+    (mevedel--turn-stamp-settled fsm)
     (mevedel--defer-turn-steps
      fsm
      (list (lambda (machine)
@@ -655,15 +728,20 @@ inverting them drops the turn's file-history checkpoints."
               #'mevedel-goal-dispatch-after-turn machine))
            (lambda (machine)
              (mevedel--turn-after-publication
-              #'mevedel-view--schedule-follow-up-drain machine))))))
+              #'mevedel-view--schedule-follow-up-drain machine)))))))
 
 (defun mevedel--fail-turn (fsm status)
   "Run failure cleanup for FSM with terminal STATUS.
 
 Deferred for the same reason as `mevedel--complete-turn\=': the failure chain
 also autosaves, and it reaches here from the same process sentinel."
-  (unless (mevedel--turn-settled-p fsm)
+  (cond
+   ((mevedel--turn-settled-p fsm) nil)
+   ((mevedel--turn-lost-p fsm)
+    (mevedel--turn-settle-lost fsm))
+   (t
     (mevedel--turn-commit fsm)
+    (mevedel--turn-stamp-settled fsm)
     (mevedel--defer-turn-steps
      fsm
      (append
@@ -688,7 +766,7 @@ also autosaves, and it reaches here from the same process sentinel."
                #'mevedel-goal-persist-failure machine))
             (lambda (machine)
               (mevedel--turn-after-publication
-               #'mevedel-goal-dispatch-after-turn machine)))))))
+               #'mevedel-goal-dispatch-after-turn machine))))))))
 
 
 (defun mevedel--handler-name (handler)

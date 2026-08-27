@@ -86,6 +86,13 @@ including user waits. Interaction events separately identify whether active
 work was paused. The request-progress display and persisted request summary use
 active elapsed time instead and exclude actionable user-input waits.
 
+A `request-settled` event with `:outcome lost` records a degraded
+settlement: the turn's request slot was emptied without its settlement
+ever running -- a terminal transition lost with its process -- and a
+later terminal transition on the same machine settled what it still
+could.  Its request identity comes from the machine itself, and it
+carries no duration or token facts.
+
 - Goal start, continuation dispatch, root-turn settlement, accounting, retries,
   and terminal status changes;
 - request queueing, provider dispatch, first response, stream end, callback

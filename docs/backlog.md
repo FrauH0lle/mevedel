@@ -231,37 +231,6 @@ become implemented, obsolete, or unjustified.
   model, tool, and agent work.  Incorrect cleanup can drain a laptop battery or
   block explicit suspend after mevedel becomes idle.
 
-### Settle turns whose request slot was lost without settlement
-
-- **Source:** `mevedel-turn.el` (`mevedel--turn-settled-p`,
-  `mevedel--complete-turn`, `mevedel--fail-turn`); `mevedel-chat.el`
-  (`mevedel-abort`)
-- **What's owed:** `mevedel--turn-settled-p` conflates "settled" with "the
-  request slot is empty".  A turn whose slot is cleared without settlement --
-  the lost-teardown state `04fea0f` names, observed live in session
-  `main-2026-08-26T16-01-a254` on 2026-08-27 15:16-15:45, where the final
-  request produced no `request-settled`, `request-teardown`, or Stop hook --
-  then never settles: a later terminal transition returns early, and the
-  abort's no-request branch idles the roster and saves artifacts but runs no
-  settlement.  Lost with it: settlement telemetry, Stop/StopFailure hooks,
-  the token baseline, and plan/goal settlement (publication collection now
-  drains at next open instead).  Fix shape: stamp a monotone settled flag on
-  the FSM info at the top of `mevedel--complete-turn`/`mevedel--fail-turn`
-  and make `--turn-settled-p` require it; a terminal transition or abort that
-  finds no request and no stamp runs a degraded settlement (record a `lost`
-  outcome, StopFailure hook, autosave) instead of returning early.
-- **Why deferred:** The common suspend case is already sound post-`39c3680`
-  (resume-time sentinel drives ERRS -> `mevedel--fail-turn` -> full
-  settlement; repeats settle quietly), and the exact mechanism that cleared
-  the slot without settlement pre-fix was not reproduced -- the most
-  consistent story is the pre-fix double signal aborting the failure chain
-  inside `mevedel--turn-commit`, before `mevedel--turn-record-settlement`,
-  which matches the missing telemetry.
-- **Status check:** Investigation of 2026-08-27; no code changed.
-- **Blast radius:** Rare (needs a lost terminal transition), but a hit costs
-  a turn's settlement accounting and hooks and leaves lifecycle telemetry
-  incomplete for exactly the sessions worth debugging.
-
 ## Review
 
 ### Automatic turn advisor
