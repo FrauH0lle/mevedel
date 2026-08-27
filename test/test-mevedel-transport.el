@@ -220,10 +220,19 @@
   (let ((runs 0))
     (unwind-protect
         (progn
-          (mevedel-transport-run-when-idle
-           'test-key "/srv/project" (lambda () (cl-incf runs)))
+          (should
+           (mevedel-transport-run-when-idle
+            'test-key "/srv/project" (lambda () (cl-incf runs))))
           (should (= 1 runs)))
       (mevedel-transport-cancel-pending)))
+
+  :doc "rejects work while transport integration is disabled"
+  (let ((mevedel-transport--enabled-p nil)
+        (runs 0))
+    (should-not
+     (mevedel-transport-run-when-idle
+      'disabled "/srv/project" (lambda () (cl-incf runs))))
+    (should (= 0 runs)))
 
   :doc "defers while busy and runs once the transport frees"
   (let ((runs 0)
@@ -239,6 +248,29 @@
            'file-exists-p "/ssh:user@host:/srv/x")
           (should (= 0 runs))
           (with-timeout (2 (ert-fail "Deferred work never ran"))
+            (while (= 0 runs)
+              (accept-process-output nil 0.01)))
+          (should (= 1 runs)))
+      (mevedel-transport-cancel-pending)))
+
+  :doc "re-arms a retry timer dropped by TRAMP's suspended timer binding"
+  (let ((runs 0)
+        (mevedel-transport-retry-seconds 0.01)
+        timer)
+    (unwind-protect
+        (progn
+          (mevedel-transport--handler-advice
+           (lambda (&rest _)
+             (let (timer-list)
+               (mevedel-transport-run-when-idle
+                'dropped-timer "/srv/project"
+                (lambda () (cl-incf runs)))
+               (setq timer
+                     (gethash 'dropped-timer mevedel-transport--pending))
+               (should (timerp timer))))
+           'file-exists-p "/ssh:user@host:/srv/x")
+          (should (memq timer timer-list))
+          (with-timeout (2 (ert-fail "Re-armed work never ran"))
             (while (= 0 runs)
               (accept-process-output nil 0.01)))
           (should (= 1 runs)))

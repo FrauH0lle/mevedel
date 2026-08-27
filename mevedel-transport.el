@@ -17,6 +17,8 @@
 
 ;;; Code:
 
+(require 'mevedel-utilities)
+
 ;; `tramp'
 (declare-function tramp-dissect-file-name "tramp" (name &optional nodefault))
 (declare-function tramp-get-connection-process "tramp" (vec))
@@ -60,11 +62,15 @@ control check does during redisplay.")
 (defun mevedel-transport--handler-advice (original &rest args)
   "Count one TRAMP handler frame around ORIGINAL applied to ARGS.
 
-Purely observational: the frame is counted with a dynamic binding, so a
-handler that exits through `throw', `keyboard-quit', or any signal still
-uncounts itself."
-  (let ((mevedel-transport--depth (1+ mevedel-transport--depth)))
-    (apply original args)))
+The frame is counted with a dynamic binding, so a handler that exits through
+`throw', `keyboard-quit', or any signal still uncounts itself.  After the
+outermost frame restores TRAMP's suspended timer lists, re-arm any transport
+retry timer that was created inside and discarded with the temporary list."
+  (let ((outermost (zerop mevedel-transport--depth))
+        (mevedel-transport--depth (1+ mevedel-transport--depth)))
+    (unwind-protect (apply original args)
+      (when outermost
+        (mevedel-transport--rearm-pending-timers)))))
 
 (defun mevedel-transport-install ()
   "Begin counting TRAMP handler frames."
@@ -221,6 +227,18 @@ restored on exit as though the cancel never happened."
 (defvar mevedel-transport--pending-cancellers (make-hash-table :test #'equal)
   "Cancellation callbacks for deferred transport work.")
 
+(defun mevedel-transport--rearm-pending-timers ()
+  "Re-arm retry timers dropped by TRAMP's suspended timer binding.
+
+The outermost file-name handler calls this after TRAMP has restored the
+real timer list.  Pending entries still name their discarded timer, so
+they can be activated without duplicating or losing the deferred work."
+  (maphash
+   (lambda (_key timer)
+     (when (and (timerp timer) (not (mevedel--timer-pending-p timer)))
+       (timer-activate timer)))
+   mevedel-transport--pending))
+
 (defun mevedel-transport--retry (key path thunk on-cancel)
   "Re-attempt KEY's THUNK for PATH, preserving ON-CANCEL."
   (remhash key mevedel-transport--pending)
@@ -234,7 +252,8 @@ KEY coalesces repeated scheduling of the same logical work, so a caller that
 re-arms on every event queues one retry rather than a growing fan of timers.
 THUNK runs immediately when the transport is already idle, because a filter or
 sentinel is only unsafe when it nests.  ON-CANCEL runs if queued work is
-cancelled before THUNK starts.  Disabled transport drops late work."
+cancelled before THUNK starts.  Return non-nil when work was accepted; disabled
+transport drops late work and returns nil."
   (when mevedel-transport--enabled-p
     (if (mevedel-transport-busy-p path)
         (unless (gethash key mevedel-transport--pending)
@@ -248,7 +267,8 @@ cancelled before THUNK starts.  Disabled transport drops late work."
                      mevedel-transport--pending-cancellers)))
       (remhash key mevedel-transport--pending)
       (remhash key mevedel-transport--pending-cancellers)
-      (funcall thunk))))
+      (funcall thunk))
+    t))
 
 (defun mevedel-transport-cancel-pending (&optional key)
   "Cancel deferred transport work for KEY, or all of it when KEY is nil."

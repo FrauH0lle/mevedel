@@ -450,11 +450,14 @@ from that is wrong. Every caller reachable from a timer, a process filter, or
 redisplay therefore asks `mevedel-transport-busy-p` first and defers through
 `mevedel-transport-run-when-idle`.
 
-That predicate combines two signals with complementary blind spots. A dynamic
-depth counter, maintained by observational advice on `tramp-file-name-handler`,
-spans the whole of any operation this Emacs started through a file name,
-including operations belonging to other packages: a mode line that stats a
-remote file during redisplay opens exactly this window. TRAMP's own
+That predicate combines two signals with complementary blind spots. Advice on
+`tramp-file-name-handler` maintains a dynamic depth counter spanning the whole
+of any operation this Emacs started through a file name, including operations
+belonging to other packages: a mode line that stats a remote file during
+redisplay opens exactly this window. When the outermost handler returns, the
+same advice re-arms package-owned deferral timers created while TRAMP had
+`timer-list` temporarily bound away; otherwise the pending entry would retain
+a timer that can never fire. TRAMP's own
 per-connection lock property covers callers that reach the connection without
 a handler frame, but only for the instants it is held — TRAMP releases it and
 runs timers between the send and the read, which is the window the depth
