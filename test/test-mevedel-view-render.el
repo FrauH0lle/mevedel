@@ -6237,6 +6237,9 @@
            '(nil
              (:header "h" :vtype agent-handle)
              (:header "h" :child-calls ((:id "1")))
+             ;; The header cache strips `:child-calls' from a collapsed
+             ;; compound row; `:compound-p' is what survives it.
+             (:header "h" :compound-p t)
              (:header "h" :hook-audits ((:type x)))
              (:header "h" :sandbox-summary (:sandbox refused))
              (:header "h" :force-expanded-p t)
