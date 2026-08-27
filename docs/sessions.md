@@ -592,6 +592,16 @@ and afterwards nothing resolves through them -- so
 `mevedel-session-publication-collect-generations` runs there, best-effort,
 under the owner's lease.
 
+Collection reads every published sidecar rather than a recent window,
+because coarse target timestamps make "the newest N generations" an
+unreliable set when several publishes share a second: a generation the
+current head still resolves through could fall outside such a window.
+Manifests and sidecar facts are therefore cached in memory per generation
+path, which a committed generation's immutability makes sound.  Reading
+752 uncached generations measured 17 seconds inside one settlement and
+0.12 once cached, so the cache is what makes the complete scan
+affordable rather than an optimisation.
+
 Collection is a mark-and-sweep, never an age cap, because manifests are
 chained: a committed manifest carries unchanged entries forward verbatim rather
 than copying their bytes, so a retained head resolves artifacts through the
