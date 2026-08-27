@@ -45,6 +45,7 @@
                   "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-utilities'
+(declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 
@@ -443,9 +444,12 @@ FACE defaults to `mevedel-view-spinner'."
 
 (defun mevedel-view--start-spinner-timer ()
   "Start the buffer-local spinner animation timer when needed."
+  ;; Test presence on `timer-list', not the variable: a timer armed while
+  ;; TRAMP had timers suspended is discarded with the binding, and trusting
+  ;; the stale object would freeze the spinner for the rest of the request.
   (when (and mevedel-view-spinner-animate
              (cdr mevedel-view-spinner-frames)
-             (not (timerp mevedel-view--spinner-timer)))
+             (not (mevedel--timer-pending-p mevedel-view--spinner-timer)))
     (let ((buffer (current-buffer))
           timer)
       (setq timer

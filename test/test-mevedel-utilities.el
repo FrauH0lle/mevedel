@@ -92,6 +92,29 @@
   (should (= 100 (mevedel--clamped-integer t 100 10 1000)))
   (should (= 10 (mevedel--clamped-integer nil 3 10 1000))))
 
+(mevedel-deftest mevedel--timer-pending-p ()
+  ,test
+  (test)
+
+  :doc "recognizes an armed timer and its cancellation"
+  (let ((timer (run-at-time 3600 nil #'ignore)))
+    (unwind-protect
+        (should (mevedel--timer-pending-p timer))
+      (cancel-timer timer))
+    (should-not (mevedel--timer-pending-p timer)))
+
+  :doc "rejects a timer discarded with a let-bound `timer-list'"
+  (let (lost)
+    (let (timer-list)
+      (setq lost (run-at-time 3600 nil #'ignore)))
+    (should (timerp lost))
+    (should-not (mevedel--timer-pending-p lost)))
+
+  :doc "rejects values that are not timers"
+  (progn
+    (should-not (mevedel--timer-pending-p nil))
+    (should-not (mevedel--timer-pending-p 'scheduled))))
+
 (mevedel-deftest mevedel--normalize-message-text ()
   ,test
   (test)
