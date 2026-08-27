@@ -220,6 +220,44 @@
        (mevedel-execution-target-native-path target path)
        :type 'mevedel-execution-target-error))))
 
+(mevedel-deftest mevedel-execution-target-same-path-domain-p ()
+  ,test
+  (test)
+  :doc "normalizes SSH host case and its explicit default port"
+  (progn
+    (should
+     (mevedel-execution-target-same-path-domain-p
+      "/ssh:user@HOST:/repo/"
+      "/ssh:user@host#22:/other/"))
+    (should
+     (mevedel-execution-target-same-path-domain-p
+      "/srv/one" "/srv/two")))
+
+  :doc "preserves opaque container target case"
+  (progn
+    (should-not
+     (mevedel-execution-target-same-path-domain-p
+      "/docker:Build:/repo/"
+      "/docker:build:/repo/"))
+    (should-not
+     (mevedel-execution-target-same-path-domain-p
+      "/docker:Build|ssh:user@host:/repo/"
+      "/docker:build|ssh:user@host:/repo/")))
+
+  :doc "normalizes every SSH endpoint in a multi-hop domain"
+  (should
+   (mevedel-execution-target-same-path-domain-p
+    "/ssh:jump|ssh:user@host:/repo/"
+    "/ssh:JUMP#22|ssh:user@HOST#22:/other/"))
+
+  :doc "distinguishes remote users, hosts, and methods"
+  (dolist (right '("/ssh:other@host:/repo/"
+                   "/ssh:user@other:/repo/"
+                   "/docker:user@host:/repo/"))
+    (should-not
+     (mevedel-execution-target-same-path-domain-p
+      "/ssh:user@host:/repo/" right))))
+
 (mevedel-deftest mevedel-execution-target-expand-path ()
   ,test
   (test)

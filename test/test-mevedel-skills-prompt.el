@@ -403,7 +403,8 @@ this collapses both shapes to the delivered text."
                      :active-p nil :model-invocable-p nil))
          (disabled (mevedel-skills-test--stateful-skill
                     :name "disabled" :path-patterns '("*.el")
-                    :active-p nil :model-invocable-p t))
+                    :active-p nil :model-invocable-p t
+                    :workspace ws))
          (fake-tool (mevedel-tool--create
                      :name "Read"
                      :handler #'ignore

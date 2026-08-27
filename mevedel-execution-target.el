@@ -275,6 +275,34 @@ different execution target."
                               path))))
     path))
 
+(defun mevedel-execution-target--path-domain-key (path)
+  "Return PATH's normalized local or remote filesystem domain key."
+  (if-let* ((method (file-remote-p path 'method 'never)))
+      (let* ((raw-host (file-remote-p path 'host 'never))
+             (hop (file-remote-p path 'hop 'never))
+             (explicit-port
+              (and raw-host
+                   (string-match "\\`\\(.*\\)#\\([0-9]+\\)\\'" raw-host)
+                   (match-string 2 raw-host)))
+             (host (if explicit-port (match-string 1 raw-host) raw-host))
+             (ssh-family-p
+              (member method '("ssh" "scp" "sshx" "scpx"))))
+        (list method
+              (file-remote-p path 'user 'never)
+              (and host (if ssh-family-p (downcase host) host))
+              (or explicit-port (and ssh-family-p "22"))
+              (mapcar
+               (lambda (entry)
+                 (mevedel-execution-target--path-domain-key
+                  (concat "/" entry ":/")))
+               (split-string (or hop "") "|" t))))
+    'local))
+
+(defun mevedel-execution-target-same-path-domain-p (left right)
+  "Return non-nil when LEFT and RIGHT name the same filesystem domain."
+  (equal (mevedel-execution-target--path-domain-key left)
+         (mevedel-execution-target--path-domain-key right)))
+
 (defun mevedel-execution-target--environment-value (target name)
   "Return NAME from TARGET's probed environment or signal an error."
   (if-let* ((entry (assoc name

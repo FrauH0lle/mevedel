@@ -39,6 +39,7 @@
 (require 'mevedel-workspace)
 (require 'mevedel-worktree)
 (require 'tabulated-list)
+(require 'mevedel-view)
 (require 'mevedel-view-composer)
 
 (defvar mevedel-plugin-extra-roots)
@@ -372,8 +373,10 @@ spanning lines")))
   :doc "skills mutation slash commands remain direct"
   (let* ((user-dir (make-temp-file "mevedel-skills-slash-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
-         (session (mevedel-skills-test--make-session))
-         (skill (mevedel-skills-test--stateful-skill :name "visible")))
+         (session (mevedel-skills-test--make-session nil user-dir))
+         (skill (mevedel-skills-test--stateful-skill
+                 :name "visible"
+                 :workspace (mevedel-session-workspace session))))
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list skill))
@@ -893,9 +896,11 @@ spanning lines")))
   (test)
 
   :doc "returns enabled/total skills for a session"
-  (let* ((session (mevedel-skills-test--make-session))
+  (let* ((session (mevedel-skills-test--make-session nil user-dir))
          (enabled (mevedel-skill--create :name "enabled"))
-         (disabled (mevedel-skills-test--stateful-skill :name "disabled")))
+         (disabled (mevedel-skills-test--stateful-skill
+                    :name "disabled"
+                    :workspace (mevedel-session-workspace session))))
     (setf (mevedel-session-skills session) (list enabled disabled))
     (mevedel-skills-set-enabled disabled nil)
     (should (equal "1/2" (mevedel-skills-count-label session))))
@@ -909,7 +914,7 @@ spanning lines")))
   :doc "renders session skills as a tabulated cockpit"
   (let* ((user-dir (make-temp-file "mevedel-skills-list-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
-         (session (mevedel-skills-test--make-session))
+         (session (mevedel-skills-test--make-session nil user-dir))
          (view-buffer (generate-new-buffer " *skills-list-view*"))
          (data-buffer (generate-new-buffer " *skills-list-data*"))
          (source-file (make-temp-file "mevedel-skill-source-"))
@@ -918,7 +923,8 @@ spanning lines")))
                   :source 'project :source-file source-file))
          (disabled (mevedel-skills-test--stateful-skill
                     :name "disabled" :description "Disabled description"
-                    :source 'user))
+                    :source 'user
+                    :workspace (mevedel-session-workspace session)))
          (plugin (mevedel-skill--create
                   :name "plugin:assist" :description "Plugin description"
                   :source 'plugin)))
@@ -997,7 +1003,9 @@ spanning lines")))
   :doc "formats enabled and disabled status cells"
   (let* ((user-dir (make-temp-file "mevedel-skills-status-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
-         (skill (mevedel-skills-test--stateful-skill :name "visible")))
+         (workspace (mevedel-skills-test--make-workspace user-dir))
+         (skill (mevedel-skills-test--stateful-skill
+                 :name "visible" :workspace workspace)))
     (unwind-protect
         (progn
           (should (equal (substring-no-properties
@@ -1015,10 +1023,12 @@ spanning lines")))
   :doc "builds table cells from skill state, name, source, and description"
   (let* ((user-dir (make-temp-file "mevedel-skills-entry-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
+         (workspace (mevedel-skills-test--make-workspace user-dir))
          (skill (mevedel-skills-test--stateful-skill
                  :name "visible"
                  :description "Visible description"
-                 :source 'plugin))
+                 :source 'plugin
+                 :workspace workspace))
          (entry (unwind-protect
                     (progn
                       (mevedel-skills-set-enabled skill nil)
@@ -1049,23 +1059,23 @@ spanning lines")))
          (details (mevedel-skills--skill-detail-text skill)))
     (should-not (string-match-p "Warnings:" details))))
 
-(mevedel-deftest mevedel-skills-list--session-label ()
+(mevedel-deftest mevedel-skills-list--workspace-label ()
   ,test
   (test)
-  :doc "returns the rendered session name or unknown"
+  :doc "returns the rendered workspace root or no workspace"
   (let ((session (mevedel-skills-test--make-session "named"))
         (view-buffer (generate-new-buffer " *skills-label-view*"))
         (data-buffer (generate-new-buffer " *skills-label-data*")))
     (with-temp-buffer
       (mevedel-skills-list-mode)
-      (should (equal (mevedel-skills-list--session-label) "unknown")))
+      (should (equal (mevedel-skills-list--workspace-label) "no workspace")))
     (unwind-protect
         (let ((buffer (mevedel-skills-test--open-list
                        session view-buffer data-buffer)))
           (with-current-buffer buffer
-            (should (equal (mevedel-skills-list--session-label
+            (should (equal (mevedel-skills-list--workspace-label
                             (mevedel-cockpit-surface-context))
-                           "named"))))
+                           "/tmp/t"))))
       (mevedel-skills-test--cleanup-list view-buffer data-buffer))))
 
 (mevedel-deftest mevedel-skills-list--header-line ()
@@ -1074,8 +1084,10 @@ spanning lines")))
   :doc "summarizes the session skill count and points at the keys"
   (let* ((user-dir (make-temp-file "mevedel-skills-header-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
+         (workspace (mevedel-skills-test--make-workspace user-dir))
          (enabled (mevedel-skill--create :name "enabled"))
-         (disabled (mevedel-skills-test--stateful-skill :name "disabled")))
+         (disabled (mevedel-skills-test--stateful-skill
+                    :name "disabled" :workspace workspace)))
     (unwind-protect
         (with-temp-buffer
           (mevedel-skills-list-mode)
@@ -1105,7 +1117,7 @@ spanning lines")))
         (progn
           (setf (mevedel-session-skills session) (list skill))
           (should (string-match-p
-                   "mevedel skills for main"
+                   "mevedel skills for workspace /tmp/t"
                    (mevedel-skills--list-message-text session)))
           (should (string-match-p
                    "visible \\[enabled\\] source:project - Visible description"
@@ -1123,11 +1135,12 @@ spanning lines")))
   :doc "toggles selected skill state and refreshes the owner view prompt"
   (let* ((user-dir (make-temp-file "mevedel-skills-toggle-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
-         (session (mevedel-skills-test--make-session))
+         (session (mevedel-skills-test--make-session nil user-dir))
          (view-buffer (generate-new-buffer " *skills-toggle-view*"))
          (data-buffer (generate-new-buffer " *skills-toggle-data*"))
          (skill (mevedel-skills-test--stateful-skill
-                 :name "visible" :source 'project))
+                 :name "visible" :source 'project
+                 :workspace (mevedel-session-workspace session)))
          refreshed-buffer
          message-text)
     (unwind-protect
@@ -1155,7 +1168,33 @@ spanning lines")))
                 (should (mevedel-skills-skill-enabled-p skill))
                 (should (string-match-p "enabled" message-text))))))
       (mevedel-skills-test--cleanup-list view-buffer data-buffer)
-      (delete-directory user-dir t))))
+      (delete-directory user-dir t)))
+
+  :doc "preserves a multiline leading-> composer draft"
+  (let ((draft "> quoted\nsecond line")
+        (point-offset 4))
+    (mevedel-view-test--with-buffers
+      (let* ((session (mevedel-skills-test--make-session
+                       nil mevedel-user-dir))
+             (skill (mevedel-skills-test--stateful-skill
+                     :name "visible" :source 'project
+                     :workspace (mevedel-session-workspace session))))
+        (with-current-buffer data-buf
+          (setq-local mevedel--session session))
+        (setf (mevedel-session-skills session) (list skill))
+        (with-current-buffer view-buf
+          (mevedel-view-test--insert-composer-draft draft point-offset))
+        (mevedel-skills-list-open
+         (mevedel-cockpit-context-for-buffer view-buf))
+        (with-current-buffer mevedel-skills-list-buffer-name
+          (mevedel-cockpit-goto-id "visible")
+          (mevedel-test--with-captured-messages nil
+            (mevedel-skills-list-toggle-enabled)))
+        (with-current-buffer view-buf
+          (let ((start (mevedel-view--input-start)))
+            (should (equal draft
+                           (buffer-substring-no-properties start (point-max))))
+            (should (= (point) (+ start point-offset)))))))))
 
 (mevedel-deftest mevedel-skills-list-open-source ()
   ,test
@@ -1994,9 +2033,11 @@ spanning lines")))
   :doc "disabled skills are omitted from completion"
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
-         (session (mevedel-skills-test--make-session))
+         (session (mevedel-skills-test--make-session nil user-dir))
          (visible (mevedel-skill--create :name "visible"))
-         (hidden (mevedel-skills-test--stateful-skill :name "hidden")))
+         (hidden (mevedel-skills-test--stateful-skill
+                  :name "hidden"
+                  :workspace (mevedel-session-workspace session))))
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list visible hidden))

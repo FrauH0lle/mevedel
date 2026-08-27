@@ -1554,10 +1554,11 @@ description: Yell
   :doc "disabled skill is rejected before model invocation"
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
-         (session (mevedel-skills-test--make-session))
+         (session (mevedel-skills-test--make-session nil user-dir))
          (skill (mevedel-skills-test--stateful-skill
                  :name "hidden"
-                 :body "should not run"))
+                 :body "should not run"
+                 :workspace (mevedel-session-workspace session)))
          received)
     (unwind-protect
         (progn
@@ -1578,13 +1579,14 @@ description: Yell
   :doc "returns active model-invocable enabled skills"
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
-         (session (mevedel-skills-test--make-session))
+         (session (mevedel-skills-test--make-session nil user-dir))
          (alpha (mevedel-skill--create
                  :name "alpha" :description "Alpha helper"
                  :active-p t :model-invocable-p t))
          (beta (mevedel-skills-test--stateful-skill
                 :name "beta" :description "Beta helper"
-                :active-p t :model-invocable-p t))
+                :active-p t :model-invocable-p t
+                :workspace (mevedel-session-workspace session)))
          (model-disabled (mevedel-skill--create
                           :name "internal" :description "Internal"
                           :active-p t :model-invocable-p nil))
@@ -1737,13 +1739,14 @@ description: Yell
   :doc "omits user-disabled skills"
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
-         (session (mevedel-skills-test--make-session))
+         (session (mevedel-skills-test--make-session nil user-dir))
          (enabled (mevedel-skill--create
                    :name "enabled" :description "E"
                    :model-invocable-p t :active-p t))
          (disabled (mevedel-skills-test--stateful-skill
                     :name "disabled" :description "D"
-                    :model-invocable-p t :active-p t)))
+                    :model-invocable-p t :active-p t
+                    :workspace (mevedel-session-workspace session))))
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list enabled disabled))

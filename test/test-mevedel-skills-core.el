@@ -14,6 +14,7 @@
 (require 'mevedel-hooks)
 (require 'mevedel-execution-target)
 (require 'mevedel-plugins)
+(require 'mevedel-session-durability)
 (require 'mevedel-skills-core)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
@@ -144,6 +145,26 @@ argument-hint: \"[path]\"
             ;; Body is not loaded eagerly.
             (should-not (mevedel-skill-body skill))))
       (delete-directory dir t)))
+
+  :doc "reads workspace enablement once for every skill in one scan"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-skills-enable-scan-" t))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (reads 0))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           root "one" "description: One\n" "Body")
+          (mevedel-skills-test--write-skill
+           root "two" "description: Two\n" "Body")
+          (cl-letf (((symbol-function 'mevedel-skills--read-state)
+                     (lambda (_workspace)
+                       (cl-incf reads)
+                       nil)))
+            (should (= 2 (length (mevedel-skills-scan
+                                  root '(".") workspace)))))
+          (should (= 1 reads)))
+      (delete-directory root t)))
 
   :doc "preserves model and effort metadata normalized from YAML"
   (let* ((mevedel-skills-include-bundled nil)
@@ -1362,19 +1383,54 @@ description: Review changed code
           (should-not (mevedel-skills-source-key nil)))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-skills--workspace-source-key ()
+  ,test
+  (test)
+  :doc "uses a portable relative identity for workspace skill sources"
+  (let* ((first-root (file-name-as-directory
+                      (make-temp-file "mevedel-skills-key-first-" t)))
+         (second-root (file-name-as-directory
+                       (make-temp-file "mevedel-skills-key-second-" t)))
+         (relative (file-name-concat ".mevedel" "skills" "demo" "SKILL.md"))
+         (first-workspace (mevedel-skills-test--make-workspace first-root))
+         (second-workspace (mevedel-skills-test--make-workspace second-root)))
+    (unwind-protect
+        (should
+         (equal
+          (list (mevedel-skills--workspace-source-key
+                 (file-name-concat first-root relative) first-workspace)
+                (mevedel-skills--workspace-source-key
+                 (file-name-concat second-root relative) second-workspace))
+          (list (concat "workspace:" relative)
+                (concat "workspace:" relative))))
+      (delete-directory first-root t)
+      (delete-directory second-root t)))
+
+  :doc "normalizes an explicit default SSH port for workspace containment"
+  (let ((workspace
+         (mevedel-skills-test--make-workspace "/ssh:host:/repo/")))
+    (should
+     (equal
+      "workspace:.mevedel/skills/demo/SKILL.md"
+      (mevedel-skills--workspace-source-key
+       "/ssh:host#22:/repo/.mevedel/skills/demo/SKILL.md"
+       workspace)))))
+
 (mevedel-deftest mevedel-skills--write-state
   (:vars* ((user-dir (make-temp-file "mevedel-skills-write-" t))
-           (mevedel-user-dir (file-name-as-directory user-dir)))
+           (mevedel-user-dir (file-name-as-directory user-dir))
+           (workspace (mevedel-skills-test--make-workspace user-dir)))
    :after-each (delete-directory user-dir t))
   ,test
   (test)
 
   :doc "a write that dies after truncating leaves the previous state"
-  ;; This file is global rather than per-workspace, and the reader signals on
-  ;; anything malformed, so a half-written state breaks every enablement
-  ;; check in every session until someone repairs it by hand.
-  (let ((first (mevedel-skills-test--stateful-skill :name "one"))
-        (second (mevedel-skills-test--stateful-skill :name "two"))
+  ;; The reader signals on anything malformed, so a half-written state breaks
+  ;; every enablement check after the workspace's next skill rescan.
+  (let ((first (mevedel-skills-test--stateful-skill
+                :name "one" :workspace workspace))
+        (second (mevedel-skills-test--stateful-skill
+                 :name "two" :workspace workspace))
         (real (symbol-function 'write-region)))
     (mevedel-skills-set-enabled first nil)
     (should-not (mevedel-skills-skill-enabled-p first))
@@ -1386,30 +1442,124 @@ description: Review changed code
     (should-not (mevedel-skills-skill-enabled-p first)))
 
   :doc "a completed write leaves no staging file beside the state"
-  (let ((skill (mevedel-skills-test--stateful-skill :name "one")))
+  (let ((skill (mevedel-skills-test--stateful-skill
+                :name "one" :workspace workspace)))
     (mevedel-skills-set-enabled skill nil)
     (should (equal '("skills-state.el")
-                   (directory-files mevedel-user-dir nil
-                                    directory-files-no-dot-files-regexp)))))
+                   (directory-files (mevedel-workspace-state-dir workspace) nil
+                                    directory-files-no-dot-files-regexp))))
+
+  :doc "remote skill state refuses to write without its live session"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-skills-remote-state-" t)))
+         (remote-root (concat "/mevedelmock:skills:" root))
+         (remote-workspace (mevedel-skills-test--make-workspace remote-root))
+         (mevedel--session nil))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("skills")
+          (should-error
+           (mevedel-skills--write-state
+            '(:disabled-keys ("file:/demo")) remote-workspace)
+           :type 'user-error)
+          (should-not
+           (file-exists-p
+            (file-name-concat root ".mevedel" "skills-state.el"))))
+      (delete-directory root t)))
+
+  :doc "remote skill state discloses, leases, and publishes on the target"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-skills-remote-state-" t)))
+         (remote-root (concat "/mevedelmock:skills:" root))
+         (remote-workspace (mevedel-workspace--create
+                            :type 'project :id remote-root :root remote-root
+                            :name "test"))
+         (session nil)
+         (mevedel--session nil)
+         (mevedel-session-durability--disclosed-targets
+          (make-hash-table :test #'equal))
+         prompts)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("skills")
+          (setq session (mevedel-session-create
+                         "main" remote-workspace remote-root)
+                mevedel--session session)
+          (setf (mevedel-execution-target-readiness
+                 (mevedel-session-execution-target session))
+                '(:status ready))
+          (unwind-protect
+              (progn
+                (cl-letf (((symbol-function 'yes-or-no-p)
+                           (lambda (prompt)
+                             (push prompt prompts)
+                             t)))
+                  (mevedel-skills--write-state
+                   '(:disabled-keys ("file:/demo")) remote-workspace))
+                (should (= 1 (length prompts)))
+                (should (mevedel-session-save-path session))
+                (should (eq 'owned
+                            (plist-get (mevedel-session-lease session) :state)))
+                (should
+                 (equal '(:disabled-keys ("file:/demo"))
+                        (mevedel-skills--read-state remote-workspace))))
+            (when (mevedel-session-save-path session)
+              (mevedel-session-durability-lease-release
+               (mevedel-session-save-path session) session))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-skills-set-enabled
   (:vars* ((user-dir (make-temp-file "mevedel-skills-state-" t))
-           (mevedel-user-dir (file-name-as-directory user-dir)))
+           (mevedel-user-dir (file-name-as-directory user-dir))
+           (workspace (mevedel-skills-test--make-workspace user-dir)))
    :after-each (delete-directory user-dir t))
   ,test
   (test)
 
   :doc "disable and enable persist file-backed skill state"
-  (let ((skill (mevedel-skills-test--stateful-skill :name "visible")))
+  (let ((skill (mevedel-skills-test--stateful-skill
+                :name "visible" :workspace workspace)))
     (mevedel-skills-set-enabled skill nil)
     (should-not (mevedel-skills-skill-enabled-p skill))
     (mevedel-skills-set-enabled skill t)
     (should (mevedel-skills-skill-enabled-p skill)))
 
-  :doc "disable rejects skills without a stable source file"
+  :doc "keeps the same external skill isolated between workspaces"
+  (let* ((mevedel-skills-include-bundled nil)
+         (shared-root (make-temp-file "mevedel-skills-shared-" t))
+         (first-root (make-temp-file "mevedel-skills-first-" t))
+         (second-root (make-temp-file "mevedel-skills-second-" t))
+         (first-workspace (mevedel-skills-test--make-workspace first-root))
+         (second-workspace (mevedel-skills-test--make-workspace second-root)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           shared-root "visible" "description: Visible\n" "Body")
+          (let ((first (car (mevedel-skills-scan
+                             first-root (list shared-root) first-workspace)))
+                (second (car (mevedel-skills-scan
+                              second-root (list shared-root) second-workspace))))
+            (mevedel-skills-set-enabled first nil)
+            (should-not (mevedel-skills-skill-enabled-p first))
+            (should (mevedel-skills-skill-enabled-p second))
+            (should (file-exists-p
+                     (file-name-concat first-root ".mevedel"
+                                       "skills-state.el")))
+            (should-not (file-exists-p
+                         (file-name-concat second-root ".mevedel"
+                                           "skills-state.el")))))
+      (delete-directory shared-root t)
+      (delete-directory first-root t)
+      (delete-directory second-root t)))
+
+  :doc "disable rejects skills without a workspace"
   (should-error
    (mevedel-skills-set-enabled
     (mevedel-skill--create :name "inline") nil)
+   :type 'user-error)
+
+  :doc "disable rejects skills without a stable source file"
+  (should-error
+   (mevedel-skills-set-enabled
+    (mevedel-skill--create :name "inline" :workspace workspace) nil)
    :type 'user-error)
 
   :doc "stable source identity survives generated renaming"
@@ -1419,32 +1569,49 @@ description: Review changed code
          (other-file (mevedel-skills-test--write-skill
                       root "other" "description: Other\n" "Body"))
          (skill (mevedel-skill--create
-                 :name "shared" :source-file skill-file))
+                 :name "shared" :source-file skill-file
+                 :workspace workspace))
          (renamed (mevedel-skill--create
-                   :name "user:shared" :source-file skill-file))
+                   :name "user:shared" :source-file skill-file
+                   :workspace workspace))
          (other (mevedel-skill--create
-                 :name "shared" :source-file other-file)))
+                 :name "shared" :source-file other-file
+                 :workspace workspace)))
     (unwind-protect
         (progn
           (mevedel-skills-set-enabled skill nil)
-          (should (mevedel-skills--disabled-keys))
-          (should-not (mevedel-skills-skill-enabled-p renamed))
-          (should (mevedel-skills-skill-enabled-p other)))
+          (should (mevedel-skills--disabled-keys workspace))
+          (should (equal (mevedel-skills--state-key skill)
+                         (mevedel-skills--state-key renamed)))
+          (should-not (equal (mevedel-skills--state-key skill)
+                             (mevedel-skills--state-key other))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-skills--read-state
   (:vars* ((user-dir (make-temp-file "mevedel-skills-state-" t))
-           (mevedel-user-dir (file-name-as-directory user-dir)))
+           (mevedel-user-dir (file-name-as-directory user-dir))
+           (workspace (mevedel-skills-test--make-workspace user-dir)))
    :after-each (delete-directory user-dir t))
   ,test
   (test)
 
   :doc "obsolete name-based state is rejected"
   (progn
-    (make-directory (file-name-directory (mevedel-skills--state-file)) t)
-    (with-temp-file (mevedel-skills--state-file)
+    (make-directory (file-name-directory
+                     (mevedel-skills--state-file workspace)) t)
+    (with-temp-file (mevedel-skills--state-file workspace)
       (prin1 '(:disabled ("shared")) (current-buffer)))
-    (should-error (mevedel-skills--read-state) :type 'error)))
+    (should-error (mevedel-skills--read-state workspace) :type 'error))
+
+  :doc "a second form is rejected instead of silently ignored"
+  (progn
+    (make-directory (file-name-directory
+                     (mevedel-skills--state-file workspace)) t)
+    (with-temp-file (mevedel-skills--state-file workspace)
+      (insert "(:disabled-keys nil) (:disabled-keys (\"workspace:x\"))\n"))
+    (let ((err (should-error (mevedel-skills--read-state workspace))))
+      (should (string-match-p "Unsupported skill state format"
+                              (error-message-string err))))))
 
 
 ;;

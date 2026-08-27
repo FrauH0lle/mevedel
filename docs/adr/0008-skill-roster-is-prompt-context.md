@@ -22,7 +22,10 @@ when uncertain, it may call `ListSkills(query)` or one skill first and decide
 from the result. Skill trigger decisions do not carry across turns unless the
 skill is re-mentioned or newly matched. User wording such as `$foo off` or
 `don't use foo` is request-scoped instruction, not persistent skill disabling;
-persistent disabling stays explicit through `/skills disable` or the skills UI.
+persistent workspace-scoped disabling stays explicit through `/skills disable`
+or the skills UI. Skills remain enabled by default in each workspace, and the
+workspace denylist applies to every visible project, user, bundled, managed,
+and enabled-plugin skill without changing path-scoped active/dormant state.
 Do not copy Codex's file-reading progressive-disclosure instructions: mevedel
 models use the `Skill` tool, and the tool owns loading/preparing skill bodies.
 The dynamic roster belongs at the

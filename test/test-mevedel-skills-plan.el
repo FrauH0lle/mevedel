@@ -27,8 +27,11 @@
 ;;
 ;;; Helpers
 
-(defun mevedel-skills-plan-test--skill (root name &optional context source)
-  "Return a user-invocable NAME skill below ROOT with CONTEXT and SOURCE."
+(defun mevedel-skills-plan-test--skill
+    (root name &optional context source workspace)
+  "Return a user-invocable NAME skill below ROOT.
+CONTEXT and SOURCE customize invocation and identity.  WORKSPACE owns
+persisted enablement when supplied."
   (let ((file (or source
                   (mevedel-skills-test--write-skill
                    root name
@@ -38,7 +41,8 @@
     (mevedel-skill--create
      :name name :source-file file :source-dir (file-name-directory file)
      :source 'project :active-p t :user-invocable-p t
-     :model-invocable-p t :context (or context 'inline))))
+     :model-invocable-p t :context (or context 'inline)
+     :workspace workspace)))
 
 (defun mevedel-skills-plan-test--session (&rest skills)
   "Return a transient session containing SKILLS."
@@ -370,9 +374,13 @@
   (let* ((mevedel-skills-check-for-modifications nil)
          (root (make-temp-file "mevedel-skill-plan-" t))
          (mevedel-user-dir (make-temp-file "mevedel-skill-plan-state-" t))
-         (disabled (mevedel-skills-plan-test--skill root "disabled"))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (disabled (mevedel-skills-plan-test--skill
+                    root "disabled" nil nil workspace))
          (internal (mevedel-skills-plan-test--skill root "internal"))
-         (session (mevedel-skills-plan-test--session disabled internal))
+         (session (mevedel-session--create
+                   :name "plan" :workspace workspace
+                   :skills (list disabled internal)))
          (input (copy-sequence
                  "Use \\$disabled, \"$internal\", and `$missing`."))
          (missing-start (string-match "\\$missing" input)))
@@ -394,9 +402,13 @@
   (let* ((mevedel-skills-check-for-modifications nil)
          (root (make-temp-file "mevedel-skill-plan-" t))
          (mevedel-user-dir (make-temp-file "mevedel-skill-plan-state-" t))
-         (disabled (mevedel-skills-plan-test--skill root "disabled"))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (disabled (mevedel-skills-plan-test--skill
+                    root "disabled" nil nil workspace))
          (internal (mevedel-skills-plan-test--skill root "internal"))
-         (session (mevedel-skills-plan-test--session disabled internal))
+         (session (mevedel-session--create
+                   :name "plan" :workspace workspace
+                   :skills (list disabled internal)))
          (bound (copy-sequence "Use $missing"))
          (missing (file-name-concat root "missing/SKILL.md")))
     (setf (mevedel-skill-user-invocable-p internal) nil)

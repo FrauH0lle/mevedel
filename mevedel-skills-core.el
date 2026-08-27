@@ -21,6 +21,14 @@
 (declare-function file-notify-rm-watch "filenotify" (descriptor))
 (declare-function file-notify-valid-p "filenotify" (descriptor))
 
+;; `mevedel-cockpit'
+(declare-function mevedel-cockpit-context-session
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-current-context
+                  "mevedel-cockpit" ())
+(autoload 'mevedel-cockpit-context-session "mevedel-cockpit")
+(autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-capability
                   "mevedel-execution-target" (target name))
@@ -30,10 +38,14 @@
                   "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-prefix
                   "mevedel-execution-target" (cl-x) t)
+(declare-function mevedel-execution-target-same-path-domain-p
+                  "mevedel-execution-target" (left right))
 (autoload 'mevedel-execution-target-capability "mevedel-execution-target")
 (autoload 'mevedel-execution-target-identity "mevedel-execution-target")
 (autoload 'mevedel-execution-target-label "mevedel-execution-target")
 (autoload 'mevedel-execution-target-prefix "mevedel-execution-target")
+(autoload 'mevedel-execution-target-same-path-domain-p
+  "mevedel-execution-target")
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-annotate-rules-source
@@ -57,11 +69,26 @@
                   (&optional workspace))
 (autoload 'mevedel-plugins-skill-dirs "mevedel-plugins")
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-publish-text
+                  "mevedel-session-artifacts"
+                  (session path content &optional coding))
+(autoload 'mevedel-session-artifacts-publish-text
+  "mevedel-session-artifacts")
+
+;; `mevedel-structs'
+(defvar mevedel--session)
+
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 (declare-function mevedel--write-file-atomically
                   "mevedel-utilities" (path content &optional coding mode))
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace-state-dir
+                  "mevedel-workspace" (workspace))
+(autoload 'mevedel-workspace-state-dir "mevedel-workspace")
 
 ;; `subr'
 (defvar read-eval)
@@ -147,6 +174,8 @@ entries filtered out.  PATH-PATTERNS contains globs that trigger
 conditional activation.  HOOKS is the normalized frontmatter `hooks'
 value.
 WARNINGS holds configuration diagnostics exposed by skill inspection.
+WORKSPACE owns persisted enablement for this session-scoped skill.
+ENABLED-P caches that workspace policy from the latest scan or mutation.
 ACTIVE-P records the current activation state for path-scoped
 skills."
   name
@@ -173,6 +202,8 @@ skills."
   path-patterns
   hooks
   warnings
+  (workspace nil :read-only t)
+  (enabled-p t)
   active-p)
 
 
@@ -180,16 +211,19 @@ skills."
 ;;; Skill state
 
 (defconst mevedel-skills--state-file-name "skills-state.el"
-  "Global user skill state file under `mevedel-user-dir'.")
+  "Workspace skill state file under `.mevedel'.")
 
-(defun mevedel-skills--state-file ()
-  "Return the global skill state file path."
-  (file-name-concat mevedel-user-dir mevedel-skills--state-file-name))
+(defun mevedel-skills--state-file (workspace)
+  "Return WORKSPACE's persistent skill state file path."
+  (when workspace
+    (file-name-concat
+     (mevedel-workspace-state-dir workspace)
+     mevedel-skills--state-file-name)))
 
-(defun mevedel-skills--read-state ()
-  "Read global skill state, returning a plist."
-  (let ((file (mevedel-skills--state-file)))
-    (if (not (file-readable-p file))
+(defun mevedel-skills--read-state (workspace)
+  "Read persistent skill state for WORKSPACE, returning a plist."
+  (let ((file (mevedel-skills--state-file workspace)))
+    (if (not (and file (file-readable-p file)))
         nil
       (condition-case err
           (with-temp-buffer
@@ -202,27 +236,54 @@ skills."
                              (listp (cadr state))
                              (cl-every #'stringp (cadr state)))
                   (error "Unsupported skill state format"))
+                (skip-chars-forward " \t\r\n")
+                (while (eq (char-after) ?\;)
+                  (forward-line 1)
+                  (skip-chars-forward " \t\r\n"))
+                (unless (eobp)
+                  (error "Unsupported skill state format"))
                 state)))
         (error
          (error "Could not read skill state %s: %s"
                 file (error-message-string err)))))))
 
-(defun mevedel-skills--write-state (state)
-  "Write global skill STATE plist.
-This file is global rather than per-workspace, and the reader signals
-on malformed content, so a write that died in place would break every
-enablement check in every session until someone repaired it by hand."
-  (mevedel--write-file-atomically
-   (mevedel-skills--state-file)
-   (with-temp-buffer
-     (insert ";; Mevedel skill state\n")
-     (insert ";; Auto-generated, safe to edit\n\n")
-     (pp state (current-buffer))
-     (buffer-string))))
+(defun mevedel-skills--state-session (workspace)
+  "Return the live session authorized to mutate WORKSPACE skill state."
+  (let ((session
+         (or (and (boundp 'mevedel--session) mevedel--session)
+             (ignore-errors
+               (mevedel-cockpit-context-session
+                (mevedel-cockpit-current-context))))))
+    (and session
+         (eq workspace (mevedel-session-workspace session))
+         session)))
 
-(defun mevedel-skills--disabled-keys ()
-  "Return persisted disabled stable skill keys."
-  (plist-get (mevedel-skills--read-state) :disabled-keys))
+(defun mevedel-skills--state-text (state)
+  "Return the durable skill STATE file contents."
+  (with-temp-buffer
+    (insert ";; Mevedel skill state\n")
+    (insert ";; Auto-generated, safe to edit\n\n")
+    (pp state (current-buffer))
+    (buffer-string)))
+
+(defun mevedel-skills--write-state (state workspace)
+  "Persist skill STATE for WORKSPACE."
+  (let* ((file (or (mevedel-skills--state-file workspace)
+                   (error "No workspace for skill state")))
+         (content (mevedel-skills--state-text state)))
+    (if (file-remote-p file)
+        (let ((session (or (mevedel-skills--state-session workspace)
+                           (user-error
+                            "Remote skill state requires its live session"))))
+          (mevedel-session-artifacts-publish-text
+           session file content 'utf-8-unix))
+      ;; The reader signals on malformed content, so a write that died in
+      ;; place would break every enablement check after the next rescan.
+      (mevedel--write-file-atomically file content))))
+
+(defun mevedel-skills--disabled-keys (workspace)
+  "Return persisted disabled skill keys for WORKSPACE."
+  (plist-get (mevedel-skills--read-state workspace) :disabled-keys))
 
 (defun mevedel-skills-source-key (source-file)
   "Return the stable identity key for SOURCE-FILE."
@@ -230,20 +291,45 @@ enablement check in every session until someone repaired it by hand."
     (concat "file:" (or (ignore-errors (file-truename source-file))
                         (expand-file-name source-file)))))
 
+(defun mevedel-skills--workspace-source-key (source-file workspace)
+  "Return portable persisted identity for SOURCE-FILE in WORKSPACE."
+  (when source-file
+    (let* ((source (expand-file-name source-file))
+           (root (and workspace
+                      (file-name-as-directory
+                       (expand-file-name (mevedel-workspace-root workspace)))))
+           (relative
+            (and root
+                 (mevedel-execution-target-same-path-domain-p source root)
+                 (file-relative-name
+                  (or (file-remote-p source 'localname 'never) source)
+                  (or (file-remote-p root 'localname 'never) root)))))
+      (if (and relative
+               (not (file-name-absolute-p relative))
+               (not (equal relative ".."))
+               (not (string-prefix-p "../" relative)))
+          (concat "workspace:" relative)
+        (mevedel-skills-source-key source)))))
+
 (defun mevedel-skills--state-key (skill)
-  "Return stable persisted state key for SKILL."
+  "Return stable workspace-persisted state key for SKILL."
   (and (mevedel-skill-p skill)
-       (mevedel-skills-source-key (mevedel-skill-source-file skill))))
+       (mevedel-skills--workspace-source-key
+        (mevedel-skill-source-file skill)
+        (mevedel-skill-workspace skill))))
 
 (defun mevedel-skills-set-enabled (skill enabled)
   "Persist file-backed SKILL as enabled or disabled according to ENABLED."
   (unless (mevedel-skill-p skill)
     (user-error "Loaded skill is required"))
-  (let ((key (mevedel-skills--state-key skill)))
+  (let ((workspace (mevedel-skill-workspace skill))
+        (key (mevedel-skills--state-key skill)))
+    (unless workspace
+      (user-error "Skill has no workspace: %s" (mevedel-skill-name skill)))
     (unless key
       (user-error "Skill has no stable source file: %s"
                   (mevedel-skill-name skill)))
-    (let* ((state (or (mevedel-skills--read-state)
+    (let* ((state (or (mevedel-skills--read-state workspace)
                       '(:disabled-keys nil)))
            (disabled-keys
             (cl-remove key (plist-get state :disabled-keys) :test #'equal)))
@@ -251,12 +337,13 @@ enablement check in every session until someone repaired it by hand."
         (push key disabled-keys))
       (setf (plist-get state :disabled-keys)
             (sort (delete-dups disabled-keys) #'string<))
-      (mevedel-skills--write-state state))))
+      (mevedel-skills--write-state state workspace)
+      (setf (mevedel-skill-enabled-p skill) enabled))))
 
 (defun mevedel-skills-skill-enabled-p (skill)
   "Return non-nil when SKILL is not user-disabled."
-  (let ((key (mevedel-skills--state-key skill)))
-    (not (and key (member key (mevedel-skills--disabled-keys))))))
+  (and (mevedel-skill-p skill)
+       (mevedel-skill-enabled-p skill)))
 
 
 ;;
@@ -474,7 +561,7 @@ YAML parsing fails."
 
 (defun mevedel-skills--from-plist
     (name plist source-file source
-          &optional source-family project-hooks-trusted-p plugin-name)
+          &optional source-family project-hooks-trusted-p plugin-name workspace)
   "Build a `mevedel-skill' from NAME and PLIST parsed from SOURCE-FILE.
 SOURCE is the origin tag symbol.  SOURCE-FAMILY is `mevedel', `agents',
 or nil.  PROJECT-HOOKS-TRUSTED-P authorizes executable hooks from a
@@ -482,7 +569,7 @@ project manifest.  NAME is the resolved invocation identifier (already
 validated by the caller).  Description fallback from the body is the
 caller's responsibility -- anything in PLIST's `:description' wins over
 the fallback.  PLUGIN-NAME records plugin ownership when SOURCE is
-`plugin'."
+  `plugin'.  WORKSPACE owns persisted enablement."
   (let* ((description (plist-get plist :description))
          (display-name (plist-get plist :display-name))
          (disable-model (plist-get plist :disable-model-invocation))
@@ -548,6 +635,7 @@ the fallback.  PLUGIN-NAME records plugin ownership when SOURCE is
           (if (eq source 'plugin) 'plugin 'user-file))
         source-file (file-name-directory source-file)))
      :warnings warnings
+     :workspace workspace
      :active-p (null paths))))
 
 
@@ -676,7 +764,7 @@ description fallback from the body when frontmatter omits `description'."
               (setq plist (plist-put plist :description fallback))))
           (mevedel-skills--from-plist
            raw-name plist skill-file source source-family
-           (plist-get snapshot :trusted-p) plugin-name)))))))
+           (plist-get snapshot :trusted-p) plugin-name workspace)))))))
 
 (defun mevedel-skills--scan-dir
     (dir source &optional source-family workspace plugin-name)
@@ -791,6 +879,14 @@ including plugin skills, are left untouched."
      groups)
     deduped))
 
+(defun mevedel-skills--apply-enable-state (skills workspace)
+  "Apply WORKSPACE's persisted enablement to SKILLS and return SKILLS."
+  (let ((disabled-keys (mevedel-skills--disabled-keys workspace)))
+    (dolist (skill skills)
+      (setf (mevedel-skill-enabled-p skill)
+            (not (member (mevedel-skills--state-key skill) disabled-keys))))
+    skills))
+
 (defun mevedel-skills-scan (&optional workspace-root dirs workspace)
   "Scan skill directories and return a list of `mevedel-skill' structs.
 
@@ -817,7 +913,7 @@ explicit scans for tests and internal callers."
     (when (and mevedel-skills-include-bundled
                (file-directory-p mevedel-skills--bundled-dir))
       (dolist (skill (mevedel-skills--scan-dir
-                      mevedel-skills--bundled-dir 'bundled))
+                      mevedel-skills--bundled-dir 'bundled nil workspace))
         (push skill result)))
     (when include-plugins
       (dolist (entry (mevedel-plugins-skill-dirs workspace))
@@ -826,7 +922,9 @@ explicit scans for tests and internal callers."
           (dolist (skill (mevedel-skills--scan-resolved-dir
                           (car resolved) (cdr resolved) workspace))
             (push skill result)))))
-    (mevedel-skills--qualify-conflicting-names (nreverse result))))
+    (mevedel-skills--apply-enable-state
+     (mevedel-skills--qualify-conflicting-names (nreverse result))
+     workspace)))
 
 
 ;;
@@ -915,7 +1013,10 @@ No name fallback is attempted."
     (mevedel-skills-ensure-fresh (current-buffer) session))
   (when-let* ((key (mevedel-skills-source-key source-file)))
     (cl-find key (mevedel-session-skills session)
-             :key #'mevedel-skills--state-key :test #'equal)))
+             :key (lambda (skill)
+                    (mevedel-skills-source-key
+                     (mevedel-skill-source-file skill)))
+             :test #'equal)))
 
 
 ;;
