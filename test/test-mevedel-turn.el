@@ -236,7 +236,7 @@
           (should-not (mevedel--turn-settled-p fsm)))
       (kill-buffer chat-buf)))
 
-  :doc "a second terminal transition finds the request already ended"
+  :doc "a second terminal transition finds its own settlement stamp"
   (let* ((session (mevedel-session--create :turn-count 1))
          (chat-buf (generate-new-buffer " *mevedel-turn-resettled*"))
          (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
@@ -245,7 +245,9 @@
           (with-current-buffer chat-buf
             (setq-local mevedel--session session)
             (setq-local mevedel--current-request nil))
+          (mevedel--turn-stamp-settled fsm)
           (should (mevedel--turn-settled-p fsm))
+          (should-not (mevedel--turn-lost-p fsm))
           ;; The commit fence still signals for a direct caller; the
           ;; terminal entry points return before reaching it.
           (mevedel--fail-turn fsm 'error)
@@ -253,11 +255,25 @@
           (should (= 1 (mevedel-session-turn-count session))))
       (kill-buffer chat-buf)))
 
-  :doc "a dead request buffer has nothing to settle"
+  :doc "an empty request slot without the stamp is lost, not settled"
+  (let* ((session (mevedel-session--create :turn-count 1))
+         (chat-buf (generate-new-buffer " *mevedel-turn-lost*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request nil))
+          (should-not (mevedel--turn-settled-p fsm))
+          (should (mevedel--turn-lost-p fsm)))
+      (kill-buffer chat-buf)))
+
+  :doc "a dead request buffer has nothing to settle and nothing lost"
   (let* ((chat-buf (generate-new-buffer " *mevedel-turn-dead*"))
          (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
     (kill-buffer chat-buf)
-    (should-not (mevedel--turn-settled-p fsm)))
+    (should-not (mevedel--turn-settled-p fsm))
+    (should-not (mevedel--turn-lost-p fsm)))
 
   :doc "a delayed terminal transition cannot settle a newer request"
   (let* ((session (mevedel-session--create :turn-count 1))
@@ -280,6 +296,64 @@
                                           chat-buf))))
       (kill-buffer chat-buf))))
 
+
+(mevedel-deftest mevedel--turn-settle-lost ()
+  ,test
+  (test)
+  :doc "a lost turn settles degraded once: telemetry, save, hook, idle roster"
+  (let* ((session (mevedel-session--create
+                   :turn-count 1 :agent-root-activity 'running))
+         (chat-buf (generate-new-buffer " *mevedel-turn-settle-lost*"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf
+                           :mevedel-request-id "lost-1"
+                           :status "finished")))
+         events saves hooks)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request nil))
+          (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
+                     (lambda (_key _dir function) (funcall function)))
+                    ((symbol-function 'mevedel-telemetry-record)
+                     (lambda (_session event &rest props)
+                       (push (cons event props) events)))
+                    ((symbol-function 'mevedel-ptc-checkpoint-clear-settled)
+                     #'ignore)
+                    ((symbol-function 'mevedel-session-artifacts-save)
+                     (lambda (&rest _) (push t saves) t))
+                    ((symbol-function
+                      'mevedel-session-publication-collect-generations)
+                     #'ignore)
+                    ((symbol-function 'mevedel-workspace)
+                     (lambda (&optional _buffer) nil))
+                    ((symbol-function 'mevedel-hooks-event-plist)
+                     (lambda (event &rest _) (list event)))
+                    ((symbol-function 'mevedel-hooks-run-event)
+                     (lambda (event _plist callback &rest _)
+                       (push event hooks)
+                       (funcall callback nil)))
+                    ((symbol-function
+                      'mevedel--implementation-permission-mode-restore)
+                     #'ignore))
+            (mevedel--fail-turn fsm 'error)
+            (let ((settled (assq 'request-settled events)))
+              (should settled)
+              (should (equal "lost-1" (plist-get (cdr settled) :request-id)))
+              (should (eq 'lost (plist-get (cdr settled) :outcome))))
+            (should (= 1 (length saves)))
+            (should (equal '(StopFailure) hooks))
+            (should (eq 'idle (mevedel-session-agent-root-activity session)))
+            ;; The reservation was never committed; nothing moves the count.
+            (should (= 1 (mevedel-session-turn-count session)))
+            ;; The degraded settlement stamps the machine, so a repeat
+            ;; terminal transition settles quietly.
+            (should (mevedel--turn-settled-p fsm))
+            (mevedel--complete-turn fsm)
+            (should (= 1 (length saves)))
+            (should (equal '(StopFailure) hooks))))
+      (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--turn-commit
   (:before-each (mevedel-workspace-clear-registry)
