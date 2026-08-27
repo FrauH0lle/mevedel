@@ -5029,8 +5029,9 @@ resurrect rows the renderer suppressed."
 The result reuses the compound-tool row machinery: each grouped call is
 a `:child-calls' entry rendered by its own tool's renderer, so the
 expanded group has the same layout, per-row disclosure, and toggles as a
-ToolScript block.  A run with any failed call renders expanded with a
-warning marker."
+ToolScript block.  A run with any failed call carries a warning marker but
+still renders collapsed: the marker says something went wrong, and the
+reader opens the group when they want to know what."
   (let* ((children
           (let ((index 0)
                 out)
@@ -5049,7 +5050,7 @@ warning marker."
             :expandable-p t
             :child-calls children
             :status (and failed-p 'warning)
-            :initially-collapsed-p (not failed-p)))))
+            :initially-collapsed-p t))))
 
 (defun mevedel-view--tool-group-rendering-from-source
     (data-buf start end)

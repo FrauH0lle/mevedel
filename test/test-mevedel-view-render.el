@@ -6285,7 +6285,7 @@
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Read 4 files" text))
         (should-not (string-match-p "f0\\.el\\|content 0" text)))))
-  :doc "a failed call renders the group expanded with a warning marker"
+  :doc "a failed call marks the group but leaves it collapsed"
   (mevedel-view-test--with-buffers
     (dotimes (i 3)
       (mevedel-view-test--insert-data
@@ -6306,7 +6306,7 @@
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p
                  "! Read 3 files, ran 1 command" text))
-        (should (string-match-p "Error: command failed" text)))))
+        (should-not (string-match-p "Error: command failed" text)))))
   :doc "a short run and a zero threshold keep individual rows"
   (let ((mevedel-view-tool-group-collapse-threshold 0))
     (mevedel-view-test--with-buffers
