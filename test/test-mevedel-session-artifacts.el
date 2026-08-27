@@ -52,6 +52,25 @@
       (kill-buffer source)
       (kill-buffer target))))
 
+(mevedel-deftest mevedel-session-artifacts-run-save-hooks-silently ()
+  ,test
+  (test)
+  :doc "runs the hook with echo-area and log reporting suppressed"
+  (let ((ran nil)
+        (noise-suppressed 'unseen))
+    (cl-letf (((symbol-function 'message)
+               (lambda (&optional fmt &rest _args)
+                 (when (and fmt (string-search "NOISE" fmt))
+                   (setq noise-suppressed
+                         (and inhibit-message (null message-log-max))))
+                 nil)))
+      (let ((after-save-hook
+             (list (lambda () (setq ran t) (message "NOISE written")))))
+        (mevedel-session-artifacts-run-save-hooks-silently 'after-save-hook)))
+    (should ran)
+    (should (eq noise-suppressed t))))
+
+
 (mevedel-deftest mevedel-session-artifacts-save-buffer-silently ()
   ,test
   (test)
