@@ -852,6 +852,10 @@
 (mevedel-deftest mevedel-tool-patch--fontify-diff
   (:doc "Fontifies diff lines whole-line and marks them linkify-exempt")
   ,test (test)
+  ;; The renderer runs whenever a patch applies; the review UI it shares
+  ;; these faces with loads only when the user actually reviews one.
+  (should (facep 'mevedel-patch-review-added))
+  (should (facep 'mevedel-patch-review-removed))
   (let ((body (mevedel-tool-patch--fontify-diff "@@ ctx\n-x\n+y\n z")))
     (should (equal "@@ ctx\n-x\n+y\n z" body))
     (should (eq 'diff-hunk-header (get-text-property 0 'font-lock-face body)))

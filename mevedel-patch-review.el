@@ -108,40 +108,6 @@
 (defvar mevedel-patch-review--counter 0
   "Monotonic id counter for patch review interactions.")
 
-(defface mevedel-patch-review-added
-  '((((class color) (background light))
-     :inherit diff-added :background "#e2f5e2" :extend t)
-    (((class color) (background dark))
-     :inherit diff-added :background "#2c3a2c" :extend t)
-    (t :inherit diff-added :extend t))
-  "Face for added lines in an ApplyPatch review.
-Foreground comes from the theme's `diff-added'; the explicit background
-guarantees a whole-line tint even for themes that style diffs with
-foreground colors only."
-  :group 'mevedel)
-
-(defface mevedel-patch-review-removed
-  '((((class color) (background light))
-     :inherit diff-removed :background "#fbe9e9" :extend t)
-    (((class color) (background dark))
-     :inherit diff-removed :background "#3d2c2c" :extend t)
-    (t :inherit diff-removed :extend t))
-  "Face for removed lines in an ApplyPatch review.
-Foreground comes from the theme's `diff-removed'; the explicit
-background guarantees a whole-line tint even for themes that style
-diffs with foreground colors only."
-  :group 'mevedel)
-
-(with-eval-after-load 'magit-diff
-  ;; Magit's diff faces are usually themed more carefully than diff-mode's;
-  ;; prefer them when magit is actually loaded.
-  (when (facep 'magit-diff-added)
-    (set-face-attribute 'mevedel-patch-review-added nil
-                        :inherit 'magit-diff-added))
-  (when (facep 'magit-diff-removed)
-    (set-face-attribute 'mevedel-patch-review-removed nil
-                        :inherit 'magit-diff-removed)))
-
 (defface mevedel-patch-review-apply-button
   '((t :inherit success :box (:line-width (1 . -1))))
   "Face for the primary ApplyPatch review action."
