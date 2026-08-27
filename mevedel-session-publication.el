@@ -562,6 +562,52 @@ The returned plist carries `:turn-count', `:segment', `:turn',
     (mevedel-session-publication--sidecar-facts
      session-dir manifest)))
 
+(defvar mevedel-session-publication--facts-cache
+  (make-hash-table :test #'equal)
+  "Cache of published generation turn facts, keyed by generation path.
+
+A committed generation is immutable, so its sidecar's answers cannot
+change: caching them is sound, and it is what makes collection's
+every-sidecar scan affordable.  Reading 752 uncached sidecars measured 17
+seconds inside one turn settlement.  Entries live for this Emacs session
+only; a collected generation's entry is simply never asked for again.")
+
+(defvar mevedel-session-publication--manifest-cache
+  (make-hash-table :test #'equal)
+  "Cache of published generation manifests, keyed by generation path.
+
+Immutable for the same reason as the facts cache, and cached only for
+listing and collection: authority reads keep going through
+`mevedel-session-publication-read', which verifies bytes rather than
+trusting a remembered plist.")
+
+(defun mevedel-session-publication--cached-manifest (session-dir head)
+  "Return HEAD's manifest below SESSION-DIR, caching the parse."
+  (let ((key (mevedel-session-publication--publication-path
+              session-dir head)))
+    (if-let* ((cached (gethash key mevedel-session-publication--manifest-cache)))
+        (and (not (eq cached 'none)) cached)
+      (let ((manifest
+             (ignore-errors
+               (mevedel-session-publication--read-publication-raw
+                session-dir head))))
+        (puthash key (or manifest 'none)
+                 mevedel-session-publication--manifest-cache)
+        manifest))))
+
+(defun mevedel-session-publication--cached-sidecar-facts
+    (session-dir head manifest)
+  "Return HEAD's turn facts for MANIFEST below SESSION-DIR, caching them."
+  (let ((key (mevedel-session-publication--publication-path
+              session-dir head)))
+    (if-let* ((cached (gethash key mevedel-session-publication--facts-cache)))
+        (and (not (eq cached 'none)) cached)
+      (let ((facts (mevedel-session-publication--sidecar-facts
+                    session-dir manifest)))
+        (puthash key (or facts 'none)
+                 mevedel-session-publication--facts-cache)
+        facts))))
+
 (defun mevedel-session-publication-generation-summaries
     (session-dir &optional limit)
   "Return newest-first summaries of SESSION-DIR's published generations.
@@ -581,13 +627,11 @@ listing does not need to pay."
                         (nreverse summaries))
       (let* ((head (plist-get generation :head))
              (manifest
-              (ignore-errors
-                (mevedel-session-publication--read-publication-raw
-                 session-dir head)))
+              (mevedel-session-publication--cached-manifest session-dir head))
              (facts (when (< index limit)
                       (and manifest
-                           (mevedel-session-publication--sidecar-facts
-                            session-dir manifest)))))
+                           (mevedel-session-publication--cached-sidecar-facts
+                            session-dir head manifest)))))
         (setq index (1+ index))
         (push (append (list :head head
                             :name (plist-get generation :name)
@@ -678,8 +722,11 @@ number of generations deleted."
       (when (and session-dir current)
         (let* ((summaries
                 ;; A picker may bound sidecar reads, but collection needs
-                ;; turn facts for every candidate or an unscanned generation
-                ;; would be retained forever as an unknown state.
+                ;; turn facts for every candidate: coarse target timestamps
+                ;; make "the newest N" unreliable when publishes share a
+                ;; second, so an unscanned generation the current head still
+                ;; needs could fall outside a window.  The immutable facts
+                ;; cache is what keeps scanning every sidecar affordable.
                 (mevedel-session-publication-generation-summaries
                  session-dir most-positive-fixnum))
                (current-name

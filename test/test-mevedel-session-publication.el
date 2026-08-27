@@ -162,6 +162,34 @@ and its segment path."
           (should (= 0 (mevedel-session-publication-collect-generations
                         session))))))))
 
+  :doc "reads an immutable generation's manifest and facts once"
+  (let ((mevedel-session-publication--manifest-cache
+         (make-hash-table :test #'equal))
+        (mevedel-session-publication--facts-cache
+         (make-hash-table :test #'equal))
+        (reads 0))
+    (test-mevedel-session-publication--with-published
+     "publication-cache" "mevedel-publication-cache-" ?c
+     (lambda (session session-dir segment)
+       (test-mevedel-session-publication--publish
+        session session-dir segment "Turn one\n" 1)
+       (let ((raw (symbol-function
+                   'mevedel-session-publication--read-publication-raw)))
+         (cl-letf (((symbol-function
+                     'mevedel-session-publication--read-publication-raw)
+                    (lambda (&rest args)
+                      (setq reads (1+ reads))
+                      (apply raw args))))
+           (mevedel-session-publication-generation-summaries
+            session-dir most-positive-fixnum)
+           (let ((first-pass reads))
+             (should (> first-pass 0))
+             ;; A committed generation cannot change, so a second listing
+             ;; asks the target for nothing.
+             (mevedel-session-publication-generation-summaries
+              session-dir most-positive-fixnum)
+             (should (= first-pass reads))))))))
+
   :doc "collects no more than its per-pass bound, leaving the rest for later"
   (let ((mevedel-session-publication-keep-recent-generations 1)
         (mevedel-session-publication-collect-max 1))
