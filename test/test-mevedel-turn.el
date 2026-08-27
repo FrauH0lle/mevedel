@@ -9,19 +9,34 @@
 (require 'gptel)
 (require 'mevedel-hooks)
 (require 'mevedel-permission-queue)
+(require 'mevedel-permission-mode)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
+(require 'mevedel-telemetry)
 (require 'mevedel-tool-render-data)
+(require 'mevedel-transport)
 (require 'mevedel-turn)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-render)
 (require 'mevedel-workspace)
+(require 'mevedel-workspace-identity)
 (require 'helpers
          (file-name-concat
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+
+(mevedel-deftest mevedel--turn-stamp-settled ()
+  ,test
+  (test)
+  :doc "writes a monotone settlement stamp on the real FSM info"
+  (let ((fsm (gptel-make-fsm :info '(:buffer ignored))))
+    (mevedel--turn-stamp-settled fsm)
+    (should (plist-get (gptel-fsm-info fsm) :mevedel-turn-settled))
+    (mevedel--turn-stamp-settled fsm)
+    (should (plist-get (gptel-fsm-info fsm) :mevedel-turn-settled))))
 
 (mevedel-deftest mevedel--fsm-error-message ()
   ,test
@@ -239,7 +254,8 @@
   :doc "a second terminal transition finds its own settlement stamp"
   (let* ((session (mevedel-session--create :turn-count 1))
          (chat-buf (generate-new-buffer " *mevedel-turn-resettled*"))
-         (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf :mevedel-request-id "done"))))
     (unwind-protect
         (progn
           (with-current-buffer chat-buf
@@ -255,25 +271,21 @@
           (should (= 1 (mevedel-session-turn-count session))))
       (kill-buffer chat-buf)))
 
-  :doc "an empty request slot without the stamp is lost, not settled"
+  :doc "a request-id-less machine never began a mevedel turn"
   (let* ((session (mevedel-session--create :turn-count 1))
-         (chat-buf (generate-new-buffer " *mevedel-turn-lost*"))
+         (chat-buf (generate-new-buffer " *mevedel-turn-unbegun*"))
          (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
     (unwind-protect
         (progn
           (with-current-buffer chat-buf
             (setq-local mevedel--session session)
             (setq-local mevedel--current-request nil))
-          (should-not (mevedel--turn-settled-p fsm))
-          (should (mevedel--turn-lost-p fsm)))
+          (should (mevedel--turn-settled-p fsm))
+          (mevedel--complete-turn fsm)
+          (should (plist-get (gptel-fsm-info fsm)
+                             :mevedel-turn-settled))
+          (should (= 1 (mevedel-session-turn-count session))))
       (kill-buffer chat-buf)))
-
-  :doc "a dead request buffer has nothing to settle and nothing lost"
-  (let* ((chat-buf (generate-new-buffer " *mevedel-turn-dead*"))
-         (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
-    (kill-buffer chat-buf)
-    (should-not (mevedel--turn-settled-p fsm))
-    (should-not (mevedel--turn-lost-p fsm)))
 
   :doc "a delayed terminal transition cannot settle a newer request"
   (let* ((session (mevedel-session--create :turn-count 1))
@@ -291,69 +303,175 @@
           (mevedel--fail-turn fsm 'error)
           (mevedel--complete-turn fsm)
           (should (= 1 (mevedel-session-turn-count session)))
+          (should (plist-get (gptel-fsm-info fsm)
+                             :mevedel-turn-settled))
           (should (eq request
                       (buffer-local-value 'mevedel--current-request
-                                          chat-buf))))
+                                          chat-buf)))
+          (with-current-buffer chat-buf
+            (setq-local mevedel--current-request nil))
+          (mevedel--fail-turn fsm 'error)
+          (should (= 1 (mevedel-session-turn-count session))))
       (kill-buffer chat-buf))))
 
-
-(mevedel-deftest mevedel--turn-settle-lost ()
+(mevedel-deftest mevedel--turn-lost-p ()
   ,test
   (test)
-  :doc "a lost turn settles degraded once: telemetry, save, hook, idle roster"
-  (let* ((session (mevedel-session--create
-                   :turn-count 1 :agent-root-activity 'running))
-         (chat-buf (generate-new-buffer " *mevedel-turn-settle-lost*"))
+  :doc "an identified empty request slot without the stamp is lost"
+  (let* ((session (mevedel-session--create :turn-count 1))
+         (chat-buf (generate-new-buffer " *mevedel-turn-lost*"))
          (fsm (gptel-make-fsm
                :info (list :buffer chat-buf
-                           :mevedel-request-id "lost-1"
-                           :status "finished")))
-         events saves hooks)
+                           :mevedel-request-id "lost"))))
     (unwind-protect
         (progn
           (with-current-buffer chat-buf
             (setq-local mevedel--session session)
             (setq-local mevedel--current-request nil))
-          (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
-                     (lambda (_key _dir function) (funcall function)))
-                    ((symbol-function 'mevedel-telemetry-record)
-                     (lambda (_session event &rest props)
-                       (push (cons event props) events)))
-                    ((symbol-function 'mevedel-ptc-checkpoint-clear-settled)
-                     #'ignore)
-                    ((symbol-function 'mevedel-session-artifacts-save)
-                     (lambda (&rest _) (push t saves) t))
-                    ((symbol-function
-                      'mevedel-session-publication-collect-generations)
-                     #'ignore)
-                    ((symbol-function 'mevedel-workspace)
-                     (lambda (&optional _buffer) nil))
-                    ((symbol-function 'mevedel-hooks-event-plist)
-                     (lambda (event &rest _) (list event)))
-                    ((symbol-function 'mevedel-hooks-run-event)
-                     (lambda (event _plist callback &rest _)
-                       (push event hooks)
-                       (funcall callback nil)))
-                    ((symbol-function
-                      'mevedel--implementation-permission-mode-restore)
-                     #'ignore))
-            (mevedel--fail-turn fsm 'error)
-            (let ((settled (assq 'request-settled events)))
-              (should settled)
-              (should (equal "lost-1" (plist-get (cdr settled) :request-id)))
-              (should (eq 'lost (plist-get (cdr settled) :outcome))))
-            (should (= 1 (length saves)))
-            (should (equal '(StopFailure) hooks))
-            (should (eq 'idle (mevedel-session-agent-root-activity session)))
-            ;; The reservation was never committed; nothing moves the count.
-            (should (= 1 (mevedel-session-turn-count session)))
-            ;; The degraded settlement stamps the machine, so a repeat
-            ;; terminal transition settles quietly.
-            (should (mevedel--turn-settled-p fsm))
-            (mevedel--complete-turn fsm)
-            (should (= 1 (length saves)))
-            (should (equal '(StopFailure) hooks))))
+          (should-not (mevedel--turn-settled-p fsm))
+          (should (mevedel--turn-lost-p fsm)))
+      (kill-buffer chat-buf)))
+
+  :doc "an unbegun machine and a dead request buffer are not lost"
+  (let* ((chat-buf (generate-new-buffer " *mevedel-turn-unbegun*"))
+         (unbegun (gptel-make-fsm :info (list :buffer chat-buf)))
+         (identified
+          (gptel-make-fsm
+           :info (list :buffer chat-buf :mevedel-request-id "dead"))))
+    (should-not (mevedel--turn-lost-p unbegun))
+    (kill-buffer chat-buf)
+    (should-not (mevedel--turn-lost-p identified))))
+
+(mevedel-deftest mevedel--turn-record-lost-settlement ()
+  ,test
+  (test)
+  :doc "records the machine-owned request identity as a real telemetry event"
+  (let* ((session (mevedel-session--create
+                   :name "lost-telemetry" :session-id "lost-telemetry"))
+         (chat-buf (generate-new-buffer " *mevedel-turn-lost-telemetry*"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf
+                           :mevedel-request-id "lost-1"
+                           :status "finished"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session))
+          (mevedel--turn-record-lost-settlement fsm)
+          (let ((entry (car (mevedel-session-telemetry-pending session))))
+            (should (eq 'request-settled (plist-get entry :event)))
+            (should (equal "lost-1" (plist-get entry :request-id)))
+            (should (eq 'lost (plist-get entry :outcome)))
+            (should (equal "finished" (plist-get entry :provider-status)))))
       (kill-buffer chat-buf))))
+
+
+(mevedel-deftest mevedel--turn-settle-lost
+  (:quiet t
+   :before-each (mevedel-workspace-clear-registry)
+   :after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "distinct lost turns defer independently and block admission until settled"
+  (let* ((root (make-temp-file "mevedel-turn-settle-lost-" t))
+         (workspace
+          (mevedel-workspace-get-or-create
+           'project root root "lost-settlement"))
+         (_identity (mevedel-workspace-identity-ensure root))
+         (session (mevedel-session-create "main" workspace))
+         (chat-buf (generate-new-buffer " *mevedel-turn-settle-lost*"))
+         (fsms (mapcar
+                (lambda (id)
+                  (gptel-make-fsm
+                   :info (list :buffer chat-buf
+                               :mevedel-request-id id
+                               :status "finished")))
+                '("lost-1" "lost-2")))
+         (mevedel-transport-retry-seconds 0.01)
+         hook-events)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-turn-count session) 1
+                (mevedel-session-agent-root-activity session) 'running
+                (mevedel-session-permission-mode session) 'full-auto)
+          (with-current-buffer chat-buf
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request nil)
+            (setq-local mevedel--implementation-permission-mode-saved
+                        '(ask))
+            (insert "Lost response\n"))
+          (let ((mevedel-stop-failure-functions
+                 (list (lambda (event) (push event hook-events)))))
+            (mevedel-transport--handler-advice
+             (lambda (&rest _)
+               (dolist (fsm fsms)
+                 (mevedel--fail-turn fsm 'error))
+               (with-current-buffer chat-buf
+                 (should (= 2 (length mevedel--turn-settlements-pending)))
+                 (should (mevedel-turn-busy-p))
+                 (should (equal "settling" (mevedel-request-state-label)))
+                 (should-error (mevedel-request-begin session)
+                               :type 'user-error))
+               (should (= 2 (hash-table-count mevedel-transport--pending))))
+             'file-exists-p "/ssh:test:/lost")
+            (mevedel-transport-cancel-pending)
+            (with-current-buffer chat-buf
+              (should-not (mevedel-turn-busy-p))
+              (should (eq 'ask (mevedel-session-permission-mode session))))
+            (dolist (fsm fsms)
+              (should-not (plist-get (gptel-fsm-info fsm)
+                                     :mevedel-turn-settled))
+              (mevedel--fail-turn fsm 'error)))
+          (should (mevedel-session-save-path session))
+          (should (file-exists-p
+                   (mevedel-session-artifacts-segment-path
+                    (mevedel-session-save-path session)
+                    (mevedel-session-current-segment session))))
+          (with-temp-buffer
+            (insert-file-contents
+             (file-name-concat (mevedel-session-save-path session)
+                               "telemetry-log.el"))
+            (let (settled)
+              (condition-case nil
+                  (while t
+                    (let ((entry (read (current-buffer))))
+                      (when (eq 'request-settled (plist-get entry :event))
+                        (push entry settled))))
+                (end-of-file))
+              (should (= 2 (length settled)))
+              (should (equal '("lost-1" "lost-2")
+                             (sort (mapcar
+                                    (lambda (entry)
+                                      (plist-get entry :request-id))
+                                    settled)
+                                   #'string-lessp)))
+              (should (seq-every-p
+                       (lambda (entry)
+                         (eq 'lost (plist-get entry :outcome)))
+                       settled))))
+          (should (= 2 (length hook-events)))
+          (should (seq-every-p
+                   (lambda (event)
+                     (and (equal "lost" (plist-get event :status))
+                          (equal "lost"
+                                 (plist-get event :terminal-reason))))
+                   hook-events))
+          (should (eq 'idle (mevedel-session-agent-root-activity session)))
+          (should (eq 'ask (mevedel-session-permission-mode session)))
+          (should (= 1 (mevedel-session-turn-count session)))
+          (should-not (buffer-local-value
+                       'mevedel--turn-settlements-pending chat-buf))
+          (dolist (fsm fsms)
+            (should (mevedel--turn-settled-p fsm))
+            (mevedel--complete-turn fsm))
+          (should (= 2 (length hook-events))))
+      (when (buffer-live-p chat-buf)
+        (set-buffer chat-buf)
+        (set-buffer-modified-p nil)
+        (kill-buffer chat-buf))
+      (mevedel-transport-cancel-pending)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel--turn-commit
   (:before-each (mevedel-workspace-clear-registry)
@@ -639,7 +757,10 @@
                (lambda (_fsm) (setq drained t))))
       (dolist (case '((error) (aborted)))
         (setq events nil)
-        (mevedel--fail-turn 'fsm (car case))
+        (mevedel--fail-turn
+         (gptel-make-fsm
+          :info (list :mevedel-request-id (symbol-name (car case))))
+         (car case))
         (should
          (equal
           (nreverse events)

@@ -24,6 +24,7 @@
 (require 'mevedel-session-publication)
 (require 'mevedel-transcript-restore)
 (require 'mevedel-structs)
+(require 'mevedel-turn)
 (require 'mevedel-workspace)
 
 (require 'mevedel-transport)
@@ -109,6 +110,21 @@
       (should (mevedel-session-control-transfer-drained-p session))
       (mevedel-session-control-transfer-unregister-drain session predicate)
       (should-not (mevedel-session-control-transfer-drains session)))))
+
+(mevedel-deftest mevedel-session-control-transfer-drained-p ()
+  ,test
+  (test)
+  :doc "keeps ownership while a lost turn settles"
+  (let ((session (mevedel-session--create :name "transfer")))
+    (with-temp-buffer
+      (cl-letf (((symbol-function
+                  'mevedel-session-control-transfer-root-buffer)
+                 (lambda (_session) (current-buffer))))
+        (setq-local mevedel--turn-settlements-pending '(settlement))
+        (should-not (mevedel-session-control-transfer-drained-p session))
+        (should (equal "a settling turn"
+                       (mevedel-session-control-transfer-drain-blocker
+                        session)))))))
 
 (mevedel-deftest mevedel-session-control-transfer-descriptor ()
   ,test

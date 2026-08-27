@@ -284,6 +284,25 @@
           (mevedel-transport-cancel-pending)
           (should (= 0 (hash-table-count mevedel-transport--pending)))
           (should (= 0 runs)))
+      (mevedel-transport-cancel-pending)))
+
+  :doc "notifies queued work once when cancellation prevents its thunk"
+  (let ((runs 0)
+        (cancels 0)
+        (mevedel-transport-retry-seconds 5))
+    (unwind-protect
+        (progn
+          (mevedel-transport--handler-advice
+           (lambda (&rest _)
+             (mevedel-transport-run-when-idle
+              'cancel-callback "/srv/project"
+              (lambda () (cl-incf runs))
+              (lambda () (cl-incf cancels))))
+           'file-exists-p "/ssh:user@host:/srv/x")
+          (mevedel-transport-cancel-pending 'cancel-callback)
+          (mevedel-transport-cancel-pending 'cancel-callback)
+          (should (= 0 runs))
+          (should (= 1 cancels)))
       (mevedel-transport-cancel-pending))))
 
 (provide 'test-mevedel-transport)

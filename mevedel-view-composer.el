@@ -363,9 +363,11 @@
                   (session &optional directive-uuid))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
+(declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
 (autoload 'mevedel-request-assert-target-ready "mevedel-turn")
 (autoload 'mevedel-request-begin "mevedel-turn")
 (autoload 'mevedel-request-end "mevedel-turn")
+(autoload 'mevedel-turn-busy-p "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -1711,6 +1713,8 @@ to the data buffer as the authoritative user prompt.  The data-turn
 rendered by the normal post-response hook.  HOOK-CONTEXT is summarized
 in the view when present.  SUBMITTED-DRAFT is the composer text captured
 when the submission started."
+  (when (mevedel-turn-busy-p mevedel--data-buffer)
+    (user-error "Turn settlement is still pending"))
   (let ((view-turn-start
          (mevedel-view--insert-user-message display-text nil hook-context)))
     (mevedel-view--clear-submitted-input submitted-draft)
@@ -2201,6 +2205,10 @@ their local dispatch path."
     (user-error "No data buffer associated with this view"))
   (unless (buffer-live-p mevedel--data-buffer)
     (user-error "Data buffer has been killed"))
+  (when (and (mevedel-turn-busy-p mevedel--data-buffer)
+             (not (buffer-local-value 'mevedel--current-request
+                                      mevedel--data-buffer)))
+    (user-error "Turn settlement is still pending"))
   (when mevedel-view--prompt-hook-pending
     (user-error "A prompt hook is still running -- wait or abort first"))
   (when mevedel-view--pending-skill-submission
@@ -2477,6 +2485,8 @@ the input zone (where the assistant turn will be rendered);
 after the forwarded prompt, where the LLM's response will begin."
   (cl-labels
       ((send-now (stored-input view-text accepted request-input)
+         (when (mevedel-turn-busy-p mevedel--data-buffer)
+           (user-error "The session became busy before dispatch"))
          (when before-send
            (funcall before-send))
          (mevedel-view--forward-input-now
@@ -2532,11 +2542,13 @@ asynchronous preparation ran is left alone instead of cleared."
             (or model-input input)))
           (data-buffer mevedel--data-buffer)
           (session (mevedel-view--session))
-          (dropped-file-grants
+          (_admission
            (progn
              (mevedel-request-assert-target-ready session)
-             (mevedel-view--pop-dropped-file-grants-for-input
-              input session))))
+             (when (mevedel-turn-busy-p mevedel--data-buffer)
+               (user-error "The session became busy before dispatch"))))
+          (dropped-file-grants
+           (mevedel-view--pop-dropped-file-grants-for-input input session)))
      (let (data-turn-start
            hook-audits-with-source
            prompt-summary-source

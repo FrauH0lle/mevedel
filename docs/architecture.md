@@ -304,7 +304,9 @@ resource capture. It never receives a live execution record.
 remote operation?  Durable target I/O started from a timer, a process
 filter, or redisplay must not nest inside an in-flight TRAMP command, so
 callers route deferrable work through `mevedel-transport-run-when-idle`
-and it runs when the connection is quiet.
+and it runs when the connection is quiet. Deferred work that owns an
+in-memory admission fence supplies cancellation cleanup so transport teardown
+cannot leave the session permanently busy.
 
 `mevedel-session-durability.el` owns portable project lease and storage
 primitives.  `mevedel-session-recovery.el` owns specialized recovery markers,
@@ -447,7 +449,12 @@ sidecar identity store. See [`mentions.md`](mentions.md#atomic-binding-lifecycle
 `mevedel-turn.el` owns top-level request admission, identity, cancellation, and
 the single completion boundary. The ordinary gptel `DONE` state and awaited
 fork-skill workflows call it after response hooks, while error and abort
-terminals retain their separate no-save/no-follow-up behavior.
+terminals retain their separate no-save/no-follow-up behavior. If teardown
+lost the request before a terminal transition arrived, the machine's request
+identity keys a degraded settlement. The data buffer remains busy and cannot
+admit another turn or transfer its lease until that settlement finishes.
+Transport cancellation releases the fence and clears the machine's stamp so
+a later terminal transition can retry it.
 
 Main and agent data buffers install buffer-local gptel pre/post-tool hooks.
 The pre-tool hook preserves raw JSON distinctions, validates the call as-is,

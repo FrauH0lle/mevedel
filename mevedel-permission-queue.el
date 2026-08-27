@@ -120,22 +120,26 @@
 
 Called once per card, at admission -- never for decisions the rule
 chain or hooks settle without prompting, and never again when the card
-is re-rendered, coalesced, or resolved.  Cards are rare (a handful per
-long session), so no rate limiting is applied.  Firing at enqueue is
-deliberate: the machine is certainly awake then, while an idle timer
-would die with a suspend.
+is re-rendered, coalesced, or resolved.  No rate limiting is applied.
+Firing at enqueue is deliberate: the machine is certainly awake then,
+while an idle timer would die with a suspend.
 
 The single argument is the card's entry plist without its internal
-`:callback'.  Stable keys: `:kind' (`generic' / `bash' / `eval' /
-`sandbox'), `:tool-name', `:specifier-key', `:specifier-value'
-(display path, pattern, domain, or name),
+`:callback', so the function is always a small wrapper that formats a
+message from the entry -- never `notifications-notify' itself, whose
+keywords the entry does not carry.  Stable keys: `:kind' (`generic' /
+`eval' / `bash' / `sandbox'), `:tool-name', `:specifier-key',
+`:specifier-value' (display path, pattern, domain, or name),
 `:command' (bash), `:expression' (eval), `:detail' and
 `:justification' (sandbox), `:origin' (requesting agent path), and
 `:session'.
 
-Errors are demoted: a broken notifier must not break admission.  Point
-it at `notifications-notify' for a desktop notification, or at a
-wrapper around a push service such as ntfy to reach a phone."
+The return value is ignored, nothing waits on it, and it cannot answer
+the prompt.  Errors are demoted: a broken notifier must not break
+admission.  Typical wrappers call `notifications-notify' or the
+`notify-send' binary for a desktop notification, or a push service
+such as ntfy to reach a phone; see the examples in
+docs/permissions.md."
   :type '(choice (const :tag "Disabled" nil) function)
   :group 'mevedel)
 

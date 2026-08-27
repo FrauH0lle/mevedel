@@ -988,7 +988,28 @@
                                  (should (eq active mevedel--current-request))
                                  (should (equal "other-directive"
                                                 mevedel--current-directive-uuid))
-                                 (should mevedel--directive-read-only-request-p))))))
+                                 (should mevedel--directive-read-only-request-p)
+                                 (setq-local mevedel--current-request nil
+                                             mevedel--current-directive-uuid nil
+                                             mevedel--directive-read-only-request-p nil
+                                             mevedel--turn-settlements-pending
+                                             '(settlement)))
+                               (let ((transcript
+                                      (with-current-buffer chat
+                                        (buffer-string))))
+                                 (should-error
+                                  (mevedel--process-directive
+                                   directive '(:system "test") #'identity nil)
+                                  :type 'user-error)
+                                 (should (eq 'implemented
+                                             (mevedel-directive-state record)))
+                                 (with-current-buffer chat
+                                   (should-not mevedel--current-request)
+                                   (should-not mevedel--current-directive-uuid)
+                                   (should-not
+                                   mevedel--directive-read-only-request-p)
+                                   (should (equal transcript
+                                                  (buffer-string)))))))))
                      (kill-buffer source)
                      (kill-buffer chat)))
 
