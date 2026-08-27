@@ -400,12 +400,16 @@ readable Lisp data, and visible result bodies are truncated by character caps:
 
 The current unsent prompt is kept outside the summarized body. For
 auto-compaction it is reattached after the new summary and preserved
-tail, then the original request proceeds. If older touched-file
-references were omitted, the current auto-compacted request also receives
-a one-shot reminder to re-read files before relying on exact contents.
-That reminder is current-request state injected while rebuilding or
-realizing the compacted prompt; it must not be queued into the session
-pending-reminder FIFO, which would deliver it to a later turn.
+tail, then the original request proceeds. If touched-file references
+were omitted, the current auto-compacted request also receives a
+one-shot reminder to re-read files before relying on exact contents.
+Auto compaction includes files touched during the in-flight turn --
+they are stamped with the reserved turn number above the committed
+count, and a mid-request compaction summarizes exactly their evidence
+-- while manual compaction lists only files older than the preserved
+tail. That reminder is current-request state injected while rebuilding
+or realizing the compacted prompt; it must not be queued into the
+session pending-reminder FIFO, which would deliver it to a later turn.
 
 ## Segment integration
 
