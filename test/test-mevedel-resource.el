@@ -638,6 +638,48 @@
             (should (equal (list skill-dir address) grep-path))))
       (delete-directory root t)))
 
+  :doc "disabled skills are absent from listings and reject exact resolution"
+  (let* ((root (make-temp-file "mevedel-resource-disabled-skill-" t))
+         (skill-dir (file-name-concat root "demo"))
+         (skill-file (file-name-concat skill-dir "SKILL.md"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id root :root root
+                     :name "resource-disabled-skill"))
+         (skill (mevedel-skill--create
+                 :name "demo" :raw-name "demo" :source 'project
+                 :source-family 'agents :source-file skill-file
+                 :source-dir skill-dir :enabled-p nil))
+         (session (mevedel-session--create
+                   :workspace workspace :skills (list skill)))
+         (address (format "skill://demo@%s"
+                          (mevedel-resource-skill-digest skill-file))))
+    (unwind-protect
+        (progn
+          (make-directory skill-dir t)
+          (with-temp-file skill-file (insert "disabled\n"))
+          (let ((listing
+                 (mevedel-resource-execute
+                  (mevedel-resource-prepare
+                   'read "skill://" (list :session session)))))
+            (should-not (string-match-p
+                         (regexp-quote address)
+                         (plist-get listing :result))))
+          (should-error
+           (mevedel-resource-execute
+            (mevedel-resource-prepare
+             'read address (list :session session)))
+           :type 'mevedel-resource-unavailable)
+          (let ((err
+                 (should-error
+                  (mevedel-resource-prepare
+                   'read "skill://local-agents/demo"
+                   (list :session session))
+                  :type 'mevedel-resource-error)))
+            (should (string-match-p
+                     "Skill alias does not name an enabled skill"
+                     (error-message-string err)))))
+      (delete-directory root t)))
+
   :doc "resolves readable aliases once while preserving the authored address"
   (let* ((root (make-temp-file "mevedel-resource-skill-alias-" t))
          (skill-dir (file-name-concat root "demo"))

@@ -404,12 +404,13 @@ settles at the sentinel instead of riding the grace timers."
      (gptel-make-openai "Balanced" :key "test" :models '(balanced-model))
      ,@body))
 
-(defun mevedel-skills-test--make-session (&optional name)
-  "Return a throwaway session named NAME with a minimal workspace."
+(defun mevedel-skills-test--make-session (&optional name root)
+  "Return a throwaway session named NAME with a minimal workspace at ROOT."
   (let ((ws (mevedel-workspace--create
              ;; A real workspace category: durable authority resolution
              ;; refuses to guess one for a synthetic type.
-             :type 'file :id "t" :root "/tmp/t" :name (or name "t")
+             :type 'file :id (or root "t") :root (or root "/tmp/t")
+             :name (or name "t")
              :file-cache (mevedel-file-cache--create
                           :table (make-hash-table :test #'equal)
                           :order nil :total-bytes 0))))

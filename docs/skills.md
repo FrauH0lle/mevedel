@@ -278,19 +278,30 @@ today; mevedel does not start plugin apps or bundled MCP servers yet.
 `/skills` manages visible skills:
 
 - `/skills` or `/skills list` opens the skills cockpit surface, listing
-  session skills and whether each is enabled.
+  skills visible in the current workspace and whether each is enabled there.
 - `/skills help NAME` shows description, source, and file metadata.
-- `/skills enable NAME` removes NAME from the persisted disabled set.
-- `/skills disable NAME` persists NAME as disabled.
+- `/skills enable NAME` removes NAME's source from the workspace disabled set.
+- `/skills disable NAME` persists NAME's source as disabled in the workspace.
 
 Disabled skills stay on the session for inspection, but they are omitted
 from `$` completion, rejected by explicit `$skill` invocation and
-`Skill(name=...)`, and omitted from model-facing skill discovery. The
-disabled set is stored in `skills-state.el` under `mevedel-user-dir`.
-That file is replaced through a rename, so an interrupted write leaves the
-previous disabled set intact rather than a partial file the reader would
-reject. Unlike plugin state it is global rather than per-workspace, so two
-Emacs instances resolve last-writer-wins on the whole file.
+`Skill(name=...)`, and omitted from model-facing skill discovery and
+`skill://` resources. The denylist is stored as
+`(:disabled-keys (...))` in `<workspace>/.mevedel/skills-state.el`; a missing
+file leaves every skill enabled. Project-contained skill sources use portable
+workspace-relative identities, while external user, bundled, managed, and
+plugin skill sources use canonical absolute identities. Visible names and
+collision prefixes therefore do not change persisted policy.
+
+Local state is replaced atomically, so an interrupted write leaves the
+previous denylist intact rather than a partial file the strict reader would
+reject. Remote state is published through the owning live session and its
+normal storage disclosure and lease checks; a sessionless inspector cannot
+mutate it. A scan reads state once and caches effective enablement on the
+session's skill objects. The owning session refreshes immediately after a
+command or cockpit toggle; other live sessions observe the change after their
+next rescan or reopen. The former global `~/.mevedel/skills-state.el` is no
+longer read and is left untouched for manual reference.
 
 Completion offers local command names at leading `/` and user-invocable
 skill names at leading `$` in the composer, with annotations for every

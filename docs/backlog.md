@@ -67,8 +67,6 @@ recommends those elements while leaving Codex room to choose the next action.
 
 - Consider making mevedel's data buffers hidden
 
-- Allow activation and deactivation of skills per project
-- Allow activation and deactivation of plugins per project
 
 - Residual watch after the 2026-08-23 interaction rebuild fix (cursor jumps
   at tick rate + garbled ApplyPatch feedback both traced to the 5s

@@ -45,6 +45,8 @@
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-context-session
                   "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-context-workspace
+                  "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-format-header
                   "mevedel-cockpit" (name scope state))
@@ -66,6 +68,7 @@
                   "mevedel-cockpit" (&optional no-error))
 (autoload 'mevedel-cockpit-context-data-buffer "mevedel-cockpit")
 (autoload 'mevedel-cockpit-context-session "mevedel-cockpit")
+(autoload 'mevedel-cockpit-context-workspace "mevedel-cockpit")
 (autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
 (autoload 'mevedel-cockpit-format-header "mevedel-cockpit")
 (autoload 'mevedel-cockpit-open-surface "mevedel-cockpit")
@@ -554,12 +557,12 @@ Routes through the lifecycle-aware permission transition path."
    (when-let* ((warnings (mevedel-skill-warnings skill)))
      (concat "\nWarnings:\n- " (string-join warnings "\n- ")))))
 
-(defun mevedel-skills-list--session-label (&optional context)
-  "Return CONTEXT's skills cockpit session label."
-  (if-let* ((session (and context
-                          (mevedel-cockpit-context-session context))))
-      (mevedel-session-name session)
-    "unknown"))
+(defun mevedel-skills-list--workspace-label (&optional context)
+  "Return CONTEXT's skills cockpit workspace root label."
+  (if-let* ((workspace (and context
+                            (mevedel-cockpit-context-workspace context))))
+      (abbreviate-file-name (mevedel-workspace-root workspace))
+    "no workspace"))
 
 (defun mevedel-skills-list--header-line (&optional items context)
   "Return the skills cockpit header line for ITEMS and CONTEXT."
@@ -568,7 +571,7 @@ Routes through the lifecycle-aware permission transition path."
                                items)))
     (mevedel-cockpit-format-header
      "skills"
-     (mevedel-skills-list--session-label context)
+     (mevedel-skills-list--workspace-label context)
      (format "%d/%d enabled" enabled total))))
 
 (defun mevedel-skills-list--collect (context)
@@ -684,8 +687,9 @@ Routes through the lifecycle-aware permission transition path."
 (defun mevedel-skills--list-message-text (session)
   "Return fallback `/skills list' message text for SESSION."
   (concat
-   (format "mevedel skills for %s\n\n"
-           (mevedel-session-name session))
+   (format "mevedel skills for workspace %s\n\n"
+           (abbreviate-file-name
+            (mevedel-workspace-root (mevedel-session-workspace session))))
    (if-let* ((skills (mevedel-session-skills session)))
        (mapconcat
         (lambda (skill)
