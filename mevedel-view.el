@@ -1130,7 +1130,11 @@ render timers."
               (null mevedel-view--pending-render-kind))
       (setq mevedel-view--pending-render-kind kind))
     (if (and (numberp delay) (> delay 0))
-        (unless mevedel-view--render-timer
+        ;; Test the timer's presence on `timer-list', not the variable: a
+        ;; timer armed from a stream or tool hook while TRAMP had timers
+        ;; suspended is silently discarded, and trusting the stale object
+        ;; would wedge every future render of this view.
+        (unless (mevedel--timer-pending-p mevedel-view--render-timer)
           (let ((view-buffer (current-buffer)))
             (setq mevedel-view--render-timer
                   (run-at-time

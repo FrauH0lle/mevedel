@@ -82,7 +82,7 @@
     (let ((mevedel-view-stream-render-delay 1)
           (mevedel-view-tool-boundary-render-delay 1)
           (mevedel-view-rerender-debounce 1)
-          (scheduled 0) callback args
+          (scheduled 0) callback args fake-timers
           (incremental-count 0)
           (full-count 0))
       (with-current-buffer view-buf
@@ -90,68 +90,99 @@
               (copy-marker mevedel-view--input-marker))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf (copy-marker (point-min)))))
-      (cl-letf (((symbol-function 'run-at-time)
-                 (lambda (_delay _repeat function &rest function-args)
-                   (cl-incf scheduled)
-                   (setq callback function
-                         args function-args)
-                   'scheduled))
-                ((symbol-function 'mevedel-view--render-stream-update)
-                 (lambda (_data-buffer) (cl-incf incremental-count)))
-                ((symbol-function 'mevedel-view--full-rerender)
-                 (lambda () (cl-incf full-count))))
-        (with-current-buffer data-buf
-          (mevedel-view-stream-schedule))
-        (with-current-buffer view-buf
-          (mevedel-view--schedule-tool-boundary-render data-buf))
-        (mevedel-view-rerender view-buf)
-        (should (= 1 scheduled))
-        (with-current-buffer view-buf
-          (should (eq 'full mevedel-view--pending-render-kind)))
-        (apply callback args)
-        (should (= 1 full-count))
-        (should (= 0 incremental-count))
-        (with-current-buffer view-buf
-          (should-not mevedel-view--render-timer)
-          (should-not mevedel-view--pending-render-kind))
-        (setq callback nil args nil)
-        (with-current-buffer data-buf
-          (mevedel-view-stream-schedule))
-        (with-current-buffer view-buf
-          (mevedel-view--schedule-tool-boundary-render data-buf))
-        (should (= 2 scheduled))
-        (apply callback args)
-        (should (= 1 full-count))
-        (should (= 1 incremental-count)))))
+      (unwind-protect
+          ;; The mock must arm a real far-future timer: scheduling now
+          ;; tests presence on `timer-list', so a bare placeholder value
+          ;; would read as a dropped timer and defeat the coalescing.
+          (cl-letf* ((real-run-at-time (symbol-function 'run-at-time))
+                     ((symbol-function 'run-at-time)
+                      (lambda (_delay _repeat function &rest function-args)
+                        (cl-incf scheduled)
+                        (setq callback function
+                              args function-args)
+                        (car (push (apply real-run-at-time 3600 nil
+                                          function function-args)
+                                   fake-timers))))
+                     ((symbol-function 'mevedel-view--render-stream-update)
+                      (lambda (_data-buffer) (cl-incf incremental-count)))
+                     ((symbol-function 'mevedel-view--full-rerender)
+                      (lambda () (cl-incf full-count))))
+            (with-current-buffer data-buf
+              (mevedel-view-stream-schedule))
+            (with-current-buffer view-buf
+              (mevedel-view--schedule-tool-boundary-render data-buf))
+            (mevedel-view-rerender view-buf)
+            (should (= 1 scheduled))
+            (with-current-buffer view-buf
+              (should (eq 'full mevedel-view--pending-render-kind)))
+            (apply callback args)
+            (should (= 1 full-count))
+            (should (= 0 incremental-count))
+            (with-current-buffer view-buf
+              (should-not mevedel-view--render-timer)
+              (should-not mevedel-view--pending-render-kind))
+            (setq callback nil args nil)
+            (with-current-buffer data-buf
+              (mevedel-view-stream-schedule))
+            (with-current-buffer view-buf
+              (mevedel-view--schedule-tool-boundary-render data-buf))
+            (should (= 2 scheduled))
+            (apply callback args)
+            (should (= 1 full-count))
+            (should (= 1 incremental-count)))
+        (mapc #'cancel-timer fake-timers))))
 
   :doc "defers timer flushes while a remote operation is already in flight"
   (mevedel-view-test--with-buffers
     (let ((mevedel-view-rerender-debounce 1)
-          callback args
+          callback args fake-timers
           (scheduled 0)
           (full-count 0))
+      (unwind-protect
+          (cl-letf* ((real-run-at-time (symbol-function 'run-at-time))
+                     ((symbol-function 'run-at-time)
+                      (lambda (_delay _repeat function &rest function-args)
+                        (cl-incf scheduled)
+                        (setq callback function
+                              args function-args)
+                        (car (push (apply real-run-at-time 3600 nil
+                                          function function-args)
+                                   fake-timers))))
+                     ((symbol-function 'mevedel-view--full-rerender)
+                      (lambda () (cl-incf full-count))))
+            (mevedel-view-rerender view-buf)
+            ;; A real handler frame, because that is what a render timer lands
+            ;; inside.  It must not test `tramp-current-connection': that stays
+            ;; set for the life of the process once any remote file is touched,
+            ;; which postponed every remote render forever.
+            (mevedel-transport--handler-advice
+             (lambda (&rest _) (apply callback args))
+             'file-exists-p "/ssh:user@host:/srv/x")
+            (should (= 2 scheduled))
+            (should (= 0 full-count))
+            (with-current-buffer view-buf
+              (should (eq 'full mevedel-view--pending-render-kind)))
+            (apply callback args)
+            (should (= 1 full-count)))
+        (mapc #'cancel-timer fake-timers))))
+
+  :doc "re-arms when the recorded timer is no longer on `timer-list'"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-rerender-debounce 1)
+          (scheduled 0)
+          lost)
+      ;; Arm a timer on a discarded `timer-list' binding: the shape TRAMP's
+      ;; suspended-timers window leaves behind when a stream or tool hook
+      ;; schedules a render inside it.
+      (let (timer-list)
+        (setq lost (run-at-time 3600 nil #'ignore)))
+      (should (timerp lost))
+      (with-current-buffer view-buf
+        (setq mevedel-view--render-timer lost))
       (cl-letf (((symbol-function 'run-at-time)
-                 (lambda (_delay _repeat function &rest function-args)
-                   (cl-incf scheduled)
-                   (setq callback function
-                         args function-args)
-                   'scheduled))
-                ((symbol-function 'mevedel-view--full-rerender)
-                 (lambda () (cl-incf full-count))))
-        (mevedel-view-rerender view-buf)
-        ;; A real handler frame, because that is what a render timer lands
-        ;; inside.  It must not test `tramp-current-connection': that stays
-        ;; set for the life of the process once any remote file is touched,
-        ;; which postponed every remote render forever.
-        (mevedel-transport--handler-advice
-         (lambda (&rest _) (apply callback args))
-         'file-exists-p "/ssh:user@host:/srv/x")
-        (should (= 2 scheduled))
-        (should (= 0 full-count))
-        (with-current-buffer view-buf
-          (should (eq 'full mevedel-view--pending-render-kind)))
-        (apply callback args)
-        (should (= 1 full-count))))))
+                 (lambda (&rest _) (cl-incf scheduled) 'scheduled)))
+        (mevedel-view-rerender view-buf))
+      (should (= 1 scheduled)))))
 
 (mevedel-deftest mevedel-view--flush-scheduled-render
   (:doc "keeps historical projection fixed while refreshing live chrome")

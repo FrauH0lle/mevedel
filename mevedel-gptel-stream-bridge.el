@@ -31,8 +31,10 @@
 (autoload 'mevedel-telemetry-record "mevedel-telemetry")
 
 ;; `mevedel-utilities'
+(declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
+(autoload 'mevedel--timer-pending-p "mevedel-utilities")
 (autoload 'mevedel--warn-once "mevedel-utilities")
 (eval-when-compile (require 'mevedel-utilities))
 
@@ -178,7 +180,11 @@ chunk when that stale transformer fails."
   (plist-put info :mevedel-stream-insert-parts
              (cons response
                    (plist-get info :mevedel-stream-insert-parts)))
-  (unless (timerp (plist-get info :mevedel-stream-insert-timer))
+  ;; Test presence on `timer-list', not the stored object: this runs inside
+  ;; the curl stream filter, which can execute while TRAMP has timers
+  ;; suspended, and a timer armed in that window is silently discarded.
+  (unless (mevedel--timer-pending-p
+           (plist-get info :mevedel-stream-insert-timer))
     (plist-put
      info :mevedel-stream-insert-timer
      (run-at-time mevedel-gptel-stream-bridge-insert-batch-delay nil
@@ -241,7 +247,10 @@ was a leading allocator in a profiled session."
 
 (defun mevedel-gptel-stream-bridge--schedule-gptel-stream-filter-flush (process)
   "Schedule a deferred gptel stream filter flush for PROCESS."
-  (unless (process-get process 'mevedel-gptel-stream-bridge--filter-timer)
+  ;; Same wedge hazard as the insert-batch timer: this is armed from the
+  ;; stream filter, so verify the stored timer is actually scheduled.
+  (unless (mevedel--timer-pending-p
+           (process-get process 'mevedel-gptel-stream-bridge--filter-timer))
     (process-put
      process 'mevedel-gptel-stream-bridge--filter-timer
      (run-at-time 0 nil

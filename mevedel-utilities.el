@@ -401,6 +401,16 @@ accepted when Emacs can prove the directories are the same."
       (string-join parts "/"))
      (t file))))
 
+(defun mevedel--timer-pending-p (timer)
+  "Return non-nil when TIMER is armed and still due to fire.
+
+A timer object proves nothing by itself: `run-at-time' pushes onto the
+current binding of `timer-list', and TRAMP let-binds that list to nil
+around every remote command, so a timer created from a process filter or
+hook inside that window is discarded with the binding and never fires.
+Only presence on `timer-list' means the timer is actually scheduled."
+  (and (timerp timer) (memq timer timer-list) t))
+
 (defun mevedel--cycle-list-around (element list)
   "Cycle list LIST around ELEMENT.
 

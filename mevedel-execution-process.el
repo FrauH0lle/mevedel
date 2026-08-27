@@ -25,6 +25,9 @@
   "mevedel-execution-target")
 (autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
 
+;; `mevedel-utilities'
+(declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
+
 ;; `tramp'
 (declare-function tramp-dissect-file-name "tramp" (name &optional nodefault))
 
@@ -332,7 +335,7 @@
   "Mark CHILD's target outcome unprovable with ERROR-DATA."
   (setf (mevedel-execution-process--child-termination child) 'unknown
         (mevedel-execution-process--child-error child) error-data)
-  (unless (mevedel-execution-process--timer-pending-p
+  (unless (mevedel--timer-pending-p
            (mevedel-execution-process--child-settle-timer child))
     (setf (mevedel-execution-process--child-settle-timer child)
           (run-at-time mevedel-execution-process--child-kill-delay nil
@@ -525,10 +528,6 @@
   "Record PATH as CHILD's spool after an external tree relocation."
   (setf (mevedel-execution-process--child-spool-path child) path))
 
-(defun mevedel-execution-process--timer-pending-p (timer)
-  "Return non-nil when TIMER is armed and still due to fire."
-  (and (timerp timer) (memq timer timer-list) t))
-
 (defun mevedel-execution-process--finish
     (child status &optional error-data)
   "Emit CHILD's immutable terminal result once."
@@ -591,7 +590,7 @@
   (unless (mevedel-execution-process--child-finished-p child)
     (setf (mevedel-execution-process--child-force-timer child) nil)
     (mevedel-execution-process--signal child 'KILL)
-    (unless (mevedel-execution-process--timer-pending-p
+    (unless (mevedel--timer-pending-p
              (mevedel-execution-process--child-settle-timer child))
       (setf (mevedel-execution-process--child-settle-timer child)
             (run-at-time
@@ -710,10 +709,10 @@
           (setf (mevedel-execution-process--child-termination child)
                 'signaled))
         (cond
-         ((mevedel-execution-process--timer-pending-p
+         ((mevedel--timer-pending-p
            (mevedel-execution-process--child-settle-timer child)))
          ((and (mevedel-execution-process--child-stop-p child)
-               (mevedel-execution-process--timer-pending-p
+               (mevedel--timer-pending-p
                 (mevedel-execution-process--child-force-timer child)))
           (setf (mevedel-execution-process--child-settle-timer child)
                 (run-at-time
