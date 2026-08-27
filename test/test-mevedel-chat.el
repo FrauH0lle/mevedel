@@ -1407,6 +1407,28 @@
                              (should (equal "interrupted by user"
                                             (mevedel-goal-reason goal)))))
 
+		 :doc "idles a root roster left running by a lost request teardown"
+                 (with-temp-buffer
+                   (let* ((workspace (mevedel-workspace--create
+                                      :type 'project
+                                      :id "/tmp/mevedel-chat-abort-roster/"
+                                      :root "/tmp/mevedel-chat-abort-roster/"
+                                      :name "abort-roster"))
+                          (session (mevedel-session-create "main" workspace)))
+                     (setq-local mevedel--session session)
+                     ;; The request vanished without its own teardown, so
+                     ;; nothing idled the roster and the view keeps spinning.
+                     (setq-local mevedel--current-request nil)
+                     (setf (mevedel-session-agent-root-activity session)
+                           'running)
+                     (cl-letf (((symbol-function
+                                 'mevedel-session-artifacts-save)
+                                (lambda (&rest _) "saved")))
+                       (mevedel-abort (current-buffer)))
+                     (should (eq 'idle
+                                 (mevedel-session-agent-root-activity
+                                  session)))))
+
 		 :doc "does not save or warn during read-only inspection cleanup"
 		 (with-temp-buffer
 		   (let* ((workspace
