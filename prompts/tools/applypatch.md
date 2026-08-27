@@ -1,4 +1,4 @@
-Apply one coherent filesystem change with a Codex-style patch. Put every
+Apply one coherent filesystem change with a structured patch. Put every
 related file operation in one call. Paths are relative to the session working
 directory unless absolute.
 
@@ -68,8 +68,14 @@ of context cannot uniquely locate the snippet, anchor the hunk with `@@ N`,
 where N is the line number its first line carried in your most recent Read of
 that file. A line number only chooses among locations whose content already
 matches, so a stale N is harmless and never rejects a hunk on its own.
-Alternatively add a distinguishing `@@ context anchor` naming the enclosing
-definition, or enlarge the hunk. Each hunk takes at most one `@@` anchor.
+Alternatively add a `@@ context anchor` naming a line above the hunk or a
+prefix of one, such as the enclosing definition's first line, or enlarge the
+hunk. Each hunk takes at most one `@@` anchor.
+
+A hunk made only of context lines is a locator: it matches its lines and
+changes nothing, pinning where the hunks after it apply. Every hunk must
+contain at least one line, and an Update whose hunks change nothing is
+rejected as a whole.
 
 Matching tolerates trailing whitespace, surrounding whitespace, and
 ASCII-vs-typographic punctuation differences, in that order of preference,
@@ -86,11 +92,11 @@ and may also contain update hunks. Do not use shell commands for file edits.
 ### Examples of good usage
 
 <example>
-- Edit one function with anchored context:
+- Edit one function with an anchored hunk; the anchor names a line above
+  the hunk, so the hunk starts below it:
 ApplyPatch(patch="*** Begin Patch
 *** Update File: src/config.py
 @@ def load_config
- def load_config(path):
 -    data = json.load(open(path))
 +    with open(path) as fh:
 +        data = json.load(fh)
