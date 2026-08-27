@@ -1397,17 +1397,17 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry)))
-  :doc "collects published generations once on an acquiring restore only"
+  :doc "an acquiring restore collects real generations; a live reopen does not"
   (let* ((host "restore-collect-host")
          (local-root
           (file-name-as-directory
            (make-temp-file "mevedel-remote-restore-" t)))
-         (collected 0)
+         (mevedel-session-publication-keep-recent-generations 1)
          restored)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp (list host)
-          (cl-destructuring-bind (workspace session session-dir _segment)
-            (test-mevedel-session-persistence--make-remote-restore-fixture
+          (cl-destructuring-bind (workspace session session-dir segment)
+              (test-mevedel-session-persistence--make-remote-restore-fixture
                host local-root "* Chat\n")
             (let ((mevedel-session-durability--client-id
                    (make-string 64 ?e))
@@ -1417,36 +1417,65 @@
                (mevedel-execution-target-identity
                 (mevedel-session-execution-target session))
                t mevedel-session-durability--disclosed-targets)
+              (should
+               (mevedel-session-durability-lease-acquire
+                session-dir "*restore-collect-publisher*" session))
               (unwind-protect
-                  (cl-letf
-                      (((symbol-function 'mevedel--probe-session-target)
-                        #'ignore)
-                       ((symbol-function 'mevedel--chat-buffer-init-common)
-                        #'ignore)
-                       ((symbol-function
-                         'mevedel-agent-persistence-restore-tree)
-                        (lambda (&rest _) 0))
-                       ((symbol-function
-                         'mevedel-session-artifacts-load-instructions)
-                        #'ignore)
-                       ((symbol-function
-                         'mevedel-session-publication-collect-generations)
-                        (lambda (_session) (cl-incf collected) 0)))
-                    (setq restored
-                          (mevedel-session-persistence-restore
-                           session-dir nil nil workspace))
-                    (should (= 1 collected))
-                    ;; Re-opening switches to the live buffer without
-                    ;; acquiring, so nothing collects again.
-                    (should (eq restored
-                                (mevedel-session-persistence-restore
-                                 session-dir nil nil workspace)))
-                    (should (= 1 collected)))
-                (when restored
-                  (test-mevedel-session-persistence--release-and-kill
-                   restored
-                   (buffer-local-value 'mevedel--session restored)))
-                (setq restored nil)))))
+                  (progn
+                    (dolist (text '("one" "one more" "one complete"))
+                      (test-mevedel-session-persistence--publish-generation
+                       session session-dir segment (concat text "\n") 1))
+                    (test-mevedel-session-persistence--publish-generation
+                     session session-dir segment "two\n" 2))
+                (mevedel-session-durability-lease-release
+                 session-dir session))
+              (let ((before
+                     (length
+                      (mevedel-session-publication--generation-names
+                       session-dir))))
+                (unwind-protect
+                    (cl-letf
+                        (((symbol-function 'mevedel--probe-session-target)
+                          #'ignore)
+                         ((symbol-function 'mevedel--chat-buffer-init-common)
+                          #'ignore)
+                         ((symbol-function
+                           'mevedel-agent-persistence-restore-tree)
+                          (lambda (&rest _) 0))
+                         ((symbol-function
+                           'mevedel-session-artifacts-load-instructions)
+                          #'ignore))
+                      (setq restored
+                            (mevedel-session-persistence-restore
+                             session-dir nil nil workspace))
+                      (let ((after
+                             (length
+                              (mevedel-session-publication--generation-names
+                               session-dir))))
+                        (should (< after before))
+                        (with-current-buffer restored
+                          (test-mevedel-session-persistence--publish-generation
+                           mevedel--session session-dir segment "live\n" 2))
+                        (let ((live-before
+                               (length
+                                (mevedel-session-publication--generation-names
+                                 session-dir))))
+                          (should (> live-before after))
+                        ;; Re-opening switches to the live buffer without
+                        ;; acquiring and therefore collects nothing again.
+                          (should (eq restored
+                                      (mevedel-session-persistence-restore
+                                       session-dir nil nil workspace)))
+                          (should
+                           (= live-before
+                              (length
+                               (mevedel-session-publication--generation-names
+                                session-dir)))))))
+                  (when restored
+                    (test-mevedel-session-persistence--release-and-kill
+                     restored
+                     (buffer-local-value 'mevedel--session restored)))
+                  (setq restored nil))))))
       (when (file-directory-p local-root)
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry)))

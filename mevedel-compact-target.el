@@ -205,11 +205,10 @@ summarizes away, so they are included rather than assumed visible."
            files)
       (maphash
        (lambda (path interaction)
-         (let ((last-turn (or (mevedel-file-interaction-modified-turn
-                               interaction)
-                              (mevedel-file-interaction-read-turn
-                               interaction)
-                              0)))
+         (let ((last-turn
+                (max (or (mevedel-file-interaction-modified-turn interaction)
+                         0)
+                     (or (mevedel-file-interaction-read-turn interaction) 0))))
           (when (or (< last-turn cutoff)
                     (and auto (> last-turn turn)))
             (push path files))))

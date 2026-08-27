@@ -135,7 +135,10 @@ context line), one `*** Environment ID:` line after `*** Begin Patch` is
 skipped, and a bare empty line inside an update body is an empty context
 line whose space marker the model dropped. Deliberate divergences: a pure
 rename (Update + Move with no hunks) is allowed where Codex rejects it, and
-a hunk without any `+`/`-` line is rejected as a no-op.
+a context-only hunk is accepted as a locator that positions later hunks
+without changing the file. An Update whose hunks are all locators is rejected
+as a no-op. Locator hunks are hidden from review rows, counts, result lines,
+and persisted diffs; they cannot be selected or commented on.
 
 ## Matching fallbacks
 
@@ -153,7 +156,10 @@ untouched lines. Hunks arrive in file order, so an otherwise ambiguous
 match is retried among the candidates at or after the previous hunk's
 position before being rejected; deselected hunks still advance that
 cursor at apply time, keeping the preview's disambiguation window and
-the application's identical. A hunk whose `@@` anchor is a bare positive
+the application's identical. Locator hunks likewise advance the cursor while
+remaining absent from the review. A textual `@@` anchor matches either its
+full line or a prefix of that line and must occur strictly above the hunk it
+anchors. A hunk whose `@@` anchor is a bare positive
 integer carries that number as a line hint, which settles a tie the
 order cursor left by selecting the nearest candidate; equidistant
 candidates stay rejected. Neither tie-break can empty the candidate set,

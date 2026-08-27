@@ -510,17 +510,9 @@ Signal when the request is missing or its reservation is not the next turn."
             ;; published mid-stream stop being anyone's recovery state:
             ;; until settlement they are what a crashed owner resumes
             ;; from, and afterwards nothing resolves through them.
-            ;; Best-effort by construction -- a turn must not fail
-            ;; because storage could not be reclaimed.
-            (condition-case error
-                (mevedel-session-publication-collect-generations
-                 mevedel--session)
-              (error
-               (display-warning
-                'mevedel
-                (format "Could not collect published generations: %s"
-                        (error-message-string error))
-                :warning))))
+            ;; The collector owns its best-effort warning contract.
+            (mevedel-session-publication-collect-generations
+             mevedel--session))
           (when (and saved (buffer-live-p mevedel--view-buffer))
             (mevedel-view-rerender mevedel--view-buffer)))))))
 

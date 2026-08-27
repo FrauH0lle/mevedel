@@ -88,19 +88,34 @@
   ;; Mid-request file access is stamped with the reserved turn, one
   ;; above the committed count; a mid-request compaction summarizes
   ;; exactly that evidence, so auto includes it and manual does not.
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/r/" "/tmp/r/" "r"))
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-compact-in-flight-" t)))
+         (path (file-name-concat root "in-flight.el"))
+         (ws (mevedel-workspace-get-or-create 'project root root "r"))
          (session (mevedel-session-create "main" ws)))
-    (setf (mevedel-session-turn-count session) 10)
-    (puthash "/tmp/r/in-flight.el"
-             (mevedel-file-interaction--create
-              :path "/tmp/r/in-flight.el" :modified-turn 11)
-             (mevedel-session-touched-files session))
-    (should (string-match-p
-             "/tmp/r/in-flight.el"
-             (mevedel-compact-target-file-reference-reminder-body
-              session 2 t)))
-    (should-not (mevedel-compact-target-file-reference-reminder-body
-                 session 2 nil))))
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "content\n"))
+          (setf (mevedel-session-turn-count session) 10)
+          ;; An older modification must not mask the later in-flight read.
+          (puthash path
+                   (mevedel-file-interaction--create
+                    :path path :modified-turn 5)
+                   (mevedel-session-touched-files session))
+          (let ((mevedel--current-request
+                 (mevedel-request--create :session session :turn 11)))
+            (mevedel-session-record-file-access session path 'read))
+          (let ((interaction
+                 (gethash path (mevedel-session-touched-files session))))
+            (should (= 5 (mevedel-file-interaction-modified-turn interaction)))
+            (should (= 11 (mevedel-file-interaction-read-turn interaction))))
+          (should (string-match-p
+                   (regexp-quote path)
+                   (mevedel-compact-target-file-reference-reminder-body
+                    session 2 t)))
+          (should-not (mevedel-compact-target-file-reference-reminder-body
+                       session 2 nil)))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-compact-target-agent-target ()
   ,test

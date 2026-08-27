@@ -438,7 +438,58 @@ adopt prompt.  Returns the messages the session produced."
                            (with-temp-buffer
                              (insert-file-contents path)
                              (buffer-string)))))
-        (when (file-directory-p root) (delete-directory root t))))))
+        (when (file-directory-p root) (delete-directory root t)))))
+
+  :doc "a hidden locator does not make file-row reselection take two presses"
+  (mevedel-view-test--with-buffers
+    (let* ((root (file-name-as-directory
+                  (make-temp-file "mevedel-patch-locator-select-" t)))
+           (path (file-name-concat root "one.txt"))
+           (workspace (mevedel-workspace--create
+                       :type 'file :id root :root root :name "locator-select"
+                       :file-cache (mevedel-test-file-cache-create)))
+           (session (mevedel-session-create
+                     "locator-select" workspace root))
+           (patch (string-join
+                   '("*** Begin Patch"
+                     "*** Update File: one.txt"
+                     "@@"
+                     " section"
+                     " same"
+                     "@@"
+                     "-same"
+                     "+changed"
+                     "*** End Patch")
+                   "\n")))
+      (unwind-protect
+          (progn
+            (with-temp-file path (insert "section\nsame\nsame\n"))
+            (with-current-buffer data-buf
+              (setq-local default-directory root
+                          mevedel--workspace workspace
+                          mevedel--session session)
+              (mevedel-tool-patch-handler #'ignore (list :patch patch)))
+            (with-current-buffer view-buf
+              (goto-char (point-min))
+              (search-forward "M one.txt")
+              (mevedel-patch-review-toggle-fold)
+              (goto-char (point-min))
+              (goto-char
+               (next-single-property-change
+                (point) 'mevedel-patch-hunk nil mevedel-view--input-marker))
+              (mevedel-patch-review-toggle-selection)
+              (goto-char (point-min))
+              (search-forward "M one.txt")
+              (let* ((operation
+                      (mevedel-patch-review--target-at-point
+                       'mevedel-patch-operation))
+                     (change
+                      (seq-find #'mevedel-tool-patch-hunk-changes-p
+                                (plist-get operation :hunks))))
+                (should-not (plist-get change :selected))
+                (mevedel-patch-review-toggle-selection)
+                (should (plist-get change :selected)))))
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-patch-review-edit
   (:doc "Editing an Update re-derives its hunks from the edited result")

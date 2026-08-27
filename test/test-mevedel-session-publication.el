@@ -12,24 +12,6 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 
-(defun test-mevedel-session-publication--publish (session session-dir segment
-                                                          transcript turns)
-  "Publish TRANSCRIPT for SESSION at SEGMENT with TURNS settled turns.
-SESSION-DIR locates the sidecar.  Returns the committed head."
-  (setf (mevedel-session-turn-count session) turns)
-  (mevedel-session-publication-publish
-   session
-   (list
-    (list :path segment :content transcript)
-    (list :path (mevedel-session-artifacts-sidecar-path session-dir)
-          :content
-          (mevedel-session-artifacts-printed-value
-           (mevedel-session-artifacts-build-sidecar
-            session (current-buffer)))
-          :commit-marker t
-          :replace t)))
-  (plist-get (mevedel-session-publication session) :head))
-
 (defun test-mevedel-session-publication--with-published
     (host prefix client-id body)
   "Call BODY with a leased portable session fixture.
@@ -77,9 +59,9 @@ and its segment path."
     (test-mevedel-session-publication--with-published
      "publication-summaries" "mevedel-publication-summaries-" ?c
      (lambda (session session-dir segment)
-       (test-mevedel-session-publication--publish
+       (test-mevedel-session-persistence--publish-generation
         session session-dir segment "Turn one\n" 1)
-       (test-mevedel-session-publication--publish
+       (test-mevedel-session-persistence--publish-generation
         session session-dir segment "Turn two\n" 2)
        (let ((summaries
               (mevedel-session-publication-generation-summaries session-dir)))
@@ -101,7 +83,7 @@ and its segment path."
   (test-mevedel-session-publication--with-published
    "publication-head-facts" "mevedel-publication-head-facts-" ?d
    (lambda (session session-dir segment)
-     (let* ((head (test-mevedel-session-publication--publish
+     (let* ((head (test-mevedel-session-persistence--publish-generation
                    session session-dir segment "Turn one\n" 1))
             (facts (mevedel-session-publication-head-facts session-dir head)))
        (should (= 1 (plist-get facts :turn-count)))))))
@@ -130,7 +112,7 @@ and its segment path."
      "publication-collect" "mevedel-publication-collect-" ?a
      (lambda (session session-dir segment)
       (cl-flet ((publish (transcript turns)
-                  (test-mevedel-session-publication--publish
+                  (test-mevedel-session-persistence--publish-generation
                    session session-dir segment transcript turns)))
         ;; One settled turn, three further saves of that same state, then
         ;; a second settled turn.
@@ -177,7 +159,7 @@ and its segment path."
     (test-mevedel-session-publication--with-published
      "publication-cache" "mevedel-publication-cache-" ?c
      (lambda (session session-dir segment)
-       (test-mevedel-session-publication--publish
+       (test-mevedel-session-persistence--publish-generation
         session session-dir segment "Turn one\n" 1)
        (let ((raw (symbol-function
                    'mevedel-session-publication--read-publication-raw)))
@@ -202,12 +184,27 @@ and its segment path."
      "publication-bound" "mevedel-publication-bound-" ?b
      (lambda (session session-dir segment)
        (dolist (turns '(1 1 1 2))
-         (test-mevedel-session-publication--publish
+         (test-mevedel-session-persistence--publish-generation
           session session-dir segment (format "Turn %d\n" turns) turns))
        (should (= 2 (mevedel-session-publication-collect-generations session)))
        ;; The pass was complete; nothing is left for later.
        (should (= 0 (mevedel-session-publication-collect-generations
                      session))))))
+
+  :doc "warns instead of failing when collection cannot inspect generations"
+  (test-mevedel-session-publication--with-published
+   "publication-collect-failure" "mevedel-publication-collect-failure-" ?f
+   (lambda (session _session-dir _segment)
+     (let (captured)
+       (mevedel-test--with-captured-diagnostics captured
+         (cl-letf (((symbol-function
+                     'mevedel-session-publication-generation-summaries)
+                    (lambda (&rest _) (error "Injected scan failure"))))
+           (should-not
+            (mevedel-session-publication-collect-generations session))))
+       (should (string-match-p
+                "Could not collect published generations.*Injected scan failure"
+                captured)))))
 
   :doc "refuses without the lease and for a PID-lock session"
   (should-not

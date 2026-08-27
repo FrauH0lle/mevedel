@@ -731,7 +731,9 @@ On an Update file row this toggles every hunk in the file at once."
     (unless (and proposal operation)
       (user-error "No selectable patch change at point"))
     (if (and (eq (plist-get operation :kind) 'update) (not hunk))
-        (let* ((hunks (plist-get operation :hunks))
+        (let* ((hunks (seq-filter
+                       #'mevedel-tool-patch-hunk-changes-p
+                       (plist-get operation :hunks)))
                (any (cl-some (lambda (h) (plist-get h :selected)) hunks)))
           (cond
            (any (dolist (h hunks) (plist-put h :selected nil)))
