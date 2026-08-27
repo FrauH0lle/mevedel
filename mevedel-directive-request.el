@@ -217,8 +217,10 @@
                   "mevedel-turn" (session &optional directive-uuid))
 (declare-function mevedel-request-end
                   "mevedel-turn" (&optional abort-plan-approval))
+(declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
 (autoload 'mevedel-request-begin "mevedel-turn")
 (autoload 'mevedel-request-end "mevedel-turn")
+(autoload 'mevedel-turn-busy-p "mevedel-turn")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -887,8 +889,9 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 			  (kill-buffer transient-buffer))))))))
 
           (with-current-buffer chat-buffer
-            (when mevedel--current-request
-              (user-error "A request is already active -- wait or abort first"))
+            (when (mevedel-turn-busy-p)
+              (user-error
+               "The session is busy -- wait for settlement or abort the active request"))
             (when planning-p
               (when (mevedel-session-plan-mode mevedel--session)
                 (user-error

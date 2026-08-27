@@ -91,7 +91,9 @@ settlement: the turn's request slot was emptied without its settlement
 ever running -- a terminal transition lost with its process -- and a
 later terminal transition on the same machine settled what it still
 could.  Its request identity comes from the machine itself, and it
-carries no duration or token facts.
+carries no duration or token facts.  The session reports `settling` and
+rejects new admission until the degraded settlement chain completes; transport
+cancellation releases the fence and leaves the machine retryable.
 
 - Goal start, continuation dispatch, root-turn settlement, accounting, retries,
   and terminal status changes;

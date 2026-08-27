@@ -339,28 +339,56 @@ coalescing siblings by re-running policy never fire that hook again.
 `mevedel-permission-notify-function` (default nil) is called once per admitted
 card with its entry plist, at admission -- never for decisions the rule chain
 or hooks settle without prompting, and never again on head redraw, coalesce,
-or resolution. Interactive cards are rare (a real two-day session made 988
-permission decisions but queued only a handful of cards), so a notifier fires
-a few times per session, not per tool call. It fires at enqueue rather than
-after an unanswered delay because the machine is certainly awake then; an
+or resolution. Only prompts the user must answer notify, never auto-resolved
+tool calls; how many that is per session depends entirely on the session's
+permission mode and rules. It fires at enqueue rather than after an
+unanswered delay because the machine is certainly awake then; an
 idle-escalation timer dies with a suspend, which is exactly the situation --
 the user stepped away, the machine slept on an open prompt -- the hook exists
 for. Errors are demoted so a broken notifier cannot break admission.
 
+The value is always a small wrapper that formats a message from the entry;
+the entry carries mevedel's card keys, not a notification API's keywords, so
+pointing the variable directly at `notifications-notify` shows an empty
+notification.
+
 ```elisp
-;; Desktop notification:
+;; Desktop notification via Emacs's built-in DBus client
+;; (notifications.el ships with Emacs and talks to the same
+;; freedesktop daemon notify-send does):
+(require 'notifications)
 (setq mevedel-permission-notify-function
       (lambda (entry)
         (notifications-notify
          :title "mevedel needs permission"
+         :urgency 'critical
+         :timeout 0
          :body (format "%s %s"
                        (or (plist-get entry :tool-name)
                            (plist-get entry :kind))
                        (or (plist-get entry :command)
+                           (plist-get entry :expression)
                            (plist-get entry :specifier-value)
                            "")))))
 
-;; Phone push through ntfy:
+;; The same through the notify-send binary; destination 0 makes
+;; call-process fire-and-forget:
+(setq mevedel-permission-notify-function
+      (lambda (entry)
+        (call-process "notify-send" nil 0 nil
+                      "--app-name=mevedel" "--urgency=critical"
+                      "--expire-time=0"
+                      "mevedel needs permission"
+                      (format "%s %s"
+                              (or (plist-get entry :tool-name)
+                                  (plist-get entry :kind))
+                              (or (plist-get entry :command)
+                                  (plist-get entry :expression)
+                                  (plist-get entry :specifier-value)
+                                  "")))))
+
+;; Phone push through ntfy, for the prompt that opens after you have
+;; left the desk:
 (setq mevedel-permission-notify-function
       (lambda (entry)
         (call-process "curl" nil 0 nil "-s"
@@ -369,6 +397,10 @@ for. Errors are demoted so a broken notifier cannot break admission.
                                        (plist-get entry :kind)))
                       "https://ntfy.sh/YOUR-TOPIC")))
 ```
+
+The desktop wrappers request a non-expiring critical notification.  A
+notification server may ignore the timeout hint; `notify-send(1)` documents
+GNOME Shell and Notify OSD as examples.
 
 `mevedel-permission-prompt.el` is the focused UI owner for all four entry
 kinds. It owns generic permission controls, agent attribution, Bash guardian

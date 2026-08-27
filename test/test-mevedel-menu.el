@@ -1488,6 +1488,13 @@
       (setq-local mevedel--current-request
                   (mevedel-request--create :session mevedel--session)))
     (with-current-buffer view-buf
+      (should (mevedel-menu--send-inapt-p))))
+
+  :doc "settling session cannot send"
+  (mevedel-menu-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local mevedel--turn-settlements-pending '(settlement)))
+    (with-current-buffer view-buf
       (should (mevedel-menu--send-inapt-p)))))
 
 (mevedel-deftest mevedel-menu--abort-inapt-p ()

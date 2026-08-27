@@ -476,7 +476,8 @@ right-side state is dropped. Clickable parts route to session cockpit
 surfaces such as top, mode, model, and tools. The request state is
 plain status text. The view must not copy or proxy gptel's clickable
 data-buffer header line; gptel-owned header controls stay in the raw
-data buffer. Header construction is cached by its semantic fields and display
+data buffer. The request state is `settling` while a lost turn's deferred
+terminal work still owns the session. Header construction is cached by its semantic fields and display
 width, so spinner redisplay reuses the same propertized strip until one of
 those inputs changes.
 

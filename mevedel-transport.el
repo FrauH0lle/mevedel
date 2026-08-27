@@ -218,26 +218,36 @@ restored on exit as though the cancel never happened."
 (defvar mevedel-transport--pending (make-hash-table :test #'equal)
   "Timers for work waiting on an idle transport, keyed by coalescing key.")
 
-(defun mevedel-transport--retry (key path thunk)
-  "Re-attempt KEY's THUNK for PATH now that its retry timer has fired."
-  (remhash key mevedel-transport--pending)
-  (mevedel-transport-run-when-idle key path thunk))
+(defvar mevedel-transport--pending-cancellers (make-hash-table :test #'equal)
+  "Cancellation callbacks for deferred transport work.")
 
-(defun mevedel-transport-run-when-idle (key path thunk)
+(defun mevedel-transport--retry (key path thunk on-cancel)
+  "Re-attempt KEY's THUNK for PATH, preserving ON-CANCEL."
+  (remhash key mevedel-transport--pending)
+  (remhash key mevedel-transport--pending-cancellers)
+  (mevedel-transport-run-when-idle key path thunk on-cancel))
+
+(defun mevedel-transport-run-when-idle (key path thunk &optional on-cancel)
   "Call THUNK once no remote operation for PATH is in flight.
 
 KEY coalesces repeated scheduling of the same logical work, so a caller that
 re-arms on every event queues one retry rather than a growing fan of timers.
 THUNK runs immediately when the transport is already idle, because a filter or
-sentinel is only unsafe when it nests. Disabled transport drops late work."
+sentinel is only unsafe when it nests.  ON-CANCEL runs if queued work is
+cancelled before THUNK starts.  Disabled transport drops late work."
   (when mevedel-transport--enabled-p
     (if (mevedel-transport-busy-p path)
         (unless (gethash key mevedel-transport--pending)
           (puthash key
                    (run-at-time mevedel-transport-retry-seconds nil
-                                #'mevedel-transport--retry key path thunk)
-                   mevedel-transport--pending))
+                                #'mevedel-transport--retry key path thunk
+                                on-cancel)
+                   mevedel-transport--pending)
+          (when on-cancel
+            (puthash key on-cancel
+                     mevedel-transport--pending-cancellers)))
       (remhash key mevedel-transport--pending)
+      (remhash key mevedel-transport--pending-cancellers)
       (funcall thunk))))
 
 (defun mevedel-transport-cancel-pending (&optional key)
@@ -245,11 +255,19 @@ sentinel is only unsafe when it nests. Disabled transport drops late work."
   (if key
       (when-let* ((timer (gethash key mevedel-transport--pending)))
         (when (timerp timer) (cancel-timer timer))
-        (remhash key mevedel-transport--pending))
+        (remhash key mevedel-transport--pending)
+        (when-let* ((on-cancel
+                     (gethash key mevedel-transport--pending-cancellers)))
+          (remhash key mevedel-transport--pending-cancellers)
+          (ignore-errors (funcall on-cancel))))
     (maphash (lambda (_key timer)
                (when (timerp timer) (cancel-timer timer)))
              mevedel-transport--pending)
-    (clrhash mevedel-transport--pending)))
+    (clrhash mevedel-transport--pending)
+    (maphash (lambda (_key on-cancel)
+               (ignore-errors (funcall on-cancel)))
+             mevedel-transport--pending-cancellers)
+    (clrhash mevedel-transport--pending-cancellers)))
 
 (mevedel-transport-install)
 

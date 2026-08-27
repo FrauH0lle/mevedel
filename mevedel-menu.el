@@ -215,8 +215,10 @@
                   (&optional buffer))
 (declare-function mevedel-request-state-label "mevedel-turn"
                   (&optional buffer))
+(declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
 (autoload 'mevedel-request-active-p "mevedel-turn")
 (autoload 'mevedel-request-state-label "mevedel-turn")
+(autoload 'mevedel-turn-busy-p "mevedel-turn")
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--assert-live-tip
@@ -948,7 +950,8 @@ state rather than as a fourth permission choice."
 
 (defun mevedel-menu--send-inapt-p ()
   "Return non-nil when sending should be inapt."
-  (mevedel-menu--request-active-p))
+  (mevedel-turn-busy-p
+   (mevedel-cockpit-context-data-buffer (mevedel-menu--context))))
 
 (defun mevedel-menu--abort-inapt-p ()
   "Return non-nil when aborting should be inapt."

@@ -3654,9 +3654,47 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (should-not mevedel--pending-model-input)))
       (kill-buffer chat-buffer))))
 
+(mevedel-deftest mevedel-view--start-fork-skill-turn ()
+  ,test
+  (test)
+  :doc "rejects a late settlement fence before mutating either buffer"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "fork-settlement"))
+          (draft "> first line\nsecond line")
+          data-before view-before)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--turn-settlements-pending '(settlement))
+        (setq data-before (buffer-string)))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert draft)
+        (setq view-before (buffer-string))
+        (should-error
+         (mevedel-view--start-fork-skill-turn
+          "stored" "display" nil draft)
+         :type 'user-error)
+        (should (equal view-before (buffer-string))))
+      (with-current-buffer data-buf
+        (should (equal data-before (buffer-string)))))))
+
 (mevedel-deftest mevedel-view-send/pending-input (:quiet t)
   ,test
   (test)
+
+  :doc "deferred settlement blocks sending and preserves a multiline draft"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create
+                    :authority-mode 'pid-lock :name "main"))
+          (draft "> first line\nsecond line"))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--turn-settlements-pending '(settlement)))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert draft)
+        (should-error (mevedel-view-send) :type 'user-error)
+        (should (equal draft (mevedel-view--input-text))))))
 
   :doc "C-c TAB queues independent FIFO follow-ups during an active request"
   (mevedel-view-test--with-buffers
@@ -5025,6 +5063,39 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 	      (with-current-buffer data-buf
 		(should (string-empty-p (buffer-string)))))
       (delete-directory root t)))
+
+  :doc "a settlement arriving in a prompt hook preserves transcript and draft"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'file :id "hook-settlement" :root "/tmp"
+                       :name "hook-settlement"))
+           (session (mevedel-session-create "main" workspace))
+           (draft "> first line\nsecond line")
+           data-before)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace)
+        (setq data-before (buffer-string)))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace)
+        (goto-char (mevedel-view--input-start))
+        (insert draft))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (with-current-buffer data-buf
+                     (setq-local mevedel--turn-settlements-pending
+                                 '(settlement)))
+                   (funcall callback nil)))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (ert-fail "Settlement fence allowed provider dispatch"))))
+        (with-current-buffer view-buf
+          (should-error (mevedel-view-send) :type 'user-error)
+          (should (equal draft (mevedel-view--input-text)))
+          (should-not (mevedel-view-history--entries))))
+      (with-current-buffer data-buf
+        (should (equal data-before (buffer-string))))))
 
   :doc "blocked prompt context is consumed once by the next accepted root input"
   (mevedel-view-test--with-buffers

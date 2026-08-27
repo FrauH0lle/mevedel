@@ -184,7 +184,9 @@
 ;; `mevedel-turn'
 (declare-function mevedel-request-active-p
                   "mevedel-turn" (&optional buffer))
+(declare-function mevedel-turn-busy-p "mevedel-turn" (&optional buffer))
 (autoload 'mevedel-request-active-p "mevedel-turn")
+(autoload 'mevedel-turn-busy-p "mevedel-turn")
 
 (defcustom mevedel-session-follow-published t
   "Whether a non-owner session buffer follows the owner's committed state.
@@ -336,7 +338,7 @@ Return BUFFER so lifecycle hooks can use this as their value."
 The coordinator owns the session-state part of this decision.  UI and other
 transient owners contribute through the registered drain predicates; a failed
 predicate is conservatively treated as still draining."
-  (and (not (mevedel-request-active-p
+  (and (not (mevedel-turn-busy-p
              (mevedel-session-control-transfer-root-buffer session)))
        (not (mevedel-session-pending-publication session))
        (not (mevedel-session-publication-active-p session))
@@ -362,6 +364,9 @@ wait is theirs to end, not an inventory."
    ((mevedel-request-active-p
      (mevedel-session-control-transfer-root-buffer session))
     "a running request")
+   ((mevedel-turn-busy-p
+     (mevedel-session-control-transfer-root-buffer session))
+    "a settling turn")
    ((mevedel-execution-session-live-p session) "a live execution")
    ((mevedel-session-permission-queue session) "a permission prompt")
    ((mevedel-session-pending-plan-approval session) "a plan approval")

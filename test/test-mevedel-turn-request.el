@@ -85,12 +85,26 @@
     (setq-local mevedel--current-request t)
     (should (mevedel-request-active-p))))
 
+(mevedel-deftest mevedel-turn-busy-p ()
+  ,test
+  (test)
+  :doc "includes both active requests and deferred settlement"
+  (with-temp-buffer
+    (should-not (mevedel-turn-busy-p))
+    (setq-local mevedel--turn-settlements-pending '(settlement))
+    (should (mevedel-turn-busy-p))
+    (setq-local mevedel--turn-settlements-pending nil
+                mevedel--current-request t)
+    (should (mevedel-turn-busy-p))))
+
 (mevedel-deftest mevedel-request-state-label ()
   ,test
   (test)
-  :doc "reports idle without an active request and running with one"
+  :doc "reports idle, settling, and running request states"
   (with-temp-buffer
     (should (equal "idle" (mevedel-request-state-label)))
+    (setq-local mevedel--turn-settlements-pending '(settlement))
+    (should (equal "settling" (mevedel-request-state-label)))
     (setq-local mevedel--current-request t)
     (should (equal "running" (mevedel-request-state-label)))))
 
@@ -114,6 +128,13 @@
                   (mevedel-session-agent-root-activity session)))
       (should (hash-table-p (mevedel-request-file-snapshots req)))
       (should (null (mevedel-request-directive-uuid req)))))
+
+  :doc "rejects admission while a lost turn is still settling"
+  (with-temp-buffer
+    (let ((session (mevedel-session--create :name "settling")))
+      (setq-local mevedel--turn-settlements-pending '(settlement))
+      (should-error (mevedel-request-begin session) :type 'user-error)
+      (should-not mevedel--current-request)))
 
   :doc "reserves the next turn without committing it"
   (with-temp-buffer
