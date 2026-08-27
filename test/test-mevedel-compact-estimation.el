@@ -368,29 +368,43 @@ missing or zero prompt-side usage cannot become the active baseline"
                                :provider-context-status))))))
 
   :doc "loads model metadata at the cold owner boundary"
+  ;; The boundary under test is mevedel's own module graph: an owner must
+  ;; reach Models without the umbrella.  It is not an absence of gptel,
+  ;; which this module declares and which a compiled Elisp caller embeds
+  ;; -- `gptel-fsm-info' is a `cl-defstruct' accessor, so compiling
+  ;; inlines its slot access and its type check's
+  ;; `cl-struct-gptel-fsm-tags'.  Starving the subprocess of gptel and
+  ;; stubbing the accessor therefore passed only while the module was
+  ;; loaded as source; the subprocess now inherits this process's
+  ;; `load-path' and drives a real state machine.
   (let ((root
          (file-name-directory
           (locate-library "mevedel-compact-estimation")))
+        (paths load-path)
         (emacs (expand-file-name invocation-name invocation-directory)))
     (with-temp-buffer
       (should
        (= 0
           (call-process
-           emacs nil t nil "--batch" "-Q" "-L" root
+           emacs nil t nil "--batch" "-Q"
+           "--eval" (prin1-to-string `(setq load-path ',paths))
+           "-L" root
            "--eval"
            (prin1-to-string
             '(progn
                (require 'cl-lib)
+               (require 'gptel-request)
                (require 'mevedel-compact-estimation)
-               (cl-letf (((symbol-function 'gptel-fsm-info)
-                          (lambda (_fsm)
-                            (list :buffer (current-buffer)
-                                  :model 'cold-model
-                                  :tokens '(:input 4 :output 1)))))
-                 (with-temp-buffer
-                   (mevedel-compact-estimation-record-token-baseline 'fsm)))
+               (with-temp-buffer
+                 (mevedel-compact-estimation-record-token-baseline
+                  (gptel-make-fsm
+                   :info (list :buffer (current-buffer)
+                               :model 'cold-model
+                               :tokens '(:input 4 :output 1)))))
                (unless (featurep 'mevedel-models)
-                 (error "Estimation did not load Models")))))))
+                 (error "Estimation did not load Models"))
+               (when (featurep 'mevedel)
+                 (error "Estimation loaded the mevedel umbrella")))))))
       (should (string-empty-p (string-trim (buffer-string))))))
 
   :doc "ignores compaction request token usage"
