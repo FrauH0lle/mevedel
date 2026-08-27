@@ -3893,7 +3893,8 @@
   (test)
   :doc "disables so-long predicate while opening persisted files"
   (let ((observed :unset)
-        (opened (generate-new-buffer " *mevedel-so-long-open*")))
+        (opened (generate-new-buffer " *mevedel-so-long-open*"))
+        (permanent (get 'so-long-predicate 'permanent-local)))
     (unwind-protect
         (cl-letf (((symbol-function 'find-file-noselect)
                    (lambda (_file &rest _args)
@@ -3906,8 +3907,12 @@
           ;; The opt-out has to outlive the visit: `so-long' reconsiders
           ;; the buffer at every later major-mode change.
           (with-current-buffer opened
-            (should (eq #'ignore so-long-predicate))
-            (should (local-variable-p 'so-long-predicate))))
+            (should so-long--inhibited)
+            (should (local-variable-p 'so-long--inhibited)))
+          ;; Session setup must not change unrelated buffers' local-variable
+          ;; semantics through a global symbol property.
+          (should (eq permanent
+                      (get 'so-long-predicate 'permanent-local))))
       (when (buffer-live-p opened)
         (kill-buffer opened)))))
 

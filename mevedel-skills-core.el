@@ -21,14 +21,6 @@
 (declare-function file-notify-rm-watch "filenotify" (descriptor))
 (declare-function file-notify-valid-p "filenotify" (descriptor))
 
-;; `mevedel-cockpit'
-(declare-function mevedel-cockpit-context-session
-                  "mevedel-cockpit" (&optional context))
-(declare-function mevedel-cockpit-current-context
-                  "mevedel-cockpit" ())
-(autoload 'mevedel-cockpit-context-session "mevedel-cockpit")
-(autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
-
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-capability
                   "mevedel-execution-target" (target name))
@@ -247,17 +239,6 @@ skills."
          (error "Could not read skill state %s: %s"
                 file (error-message-string err)))))))
 
-(defun mevedel-skills--state-session (workspace)
-  "Return the live session authorized to mutate WORKSPACE skill state."
-  (let ((session
-         (or (and (boundp 'mevedel--session) mevedel--session)
-             (ignore-errors
-               (mevedel-cockpit-context-session
-                (mevedel-cockpit-current-context))))))
-    (and session
-         (eq workspace (mevedel-session-workspace session))
-         session)))
-
 (defun mevedel-skills--state-text (state)
   "Return the durable skill STATE file contents."
   (with-temp-buffer
@@ -266,15 +247,16 @@ skills."
     (pp state (current-buffer))
     (buffer-string)))
 
-(defun mevedel-skills--write-state (state workspace)
-  "Persist skill STATE for WORKSPACE."
+(defun mevedel-skills--write-state (state workspace &optional session)
+  "Persist skill STATE for WORKSPACE through its optional live SESSION."
   (let* ((file (or (mevedel-skills--state-file workspace)
                    (error "No workspace for skill state")))
          (content (mevedel-skills--state-text state)))
     (if (file-remote-p file)
-        (let ((session (or (mevedel-skills--state-session workspace)
-                           (user-error
-                            "Remote skill state requires its live session"))))
+        (progn
+          (unless (and session
+                       (eq workspace (mevedel-session-workspace session)))
+            (user-error "Remote skill state requires its live session"))
           (mevedel-session-artifacts-publish-text
            session file content 'utf-8-unix))
       ;; The reader signals on malformed content, so a write that died in
@@ -318,8 +300,8 @@ skills."
         (mevedel-skill-source-file skill)
         (mevedel-skill-workspace skill))))
 
-(defun mevedel-skills-set-enabled (skill enabled)
-  "Persist file-backed SKILL as enabled or disabled according to ENABLED."
+(defun mevedel-skills-set-enabled (skill enabled &optional session)
+  "Persist file-backed SKILL as ENABLED through optional live SESSION."
   (unless (mevedel-skill-p skill)
     (user-error "Loaded skill is required"))
   (let ((workspace (mevedel-skill-workspace skill))
@@ -337,8 +319,17 @@ skills."
         (push key disabled-keys))
       (setf (plist-get state :disabled-keys)
             (sort (delete-dups disabled-keys) #'string<))
-      (mevedel-skills--write-state state workspace)
-      (setf (mevedel-skill-enabled-p skill) enabled))))
+      (mevedel-skills--write-state state workspace session)
+      (setf (mevedel-skill-enabled-p skill) enabled)
+      ;; A workspace may have several live sessions, each with its own skill
+      ;; structs.  Keep those cached copies consistent with the state just
+      ;; committed instead of waiting for an unrelated source-file rescan.
+      (dolist (buffer (buffer-list))
+        (when-let* ((session (buffer-local-value 'mevedel--session buffer))
+                    ((eq workspace (mevedel-session-workspace session))))
+          (dolist (candidate (mevedel-session-skills session))
+            (when (equal key (mevedel-skills--state-key candidate))
+              (setf (mevedel-skill-enabled-p candidate) enabled))))))))
 
 (defun mevedel-skills-skill-enabled-p (skill)
   "Return non-nil when SKILL is not user-disabled."

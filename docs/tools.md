@@ -84,8 +84,7 @@ value inline. Each nested call becomes its own collapsible row rendered by that
 tool's registered renderer, so a nested Grep row gets Grep's header and
 `grep-mode` body rather than one flat dump fontified in a single mode. Rows
 exist only while the envelope is expanded, a failed row opens expanded, and a
-nested compound call shows its returned value instead of opening a second
-level of rows. The calls
+nested compound call expands into its own child rows one level deeper. The calls
 of one `parallel` or `parallel-map` join share a batch identity and are drawn
 as a bracketed group, so a concurrent fan-out is distinguishable from the same
 calls made in sequence; a one-call join is not concurrency and is not marked.

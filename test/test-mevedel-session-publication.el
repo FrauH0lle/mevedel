@@ -36,7 +36,11 @@ SESSION-DIR locates the sidecar.  Returns the committed head."
 HOST names the mock target, PREFIX the temporary root, and CLIENT-ID the
 durability client character.  BODY receives the session, its directory,
 and its segment path."
-  (let ((local-root
+  (let ((mevedel-session-publication--manifest-cache
+         (make-hash-table :test #'equal))
+        (mevedel-session-publication--facts-cache
+         (make-hash-table :test #'equal))
+        (local-root
          (file-name-as-directory (make-temp-file prefix t))))
     (unwind-protect
         (mevedel-test--with-local-shell-tramp (list host)
@@ -145,6 +149,12 @@ and its segment path."
           (should (> before 5))
           (should (> deleted 0))
           (should (member current kept))
+          (should (= (length kept)
+                     (hash-table-count
+                      mevedel-session-publication--manifest-cache)))
+          (should (= (length kept)
+                     (hash-table-count
+                      mevedel-session-publication--facts-cache)))
           ;; One generation stands for the earlier settled turn; the three
           ;; saves of that same state are gone.  Which one survives is not
           ;; the contract -- they restore the same conversation.
@@ -163,11 +173,7 @@ and its segment path."
                         session))))))))
 
   :doc "reads an immutable generation's manifest and facts once"
-  (let ((mevedel-session-publication--manifest-cache
-         (make-hash-table :test #'equal))
-        (mevedel-session-publication--facts-cache
-         (make-hash-table :test #'equal))
-        (reads 0))
+  (let ((reads 0))
     (test-mevedel-session-publication--with-published
      "publication-cache" "mevedel-publication-cache-" ?c
      (lambda (session session-dir segment)
@@ -185,7 +191,7 @@ and its segment path."
            (let ((first-pass reads))
              (should (> first-pass 0))
              ;; A committed generation cannot change, so a second listing
-             ;; asks the target for nothing.
+             ;; does not reread its manifest or sidecar.
              (mevedel-session-publication-generation-summaries
               session-dir most-positive-fixnum)
              (should (= first-pass reads))))))))
@@ -212,6 +218,46 @@ and its segment path."
    (mevedel-session-publication-collect-generations
     (mevedel-session--create :authority-mode 'portable
                              :save-path "/tmp/mevedel-absent/"))))
+
+(mevedel-deftest mevedel-session-publication--cached-manifest
+  (:doc "Caches only successfully read immutable manifests")
+  (let ((mevedel-session-publication--manifest-cache
+         (make-hash-table :test #'equal))
+        (head ".publications/generation-deadbeef/manifest.el")
+        (reads 0))
+    (cl-letf (((symbol-function
+                'mevedel-session-publication--read-publication-raw)
+               (lambda (&rest _)
+                 (setq reads (1+ reads))
+                 (if (= reads 1)
+                     (error "Transient read failure")
+                   '(:head "generation")))))
+      (should-not
+       (mevedel-session-publication--cached-manifest "/tmp/session/" head))
+      (should
+       (equal '(:head "generation")
+              (mevedel-session-publication--cached-manifest
+               "/tmp/session/" head)))
+      (should (= 2 reads)))))
+
+(mevedel-deftest mevedel-session-publication--cached-sidecar-facts
+  (:doc "Caches only successfully read immutable sidecar facts")
+  (let ((mevedel-session-publication--facts-cache
+         (make-hash-table :test #'equal))
+        (head ".publications/generation-deadbeef/manifest.el")
+        (reads 0))
+    (cl-letf (((symbol-function 'mevedel-session-publication--sidecar-facts)
+               (lambda (&rest _)
+                 (setq reads (1+ reads))
+                 (and (> reads 1) '(:turn-count 1)))))
+      (should-not
+       (mevedel-session-publication--cached-sidecar-facts
+        "/tmp/session/" head '(:head "generation")))
+      (should
+       (equal '(:turn-count 1)
+              (mevedel-session-publication--cached-sidecar-facts
+               "/tmp/session/" head '(:head "generation"))))
+      (should (= 2 reads)))))
 
 (provide 'test-mevedel-session-publication)
 ;;; test-mevedel-session-publication.el ends here

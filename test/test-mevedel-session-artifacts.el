@@ -52,7 +52,7 @@
       (kill-buffer source)
       (kill-buffer target))))
 
-(mevedel-deftest mevedel-session-artifacts-run-save-hooks-silently ()
+(mevedel-deftest mevedel-session-artifacts--run-save-hooks-silently ()
   ,test
   (test)
   :doc "runs the hook with echo-area and log reporting suppressed"
@@ -66,9 +66,26 @@
                  nil)))
       (let ((after-save-hook
              (list (lambda () (setq ran t) (message "NOISE written")))))
-        (mevedel-session-artifacts-run-save-hooks-silently 'after-save-hook)))
+        (mevedel-session-artifacts--run-save-hooks-silently 'after-save-hook)))
     (should ran)
     (should (eq noise-suppressed t))))
+
+(mevedel-deftest mevedel-session-artifacts-inhibit-so-long ()
+  ,test
+  (test)
+  :doc "reapplies native inhibition only in the prepared session buffer"
+  (with-temp-buffer
+    (mevedel-session-artifacts-inhibit-so-long)
+    (should so-long--inhibited)
+    (setq so-long--inhibited nil)
+    (fundamental-mode)
+    (should so-long--inhibited)
+    (should (memq #'mevedel-session-artifacts-inhibit-so-long
+                  after-change-major-mode-hook)))
+  (with-temp-buffer
+    (should-not
+     (memq #'mevedel-session-artifacts-inhibit-so-long
+           after-change-major-mode-hook))))
 
 
 (mevedel-deftest mevedel-session-artifacts-save-buffer-silently ()

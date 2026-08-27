@@ -269,13 +269,30 @@
 (autoload 'org-entry-get "org")
 (autoload 'org-entry-put "org")
 
+;; `so-long'
+(declare-function so-long-inhibit "so-long" (&optional mode))
+(autoload 'so-long-inhibit "so-long")
+
 (defvar mevedel-session-artifacts-require-agent-commit-p nil
   "Non-nil while an acknowledged agent mutation requires immediate commit.")
 
 ;;
 ;;; Buffer persistence
 
-(defun mevedel-session-artifacts-run-save-hooks-silently (hook)
+(defun mevedel-session-artifacts-inhibit-so-long ()
+  "Keep `so-long' from replacing the current session buffer's major mode.
+
+Session transcripts contain expected long GPTEL_BOUNDS property lines.
+The permanent local hook reapplies Emacs's native inhibition after every
+major-mode change, including inside `set-auto-mode' before `so-long' makes
+its post-mode decision."
+  (so-long-inhibit)
+  (add-hook 'after-change-major-mode-hook
+            #'mevedel-session-artifacts-inhibit-so-long nil t))
+
+(put 'mevedel-session-artifacts-inhibit-so-long 'permanent-local-hook t)
+
+(defun mevedel-session-artifacts--run-save-hooks-silently (hook)
   "Run HOOK with save-related echo-area and log messages suppressed.
 
 Publication saves the segment itself, then runs the buffer's save hooks so
@@ -1644,7 +1661,7 @@ continues to wait for the root turn's completed-turn publication boundary."
             (gptel--save-state))
           (let ((before-save-hook
                  (remq 'gptel--save-state before-save-hook)))
-            (mevedel-session-artifacts-run-save-hooks-silently
+            (mevedel-session-artifacts--run-save-hooks-silently
              'before-save-hook)))
         (mevedel-session-persistence-update-transcript-entry
          session (mevedel-agent-invocation-agent-id invocation)
@@ -1669,7 +1686,7 @@ continues to wait for the root turn's completed-turn publication boundary."
               (progn
                 (set-visited-file-modtime)
                 (set-buffer-modified-p nil)
-                (mevedel-session-artifacts-run-save-hooks-silently
+                (mevedel-session-artifacts--run-save-hooks-silently
                  'after-save-hook))
             (error
              (mevedel--warn-once
@@ -1795,7 +1812,7 @@ calling this serializer."
                 (progn
                   (set-visited-file-modtime)
                   (set-buffer-modified-p nil)
-                  (mevedel-session-artifacts-run-save-hooks-silently
+                  (mevedel-session-artifacts--run-save-hooks-silently
                    'after-save-hook))
               (error
                (mevedel--warn-once

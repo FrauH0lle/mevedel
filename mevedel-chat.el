@@ -156,6 +156,8 @@
 		  "mevedel-reminders" (session))
 
 ;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-inhibit-so-long
+                  "mevedel-session-artifacts" ())
 (declare-function
  mevedel-session-artifacts-install-gptel-save-state-advice
  "mevedel-session-artifacts" nil)
@@ -164,6 +166,8 @@
                   (session buffer &optional settled force))
 (declare-function mevedel-session-artifacts-strip-gptel-config-properties
                   "mevedel-session-artifacts" nil)
+(autoload 'mevedel-session-artifacts-inhibit-so-long
+  "mevedel-session-artifacts")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-release-on-kill
@@ -245,12 +249,10 @@
 		  "mevedel-utilities" (start end))
 (declare-function mevedel--optimize-transcript-buffer
 		  "mevedel-utilities" nil)
-(declare-function mevedel--inhibit-so-long "mevedel-utilities" nil)
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" nil)
 (declare-function mevedel-generate-diff "mevedel-utilities"
                   (original modified filepath &optional labels-real))
 (autoload 'mevedel--clear-user-turn-gptel-properties "mevedel-utilities")
-(autoload 'mevedel--inhibit-so-long "mevedel-utilities")
 (autoload 'mevedel--optimize-transcript-buffer "mevedel-utilities")
 (autoload 'mevedel--transcript-org-mode "mevedel-utilities")
 (autoload 'mevedel-generate-diff "mevedel-utilities")
@@ -740,7 +742,7 @@ with workspace."
       (with-current-buffer target-buf
         ;; Cache workspace struct for pre-session access
         (setq-local mevedel--workspace workspace)
-        (mevedel--inhibit-so-long)))
+        (mevedel-session-artifacts-inhibit-so-long)))
     (when target-buf
       (cons target-buf created-p))))
 

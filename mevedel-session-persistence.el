@@ -165,6 +165,7 @@
 (declare-function mevedel-session-artifacts-disown-save-machinery "mevedel-session-artifacts" nil)
 (declare-function mevedel-session-artifacts-finalized-segment-text "mevedel-session-artifacts" (text coding))
 (declare-function mevedel-session-artifacts-find-artifact-noselect "mevedel-session-artifacts" (session logical &optional inspection))
+(declare-function mevedel-session-artifacts-inhibit-so-long "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn directive-records preserve-directives-p))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
 (declare-function mevedel-session-artifacts-publish-text "mevedel-session-artifacts" (session path content &optional coding))
@@ -177,6 +178,8 @@
 (declare-function mevedel-session-artifacts-sessions-dir "mevedel-session-artifacts" (workspace))
 (declare-function mevedel-session-artifacts-sidecar-path "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-stabilize-gptel-bounds "mevedel-session-artifacts" nil)
+(autoload 'mevedel-session-artifacts-inhibit-so-long
+  "mevedel-session-artifacts")
 (defvar mevedel-session-artifacts-require-agent-commit-p)
 
 ;; `mevedel-session-codec'
@@ -404,11 +407,9 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--forget-place "mevedel-utilities" nil)
-(declare-function mevedel--inhibit-so-long "mevedel-utilities" nil)
 (declare-function mevedel--normalize-message-text "mevedel-utilities" (text))
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
 (autoload 'mevedel--forget-place "mevedel-utilities")
-(autoload 'mevedel--inhibit-so-long "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" nil)
@@ -462,6 +463,7 @@
 (defvar save-place-mode)
 
 ;; `so-long'
+(defvar so-long--inhibited)
 (defvar so-long-predicate)
 
 ;;
@@ -1235,10 +1237,9 @@ restoration and reveal timers."
          (save-place-mode nil)
          (buffer (find-file-noselect file)))
     (with-current-buffer buffer
-      ;; The let-binding only covers the visit.  `so-long' reconsiders the
-      ;; buffer at every later major-mode change, so the opt-out has to
-      ;; outlive this call.
-      (mevedel--inhibit-so-long)
+      ;; The let-binding only covers the visit.  Keep native inhibition active
+      ;; across every later major-mode change too.
+      (mevedel-session-artifacts-inhibit-so-long)
       (mevedel--forget-place))
     buffer))
 
