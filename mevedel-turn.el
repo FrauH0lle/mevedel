@@ -617,14 +617,17 @@ A terminal transition can arrive twice.  gptel drives settlement from the
 curl process sentinel, and a request that already failed -- a dropped
 connection when the machine suspends, say -- settles once on the failure
 and then again when Emacs reaps the dead process on resume.  The second
-arrival has no request: the first one ended it, along with the cancellers,
-pending steering, and permission mode that a turn teardown exists to
-release.  Settling again has nothing to commit and nothing to tear down."
+arrival has no matching request: the first one ended it, along with the
+cancellers, pending steering, and permission mode that a turn teardown exists
+to release.  A later request may already be active, so identity rather than
+mere presence is the settlement fence."
   (when-let* ((info (condition-case nil (gptel-fsm-info fsm) (error nil)))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
-      (null mevedel--current-request))))
+      (or (null mevedel--current-request)
+          (not (equal (plist-get info :mevedel-request-id)
+                      (mevedel-request-id mevedel--current-request)))))))
 
 (defun mevedel--complete-turn (fsm)
   "Run the canonical successful top-level turn transaction for FSM.

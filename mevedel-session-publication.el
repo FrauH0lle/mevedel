@@ -570,7 +570,7 @@ A committed generation is immutable, so its sidecar's answers cannot
 change: caching them is sound, and it is what makes collection's
 every-sidecar scan affordable.  Reading 752 uncached sidecars measured 17
 seconds inside one turn settlement.  Entries live for this Emacs session
-only; a collected generation's entry is simply never asked for again.")
+or until collection removes their generation.")
 
 (defvar mevedel-session-publication--manifest-cache
   (make-hash-table :test #'equal)
@@ -585,28 +585,24 @@ trusting a remembered plist.")
   "Return HEAD's manifest below SESSION-DIR, caching the parse."
   (let ((key (mevedel-session-publication--publication-path
               session-dir head)))
-    (if-let* ((cached (gethash key mevedel-session-publication--manifest-cache)))
-        (and (not (eq cached 'none)) cached)
-      (let ((manifest
-             (ignore-errors
-               (mevedel-session-publication--read-publication-raw
-                session-dir head))))
-        (puthash key (or manifest 'none)
-                 mevedel-session-publication--manifest-cache)
-        manifest))))
+    (or (gethash key mevedel-session-publication--manifest-cache)
+        (when-let* ((manifest
+                     (ignore-errors
+                       (mevedel-session-publication--read-publication-raw
+                        session-dir head))))
+          (puthash key manifest mevedel-session-publication--manifest-cache)
+          manifest))))
 
 (defun mevedel-session-publication--cached-sidecar-facts
     (session-dir head manifest)
   "Return HEAD's turn facts for MANIFEST below SESSION-DIR, caching them."
   (let ((key (mevedel-session-publication--publication-path
               session-dir head)))
-    (if-let* ((cached (gethash key mevedel-session-publication--facts-cache)))
-        (and (not (eq cached 'none)) cached)
-      (let ((facts (mevedel-session-publication--sidecar-facts
-                    session-dir manifest)))
-        (puthash key (or facts 'none)
-                 mevedel-session-publication--facts-cache)
-        facts))))
+    (or (gethash key mevedel-session-publication--facts-cache)
+        (when-let* ((facts (mevedel-session-publication--sidecar-facts
+                            session-dir manifest)))
+          (puthash key facts mevedel-session-publication--facts-cache)
+          facts))))
 
 (defun mevedel-session-publication-generation-summaries
     (session-dir &optional limit)
@@ -749,7 +745,8 @@ number of generations deleted."
                        (mevedel-session-publication--generation-names
                         session-dir)
                        deleted)
-                (let ((name (plist-get generation :name)))
+                (let ((name (plist-get generation :name))
+                      (head (plist-get generation :head)))
                   (unless
                       (or (member name retained)
                           (>= deleted
@@ -760,6 +757,13 @@ number of generations deleted."
                            (mevedel-session-publication--publication-path
                             session-dir
                             (file-name-concat ".publications" name)))
+                          (let ((key
+                                 (mevedel-session-publication--publication-path
+                                  session-dir head)))
+                            (remhash key
+                                     mevedel-session-publication--manifest-cache)
+                            (remhash key
+                                     mevedel-session-publication--facts-cache))
                           (setq deleted (1+ deleted)))
                       (error
                        (display-warning

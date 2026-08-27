@@ -116,6 +116,7 @@
   "mevedel-skills-preparation")
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-id "mevedel-structs" (cl-x))
 (defvar mevedel--current-directive-uuid)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
@@ -681,7 +682,10 @@ observe the completed response."
             :warning)))
         (mevedel-transcript-restore-ignored-properties start end)
         (mevedel--complete-turn
-         (gptel-make-fsm :info (list :buffer (current-buffer))))
+         (gptel-make-fsm
+          :info (list :buffer (current-buffer)
+                      :mevedel-request-id
+                      (mevedel-request-id mevedel--current-request))))
         (gptel--update-status " Ready" 'success)))))
 
 (defun mevedel-skills-input-command-delete-context (command-pos)

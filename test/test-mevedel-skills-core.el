@@ -1493,7 +1493,7 @@ description: Review changed code
                              (push prompt prompts)
                              t)))
                   (mevedel-skills--write-state
-                   '(:disabled-keys ("file:/demo")) remote-workspace))
+                   '(:disabled-keys ("file:/demo")) remote-workspace session))
                 (should (= 1 (length prompts)))
                 (should (mevedel-session-save-path session))
                 (should (eq 'owned
@@ -1521,6 +1521,24 @@ description: Review changed code
     (should-not (mevedel-skills-skill-enabled-p skill))
     (mevedel-skills-set-enabled skill t)
     (should (mevedel-skills-skill-enabled-p skill)))
+
+  :doc "updates cached skill copies in every live workspace session"
+  (let* ((first (mevedel-skills-test--stateful-skill
+                 :name "visible" :workspace workspace))
+         (second (mevedel-skills-test--stateful-skill
+                  :name "visible" :workspace workspace))
+         (session (mevedel-session--create
+                   :workspace workspace :skills (list second)))
+         (buffer (generate-new-buffer " *mevedel-skills-workspace-state*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local mevedel--session session))
+          (mevedel-skills-set-enabled first nil)
+          (should-not (mevedel-skills-skill-enabled-p second))
+          (mevedel-skills-set-enabled first t)
+          (should (mevedel-skills-skill-enabled-p second)))
+      (kill-buffer buffer)))
 
   :doc "keeps the same external skill isolated between workspaces"
   (let* ((mevedel-skills-include-bundled nil)

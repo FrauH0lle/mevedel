@@ -164,6 +164,10 @@
 (autoload 'mevedel-session-publication-status
   "mevedel-session-publication")
 
+;; `mevedel-session-rewind'
+(declare-function mevedel-redo "mevedel-session-rewind" ())
+(autoload 'mevedel-redo "mevedel-session-rewind")
+
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills-count-label "mevedel-skills-ui" (session))
 (declare-function mevedel-skills-list-open "mevedel-skills-ui"
@@ -180,6 +184,7 @@
 (declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-tokens-used "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-turns-run "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-authority-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-current-segment
@@ -191,7 +196,6 @@
 (declare-function mevedel-session-pending-plan-approval
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-authority-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -253,8 +257,6 @@
 (declare-function mevedel-view-previous-display "mevedel-view-render" ())
 (declare-function mevedel-view-previous-user-query "mevedel-view-render" ())
 (declare-function mevedel-view-rewind-at-point "mevedel-view-render" ())
-(declare-function mevedel-redo "mevedel-session-rewind" ())
-(autoload 'mevedel-redo "mevedel-session-rewind")
 (declare-function mevedel-view-switch-conversation-variant-at-point
                   "mevedel-view-render" ())
 

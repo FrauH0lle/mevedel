@@ -298,10 +298,10 @@ previous denylist intact rather than a partial file the strict reader would
 reject. Remote state is published through the owning live session and its
 normal storage disclosure and lease checks; a sessionless inspector cannot
 mutate it. A scan reads state once and caches effective enablement on the
-session's skill objects. The owning session refreshes immediately after a
-command or cockpit toggle; other live sessions observe the change after their
-next rescan or reopen. The former global `~/.mevedel/skills-state.el` is no
-longer read and is left untouched for manual reference.
+session's skill objects. A command or cockpit toggle updates every live session
+in that workspace immediately. The former global
+`~/.mevedel/skills-state.el` is no longer read and is left untouched for manual
+reference.
 
 Completion offers local command names at leading `/` and user-invocable
 skill names at leading `$` in the composer, with annotations for every

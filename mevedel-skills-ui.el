@@ -597,12 +597,14 @@ Routes through the lifecycle-aware permission transition path."
 (defun mevedel-skills-list-toggle-enabled ()
   "Toggle enabled state for the skill at point."
   (interactive)
-  (let* ((skill (mevedel-skills-list--skill-at-point))
+  (let* ((context (mevedel-cockpit-surface-context))
+         (skill (mevedel-skills-list--skill-at-point))
          (name (mevedel-skill-name skill))
          (enable (not (mevedel-skills-skill-enabled-p skill))))
-    (mevedel-skills-set-enabled skill enable)
+    (mevedel-skills-set-enabled
+     skill enable (mevedel-cockpit-context-session context))
     (when-let* ((data-buffer (mevedel-cockpit-context-data-buffer
-                              (mevedel-cockpit-surface-context))))
+                              context)))
       (with-current-buffer data-buffer
         (mevedel-view-refresh-associated-input-prompt)))
     (mevedel-skills-list-refresh)
@@ -732,7 +734,7 @@ Routes through the lifecycle-aware permission transition path."
        (mevedel-skills-set-enabled
         (or (mevedel-session-get-skill mevedel--session name)
             (user-error "Unknown skill: %s" name))
-        t)
+        t mevedel--session)
        (mevedel-view-refresh-associated-input-prompt)
        (message "Skill %s enabled" name))
       ("disable"
@@ -740,7 +742,7 @@ Routes through the lifecycle-aware permission transition path."
        (mevedel-skills-set-enabled
         (or (mevedel-session-get-skill mevedel--session name)
             (user-error "Unknown skill: %s" name))
-        nil)
+        nil mevedel--session)
        (mevedel-view-refresh-associated-input-prompt)
        (message "Skill %s disabled" name))
       (_

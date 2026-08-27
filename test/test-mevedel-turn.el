@@ -224,13 +224,15 @@
   :doc "a turn with a live request still has settlement work"
   (let* ((session (mevedel-session--create :turn-count 0))
          (chat-buf (generate-new-buffer " *mevedel-turn-settled*"))
-         (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf :mevedel-request-id "live"))))
     (unwind-protect
         (progn
           (with-current-buffer chat-buf
             (setq-local mevedel--session session)
             (setq-local mevedel--current-request
-                        (mevedel-request--create :session session :turn 1)))
+                        (mevedel-request--create
+                         :id "live" :session session :turn 1)))
           (should-not (mevedel--turn-settled-p fsm)))
       (kill-buffer chat-buf)))
 
@@ -255,7 +257,28 @@
   (let* ((chat-buf (generate-new-buffer " *mevedel-turn-dead*"))
          (fsm (gptel-make-fsm :info (list :buffer chat-buf))))
     (kill-buffer chat-buf)
-    (should-not (mevedel--turn-settled-p fsm))))
+    (should-not (mevedel--turn-settled-p fsm)))
+
+  :doc "a delayed terminal transition cannot settle a newer request"
+  (let* ((session (mevedel-session--create :turn-count 1))
+         (chat-buf (generate-new-buffer " *mevedel-turn-stale*"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf :mevedel-request-id "old")))
+         (request (mevedel-request--create
+                   :id "new" :session session :turn 2)))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request request))
+          (should (mevedel--turn-settled-p fsm))
+          (mevedel--fail-turn fsm 'error)
+          (mevedel--complete-turn fsm)
+          (should (= 1 (mevedel-session-turn-count session)))
+          (should (eq request
+                      (buffer-local-value 'mevedel--current-request
+                                          chat-buf))))
+      (kill-buffer chat-buf))))
 
 
 (mevedel-deftest mevedel--turn-commit
@@ -431,11 +454,12 @@
   (test)
   :doc "runs the successful transaction in order and drains after request end"
   (let ((chat-buf (generate-new-buffer " *mevedel-turn-complete*"))
+        (request (mevedel-request--create :id "complete"))
         events)
     (unwind-protect
         (progn
           (with-current-buffer chat-buf
-            (setq-local mevedel--current-request 'live))
+            (setq-local mevedel--current-request request))
           (cl-letf (((symbol-function 'display-warning) #'ignore)
                     ((symbol-function 'mevedel--turn-commit)
                      (lambda (_fsm) (push 'turn events)))
@@ -451,7 +475,7 @@
                      (lambda (_fsm event status)
                        (push (list event status
                                    (with-current-buffer chat-buf
-                                     mevedel--current-request))
+                                     (and mevedel--current-request 'live)))
                              events)))
                     ((symbol-function 'mevedel--turn-restore-permission-mode)
                      (lambda (_fsm) (push 'restore events)))
@@ -468,7 +492,9 @@
                                      (null mevedel--current-request)))
                              events))))
             (mevedel--complete-turn
-             (gptel-make-fsm :info (list :buffer chat-buf)))))
+             (gptel-make-fsm
+              :info (list :buffer chat-buf
+                          :mevedel-request-id "complete")))))
           (should (equal (nreverse events)
                          '(turn (plan success) baseline save
                            (Stop completed live)
@@ -567,6 +593,7 @@
           (gptel-make-fsm
            :info
            (list :buffer chat-buf
+                 :mevedel-request-id "request-current"
                  :position (with-current-buffer chat-buf
                              (copy-marker (point-min)))
                  :status "HTTP/2 200"
