@@ -173,6 +173,17 @@
 (declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
 (defvar mevedel-tools--current-fsm)
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-cancel-pending
+                  "mevedel-transport" (&optional key))
+(declare-function mevedel-transport-busy-p
+                  "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk &optional on-cancel))
+(autoload 'mevedel-transport-cancel-pending "mevedel-transport")
+(autoload 'mevedel-transport-busy-p "mevedel-transport")
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
+
 ;; `mevedel-turn'
 (declare-function mevedel-current-origin "mevedel-turn" ())
 (declare-function mevedel-request-note-untracked-effect
@@ -1702,8 +1713,6 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                "Pipeline callback fired twice; dropping late \
 delivery: %S"
                outcome))))))
-    (when (and session (not (mevedel-tool-read-only-p tool)))
-      (mevedel-session-artifacts-assert-new-mutation-authority session))
     (let ((cancel
            (lambda ()
              (when-let* ((current (car cancel-cell)))
@@ -1717,11 +1726,75 @@ delivery: %S"
        :request-id (and request (mevedel-request-id request))
        :origin (mevedel-current-origin)
        :read-only (and (mevedel-tool-read-only-p tool) t))
-      (mevedel-pipeline--run steps once-callback context)
+      (mevedel-pipeline--dispatch tool once-callback context steps)
       ;; Handler cleanup must run before this outer settlement canceller.
       (when request
         (mevedel-request-push-canceller request cancel))
       cancel)))
+
+(defun mevedel-pipeline--dispatch (tool callback context steps)
+  "Assert mutation authority for TOOL, then run STEPS on CONTEXT.
+
+gptel dispatches tool calls from its curl process sentinel, and applies
+an async tool's function bare -- a signal escaping here kills the
+sentinel and the request waits forever for a result that never comes.
+Two consequences.  The authority assertion performs target I/O, and a
+sentinel may run inside another remote operation's wait loop, where the
+control filesystem refuses to nest; that refusal is transient, so the
+dispatch defers and retries once the transport is idle instead of
+failing the call.  Any error the assertion still signals must settle
+the tool call as a canonical error result rather than escape."
+  (let* ((session (plist-get context :session))
+         (mutating-p (and session (not (mevedel-tool-read-only-p tool))))
+         (workdir (plist-get context :default-directory))
+         (cancel-cell (plist-get context :cancel-cell))
+         (key (list 'tool-dispatch
+                    (or (plist-get context :tool-use-id)
+                        (make-symbol "tool-dispatch"))))
+         (finished nil)
+         (finish-dispatch
+          (lambda (reason message)
+            (unless finished
+              (setq finished t)
+              (when cancel-cell
+                (setcar cancel-cell nil))
+              (funcall callback
+                       (mevedel-pipeline--settlement
+                        context reason message)))))
+         (cancel-dispatch
+          (lambda ()
+            (funcall finish-dispatch 'cancelled "Request cancelled")))
+         (start
+          (lambda ()
+            (when cancel-cell
+              (setcar cancel-cell cancel-dispatch))
+            (when (if mutating-p
+                      (condition-case err
+                          (progn
+                            (mevedel-session-artifacts-assert-new-mutation-authority
+                             session)
+                            (not finished))
+                        (error
+                         (funcall finish-dispatch
+                                  'pipeline-error (error-message-string err))
+                         nil))
+                    t)
+              (unless finished
+                (setq finished t)
+                (mevedel-pipeline--run steps callback context))))))
+    (if (and mutating-p (mevedel-transport-busy-p workdir))
+        (progn
+          (when cancel-cell
+            (setcar cancel-cell
+                    (lambda ()
+                      (mevedel-transport-cancel-pending key))))
+          ;; A disabled transport drops deferred work, so fall back to the
+          ;; guarded immediate path rather than strand the tool call.
+          (unless
+              (mevedel-transport-run-when-idle
+               key workdir start cancel-dispatch)
+            (funcall start)))
+      (funcall start))))
 
 (defun mevedel-pipeline-run-tool (tool callback args)
   "Execute TOOL and deliver its provider-facing result to CALLBACK."

@@ -27,6 +27,7 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
+(autoload 'mevedel--timer-pending-p "mevedel-utilities")
 
 ;; `tramp'
 (declare-function tramp-dissect-file-name "tramp" (name &optional nodefault))

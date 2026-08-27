@@ -3513,6 +3513,150 @@ cover, so the permission step's warning about it is captured here."
 		   (should (= 1 count))))
 
 
+(mevedel-deftest mevedel-pipeline--dispatch ()
+  ,test
+  (test)
+
+  :doc "defers dispatch of a mutating tool while the transport is busy"
+  (let* ((tool (mevedel-tool--create
+                :name "WriteThing" :read-only-p nil :handler #'ignore))
+         (context (list :session 'session-stub
+                        :default-directory temporary-file-directory
+                        :tool-use-id "toolu-busy"))
+         (steps (list (lambda (ctx next _fail)
+                        (funcall next (plist-put ctx :result "ran")))))
+         deferred-thunk asserted settlement)
+    (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (&optional _) t))
+              ((symbol-function 'mevedel-transport-run-when-idle)
+               (lambda (_key _path thunk &optional _on-cancel)
+                 (setq deferred-thunk thunk)))
+              ((symbol-function
+                'mevedel-session-artifacts-assert-new-mutation-authority)
+               (lambda (_session) (setq asserted t)))
+              ((symbol-function 'mevedel-telemetry-detailed-p)
+               (lambda (_session) nil)))
+      (mevedel-pipeline--dispatch
+       tool (lambda (outcome) (setq settlement outcome)) context steps)
+      ;; Busy: nothing ran yet, and the authority assertion waited too.
+      (should-not settlement)
+      (should-not asserted)
+      (should (functionp deferred-thunk))
+      ;; Transport idle: the deferred thunk asserts and runs the pipeline.
+      (funcall deferred-thunk)
+      (should asserted)
+      (should (equal "ran" (plist-get settlement :result)))))
+
+  :doc "settles the call instead of signaling when the assertion fails"
+  (let* ((tool (mevedel-tool--create
+                :name "WriteThing" :read-only-p nil :handler #'ignore))
+         (context (list :session 'session-stub
+                        :default-directory temporary-file-directory
+                        :tool-use-id "toolu-refused"))
+         (steps (list (lambda (ctx next _fail) (funcall next ctx))))
+         settlement)
+    (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+               (lambda (&optional _) nil))
+              ((symbol-function
+                'mevedel-session-artifacts-assert-new-mutation-authority)
+               (lambda (_session)
+                 (signal 'mevedel-session-control-fs-busy '("/x/.lease")))))
+      ;; The whole point: gptel applies async tools bare, so this call
+      ;; must never signal.
+      (mevedel-pipeline--dispatch
+       tool (lambda (outcome) (setq settlement outcome)) context steps)
+      (should (eq 'error (plist-get settlement :status)))
+      (should (eq 'pipeline-error (plist-get settlement :reason)))
+      (should (string-match-p "already in use"
+                              (plist-get settlement :result)))))
+
+  :doc "request cancellation cancels and settles deferred dispatch"
+  (let* ((tool (mevedel-tool--create
+                :name "WriteThing" :read-only-p nil :handler #'ignore))
+         (cancel-cell (list nil))
+         (context (list :session 'session-stub
+                        :default-directory temporary-file-directory
+                        :tool-use-id "toolu-cancelled"
+                        :cancel-cell cancel-cell))
+         settlement)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+                   (lambda (&optional _) t)))
+          (mevedel-pipeline--dispatch
+           tool (lambda (outcome) (setq settlement outcome)) context nil)
+          (should (functionp (car cancel-cell)))
+          (should (= 1 (hash-table-count mevedel-transport--pending)))
+          (funcall (car cancel-cell))
+          (should (eq 'error (plist-get settlement :status)))
+          (should (eq 'cancelled (plist-get settlement :reason)))
+          (should (= 0 (hash-table-count mevedel-transport--pending))))
+      (mevedel-transport-cancel-pending)))
+
+  :doc "cancellation during authority I/O settles and prevents dispatch"
+  (let* ((tool (mevedel-tool--create
+                :name "WriteThing" :read-only-p nil :handler #'ignore))
+         (cancel-cell (list nil))
+         (context (list :session 'session-stub
+                        :default-directory temporary-file-directory
+                        :tool-use-id "toolu-cancel-during-authority"
+                        :cancel-cell cancel-cell))
+         (steps (list (lambda (ctx next _fail)
+                        (funcall next (plist-put ctx :result "ran")))))
+         settlement)
+    (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+               (lambda (&optional _) nil))
+              ((symbol-function
+                'mevedel-session-artifacts-assert-new-mutation-authority)
+               (lambda (_session)
+                 (funcall (car cancel-cell))))
+              ((symbol-function 'mevedel-telemetry-detailed-p)
+               (lambda (_session) nil)))
+      (mevedel-pipeline--dispatch
+       tool (lambda (outcome) (setq settlement outcome)) context steps)
+      (should (eq 'cancelled (plist-get settlement :reason)))
+      (should-not (equal "ran" (plist-get settlement :result)))
+      (should-not (car cancel-cell))))
+
+  :doc "unidentified concurrent calls receive distinct deferral keys"
+  (let* ((tool (mevedel-tool--create
+                :name "WriteThing" :read-only-p nil :handler #'ignore))
+         (first-cell (list nil))
+         (second-cell (list nil))
+         (base (list :session 'session-stub
+                     :default-directory temporary-file-directory))
+         (first (append base (list :cancel-cell first-cell)))
+         (second (append base (list :cancel-cell second-cell)))
+         settlements)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+                   (lambda (&optional _) t)))
+          (mevedel-pipeline--dispatch
+           tool (lambda (outcome) (push outcome settlements)) first nil)
+          (mevedel-pipeline--dispatch
+           tool (lambda (outcome) (push outcome settlements)) second nil)
+          (should (= 2 (hash-table-count mevedel-transport--pending))))
+      (mevedel-transport-cancel-pending))
+    (should (= 2 (length settlements)))
+    (should (cl-every (lambda (outcome)
+                        (eq 'cancelled (plist-get outcome :reason)))
+                      settlements)))
+
+  :doc "read-only tools dispatch immediately even on a busy transport"
+  (let* ((tool (mevedel-tool--create
+                :name "ReadThing" :read-only-p t :handler #'ignore))
+         (context (list :session 'session-stub
+                        :default-directory temporary-file-directory
+                        :tool-use-id "toolu-read"))
+         (steps (list (lambda (ctx next _fail)
+                        (funcall next (plist-put ctx :result "read")))))
+         settlement)
+    (cl-letf (((symbol-function 'mevedel-transport-busy-p) (lambda (&optional _) t))
+              ((symbol-function 'mevedel-telemetry-detailed-p)
+               (lambda (_session) nil)))
+      (mevedel-pipeline--dispatch
+       tool (lambda (outcome) (setq settlement outcome)) context steps)
+      (should (equal "read" (plist-get settlement :result))))))
+
+
 ;;
 ;;; Args conversion
 
