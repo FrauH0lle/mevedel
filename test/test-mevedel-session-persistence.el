@@ -3902,7 +3902,12 @@
           (should (eq opened
                       (mevedel-session-persistence--find-file-noselect
                        "/tmp/session.chat.org")))
-          (should (eq observed nil)))
+          (should (eq observed nil))
+          ;; The opt-out has to outlive the visit: `so-long' reconsiders
+          ;; the buffer at every later major-mode change.
+          (with-current-buffer opened
+            (should (eq #'ignore so-long-predicate))
+            (should (local-variable-p 'so-long-predicate))))
       (when (buffer-live-p opened)
         (kill-buffer opened)))))
 
