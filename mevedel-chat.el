@@ -1093,8 +1093,17 @@ BUF defaults to the current buffer if not specified."
                 (mevedel-goal-reason goal) "interrupted by user"
                 (mevedel-goal-updated-at goal)
                 (format-time-string "%FT%T%z")))
-        (when (bound-and-true-p mevedel--current-request)
-          (mevedel-request-end))
+        (if (bound-and-true-p mevedel--current-request)
+            (mevedel-request-end)
+          ;; A request can disappear without its own teardown -- a terminal
+          ;; transition lost with the process that would have driven it.
+          ;; `mevedel-request-end' is the only place that idles the root
+          ;; roster, and it needs a request, so the roster stays marked
+          ;; running with nothing running it and the view spins forever.
+          ;; An abort is the user asserting the opposite.
+          (when (bound-and-true-p mevedel--session)
+            (setf (mevedel-session-agent-root-activity mevedel--session)
+                  'idle)))
         (when (and (bound-and-true-p mevedel--session)
                    (mevedel-session-workspace mevedel--session)
                    (not (bound-and-true-p
