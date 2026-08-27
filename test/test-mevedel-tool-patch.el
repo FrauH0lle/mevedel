@@ -401,7 +401,18 @@
                   :diff-lines ("-x" "+X")))))
     (should (equal "x\na\nx\nX\n"
                    (mevedel-tool-patch-apply-hunks
-                    "x\na\nx\nx\n" hunks "file.txt")))))
+                    "x\na\nx\nx\n" hunks "file.txt"))))
+
+  :doc "A locator lets a prefix anchor name its own enclosing line"
+  (let ((hunks
+         (mevedel-tool-patch-parse-update-lines
+          '("@@" " def load_config(path):"
+            "@@ def load_config" " old" "-value = 1" "+value = 2")
+          2)))
+    (should (equal "def load_config(path):\nold\nvalue = 2\n"
+                   (mevedel-tool-patch-apply-hunks
+                    "def load_config(path):\nold\nvalue = 1\n"
+                    hunks "config.py")))))
 
 (mevedel-deftest mevedel-tool-patch-hunks-from-content ()
   ,test
@@ -1052,6 +1063,17 @@
                  '("x" "a" "x") '(:old-lines ("x") :line-hint 2) "p")
                 :type 'error)
 
+  :doc "match failures name the offending hunk's patch line"
+  (dolist (case '((("a") (:old-lines ("missing") :at-line 17)
+                   "line 17.*does not match")
+                  (("x" "a" "x") (:old-lines ("x") :at-line 23)
+                   "line 23.*ambiguous")))
+    (let ((err (should-error
+                (mevedel-tool-patch--match-start
+                 (nth 0 case) (nth 1 case) "p")
+                :type 'error)))
+      (should (string-match-p (nth 2 case) (error-message-string err)))))
+
   :doc "a stale hint never rejects an unambiguous match"
   (should (= 1 (mevedel-tool-patch--match-start
                 '("a" "b") '(:old-lines ("b") :line-hint 900) "x")))
@@ -1097,7 +1119,14 @@
   (should (equal '("a")
                  (mevedel-tool-patch--selected-paths
                   '(:operations ((:kind add :path "a" :selected t)
-                                 (:kind delete :path "b" :selected nil)))))))
+                                 (:kind delete :path "b" :selected nil))))))
+  :doc "Ignores a selected locator when every changing hunk is rejected"
+  (should-not
+   (mevedel-tool-patch--selected-paths
+    '(:operations
+      ((:kind update :path "a"
+        :hunks ((:selected t :diff-lines (" context"))
+                (:selected nil :diff-lines ("-old" "+new")))))))))
 
 (mevedel-deftest mevedel-tool-patch-assert-baseline
   (:doc "Accepts an unchanged selected baseline") ,test (test)

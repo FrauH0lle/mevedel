@@ -1778,17 +1778,10 @@ mentions-shown reset to empty hash tables on load."
                 ;; published mid-stream, and settlement-time collection
                 ;; never sees them again.  Opening under a freshly
                 ;; acquired lease is where that debt drains; a restore
-                ;; must not fail because storage could not be reclaimed.
+                ;; must not fail because storage could not be reclaimed,
+                ;; which the collector's best-effort contract guarantees.
                 (when (and acquired (not live))
-                  (condition-case error
-                      (mevedel-session-publication-collect-generations
-                       session)
-                    (error
-                     (display-warning
-                      'mevedel
-                      (format "Could not collect published generations: %s"
-                              (error-message-string error))
-                      :warning))))
+                  (mevedel-session-publication-collect-generations session))
                 (setq setup-done t)
                 buf))
           ;; Any failure after acquisition releases the session lease and

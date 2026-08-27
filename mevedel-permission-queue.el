@@ -16,6 +16,7 @@
 
 ;;; Code:
 
+(require 'map)
 (require 'mevedel-structs)
 (require 'mevedel-permission-log)
 (require 'mevedel-queue)
@@ -124,9 +125,10 @@ long session), so no rate limiting is applied.  Firing at enqueue is
 deliberate: the machine is certainly awake then, while an idle timer
 would die with a suspend.
 
-The single argument is the card's entry plist.  Stable keys: `:kind'
-(`generic' / `bash' / `eval' / `sandbox'), `:tool-name',
-`:specifier-value' (display path, pattern, domain, or name),
+The single argument is the card's entry plist without its internal
+`:callback'.  Stable keys: `:kind' (`generic' / `bash' / `eval' /
+`sandbox'), `:tool-name', `:specifier-key', `:specifier-value'
+(display path, pattern, domain, or name),
 `:command' (bash), `:expression' (eval), `:detail' and
 `:justification' (sandbox), `:origin' (requesting agent path), and
 `:session'.
@@ -331,7 +333,8 @@ ENTRY plist keys:
              session)
             (when mevedel-permission-notify-function
               (with-demoted-errors "mevedel: permission notify failed: %S"
-                (funcall mevedel-permission-notify-function entry)))
+                (funcall mevedel-permission-notify-function
+                         (map-delete (copy-sequence entry) :callback))))
             ;; Re-render the head so its pending count includes new siblings.
             (mevedel-permission-queue--render-head session))
         (error

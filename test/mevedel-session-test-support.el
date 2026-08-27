@@ -197,6 +197,23 @@ publication."
     session))
 
 
+(defun test-mevedel-session-persistence--publish-generation
+    (session session-dir segment transcript turns)
+  "Publish TRANSCRIPT for SESSION at SEGMENT with TURNS settled turns."
+  (setf (mevedel-session-turn-count session) turns)
+  (mevedel-session-publication-publish
+   session
+   (list
+    (list :path segment :content transcript)
+    (list :path (mevedel-session-artifacts-sidecar-path session-dir)
+          :content
+          (mevedel-session-artifacts-printed-value
+           (mevedel-session-artifacts-build-sidecar
+            session (current-buffer)))
+          :commit-marker t
+          :replace t)))
+  (plist-get (mevedel-session-publication session) :head))
+
 (defun test-mevedel-session-persistence--make-remote-restore-fixture
     (host local-root transcript)
   "Create a mock-TRAMP session for HOST at LOCAL-ROOT with TRANSCRIPT."

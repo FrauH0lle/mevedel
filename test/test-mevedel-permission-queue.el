@@ -139,6 +139,7 @@
                #'ignore))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
+             :specifier-key :path :specifier-value "one.el"
              :origin "/root" :callback #'ignore))
       ;; A sibling re-renders the head but notifies only for itself.
       (mevedel-permission--enqueue
@@ -146,8 +147,14 @@
              :callback #'ignore)))
     (should (= 2 (length notified)))
     (should (equal "Read" (plist-get (cadr notified) :tool-name)))
+    (should (eq :path (plist-get (cadr notified) :specifier-key)))
+    (should (equal "one.el"
+                   (plist-get (cadr notified) :specifier-value)))
     (should (equal "git add ." (plist-get (car notified) :command)))
-    (should (eq session (plist-get (car notified) :session))))
+    (should (eq session (plist-get (car notified) :session)))
+    (should (cl-every (lambda (entry)
+                        (not (plist-member entry :callback)))
+                      notified)))
 
   :doc "the notify function never fires for a no-session abort"
   (let ((mevedel--session nil)
@@ -497,6 +504,9 @@
   :doc "allow-session coalesces queued path siblings via a resource grant"
   (let* ((session (test-pq--make-session))
          (mevedel--session session)
+         (notified 0)
+         (mevedel-permission-notify-function
+          (lambda (_entry) (cl-incf notified)))
          (resolved-outcomes nil))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                #'ignore))
@@ -524,6 +534,7 @@
     ;; --coalesce was called).
     (should (assoc "Read2" resolved-outcomes))
     (should (eq 'allow (cdr (assoc "Read2" resolved-outcomes))))
+    (should (= 2 notified))
     ;; Queue is now empty (Read1 was already dropped before
     ;; --coalesce; Read2 was just resolved).
     (should (null (mevedel-session-permission-queue session))))

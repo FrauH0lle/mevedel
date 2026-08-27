@@ -696,51 +696,53 @@ the session's current head and everything it resolves through.  Only a
 portable session owning its lease may collect: the deletion is a target
 mutation, and the current head must not move underneath it.  Every
 collectible generation is deleted in one batched target program, so one
-pass reclaims everything regardless of backlog size.  Returns the
-number of generations deleted."
-  (when (and (mevedel-session-codec-portable-authority-p session)
-             (mevedel-session-durability-lease-owned-p session)
-             (not (mevedel-session-pending-publication session))
-             (null (mevedel-session-publication-queue session))
-             (not (mevedel-session-publication-active-p session)))
-    (let* ((session-dir (mevedel-session-save-path session))
-           (current (or (plist-get (mevedel-session-publication session) :head)
-                        (mevedel-session-durability-publication-head
-                         session-dir))))
-      (when (and session-dir current)
-        (let* ((summaries
-                ;; A picker may bound sidecar reads, but collection needs
-                ;; turn facts for every candidate: coarse target timestamps
-                ;; make "the newest N" unreliable when publishes share a
-                ;; second, so an unscanned generation the current head still
-                ;; needs could fall outside a window.  The immutable facts
-                ;; cache is what keeps scanning every sidecar affordable.
-                (mevedel-session-publication-generation-summaries
-                 session-dir most-positive-fixnum))
-               (current-name
-                (file-name-nondirectory
-                 (directory-file-name (file-name-directory current))))
-               (current-summary
-                (seq-find
-                 (lambda (summary)
-                   (equal current-name (plist-get summary :name)))
-                 summaries))
-               (deleted 0))
-          (when (plist-get current-summary :manifest-readable-p)
-            (let* ((retained
-                    (append
-                     (list current-name)
-                     (plist-get current-summary :references)
-                     (mevedel-session-publication--retained-generations
-                      summaries)))
-                   (collectible
-                    (seq-remove
-                     (lambda (generation)
-                       (member (plist-get generation :name) retained))
-                     (mevedel-session-publication--generation-names
-                      session-dir)))
-                   (results
-                    (condition-case error
+pass reclaims everything regardless of backlog size.  Collection is
+best-effort: failures warn and return nil rather than breaking turn
+settlement or session restore.  Returns the number of generations
+deleted."
+  (condition-case error
+      (when (and (mevedel-session-codec-portable-authority-p session)
+                 (mevedel-session-durability-lease-owned-p session)
+                 (not (mevedel-session-pending-publication session))
+                 (null (mevedel-session-publication-queue session))
+                 (not (mevedel-session-publication-active-p session)))
+        (let* ((session-dir (mevedel-session-save-path session))
+               (current
+                (or (plist-get (mevedel-session-publication session) :head)
+                    (mevedel-session-durability-publication-head session-dir))))
+          (when (and session-dir current)
+            (let* ((summaries
+                    ;; A picker may bound sidecar reads, but collection needs
+                    ;; turn facts for every candidate: coarse target timestamps
+                    ;; make "the newest N" unreliable when publishes share a
+                    ;; second, so an unscanned generation the current head still
+                    ;; needs could fall outside a window.  The immutable facts
+                    ;; cache is what keeps scanning every sidecar affordable.
+                    (mevedel-session-publication-generation-summaries
+                     session-dir most-positive-fixnum))
+                   (current-name
+                    (file-name-nondirectory
+                     (directory-file-name (file-name-directory current))))
+                   (current-summary
+                    (seq-find
+                     (lambda (summary)
+                       (equal current-name (plist-get summary :name)))
+                     summaries))
+                   (deleted 0))
+              (when (plist-get current-summary :manifest-readable-p)
+                (let* ((retained
+                        (append
+                         (list current-name)
+                         (plist-get current-summary :references)
+                         (mevedel-session-publication--retained-generations
+                          summaries)))
+                       (collectible
+                        (seq-remove
+                         (lambda (generation)
+                           (member (plist-get generation :name) retained))
+                         (mevedel-session-publication--generation-names
+                          session-dir)))
+                       (results
                         (mevedel-session-control-fs-delete-directories
                          (mapcar
                           (lambda (generation)
@@ -749,36 +751,37 @@ number of generations deleted."
                              (file-name-concat
                               ".publications"
                               (plist-get generation :name))))
-                          collectible))
-                      (error
-                       (display-warning
-                        'mevedel
-                        (format "Could not collect published generations: %s"
-                                (error-message-string error))
-                        :warning)
-                       nil))))
-              (cl-loop for generation in collectible
-                       for result in results
-                       do
-                       (if (eq (plist-get result :status) 'ok)
-                           (let ((key
-                                  (mevedel-session-publication--publication-path
-                                   session-dir
-                                   (plist-get generation :head))))
-                             (remhash
-                              key mevedel-session-publication--manifest-cache)
-                             (remhash
-                              key mevedel-session-publication--facts-cache)
-                             (setq deleted (1+ deleted)))
-                         (display-warning
-                          'mevedel
-                          (format
-                           "Could not collect publication generation %s: %s"
-                           (plist-get generation :name)
-                           (or (plist-get result :diagnostic)
-                               (plist-get result :status)))
-                          :warning)))
-              deleted)))))))
+                          collectible))))
+                  (cl-loop for generation in collectible
+                           for result in results
+                           do
+                           (if (eq (plist-get result :status) 'ok)
+                               (let ((key
+                                      (mevedel-session-publication--publication-path
+                                       session-dir
+                                       (plist-get generation :head))))
+                                 (remhash
+                                  key
+                                  mevedel-session-publication--manifest-cache)
+                                 (remhash
+                                  key mevedel-session-publication--facts-cache)
+                                 (setq deleted (1+ deleted)))
+                             (display-warning
+                              'mevedel
+                              (format
+                               "Could not collect publication generation %s: %s"
+                               (plist-get generation :name)
+                               (or (plist-get result :diagnostic)
+                                   (plist-get result :status)))
+                              :warning)))
+                  deleted))))))
+    (error
+     (display-warning
+      'mevedel
+      (format "Could not collect published generations: %s"
+              (error-message-string error))
+      :warning)
+     nil)))
 
 (defun mevedel-session-publication-read (session-dir &optional head)
   "Return SESSION-DIR's captured immutable publication, or nil.

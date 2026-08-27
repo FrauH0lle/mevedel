@@ -820,7 +820,9 @@ Returns nil when the two contents hold the same lines."
   (let (paths)
     (dolist (operation (plist-get proposal :operations))
       (when (if (eq (plist-get operation :kind) 'update)
-                (cl-some (lambda (hunk) (plist-get hunk :selected))
+                (cl-some (lambda (hunk)
+                           (and (plist-get hunk :selected)
+                                (mevedel-tool-patch-hunk-changes-p hunk)))
                          (plist-get operation :hunks))
               (plist-get operation :selected))
         (setq paths (append paths
