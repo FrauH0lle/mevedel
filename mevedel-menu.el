@@ -191,6 +191,7 @@
 (declare-function mevedel-session-pending-plan-approval
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-authority-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -252,6 +253,8 @@
 (declare-function mevedel-view-previous-display "mevedel-view-render" ())
 (declare-function mevedel-view-previous-user-query "mevedel-view-render" ())
 (declare-function mevedel-view-rewind-at-point "mevedel-view-render" ())
+(declare-function mevedel-redo "mevedel-session-rewind" ())
+(autoload 'mevedel-redo "mevedel-session-rewind")
 (declare-function mevedel-view-switch-conversation-variant-at-point
                   "mevedel-view-render" ())
 
@@ -1165,6 +1168,21 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (mevedel-cockpit-call-in-view
    (mevedel-menu--context) #'mevedel-view-rewind-at-point))
 
+(defun mevedel-menu--redo ()
+  "Restore the session to one of its published heads."
+  (interactive)
+  (mevedel-menu--call-live-tip-data #'mevedel-redo))
+
+(defun mevedel-menu--redo-inapt-p ()
+  "Return non-nil when this session publishes no restorable head.
+
+The recorded authority mode is read directly: offering the entry must
+not be the step that rejects a session, and a file session simply has
+nothing to restore."
+  (let ((session (mevedel-cockpit-context-session (mevedel-menu--context))))
+    (not (and session
+              (eq (mevedel-session-authority-mode session) 'portable)))))
+
 (defun mevedel-menu--switch-variant-here ()
   "Switch conversation variants at point in the paired view buffer."
   (interactive)
@@ -1434,6 +1452,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("f" "Fork conversation" mevedel-menu--fork-conversation-here)
     ("F" "Fork worktree" mevedel-menu--fork-worktree-here)
     ("R" "Rewind here" mevedel-menu--rewind-here)
+    ("D" "Redo…" mevedel-menu--redo
+     :inapt-if mevedel-menu--redo-inapt-p)
     ("B" "Switch variant" mevedel-menu--switch-variant-here)]
    ["Configure"
     :pad-keys t

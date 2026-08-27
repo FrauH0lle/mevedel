@@ -1305,6 +1305,36 @@
           (mevedel-menu--rewind-here))
         (should (eq called-buffer view-buf))))))
 
+(mevedel-deftest mevedel-menu--redo ()
+  ,test
+  (test)
+  :doc "redo runs against the session's data buffer"
+  (mevedel-menu-test--with-buffers
+    (let (called-buffer)
+      (cl-letf (((symbol-function 'mevedel-redo)
+                 (lambda ()
+                   (interactive)
+                   (setq called-buffer (current-buffer)))))
+        (with-current-buffer view-buf
+          (mevedel-menu--redo))
+        (should (eq called-buffer data-buf))))))
+
+(mevedel-deftest mevedel-menu--redo-inapt-p ()
+  ,test
+  (test)
+  :doc "offers redo only where a session publishes restorable heads"
+  (mevedel-menu-test--with-buffers
+    (with-current-buffer view-buf
+      (setf (mevedel-session-authority-mode session) 'portable)
+      (should-not (mevedel-menu--redo-inapt-p))
+      ;; A file session publishes no immutable heads, so it has nothing
+      ;; to restore.
+      (setf (mevedel-session-authority-mode session) 'pid-lock)
+      (should (mevedel-menu--redo-inapt-p))
+      ;; An unrecorded mode is not a reason to signal from a menu.
+      (setf (mevedel-session-authority-mode session) nil)
+      (should (mevedel-menu--redo-inapt-p)))))
+
 (mevedel-deftest mevedel-menu--switch-variant-here ()
   ,test
   (test)

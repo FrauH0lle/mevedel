@@ -990,8 +990,11 @@ clear them with `C-c C-q` before a destructive transcript operation.
 
 ### Redo
 
-`mevedel-redo` restores a portable session's conversation to one of its
-superseded published heads. Every committed head is immutable, so the state a
+`mevedel-redo`, also available as `D` in the session cockpit beside
+Rewind's `R`, restores a portable session's conversation to one of its
+superseded published heads.  The cockpit entry is inapt for a file
+session, which publishes no immutable heads and therefore has nothing to
+restore. Every committed head is immutable, so the state a
 Rewind moved away from is still on disk as a complete, hash-verified
 generation; redo is an exposure of that state rather than a new mechanism.
 
