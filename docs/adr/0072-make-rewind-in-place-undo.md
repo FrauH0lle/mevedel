@@ -133,3 +133,21 @@ Read pins stay deferred. A follower re-reads the owner's current head rather
 than pinning it, and the grace window covers that race; a reader holding an
 older non-boundary head can still lose its bytes and will see a hash or absence
 failure rather than silent corruption.
+
+## Amendment: complete batched passes, and collection on restore (2026-08-27)
+
+Settlement-only collection with a 32-deletion cap did not hold the line. The
+cap existed because each deletion was its own control program -- one round
+trip per generation, and "what the bound leaves behind is collected at the
+next settlement". A real two-day session broke both assumptions: publications
+streamed in at four to five per minute during long turns while settlements
+happened a handful of times, and its final turn never settled at all --
+suspend killed the stream after the response had arrived -- so 421 of its 465
+generations (366 MB of 401) were collectible garbage no pass would ever
+reach.
+
+Both legs moved. Deletions are batched into one control program
+(`mevedel-session-control-fs-delete-directories`), which removes the reason
+for the cap, so a pass now collects everything collectible; and collection
+also runs when a restore acquires the lease, which is where an unsettled
+turn's orphans finally drain. Retention semantics are unchanged.

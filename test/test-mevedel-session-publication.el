@@ -196,18 +196,17 @@ and its segment path."
               session-dir most-positive-fixnum)
              (should (= first-pass reads))))))))
 
-  :doc "collects no more than its per-pass bound, leaving the rest for later"
-  (let ((mevedel-session-publication-keep-recent-generations 1)
-        (mevedel-session-publication-collect-max 1))
+  :doc "collects every collectible generation in one batched pass"
+  (let ((mevedel-session-publication-keep-recent-generations 1))
     (test-mevedel-session-publication--with-published
      "publication-bound" "mevedel-publication-bound-" ?b
      (lambda (session session-dir segment)
        (dolist (turns '(1 1 1 2))
          (test-mevedel-session-publication--publish
           session session-dir segment (format "Turn %d\n" turns) turns))
-       (should (= 1 (mevedel-session-publication-collect-generations session)))
-       ;; The next settlement continues where this pass stopped.
-       (should (= 1 (mevedel-session-publication-collect-generations
+       (should (= 2 (mevedel-session-publication-collect-generations session)))
+       ;; The pass was complete; nothing is left for later.
+       (should (= 0 (mevedel-session-publication-collect-generations
                      session))))))
 
   :doc "refuses without the lease and for a PID-lock session"

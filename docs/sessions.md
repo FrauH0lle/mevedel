@@ -590,7 +590,18 @@ settled turn is where the generations that turn published stop being anyone's
 recovery state -- until settlement they are what a crashed owner resumes from,
 and afterwards nothing resolves through them -- so
 `mevedel-session-publication-collect-generations` runs there, best-effort,
-under the owner's lease.
+under the owner's lease.  It also runs when a restore acquires the lease,
+because a turn that never settles -- crash, suspend, lost provider callback
+-- orphans everything it published and settlement never sees it again: one
+real two-day session accumulated 421 collectible generations (366 MB) that
+way.
+
+A collection pass is complete: every collectible generation is deleted in one
+batched control program (`mevedel-session-control-fs-delete-directories`),
+so a backlog costs one extra round trip rather than surviving to the next
+settlement.  An earlier per-pass cap of 32, motivated by one-deletion-per-
+program round trips, lost by arithmetic once publications streamed in at
+several per minute.
 
 Collection reads every published sidecar rather than a recent window,
 because coarse target timestamps make "the newest N generations" an
