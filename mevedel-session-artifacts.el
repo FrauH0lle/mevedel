@@ -275,6 +275,18 @@
 ;;
 ;;; Buffer persistence
 
+(defun mevedel-session-artifacts-run-save-hooks-silently (hook)
+  "Run HOOK with save-related echo-area and log messages suppressed.
+
+Publication saves the segment itself, then runs the buffer's save hooks so
+third-party integrations see an ordinary save.  Those hooks belong to the
+user's configuration and may report to the echo area; a session buffer is
+internal state, and a per-turn save report is noise in `*Messages*'."
+  (let ((save-silently t)
+        (inhibit-message t)
+        (message-log-max nil))
+    (run-hooks hook)))
+
 (defun mevedel-session-artifacts-save-buffer-silently ()
   "Save the current session buffer without save or hook messages."
   (let ((save-silently t)
@@ -1632,7 +1644,8 @@ continues to wait for the root turn's completed-turn publication boundary."
             (gptel--save-state))
           (let ((before-save-hook
                  (remq 'gptel--save-state before-save-hook)))
-            (run-hooks 'before-save-hook)))
+            (mevedel-session-artifacts-run-save-hooks-silently
+             'before-save-hook)))
         (mevedel-session-persistence-update-transcript-entry
          session (mevedel-agent-invocation-agent-id invocation)
          (list :updated-at (format-time-string "%FT%H-%M-%S")))
@@ -1656,7 +1669,8 @@ continues to wait for the root turn's completed-turn publication boundary."
               (progn
                 (set-visited-file-modtime)
                 (set-buffer-modified-p nil)
-                (run-hooks 'after-save-hook))
+                (mevedel-session-artifacts-run-save-hooks-silently
+                 'after-save-hook))
             (error
              (mevedel--warn-once
               'artifacts-agent-post-save
@@ -1781,7 +1795,8 @@ calling this serializer."
                 (progn
                   (set-visited-file-modtime)
                   (set-buffer-modified-p nil)
-                  (run-hooks 'after-save-hook))
+                  (mevedel-session-artifacts-run-save-hooks-silently
+                   'after-save-hook))
               (error
                (mevedel--warn-once
                 'artifacts-session-post-save
