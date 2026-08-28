@@ -807,7 +807,36 @@
                                               '(:path "/home/user/projects/myapp/src/main.el"))))
 
   :doc "nil when no args"
-  (should (null (mevedel-tool-display-string "Unknown" nil))))
+  (should (null (mevedel-tool-display-string "Unknown" nil)))
+
+  :doc "a signalling display-arg loses the label, never the turn"
+  ;; Reached from `gptel--handle-pre-tool' inside gptel's curl sentinel,
+  ;; and gptel transitions the request outside its own error guard: an
+  ;; escape here strands the turn waiting on a tool result forever.
+  (unwind-protect
+      (let (captured)
+        (mevedel-tool-register
+         (mevedel-tool--create
+          :name "Exploding" :read-only-p t
+          :args '((patch string :required "Patch"))
+          :display-arg (lambda (_args) (aref "1 file" 6))))
+        (mevedel-test--with-captured-diagnostics captured
+          (should-not
+           (mevedel-tool-display-string "Exploding" '(:patch "x"))))
+        (should (string-match-p "omitting label" captured)))
+    (mevedel-tool-clear-registry))
+
+  :doc "a well-behaved display-arg is unaffected by the guard"
+  (unwind-protect
+      (progn
+        (mevedel-tool-register
+         (mevedel-tool--create
+          :name "Calm" :read-only-p t
+          :args '((patch string :required "Patch"))
+          :display-arg (lambda (_args) "1 file")))
+        (should (equal "1 file"
+                       (mevedel-tool-display-string "Calm" '(:patch "x")))))
+    (mevedel-tool-clear-registry)))
 
 (provide 'test-mevedel-tool-registry)
 ;;; test-mevedel-tool-registry.el ends here
