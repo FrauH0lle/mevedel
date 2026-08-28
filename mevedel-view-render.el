@@ -2846,12 +2846,51 @@ never blank, however much of it is marker lines."
         (or (>= s e)
             (string-blank-p (buffer-substring-no-properties s e)))))))
 
+(defconst mevedel-view--scaffolding-only-cache-size 512
+  "Scaffolding verdicts retained by `mevedel-view--scaffolding-only-cache'.
+
+Generous because a verdict is one boolean.  The cleaned text it is derived
+from is not retained here, so this bound costs almost nothing while
+covering every segment a long transcript re-examines.")
+
+(defvar-local mevedel-view--scaffolding-only-cache nil
+  "Scaffolding verdicts, keyed by the segment text they were derived from.
+
+A render walks every segment and asks each one whether it is glue, and the
+answer came from cleaning the whole segment and testing the result for
+emptiness -- four passes allocating a fresh copy each.  That was 81% of all
+reasoning-cleaning allocation in a profiled remote turn, and it recurs on
+every redraw because the segments do not change.
+
+Kept apart from `mevedel-view--clean-reasoning-cache' precisely because the
+values are cheap: a shared bound sized for whole cleaned blocks was small
+enough that a long transcript evicted its own entries before reusing them.")
+
 (defun mevedel-view--scaffolding-only-text-p (text)
   "Return non-nil if TEXT is org-only glue, or nil.
-Nil TEXT counts as glue.  See `mevedel-view--scaffolding-only-p'."
-  (or (null text)
-      (string-empty-p
-       (string-trim (mevedel-view--clean-reasoning-text text)))))
+Nil TEXT counts as glue.  See `mevedel-view--scaffolding-only-p'.
+
+Cached per buffer; see `mevedel-view--scaffolding-only-cache'."
+  (if (null text)
+      t
+    (unless mevedel-view--scaffolding-only-cache
+      (setq mevedel-view--scaffolding-only-cache
+            (make-hash-table :test #'equal)))
+    (let ((cached (gethash text mevedel-view--scaffolding-only-cache 'miss)))
+      (if (eq cached 'miss)
+          (progn
+            ;; Cleared rather than evicted one by one: recomputing a
+            ;; verdict is the work this cache already exists to skip, and
+            ;; a transcript long enough to overflow re-examines its oldest
+            ;; segments least.
+            (when (>= (hash-table-count mevedel-view--scaffolding-only-cache)
+                      mevedel-view--scaffolding-only-cache-size)
+              (clrhash mevedel-view--scaffolding-only-cache))
+            (puthash text
+                     (string-empty-p
+                      (string-trim (mevedel-view--clean-reasoning-text text)))
+                     mevedel-view--scaffolding-only-cache))
+        cached))))
 
 (defun mevedel-view--inline-skill-render-data-from-text (text)
   "Return inline-skill render-data from TEXT, or nil."
