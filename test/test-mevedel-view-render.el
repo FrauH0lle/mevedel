@@ -6357,5 +6357,32 @@
       (let ((text (buffer-substring-no-properties (point-min) (point-max))))
         (should-not (string-match-p "PREVIEW BODY\\|FULL BODY" text))))))
 
+(mevedel-deftest mevedel-view--nonblank-line-count ()
+  ,test
+  (test)
+
+  :doc "counts exactly what splitting into lines would have counted"
+  ;; The summary needs only the number.  Building the list to take its
+  ;; length allocated one string per line of a reasoning block running to
+  ;; thousands of lines, on every redraw.
+  (dolist (case '("" "\n" "a\nb\n" "  \n\ta\n \n b " "one" "\n\n\n"
+                  "x\n \t \ny" "trail   "))
+    (should (= (length (split-string case "\n" t "[ \t]+"))
+               (mevedel-view--nonblank-line-count case)))))
+
+(mevedel-deftest mevedel-view--clean-reasoning-text ()
+  ,test
+  (test)
+
+  :doc "strips every scaffolding marker in one pass over the markers"
+  (should (equal "keep\ntail\n"
+                 (mevedel-view--clean-reasoning-text
+                  (concat "#+begin_reasoning x\nkeep\n#+end_reasoning\n"
+                          "#+begin_tool y\n#+end_tool\ntail\n"))))
+
+  :doc "leaves ordinary reasoning prose untouched"
+  (should (equal "just thinking\n"
+                 (mevedel-view--clean-reasoning-text "just thinking\n"))))
+
 (provide 'test-mevedel-view-render)
 ;;; test-mevedel-view-render.el ends here
