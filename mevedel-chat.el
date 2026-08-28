@@ -923,23 +923,31 @@ if none found."
                                     (or (cl-position (cdr s) buf-list)
                                         most-positive-fixnum)))))))))))
 
-(defun mevedel--generate-final-patch (&optional workspace)
-  "Generate final diffs for all tracked files in current request.
+(defun mevedel--generate-final-patch (&optional workspace request)
+  "Generate final diffs for all tracked files in REQUEST.
 
 Return a unified diff string showing original -> final state for each
-file.  Uses the active request's snapshots to compare original states
-with current file contents in WORKSPACE."
-  (let ((diffs "")
-        (workspace-root (mevedel-workspace-root
-                         (or workspace (mevedel-workspace))))
-        paths)
-    (when mevedel--current-request
-      (maphash (lambda (filepath _original) (push filepath paths))
-               (mevedel-request-file-snapshots mevedel--current-request)))
+file.  Uses REQUEST's snapshots -- defaulting to `mevedel--current-request\'
+-- to compare original states with current file contents in WORKSPACE.
+
+REQUEST is resolved once, at entry.  Reading the buffer-local on each
+iteration instead was a use-after-settle: the loop reads every touched
+file, and on a remote workspace `insert-file-contents\' hands control to
+TRAMP\'s wait loop, which runs timers and process sentinels.  One of those
+settles the turn and clears `mevedel--current-request\', so an iteration
+that began with a live request could reach the next one holding nil and
+signal `wrong-type-argument\'.  A caller that already knows the request --
+because it captured it while the turn was live -- should pass it."
+  (let* ((diffs "")
+         (workspace-root (mevedel-workspace-root
+                          (or workspace (mevedel-workspace))))
+         (request (or request mevedel--current-request))
+         (snapshots (and request (mevedel-request-file-snapshots request)))
+         paths)
+    (when snapshots
+      (maphash (lambda (filepath _original) (push filepath paths)) snapshots))
     (dolist (filepath (sort paths #'string<))
-      (let* ((original (gethash filepath
-                                (mevedel-request-file-snapshots
-                                 mevedel--current-request)))
+      (let* ((original (gethash filepath snapshots))
              (current (when (file-regular-p filepath)
                         (with-temp-buffer
                           (insert-file-contents filepath)

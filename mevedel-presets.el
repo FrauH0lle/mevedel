@@ -45,7 +45,7 @@
 ;; `mevedel-chat'
 (declare-function mevedel--directive-capture "mevedel-chat" (request))
 (declare-function mevedel--generate-final-patch
-                  "mevedel-chat" (&optional workspace))
+                  "mevedel-chat" (&optional workspace request))
 (declare-function mevedel--replace-patch-buffer
                   "mevedel-chat" (patch-content))
 (defvar mevedel--current-directive-uuid)
@@ -136,6 +136,13 @@
 (declare-function mevedel--complete-turn "mevedel-turn" (fsm))
 (declare-function mevedel--fail-turn "mevedel-turn" (fsm status))
 (declare-function mevedel--safe-fsm-handler "mevedel-turn" (handler))
+
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk &optional on-cancel))
+(autoload 'mevedel-transport-busy-p "mevedel-transport")
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 (declare-function mevedel-request-begin
                   "mevedel-turn" (session &optional directive-uuid))
 
@@ -568,11 +575,8 @@ Has no effect when no extras are registered for PRESET-NAME."
     (let* ((request (or (plist-get info :mevedel-request)
                         (with-current-buffer chat-buffer
                           mevedel--current-request)))
-           (final-patch (with-current-buffer chat-buffer
-                          (mevedel--generate-final-patch workspace)))
            (capture (with-current-buffer chat-buffer
                       (mevedel--directive-capture request))))
-      (setq info (plist-put info :mevedel-directive-patch final-patch))
       (setq info
             (plist-put info :mevedel-directive-capture
                        (plist-get capture :capture)))
@@ -586,8 +590,48 @@ Has no effect when no extras are registered for PRESET-NAME."
             (plist-put info :mevedel-directive-untracked-effects
                        (plist-get capture :untracked-effects)))
       (setf (gptel-fsm-info fsm) info)
-      (when (and final-patch (> (length final-patch) 0))
-        (mevedel--replace-patch-buffer final-patch)))))
+      (mevedel-preset--apply-final-patch
+       fsm chat-buffer workspace request))))
+
+(defun mevedel-preset--apply-final-patch (fsm chat-buffer workspace request)
+  "Generate FSM's final patch for WORKSPACE, off a busy transport.
+
+This handler runs from `gptel--fsm-transition', which gptel calls inside
+its curl process sentinel -- and TRAMP re-runs a pending sentinel from the
+wait loop of any remote command already in flight.  Generating the patch
+reads every file the turn touched, so doing it there issues commands on a
+connection that is mid-conversation, and the two cross replies.
+
+`mevedel-transport-run-when-idle' runs the work inline when the transport
+is free, which is the ordinary case and leaves the patch on FSM's info
+before anything reads it.  Only a busy transport defers, and that is the
+case which until now signalled `Forbidden reentrant call of Tramp' and
+lost the patch outright -- so a late patch is strictly better than what it
+replaces, never worse.
+
+REQUEST is captured here, while the turn is still live, and handed to the
+generator.  Deferring moved that work past the point where settlement
+clears `mevedel--current-request\', so a deferred generator that re-read
+the buffer-local would find nil and signal."
+  (let* ((root (ignore-errors (mevedel-workspace-root workspace)))
+         (generate
+          (lambda ()
+            (when (buffer-live-p chat-buffer)
+              (let ((patch (with-current-buffer chat-buffer
+                             (mevedel--generate-final-patch
+                              workspace request))))
+                (setf (gptel-fsm-info fsm)
+                      (plist-put (gptel-fsm-info fsm)
+                                 :mevedel-directive-patch patch))
+                (when (and patch (> (length patch) 0))
+                  (mevedel--replace-patch-buffer patch)))))))
+    (if (and root
+             (file-remote-p root)
+             (mevedel-transport-busy-p root)
+             (mevedel-transport-run-when-idle
+              (list 'final-patch (buffer-name chat-buffer)) root generate))
+        t
+      (funcall generate))))
 
 (defun mevedel-preset--build-handlers (handlers)
   "Build the standard mevedel FSM handler chain from base HANDLERS.

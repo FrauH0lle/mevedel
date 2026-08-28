@@ -227,7 +227,7 @@
           (cl-letf (((symbol-function 'mevedel-workspace)
                      (lambda (&optional _buffer) ws))
                     ((symbol-function 'mevedel--generate-final-patch)
-                     (lambda (workspace)
+                     (lambda (&optional workspace _request)
                        (setq generated workspace)
                        "diff --git a/file b/file\n"))
                     ((symbol-function 'mevedel--directive-capture)
@@ -1039,6 +1039,83 @@
       (should (equal rules
                      (mevedel-agent-invocation-hook-rules invocation))))))
 
+
+(mevedel-deftest mevedel-preset--apply-final-patch ()
+  ,test
+  (test)
+
+  :doc "an idle transport generates inline, so the patch is there to read"
+  ;; The directive attempt is recorded straight after this handler and
+  ;; reads `:mevedel-directive-patch' from the info plist.
+  (let ((fsm (gptel-make-fsm))
+        (request (mevedel-request--create))
+        (workspace (mevedel-workspace--create
+                    :type 'project :id "/mevedelmock:host:/srv/p/"
+                    :root "/mevedelmock:host:/srv/p/" :name "p")))
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+                 (lambda (&optional _) nil))
+                ((symbol-function 'mevedel--generate-final-patch)
+                 (lambda (&rest _) "diff --git a/x b/x\n"))
+                ((symbol-function 'mevedel--replace-patch-buffer) #'ignore))
+        (mevedel-preset--apply-final-patch
+         fsm (current-buffer) workspace request)
+        (should (equal "diff --git a/x b/x\n"
+                       (plist-get (gptel-fsm-info fsm)
+                                  :mevedel-directive-patch))))))
+
+  :doc "a busy transport defers instead of nesting inside the sentinel"
+  ;; Until this deferral the same call signalled `Forbidden reentrant call
+  ;; of Tramp' and lost the patch, so a late patch is the better outcome.
+  (let ((fsm (gptel-make-fsm))
+        (request (mevedel-request--create))
+        (workspace (mevedel-workspace--create
+                    :type 'project :id "/mevedelmock:host:/srv/p/"
+                    :root "/mevedelmock:host:/srv/p/" :name "p"))
+        deferred-thunk generated)
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+                 (lambda (&optional _) t))
+                ((symbol-function 'mevedel-transport-run-when-idle)
+                 (lambda (_key _path thunk &optional _on-cancel)
+                   (setq deferred-thunk thunk)
+                   t))
+                ((symbol-function 'mevedel--generate-final-patch)
+                 (lambda (&optional _ws req)
+                   ;; Settlement clears the buffer-local before the
+                   ;; deferred thunk runs; the captured request is what
+                   ;; must reach the generator.
+                   (setq generated req)
+                   "diff\n"))
+                ((symbol-function 'mevedel--replace-patch-buffer) #'ignore))
+        (mevedel-preset--apply-final-patch
+         fsm (current-buffer) workspace request)
+        (should-not generated)
+        (should (functionp deferred-thunk))
+        (setq mevedel--current-request nil)
+        (funcall deferred-thunk)
+        (should (eq request generated))
+        (should (equal "diff\n"
+                       (plist-get (gptel-fsm-info fsm)
+                                  :mevedel-directive-patch))))))
+
+  :doc "a local workspace never defers, busy transport or not"
+  (let ((fsm (gptel-make-fsm))
+        (request (mevedel-request--create))
+        (workspace (mevedel-workspace--create
+                    :type 'project :id "/tmp/p/" :root "/tmp/p/" :name "p"))
+        generated)
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+                 (lambda (&optional _) t))
+                ((symbol-function 'mevedel-transport-run-when-idle)
+                 (lambda (&rest _) (error "Local workspace must not defer")))
+                ((symbol-function 'mevedel--generate-final-patch)
+                 (lambda (&rest _) (setq generated t) ""))
+                ((symbol-function 'mevedel--replace-patch-buffer) #'ignore))
+        (mevedel-preset--apply-final-patch
+         fsm (current-buffer) workspace request)
+        (should generated)))))
 
 (provide 'test-mevedel-presets)
 ;;; test-mevedel-presets.el ends here
