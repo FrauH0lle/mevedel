@@ -6416,7 +6416,42 @@
 
   :doc "leaves ordinary reasoning prose untouched"
   (should (equal "just thinking\n"
-                 (mevedel-view--clean-reasoning-text "just thinking\n"))))
+                 (mevedel-view--clean-reasoning-text "just thinking\n")))
+
+  :doc "a repeat cleaning is served from the buffer cache"
+  ;; A render walks every turn, so each tick re-cleans every completed
+  ;; reasoning block as well as the live one.
+  (with-temp-buffer
+    (let ((text "#+begin_reasoning a\nkeep\n#+end_reasoning\ntail\n")
+          (computed 0))
+      (cl-letf* ((original
+                  (symbol-function 'mevedel-view--clean-reasoning-text-1))
+                 ((symbol-function 'mevedel-view--clean-reasoning-text-1)
+                  (lambda (arg)
+                    (setq computed (1+ computed))
+                    (funcall original arg))))
+        (should (equal (mevedel-view--clean-reasoning-text-1 text)
+                       (mevedel-view--clean-reasoning-text text)))
+        (setq computed 0)
+        (dotimes (_ 20) (mevedel-view--clean-reasoning-text text))
+        (should (= 0 computed)))))
+
+  :doc "the cache stays bounded and keeps the newest entry"
+  (with-temp-buffer
+    (dotimes (index 100)
+      (mevedel-view--clean-reasoning-text (format "text-%d\n" index)))
+    (should (= mevedel-view--clean-reasoning-cache-size
+               (length mevedel-view--clean-reasoning-cache)))
+    (should (equal "text-99\n"
+                   (mevedel-view--clean-reasoning-cached "text-99\n"))))
+
+  :doc "one buffer's cleanings never answer for another's"
+  (let ((text "#+begin_reasoning a\nkeep\n#+end_reasoning\n"))
+    (with-temp-buffer
+      (mevedel-view--clean-reasoning-text text)
+      (should (mevedel-view--clean-reasoning-cached text)))
+    (with-temp-buffer
+      (should-not (mevedel-view--clean-reasoning-cached text)))))
 
 (provide 'test-mevedel-view-render)
 ;;; test-mevedel-view-render.el ends here
