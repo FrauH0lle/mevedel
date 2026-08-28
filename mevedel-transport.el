@@ -174,7 +174,18 @@ charged for the section."
   (let ((suspended (with-timeout-suspend))
         (started (float-time))
         (scheduled nil)
-        (scheduled-idle nil))
+        (scheduled-idle nil)
+        ;; A collection inside the section is paid twice: it lengthens the
+        ;; section, and the section is the window where the connection is
+        ;; held and foreign timers are stopped, so the whole of Emacs waits
+        ;; out the collection.  A profiled remote turn sat at the 800KB
+        ;; idle floor `gcmh' leaves behind and spent 18% of its samples in
+        ;; automatic GC.  How much of that fell inside these sections is
+        ;; not measurable from that profile -- Emacs attributes GC to a
+        ;; top-level pseudo-frame rather than to the code that allocated --
+        ;; so this is reasoned from the cost of collecting here, not from
+        ;; an observed share.
+        (gc-cons-threshold (max gc-cons-threshold (* 64 1024 1024))))
     (unwind-protect
         (let (timer-list timer-idle-list)
           (unwind-protect (funcall thunk)
