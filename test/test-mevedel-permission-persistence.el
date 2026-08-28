@@ -568,5 +568,59 @@
                            (buffer-string))))))
       (delete-directory tmp-dir t))))
 
+(mevedel-deftest mevedel-permission--store-file-status ()
+  ,test
+  (test)
+
+  :doc "a repeat read is served from memory, never from the target"
+  ;; Consulted twice per tool call, from inside gptel's curl sentinel that
+  ;; TRAMP's wait loop re-runs; a read there lands on a connection that
+  ;; already has a command in flight.
+  (let* ((dir (make-temp-file "mevedel-store-cache-" t))
+         (file (file-name-concat dir "permissions.el"))
+         (reads 0))
+    (unwind-protect
+        (progn
+          (clrhash mevedel-permission--store-cache)
+          (write-region "(:rules nil :resource-grants nil)" nil file nil 'silent)
+          (advice-add
+           'insert-file-contents :before
+           (lambda (&rest _) (setq reads (1+ reads)))
+           '((name . mevedel-store-cache-count)))
+          (unwind-protect
+              (progn
+                (should (eq 'valid (plist-get
+                                    (mevedel-permission--store-file-status file)
+                                    :status)))
+                (should (= 1 reads))
+                (mevedel-permission--store-file-status file)
+                (mevedel-permission--store-file-status file)
+                (should (= 1 reads)))
+            (advice-remove 'insert-file-contents 'mevedel-store-cache-count)))
+      (clrhash mevedel-permission--store-cache)
+      (delete-directory dir t)))
+
+  :doc "validation reads the file itself, so a hand edit is still caught"
+  (let* ((dir (make-temp-file "mevedel-store-fresh-" t))
+         (file (file-name-concat dir "permissions.el")))
+    (unwind-protect
+        (progn
+          (clrhash mevedel-permission--store-cache)
+          (write-region "(:rules nil :resource-grants nil)" nil file nil 'silent)
+          (should (eq 'valid (plist-get
+                              (mevedel-permission--store-file-status file)
+                              :status)))
+          (write-region "not-a-store" nil file nil 'silent)
+          ;; The cache still answers valid; the uncached read does not.
+          (should (eq 'valid (plist-get
+                              (mevedel-permission--store-file-status file)
+                              :status)))
+          (should (eq 'invalid
+                      (plist-get
+                       (mevedel-permission--read-store-file-uncached file)
+                       :status))))
+      (clrhash mevedel-permission--store-cache)
+      (delete-directory dir t))))
+
 (provide 'test-mevedel-permission-persistence)
 ;;; test-mevedel-permission-persistence.el ends here
