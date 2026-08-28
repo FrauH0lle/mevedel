@@ -8,6 +8,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (require 'cl-lib)
 (require 'seq)
 
@@ -520,10 +525,10 @@ blockers."
          ;; already known.  Both share one row budget, because a very
          ;; long single line soft-wraps past the status fragment's
          ;; height cap.
-         (text (truncate-string-to-width
+         (text (mevedel--truncate-display
                 (or activity
                     (string-clean-whitespace (mevedel-task-subject task)))
-                72 nil nil t))
+                72 t))
          (icon (pcase status
                  ('completed   "✔")
                  ('in-progress "→")

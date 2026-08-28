@@ -20,6 +20,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (eval-when-compile
   (require 'cl-lib))
 (require 'seq)
@@ -338,9 +343,8 @@ made before it."
 Shortened to what is left of the budget, because the full text is
 available by moving point onto the line."
   (let* ((room (max 20 (- mevedel-buddy-note-width column)))
-         (text (truncate-string-to-width
-                (replace-regexp-in-string "[ \t\n]+" " " note)
-                room nil nil t)))
+         (text (mevedel--truncate-display (replace-regexp-in-string "[ \t\n]+" " " note)
+                room t)))
     (propertize (concat "  " text)
                 'face (mevedel-buddy-note--face severity))))
 

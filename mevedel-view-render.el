@@ -554,9 +554,8 @@ ERROR-P means the result itself looks like a tool-level failure."
         (mevedel-view--operation-line
          "?"
          'mevedel-view-tool-warning
-         (truncate-string-to-width
-          (replace-regexp-in-string "[\n\r]+" " " raw)
-          60 nil nil "...")
+         (mevedel--truncate-display (replace-regexp-in-string "[\n\r]+" " " raw)
+          60 "...")
          nil nil
          'mevedel-view-tool-summary)))))
 
@@ -4530,9 +4529,9 @@ coordinates yet -- folds and expands the same way as a rendered turn."
         (insert (propertize
                  (if directive
                    (format "◆ %s · %s · T%s · excluded from model context\n"
-                           (truncate-string-to-width
+                           (mevedel--truncate-display
                             (or (plist-get directive :directive-id) "?")
-                            8 nil nil "…")
+                            8 "…")
                            (mevedel-overlay-ui-directive-action-label
                             (plist-get directive :action))
                            (or (plist-get directive :turn) "?"))
