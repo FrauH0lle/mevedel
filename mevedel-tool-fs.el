@@ -197,11 +197,18 @@ addressable locator."
       result
     (list :result result)))
 
+;; `mevedel-utilities'
+(declare-function mevedel--executable-find
+                  "mevedel-utilities" (name &optional remote))
+(autoload 'mevedel--executable-find "mevedel-utilities")
+
 (defun mevedel-tool-fs-executable-find (name path)
-  "Find executable NAME in PATH's execution target."
-  (if-let* ((remote (file-remote-p path)))
-      (executable-find name remote)
-    (executable-find name)))
+  "Find executable NAME in PATH's execution target.
+
+Cached through `mevedel--executable-find': Glob, Grep and Read each probe
+for `rg' on every call, and on a remote target an uncached probe walks the
+whole PATH from inside gptel's curl sentinel."
+  (mevedel--executable-find name (file-remote-p path)))
 
 (defun mevedel-tool-fs--register ()
   "Register file system tools for mevedel."

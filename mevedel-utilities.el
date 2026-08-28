@@ -58,6 +58,7 @@
 ;; `org'
 (declare-function org-mode "org" ())
 (autoload 'org-mode "org")
+(defvar org-inhibit-startup)
 
 ;; `org-indent'
 (declare-function org-indent-mode "org-indent" (&optional arg))
@@ -145,6 +146,36 @@ both sides use real `a/FILEPATH' and `b/FILEPATH' labels."
         (when (file-exists-p mod-file) (delete-file mod-file))))))
 
 
+
+;;
+;;; Executable lookup
+
+(defvar mevedel--executable-cache (make-hash-table :test #'equal)
+  "Resolved executables, keyed by (REMOTE . NAME); REMOTE is nil when local.
+
+`executable-find' walks PATH with a `file-directory-p' and a
+`file-executable-p' per entry, so one remote lookup is many round trips.
+The callers ask per tool call and per spawn, from inside gptel's curl
+sentinel -- which TRAMP re-runs from the wait loop of a command already in
+flight, putting the nested lookup on a busy connection.
+
+An executable does not appear or vanish under a running session, so the
+answer is cached for the process.  Clear this to pick up a target whose
+tooling changed mid-session.")
+
+(defun mevedel--executable-find (name &optional remote)
+  "Return NAME's path on REMOTE, or locally when REMOTE is nil.
+
+Cached; see `mevedel--executable-cache'.  A negative result is cached too,
+because a missing tool is looked up just as often as a present one."
+  (let* ((key (cons remote name))
+         (cached (gethash key mevedel--executable-cache 'miss)))
+    (if (eq cached 'miss)
+        (puthash key
+                 (if remote (executable-find name remote) (executable-find name))
+                 mevedel--executable-cache)
+      cached)))
+
 ;;
 ;;; Diagnostics
 
@@ -209,16 +240,48 @@ echo area stays untouched.  FORMAT and ARGS are as for `format'."
 Mevedel data buffers and sub-agent transcript buffers are authoritative
 storage for gptel, not the primary user editing surface.  Disabling
 visual/checking/history modes there keeps generated model and tool-output
-insertion from running expensive editor hooks."
+insertion from running expensive editor hooks.
+
+A backstop rather than the mechanism: `mevedel--transcript-org-mode\' now
+sets the mode without running the hooks these modes enter through, so a
+buffer prepared that way should never have had one enabled.  It stays for a
+mode that some other path switches on."
   :type '(repeat symbol)
   :group 'mevedel)
 
 (defun mevedel--transcript-org-mode ()
-  "Enable Org mode without activating its frame-wide indentation redraw."
-  (if (fboundp 'org-indent-mode)
-      (cl-letf (((symbol-function 'org-indent-mode) #'ignore))
-        (org-mode))
-    (org-mode)))
+  "Enable Org mode in a generated transcript buffer, and nothing else.
+
+These buffers are authoritative storage for gptel, not an editing surface.
+They need Org\'s syntax, and none of what a person\'s Org setup layers on
+top: every minor mode attached there runs on each model and tool insertion,
+and on a remote workspace several of them reach the target.
+
+`delay-mode-hooks\' is what excludes that.  Under it `run-mode-hooks\'
+records and returns without running anything, so `org-mode-hook\',
+`text-mode-hook\' and `outline-mode-hook\' are skipped along with
+`change-major-mode-after-body-hook\' and `after-change-major-mode-hook\' --
+and the latter is how global minor modes enter a buffer at all.  Org itself
+defines no `:after-hook\', so nothing it needs is lost.
+
+`org-inhibit-startup\' covers what remains, because Org\'s startup block
+runs in the mode body where `delay-mode-hooks\' cannot reach it: inline
+images, LaTeX previews, `org-num-mode\', and `org-indent-mode\', whose
+frame-wide indentation redraw this function previously suppressed by
+redefining it.  Org uses the same binding itself when it opens a file it
+only means to read.
+
+`hack-local-variables\' is skipped with the rest, which is worth stating
+plainly: these buffers visit files whose contents are model output, so a
+transcript can no longer set buffer-local variables by carrying a Local
+Variables block."
+  (let ((org-inhibit-startup t)
+        (change-major-mode-after-body-hook nil)
+        (after-change-major-mode-hook nil)
+        (hack-local-variables-hook nil)
+        (enable-local-variables nil)
+        (font-lock-mode-hook nil))
+    (delay-mode-hooks (org-mode))))
 
 (defun mevedel--optimize-transcript-buffer ()
   "Apply buffer-local performance settings for generated transcript buffers."
@@ -288,7 +351,26 @@ already recorded, because `save-place-to-alist' deletes on kill."
     (string-prefix-p directory file ignore-case)))
 
 (defun mevedel--file-name-candidates (file)
-  "Return alias-tolerant absolute path candidates for FILE."
+  "Return alias-tolerant absolute path candidates for FILE.
+
+A target path gets its expanded name and nothing else.  Every alias this
+resolves is a local-filesystem concept -- macOS `/private/var\', Windows
+8.3 short names -- and none of them can apply to a name on another host,
+so the `file-truename\' that would discover them is a round trip that
+cannot change the answer.
+
+It is also a round trip on the worst possible path.  The directory walks
+below call `mevedel--same-file-p\' once per ancestor, and those run during
+tool dispatch, inside gptel\'s curl sentinel: TRAMP\'s wait loop re-runs
+that sentinel, and the nested call issues a command on a connection that
+already has one in flight."
+  (if-let* ((expanded (expand-file-name file))
+            ((file-remote-p expanded)))
+      (list (directory-file-name expanded))
+    (mevedel--local-file-name-candidates file)))
+
+(defun mevedel--local-file-name-candidates (file)
+  "Return alias-tolerant absolute path candidates for local FILE."
   (let* ((expanded (expand-file-name file))
          (true (mevedel--file-truename expanded))
          (long (mevedel--file-long-name expanded))
@@ -314,9 +396,15 @@ its containing directory does."
         (candidates-b (mevedel--file-name-candidates file-b)))
     (or (cl-some (lambda (a)
                    (or (member a candidates-b)
-                       (cl-some (lambda (b)
-                                  (ignore-errors (file-equal-p a b)))
-                                candidates-b)))
+                       ;; `file-equal-p' resolves both names on the target.
+                       ;; For a remote pair the candidate lists are already
+                       ;; the expanded names, so it can only repeat the
+                       ;; comparison just made -- at a round trip apiece.
+                       (and (not (file-remote-p a))
+                            (not (file-remote-p (car candidates-b)))
+                            (cl-some (lambda (b)
+                                       (ignore-errors (file-equal-p a b)))
+                                     candidates-b))))
                  candidates-a)
         (let* ((da (car candidates-a))
                (db (car candidates-b))
