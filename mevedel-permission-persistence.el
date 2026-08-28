@@ -278,7 +278,36 @@ Return nil when any entry is malformed or contains a client-specific target."
         (mevedel-session-execution-target session)
       (mevedel-execution-target-create (mevedel-workspace-root workspace)))))
 
+(defvar mevedel-permission--store-cache (make-hash-table :test #'equal)
+  "Permission store reads, keyed by (FILE . TARGET-PREFIX).
+
+The store is consulted on every tool call -- twice, for the global and the
+project file -- and each read is a `file-exists-p\', a `file-readable-p\'
+and an `insert-file-contents\'.  On a remote workspace that is six round
+trips per tool call, issued from inside gptel\'s curl sentinel, which
+TRAMP\'s wait loop re-runs; the nested read then lands on a connection that
+already has a command in flight and parses somebody else\'s reply.
+
+`mevedel-permission-persistence-write-store\' clears this, so a permission
+the user grants takes effect at once.  A store edited by a different Emacs
+is picked up when that clears it or when this one restarts -- the trade for
+not re-reading the file on the dispatch path.")
+
+(defun mevedel-permission--store-cache-key (file target)
+  "Return the cache key for FILE read against TARGET."
+  (cons file (and target (mevedel-execution-target-prefix target))))
+
 (defun mevedel-permission--store-file-status (file &optional target)
+  "Return FILE\'s permission store status and normalized contents.
+TARGET restores portable target paths when non-nil.  Reads are cached; see
+`mevedel-permission--store-cache\'."
+  (let ((key (mevedel-permission--store-cache-key file target)))
+    (or (gethash key mevedel-permission--store-cache)
+        (puthash key
+                 (mevedel-permission--read-store-file-uncached file target)
+                 mevedel-permission--store-cache))))
+
+(defun mevedel-permission--read-store-file-uncached (file &optional target)
   "Return FILE's permission store status and normalized contents.
 TARGET restores portable target paths when non-nil."
   (cond
@@ -336,7 +365,12 @@ TARGET restores portable target paths when non-nil."
           (file-attribute-modification-time attributes))))
 
 (defun mevedel-permission-validate-persistent-stores (workspace)
-  "Warn once per invalid global or WORKSPACE permission store version."
+  "Warn once per invalid global or WORKSPACE permission store version.
+
+Reads past `mevedel-permission--store-cache\'.  This is a deliberate check
+of what is on disk, run at workspace setup rather than on the dispatch
+path, and it is the one caller that must notice a store edited by hand or
+by another Emacs."
   (let ((target (mevedel-permission--workspace-target workspace)))
     (dolist (entry
              (list (cons (file-name-concat mevedel-user-dir "permissions.el")
@@ -344,8 +378,11 @@ TARGET restores portable target paths when non-nil."
                    (cons (mevedel-permission-persistence-file workspace)
                          target)))
       (let* ((file (car entry))
-             (result (mevedel-permission--store-file-status file (cdr entry)))
-           (status (plist-get result :status)))
+             (result (mevedel-permission--read-store-file-uncached
+                      file (cdr entry)))
+             (status (plist-get result :status)))
+        (remhash (mevedel-permission--store-cache-key file (cdr entry))
+                 mevedel-permission--store-cache)
         (when (eq status 'invalid)
           (mevedel--warn-once
            (list 'permission-store-invalid file
@@ -379,7 +416,10 @@ TARGET restores portable target paths when non-nil."
            session file content 'utf-8-unix))
       (mevedel-session-control-fs-make-directory
        (directory-file-name (file-name-directory file)) t)
-      (mevedel-session-control-fs-write-file file content 'utf-8-unix))))
+      (mevedel-session-control-fs-write-file file content 'utf-8-unix))
+    ;; Cleared wholesale: a write is rare, and a grant must be visible to
+    ;; the next permission check whichever file it landed in.
+    (clrhash mevedel-permission--store-cache)))
 
 (defun mevedel-permission-persistence-load-rules (workspace)
   "Load persistent permission rules for WORKSPACE.

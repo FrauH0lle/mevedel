@@ -280,13 +280,24 @@ When NAME is nil, clear all prompt component cache entries."
   (mevedel-workspace-root (or workspace (mevedel-workspace))))
 
 (defun mevedel-system--file-cache-key (file)
-  "Return metadata cache key for FILE."
-  (let ((expanded (expand-file-name file)))
-    (if (file-exists-p expanded)
-        (let ((attrs (file-attributes expanded)))
-          (list :file (file-truename expanded)
-                :mtime (file-attribute-modification-time attrs)
-                :size (file-attribute-size attrs)))
+  "Return metadata cache key for FILE.
+
+One `file-attributes' answers existence, mtime, and size together.  Asking
+`file-exists-p' and `file-truename' as well cost three target round trips
+per file where one does, and this runs for every memory and workspace
+configuration file on every send -- while the connection is the one the
+request itself needs.
+
+The key is keyed on the expanded name rather than the true name.  It exists
+to notice that a file changed, which mtime and size already report; sharing
+one entry between two paths that symlink to the same file was never worth a
+round trip per file to discover."
+  (let* ((expanded (expand-file-name file))
+         (attrs (file-attributes expanded)))
+    (if attrs
+        (list :file expanded
+              :mtime (file-attribute-modification-time attrs)
+              :size (file-attribute-size attrs))
       (list :missing expanded))))
 
 (defun mevedel-system--memory-root (workspace dir)
@@ -432,10 +443,17 @@ present."
   (when-let* ((workspace-root (and workspace (mevedel-workspace-root workspace))))
     (let* ((root (file-name-as-directory (expand-file-name workspace-root)))
            (cwd (mevedel-system--working-directory workspace working-directory))
-           (cwd (if (file-in-directory-p cwd root) cwd root))
+           ;; Containment by name, not by `file-in-directory-p': that
+           ;; resolves both arguments with `file-truename', which on a remote
+           ;; workspace is a round trip per directory level, once per send.
+           ;; Both names are already expanded and slash-terminated here.
+           (cwd (if (string-prefix-p root (file-name-as-directory cwd))
+                    cwd
+                  root))
            (dirs nil)
            (cursor cwd))
-      (while (and cursor (file-in-directory-p cursor root))
+      (while (and cursor
+                  (string-prefix-p root (file-name-as-directory cursor)))
         (push cursor dirs)
         (setq cursor
              (unless (equal (file-name-as-directory cursor) root)
