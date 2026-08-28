@@ -6453,5 +6453,48 @@
     (with-temp-buffer
       (should-not (mevedel-view--clean-reasoning-cached text)))))
 
+(mevedel-deftest mevedel-view--scaffolding-only-text-p ()
+  ,test
+  (test)
+
+  :doc "separates org glue from real content, and treats nil as glue"
+  (with-temp-buffer
+    (should (mevedel-view--scaffolding-only-text-p nil))
+    (should (mevedel-view--scaffolding-only-text-p
+             "#+begin_reasoning x\n#+end_reasoning\n"))
+    (should-not (mevedel-view--scaffolding-only-text-p
+                 "#+begin_reasoning x\nactual thought\n#+end_reasoning\n")))
+
+  :doc "a repeat verdict never cleans the text again"
+  ;; A render walks every segment and asks each whether it is glue; the
+  ;; segments do not change between redraws.
+  (with-temp-buffer
+    (let ((glue "#+begin_reasoning x\n#+end_reasoning\n")
+          (cleans 0))
+      (cl-letf* ((original (symbol-function 'mevedel-view--clean-reasoning-text))
+                 ((symbol-function 'mevedel-view--clean-reasoning-text)
+                  (lambda (text)
+                    (setq cleans (1+ cleans))
+                    (funcall original text))))
+        (should (mevedel-view--scaffolding-only-text-p glue))
+        (should (= 1 cleans))
+        (dotimes (_ 30) (mevedel-view--scaffolding-only-text-p glue))
+        (should (= 1 cleans)))))
+
+  :doc "the verdict cache stays bounded"
+  (with-temp-buffer
+    (dotimes (index (* 2 mevedel-view--scaffolding-only-cache-size))
+      (mevedel-view--scaffolding-only-text-p (format "segment-%d" index)))
+    (should (<= (hash-table-count mevedel-view--scaffolding-only-cache)
+                mevedel-view--scaffolding-only-cache-size)))
+
+  :doc "one buffer's verdicts never answer for another's"
+  (let ((glue "#+begin_reasoning x\n#+end_reasoning\n"))
+    (with-temp-buffer
+      (mevedel-view--scaffolding-only-text-p glue)
+      (should (= 1 (hash-table-count mevedel-view--scaffolding-only-cache))))
+    (with-temp-buffer
+      (should-not mevedel-view--scaffolding-only-cache))))
+
 (provide 'test-mevedel-view-render)
 ;;; test-mevedel-view-render.el ends here
