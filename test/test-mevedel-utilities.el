@@ -41,6 +41,7 @@
 (mevedel-deftest mevedel--transcript-org-mode ()
   ,test
   (test)
+
   :doc "suppresses org-indent-mode while transcript Org hooks run"
   (progn
     (require 'org)
@@ -52,7 +53,56 @@
           (mevedel--transcript-org-mode))
         (should (derived-mode-p 'org-mode))
         (should-not (bound-and-true-p org-indent-mode))
-        (should (= 0 redraws))))))
+        (should (= 0 redraws)))))
+
+  :doc "runs no mode hook, so a user Org setup cannot attach to storage"
+  ;; Every minor mode attached here would run on each model and tool
+  ;; insertion, and several of them reach the target on a remote workspace.
+  (progn
+    (require 'org)
+    (with-temp-buffer
+      (let* ((ran nil)
+             (note (lambda (hook) (lambda () (push hook ran))))
+             (org-mode-hook (list (funcall note 'org)))
+             (text-mode-hook (list (funcall note 'text)))
+             (outline-mode-hook (list (funcall note 'outline)))
+             (change-major-mode-after-body-hook (list (funcall note 'body)))
+             (after-change-major-mode-hook (list (funcall note 'after))))
+        (mevedel--transcript-org-mode)
+        (should (derived-mode-p 'org-mode))
+        (should-not ran))))
+
+  :doc "inhibits the Org startup block the mode body runs directly"
+  ;; `delay-mode-hooks' cannot reach these: they are in the mode body, not
+  ;; a hook.  `org-inhibit-startup' is what covers them.
+  (progn
+    (require 'org)
+    (with-temp-buffer
+      (let ((org-startup-truncated t)
+            (org-startup-numerated t))
+        (setq truncate-lines nil)
+        (mevedel--transcript-org-mode)
+        (should (derived-mode-p 'org-mode))
+        (should-not truncate-lines)
+        (should-not (bound-and-true-p org-num-mode)))))
+
+  :doc "a Local Variables block in stored model output is not honoured"
+  ;; These buffers visit files whose contents are model output.
+  (progn
+    (require 'org)
+    (let ((file (make-temp-file "mevedel-transcript-" nil ".org"
+                                "# Local Variables:\n# fill-column: 12\n# End:\n")))
+      (unwind-protect
+          (with-temp-buffer
+            (insert-file-contents file)
+            (setq buffer-file-name file)
+            (unwind-protect
+                (let ((fill-column 70))
+                  (mevedel--transcript-org-mode)
+                  (should (derived-mode-p 'org-mode))
+                  (should (= 70 fill-column)))
+              (setq buffer-file-name nil)))
+        (delete-file file)))))
 
 (mevedel-deftest mevedel--head-tail-preview-parts ()
   ,test
@@ -827,6 +877,71 @@ rejects trailing binary operators"
   (let ((gc-cons-threshold (* 128 1024 1024)))
     (mevedel--with-gc-batched
       (should (= gc-cons-threshold (* 128 1024 1024))))))
+
+(mevedel-deftest mevedel--file-name-candidates ()
+  ,test
+  (test)
+
+  :doc "a target path resolves no aliases, and so touches no target"
+  ;; The alias forms are local concepts and cannot apply to another host;
+  ;; the directory walks call this once per ancestor during dispatch.
+  (let ((truenames 0))
+    (mevedel-test--with-captured-diagnostics nil
+      (cl-letf (((symbol-function 'file-truename)
+                 (lambda (name &rest _) (setq truenames (1+ truenames)) name)))
+        (should (equal '("/mevedelmock:host:/srv/project/main.py")
+                       (mevedel--file-name-candidates
+                        "/mevedelmock:host:/srv/project/main.py")))
+        (should (= 0 truenames)))))
+
+  :doc "a local path still resolves its aliases"
+  (let* ((dir (make-temp-file "mevedel-cand-" t))
+         (file (file-name-concat dir "f.el")))
+    (unwind-protect
+        (progn
+          (write-region "" nil file nil 'silent)
+          (should (member (directory-file-name (expand-file-name file))
+                          (mevedel--file-name-candidates file))))
+      (delete-directory dir t))))
+
+(mevedel-deftest mevedel--executable-find ()
+  ,test
+  (test)
+
+  :doc "one lookup per (target, name), positive and negative alike"
+  ;; Glob, Grep, Read and every spawn probe for a tool on the hot path,
+  ;; from inside gptel's curl sentinel; an uncached remote probe walks the
+  ;; whole PATH with a stat per entry.
+  (let ((lookups 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (name &rest _)
+                     (setq lookups (1+ lookups))
+                     (and (equal name "rg") "/bin/rg"))))
+          (clrhash mevedel--executable-cache)
+          (should (equal "/bin/rg"
+                         (mevedel--executable-find "rg" "/mevedelmock:host:")))
+          (should-not (mevedel--executable-find "nope" "/mevedelmock:host:"))
+          (should (= 2 lookups))
+          (should (equal "/bin/rg"
+                         (mevedel--executable-find "rg" "/mevedelmock:host:")))
+          (should-not (mevedel--executable-find "nope" "/mevedelmock:host:"))
+          (should (= 2 lookups)))
+      (clrhash mevedel--executable-cache)))
+
+  :doc "local and remote answers do not share a cache entry"
+  (let (asked)
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (name &optional remote)
+                     (push remote asked)
+                     (and remote "/remote/bin/rg"))))
+          (clrhash mevedel--executable-cache)
+          (should-not (mevedel--executable-find "rg"))
+          (should (equal "/remote/bin/rg"
+                         (mevedel--executable-find "rg" "/mevedelmock:host:")))
+          (should (equal '("/mevedelmock:host:" nil) asked)))
+      (clrhash mevedel--executable-cache))))
 
 (provide 'test-mevedel-utilities)
 ;;; test-mevedel-utilities.el ends here

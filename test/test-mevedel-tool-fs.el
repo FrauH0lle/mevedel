@@ -24,19 +24,26 @@
   ,test
   (test)
   :doc "searches in the path's local or remote execution target"
+  ;; The lookup is memoized per (target . name), so the cache is cleared
+  ;; around the case: a leftover entry would answer without consulting the
+  ;; stub and the recorded calls would be empty.
   (let (calls)
-    (cl-letf (((symbol-function 'executable-find)
-               (lambda (name &optional remote)
-                 (push (list name remote) calls)
-                 "/bin/rg")))
-      (should (mevedel-tool-fs-executable-find "rg" "/tmp/project/"))
-      (should
-       (mevedel-tool-fs-executable-find
-        "rg" "/ssh:user@host:/srv/project/")))
-    (should
-     (equal '(("rg" nil) ("rg" "/ssh:user@host:"))
-            (seq-filter (lambda (call) (equal (car call) "rg"))
-                        (nreverse calls))))))
+    (unwind-protect
+        (progn
+          (clrhash mevedel--executable-cache)
+          (cl-letf (((symbol-function 'executable-find)
+                     (lambda (name &optional remote)
+                       (push (list name remote) calls)
+                       "/bin/rg")))
+            (should (mevedel-tool-fs-executable-find "rg" "/tmp/project/"))
+            (should
+             (mevedel-tool-fs-executable-find
+              "rg" "/ssh:user@host:/srv/project/")))
+          (should
+           (equal '(("rg" nil) ("rg" "/ssh:user@host:"))
+                  (seq-filter (lambda (call) (equal (car call) "rg"))
+                              (nreverse calls)))))
+      (clrhash mevedel--executable-cache))))
 
 (mevedel-deftest mevedel-tool-fs-model-path ()
   ,test
