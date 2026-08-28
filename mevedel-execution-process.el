@@ -25,8 +25,18 @@
   "mevedel-execution-target")
 (autoload 'mevedel-execution-target-native-path "mevedel-execution-target")
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk &optional on-cancel))
+(autoload 'mevedel-transport-busy-p "mevedel-transport")
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
+
 ;; `mevedel-utilities'
+(declare-function mevedel--executable-find
+                  "mevedel-utilities" (name &optional remote))
 (declare-function mevedel--timer-pending-p "mevedel-utilities" (timer))
+(autoload 'mevedel--executable-find "mevedel-utilities")
 (autoload 'mevedel--timer-pending-p "mevedel-utilities")
 
 ;; `tramp'
@@ -306,13 +316,15 @@
         (setf (mevedel-execution-process--child-group-marker-buffer child)
               chunk)))))
 
-(defun mevedel-execution-process--remote-group-status (child)
-  "Return CHILD's remote group status as `live', `dead', or `ambiguous'."
-  (let ((group-id (mevedel-execution-process--child-group-id child))
-        (start-time
-         (mevedel-execution-process--child-group-start-time child))
-        (workdir (mevedel-execution-process--child-workdir child))
-        (process-environment nil))
+(defun mevedel-execution-process-remote-group-status
+    (group-id start-time workdir)
+  "Return the target status of GROUP-ID started at START-TIME under WORKDIR.
+
+The value is `live', `dead', or `ambiguous'.  START-TIME pins the identity
+so a recycled process-group number cannot read as the original group.
+Incomplete identity, an unreachable target, or an unexpected exit is
+`ambiguous': only an affirmative answer proves the group gone."
+  (let ((process-environment nil))
     (if (not (and (integerp group-id) (> group-id 0)
                   (stringp start-time) (stringp workdir)
                   (file-remote-p workdir)))
@@ -331,6 +343,13 @@
             (0 'live)
             (1 'dead)
             (_ 'ambiguous)))))))
+
+(defun mevedel-execution-process--remote-group-status (child)
+  "Return CHILD's remote group status as `live', `dead', or `ambiguous'."
+  (mevedel-execution-process-remote-group-status
+   (mevedel-execution-process--child-group-id child)
+   (mevedel-execution-process--child-group-start-time child)
+   (mevedel-execution-process--child-workdir child)))
 
 (defun mevedel-execution-process--mark-unknown (child error-data)
   "Mark CHILD's target outcome unprovable with ERROR-DATA."
@@ -514,7 +533,42 @@
       (ignore-errors (delete-process process)))
     (unless preserve-spool
       (when-let* ((path (mevedel-execution-process--child-spool-path child)))
-        (ignore-errors (delete-file path))))))
+        (mevedel-execution-process--delete-spool path)))))
+
+(defun mevedel-execution-process--executable-found-p (executable remote)
+  "Return non-nil when EXECUTABLE resolves on REMOTE.
+
+Cached through `mevedel--executable-find', shared with the filesystem
+tools rather than kept per module: both ask on the hot path, and both
+paid a full remote PATH walk for the answer."
+  (and (mevedel--executable-find executable remote) t))
+
+(defun mevedel-execution-process--delete-spool (path)
+  "Delete spool PATH, deferring the deletion while the transport is busy.
+
+Release reaches here from the child\'s sentinel and from the settle timer,
+so this deletion lands inside whatever remote command those interrupted:
+TRAMP yields to timers between its send and its read, and a command issued
+in that window is answered with the reply belonging to the one already in
+flight.
+
+Deferral is decided on the transport alone, never on how PATH is spelled.
+Two attempts to decide it from the name were wrong -- `file-remote-p\' on
+the name as passed, then on its expansion, and an absolute local name
+expands to itself even under a remote `default-directory\'.  Meanwhile the
+recorded chain showed this function reaching the target anyway.  A local
+`delete-file\' is cheap enough that deferring one costs nothing, and
+nothing waits on the spool being gone, so the question the guard has to
+answer is only whether issuing any file operation right now can nest.
+
+`mevedel-transport-run-when-idle\' runs the deletion inline when the
+transport is free, which is the ordinary case.  A disabled transport drops
+deferred work, so that case deletes immediately rather than leak."
+  (unless (and (mevedel-transport-busy-p path)
+               (mevedel-transport-run-when-idle
+                (list 'execution-spool path) path
+                (lambda () (ignore-errors (delete-file path)))))
+    (ignore-errors (delete-file path))))
 
 (defun mevedel-execution-process-relocate-spool (child destination)
   "Move CHILD's spool to DESTINATION and return the new path."
@@ -759,7 +813,8 @@
             (setq default-directory workdir)
             (unless (and (stringp executable)
                          (if remote
-                             (executable-find executable remote)
+                             (mevedel-execution-process--executable-found-p
+                              executable remote)
                            (executable-find executable)))
               (signal 'file-missing (list "Executable not found" executable)))
             (setf (mevedel-execution-process--child-launch-attempted-p child)

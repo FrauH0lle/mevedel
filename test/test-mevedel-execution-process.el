@@ -80,6 +80,21 @@
       (mevedel-execution-process-release direct)
       (mevedel-execution-process-release classic))))
 
+(mevedel-deftest mevedel-execution-process-remote-group-status
+  (:doc "an identity too incomplete to ask about never reaches the target")
+  ;; A recorded outcome may be missing the group number, the start time
+  ;; that pins it, or a remote workdir.  Each case must answer without a
+  ;; connection attempt, because `ambiguous' is what keeps the caller
+  ;; from treating a question it cannot ask as a proof of death.
+  (dolist (case '((nil "981" "/ssh:host:/project/")
+                 (0 "981" "/ssh:host:/project/")
+                 (42 nil "/ssh:host:/project/")
+                 (42 "981" nil)
+                 (42 "981" "/local/project/")))
+    (should
+     (eq 'ambiguous
+         (apply #'mevedel-execution-process-remote-group-status case)))))
+
 (mevedel-deftest mevedel-execution-process--remote-group-status ()
   ,test
   (test)
@@ -454,6 +469,83 @@
           (should-not (zerop (plist-get result :exit-code))))
       (mevedel-execution-process-release child)
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-execution-process--delete-spool ()
+  ,test
+  (test)
+
+  :doc "a busy transport defers the deletion, whatever the path looks like"
+  ;; Deciding this from the spelling was wrong twice: `file-remote-p' on
+  ;; the name as passed, then on its expansion.  Only the transport
+  ;; matters, so a plainly local name defers too when the connection is
+  ;; mid-command.
+  (dolist (path '("/mevedelmock:host:/srv/project/child.spool"
+                  "/tmp/mevedel-execution-output-abc"))
+    (let (deferred-thunk deleted)
+      (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+                 (lambda (&optional _) t))
+                ((symbol-function 'mevedel-transport-run-when-idle)
+                 (lambda (_key _path thunk &optional _on-cancel)
+                   (setq deferred-thunk thunk)
+                   t))
+                ((symbol-function 'delete-file)
+                 (lambda (name &optional _) (setq deleted name))))
+        (mevedel-execution-process--delete-spool path)
+        (should-not deleted)
+        (should (functionp deferred-thunk))
+        (funcall deferred-thunk)
+        (should (equal path deleted)))))
+
+  :doc "an idle transport deletes immediately"
+  (let (scheduled deleted)
+    (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+               (lambda (&optional _) nil))
+              ((symbol-function 'mevedel-transport-run-when-idle)
+               (lambda (&rest _) (setq scheduled t) t))
+              ((symbol-function 'delete-file)
+               (lambda (name &optional _) (setq deleted name))))
+      (mevedel-execution-process--delete-spool "/tmp/spool")
+      (should-not scheduled)
+      (should (equal "/tmp/spool" deleted))))
+
+  :doc "a disabled transport deletes rather than leaking the spool"
+  ;; `mevedel-transport-run-when-idle' returns nil when integration is
+  ;; off, and drops the work with it.
+  (let (deleted)
+    (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+               (lambda (&optional _) t))
+              ((symbol-function 'mevedel-transport-run-when-idle)
+               (lambda (&rest _) nil))
+              ((symbol-function 'delete-file)
+               (lambda (name &optional _) (setq deleted name))))
+      (mevedel-execution-process--delete-spool "/tmp/spool")
+      (should (equal "/tmp/spool" deleted)))))
+
+(mevedel-deftest mevedel-execution-process--executable-found-p ()
+  ,test
+  (test)
+
+  :doc "a repeat lookup is served from memory, positive and negative alike"
+  ;; Shares `mevedel--executable-cache' with the filesystem tools: both
+  ;; probe on the hot path, from inside the curl sentinel TRAMP re-runs.
+  (let ((lookups 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (name &rest _)
+                     (setq lookups (1+ lookups))
+                     (and (equal name "bash") "/bin/bash"))))
+          (clrhash mevedel--executable-cache)
+          (should (mevedel-execution-process--executable-found-p
+                   "bash" "/mevedelmock:host:"))
+          (should-not (mevedel-execution-process--executable-found-p
+                       "nope" "/mevedelmock:host:"))
+          (should (= 2 lookups))
+          (should (mevedel-execution-process--executable-found-p
+                   "bash" "/mevedelmock:host:"))
+          (should-not (mevedel-execution-process--executable-found-p
+                       "nope" "/mevedelmock:host:"))
+          (should (= 2 lookups)))
+      (clrhash mevedel--executable-cache))))
 
 (provide 'test-mevedel-execution-process)
 ;;; test-mevedel-execution-process.el ends here
