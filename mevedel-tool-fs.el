@@ -74,7 +74,22 @@
               (mevedel-session-workspace mevedel--session))))))
 
 (defun mevedel-tool-fs-display-path (path)
-  "Return PATH as a compact display path for tool headers."
+  "Return PATH as a compact display path for tool headers.
+
+Decides containment by name.  This runs from a tool renderer, and
+renderers run from the redraw path, where TRAMP yields to timers and
+process sentinels between its send and its read: a stat issued here
+lands inside whatever remote command the redraw interrupted, and TRAMP
+refuses the nested call -- the renderer then fails outright and the row
+loses its header.  `file-in-directory-p\' looks like a string test but
+resolves both arguments with `file-truename\', which is a round trip
+apiece on a remote workspace.
+
+Both names are absolute and expanded here, so a prefix comparison
+answers the same question for every path that is genuinely under the
+root.  It differs only for a path reaching the root through a symlink,
+which then shows as its full name rather than a relative one -- a
+cosmetic loss in a header, against a renderer that cannot fail."
   (or (and (stringp path)
            (mevedel-resource-address-like-p path)
            path)
@@ -90,8 +105,8 @@
                          default-directory))
                (full-path (expand-file-name path base)))
           (when (and expanded-root
-                     (file-in-directory-p
-                      full-path (file-name-as-directory expanded-root)))
+                     (string-prefix-p (file-name-as-directory expanded-root)
+                                      full-path))
             (file-relative-name full-path expanded-root))))
       (and path (file-name-nondirectory path))
       "?"))
