@@ -26,6 +26,9 @@ settlement failed to collect, not a weaker substitute for it. Mutating requests
 therefore re-ask before refusing, and an affirmative `dead` settles the outcome
 with no human involved. Only an affirmative answer counts: live, unreachable,
 ambiguous, and an identity too incomplete to ask about all stay blocked.
+Re-proof also stays blocked while the transport is active: starting another
+target command from that nested context can consume the pending reply, so the
+next mutation attempt retries after the transport becomes idle.
 
 The durable latch keeps its original contract, because it is a boolean and
 carries no process identity. Restore across a restart therefore still blocks

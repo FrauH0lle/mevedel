@@ -228,7 +228,8 @@ EXPLICIT takes precedence when non-nil."
     (&key tool tool-name args session workspace request invocation buffer
           path pattern domain name mode workspace-root allowed-roots
           exact-allowed-paths invocation-rules request-rules session-rules
-          persistent-rules resource-grants permission-request
+          persistent-rules persistent-snapshot resource-grants
+          permission-request
           one-shot-mutations-p patch-local-only-p warn-no-session-p)
   "Return normalized permission invocation context.
 
@@ -238,8 +239,11 @@ chain, prompt queue, and Bash/Eval adapters.
 TOOL, TOOL-NAME, ARGS, SESSION, WORKSPACE, REQUEST, INVOCATION, BUFFER,
 PATH, PATTERN, DOMAIN, NAME, MODE, WORKSPACE-ROOT, ALLOWED-ROOTS,
 EXACT-ALLOWED-PATHS, INVOCATION-RULES, REQUEST-RULES, SESSION-RULES,
-PERSISTENT-RULES, RESOURCE-GRANTS, and WARN-NO-SESSION-P provide the
-context facts.  ONE-SHOT-MUTATIONS-P defaults from REQUEST.
+PERSISTENT-RULES, PERSISTENT-SNAPSHOT, RESOURCE-GRANTS, and
+WARN-NO-SESSION-P provide the context facts.  PERSISTENT-SNAPSHOT is the
+invocation's already-refreshed `:rules' and `:resource-grants' plist,
+including when either value is nil.  ONE-SHOT-MUTATIONS-P defaults from
+REQUEST.
 PATCH-LOCAL-ONLY-P is the prepared ApplyPatch classification used by the Plan
 boundary.
 PERMISSION-REQUEST admits an interactive request at its hook boundary before
@@ -274,11 +278,13 @@ it enters the shared queue."
         (or session-rules
             (and session (mevedel-session-permission-rules session)))
         persistent-rules
-        (or persistent-rules
-            (and mevedel-permission--context-frozen-p
-                 mevedel-permission--frozen-persistent-rules)
-            (and (not mevedel-permission--context-frozen-p) workspace
-                 (mevedel-permission-persistence-load-rules workspace)))
+        (if persistent-snapshot
+            (plist-get persistent-snapshot :rules)
+          (or persistent-rules
+              (and mevedel-permission--context-frozen-p
+                   mevedel-permission--frozen-persistent-rules)
+              (and (not mevedel-permission--context-frozen-p) workspace
+                   (mevedel-permission-persistence-load-rules workspace))))
         resource-grants
         (or resource-grants
             (append (when-let* ((path (and request
@@ -288,9 +294,12 @@ it enters the shared queue."
                     (and session (mevedel-session-resource-grants session))
                     (and mevedel-permission--context-frozen-p
                          mevedel-permission--frozen-resource-grants)
-                    (and (not mevedel-permission--context-frozen-p) workspace
-                         (mevedel-permission-persistence-load-resource-grants
-                          workspace))))
+                    (and (not mevedel-permission--context-frozen-p)
+                         workspace
+                         (if persistent-snapshot
+                             (plist-get persistent-snapshot :resource-grants)
+                           (mevedel-permission-persistence-load-resource-grants
+                            workspace)))))
         one-shot-mutations-p
         (mevedel-permission--one-shot-mutations-p
          request one-shot-mutations-p)

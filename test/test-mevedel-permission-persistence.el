@@ -496,6 +496,49 @@
                    (cadar warnings))))
       (delete-directory tmp-dir t))))
 
+(mevedel-deftest mevedel-permission-persistence-refresh ()
+  ,test
+  (test)
+  :doc "waits for an idle remote transport before refreshing authority"
+  (let ((workspace (mevedel-workspace--create
+                    :type 'project :id "remote"
+                    :root "/mevedelmock:host:/srv/project/"
+                    :name "remote"))
+        deferred refreshed continued)
+    (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+               (lambda (&optional _) t))
+              ((symbol-function 'mevedel-transport-run-when-idle)
+               (lambda (_key _path thunk &optional _on-cancel)
+                 (setq deferred thunk)
+                 t))
+              ((symbol-function 'mevedel-permission-validate-persistent-stores)
+               (lambda (_) (setq refreshed t))))
+      (mevedel-permission-persistence-refresh
+       workspace (lambda () (setq continued t)))
+      (should-not refreshed)
+      (should-not continued)
+      (funcall deferred)
+      (should refreshed)
+      (should continued)))
+
+  :doc "fails closed when deferred refresh cannot be queued"
+  (let ((workspace (mevedel-workspace--create
+                    :type 'project :id "remote"
+                    :root "/mevedelmock:host:/srv/project/"
+                    :name "remote"))
+        continued cancelled)
+    (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+               (lambda (&optional _) t))
+              ((symbol-function 'mevedel-transport-run-when-idle)
+               (lambda (&rest _) nil)))
+      (should-not
+       (mevedel-permission-persistence-refresh
+        workspace
+        (lambda () (setq continued t))
+        (lambda () (setq cancelled t))))
+      (should-not continued)
+      (should cancelled))))
+
 (mevedel-deftest mevedel-permission-persistence-save-resource-grant ()
   ,test
   (test)

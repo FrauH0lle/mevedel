@@ -125,8 +125,12 @@ lease or publication tree.  A session directory containing both control
 artifacts, or a persisted authority profile that disagrees with its workspace
 category, is rejected rather than guessed.
 
-The data buffer is locked to `org-mode` so `gptel-org--save-state` can
-round-trip text-property bounds via `GPTEL_BOUNDS`. The sidecar holds
+The data buffer is locked to bare `org-mode` so `gptel-org--save-state` can
+round-trip text-property bounds via `GPTEL_BOUNDS`. Entering the mode suppresses
+all major-mode hooks, Org startup UI, global-minor-mode attachment, and Local
+Variables processing. The transcript is generated authoritative storage rather
+than a normal Org editing surface, and model output must not activate project
+or user configuration. The companion view owns presentation. The sidecar holds
 session-wide state that doesn't live in the buffer text: permission rules,
 exact session resource grants, tasks, prompt-index (driving the rewind picker
 and latest resume preview), `:file-snapshots` (per-turn pre-turn checkpoints of
@@ -229,8 +233,10 @@ that admission reports.
 A lost settlement records the target process-group identity, so a mutating
 request re-proves that group against the target before it is refused: an
 affirmative `dead` clears the block with no user action, while live,
-unreachable, or ambiguous keeps it. The durable latch restored across a
-restart carries no process identity and still needs
+unreachable, or ambiguous keeps it. If the transport is already active, the
+request stays blocked rather than nesting a target probe; the next mutation
+attempt retries the proof. The durable latch restored across a restart carries
+no process identity and still needs
 `mevedel-retry-target-readiness`, which every refusal names.
 
 The unsettled-mutation latch is
@@ -884,9 +890,10 @@ back into live session state on resume.  Pre-materialization entries wait in
 a transient session queue and flush with the other diagnostic logs.  Failed
 hook, repair, permission, and telemetry appends stay queued and retry after
 the next successful session save; they never block critical publication.
-Portable project diagnostic appends share the session publication serializer
-and send only their queued delta. A crash may tear the final line; failed
-appends leave the in-memory entries queued.
+Portable project diagnostic appends share one reservation only with appends
+owned by the same session and send only their queued delta. A nested flush for
+another session reserves that session's lease independently. A crash may tear
+the final line; failed appends leave the in-memory entries queued.
 
 For mevedel chat buffers, save-time advice around `gptel--save-state`
 strips every gptel request-config Org property (`GPTEL_BACKEND`,

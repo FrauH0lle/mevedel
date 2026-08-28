@@ -362,6 +362,34 @@
   ,test
   (test)
   :doc "owned mount target cleanup:
+a busy transport defers the complete cleanup"
+  (let (deferred cleaned)
+    (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+               (lambda (&optional _) t))
+              ((symbol-function 'mevedel-transport-run-when-idle)
+               (lambda (_key _path thunk &optional _on-cancel)
+                 (setq deferred thunk)
+                 t))
+              ((symbol-function 'mevedel-sandbox--cleanup-now)
+               (lambda (preparation) (setq cleaned preparation))))
+      (let ((preparation '(:cleanup-paths ((:path "/remote/target")))))
+        (should (mevedel-sandbox-cleanup preparation))
+        (should-not cleaned)
+        (funcall deferred)
+        (should (equal preparation cleaned)))))
+  :doc "owned mount target cleanup:
+a disabled transport cleans immediately instead of dropping work"
+  (let (cleaned)
+    (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+               (lambda (&optional _) t))
+              ((symbol-function 'mevedel-transport-run-when-idle)
+               (lambda (&rest _) nil))
+              ((symbol-function 'mevedel-sandbox--cleanup-now)
+               (lambda (preparation) (setq cleaned preparation))))
+      (let ((preparation '(:cleanup-paths ((:path "/remote/target")))))
+        (should (mevedel-sandbox-cleanup preparation))
+        (should (equal preparation cleaned)))))
+  :doc "owned mount target cleanup:
 `mevedel-sandbox-cleanup' removes an unchanged empty synthetic directory"
   (let* ((root (make-temp-file "mevedel-sandbox-cleanup-" t))
          (path (file-name-concat root "synthetic")))

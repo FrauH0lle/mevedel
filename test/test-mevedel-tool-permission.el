@@ -221,6 +221,120 @@
     (mevedel-tool-permission-step
      ctx (lambda (_c) (setq called t)) #'ignore)
     (should called))
+  :doc "observes an external persistent revocation at the next tool"
+  (let* ((dir (file-name-as-directory
+               (make-temp-file "mevedel-permission-refresh-" t)))
+         (mevedel-user-dir (file-name-concat dir "global"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id dir :root dir :name "refresh"))
+         (session (mevedel-session--create
+                   :name "refresh" :workspace workspace
+                   :permission-mode 'full-auto))
+         (tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+         (file (mevedel-permission-persistence-file workspace))
+         (context (list :tool tool :args nil
+                        :session session :workspace workspace))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         allowed denied)
+    (unwind-protect
+        (progn
+          (clrhash mevedel-permission--store-cache)
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (insert "(:rules ((\"Edit\" :action allow)) :resource-grants nil)"))
+          (mevedel-tool-permission-step
+           context (lambda (_) (setq allowed t)) #'ignore)
+          (should allowed)
+          ;; Simulate another Emacs changing the workspace-owned store.
+          (with-temp-file file
+            (insert "(:rules ((\"Edit\" :action deny)) :resource-grants nil)"))
+          (mevedel-tool-permission-step
+           context #'ignore (lambda (&rest _) (setq denied t)))
+          (should denied))
+      (clrhash mevedel-permission--store-cache)
+      (delete-directory dir t)))
+  :doc "keeps one persistent snapshot throughout an admitted aggregate tool"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'project :id "/tmp/snapshot/"
+                     :root "/tmp/snapshot/" :name "snapshot"))
+         (session (mevedel-session--create
+                   :name "snapshot" :workspace workspace
+                   :permission-mode 'full-auto))
+         (tool (mevedel-tool--create
+                :name "AggregateEdit" :groups '(edit)
+                :get-paths (lambda (_) '("/tmp/snapshot/a"
+                                         "/tmp/snapshot/b"))))
+         (rules '(("AggregateEdit" :action allow)))
+         (grants '((:path "/tmp/snapshot" :access write)))
+         contexts pending completed)
+    (cl-letf (((symbol-function 'mevedel-permission-persistence-refresh)
+               (lambda (_workspace continuation &optional _on-cancel)
+                 (funcall continuation)))
+              ((symbol-function 'mevedel-permission-persistence-load-rules)
+               (lambda (_) rules))
+              ((symbol-function
+                'mevedel-permission-persistence-load-resource-grants)
+               (lambda (_) grants))
+              ((symbol-function 'mevedel-check-permission-async-with-metadata)
+               (lambda (_tool continuation &rest args)
+                 (push (plist-get args :normalized-context) contexts)
+                 (setq pending continuation))))
+      (mevedel-tool-permission-step
+       (list :tool tool :args nil :session session)
+       (lambda (_) (setq completed t)) #'ignore)
+      (should (= 1 (length contexts)))
+      ;; Another Emacs changes authority after this invocation was admitted.
+      (setq rules '(("AggregateEdit" :action deny))
+            grants nil)
+      (funcall pending '(:outcome allow :raw-outcome allow :via test))
+      (should (= 2 (length contexts)))
+      (should (equal '(("AggregateEdit" :action allow))
+                     (plist-get (car contexts) :persistent-rules)))
+      (should (equal '((:path "/tmp/snapshot" :access write))
+                     (plist-get (car contexts) :resource-grants)))
+      (funcall pending '(:outcome allow :raw-outcome allow :via test))
+      (should completed)))
+  :doc "keeps a frozen aggregate snapshot across an async continuation"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'project :id "/tmp/frozen/"
+                     :root "/tmp/frozen/" :name "frozen"))
+         (session (mevedel-session--create
+                   :name "frozen" :workspace workspace
+                   :permission-mode 'full-auto))
+         (tool (mevedel-tool--create
+                :name "AggregateEdit" :groups '(edit)
+                :get-paths (lambda (_) '("/tmp/frozen/a"
+                                         "/tmp/frozen/b"))))
+         contexts pending completed)
+    (with-temp-buffer
+      (setq-local mevedel-permission--context-frozen-p t
+                  mevedel-permission--frozen-persistent-rules
+                  '(("AggregateEdit" :action allow))
+                  mevedel-permission--frozen-resource-grants
+                  '((:path "/tmp/frozen" :access write)))
+      (cl-letf (((symbol-function 'mevedel-permission-persistence-refresh)
+                 (lambda (&rest _) (error "Frozen context refreshed")))
+                ((symbol-function
+                  'mevedel-check-permission-async-with-metadata)
+                 (lambda (_tool continuation &rest args)
+                   (push (plist-get args :normalized-context) contexts)
+                   (setq pending continuation))))
+        (mevedel-tool-permission-step
+         (list :tool tool :args nil :session session
+               :buffer (current-buffer))
+         (lambda (_) (setq completed t)) #'ignore)
+        (should (= 1 (length contexts)))
+        ;; Permission callbacks are free to resume from another buffer.
+        (with-temp-buffer
+          (funcall pending '(:outcome allow :raw-outcome allow :via test)))
+        (should (= 2 (length contexts)))
+        (should (equal '(("AggregateEdit" :action allow))
+                       (plist-get (car contexts) :persistent-rules)))
+        (should (equal '((:path "/tmp/frozen" :access write))
+                       (plist-get (car contexts) :resource-grants)))
+        (funcall pending '(:outcome allow :raw-outcome allow :via test))
+        (should completed))))
   :doc "authorizes every path declared by one aggregate edit"
   (let* ((dir (file-name-as-directory
                (make-temp-file "mevedel-multi-permission-" t)))

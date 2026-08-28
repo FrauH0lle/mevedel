@@ -277,14 +277,45 @@ and its segment path."
                (lambda (path content) (push (cons path content) appends) t))
               ((symbol-function 'mevedel-session-durability-call-with-reserved-lease)
                (lambda (_s fn) (setq reservations (1+ reservations)) (funcall fn))))
-      (mevedel-session-publication-with-diagnostic-batch session
-        (should (mevedel-session-publication-append-diagnostic
-                 session "/x/a.log" "a"))
-        (should (mevedel-session-publication-append-diagnostic
-                 session "/x/b.log" "b")))
+      (mevedel-session-publication-call-with-diagnostic-batch
+       session
+       (lambda ()
+         (should (mevedel-session-publication-append-diagnostic
+                  session "/x/a.log" "a"))
+         (should (mevedel-session-publication-append-diagnostic
+                  session "/x/b.log" "b"))))
       (should (= 1 reservations))
       (should (equal '(("/x/a.log" . "a") ("/x/b.log" . "b"))
                      (nreverse appends)))))
+
+  :doc "a nested batch for another session reserves its own lease"
+  (let ((outer (mevedel-session--create :authority-mode 'portable))
+        (inner (mevedel-session--create :authority-mode 'portable))
+        reservations)
+    (cl-letf (((symbol-function 'mevedel-session-recovery-refresh) #'ignore)
+              ((symbol-function 'mevedel-session-durability-lease-renew)
+               (lambda (_) t))
+              ((symbol-function 'mevedel-session-durability-lease-owned-p)
+               (lambda (_) t))
+              ((symbol-function 'mevedel-session-publication--artifact-for-session)
+               (lambda (&rest _) t))
+              ((symbol-function 'mevedel-session-control-fs-append-file)
+               (lambda (&rest _) t))
+              ((symbol-function 'mevedel-session-durability-call-with-reserved-lease)
+               (lambda (session function)
+                 (push session reservations)
+                 (funcall function))))
+      (mevedel-session-publication-call-with-diagnostic-batch
+       outer
+       (lambda ()
+         (should (mevedel-session-publication-append-diagnostic
+                  outer "/outer.log" "outer"))
+         (mevedel-session-publication-call-with-diagnostic-batch
+          inner
+          (lambda ()
+            (should (mevedel-session-publication-append-diagnostic
+                     inner "/inner.log" "inner"))))))
+      (should (equal (list outer inner) (nreverse reservations)))))
 
   :doc "an unavailable lease declines every append without re-testing"
   (let ((session (mevedel-session--create :authority-mode 'portable))
@@ -292,11 +323,13 @@ and its segment path."
     (cl-letf (((symbol-function 'mevedel-session-recovery-refresh) #'ignore)
               ((symbol-function 'mevedel-session-durability-lease-renew)
                (lambda (_s) (setq renewals (1+ renewals)) nil)))
-      (mevedel-session-publication-with-diagnostic-batch session
-        (should-not (mevedel-session-publication-append-diagnostic
-                     session "/x/a.log" "a"))
-        (should-not (mevedel-session-publication-append-diagnostic
-                     session "/x/b.log" "b")))
+      (mevedel-session-publication-call-with-diagnostic-batch
+       session
+       (lambda ()
+         (should-not (mevedel-session-publication-append-diagnostic
+                      session "/x/a.log" "a"))
+         (should-not (mevedel-session-publication-append-diagnostic
+                      session "/x/b.log" "b"))))
       (should (= 1 renewals))))
 
   :doc "one failing append declines without aborting the others"
@@ -313,16 +346,18 @@ and its segment path."
               ((symbol-function 'mevedel-session-control-fs-append-file)
                (lambda (path content)
                  (if (equal path "/x/bad.log")
-                     (error "target refused")
+                     (error "Target refused")
                    (push content written) t)))
               ((symbol-function 'mevedel-session-durability-call-with-reserved-lease)
                (lambda (_s fn) (funcall fn))))
       (mevedel-test--with-captured-diagnostics nil
-        (mevedel-session-publication-with-diagnostic-batch session
-          (should-not (mevedel-session-publication-append-diagnostic
-                       session "/x/bad.log" "bad"))
-          (should (mevedel-session-publication-append-diagnostic
-                   session "/x/good.log" "good"))))
+        (mevedel-session-publication-call-with-diagnostic-batch
+         session
+         (lambda ()
+           (should-not (mevedel-session-publication-append-diagnostic
+                        session "/x/bad.log" "bad"))
+           (should (mevedel-session-publication-append-diagnostic
+                    session "/x/good.log" "good")))))
       (should (equal '("good") written))))
 
   :doc "a session that does not publish through the lease reserves nothing"
@@ -330,8 +365,8 @@ and its segment path."
         (reservations 0) (ran nil))
     (cl-letf (((symbol-function 'mevedel-session-durability-call-with-reserved-lease)
                (lambda (_s fn) (setq reservations (1+ reservations)) (funcall fn))))
-      (mevedel-session-publication-with-diagnostic-batch session
-        (setq ran t))
+      (mevedel-session-publication-call-with-diagnostic-batch
+       session (lambda () (setq ran t)))
       (should ran)
       (should (= 0 reservations)))))
 

@@ -92,17 +92,61 @@
                   (cdr (assq 'WAIT result))))
     (should (memq #'mevedel-compact-estimation-record-token-baseline
                   (cdr (assq 'TPRE result))))
-    ;; DONE exposes one canonical named transaction; failure cleanup stays
-    ;; on ERRS and ABRT without installing the successful entry point.
-    (let ((done-handlers (cdr (assq 'DONE result)))
-          (errs-handlers (cdr (assq 'ERRS result)))
-          (abrt-handlers (cdr (assq 'ABRT result))))
-      (should (> (length done-handlers) 1))
-      (should (> (length errs-handlers) 1))
-      (should (eq (car (last done-handlers)) #'mevedel--complete-turn))
-      (should (= 1 (cl-count #'mevedel--complete-turn done-handlers)))
-      (should-not (memq #'mevedel--complete-turn errs-handlers))
-      (should-not (memq #'mevedel--complete-turn abrt-handlers))))
+    ;; One terminal orchestrator owns patch, callback, and settlement order.
+    (should (= 2 (length (cdr (assq 'DONE result)))))
+    (should (= 2 (length (cdr (assq 'ERRS result)))))
+    (should (= 1 (length (cdr (assq 'ABRT result))))))
+
+  :doc "defers callback and settlement until the final patch is ready"
+  (let* ((gptel-request--transitions
+          '((INIT . ((t . WAIT)))
+            (WAIT . ((t . DONE)))))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "/mevedelmock:host:/srv/p/"
+                     :root "/mevedelmock:host:/srv/p/" :name "p"))
+         (buffer (generate-new-buffer " *ordered-terminal*"))
+         (events nil)
+         deferred-thunk)
+    (unwind-protect
+        (with-current-buffer buffer
+          (let* ((handlers
+                  (mevedel-preset--build-handlers
+                   '((WAIT) (DONE))))
+                 (terminal (car (last (cdr (assq 'DONE handlers)))))
+                 (fsm (gptel-make-fsm
+                       :state 'DONE
+                       :info
+                       (list
+                        :buffer buffer
+                        :mevedel-request-callback
+                        (lambda (_status machine)
+                          (push (if (plist-get (gptel-fsm-info machine)
+                                               :mevedel-directive-patch)
+                                    'callback-after-patch
+                                  'callback-before-patch)
+                                events))))))
+            (cl-letf (((symbol-function 'mevedel-workspace)
+                       (lambda (&optional _) workspace))
+                      ((symbol-function 'mevedel--directive-capture)
+                       (lambda (_) nil))
+                      ((symbol-function 'mevedel-transport-busy-p)
+                       (lambda (&optional _) t))
+                      ((symbol-function 'mevedel-transport-run-when-idle)
+                       (lambda (_key _path thunk &optional _on-cancel)
+                         (setq deferred-thunk thunk)
+                         t))
+                      ((symbol-function 'mevedel--generate-final-patch)
+                       (lambda (&rest _) "diff\n"))
+                      ((symbol-function 'mevedel--replace-patch-buffer) #'ignore)
+                      ((symbol-function 'mevedel--complete-turn)
+                       (lambda (_) (push 'settled events))))
+              (funcall terminal fsm)
+              (should-not events)
+              (should (functionp deferred-thunk))
+              (funcall deferred-thunk)
+              (should (equal '(callback-after-patch settled)
+                             (nreverse events))))))
+      (kill-buffer buffer)))
 
   :doc "wraps gptel wait after request-scoped WAIT handlers"
   (let* ((gptel-request--transitions
@@ -256,7 +300,37 @@
               (should (eq request capture-request))))
           (should (eq ws generated))
           (should (equal "diff --git a/file b/file\n" replaced)))
-      (kill-buffer chat-buf))))
+      (kill-buffer chat-buf)))
+
+  :doc "a deferred patch failure is contained and continues exactly once"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'project :id "/mevedelmock:host:/srv/p/"
+                     :root "/mevedelmock:host:/srv/p/" :name "p"))
+         (buffer (generate-new-buffer " *failed-final-patch*"))
+         (fsm (gptel-make-fsm :info (list :buffer buffer)))
+         deferred-thunk
+         (continuations 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-workspace)
+                   (lambda (&optional _) workspace))
+                  ((symbol-function 'mevedel--directive-capture)
+                   (lambda (_) nil))
+                  ((symbol-function 'mevedel-transport-busy-p)
+                   (lambda (&optional _) t))
+                  ((symbol-function 'mevedel-transport-run-when-idle)
+                   (lambda (_key _path thunk &optional _on-cancel)
+                     (setq deferred-thunk thunk)
+                     t))
+                  ((symbol-function 'mevedel--generate-final-patch)
+                   (lambda (&rest _) (error "Patch failed"))))
+          (mevedel-preset--final-patch-handler
+           fsm (lambda (_) (setq continuations (1+ continuations))))
+          (should (= 0 continuations))
+          (should (functionp deferred-thunk))
+          (mevedel-test--with-captured-diagnostics nil
+            (funcall deferred-thunk))
+          (should (= 1 continuations)))
+      (kill-buffer buffer))))
 
 
 ;;
@@ -1115,7 +1189,36 @@
                 ((symbol-function 'mevedel--replace-patch-buffer) #'ignore))
         (mevedel-preset--apply-final-patch
          fsm (current-buffer) workspace request)
-        (should generated)))))
+        (should generated))))
+
+  :doc "cancelling deferred work reports abort before failure teardown"
+  (let* ((events nil)
+         (fsm (gptel-make-fsm
+               :info (list :mevedel-request-callback
+                           (lambda (status _fsm)
+                             (push (list 'callback status) events)))))
+        (request (mevedel-request--create))
+        (workspace (mevedel-workspace--create
+                    :type 'project :id "/mevedelmock:host:/srv/p/"
+                    :root "/mevedelmock:host:/srv/p/" :name "p"))
+         on-cancel continued)
+    (with-temp-buffer
+      (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+                 (lambda (&optional _) t))
+                ((symbol-function 'mevedel-transport-run-when-idle)
+                 (lambda (_key _path _thunk &optional cancel)
+                   (setq on-cancel cancel)
+                   t))
+                ((symbol-function 'mevedel--fail-turn)
+                 (lambda (_fsm reason) (push (list 'failed reason) events))))
+        (mevedel-preset--apply-final-patch
+         fsm (current-buffer) workspace request
+         (lambda (_) (setq continued t)))
+        (should (functionp on-cancel))
+        (funcall on-cancel)
+        (should (equal '((callback abort) (failed aborted))
+                       (nreverse events)))
+        (should-not continued)))))
 
 (provide 'test-mevedel-presets)
 ;;; test-mevedel-presets.el ends here

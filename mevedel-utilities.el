@@ -59,10 +59,14 @@
 (declare-function org-mode "org" ())
 (autoload 'org-mode "org")
 (defvar org-inhibit-startup)
+(defvar org-mode-hook)
 
 ;; `org-indent'
 (declare-function org-indent-mode "org-indent" (&optional arg))
 (autoload 'org-indent-mode "org-indent")
+
+;; `outline'
+(defvar outline-mode-hook)
 
 ;; `saveplace'
 (defvar save-place-mode)
@@ -273,39 +277,36 @@ mode that some other path switches on."
   :type '(repeat symbol)
   :group 'mevedel)
 
-(defun mevedel--transcript-org-mode ()
-  "Enable Org mode in a generated transcript buffer, and nothing else.
+(defun mevedel--call-with-bare-transcript-mode (function)
+  "Call FUNCTION without transcript mode hooks or file-local variables.
 
 These buffers are authoritative storage for gptel, not an editing surface.
 They need Org\'s syntax, and none of what a person\'s Org setup layers on
 top: every minor mode attached there runs on each model and tool insertion,
 and on a remote workspace several of them reach the target.
 
-`delay-mode-hooks\' is what excludes that.  Under it `run-mode-hooks\'
-records and returns without running anything, so `org-mode-hook\',
-`text-mode-hook\' and `outline-mode-hook\' are skipped along with
-`change-major-mode-after-body-hook\' and `after-change-major-mode-hook\' --
-and the latter is how global minor modes enter a buffer at all.  Org itself
-defines no `:after-hook\', so nothing it needs is lost.
+The known Org derived-mode hook chain and the global after-mode hooks are
+dynamically empty, so the same boundary also applies when FUNCTION creates and
+visits a new buffer.  Local Variables are disabled at that visit boundary.
 
 `org-inhibit-startup\' covers what remains, because Org\'s startup block
-runs in the mode body where `delay-mode-hooks\' cannot reach it: inline
-images, LaTeX previews, `org-num-mode\', and `org-indent-mode\', whose
-frame-wide indentation redraw this function previously suppressed by
-redefining it.  Org uses the same binding itself when it opens a file it
-only means to read.
-
-`hack-local-variables\' is skipped with the rest, which is worth stating
-plainly: these buffers visit files whose contents are model output, so a
-transcript can no longer set buffer-local variables by carrying a Local
-Variables block."
-  (let ((org-inhibit-startup t)
+runs in the mode body: inline images, LaTeX previews, `org-num-mode\', and
+`org-indent-mode\'."
+  (let ((after-change-major-mode-hook nil)
         (change-major-mode-after-body-hook nil)
-        (after-change-major-mode-hook nil)
-        (hack-local-variables-hook nil)
         (enable-local-variables nil)
-        (font-lock-mode-hook nil))
-    (delay-mode-hooks (org-mode))))
+        (find-file-hook nil)
+        (font-lock-mode-hook nil)
+        (org-inhibit-startup t)
+        (org-mode-hook nil)
+        (outline-mode-hook nil)
+        (text-mode-hook nil))
+    (funcall function)))
+
+(defun mevedel--transcript-org-mode ()
+  "Enable bare Org mode in a generated transcript buffer."
+  (setq-local change-major-mode-hook nil)
+  (mevedel--call-with-bare-transcript-mode #'org-mode))
 
 (defun mevedel--optimize-transcript-buffer ()
   "Apply buffer-local performance settings for generated transcript buffers."

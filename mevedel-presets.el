@@ -132,17 +132,17 @@
 (declare-function mevedel-tools--pending-steering-p
                   "mevedel-tools" (info))
 
-;; `mevedel-turn'
-(declare-function mevedel--complete-turn "mevedel-turn" (fsm))
-(declare-function mevedel--fail-turn "mevedel-turn" (fsm status))
-(declare-function mevedel--safe-fsm-handler "mevedel-turn" (handler))
-
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
 (declare-function mevedel-transport-run-when-idle
                   "mevedel-transport" (key path thunk &optional on-cancel))
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
 (autoload 'mevedel-transport-run-when-idle "mevedel-transport")
+
+;; `mevedel-turn'
+(declare-function mevedel--complete-turn "mevedel-turn" (fsm))
+(declare-function mevedel--fail-turn "mevedel-turn" (fsm status))
+(declare-function mevedel--safe-fsm-handler "mevedel-turn" (handler))
 (declare-function mevedel-request-begin
                   "mevedel-turn" (session &optional directive-uuid))
 
@@ -565,36 +565,52 @@ Has no effect when no extras are registered for PRESET-NAME."
                     (last rules))))
   transitions)
 
-(defun mevedel-preset--final-patch-handler (fsm)
-  "Generate and display a final patch for FSM when a workspace exists."
-  (when-let* ((info (gptel-fsm-info fsm))
-              (chat-buffer (plist-get info :buffer))
-              ((buffer-live-p chat-buffer))
-              (workspace (with-current-buffer chat-buffer
-                           (mevedel-workspace))))
-    (let* ((request (or (plist-get info :mevedel-request)
-                        (with-current-buffer chat-buffer
-                          mevedel--current-request)))
-           (capture (with-current-buffer chat-buffer
-                      (mevedel--directive-capture request))))
-      (setq info
-            (plist-put info :mevedel-directive-capture
-                       (plist-get capture :capture)))
-      (setq info
-            (plist-put info :mevedel-directive-covered-files
-                       (plist-get capture :covered-files)))
-      (setq info
-            (plist-put info :mevedel-directive-gaps
-                       (plist-get capture :gaps)))
-      (setq info
-            (plist-put info :mevedel-directive-untracked-effects
-                       (plist-get capture :untracked-effects)))
-      (setf (gptel-fsm-info fsm) info)
-      (mevedel-preset--apply-final-patch
-       fsm chat-buffer workspace request))))
+(defun mevedel-preset--final-patch-handler (fsm &optional continuation)
+  "Generate and display a final patch for FSM, then call CONTINUATION."
+  (let* ((continuation (or continuation #'ignore))
+         (continued nil)
+         (finish
+          (lambda (machine)
+            (unless continued
+              (setq continued t)
+              (funcall continuation machine)))))
+    (condition-case err
+        (if-let* ((info (gptel-fsm-info fsm))
+                  (chat-buffer (plist-get info :buffer))
+                  ((buffer-live-p chat-buffer))
+                  (workspace (with-current-buffer chat-buffer
+                               (mevedel-workspace))))
+            (let* ((request (or (plist-get info :mevedel-request)
+                                (with-current-buffer chat-buffer
+                                  mevedel--current-request)))
+                   (capture (with-current-buffer chat-buffer
+                              (mevedel--directive-capture request))))
+              (setq info
+                    (plist-put info :mevedel-directive-capture
+                               (plist-get capture :capture)))
+              (setq info
+                    (plist-put info :mevedel-directive-covered-files
+                               (plist-get capture :covered-files)))
+              (setq info
+                    (plist-put info :mevedel-directive-gaps
+                               (plist-get capture :gaps)))
+              (setq info
+                    (plist-put info :mevedel-directive-untracked-effects
+                               (plist-get capture :untracked-effects)))
+              (setf (gptel-fsm-info fsm) info)
+              (mevedel-preset--apply-final-patch
+               fsm chat-buffer workspace request finish))
+          (funcall finish fsm))
+      (error
+       (mevedel--warn-once
+        (list 'turn-fsm-handler "mevedel-preset--final-patch-handler")
+        "FSM handler mevedel-preset--final-patch-handler failed: %s"
+        (error-message-string err))
+       (funcall finish fsm)))))
 
-(defun mevedel-preset--apply-final-patch (fsm chat-buffer workspace request)
-  "Generate FSM's final patch for WORKSPACE, off a busy transport.
+(defun mevedel-preset--apply-final-patch
+    (fsm chat-buffer workspace request &optional continuation)
+  "Generate FSM's final patch for WORKSPACE, then call CONTINUATION.
 
 This handler runs from `gptel--fsm-transition', which gptel calls inside
 its curl process sentinel -- and TRAMP re-runs a pending sentinel from the
@@ -603,35 +619,70 @@ reads every file the turn touched, so doing it there issues commands on a
 connection that is mid-conversation, and the two cross replies.
 
 `mevedel-transport-run-when-idle' runs the work inline when the transport
-is free, which is the ordinary case and leaves the patch on FSM's info
-before anything reads it.  Only a busy transport defers, and that is the
-case which until now signalled `Forbidden reentrant call of Tramp' and
-lost the patch outright -- so a late patch is strictly better than what it
-replaces, never worse.
+is free.  When it defers, callback invocation and terminal settlement wait
+in CONTINUATION so they cannot persist the directive before the patch exists.
 
 REQUEST is captured here, while the turn is still live, and handed to the
 generator.  Deferring moved that work past the point where settlement
 clears `mevedel--current-request\', so a deferred generator that re-read
 the buffer-local would find nil and signal."
-  (let* ((root (ignore-errors (mevedel-workspace-root workspace)))
+  (let* ((continuation (or continuation #'ignore))
+         (root (ignore-errors (mevedel-workspace-root workspace)))
          (generate
           (lambda ()
-            (when (buffer-live-p chat-buffer)
-              (let ((patch (with-current-buffer chat-buffer
-                             (mevedel--generate-final-patch
-                              workspace request))))
-                (setf (gptel-fsm-info fsm)
-                      (plist-put (gptel-fsm-info fsm)
-                                 :mevedel-directive-patch patch))
-                (when (and patch (> (length patch) 0))
-                  (mevedel--replace-patch-buffer patch)))))))
+            (unwind-protect
+                (funcall
+                 (mevedel--safe-fsm-handler
+                  (lambda (_machine)
+                    (when (buffer-live-p chat-buffer)
+                      (let ((patch (with-current-buffer chat-buffer
+                                     (mevedel--generate-final-patch
+                                      workspace request))))
+                        (setf (gptel-fsm-info fsm)
+                              (plist-put (gptel-fsm-info fsm)
+                                         :mevedel-directive-patch patch))
+                        (when (and patch (> (length patch) 0))
+                          (mevedel--replace-patch-buffer patch))))))
+                 fsm)
+              (funcall continuation fsm)))))
     (if (and root
              (file-remote-p root)
              (mevedel-transport-busy-p root)
              (mevedel-transport-run-when-idle
-              (list 'final-patch (buffer-name chat-buffer)) root generate))
+              (list 'final-patch (buffer-name chat-buffer)) root generate
+              (lambda ()
+                (mevedel-preset--settle-terminal fsm t))))
         t
       (funcall generate))))
+
+(defun mevedel-preset--settle-terminal (fsm &optional cancelled-p)
+  "Invoke FSM's request callback, then settle its terminal state.
+When CANCELLED-P is non-nil, report an abort regardless of FSM's old state."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (request-callback
+               (plist-get info :mevedel-request-callback))
+              ((functionp request-callback)))
+    (funcall
+     (mevedel--safe-fsm-handler
+      (lambda (machine)
+        (funcall request-callback
+                 (and (or cancelled-p
+                          (eq (gptel-fsm-state machine) 'ABRT))
+                      'abort)
+                 machine)))
+     fsm))
+  (funcall
+   (mevedel--safe-fsm-handler
+    (pcase (if cancelled-p 'ABRT (gptel-fsm-state fsm))
+      ('DONE #'mevedel--complete-turn)
+      ('ABRT (lambda (machine) (mevedel--fail-turn machine 'aborted)))
+      (_ (lambda (machine) (mevedel--fail-turn machine 'error)))))
+   fsm))
+
+(defun mevedel-preset--terminal-handler (fsm)
+  "Generate FSM's patch before callback invocation and settlement."
+  (mevedel-preset--final-patch-handler
+   fsm #'mevedel-preset--settle-terminal))
 
 (defun mevedel-preset--build-handlers (handlers)
   "Build the standard mevedel FSM handler chain from base HANDLERS.
@@ -645,10 +696,7 @@ alist with mevedel-specific handlers added:
   1c.  Inbound agent-message delivery (WAIT state handler)
   1d.  Deferred tool injection (WAIT state handler)
   1e.  ToolScript effective-roster description (WAIT state handler)
-  2.  Final patch generation (terminal state handler)
-  3.  Request callback invocation (terminal state handler)
-  4.  Canonical successful-turn transaction (DONE state handler only)
-  5.  Failure and abort cleanup"
+  2.  Ordered final patch, request callback, and terminal settlement"
   ;; 1. Add the pre-sample WAIT handlers in execution order.
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
@@ -731,23 +779,6 @@ alist with mevedel-specific handlers added:
                      #'mevedel--compact-handle-wait
                    handler))
                (cdr wait-entry)))))
-  ;; 2. Generate final patch and store in directive
-  (setq handlers
-        (mevedel--add-termination-handler
-         #'mevedel-preset--final-patch-handler
-         handlers))
-  ;; 3. Run callback from instruction
-  (setq handlers
-        (mevedel--add-termination-handler
-         (lambda (fsm)
-           (when-let* ((info (gptel-fsm-info fsm))
-                       (request-callback
-                        (plist-get info :mevedel-request-callback)))
-             (when (functionp request-callback)
-               (funcall request-callback
-                        (and (eq (gptel-fsm-state fsm) 'ABRT) 'abort)
-                        fsm))))
-         handlers))
   ;; Record API-reported token usage at TPRE so tool-using turns retain
   ;; their latest intermediate baseline.  Terminal recording belongs to
   ;; the successful/failure transactions below.
@@ -757,29 +788,15 @@ alist with mevedel-specific handlers added:
                 (append (cdr tpre-entry)
                         (list #'mevedel-compact-estimation-record-token-baseline)))
       (push (list 'TPRE #'mevedel-compact-estimation-record-token-baseline) handlers)))
-  ;; Failure terminals retain StopFailure and skip queued follow-up
-  ;; submission.  Provider errors persist their failure disclosure;
-  ;; user aborts retain the outer abort command's save.
-  (dolist (state '(ERRS ABRT))
-    (let* ((entry (assq state handlers))
-           (failure-status (if (eq state 'ABRT) 'aborted 'error))
-           (failure-handler
-            (lambda (fsm)
-              (mevedel--fail-turn fsm failure-status))))
-      (if entry
-          (setcdr entry (append (cdr entry) (list failure-handler)))
-        (push (list state failure-handler) handlers))))
+  ;; gptel runs a terminal handler list synchronously.  Keep the dependent
+  ;; mevedel work in one handler so a deferred patch can resume the rest in
+  ;; order instead of letting sibling handlers persist an empty patch.
+  (unless (assq 'ABRT handlers)
+    (push '(ABRT) handlers))
+  (setq handlers
+        (mevedel--add-termination-handler
+         #'mevedel-preset--terminal-handler handlers))
   (setq handlers (mevedel--wrap-terminal-handlers handlers))
-  ;; Install the internally isolated successful transaction after the
-  ;; ordinary terminal handlers have been wrapped.  Keeping the named
-  ;; function itself in the chain gives direct fork turns the exact same
-  ;; entry point.
-  (let ((done-entry (assq 'DONE handlers)))
-    (if done-entry
-        (unless (memq #'mevedel--complete-turn (cdr done-entry))
-          (setcdr done-entry
-                  (append (cdr done-entry) (list #'mevedel--complete-turn))))
-      (push (list 'DONE #'mevedel--complete-turn) handlers)))
   handlers)
 
 

@@ -650,7 +650,7 @@
                      (push name truenames)
                      name)))
           (with-current-buffer inside
-            (setq buffer-file-name (concat root "src/main.el")))
+            (setq buffer-file-name (file-name-concat root "src/main.el")))
           (with-current-buffer outside
             (setq buffer-file-name "/mevedelmock:host:/srv/other/main.el"))
           (let ((found (mevedel-workspace-file-buffers workspace)))

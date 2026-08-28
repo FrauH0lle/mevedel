@@ -8,11 +8,6 @@
 
 ;;; Code:
 
-;; `mevedel-utilities'
-(declare-function mevedel--truncate-display
-                  "mevedel-utilities" (text width &optional ellipsis))
-(autoload 'mevedel--truncate-display "mevedel-utilities")
-
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-execution-transcript)
 (require 'mevedel-plan)
@@ -2681,8 +2676,11 @@ Sized for the completed reasoning blocks a transcript re-renders, not for
 history: each entry holds a whole cleaned block, and a miss costs only the
 work this cache exists to skip.")
 
-(defvar-local mevedel-view--clean-reasoning-cache nil
+(defvar mevedel-view--clean-reasoning-cache nil
   "Cleaned reasoning text, keyed by the raw text it was produced from.
+
+Global for the same reason as `mevedel-view--scaffolding-only-cache\': the
+cleaning depends on nothing but its argument.
 
 `mevedel-view--clean-reasoning-text' is a pure function of its argument, so
 equal input gives equal output and the raw text is a sound key.
@@ -2690,33 +2688,28 @@ equal input gives equal output and the raw text is a sound key.
 It earns its place on redraw.  A render walks every turn in the transcript,
 so each tick re-cleans every completed reasoning block as well as the live
 one -- four passes over each, allocating a fresh copy per pass.  Completed
-blocks do not change, so they hit; the streaming block grows on every tick
-and always misses, which is the one case the cache cannot help and does not
-try to.")
-
-(defun mevedel-view--clean-reasoning-cached (text)
-  "Return TEXT's cleaning from the buffer cache, or nil when absent."
-  (when mevedel-view--clean-reasoning-cache
-    (cdr (assoc text mevedel-view--clean-reasoning-cache))))
-
-(defun mevedel-view--clean-reasoning-remember (text cleaned)
-  "Record CLEANED as TEXT's cleaning, evicting the oldest entry."
-  (setq mevedel-view--clean-reasoning-cache
-        (cons (cons text cleaned)
-              (let ((kept (seq-take mevedel-view--clean-reasoning-cache
-                                    (1- mevedel-view--clean-reasoning-cache-size))))
-                (assoc-delete-all text kept))))
-  cleaned)
+blocks do not change, so they hit.  A streaming block has no end marker and
+is not inserted: each growing version would miss and retain an obsolete
+raw/cleaned pair.")
 
 (defun mevedel-view--clean-reasoning-text (text)
   "Strip org scaffolding markers from reasoning TEXT.
 Removes reasoning block markers, nested tool blocks, and generated
 system reminder wrappers.
 
-Cached per buffer; see `mevedel-view--clean-reasoning-cache'."
-  (or (mevedel-view--clean-reasoning-cached text)
-      (mevedel-view--clean-reasoning-remember
-       text (mevedel-view--clean-reasoning-text-1 text))))
+Completed blocks are cached globally; see
+`mevedel-view--clean-reasoning-cache'."
+  (or (cdr (assoc text mevedel-view--clean-reasoning-cache))
+      (let ((cleaned (mevedel-view--clean-reasoning-text-1 text)))
+        (when (string-match-p "^#\\+end_reasoning\\b" text)
+          (setq mevedel-view--clean-reasoning-cache
+                (cons (cons text cleaned)
+                      (let ((kept
+                             (seq-take
+                              mevedel-view--clean-reasoning-cache
+                              (1- mevedel-view--clean-reasoning-cache-size))))
+                        (assoc-delete-all text kept)))))
+        cleaned)))
 
 (defun mevedel-view--clean-reasoning-text-1 (text)
   "Return TEXT with reasoning scaffolding removed, without consulting a cache."
@@ -2853,12 +2846,17 @@ never blank, however much of it is marker lines."
 (defconst mevedel-view--scaffolding-only-cache-size 512
   "Scaffolding verdicts retained by `mevedel-view--scaffolding-only-cache'.
 
-Generous because a verdict is one boolean.  The cleaned text it is derived
-from is not retained here, so this bound costs almost nothing while
-covering every segment a long transcript re-examines.")
+Only true verdicts are retained.  Growing live reasoning and ordinary user
+text would otherwise keep whole false-result strings globally reachable.")
 
-(defvar-local mevedel-view--scaffolding-only-cache nil
+(defvar mevedel-view--scaffolding-only-cache (make-hash-table :test #'equal)
   "Scaffolding verdicts, keyed by the segment text they were derived from.
+
+Global, not per buffer.  The verdict is a pure function of the text, so a
+segment answers the same in whichever buffer asks -- and the render walks
+more than one, so a buffer-local cache was refilled from empty rather than
+reused.  That is why an earlier per-buffer version did not reduce this at
+all.
 
 A render walks every segment and asks each one whether it is glue, and the
 answer came from cleaning the whole segment and testing the result for
@@ -2866,35 +2864,26 @@ emptiness -- four passes allocating a fresh copy each.  That was 81% of all
 reasoning-cleaning allocation in a profiled remote turn, and it recurs on
 every redraw because the segments do not change.
 
-Kept apart from `mevedel-view--clean-reasoning-cache' precisely because the
-values are cheap: a shared bound sized for whole cleaned blocks was small
-enough that a long transcript evicted its own entries before reusing them.")
+Only glue is retained.  Real content includes the growing live reasoning
+segment, so caching false verdicts would preserve up to 512 progressively
+larger copies merely to avoid recomputing nil.")
 
 (defun mevedel-view--scaffolding-only-text-p (text)
   "Return non-nil if TEXT is org-only glue, or nil.
 Nil TEXT counts as glue.  See `mevedel-view--scaffolding-only-p'.
 
-Cached per buffer; see `mevedel-view--scaffolding-only-cache'."
-  (if (null text)
-      t
-    (unless mevedel-view--scaffolding-only-cache
-      (setq mevedel-view--scaffolding-only-cache
-            (make-hash-table :test #'equal)))
-    (let ((cached (gethash text mevedel-view--scaffolding-only-cache 'miss)))
-      (if (eq cached 'miss)
-          (progn
-            ;; Cleared rather than evicted one by one: recomputing a
-            ;; verdict is the work this cache already exists to skip, and
-            ;; a transcript long enough to overflow re-examines its oldest
-            ;; segments least.
-            (when (>= (hash-table-count mevedel-view--scaffolding-only-cache)
-                      mevedel-view--scaffolding-only-cache-size)
-              (clrhash mevedel-view--scaffolding-only-cache))
-            (puthash text
-                     (string-empty-p
-                      (string-trim (mevedel-view--clean-reasoning-text text)))
-                     mevedel-view--scaffolding-only-cache))
-        cached))))
+Cached globally; see `mevedel-view--scaffolding-only-cache'."
+  (or (null text)
+      (gethash text mevedel-view--scaffolding-only-cache)
+      (when (string-empty-p
+             (string-trim (mevedel-view--clean-reasoning-text-1 text)))
+        ;; Cleared rather than evicted one by one: recomputing a verdict is
+        ;; the work this cache already exists to skip, and a transcript long
+        ;; enough to overflow re-examines its oldest segments least.
+        (when (>= (hash-table-count mevedel-view--scaffolding-only-cache)
+                  mevedel-view--scaffolding-only-cache-size)
+          (clrhash mevedel-view--scaffolding-only-cache))
+        (puthash text t mevedel-view--scaffolding-only-cache))))
 
 (defun mevedel-view--inline-skill-render-data-from-text (text)
   "Return inline-skill render-data from TEXT, or nil."

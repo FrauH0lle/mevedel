@@ -39,6 +39,15 @@
 ;; `mevedel-permission-mode'
 (defvar mevedel-permission-mode)
 
+;; `mevedel-permission-persistence'
+(declare-function mevedel-permission-persistence-load-resource-grants
+                  "mevedel-permission-persistence" (workspace))
+(declare-function mevedel-permission-persistence-load-rules
+                  "mevedel-permission-persistence" (workspace))
+(declare-function mevedel-permission-persistence-refresh
+                  "mevedel-permission-persistence"
+                  (workspace continuation &optional on-cancel))
+
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission--enqueue
                   "mevedel-permission-queue" (entry &optional session))
@@ -66,6 +75,9 @@
                   "mevedel-permissions" (outcome))
 (declare-function mevedel-permission-decision-raw-outcome
                   "mevedel-permissions" (decision))
+(defvar mevedel-permission--context-frozen-p)
+(defvar mevedel-permission--frozen-persistent-rules)
+(defvar mevedel-permission--frozen-resource-grants)
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-hook-context-audit-records
@@ -88,6 +100,7 @@
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-session-permission-mode
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-forwarded-audit-p
@@ -433,7 +446,8 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
          (args (plist-get context :args))
          (tool-name (mevedel-tool-name tool))
          (session (plist-get context :session))
-         (workspace (plist-get context :workspace))
+         (workspace (or (plist-get context :workspace)
+                        (and session (mevedel-session-workspace session))))
          (request (plist-get context :request))
          (invocation (plist-get context :invocation))
          (one-shot-mutations-p
@@ -448,6 +462,8 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
            :workspace workspace
            :request request
            :invocation invocation
+           :persistent-snapshot
+           (plist-get context :persistent-permission-snapshot)
            :one-shot-mutations-p one-shot-mutations-p
            :patch-local-only-p
            (plist-get (plist-get context :patch-proposal) :local-only-p)
@@ -545,36 +561,80 @@ context and typed reason."
   (mevedel-tool-permission--initialize)
   (let* ((tool (plist-get context :tool))
          (session (plist-get context :session))
+         (workspace (or (plist-get context :workspace)
+                        (and session (mevedel-session-workspace session))))
+         (buffer (plist-get context :buffer))
+         (frozen-p
+          (if (buffer-live-p buffer)
+              (buffer-local-value
+               'mevedel-permission--context-frozen-p buffer)
+            mevedel-permission--context-frozen-p))
          (paths (mevedel-tool-permission-paths
                  tool (plist-get context :args) context)))
-    (cond
-     ((and session
-           (not (mevedel-tool-read-only-p tool))
-           (mevedel-execution-mutation-refused-p session))
-      (funcall fail mevedel-execution-mutation-blocked-message))
-     ((null paths)
-      (mevedel-tool-permission--step-one context next fail))
-     (t
-      (cl-labels
-          ((authorize (remaining current all-direct-p)
-             (if (null remaining)
-                 (funcall next
-                          (plist-put current :auto-apply-edit-p
-                                     all-direct-p))
-               (let ((path-context
-                      (plist-put
-                       (plist-put (copy-sequence current)
-                                  :permission-path (car remaining))
-                       :auto-apply-edit-p nil)))
-                 (mevedel-tool-permission--step-one
-                  path-context
-                  (lambda (updated)
-                    (authorize
-                     (cdr remaining) updated
-                     (and all-direct-p
-                          (plist-get updated :auto-apply-edit-p))))
-                  fail)))))
-        (authorize paths context t))))))
+    (cl-labels
+        ((run ()
+           (cond
+            ((and session
+                  (not (mevedel-tool-read-only-p tool))
+                  (mevedel-execution-mutation-refused-p session))
+             (funcall fail mevedel-execution-mutation-blocked-message))
+            ((null paths)
+             (mevedel-tool-permission--step-one context next fail))
+            (t
+             (cl-labels
+                 ((authorize (remaining current all-direct-p)
+                    (if (null remaining)
+                        (funcall next
+                                 (plist-put current :auto-apply-edit-p
+                                            all-direct-p))
+                      (let ((path-context
+                             (plist-put
+                              (plist-put (copy-sequence current)
+                                         :permission-path (car remaining))
+                              :auto-apply-edit-p nil)))
+                        (mevedel-tool-permission--step-one
+                         path-context
+                         (lambda (updated)
+                           (authorize
+                            (cdr remaining) updated
+                            (and all-direct-p
+                                 (plist-get updated :auto-apply-edit-p))))
+                         fail)))))
+               (authorize paths context t))))))
+      (cond
+       ((and workspace (not frozen-p))
+          (mevedel-permission-persistence-refresh
+           workspace
+           (lambda ()
+             (setq context
+                   (plist-put
+                    context :persistent-permission-snapshot
+                    (list
+                     :rules
+                     (mevedel-permission-persistence-load-rules workspace)
+                     :resource-grants
+                     (mevedel-permission-persistence-load-resource-grants
+                      workspace))))
+             (run))
+           (lambda ()
+             (funcall fail "Permission store refresh cancelled"))))
+       (frozen-p
+        (setq context
+              (plist-put
+               context :persistent-permission-snapshot
+               (list
+                :rules
+                (if (buffer-live-p buffer)
+                    (buffer-local-value
+                     'mevedel-permission--frozen-persistent-rules buffer)
+                  mevedel-permission--frozen-persistent-rules)
+                :resource-grants
+                (if (buffer-live-p buffer)
+                    (buffer-local-value
+                     'mevedel-permission--frozen-resource-grants buffer)
+                  mevedel-permission--frozen-resource-grants))))
+        (run))
+       (t (run))))))
 
 (cl-defun mevedel-tool-permission--dispatch-outcome
     (outcome context next fail

@@ -68,13 +68,16 @@
              (outline-mode-hook (list (funcall note 'outline)))
              (change-major-mode-after-body-hook (list (funcall note 'body)))
              (after-change-major-mode-hook (list (funcall note 'after))))
+        (setq-local change-major-mode-hook
+                    (list (funcall note 'change)))
         (mevedel--transcript-org-mode)
         (should (derived-mode-p 'org-mode))
-        (should-not ran))))
+        (should-not ran)
+        (should-not delayed-mode-hooks))))
 
   :doc "inhibits the Org startup block the mode body runs directly"
-  ;; `delay-mode-hooks' cannot reach these: they are in the mode body, not
-  ;; a hook.  `org-inhibit-startup' is what covers them.
+  ;; These are in the mode body, not a hook.  `org-inhibit-startup' covers
+  ;; them.
   (progn
     (require 'org)
     (with-temp-buffer
