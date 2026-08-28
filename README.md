@@ -83,6 +83,15 @@ for Git-backed workflows, Bubblewrap follows the configured sandbox mode, and
 media converters remain optional.  Mevedel probes these capabilities but does
 not install target dependencies.
 
+On a remote workspace, another package doing remote I/O from a process
+sentinel can interrupt a mevedel command mid-conversation; TRAMP then refuses
+the nested call and you see `Forbidden reentrant call of Tramp`.  Mevedel
+holds off its own work while the connection is busy, but it cannot hold off
+anybody else's.  Projectile is the one worth stopping, because it advises
+`delete-file` and so triggers on every temporary file any sentinel deletes —
+see [Transport reentrancy](docs/sessions.md#transport-reentrancy) for a
+three-line advice that declines to run inside a remote operation.
+
 ## Installation and configuration
 
 The package is not available on MELPA but you can install it directly from
