@@ -943,5 +943,32 @@ rejects trailing binary operators"
           (should (equal '("/mevedelmock:host:" nil) asked)))
       (clrhash mevedel--executable-cache))))
 
+(mevedel-deftest mevedel--truncate-display ()
+  ,test
+  (test)
+
+  :doc "returns a fitting string untouched and raises nothing"
+  ;; `truncate-string-to-width' ends its scan by running `aref' off the
+  ;; end and catching the `args-out-of-range' itself, so a label shorter
+  ;; than WIDTH always raised one internally -- which TRAMP's signal hook
+  ;; then logged to *Messages* on every remote render.
+  (let ((raised 0))
+    (advice-add 'signal :before
+                (lambda (&rest _) (setq raised (1+ raised)))
+                '((name . mevedel-truncate-count)))
+    (unwind-protect
+        (progn
+          (should (equal "git status"
+                         (mevedel--truncate-display "git status" 60 "...")))
+          (should (= 0 raised)))
+      (advice-remove 'signal 'mevedel-truncate-count)))
+
+  :doc "truncates and marks a string that does not fit"
+  (should (equal "ex..." (mevedel--truncate-display "exactly-ten" 5 "...")))
+
+  :doc "an empty string and a non-string are handled"
+  (should (equal "" (mevedel--truncate-display "" 10 "...")))
+  (should-not (mevedel--truncate-display nil 10 "...")))
+
 (provide 'test-mevedel-utilities)
 ;;; test-mevedel-utilities.el ends here

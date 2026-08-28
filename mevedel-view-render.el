@@ -8,6 +8,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-execution-transcript)
 (require 'mevedel-plan)
@@ -5783,8 +5788,7 @@ synthesizes a preview with tool counters."
                       end))))
     (concat
      (format "◆ %s · %s · T%s · %s%s%s"
-             (truncate-string-to-width
-              (or (plist-get directive :directive-id) "?") 8 nil nil "…")
+             (mevedel--truncate-display (or (plist-get directive :directive-id) "?") 8 "…")
              (mevedel-overlay-ui-directive-action-label
               (plist-get directive :action))
              (or (plist-get directive :turn) "?")

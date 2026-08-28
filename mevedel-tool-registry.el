@@ -9,6 +9,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (require 'cl-lib)
 
 (require 'mevedel-pipeline)
@@ -250,7 +255,7 @@ one this function already documents; losing the turn is not."
           (when (> (length parts) 3)
             (setq value (concat ".../" (mapconcat #'identity
                                                   (last parts 3) "/"))))))
-      (truncate-string-to-width value 60 nil nil "..."))))
+      (mevedel--truncate-display value 60 "..."))))
 
 
 ;;

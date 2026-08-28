@@ -176,6 +176,30 @@ because a missing tool is looked up just as often as a present one."
                  mevedel--executable-cache)
       cached)))
 
+
+;;
+;;; Display text
+
+(defun mevedel--truncate-display (text width &optional ellipsis)
+  "Return TEXT truncated to WIDTH columns, ending with ELLIPSIS.
+
+Returns TEXT untouched when it already fits, which is what makes this
+worth having.  `truncate-string-to-width\' ends its scan by running
+`aref\' off the end of the string and catching the `args-out-of-range\'
+itself, so a string shorter than WIDTH -- the ordinary case for a tool
+label -- always raises one internally.  Nothing escapes, but TRAMP\'s
+`signal-hook-function\' logs every signal raised inside a handler frame,
+so on a remote workspace each label rendered during a target operation
+left a line like
+
+  Args out of range: \"Args out of range\", \"git status 12\"
+
+in *Messages*, where it reads like a defect and is not one."
+  (when (stringp text)
+    (if (<= (string-width text) width)
+        text
+      (truncate-string-to-width text width nil nil (or ellipsis "...")))))
+
 ;;
 ;;; Diagnostics
 

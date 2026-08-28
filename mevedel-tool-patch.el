@@ -9,6 +9,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'mevedel-tool-registry)
@@ -644,7 +649,7 @@ first character is not whitespace or a closing bracket."
            for line = (nth index lines)
            when (and (> (length line) 0)
                      (not (memq (aref line 0) '(?\s ?\t ?\) ?\] ?\}))))
-           return (truncate-string-to-width line 48 nil nil "…")))
+           return (mevedel--truncate-display line 48 "…")))
 
 (defun mevedel-tool-patch-annotate-line-numbers (proposal)
   "Attach display start lines and section labels to hunks in PROPOSAL.
