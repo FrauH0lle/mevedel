@@ -8,6 +8,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'tabulated-list))
@@ -109,8 +114,7 @@
        (or (plist-get item :wall-time-seconds) 0))
       (number-to-string (or (plist-get item :output-bytes) 0))
       (format "%s" (or (plist-get item :sandbox-state) 'pending))
-      (truncate-string-to-width
-       (or (plist-get item :command) "") 60 nil nil "…")))))
+      (mevedel--truncate-display (or (plist-get item :command) "") 60 "…")))))
 
 (defun mevedel-executions-list--header (items context)
   "Return cockpit header for execution ITEMS and CONTEXT."

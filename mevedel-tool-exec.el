@@ -8,6 +8,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (eval-when-compile
   (require 'mevedel-tool-registry))
 
@@ -781,8 +786,7 @@ Header shows a truncated first line of the command; body fontifies as
                              "sent input to background process"))
                  (format "%s: %s"
                          (or name "Bash")
-                         (truncate-string-to-width
-                          first-line 60 nil nil "...")))
+                         (mevedel--truncate-display first-line 60 "...")))
                (and metadata (format " (%s)" metadata)))
               :body body
               :body-mode 'sh-mode
@@ -816,8 +820,7 @@ Header shows a truncated first line of the command; body fontifies as
       (list :header (format "%s: %s %s"
                             (or name "Eval")
                             mode
-                            (truncate-string-to-width
-                             first-line 60 nil nil "..."))
+                            (mevedel--truncate-display first-line 60 "..."))
             :body result
             :body-mode 'emacs-lisp-mode
             :status status

@@ -51,6 +51,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-codec)
 
@@ -914,8 +919,7 @@ non-empty line, truncated to 120 characters."
                       (when (string-match "[^[:space:]].*$" text)
                         (let ((line (match-string 0 text)))
                           (throw 'found
-                                 (truncate-string-to-width
-                                  line 120 nil nil "..."))))))
+                                 (mevedel--truncate-display line 120 "..."))))))
                   (setq pos next)))
               nil)))))))
 

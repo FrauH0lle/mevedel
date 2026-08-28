@@ -8,6 +8,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'tabulated-list))
@@ -124,7 +129,7 @@
          (paragraph (car (split-string text "\n[ \t]*\n" t)))
          (one-line (replace-regexp-in-string
                     "[ \t\n\r]+" " " (or paragraph ""))))
-    (truncate-string-to-width (string-trim one-line) 96 nil nil "...")))
+    (mevedel--truncate-display (string-trim one-line) 96 "...")))
 
 (defun mevedel-tools-list--tool-item (state tool)
   "Return a tools cockpit item for TOOL in STATE."
