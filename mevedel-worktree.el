@@ -350,7 +350,16 @@ directory they happen to be sitting in."
                          ((and superproject
                                (not (string-empty-p superproject)))
                           'submodule)
-                         ((not (file-equal-p git-dir common-dir))
+                         ;; By name.  Both come from one `rev-parse' on
+                         ;; one repository and are expanded against the
+                         ;; same directory, so git spells the same
+                         ;; directory the same way in both; `file-equal-p'
+                         ;; would resolve two truenames on the target to
+                         ;; reach that answer, and this is reached from a
+                         ;; renderer, where a nested remote call is
+                         ;; refused outright.
+                         ((not (equal (file-name-as-directory git-dir)
+                                      (file-name-as-directory common-dir)))
                           'linked-worktree)
                          (t 'normal-checkout))))
         (list :session session

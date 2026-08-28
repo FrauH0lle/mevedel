@@ -116,5 +116,35 @@
   (let ((body "1-><system-reminder>\n2->sample\n3-></system-reminder>"))
     (should (equal body (mevedel-tool-fs-strip-system-reminders body)))))
 
+(mevedel-deftest mevedel-tool-fs-display-path ()
+  ,test
+  (test)
+
+  :doc "shortens a path under the workspace root without touching the target"
+  ;; Runs from a tool renderer, and renderers run from the redraw path:
+  ;; a stat here lands inside whatever remote command the redraw
+  ;; interrupted, TRAMP refuses it, and the row loses its header.
+  (let ((root "/mevedelmock:host:/srv/project/")
+        (stats 0))
+    (cl-letf (((symbol-function 'mevedel-tool-fs-current-workspace-root)
+               (lambda () root))
+              ((symbol-function 'file-in-directory-p)
+               (lambda (&rest _) (setq stats (1+ stats)) t))
+              ((symbol-function 'file-truename)
+               (lambda (name &rest _) (setq stats (1+ stats)) name)))
+      (mevedel-test--with-captured-diagnostics nil
+        (should (equal "src/main.py"
+                       (mevedel-tool-fs-display-path
+                        (concat root "src/main.py"))))
+        (should (= 0 stats)))))
+
+  :doc "a path outside the root falls back to its base name"
+  (let ((root "/mevedelmock:host:/srv/project/"))
+    (cl-letf (((symbol-function 'mevedel-tool-fs-current-workspace-root)
+               (lambda () root)))
+      (should (equal "elsewhere.py"
+                     (mevedel-tool-fs-display-path
+                      "/mevedelmock:host:/other/elsewhere.py"))))))
+
 (provide 'test-mevedel-tool-fs)
 ;;; test-mevedel-tool-fs.el ends here
