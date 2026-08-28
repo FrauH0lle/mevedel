@@ -7,6 +7,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (eval-when-compile
   (require 'cl-lib))
 
@@ -579,11 +584,11 @@ rows remain visually distinct from the editable composer."
                    action)))
                (request
                 (and record
-                     (truncate-string-to-width
+                     (mevedel--truncate-display
                       (replace-regexp-in-string
                        "[ \t\n\r]+" " "
                       (mevedel-directive-request record))
-                      80 nil nil "…")))
+                      80 "…")))
                (request-label
                 (or request
                     (plist-get mevedel-view--composer-scope :directive-id)))

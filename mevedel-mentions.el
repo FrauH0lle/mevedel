@@ -9,6 +9,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (eval-when-compile
   (require 'cl-lib))
 
@@ -1129,9 +1134,9 @@ Provides completion for both @ref:ID and @ref:{tag-query} syntax."
                                                (buffer-substring-no-properties
                                                 (overlay-start ref)
                                                 (overlay-end ref))))
-                                    (preview (truncate-string-to-width
+                                    (preview (mevedel--truncate-display
                                               (string-trim (replace-regexp-in-string "[\n\r]+" " " content))
-                                              50 nil nil "...")))
+                                              50 "...")))
                                 ;; Store reference info as text property for annotation
                                (propertize id-str
                                            'mevedel-reference-uuid
@@ -1416,10 +1421,10 @@ using each agent's description as the candidate annotation."
                         (let ((desc (get-text-property 0 'mevedel-agent-desc cand)))
                           (if (and desc (not (string-empty-p desc)))
                               (format " %s"
-                                      (truncate-string-to-width
+                                      (mevedel--truncate-display
                                        (string-trim
                                         (replace-regexp-in-string "[\n\r]+" " " desc))
-                                       60 nil nil "..."))
+                                       60 "..."))
                             ""))))))))))))
 
 (defun mevedel-mention-capf ()
@@ -1544,11 +1549,11 @@ Requires mcp.el to be loaded; returns nil otherwise."
                             (cond
                              ((and desc (not (string-empty-p desc)))
                               (format " %s"
-                                      (truncate-string-to-width
+                                      (mevedel--truncate-display
                                        (string-trim
                                         (replace-regexp-in-string
                                          "[\n\r]+" " " desc))
-                                       60 nil nil "...")))
+                                       60 "...")))
                              ((and name (not (string-empty-p name)))
                               (format " %s" name))
                              (t "")))))))))))))))

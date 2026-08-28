@@ -7,6 +7,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (eval-when-compile
   (require 'mevedel-structs))
 
@@ -156,7 +161,7 @@ short enough that a picker row stays readable."
   (let ((name (replace-regexp-in-string
                "[[:cntrl:]]" "" (or (system-name) ""))))
     (when (string-match-p "\\S-" name)
-      (truncate-string-to-width (string-trim name) 64))))
+      (mevedel--truncate-display (string-trim name) 64))))
 
 (defvar mevedel-session-durability--disclosed-targets
   (make-hash-table :test #'equal)

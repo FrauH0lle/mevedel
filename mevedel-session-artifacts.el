@@ -6,6 +6,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (require 'cl-lib)
 
 (eval-when-compile
@@ -653,9 +658,8 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                                               (plist-get directive :start)
                                             prompt-start)
                                      :preview
-                                     (truncate-string-to-width
-                                      (match-string 0 text)
-                                      80 nil nil "..."))
+                                     (mevedel--truncate-display (match-string 0 text)
+                                      80 "..."))
                                (and directive
                                     (list
                                      :kind 'directive

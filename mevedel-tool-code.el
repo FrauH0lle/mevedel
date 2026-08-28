@@ -7,6 +7,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (require 'cl-lib)
 
 (eval-when-compile
@@ -420,9 +425,8 @@ and optional :line, :column, :whole_file, :include_ancestors,
                                    (treesit-node-end node))
                            results)
                      (push (format "Text: %s"
-                                   (truncate-string-to-width
-                                    (treesit-node-text node t)
-                                    80 nil nil "..."))
+                                   (mevedel--truncate-display (treesit-node-text node t)
+                                    80 "..."))
                            results)
                      (when (treesit-node-check node 'named)
                        (push "Named: yes" results))

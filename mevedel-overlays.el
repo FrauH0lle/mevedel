@@ -14,6 +14,11 @@
 
 ;;; Code:
 
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+
 (require 'cl-lib)
 (require 'subr-x)
 
@@ -1314,9 +1319,7 @@ text shown in UI elements such as the minibuffer prompt."
 
 Returns TEXT truncated if longer than the maximum, otherwise returns
 TEXT unchanged.  Truncation uses ellipsis to indicate omitted content."
-  (truncate-string-to-width
-   text mevedel-instructions-truncated-max nil nil
-   t))
+  (mevedel--truncate-display text mevedel-instructions-truncated-max t))
 
 (defun mevedel--read-directive (directive)
   "Prompt user to enter a directive text via minibuffer for DIRECTIVE."
