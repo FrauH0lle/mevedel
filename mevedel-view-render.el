@@ -2017,9 +2017,18 @@ Return nil when HEADER is not a `Tool: argument' style line."
           line)))))
 
 (defun mevedel-view--sandbox-summary-line (summary)
-  "Return a durable warning line for material sandbox SUMMARY."
-  (when (and summary
-             (mevedel-execution-telemetry-sandbox-summary-class summary))
+  "Return the durable disclosure line for material sandbox SUMMARY.
+A `warning' class states something went wrong on this call.  A `note'
+class restates the session's standing confinement configuration, which
+already warned once when it was first hit, so it renders in the quiet
+metadata face instead of shouting on every row."
+  (when-let* ((class
+               (and summary
+                    (mevedel-execution-telemetry-sandbox-summary-class
+                     summary)))
+              (face (if (eq class 'note)
+                        'mevedel-view-tool-metadata
+                      'mevedel-view-tool-warning)))
     (let* ((attempts (or (plist-get summary :attempt-count) 0))
            (started (or (plist-get summary :started-count) 0))
            (refused (or (plist-get summary :refused-count) 0))
@@ -2070,11 +2079,11 @@ Return nil when HEADER is not a `Tool: argument' style line."
         (setq details (nreverse details)))
       (mevedel-view--operation-line
        "!"
-       'mevedel-view-tool-warning
+       face
        "Sandbox:"
        (string-join details " · ")
        nil
-       'mevedel-view-tool-warning))))
+       face))))
 
 (defun mevedel-view--rendering-header-block (rendering)
   "Return RENDERING's header plus any durable sandbox disclosure."
@@ -2668,13 +2677,11 @@ system reminder wrappers."
   (let ((cleaned (mevedel-view--strip-render-data-display-text text)))
     (setq cleaned (mevedel-view--strip-system-reminder-blocks cleaned))
     (setq cleaned (mevedel-view--strip-tool-blocks-from-reasoning cleaned))
-    (setq cleaned (replace-regexp-in-string
-                   "#\\+\\(?:begin\\|end\\)_reasoning[^\n]*\n?" "" cleaned))
-    (setq cleaned (replace-regexp-in-string
-                   "#\\+begin_tool[^\n]*\n?" "" cleaned))
-    (setq cleaned (replace-regexp-in-string
-                   "#\\+end_tool[^\n]*\n?" "" cleaned))
-    cleaned))
+    ;; One pass over the marker lines rather than three.  Each
+    ;; `replace-regexp-in-string' copies the whole string, and reasoning
+    ;; text runs to thousands of lines while every redraw re-cleans it.
+    (replace-regexp-in-string
+     "#\\+\\(?:begin\\|end\\)_\\(?:reasoning\\|tool\\)[^\n]*\n?" "" cleaned)))
 
 (defun mevedel-view--strip-render-data-display-text (text)
   "Return TEXT without hidden render-data side-channel scaffolding."
@@ -2921,15 +2928,35 @@ or org scaffolding markers)."
     (with-current-buffer data-buf
       (let* ((text (buffer-substring-no-properties seg-start seg-end))
              (cleaned (mevedel-view--clean-reasoning-text text))
-             (lines (split-string cleaned "\n" t "[ \t]+")))
-        (if lines
+             (count (mevedel-view--nonblank-line-count cleaned)))
+        (if (> count 0)
             (concat
              "  "
              (propertize mevedel-view--thinking-glyph
                          'font-lock-face 'mevedel-view-thinking-marker)
-             (propertize (format "Thinking... (%d lines)" (length lines))
+             (propertize (format "Thinking... (%d lines)" count)
                          'font-lock-face 'mevedel-view-thinking-summary))
           "")))))
+
+(defun mevedel-view--nonblank-line-count (text)
+  "Return the number of non-blank lines in TEXT.
+
+Counts in place.  The summary needs only the number, and building the
+list of lines to take its length allocated one string per line of a
+reasoning block that reaches thousands of lines -- on every redraw."
+  (let ((count 0) (start 0) (length (length text)))
+    (while (< start length)
+      (let* ((newline (string-search "\n" text start))
+             (end (or newline length))
+             (blank t)
+             (index start))
+        (while (and blank (< index end))
+          (unless (memq (aref text index) '(?\s ?\t))
+            (setq blank nil))
+          (setq index (1+ index)))
+        (unless blank (setq count (1+ count)))
+        (setq start (if newline (1+ newline) length))))
+    count))
 
 
 ;;
@@ -5073,15 +5100,22 @@ reader opens the group when they want to know what."
   "Return non-nil when ENTRY may fold into a grouped activity row.
 Rows that demand individual presentation stay out: agent handles and
 other non-tool vtypes, compound tools with their own nested rows, rows
-carrying hook audits or a sandbox disclosure, rows their renderer wants
-expanded or compact, coalesced rows, and renderer fallbacks."
+carrying hook audits or a sandbox warning, rows their renderer wants
+expanded or compact, coalesced rows, and renderer fallbacks.
+
+A `note'-class sandbox summary folds like any other row.  It restates
+the session's standing confinement configuration, which already warned
+once on its own, and a nested row does not carry the summary -- so the
+note is dropped rather than repeated one fold deeper."
   (let ((rendering (plist-get entry :rendering)))
     (and rendering
          (= (plist-get entry :count) 1)
          (eq (or (plist-get rendering :vtype) 'tool-summary) 'tool-summary)
          (null (plist-get rendering :child-calls))
          (null (plist-get rendering :hook-audits))
-         (null (plist-get rendering :sandbox-summary))
+         (memq (mevedel-execution-telemetry-sandbox-summary-class
+                (plist-get rendering :sandbox-summary))
+               '(nil note))
          (not (plist-get rendering :force-expanded-p))
          (not (and (plist-member rendering :expandable-p)
                    (not (plist-get rendering :expandable-p))))
