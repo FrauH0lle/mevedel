@@ -773,6 +773,37 @@
              request-end goal-save goal-retry)))))
     (should-not drained)))
 
+  :doc "transport rejection still performs local failure admission cleanup"
+  (let* ((chat-buf (generate-new-buffer " *mevedel-turn-rejected*"))
+         (request (mevedel-request--create :id "rejected"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf
+                           :mevedel-request-id "rejected")))
+         events)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--current-request request))
+          (cl-letf (((symbol-function 'mevedel--turn-commit) #'ignore)
+                    ((symbol-function 'mevedel-transport-run-when-idle)
+                     (lambda (&rest _) nil))
+                    ((symbol-function
+                      'mevedel--turn-restore-permission-mode)
+                     (lambda (_) (push 'restore events)))
+                    ((symbol-function 'mevedel--turn-fail-pending-input)
+                     (lambda (_) (push 'pending-input-failure events)))
+                    ((symbol-function 'mevedel--turn-end-request)
+                     (lambda (_)
+                       (push 'request-end events)
+                       (with-current-buffer chat-buf
+                         (setq mevedel--current-request nil)))))
+            (mevedel--fail-turn fsm 'aborted))
+          (should (equal '(restore pending-input-failure request-end)
+                         (nreverse events)))
+          (with-current-buffer chat-buf
+            (should-not mevedel--current-request)))
+      (kill-buffer chat-buf)))
+
   :doc "error settlement tears down only its request-owned state"
   (let* ((session (mevedel-session--create
                    :name "turn-failure-isolation"

@@ -8,11 +8,6 @@
 
 ;;; Code:
 
-;; `mevedel-utilities'
-(declare-function mevedel--truncate-display
-                  "mevedel-utilities" (text width &optional ellipsis))
-(autoload 'mevedel--truncate-display "mevedel-utilities")
-
 (eval-when-compile
   (require 'cl-lib)
   (require 'tabulated-list))
@@ -82,6 +77,11 @@
 (declare-function mevedel-tools--tool-search
                   "mevedel-tools" (callback query &optional load))
 (defvar mevedel-deferred-tool-ttl)
+
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
 
 ;; `tabulated-list'
 (declare-function tabulated-list-mode "tabulated-list" ())

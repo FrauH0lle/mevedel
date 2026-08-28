@@ -51,11 +51,6 @@
 
 ;;; Code:
 
-;; `mevedel-utilities'
-(declare-function mevedel--truncate-display
-                  "mevedel-utilities" (text width &optional ellipsis))
-(autoload 'mevedel--truncate-display "mevedel-utilities")
-
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-codec)
 
@@ -418,10 +413,15 @@
 (autoload 'mevedel-transcript-restore-properties "mevedel-transcript-restore")
 
 ;; `mevedel-utilities'
+(declare-function mevedel--call-with-bare-transcript-mode
+                  "mevedel-utilities" (function))
 (declare-function mevedel--forget-place "mevedel-utilities" nil)
 (declare-function mevedel--normalize-message-text "mevedel-utilities" (text))
+(declare-function mevedel--transcript-org-mode "mevedel-utilities" nil)
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
+(autoload 'mevedel--call-with-bare-transcript-mode "mevedel-utilities")
 (autoload 'mevedel--forget-place "mevedel-utilities")
+(autoload 'mevedel--transcript-org-mode "mevedel-utilities")
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" nil)
@@ -647,21 +647,13 @@ reads live."
     ;; would renew the lease -- target I/O, and a warning when the lease
     ;; cannot be renewed -- to write nothing at all.  The four queues are
     ;; struct slots, so asking costs nothing.
-    (if (mevedel-session-persistence--diagnostics-pending-p session)
-        ;; The function, not the macro that wraps it: a macro has to be
-        ;; defined when this file is compiled, and an autoload does not
-        ;; make it so -- the call compiles as an ordinary function call and
-        ;; fails at runtime with `invalid-function'.
+    (if (or (mevedel-session-telemetry-pending session)
+            (mevedel-session-hook-log-pending session)
+            (mevedel-session-repair-log-pending session)
+            (mevedel-session-permission-log-pending session))
         (mevedel-session-publication-call-with-diagnostic-batch
          session flush)
       (funcall flush))))
-
-(defun mevedel-session-persistence--diagnostics-pending-p (session)
-  "Return non-nil when any of SESSION's diagnostic logs has queued content."
-  (or (and (mevedel-session-telemetry-pending session) t)
-      (and (mevedel-session-hook-log-pending session) t)
-      (and (mevedel-session-repair-log-pending session) t)
-      (and (mevedel-session-permission-log-pending session) t)))
 
 (defun mevedel-session-persistence-flush-diagnostic-logs (session)
   "Flush SESSION diagnostics, keeping target I/O off the caller's path.
@@ -1274,8 +1266,28 @@ restoration and reveal timers."
   (let* ((so-long-predicate #'ignore)
          ;; Bound around the visit so a stale entry cannot move point either.
          (save-place-mode nil)
-         (buffer (find-file-noselect file)))
+         (normal-mode-function (symbol-function 'normal-mode))
+         (set-auto-mode-function (symbol-function 'set-auto-mode))
+         (buffer
+          (cl-letf (((symbol-function 'normal-mode)
+                     (lambda (&optional find-file)
+                       ;; `delay-mode-hooks' covers derived-mode hooks but
+                       ;; `kill-all-local-variables' runs this one directly.
+                       (when (equal buffer-file-name file)
+                         (setq-local change-major-mode-hook nil))
+                       (funcall normal-mode-function find-file)))
+                    ((symbol-function 'set-auto-mode)
+                     (lambda (&optional keep-mode-if-same)
+                       ;; `normal-mode' cleared its temporary local binding
+                       ;; before dispatching to the selected major mode.
+                       (when (equal buffer-file-name file)
+                         (setq-local change-major-mode-hook nil))
+                       (funcall set-auto-mode-function keep-mode-if-same))))
+            (mevedel--call-with-bare-transcript-mode
+             (lambda () (find-file-noselect file))))))
     (with-current-buffer buffer
+      (unless (derived-mode-p 'org-mode)
+        (mevedel--transcript-org-mode))
       ;; The let-binding only covers the visit.  Keep native inhibition active
       ;; across every later major-mode change too.
       (mevedel-session-artifacts-inhibit-so-long)

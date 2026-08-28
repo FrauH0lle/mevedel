@@ -157,6 +157,11 @@
 (declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p
+                  "mevedel-transport" (&optional path))
+(autoload 'mevedel-transport-busy-p "mevedel-transport")
+
 ;; `mevedel-turn'
 (declare-function mevedel-request-push-canceller
                   "mevedel-turn" (request canceller))
@@ -484,12 +489,14 @@ process identity and can only be acknowledged manually.
 Return non-nil when the block was cleared."
   (when-let* ((outcome (mevedel-execution--state-unknown-outcome
                         (mevedel-execution--state-for-session session)))
+              (workdir (plist-get outcome :workdir))
+              ((not (mevedel-transport-busy-p workdir)))
               ((eq 'dead
                    (condition-case nil
                        (mevedel-execution-process-remote-group-status
                         (plist-get outcome :group-id)
                         (plist-get outcome :group-start-time)
-                        (plist-get outcome :workdir))
+                        workdir)
                      (error nil)))))
     (condition-case nil
         (progn

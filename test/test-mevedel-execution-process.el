@@ -521,31 +521,5 @@
       (mevedel-execution-process--delete-spool "/tmp/spool")
       (should (equal "/tmp/spool" deleted)))))
 
-(mevedel-deftest mevedel-execution-process--executable-found-p ()
-  ,test
-  (test)
-
-  :doc "a repeat lookup is served from memory, positive and negative alike"
-  ;; Shares `mevedel--executable-cache' with the filesystem tools: both
-  ;; probe on the hot path, from inside the curl sentinel TRAMP re-runs.
-  (let ((lookups 0))
-    (unwind-protect
-        (cl-letf (((symbol-function 'executable-find)
-                   (lambda (name &rest _)
-                     (setq lookups (1+ lookups))
-                     (and (equal name "bash") "/bin/bash"))))
-          (clrhash mevedel--executable-cache)
-          (should (mevedel-execution-process--executable-found-p
-                   "bash" "/mevedelmock:host:"))
-          (should-not (mevedel-execution-process--executable-found-p
-                       "nope" "/mevedelmock:host:"))
-          (should (= 2 lookups))
-          (should (mevedel-execution-process--executable-found-p
-                   "bash" "/mevedelmock:host:"))
-          (should-not (mevedel-execution-process--executable-found-p
-                       "nope" "/mevedelmock:host:"))
-          (should (= 2 lookups)))
-      (clrhash mevedel--executable-cache))))
-
 (provide 'test-mevedel-execution-process)
 ;;; test-mevedel-execution-process.el ends here

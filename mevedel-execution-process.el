@@ -535,14 +535,6 @@ Incomplete identity, an unreachable target, or an unexpected exit is
       (when-let* ((path (mevedel-execution-process--child-spool-path child)))
         (mevedel-execution-process--delete-spool path)))))
 
-(defun mevedel-execution-process--executable-found-p (executable remote)
-  "Return non-nil when EXECUTABLE resolves on REMOTE.
-
-Cached through `mevedel--executable-find', shared with the filesystem
-tools rather than kept per module: both ask on the hot path, and both
-paid a full remote PATH walk for the answer."
-  (and (mevedel--executable-find executable remote) t))
-
 (defun mevedel-execution-process--delete-spool (path)
   "Delete spool PATH, deferring the deletion while the transport is busy.
 
@@ -813,8 +805,7 @@ deferred work, so that case deletes immediately rather than leak."
             (setq default-directory workdir)
             (unless (and (stringp executable)
                          (if remote
-                             (mevedel-execution-process--executable-found-p
-                              executable remote)
+                             (mevedel--executable-find executable remote)
                            (executable-find executable)))
               (signal 'file-missing (list "Executable not found" executable)))
             (setf (mevedel-execution-process--child-launch-attempted-p child)

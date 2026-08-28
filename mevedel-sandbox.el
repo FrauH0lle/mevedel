@@ -11,13 +11,6 @@
 
 ;;; Code:
 
-;; `mevedel-transport'
-(declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
-(declare-function mevedel-transport-run-when-idle
-                  "mevedel-transport" (key path thunk &optional on-cancel))
-(autoload 'mevedel-transport-busy-p "mevedel-transport")
-(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
-
 (require 'cl-lib)
 (require 'mevedel-permission-mode)
 
@@ -64,6 +57,13 @@
 (declare-function mevedel-session--set-sandbox-mode
                   "mevedel-structs" (session mode))
 (declare-function mevedel-session-sandbox-mode "mevedel-structs" (cl-x) t)
+
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk &optional on-cancel))
+(autoload 'mevedel-transport-busy-p "mevedel-transport")
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 
 ;;
@@ -524,12 +524,9 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
 (defun mevedel-sandbox-cleanup (preparation)
   "Remove unchanged synthetic mount targets owned by PREPARATION.
 
-Teardown is reached from the child\'s terminal settlement, which runs
-from its sentinel and from the settle timer -- inside whatever remote
-command those interrupted.  Every step here is target I/O: an existence
-test, an attribute read, a mode change, a directory listing and the
-removal itself.  Issued from there they land on a connection that
-already has a command in flight, and the two cross replies.
+Teardown can run from a sentinel or settle timer while a remote command is
+active.  Every cleanup step is target I/O, so issuing it there can cross the
+two commands' replies.
 
 Nothing waits on a mount target being gone, so a busy transport defers
 the whole cleanup rather than nesting.  A disabled transport drops

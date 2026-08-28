@@ -58,6 +58,11 @@
                   "mevedel-tool-fs-search"
                   (name args result _render-data))
 
+;; `mevedel-utilities'
+(declare-function mevedel--executable-find
+                  "mevedel-utilities" (name &optional remote))
+(autoload 'mevedel--executable-find "mevedel-utilities")
+
 ;; `mevedel-workspace'
 (defvar mevedel--workspace)
 
@@ -211,11 +216,6 @@ addressable locator."
   (if (and (proper-list-p result) (plist-member result :result))
       result
     (list :result result)))
-
-;; `mevedel-utilities'
-(declare-function mevedel--executable-find
-                  "mevedel-utilities" (name &optional remote))
-(autoload 'mevedel--executable-find "mevedel-utilities")
 
 (defun mevedel-tool-fs-executable-find (name path)
   "Find executable NAME in PATH's execution target.

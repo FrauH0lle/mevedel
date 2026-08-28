@@ -236,6 +236,15 @@ overwrite an invalid file; fix it to the current
 `(:rules (...) :resource-grants (...))` shape first. Missing files are valid
 empty stores.
 
+Before each permission-controlled tool, mevedel refreshes both stores once and
+uses that snapshot for every rule and resource-grant lookup in the invocation.
+A remote refresh waits until the transport is idle, so it cannot re-enter a
+TRAMP command already in flight. Thus an external edit or revocation, including
+one made by another Emacs in a different session for the same project, governs
+the next tool admitted by this Emacs. An already admitted tool keeps its prior
+decision. Frozen `/btw` conversations retain their documented creation-time
+authority snapshot.
+
 Default allowed roots are the workspace root, the system temporary directory,
 configured memory roots, and manually configured additional roots. A native
 filesystem operation outside those roots prompts for exact `read` or `write`

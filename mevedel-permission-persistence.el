@@ -68,6 +68,14 @@
 (defvar mevedel--session)
 (defvar mevedel-user-dir)
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p
+                  "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk &optional on-cancel))
+(autoload 'mevedel-transport-busy-p "mevedel-transport")
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
+
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
@@ -281,17 +289,9 @@ Return nil when any entry is malformed or contains a client-specific target."
 (defvar mevedel-permission--store-cache (make-hash-table :test #'equal)
   "Permission store reads, keyed by (FILE . TARGET-PREFIX).
 
-The store is consulted on every tool call -- twice, for the global and the
-project file -- and each read is a `file-exists-p\', a `file-readable-p\'
-and an `insert-file-contents\'.  On a remote workspace that is six round
-trips per tool call, issued from inside gptel\'s curl sentinel, which
-TRAMP\'s wait loop re-runs; the nested read then lands on a connection that
-already has a command in flight and parses somebody else\'s reply.
-
-`mevedel-permission-persistence-write-store\' clears this, so a permission
-the user grants takes effect at once.  A store edited by a different Emacs
-is picked up when that clears it or when this one restarts -- the trade for
-not re-reading the file on the dispatch path.")
+The tool permission step refreshes both stores once before building its
+decision context.  The cache then shares that snapshot across the rule and
+resource-grant lookups for the invocation.")
 
 (defun mevedel-permission--store-cache-key (file target)
   "Return the cache key for FILE read against TARGET."
@@ -367,10 +367,7 @@ TARGET restores portable target paths when non-nil."
 (defun mevedel-permission-validate-persistent-stores (workspace)
   "Warn once per invalid global or WORKSPACE permission store version.
 
-Reads past `mevedel-permission--store-cache\'.  This is a deliberate check
-of what is on disk, run at workspace setup rather than on the dispatch
-path, and it is the one caller that must notice a store edited by hand or
-by another Emacs."
+Reads past `mevedel-permission--store-cache\' and replaces its snapshot."
   (let ((target (mevedel-permission--workspace-target workspace)))
     (dolist (entry
              (list (cons (file-name-concat mevedel-user-dir "permissions.el")
@@ -381,14 +378,35 @@ by another Emacs."
              (result (mevedel-permission--read-store-file-uncached
                       file (cdr entry)))
              (status (plist-get result :status)))
-        (remhash (mevedel-permission--store-cache-key file (cdr entry))
-                 mevedel-permission--store-cache)
+        (puthash (mevedel-permission--store-cache-key file (cdr entry))
+                 result mevedel-permission--store-cache)
         (when (eq status 'invalid)
           (mevedel--warn-once
            (list 'permission-store-invalid file
                  (mevedel-permission--store-version file))
            "Invalid permission store %s (%s); expected (:rules (...) :resource-grants (...)). Authority from this file is disabled until fixed"
            file (plist-get result :reason)))))))
+
+(defun mevedel-permission-persistence-refresh
+    (workspace continuation &optional on-cancel)
+  "Refresh WORKSPACE permission stores, then call CONTINUATION.
+
+Remote refresh waits for an idle transport.  ON-CANCEL runs instead when
+queued work is cancelled before it starts."
+  (let* ((file (mevedel-permission-persistence-file workspace))
+         (refresh
+          (lambda ()
+            (mevedel-permission-validate-persistent-stores workspace)
+            (funcall continuation))))
+    (if (mevedel-transport-busy-p file)
+        (or (mevedel-transport-run-when-idle
+             (list 'permission-store-refresh (gensym))
+             file refresh on-cancel)
+            (progn
+              (when on-cancel (funcall on-cancel))
+              nil))
+      (funcall refresh)
+      t)))
 
 (defun mevedel-permission-persistence-write-store (file store &optional target)
   "Write permission STORE plist to FILE."

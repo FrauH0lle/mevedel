@@ -804,6 +804,25 @@
           (should-not (mevedel-execution-reprove-unknown-outcome session))
           (should (mevedel-execution-mutation-refused-p session)))
       (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
+
+  :doc "a busy transport leaves the block in place without probing the target"
+  (let* ((root (make-temp-file "mevedel-managed-busy-reprove-" t))
+         (session (test-mevedel-execution--session root))
+         (state (mevedel-execution--state-for-session session)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-transport-busy-p)
+                   (lambda (&optional _) t))
+                  ((symbol-function
+                    'mevedel-execution-process-remote-group-status)
+                   (lambda (&rest _)
+                     (error "Busy transport must not reach the target"))))
+          (setf (mevedel-execution--state-unknown-outcome state)
+                '(:group-id 42 :group-start-time "981"
+                  :workdir "/ssh:host:/project/"))
+          (should-not (mevedel-execution-reprove-unknown-outcome session))
+          (should (mevedel-execution-mutation-refused-p session)))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution--artifact-address

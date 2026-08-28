@@ -135,7 +135,7 @@
       (mevedel-test--with-captured-diagnostics nil
         (should (equal "src/main.py"
                        (mevedel-tool-fs-display-path
-                        (concat root "src/main.py"))))
+                        (file-name-concat root "src/main.py"))))
         (should (= 0 stats)))))
 
   :doc "a path outside the root falls back to its base name"

@@ -1344,12 +1344,12 @@ state or publication head."
   t)
 
 (defvar mevedel-session-publication--diagnostic-batch nil
-  "Non-nil while diagnostic appends share one caller-held reservation.
+  "The session and state of a caller-held diagnostic reservation.
 
-`open' means the caller holds a reserved lease and an append should write
-straight to the target.  `unavailable' means the caller established that
-the lease cannot carry diagnostics now, so every append in the batch
-declines without re-testing.")
+The value is (SESSION . STATE).  `open' means the caller holds SESSION's
+reserved lease and its appends should write straight to the target.
+`unavailable' means the caller established that SESSION's lease cannot carry
+diagnostics now, so its appends decline without re-testing.")
 
 (defun mevedel-session-publication-call-with-diagnostic-batch (session function)
   "Call FUNCTION with SESSION's diagnostic appends sharing one lease.
@@ -1370,7 +1370,8 @@ An append that fails inside the batch declines rather than signalling, so
 one unwritable log cannot abort the others; its caller retains the content
 for the next flush, which is what a nil return already means to it."
   (cond
-   (mevedel-session-publication--diagnostic-batch (funcall function))
+   ((eq (car-safe mevedel-session-publication--diagnostic-batch) session)
+    (funcall function))
    ;; A session that does not publish through the lease writes its
    ;; diagnostics directly, so reserving one would renew a lease nothing
    ;; here is going to use -- target I/O, and a warning when the session
@@ -1382,24 +1383,20 @@ for the next flush, which is what a nil return already means to it."
                (mevedel-session-publication-active-p session)
                (not (mevedel-session-durability-lease-renew session))
                (not (mevedel-session-durability-lease-owned-p session))))
-    (let ((mevedel-session-publication--diagnostic-batch 'unavailable))
+    (let ((mevedel-session-publication--diagnostic-batch
+           (cons session 'unavailable)))
       (funcall function)))
    (t
     (mevedel-session-durability-call-with-reserved-lease
      session
      (lambda ()
-       (prog1 (let ((mevedel-session-publication--diagnostic-batch 'open))
+       (prog1 (let ((mevedel-session-publication--diagnostic-batch
+                     (cons session 'open)))
                 (funcall function))
          ;; A critical publisher may have queued while TRAMP handled the
          ;; diagnostic I/O.  It retains precedence.
          (when (mevedel-session-publication-queue session)
            (mevedel-session-publication--drain session nil))))))))
-
-(defmacro mevedel-session-publication-with-diagnostic-batch (session &rest body)
-  "Run BODY with SESSION's diagnostic appends sharing one reserved lease."
-  (declare (indent 1) (debug t))
-  `(mevedel-session-publication-call-with-diagnostic-batch
-    ,session (lambda () ,@body)))
 
 (defun mevedel-session-publication-append-diagnostic (session path content)
   "Append diagnostic CONTENT to PATH for portable project SESSION.
@@ -1417,8 +1414,11 @@ dominated remote-save allocations once a log grew to megabytes."
   (unless (and (stringp path) (stringp content))
     (error "Diagnostic publication requires string path and content"))
   (cond
-   ((eq mevedel-session-publication--diagnostic-batch 'unavailable) nil)
-   ((eq mevedel-session-publication--diagnostic-batch 'open)
+   ((and (eq (car-safe mevedel-session-publication--diagnostic-batch) session)
+         (eq (cdr mevedel-session-publication--diagnostic-batch) 'unavailable))
+    nil)
+   ((and (eq (car-safe mevedel-session-publication--diagnostic-batch) session)
+         (eq (cdr mevedel-session-publication--diagnostic-batch) 'open))
     ;; The caller holds the reservation and drains the queue itself.
     (mevedel-session-publication--artifact-for-session
      session (list :path path :content content))

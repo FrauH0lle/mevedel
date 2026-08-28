@@ -195,6 +195,9 @@
 (autoload 'mevedel-view--normalize-local-file-uri-path
   "mevedel-view-markdown")
 
+;; `mevedel-view-path'
+(declare-function mevedel-view-path-teardown "mevedel-view-path" ())
+
 ;; `mevedel-view-render'
 (declare-function mevedel-view--after-header-position
                   "mevedel-view-render" ())
@@ -839,6 +842,8 @@ kill hook sees nil and exits without re-entering this function."
   ;; included: a live timer holding a killed buffer is exactly the
   ;; leaked state the test isolation rule forbids, and outside tests it
   ;; is a needless wakeup.
+  (when (fboundp 'mevedel-view-path-teardown)
+    (mevedel-view-path-teardown))
   (mevedel-view--stop-spinner-timer)
   (mevedel-view-render-invalidate-live-tail)
   (when (and (boundp 'mevedel-view--control-transfer-timer)

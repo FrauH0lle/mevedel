@@ -603,11 +603,14 @@ this waits.  ON-CANCEL runs if transport teardown cancels the queued chain."
          (buffer (mevedel--turn-buffer fsm)))
     (unless request-id
       (error "Cannot defer turn without a request identity"))
-    (mevedel-transport-run-when-idle
-     (list 'turn-settlement request-id)
-     (and buffer (buffer-local-value 'default-directory buffer))
-     (lambda () (mevedel--run-turn-steps fsm steps))
-     on-cancel)))
+    (unless
+        (mevedel-transport-run-when-idle
+         (list 'turn-settlement request-id)
+         (and buffer (buffer-local-value 'default-directory buffer))
+         (lambda () (mevedel--run-turn-steps fsm steps))
+         on-cancel)
+      (when on-cancel
+        (funcall on-cancel)))))
 
 (defun mevedel--turn-publication-pending-p (fsm)
   "Return non-nil when FSM's session has failed critical publication."
@@ -790,33 +793,37 @@ also autosaves, and it reaches here from the same process sentinel."
    ((mevedel--turn-lost-p fsm)
     (mevedel--turn-settle-lost fsm))
    (t
-    (mevedel--turn-commit fsm)
+   (mevedel--turn-commit fsm)
     (mevedel--turn-stamp-settled fsm)
-    (mevedel--defer-turn-steps
-     fsm
-     (append
-      (list (lambda (machine)
-              (mevedel--turn-record-settlement machine status))
-            (lambda (machine)
-              (mevedel--turn-settle-plan-handoff machine status))
-            #'mevedel-compact-estimation-record-token-baseline
-            (lambda (machine)
-              (mevedel-goal-settle-failure machine status)))
-      (and (eq status 'error)
-           (list #'mevedel--turn-record-request-failure
-                 #'mevedel--turn-autosave))
-      (list (lambda (machine)
-              (mevedel--run-turn-terminal-hook
-               machine 'StopFailure status))
-            #'mevedel--turn-restore-permission-mode
-            #'mevedel--turn-fail-pending-input
-            #'mevedel--turn-end-request
-            (lambda (machine)
-              (mevedel--turn-after-publication
-               #'mevedel-goal-persist-failure machine))
-            (lambda (machine)
-              (mevedel--turn-after-publication
-               #'mevedel-goal-dispatch-after-turn machine))))))))
+    (let ((admission-cleanup
+           (list #'mevedel--turn-restore-permission-mode
+                 #'mevedel--turn-fail-pending-input
+                 #'mevedel--turn-end-request)))
+      (mevedel--defer-turn-steps
+       fsm
+       (append
+        (list (lambda (machine)
+                (mevedel--turn-record-settlement machine status))
+              (lambda (machine)
+                (mevedel--turn-settle-plan-handoff machine status))
+              #'mevedel-compact-estimation-record-token-baseline
+              (lambda (machine)
+                (mevedel-goal-settle-failure machine status)))
+        (and (eq status 'error)
+             (list #'mevedel--turn-record-request-failure
+                   #'mevedel--turn-autosave))
+        (list (lambda (machine)
+                (mevedel--run-turn-terminal-hook
+                 machine 'StopFailure status)))
+        admission-cleanup
+        (list (lambda (machine)
+                (mevedel--turn-after-publication
+                 #'mevedel-goal-persist-failure machine))
+              (lambda (machine)
+                (mevedel--turn-after-publication
+                 #'mevedel-goal-dispatch-after-turn machine))))
+       (lambda ()
+         (mevedel--run-turn-steps fsm admission-cleanup)))))))
 
 
 (defun mevedel--handler-name (handler)

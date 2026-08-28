@@ -9,32 +9,30 @@
 
 ;;; Code:
 
-;; `mevedel-utilities'
-(declare-function mevedel--truncate-display
-                  "mevedel-utilities" (text width &optional ellipsis))
-(autoload 'mevedel--truncate-display "mevedel-utilities")
-
 (require 'cl-lib)
 
 (require 'mevedel-pipeline)
 
 ;; `gptel-request'
-(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
-
-;; `mevedel-utilities'
-(declare-function mevedel--warn-once
-                  "mevedel-utilities" (key format &rest args))
-(autoload 'mevedel--warn-once "mevedel-utilities")
 (declare-function gptel-get-tool "ext:gptel-request" (path))
-(declare-function gptel-tool-p "ext:gptel-request" (object))
-(declare-function gptel-tool-name "ext:gptel-request" (tool))
-(declare-function gptel-tool-description "ext:gptel-request" (tool))
+(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
 (declare-function gptel-tool-args "ext:gptel-request" (tool))
 (declare-function gptel-tool-async "ext:gptel-request" (tool))
 (declare-function gptel-tool-category "ext:gptel-request" (tool))
+(declare-function gptel-tool-description "ext:gptel-request" (tool))
 (declare-function gptel-tool-function "ext:gptel-request" (tool))
 (declare-function gptel-tool-include "ext:gptel-request" (tool))
+(declare-function gptel-tool-name "ext:gptel-request" (tool))
+(declare-function gptel-tool-p "ext:gptel-request" (object))
 (defvar gptel--known-tools)
+
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
+(autoload 'mevedel--warn-once "mevedel-utilities")
 
 
 ;;

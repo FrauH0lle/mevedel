@@ -8,11 +8,6 @@
 
 ;;; Code:
 
-;; `mevedel-utilities'
-(declare-function mevedel--truncate-display
-                  "mevedel-utilities" (text width &optional ellipsis))
-(autoload 'mevedel--truncate-display "mevedel-utilities")
-
 (eval-when-compile
   (require 'cl-lib)
   (require 'tabulated-list))
@@ -66,6 +61,11 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
 
 ;; `subr-x'
 (declare-function string-empty-p "subr-x" (string))

@@ -8,11 +8,6 @@
 
 ;;; Code:
 
-;; `mevedel-utilities'
-(declare-function mevedel--truncate-display
-                  "mevedel-utilities" (text width &optional ellipsis))
-(autoload 'mevedel--truncate-display "mevedel-utilities")
-
 (require 'cl-lib)
 (require 'seq)
 
@@ -41,6 +36,11 @@
 
 ;; `mevedel-turn'
 (declare-function mevedel-current-turn "mevedel-turn" (session))
+
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
 
 ;; `mevedel-view'
 (defvar mevedel-view--status-marker)

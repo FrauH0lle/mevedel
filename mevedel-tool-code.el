@@ -7,11 +7,6 @@
 
 ;;; Code:
 
-;; `mevedel-utilities'
-(declare-function mevedel--truncate-display
-                  "mevedel-utilities" (text width &optional ellipsis))
-(autoload 'mevedel--truncate-display "mevedel-utilities")
-
 (require 'cl-lib)
 
 (eval-when-compile
@@ -54,6 +49,11 @@
 (declare-function mevedel-tool-register "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
 (autoload 'mevedel-tool-truthy-p "mevedel-tool-registry")
+
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
 
 ;; `project'
 (declare-function project-current "project" (&optional maybe-prompt dir))

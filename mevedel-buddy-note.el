@@ -20,17 +20,17 @@
 
 ;;; Code:
 
-;; `mevedel-utilities'
-(declare-function mevedel--truncate-display
-                  "mevedel-utilities" (text width &optional ellipsis))
-(autoload 'mevedel--truncate-display "mevedel-utilities")
-
 (eval-when-compile
   (require 'cl-lib))
 (require 'seq)
 
 ;; `gptel'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
 
 
 ;;

@@ -3997,7 +3997,34 @@
           (should (eq permanent
                       (get 'so-long-predicate 'permanent-local))))
       (when (buffer-live-p opened)
-        (kill-buffer opened)))))
+        (kill-buffer opened))))
+
+  :doc "opens stored model output without hooks or Local Variables"
+  (let* ((file (make-temp-file "mevedel-bare-resume-" nil ".chat.org"
+                               "* Transcript\n\n# Local Variables:\n# fill-column: 12\n# End:\n"))
+         (ran nil)
+         (find-file-hook (list (lambda () (push 'find ran))))
+         (org-mode-hook (list (lambda () (push 'org ran))))
+         (change-hook (lambda () (push 'change ran)))
+         buffer diagnostics)
+    (unwind-protect
+        (progn
+          (add-hook 'change-major-mode-hook change-hook)
+          (mevedel-test--with-captured-diagnostics diagnostics
+            (setq buffer
+                  (mevedel-session-persistence--find-file-noselect file)))
+          (should (equal "" diagnostics))
+          (should-not ran)
+          (with-current-buffer buffer
+            (should (derived-mode-p 'org-mode))
+            (should (= 70 fill-column))
+            (should-not delayed-mode-hooks)))
+      (remove-hook 'change-major-mode-hook change-hook)
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-file file))))
 
 
 (mevedel-deftest mevedel-session-persistence/view-rerender ()

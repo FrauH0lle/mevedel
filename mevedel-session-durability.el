@@ -7,11 +7,6 @@
 
 ;;; Code:
 
-;; `mevedel-utilities'
-(declare-function mevedel--truncate-display
-                  "mevedel-utilities" (text width &optional ellipsis))
-(autoload 'mevedel--truncate-display "mevedel-utilities")
-
 (eval-when-compile
   (require 'mevedel-structs))
 
@@ -106,6 +101,11 @@
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p
                   "mevedel-transport" (&optional path))
+
+;; `mevedel-utilities'
+(declare-function mevedel--truncate-display
+                  "mevedel-utilities" (text width &optional ellipsis))
+(autoload 'mevedel--truncate-display "mevedel-utilities")
 
 
 ;; `mevedel-workspace'

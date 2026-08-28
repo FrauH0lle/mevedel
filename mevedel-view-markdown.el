@@ -13,25 +13,21 @@
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-expand-path
                   "mevedel-execution-target" (target path &optional directory))
+(declare-function mevedel-execution-target-prefix
+                  "mevedel-execution-target" (cl-x) t)
 (declare-function mevedel-execution-target-remote-p
                   "mevedel-execution-target" (target))
 (autoload 'mevedel-execution-target-expand-path "mevedel-execution-target")
-(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
-(declare-function mevedel-execution-target-prefix "mevedel-execution-target" (cl-x) t)
 (autoload 'mevedel-execution-target-prefix "mevedel-execution-target")
+(autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-session-artifacts'
-(declare-function mevedel-session-artifacts-artifact-present-p
-                  "mevedel-session-artifacts"
-                  (session logical &optional committed-only))
 (declare-function mevedel-session-artifacts-find-artifact-noselect
                   "mevedel-session-artifacts"
                   (session logical &optional inspection))
 (declare-function mevedel-session-artifacts-read-artifact
                   "mevedel-session-artifacts"
                   (session logical &optional committed-only))
-(autoload 'mevedel-session-artifacts-artifact-present-p
-  "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-find-artifact-noselect
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-read-artifact
@@ -48,15 +44,6 @@
                   "mevedel-session-publication" (session logical))
 (autoload 'mevedel-session-publication-uncommitted-artifact
   "mevedel-session-publication")
-
-;; `mevedel-file-state'
-(declare-function mevedel-file-cache-get "mevedel-file-state" (cache path))
-(autoload 'mevedel-file-cache-get "mevedel-file-state")
-
-;; `mevedel-transport'
-(declare-function mevedel-transport-run-when-idle
-                  "mevedel-transport" (key path thunk &optional on-cancel))
-(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
@@ -77,6 +64,7 @@
 (declare-function mevedel-view-table-rerender "mevedel-view-table"
                   (&optional window))
 
+(require 'mevedel-view-path)
 (require 'mevedel-view-table)
 (require 'text-property-search)
 
@@ -90,11 +78,8 @@
       path)))
 
 (defvar mevedel-view--linkify-path-regexp
-  ;; Match either an absolute /foo/bar/... path, or a relative segment that
-  ;; contains at least one slash (e.g. foo/bar.el, src/mod/file), or a
-  ;; slashless filename with an extension (e.g. foo.el, AGENTS.md).  The
-  ;; trailing `-' inside each character class stays last to avoid being
-  ;; parsed as a range delimiter.
+  ;; Absolute paths, relative paths containing a slash, or names with an
+  ;; extension.  Keep trailing `-' last in character classes.
   (concat "\\(?:[A-Za-z]:/[[:alnum:]_./+@~-]+"
           "\\|/[[:alnum:]_./+@~-]+"
           "\\|[[:alnum:]_.+@~-]+\\(?:/[[:alnum:]_./+@~-]+\\)+"
@@ -155,84 +140,19 @@ buffer."
                             (mevedel-workspace-root workspace))))
           (expand-file-name raw root))))))
 
-(defconst mevedel-view--path-absence-ttl 30
-  "Seconds an absent remote path stays memoized before re-verification.
-
-Only absence expires.  A path that exists keeps its memo for the buffer's
-life: a file deleted afterwards leaves a link that opens nothing, which is
-a far milder failure than a file the model just wrote staying unclickable
-because absence was cached forever.")
-
-(defvar-local mevedel-view--path-existence nil
-  "Remote path existence memo: PATH -> (EXISTS-P . RECORDED-AT).
-
-Decoration is on the redraw path and must never reach the target, so it
-answers from here and never stats.  `mevedel-view--verify-paths' fills it
-in from an idle timer, where deferral is safe.")
-
-(defvar-local mevedel-view--path-pending nil
-  "Remote paths decorated optimistically and still awaiting verification.")
-
-(defvar-local mevedel-view--path-verify-timer nil
-  "Idle timer coalescing this buffer's path verification pass.")
-
-(defun mevedel-view--path-known-p (path)
-  "Return non-nil when PATH is known to exist without consulting the target.
-
-Two sources, both in memory.  The workspace file cache holds every file
-mevedel has read or written, which is most of what tool output mentions, so
-the common path links on its first redraw with no wait.  Anything else waits
-for `mevedel-view--verify-paths' to record it."
-  (or (when-let* ((entry (and mevedel-view--path-existence
-                              (gethash path mevedel-view--path-existence))))
-        (car entry))
-      (when-let* ((session (bound-and-true-p mevedel--session))
-                  (workspace (ignore-errors
-                               (mevedel-session-workspace session)))
-                  (cache (ignore-errors
-                           (mevedel-workspace-file-cache workspace))))
-        (and (ignore-errors (mevedel-file-cache-get cache path)) t))))
-
-(defun mevedel-view--path-memo-fresh-p (path)
-  "Return non-nil when PATH's memo still answers.
-
-Only absence expires.  A path recorded present keeps its memo, so a file
-deleted later leaves a link that opens nothing -- far milder than a file the
-model just wrote staying unclickable because absence was cached forever."
-  (when-let* ((entry (and mevedel-view--path-existence
-                          (gethash path mevedel-view--path-existence))))
-    (or (car entry)
-        (< (- (float-time) (cdr entry)) mevedel-view--path-absence-ttl))))
-
-(defun mevedel-view--note-unverified-path (path)
-  "Queue PATH for the idle verification pass."
-  (unless (mevedel-view--path-memo-fresh-p path)
-    (cl-pushnew path mevedel-view--path-pending :test #'equal)
-    (mevedel-view--schedule-path-verification)))
-
 (defun mevedel-view--path-target (path)
-  "Return PATH's link target, or nil when it is not available.
+  "Return PATH's link target, or nil when it is unavailable.
 
-An ordinary existing file returns t.  An artifact in the active remote
-session returns `(SESSION . LOGICAL)' only when that logical path is staged
-or committed; fixed session-cache existence is ignored.
+An ordinary file returns t.  An available active-session artifact returns
+`(SESSION . LOGICAL)'.
 
 Answers entirely from memory.  This runs from a redraw timer,
-`mevedel-view--flush-scheduled-render', once per path-shaped token per
-redraw -- and TRAMP yields to timers between its send and its read, so a
-stat issued here lands inside whatever remote command the redraw
-interrupted.  The two commands then cross replies and
-`tramp-wait-for-regexp' spins forever waiting for a prompt that already
-went to the other one.
+`mevedel-view--flush-scheduled-render'; target I/O there can nest into an
+active TRAMP command and cross the two replies.
 
 An unverified remote path is therefore left undecorated rather than linked
-optimistically.  The existence check was never only cosmetic: the linkify
-regexp matches fragments out of foreign spellings -- `/mevedelmock' out of
-`/mevedelmock:host:/tmp/x', or a `r:/tmp/x' tail -- and qualifying those
-into the target names nothing.  Linking first and retracting later would
-put those fragments on screen as real buttons.  `mevedel-view--verify-paths'
-promotes a path once it has checked it from an idle timer, where the work
-can defer until the transport is free; the next redraw then links it."
+optimistically.  `mevedel-view--verify-paths' promotes it after an idle,
+deferrable check; the next redraw then links it."
   (when (stringp path)
     (let* ((session (bound-and-true-p mevedel--session))
            (target (and session
@@ -271,48 +191,6 @@ Both sources consulted here are already in memory."
   (or (and (mevedel-session-publication-uncommitted-artifact session logical) t)
       (when-let* ((publication (mevedel-session-publication session)))
         (and (assoc logical (plist-get publication :artifacts)) t))))
-
-(defun mevedel-view--schedule-path-verification ()
-  "Arm this buffer's idle path verification pass."
-  (unless (timerp mevedel-view--path-verify-timer)
-    (setq mevedel-view--path-verify-timer
-          (run-with-idle-timer
-           0.5 nil #'mevedel-view--verify-paths (current-buffer)))))
-
-(defun mevedel-view--verify-paths (buffer)
-  "Resolve BUFFER's optimistically decorated paths once the transport is idle.
-
-Deferred through `mevedel-transport-run-when-idle' rather than stated
-directly: this is a timer too, and the whole point is that it waits for the
-connection instead of nesting into it.  Nothing depends on the answer
-arriving promptly -- a link is merely decorated optimistically until it does."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (setq mevedel-view--path-verify-timer nil)
-      (when-let* ((pending (nreverse mevedel-view--path-pending)))
-        (setq mevedel-view--path-pending nil)
-        ;; ponytail: one round trip per path, once per path rather than once
-        ;; per redraw.  `mevedel-session-control-fs-run-program' batches N
-        ;; existence probes into one target process if this measures slow --
-        ;; at the cost of contending with publication for the control lock.
-        (mevedel-transport-run-when-idle
-         (list 'view-path-verify buffer) (car pending)
-         (lambda ()
-           (when (buffer-live-p buffer)
-             (with-current-buffer buffer
-               (progn
-                 (dolist (path pending)
-                   (let ((exists (ignore-errors (and (file-exists-p path) t))))
-                     (unless mevedel-view--path-existence
-                       (setq mevedel-view--path-existence
-                             (make-hash-table :test #'equal)))
-                     (puthash path (cons exists (float-time))
-                              mevedel-view--path-existence)))
-                 ;; No redecoration pass: an unverified path was never
-                 ;; linked, so nothing has to be retracted, and a turn
-                 ;; redraws constantly while it streams -- the next one
-                 ;; reads the memo and links what is now known.
-                 nil)))))))))
 
 (defun mevedel-view--linkify-path-action (button)
   "Open the file or published session artifact referenced by BUTTON."
