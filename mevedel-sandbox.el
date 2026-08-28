@@ -11,6 +11,13 @@
 
 ;;; Code:
 
+;; `mevedel-transport'
+(declare-function mevedel-transport-busy-p "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk &optional on-cancel))
+(autoload 'mevedel-transport-busy-p "mevedel-transport")
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
+
 (require 'cl-lib)
 (require 'mevedel-permission-mode)
 
@@ -515,6 +522,29 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
       (nreverse candidates))))
 
 (defun mevedel-sandbox-cleanup (preparation)
+  "Remove unchanged synthetic mount targets owned by PREPARATION.
+
+Teardown is reached from the child\'s terminal settlement, which runs
+from its sentinel and from the settle timer -- inside whatever remote
+command those interrupted.  Every step here is target I/O: an existence
+test, an attribute read, a mode change, a directory listing and the
+removal itself.  Issued from there they land on a connection that
+already has a command in flight, and the two cross replies.
+
+Nothing waits on a mount target being gone, so a busy transport defers
+the whole cleanup rather than nesting.  A disabled transport drops
+deferred work, so that case cleans up immediately rather than leaving
+the targets behind."
+  (if (and (mevedel-transport-busy-p
+            (plist-get (car (plist-get preparation :cleanup-paths)) :path))
+           (mevedel-transport-run-when-idle
+            (list 'sandbox-cleanup preparation)
+            (plist-get (car (plist-get preparation :cleanup-paths)) :path)
+            (lambda () (mevedel-sandbox--cleanup-now preparation))))
+      t
+    (mevedel-sandbox--cleanup-now preparation)))
+
+(defun mevedel-sandbox--cleanup-now (preparation)
   "Remove unchanged synthetic mount targets owned by PREPARATION."
   (dolist (target (reverse (plist-get preparation :cleanup-paths)))
     (let* ((path (plist-get target :path))
