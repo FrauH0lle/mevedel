@@ -226,6 +226,13 @@ per admitted mutation, and a session admits several per prompt.  A failed
 observation falls back to the full probe, which settles the blocked readiness
 that admission reports.
 
+A lost settlement records the target process-group identity, so a mutating
+request re-proves that group against the target before it is refused: an
+affirmative `dead` clears the block with no user action, while live,
+unreachable, or ambiguous keeps it. The durable latch restored across a
+restart carries no process identity and still needs
+`mevedel-retry-target-readiness`, which every refusal names.
+
 The unsettled-mutation latch is
 [`ADR 0098`](adr/0098-store-unsettled-mutation-in-the-session-lease.md); the
 one portable authority profile is

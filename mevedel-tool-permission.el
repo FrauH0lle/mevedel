@@ -22,8 +22,9 @@
                   "mevedel-bash-policy" (command))
 
 ;; `mevedel-execution'
-(declare-function mevedel-execution-mutation-blocked-p
+(declare-function mevedel-execution-mutation-refused-p
                   "mevedel-execution" (session))
+(defvar mevedel-execution-mutation-blocked-message)
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-decision-reason
@@ -549,9 +550,8 @@ context and typed reason."
     (cond
      ((and session
            (not (mevedel-tool-read-only-p tool))
-           (mevedel-execution-mutation-blocked-p session))
-      (funcall fail
-               "Mutating execution is blocked by an unknown remote outcome"))
+           (mevedel-execution-mutation-refused-p session))
+      (funcall fail mevedel-execution-mutation-blocked-message))
      ((null paths)
       (mevedel-tool-permission--step-one context next fail))
      (t
