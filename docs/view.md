@@ -210,9 +210,11 @@ reuses the compound-tool nested-row machinery: each call is a `tool-child`
 row rendered by its own tool's renderer with its own collapse state, and
 collapsing the group takes its rows with it. Rows that demand individual
 presentation — agent handles, compound tools, rows carrying hook audits or
-a sandbox line, rows their renderer wants expanded or compact, and
+a sandbox warning, rows their renderer wants expanded or compact, and
 coalesced rows — never fold into a group; they split the run around
-themselves. A group containing a failed call keeps its warning marker but
+themselves. A `note`-class sandbox line folds like any other row: nested
+rows do not carry the summary, so the note is dropped rather than repeated
+one level in. A group containing a failed call keeps its warning marker but
 starts collapsed.
 
 After an interactive ApplyPatch review settles, the applied patch row opens
