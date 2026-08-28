@@ -2670,10 +2670,52 @@ summary does not include preceding agent-result or tool output text."
           (delete-region start (point-max)))))
     (buffer-string)))
 
+(defconst mevedel-view--clean-reasoning-cache-size 24
+  "Reasoning-text cleanings retained by `mevedel-view--clean-reasoning-cache'.
+
+Sized for the completed reasoning blocks a transcript re-renders, not for
+history: each entry holds a whole cleaned block, and a miss costs only the
+work this cache exists to skip.")
+
+(defvar-local mevedel-view--clean-reasoning-cache nil
+  "Cleaned reasoning text, keyed by the raw text it was produced from.
+
+`mevedel-view--clean-reasoning-text' is a pure function of its argument, so
+equal input gives equal output and the raw text is a sound key.
+
+It earns its place on redraw.  A render walks every turn in the transcript,
+so each tick re-cleans every completed reasoning block as well as the live
+one -- four passes over each, allocating a fresh copy per pass.  Completed
+blocks do not change, so they hit; the streaming block grows on every tick
+and always misses, which is the one case the cache cannot help and does not
+try to.")
+
+(defun mevedel-view--clean-reasoning-cached (text)
+  "Return TEXT's cleaning from the buffer cache, or nil when absent."
+  (when mevedel-view--clean-reasoning-cache
+    (cdr (assoc text mevedel-view--clean-reasoning-cache))))
+
+(defun mevedel-view--clean-reasoning-remember (text cleaned)
+  "Record CLEANED as TEXT's cleaning, evicting the oldest entry."
+  (setq mevedel-view--clean-reasoning-cache
+        (cons (cons text cleaned)
+              (let ((kept (seq-take mevedel-view--clean-reasoning-cache
+                                    (1- mevedel-view--clean-reasoning-cache-size))))
+                (assoc-delete-all text kept))))
+  cleaned)
+
 (defun mevedel-view--clean-reasoning-text (text)
   "Strip org scaffolding markers from reasoning TEXT.
 Removes reasoning block markers, nested tool blocks, and generated
-system reminder wrappers."
+system reminder wrappers.
+
+Cached per buffer; see `mevedel-view--clean-reasoning-cache'."
+  (or (mevedel-view--clean-reasoning-cached text)
+      (mevedel-view--clean-reasoning-remember
+       text (mevedel-view--clean-reasoning-text-1 text))))
+
+(defun mevedel-view--clean-reasoning-text-1 (text)
+  "Return TEXT with reasoning scaffolding removed, without consulting a cache."
   (let ((cleaned (mevedel-view--strip-render-data-display-text text)))
     (setq cleaned (mevedel-view--strip-system-reminder-blocks cleaned))
     (setq cleaned (mevedel-view--strip-tool-blocks-from-reasoning cleaned))
