@@ -509,6 +509,32 @@ sentinel and the running command's reply is untouched. Nothing on this side can
 prevent it, so the mitigation is to hold fewer commands in flight, which is why
 the remote control-transfer poll is deliberately slow.
 
+Each such package can be stopped at its own door, and projectile is worth
+stopping: a remote session hits it on every temporary file any sentinel
+deletes. `mevedel-transport--depth` is non-zero exactly while a TRAMP
+operation is on the stack, so the intruding work can decline to run there:
+
+```elisp
+(with-eval-after-load 'projectile
+  (define-advice delete-file-projectile-remove-from-cache
+      (:around (fn filename &optional trash) skip-inside-remote-operation)
+    (if (and (bound-and-true-p mevedel-transport--depth)
+             (> mevedel-transport--depth 0))
+        nil
+      (funcall fn filename trash))))
+```
+
+The cache update is skipped only inside that window; a delete outside one
+maintains the cache as before, and the entry skipped is stale until the next
+`projectile-invalidate-cache`.
+
+Note what the test is *not*. Whether FILENAME looks remote decides nothing:
+the file a sentinel deletes is typically a local temporary, and it is
+projectile's *project root* that is remote, so the truename crosses the
+connection however the argument is spelled. The same mistake is available
+inside this package, and the transport's own state is the only reliable
+answer to "will this reach the target".
+
 Turn settlement is deferred as one unit for the same reason. gptel drives it
 from a process sentinel, which Emacs may dispatch from inside an unrelated
 remote operation. Only the turn commit — the single-use reservation fence,
