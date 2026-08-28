@@ -633,7 +633,34 @@
           (kill-buffer buffer)))
       (mevedel-workspace-clear-registry)
       (delete-file outside)
-      (delete-directory root t))))
+      (delete-directory root t)))
+
+  :doc "a remote root selects buffers without touching the target"
+  (let* ((root "/mevedelmock:host:/srv/project/")
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "remote-wfb"))
+         (inside (generate-new-buffer "wfb-inside"))
+         (outside (generate-new-buffer "wfb-outside"))
+         truenames)
+    (unwind-protect
+        ;; The scan runs on every tool call.  A `file-truename' here is a
+        ;; round trip per buffer on the connection the call is using.
+        (cl-letf (((symbol-function 'file-truename)
+                   (lambda (name &rest _)
+                     (push name truenames)
+                     name)))
+          (with-current-buffer inside
+            (setq buffer-file-name (concat root "src/main.el")))
+          (with-current-buffer outside
+            (setq buffer-file-name "/mevedelmock:host:/srv/other/main.el"))
+          (let ((found (mevedel-workspace-file-buffers workspace)))
+            (should (memq inside found))
+            (should-not (memq outside found)))
+          (should-not truenames))
+      (dolist (buffer (list inside outside))
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (mevedel-workspace-clear-registry))))
 
 (provide 'test-mevedel-workspace)
 ;;; test-mevedel-workspace.el ends here

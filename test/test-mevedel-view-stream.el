@@ -3596,6 +3596,19 @@
               (with-current-buffer data-buf
                 (mevedel-view-stream-render-response
                  (point-min) (point-max)))
+              ;; Decoration runs from a redraw timer and so never stats the
+              ;; target; a remote path is linked only once the verification
+              ;; pass has recorded it.  Drive that pass and redraw here
+              ;; rather than waiting on its idle timer.
+              (with-current-buffer view-buf
+                (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
+                           (lambda (_key _path thunk &optional _on-cancel)
+                             (funcall thunk)
+                             t)))
+                  (mevedel-view--verify-paths view-buf)))
+              (with-current-buffer data-buf
+                (mevedel-view-stream-render-response
+                 (point-min) (point-max)))
               (with-current-buffer view-buf
                 (goto-char (point-min))
                 (search-forward native-file)
