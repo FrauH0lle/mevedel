@@ -462,7 +462,17 @@ FACE defaults to `mevedel-view-spinner'."
                  (with-current-buffer buffer
                    (if (mevedel-view--spinner-active-p)
                        (mevedel-view--spinner-tick)
-                     (mevedel-view--stop-spinner-timer)))))))
+                     ;; Retire this timer, not whichever one the buffer
+                     ;; currently records.  The two differ once TRAMP's
+                     ;; suspension window drops an armed timer from
+                     ;; `timer-list': the arm guard then sees nothing
+                     ;; pending and arms a second, and a tick that
+                     ;; retired the recorded timer would cancel its
+                     ;; successor and leave itself running for the life
+                     ;; of the buffer.
+                     (cancel-timer timer)
+                     (when (eq timer mevedel-view--spinner-timer)
+                       (setq mevedel-view--spinner-timer nil))))))))
       (setq mevedel-view--spinner-timer timer))))
 
 (defun mevedel-view--refresh-spinner-frame-spans (property start end face)
