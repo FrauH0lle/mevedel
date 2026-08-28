@@ -643,8 +643,12 @@ reads live."
     ;; cannot be renewed -- to write nothing at all.  The four queues are
     ;; struct slots, so asking costs nothing.
     (if (mevedel-session-persistence--diagnostics-pending-p session)
-        (mevedel-session-publication-with-diagnostic-batch session
-          (funcall flush))
+        ;; The function, not the macro that wraps it: a macro has to be
+        ;; defined when this file is compiled, and an autoload does not
+        ;; make it so -- the call compiles as an ordinary function call and
+        ;; fails at runtime with `invalid-function'.
+        (mevedel-session-publication-call-with-diagnostic-batch
+         session flush)
       (funcall flush))))
 
 (defun mevedel-session-persistence--diagnostics-pending-p (session)
