@@ -4175,7 +4175,30 @@
           '(:attempt-count 1 :started-count 0 :refused-count 0
             :additional-read-count 0 :additional-write-count 0))))
     (should (string-match-p "1 child did not start" line))
-    (should-not (string-match-p "nil" line))))
+    (should-not (string-match-p "nil" line)))
+  :doc "renders a standing unconfined run as a note, not a warning"
+  (dolist (sandbox '(unavailable off))
+    (let ((line
+           (mevedel-view--sandbox-summary-line
+            (list :attempt-count 2 :started-count 2 :refused-count 0
+                  :sandbox sandbox :filesystem 'unrestricted
+                  :network 'unrestricted :proc nil
+                  :additional-read-count 0 :additional-write-count 0))))
+      (should (string-match-p "! Sandbox:" line))
+      (should (string-match-p "ran without confinement" line))
+      (should (eq 'mevedel-view-tool-metadata
+                  (get-text-property (string-match "!" line)
+                                     'font-lock-face line)))))
+  :doc "keeps a material deviation in the warning face"
+  (let ((line
+         (mevedel-view--sandbox-summary-line
+          '(:attempt-count 2 :started-count 1 :refused-count 0
+            :sandbox unavailable :filesystem unrestricted
+            :network unrestricted :proc nil
+            :additional-read-count 0 :additional-write-count 0))))
+    (should (eq 'mevedel-view-tool-warning
+                (get-text-property (string-match "!" line)
+                                   'font-lock-face line)))))
 
 (mevedel-deftest mevedel-view--rendering-header-block
   (:doc "hides persisted read-only sandbox metadata")
@@ -6223,7 +6246,18 @@
                  (list :count 1 :rendering rendering))))
   :doc "coalesced rows are not groupable"
   (should-not (mevedel-view--tool-group-entry-p
-               '(:count 2 :rendering (:header "h")))))
+               '(:count 2 :rendering (:header "h"))))
+  :doc "a note-class sandbox summary does not split the run"
+  (should (mevedel-view--tool-group-entry-p
+           '(:count 1
+             :rendering
+             (:header "Bash: ls"
+              :sandbox-summary
+              (:attempt-count 1 :started-count 1 :refused-count 0
+               :sandbox unavailable :filesystem unrestricted
+               :network unrestricted :proc nil
+               :additional-read-count 0
+               :additional-write-count 0))))))
 
 (mevedel-deftest mevedel-view--insert-tool-group ()
   ,test

@@ -221,18 +221,34 @@ requested command started, and REFUSED-P records a policy refusal."
                  (car cell) facts started-p refused-p))))))
 
 (defun mevedel-execution-telemetry-sandbox-summary-class (summary)
-  "Return `warning' when SUMMARY describes a material deviation."
+  "Return SUMMARY's disclosure class, or nil for the default boundary.
+
+`warning' marks a material deviation the reader has not already been told
+about.  `note' marks the standing consequence of the session's own
+confinement configuration: every child ran unconfined because the sandbox
+is unavailable under `best-effort' or switched off outright.  That state
+warns once per session when it is first hit, so repeating it per call is
+noise -- the note records it without claiming anything new went wrong."
   (and summary
-       (let ((attempts (or (plist-get summary :attempt-count) 0)))
+       (let ((attempts (or (plist-get summary :attempt-count) 0))
+             (sandbox (plist-get summary :sandbox)))
          (when
              (or (> (or (plist-get summary :additional-write-count) 0) 0)
                  (> (or (plist-get summary :refused-count) 0) 0)
                  (< (or (plist-get summary :started-count) 0) attempts)
-                 (not (eq (plist-get summary :sandbox) 'bubblewrap))
+                 (not (eq sandbox 'bubblewrap))
                  (not (eq (plist-get summary :filesystem) 'workspace-write))
                  (not (eq (plist-get summary :network) 'isolated))
                  (eq (plist-get summary :proc) 'host))
-           'warning))))
+           ;; An unconfined run is only a note when nothing else deviated:
+           ;; every attempt started, none was refused, and no additional
+           ;; write access was granted on top.
+           (if (and (memq sandbox '(unavailable off))
+                    (zerop (or (plist-get summary :additional-write-count) 0))
+                    (zerop (or (plist-get summary :refused-count) 0))
+                    (= (or (plist-get summary :started-count) 0) attempts))
+               'note
+             'warning)))))
 
 (defun mevedel-execution-telemetry--eask-command-p (command)
   "Return non-nil when COMMAND invokes Eask directly or through npx."
@@ -312,14 +328,26 @@ requested command started, and REFUSED-P records a policy refusal."
       (append (list time-program "-v" "-o" report "--") command))))
 
 (defun mevedel-execution-telemetry-mark-direct-fallback (session facts)
-  "Mark and warn for SESSION's first direct fallback in FACTS."
-  (if (gethash session mevedel-execution-telemetry--fallback-sessions)
+  "Mark and warn for SESSION's first direct fallback in FACTS.
+
+FACTS are always marked, because an unconfined run is a fact about the
+run whether or not a session owns it.  Only the warning is session-scoped:
+a nil SESSION is not a session that can be warned about.  Helpers that must
+run beside Emacs rather than on the target unbind the session on purpose --
+`mevedel-generate-diff' is one -- and warning for those announces a
+fallback for \"this session\" when no session is in hand, filed under a
+hash key that is not a session either, so the one warning the session is
+promised arrives twice.  The owning session still warns on its own first
+unconfined child."
+  (if (and session
+           (gethash session mevedel-execution-telemetry--fallback-sessions))
       facts
-    (puthash session t mevedel-execution-telemetry--fallback-sessions)
-    (display-warning
-     'mevedel
-     "Sandbox unavailable; this session is falling back to direct execution"
-     :warning)
+    (when session
+      (puthash session t mevedel-execution-telemetry--fallback-sessions)
+      (display-warning
+       'mevedel
+       "Sandbox unavailable; this session is falling back to direct execution"
+       :warning))
     (plist-put (copy-sequence facts) :first-direct-fallback t)))
 
 (defun mevedel-execution-telemetry-record

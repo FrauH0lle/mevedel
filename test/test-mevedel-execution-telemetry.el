@@ -224,7 +224,10 @@
       (should (= 1 (plist-get summary :additional-write-count))))))
 
 (mevedel-deftest mevedel-execution-telemetry-mark-direct-fallback
-  (:doc "warns and marks only the first direct fallback in a live session")
+  ()
+  ,test
+  (test)
+  :doc "warns and marks only the first direct fallback in a live session"
   (let ((session (mevedel-session--create :name "main"))
         (mevedel-execution-telemetry--fallback-sessions
          (make-hash-table :test #'eq :weakness 'key))
@@ -242,10 +245,42 @@
                        :network unrestricted))))
     (should (plist-get first :first-direct-fallback))
     (should-not (plist-get second :first-direct-fallback))
-    (should (= 1 (length warnings)))))
+    (should (= 1 (length warnings))))
+  :doc "a session-less helper neither warns nor claims a bucket of its own"
+  (let ((session (mevedel-session--create :name "main"))
+        (mevedel-execution-telemetry--fallback-sessions
+         (make-hash-table :test #'eq :weakness 'key))
+        warnings)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &optional _level _buffer-name)
+                 (push message warnings))))
+      ;; A local-only helper runs with the session deliberately unbound.
+      ;; Its facts still record the unconfined run; only the warning and
+      ;; the bucket are session-scoped.
+      (should
+       (plist-get
+        (mevedel-execution-telemetry-mark-direct-fallback
+         nil '(:sandbox unavailable :filesystem unrestricted
+               :network unrestricted))
+        :first-direct-fallback))
+      (should (zerop (length warnings)))
+      (should
+       (zerop (hash-table-count
+               mevedel-execution-telemetry--fallback-sessions)))
+      ;; The real session still gets its one warning afterwards.
+      (should
+       (plist-get
+        (mevedel-execution-telemetry-mark-direct-fallback
+         session '(:sandbox unavailable :filesystem unrestricted
+                   :network unrestricted))
+        :first-direct-fallback))
+      (should (= 1 (length warnings))))))
 
 (mevedel-deftest mevedel-execution-telemetry-sandbox-summary-class
-  (:doc "classifies only material sandbox deviations as warnings")
+  ()
+  ,test
+  (test)
+  :doc "classifies only material sandbox deviations as warnings"
   (let ((default
          '(:attempt-count 1 :started-count 1 :refused-count 0
            :sandbox bubblewrap :filesystem workspace-write
@@ -258,7 +293,37 @@
     (should
      (eq 'warning
          (mevedel-execution-telemetry-sandbox-summary-class
-          (plist-put (copy-sequence default) :started-count 0))))))
+          (plist-put (copy-sequence default) :started-count 0)))))
+  :doc "notes an unconfined run whose only deviation is the sandbox itself"
+  (let ((unconfined
+         '(:attempt-count 2 :started-count 2 :refused-count 0
+           :sandbox unavailable :filesystem unrestricted
+           :network unrestricted :proc nil
+           :additional-read-count 0 :additional-write-count 0)))
+    (should
+     (eq 'note
+         (mevedel-execution-telemetry-sandbox-summary-class unconfined)))
+    (should
+     (eq 'note
+         (mevedel-execution-telemetry-sandbox-summary-class
+          (plist-put (copy-sequence unconfined) :sandbox 'off))))
+    (should
+     (eq 'warning
+         (mevedel-execution-telemetry-sandbox-summary-class
+          (plist-put (copy-sequence unconfined) :started-count 1))))
+    (should
+     (eq 'warning
+         (mevedel-execution-telemetry-sandbox-summary-class
+          (plist-put (copy-sequence unconfined) :refused-count 1))))
+    (should
+     (eq 'warning
+         (mevedel-execution-telemetry-sandbox-summary-class
+          (plist-put (copy-sequence unconfined)
+                     :additional-write-count 1))))
+    (should
+     (eq 'warning
+         (mevedel-execution-telemetry-sandbox-summary-class
+          (plist-put (copy-sequence unconfined) :sandbox 'escalated))))))
 
 (provide 'test-mevedel-execution-telemetry)
 ;;; test-mevedel-execution-telemetry.el ends here
