@@ -37,6 +37,8 @@
                   "mevedel-execution-process" (child &optional preserve-spool))
 (declare-function mevedel-execution-process-relocate-spool
                   "mevedel-execution-process" (child destination))
+(declare-function mevedel-execution-process-remote-group-status
+                  "mevedel-execution-process" (group-id start-time workdir))
 (declare-function mevedel-execution-process-spool-path
                   "mevedel-execution-process" (child))
 (declare-function mevedel-execution-process-start
@@ -449,9 +451,61 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
        (mevedel-execution--state-for-session session))
       (mevedel-execution--durable-mutation-latch-p session)))
 
+(defconst mevedel-execution-mutation-blocked-message
+  (concat "Mutating execution is blocked by an unknown remote outcome; "
+          "run M-x mevedel-retry-target-readiness to re-probe the target "
+          "and acknowledge it")
+  "Refusal text for a mutating request under an unproved remote outcome.
+The block never expires on its own, so the message names the command that
+clears it rather than leaving the reader to wait for a timeout that does
+not exist.")
+
 (defun mevedel-execution-mutation-blocked-p (session)
-  "Return non-nil when SESSION must not start mutating execution."
+  "Return non-nil when SESSION must not start mutating execution.
+This is a cheap predicate safe to poll.  Use
+`mevedel-execution-mutation-refused-p' at a decision point, where the
+recorded outcome is worth re-proving against the target first."
   (and (mevedel-execution-unknown-outcome session) t))
+
+(defun mevedel-execution-reprove-unknown-outcome (session)
+  "Clear SESSION's unknown outcome when its process group is proved dead.
+
+A lost settlement records the target process-group identity, so the
+question it left open can be asked again: the group either still exists on
+the target or it does not.  An affirmative `dead' is the same proof the
+original settlement failed to collect, so it settles the outcome without a
+human deciding anything.  Anything else -- still live, unreachable,
+ambiguous, or an identity too incomplete to ask about -- leaves the block
+in place for `mevedel-retry-target-readiness' to resolve.
+
+The durable latch alone, which is what survives a restart, carries no
+process identity and can only be acknowledged manually.
+
+Return non-nil when the block was cleared."
+  (when-let* ((outcome (mevedel-execution--state-unknown-outcome
+                        (mevedel-execution--state-for-session session)))
+              ((eq 'dead
+                   (condition-case nil
+                       (mevedel-execution-process-remote-group-status
+                        (plist-get outcome :group-id)
+                        (plist-get outcome :group-start-time)
+                        (plist-get outcome :workdir))
+                     (error nil)))))
+    (condition-case nil
+        (progn
+          (mevedel-execution-acknowledge-unknown session)
+          (not (mevedel-execution-mutation-blocked-p session)))
+      ;; A live armed record or a lost authority means the block stands;
+      ;; refusing the request is always the safe direction.
+      (error nil))))
+
+(defun mevedel-execution-mutation-refused-p (session)
+  "Return non-nil when SESSION must refuse a mutating request now.
+Re-proves a recorded unknown outcome against the target before refusing,
+so a session whose remote process is long gone recovers on its own."
+  (when (mevedel-execution-mutation-blocked-p session)
+    (mevedel-execution-reprove-unknown-outcome session)
+    (mevedel-execution-mutation-blocked-p session)))
 
 (defun mevedel-execution-acknowledge-unknown (session)
   "Acknowledge and clear SESSION's unproved target process outcome."
@@ -1499,10 +1553,10 @@ terminal settlement."
     (unless read-only-p
       (mevedel-session-artifacts-assert-new-mutation-authority authority))
     (when (and (not read-only-p)
-               (mevedel-execution-mutation-blocked-p session))
+               (mevedel-execution-mutation-refused-p session))
       (signal
        'mevedel-execution-error
-       (list "Mutating execution is blocked by an unknown remote outcome")))
+       (list mevedel-execution-mutation-blocked-message)))
     (when (>= (mevedel-execution--managed-count state)
               mevedel-execution-live-limit)
       (signal 'mevedel-execution-limit
@@ -1608,8 +1662,8 @@ terminal settlement."
                        (mevedel-execution--record-scheduler-lease record)
                        rejected-lease
                        (mevedel-execution--record-error-data record)
-                       '(mevedel-execution-error
-                         "Mutating execution is blocked by an unknown remote outcome")
+                       (list 'mevedel-execution-error
+                             mevedel-execution-mutation-blocked-message)
                        (mevedel-execution--record-exit-code record) -1
                        (mevedel-execution--record-termination record)
                        'unknown)

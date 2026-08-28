@@ -749,6 +749,61 @@
           (mevedel-execution-acknowledge-unknown session)
           (should-not (mevedel-execution-mutation-blocked-p session)))
       (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
+
+  :doc "re-proving a dead process group clears the block without a human"
+  (let* ((root (make-temp-file "mevedel-managed-reprove-" t))
+         (session (test-mevedel-execution--session root))
+         (state (mevedel-execution--state-for-session session))
+         asked)
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-execution-process-remote-group-status)
+                   (lambda (group-id start-time workdir)
+                     (setq asked (list group-id start-time workdir))
+                     'dead)))
+          (setf (mevedel-execution--state-unknown-outcome state)
+                '(:group-id 42 :group-start-time "981"
+                  :workdir "/ssh:host:/project/"))
+          (should (mevedel-execution-mutation-blocked-p session))
+          (should (mevedel-execution-reprove-unknown-outcome session))
+          (should (equal '(42 "981" "/ssh:host:/project/") asked))
+          (should-not (mevedel-execution-mutation-blocked-p session))
+          (should-not (mevedel-execution-mutation-refused-p session)))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
+
+  :doc "a group that is live, ambiguous, or unreachable stays blocked"
+  (dolist (answer '(live ambiguous signal))
+    (let* ((root (make-temp-file "mevedel-managed-unproved-" t))
+           (session (test-mevedel-execution--session root))
+           (state (mevedel-execution--state-for-session session)))
+      (unwind-protect
+          (cl-letf (((symbol-function
+                      'mevedel-execution-process-remote-group-status)
+                     (lambda (&rest _)
+                       (if (eq answer 'signal)
+                           (error "Target process status probe timed out")
+                         answer))))
+            (setf (mevedel-execution--state-unknown-outcome state)
+                  '(:group-id 42 :group-start-time "981"
+                    :workdir "/ssh:host:/project/"))
+            (should-not (mevedel-execution-reprove-unknown-outcome session))
+            (should (mevedel-execution-mutation-refused-p session)))
+        (mevedel-execution-teardown-session session)
+        (delete-directory root t))))
+
+  :doc "an outcome without process identity never reaches the target"
+  (let* ((root (make-temp-file "mevedel-managed-anonymous-" t))
+         (session (test-mevedel-execution--session root))
+         (state (mevedel-execution--state-for-session session)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-execution--state-unknown-outcome state)
+                '(:group-id 42 :workdir "/ssh:host:/project/"))
+          (should-not (mevedel-execution-reprove-unknown-outcome session))
+          (should (mevedel-execution-mutation-refused-p session)))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution--artifact-address
