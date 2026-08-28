@@ -15,6 +15,11 @@
 
 ;; `gptel-request'
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+
+;; `mevedel-utilities'
+(declare-function mevedel--warn-once
+                  "mevedel-utilities" (key format &rest args))
+(autoload 'mevedel--warn-once "mevedel-utilities")
 (declare-function gptel-get-tool "ext:gptel-request" (path))
 (declare-function gptel-tool-p "ext:gptel-request" (object))
 (declare-function gptel-tool-name "ext:gptel-request" (tool))
@@ -202,7 +207,28 @@ Looks up the tool in the registry and uses its `display-arg' slot.
 Returns nil when no meaningful display string can be produced.
 
 When the raw value looks like a file path (contains `/'), it is
-abbreviated to the last 3 components automatically."
+abbreviated to the last 3 components automatically.
+
+Never signals.  This is reached from `gptel--handle-pre-tool', which runs
+inside gptel's curl process sentinel, and gptel calls
+`gptel--fsm-transition' outside its own `with-demoted-errors' guard, so an
+error escaping here kills the sentinel before it advances the request and
+the turn then waits forever for a tool result that is never dispatched.  A
+`display-arg' slot is caller-supplied and parses model output -- ApplyPatch
+parses the patch itself -- which is exactly the kind of code that signals on
+input nobody anticipated.  Losing the label is an acceptable outcome, and
+one this function already documents; losing the turn is not."
+  (condition-case error
+      (mevedel-tool--display-string tool-name args)
+    (error
+     (mevedel--warn-once
+      (list 'tool-display-string tool-name)
+      "Tool display string for %s signaled, omitting label: %S"
+      tool-name error)
+     nil)))
+
+(defun mevedel-tool--display-string (tool-name args)
+  "Return the display string for TOOL-NAME with ARGS, or nil."
   (let* ((tool (mevedel-tool-get tool-name))
          (display-arg (and tool (mevedel-tool-display-arg tool)))
          (value
