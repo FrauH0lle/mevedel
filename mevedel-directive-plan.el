@@ -9,6 +9,12 @@
 
 ;;; Code:
 
+;; `setf' on a slot of a struct defined elsewhere needs that
+;; `cl-defstruct' at compile time: `declare-function' supplies the
+;; accessor but not the setter, and without the expander the form
+;; compiles to a call to a function that does not exist.
+(eval-when-compile (require 'mevedel-structs))
+
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
 
