@@ -255,5 +255,85 @@ and its segment path."
                "/tmp/session/" head '(:head "generation"))))
       (should (= 2 reads)))))
 
+(mevedel-deftest mevedel-session-publication-call-with-diagnostic-batch ()
+  ,test
+  (test)
+
+  :doc "appends inside a batch share one reservation"
+  ;; Each append otherwise opened its own transaction: recovery refresh,
+  ;; lease renewal, ownership reading, then a reservation renewing on
+  ;; entry and committing on exit -- four times over per flush point.
+  (let ((session (mevedel-session--create :authority-mode 'portable))
+        (reservations 0)
+        (appends nil))
+    (cl-letf (((symbol-function 'mevedel-session-recovery-refresh) #'ignore)
+              ((symbol-function 'mevedel-session-durability-lease-renew)
+               (lambda (_s) t))
+              ((symbol-function 'mevedel-session-durability-lease-owned-p)
+               (lambda (_s) t))
+              ((symbol-function 'mevedel-session-publication--artifact-for-session)
+               (lambda (&rest _) t))
+              ((symbol-function 'mevedel-session-control-fs-append-file)
+               (lambda (path content) (push (cons path content) appends) t))
+              ((symbol-function 'mevedel-session-durability-call-with-reserved-lease)
+               (lambda (_s fn) (setq reservations (1+ reservations)) (funcall fn))))
+      (mevedel-session-publication-with-diagnostic-batch session
+        (should (mevedel-session-publication-append-diagnostic
+                 session "/x/a.log" "a"))
+        (should (mevedel-session-publication-append-diagnostic
+                 session "/x/b.log" "b")))
+      (should (= 1 reservations))
+      (should (equal '(("/x/a.log" . "a") ("/x/b.log" . "b"))
+                     (nreverse appends)))))
+
+  :doc "an unavailable lease declines every append without re-testing"
+  (let ((session (mevedel-session--create :authority-mode 'portable))
+        (renewals 0))
+    (cl-letf (((symbol-function 'mevedel-session-recovery-refresh) #'ignore)
+              ((symbol-function 'mevedel-session-durability-lease-renew)
+               (lambda (_s) (setq renewals (1+ renewals)) nil)))
+      (mevedel-session-publication-with-diagnostic-batch session
+        (should-not (mevedel-session-publication-append-diagnostic
+                     session "/x/a.log" "a"))
+        (should-not (mevedel-session-publication-append-diagnostic
+                     session "/x/b.log" "b")))
+      (should (= 1 renewals))))
+
+  :doc "one failing append declines without aborting the others"
+  ;; Its caller retains the content, which is what nil already means to it.
+  (let ((session (mevedel-session--create :authority-mode 'portable))
+        (written nil))
+    (cl-letf (((symbol-function 'mevedel-session-recovery-refresh) #'ignore)
+              ((symbol-function 'mevedel-session-durability-lease-renew)
+               (lambda (_s) t))
+              ((symbol-function 'mevedel-session-durability-lease-owned-p)
+               (lambda (_s) t))
+              ((symbol-function 'mevedel-session-publication--artifact-for-session)
+               (lambda (&rest _) t))
+              ((symbol-function 'mevedel-session-control-fs-append-file)
+               (lambda (path content)
+                 (if (equal path "/x/bad.log")
+                     (error "target refused")
+                   (push content written) t)))
+              ((symbol-function 'mevedel-session-durability-call-with-reserved-lease)
+               (lambda (_s fn) (funcall fn))))
+      (mevedel-test--with-captured-diagnostics nil
+        (mevedel-session-publication-with-diagnostic-batch session
+          (should-not (mevedel-session-publication-append-diagnostic
+                       session "/x/bad.log" "bad"))
+          (should (mevedel-session-publication-append-diagnostic
+                   session "/x/good.log" "good"))))
+      (should (equal '("good") written))))
+
+  :doc "a session that does not publish through the lease reserves nothing"
+  (let ((session (mevedel-session--create :authority-mode 'pid-lock))
+        (reservations 0) (ran nil))
+    (cl-letf (((symbol-function 'mevedel-session-durability-call-with-reserved-lease)
+               (lambda (_s fn) (setq reservations (1+ reservations)) (funcall fn))))
+      (mevedel-session-publication-with-diagnostic-batch session
+        (setq ran t))
+      (should ran)
+      (should (= 0 reservations)))))
+
 (provide 'test-mevedel-session-publication)
 ;;; test-mevedel-session-publication.el ends here

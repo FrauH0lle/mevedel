@@ -1343,6 +1343,64 @@ state or publication head."
   (mevedel-session-recovery-refresh-session-buffers session)
   t)
 
+(defvar mevedel-session-publication--diagnostic-batch nil
+  "Non-nil while diagnostic appends share one caller-held reservation.
+
+`open' means the caller holds a reserved lease and an append should write
+straight to the target.  `unavailable' means the caller established that
+the lease cannot carry diagnostics now, so every append in the batch
+declines without re-testing.")
+
+(defun mevedel-session-publication-call-with-diagnostic-batch (session function)
+  "Call FUNCTION with SESSION's diagnostic appends sharing one lease.
+
+Each `mevedel-session-publication-append-diagnostic\' otherwise pays a
+whole transaction of its own: a recovery refresh, a lease renewal, an
+ownership reading, then a reservation that renews the lease again on entry
+and commits it again on exit.  That is several control-filesystem programs
+per append, and a flush point appends once per diagnostic log.  A profiled
+remote turn put 96% of its lease reservations here, and those reservations
+at 21% of the session\'s CPU -- to persist data this module itself
+describes as best-effort and read by nobody live.
+
+The preamble runs once, the appends run inside one reservation, and the
+publication queue drains once at the end instead of after each append.
+
+An append that fails inside the batch declines rather than signalling, so
+one unwritable log cannot abort the others; its caller retains the content
+for the next flush, which is what a nil return already means to it."
+  (cond
+   (mevedel-session-publication--diagnostic-batch (funcall function))
+   ;; A session that does not publish through the lease writes its
+   ;; diagnostics directly, so reserving one would renew a lease nothing
+   ;; here is going to use -- target I/O, and a warning when the session
+   ;; has no lease to renew.
+   ((not (mevedel-session-codec-portable-authority-p session))
+    (funcall function))
+   ((progn (mevedel-session-recovery-refresh session)
+           (or (mevedel-session-pending-publication session)
+               (mevedel-session-publication-active-p session)
+               (not (mevedel-session-durability-lease-renew session))
+               (not (mevedel-session-durability-lease-owned-p session))))
+    (let ((mevedel-session-publication--diagnostic-batch 'unavailable))
+      (funcall function)))
+   (t
+    (mevedel-session-durability-call-with-reserved-lease
+     session
+     (lambda ()
+       (prog1 (let ((mevedel-session-publication--diagnostic-batch 'open))
+                (funcall function))
+         ;; A critical publisher may have queued while TRAMP handled the
+         ;; diagnostic I/O.  It retains precedence.
+         (when (mevedel-session-publication-queue session)
+           (mevedel-session-publication--drain session nil))))))))
+
+(defmacro mevedel-session-publication-with-diagnostic-batch (session &rest body)
+  "Run BODY with SESSION's diagnostic appends sharing one reserved lease."
+  (declare (indent 1) (debug t))
+  `(mevedel-session-publication-call-with-diagnostic-batch
+    ,session (lambda () ,@body)))
+
 (defun mevedel-session-publication-append-diagnostic (session path content)
   "Append diagnostic CONTENT to PATH for portable project SESSION.
 
@@ -1358,12 +1416,26 @@ Republishing the whole file per flush was quadratic in stream size and
 dominated remote-save allocations once a log grew to megabytes."
   (unless (and (stringp path) (stringp content))
     (error "Diagnostic publication requires string path and content"))
-  (mevedel-session-recovery-refresh session)
   (cond
-   ((or (mevedel-session-pending-publication session)
-        (mevedel-session-publication-active-p session)
-        (not (mevedel-session-durability-lease-renew session))
-        (not (mevedel-session-durability-lease-owned-p session)))
+   ((eq mevedel-session-publication--diagnostic-batch 'unavailable) nil)
+   ((eq mevedel-session-publication--diagnostic-batch 'open)
+    ;; The caller holds the reservation and drains the queue itself.
+    (mevedel-session-publication--artifact-for-session
+     session (list :path path :content content))
+    (condition-case err
+        (progn (mevedel-session-control-fs-append-file path content) t)
+      (error
+       (mevedel--warn-once
+        (list 'diagnostic-append path)
+        "Diagnostic append failed for %s, retaining for retry: %s"
+        path (error-message-string err))
+       nil)))
+   ((progn
+      (mevedel-session-recovery-refresh session)
+      (or (mevedel-session-pending-publication session)
+          (mevedel-session-publication-active-p session)
+          (not (mevedel-session-durability-lease-renew session))
+          (not (mevedel-session-durability-lease-owned-p session))))
     nil)
    (t
     ;; Validate that the path stays inside the session before any
