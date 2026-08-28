@@ -248,6 +248,10 @@
 
 
 ;; `mevedel-session-publication'
+(declare-function mevedel-session-publication-call-with-diagnostic-batch
+                  "mevedel-session-publication" (session function))
+(autoload 'mevedel-session-publication-call-with-diagnostic-batch
+  "mevedel-session-publication")
 (declare-function mevedel-session-publication-collect-generations "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-committed-p "mevedel-session-publication" (session artifacts))
 (declare-function mevedel-session-publication-discard-rolled-back "mevedel-session-publication" (session))
@@ -616,15 +620,39 @@ ARTIFACT-CALLBACK has the meaning described by
     count))
 
 (defun mevedel-session-persistence--flush-diagnostic-logs-now (session)
-  "Retry SESSION diagnostics queued before or after materialization."
-  (when (fboundp 'mevedel-telemetry-flush)
-    (mevedel-telemetry-flush session))
-  (when (fboundp 'mevedel-hooks-flush-log)
-    (mevedel-hooks-flush-log session))
-  (when (fboundp 'mevedel-tool-repair-flush-log)
-    (mevedel-tool-repair-flush-log session))
-  (when (fboundp 'mevedel-permission-log-flush)
-    (mevedel-permission-log-flush session)))
+  "Retry SESSION diagnostics queued before or after materialization.
+
+The four logs share one lease reservation.  Each append otherwise opened a
+transaction of its own -- recovery refresh, lease renewal, ownership
+reading, then a reservation renewing the lease on entry and committing it
+on exit -- so a flush point paid that four times over for data nothing
+reads live."
+  (let ((flush
+         (lambda ()
+           (when (fboundp 'mevedel-telemetry-flush)
+             (mevedel-telemetry-flush session))
+           (when (fboundp 'mevedel-hooks-flush-log)
+             (mevedel-hooks-flush-log session))
+           (when (fboundp 'mevedel-tool-repair-flush-log)
+             (mevedel-tool-repair-flush-log session))
+           (when (fboundp 'mevedel-permission-log-flush)
+             (mevedel-permission-log-flush session)))))
+    ;; Only reserve when a log actually has something.  Each flush already
+    ;; returns early on an empty queue, and reserving for four of those
+    ;; would renew the lease -- target I/O, and a warning when the lease
+    ;; cannot be renewed -- to write nothing at all.  The four queues are
+    ;; struct slots, so asking costs nothing.
+    (if (mevedel-session-persistence--diagnostics-pending-p session)
+        (mevedel-session-publication-with-diagnostic-batch session
+          (funcall flush))
+      (funcall flush))))
+
+(defun mevedel-session-persistence--diagnostics-pending-p (session)
+  "Return non-nil when any of SESSION's diagnostic logs has queued content."
+  (or (and (mevedel-session-telemetry-pending session) t)
+      (and (mevedel-session-hook-log-pending session) t)
+      (and (mevedel-session-repair-log-pending session) t)
+      (and (mevedel-session-permission-log-pending session) t)))
 
 (defun mevedel-session-persistence-flush-diagnostic-logs (session)
   "Flush SESSION diagnostics, keeping target I/O off the caller's path.
