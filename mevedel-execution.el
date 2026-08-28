@@ -2312,7 +2312,10 @@ All keyword arguments follow `mevedel-execution-start-one-shot'."
 
 READ-PATHS are mounted read-only.  WRITABLE-ROOTS are explicit artifact
 directories.  A private writable scratch directory is the helper's working
-directory and is removed before CALLBACK runs."
+directory and is removed before CALLBACK runs -- except on a busy remote
+transport, where removal waits for the connection rather than nesting
+inside the command already running on it.  Nothing reads the scratch after
+the helper exits."
   (let* ((target (and session
                       (mevedel-session-execution-target session)))
          (remote-root
@@ -2341,7 +2344,20 @@ directory and is removed before CALLBACK runs."
           (lambda ()
             (unless finished
               (setq finished t)
-              (ignore-errors (delete-directory scratch t)))))
+              ;; The removal is reached from the child's terminal
+              ;; settlement, which runs from its sentinel and from the
+              ;; settle timer -- inside whatever remote command those
+              ;; interrupted.  A remote scratch directory removed there
+              ;; issues a command on a connection that already has one in
+              ;; flight, and the two cross replies.  Nothing reads the
+              ;; scratch after the helper exits, so a busy transport
+              ;; removes it once the connection is free.
+              (unless (and (mevedel-transport-busy-p scratch)
+                           (mevedel-transport-run-when-idle
+                            (list 'helper-scratch scratch) scratch
+                            (lambda ()
+                              (ignore-errors (delete-directory scratch t)))))
+                (ignore-errors (delete-directory scratch t))))))
          (teardown
           (lambda ()
             (funcall cleanup)
