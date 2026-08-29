@@ -34,6 +34,17 @@ The relay holds no state beyond live connections plus a lazy max-room-age
 sweep (`-max-room-age`, default 24h) as a backstop against a crashed host;
 the policy TTL lives in Emacs (`mevedel-collaboration-share-ttl`).
 
+## Releases
+
+Every push to `master` that touches `relay/` builds and publishes static
+Linux binaries for amd64 and arm64, tagged `relay-<short sha>`
+(`.github/workflows/relay.yml`). The viewer is `go:embed`-ed, so a CSS or JS
+change produces a new binary too. `go vet` and `go test` gate the release.
+
+```bash
+gh release download relay-<short sha> -p 'mevedel-relay-linux-amd64'
+```
+
 ## Build and run
 
 ```bash

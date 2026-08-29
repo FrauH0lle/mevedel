@@ -1,0 +1,78 @@
+name: relay
+
+# The viewer assets are `go:embed'-ed into the binary, so a CSS or JS change
+# produces a different relay just as a .go change does; the path filter
+# covers the whole directory rather than *.go.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'relay/**'
+      - '.github/workflows/relay.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: relay
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: relay/go.mod
+          cache-dependency-path: relay/go.sum
+
+      # Nothing else runs these: the Emacs suite covers the elisp side of the
+      # transport against a stub, not the relay itself.
+      - name: Test
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          go test ./...
+
+      # CGO off makes the binary static, so it does not care what glibc the
+      # deployment host has. arm64 costs one more invocation and saves
+      # guessing whether the server is x86.
+      - name: Build
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -ldflags="-s -w" \
+              -o "dist/mevedel-relay-linux-$arch" .
+          done
+          (cd dist && sha256sum mevedel-relay-* > SHA256SUMS)
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Prefixed so the tag namespace says what it releases; a bare short
+          # SHA reads like a commit rather than an artifact.
+          TAG="relay-$(git rev-parse --short "$GITHUB_SHA")"
+          {
+            echo "Built from $GITHUB_SHA. Static Linux binaries, no libc dependency."
+            echo
+            echo 'Run with `-host-token` to require `X-Mevedel-Host-Token` on room'
+            echo 'creation, and set `mevedel-collaboration-relay-host-token` to match.'
+          } > dist/NOTES.md
+          # A re-run on the same commit refreshes the artifacts rather than
+          # failing on the tag it already created.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/mevedel-relay-* dist/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" dist/mevedel-relay-* dist/SHA256SUMS \
+              --title "relay $TAG" --notes-file dist/NOTES.md
+          fi
