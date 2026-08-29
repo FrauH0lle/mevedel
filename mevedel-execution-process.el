@@ -425,9 +425,15 @@ Incomplete identity, an unreachable target, or an unexpected exit is
                      (mevedel-execution-process--remote-control-timeout
                       (error "Target process signal timed out"))
                    (signal-process (- group-id) signal workdir)))
-                ('dead -1)
-                (status
-                 (error "Remote process-group status is %s" status)))
+                ;; A dead group needs no signal, and an ambiguous one must
+                ;; not be signalled: the pinned identity is the only thing
+                ;; stopping a recycled group number from taking it.  Neither
+                ;; answer proves the outcome unprovable, though -- a leader
+                ;; that exits a moment before its last member reads as
+                ;; ambiguous for exactly that moment.  The bounded
+                ;; escalation re-probes, and settles the outcome as unknown
+                ;; only once the ambiguity outlives it.
+                (_ -1))
             (signal-process (- group-id) signal)))
          (remote (error "Remote process-group identity is unavailable"))
          ((process-live-p process) (signal-process process signal)))
