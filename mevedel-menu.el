@@ -488,13 +488,13 @@ The complete target and durability state lives in the session info panel."
 
 (defun mevedel-menu--read-only-p ()
   "Return non-nil when this cockpit's session is read-only here."
-  (when-let ((data (mevedel-cockpit-context-data-buffer
+  (when-let* ((data (mevedel-cockpit-context-data-buffer
                     (mevedel-menu--context))))
     (buffer-local-value 'mevedel-session--read-only-mode data)))
 
 (defun mevedel-menu--transfer-pending-p ()
   "Return non-nil when another client is waiting for this session's lease."
-  (when-let ((session (mevedel-cockpit-context-session
+  (when-let* ((session (mevedel-cockpit-context-session
                        (mevedel-menu--context))))
     (and (not (mevedel-menu--read-only-p))
          (memq (plist-get (mevedel-session-control-transfer session) :state)

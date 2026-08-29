@@ -958,7 +958,7 @@ Replace its preserved head with non-nil PUBLICATION-HEAD.  When
 EXPECTED-PUBLICATION-HEAD-P is non-nil, require the current head to equal
 EXPECTED-PUBLICATION-HEAD.  When UNSETTLED-MUTATION-P is non-nil, replace the
 preserved unsettled-mutation flag with UNSETTLED-MUTATION."
-  (when-let ((session-dir (mevedel-session-save-path session)))
+  (when-let* ((session-dir (mevedel-session-save-path session)))
     (let* ((remote-file-name-inhibit-cache t)
            (directory (mevedel-session-durability--lease-path session-dir))
            (bound (mevedel-session-lease session))
@@ -1098,7 +1098,7 @@ preserved unsettled-mutation flag with UNSETTLED-MUTATION."
 Return non-nil only when the current owned lease generation commits VALUE."
   (unless (booleanp value)
     (error "Unsettled mutation latch must be boolean"))
-  (when-let ((session-dir (mevedel-session-save-path session)))
+  (when-let* ((session-dir (mevedel-session-save-path session)))
     (let* ((remote-file-name-inhibit-cache t)
            (directory (mevedel-session-durability--lease-path session-dir))
            (bound (mevedel-session-lease session))
@@ -1124,7 +1124,7 @@ Return non-nil only when the current owned lease generation commits VALUE."
       (if (and (equal existing head)
                (mevedel-session-durability--owned-lease-record-p
                 existing directory now))
-          (if-let ((successor
+          (if-let* ((successor
                     (mevedel-session-durability--claim-next
                      directory existing (plist-get existing :buffer)
                      status t value)))
@@ -1279,7 +1279,7 @@ its lease state."
       (when session
         (mevedel-session-durability--cancel-renewal session)
         (setf (mevedel-session-lease session) nil)
-        (when-let ((queued
+        (when-let* ((queued
                     (and (not (mevedel-session-pending-publication session))
                          (mevedel-session-publication-queue session))))
           (let ((batches

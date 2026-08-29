@@ -451,7 +451,7 @@
                            (line-beginning-position 2)
                            nil "Keep me attached")
                 record (mevedel--directive-record directive))
-          ;; `replace-buffer-contents' reports one change over the whole
+          ;; `replace-region-contents' reports one change over the whole
           ;; region it replaces, so the captured range covers the directive
           ;; even though the directive's text survives.
           (let ((source (generate-new-buffer " *replacement*")))
@@ -459,7 +459,7 @@
                 (progn
                   (with-current-buffer source
                     (insert "before\ndirective BODY\nafter\n"))
-                  (replace-buffer-contents source))
+                  (replace-region-contents (point-min) (point-max) source))
               (kill-buffer source)))
           (should (eq buffer (overlay-buffer directive)))
           (should (equal "directive BODY\n"

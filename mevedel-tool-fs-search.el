@@ -184,7 +184,7 @@ before a logical address is emitted."
                when logical
                return
                (concat logical
-                       (when-let ((label (plist-get root-data :label)))
+                       (when-let* ((label (plist-get root-data :label)))
                          (concat "\t" label))))
               "Error: Resource search returned an unsafe path"))
            (split-string output "\0" t) "\n")
@@ -209,7 +209,7 @@ before a logical address is emitted."
              return
              (if logical
                  (concat logical
-                         (when-let ((label (plist-get root-data :label)))
+                         (when-let* ((label (plist-get root-data :label)))
                            (concat "\t" label))
                          (substring line candidate-end))
                (format "Error: Resource search returned an unsafe path")))
@@ -233,7 +233,7 @@ addresses."
               (directory-file-name
                (expand-file-name (plist-get root :path))))
              (native-root
-              (when-let ((path
+              (when-let* ((path
                           (file-remote-p physical-root 'localname 'never)))
                 (directory-file-name path)))
              (variants (delete-dups (delq nil (list physical-root native-root))))
@@ -582,7 +582,7 @@ and optional :path."
                  :session session :owner (mevedel-current-origin)
                  :timeout mevedel-tool-fs-search-timeout))
             (let ((path (car paths)))
-              (if-let ((normalized
+              (if-let* ((normalized
                         (and (not (mevedel-tool-fs-search--vcs-metadata-path-p path))
                              (mevedel-tool-fs-search--normalize-rg-glob path pattern))))
                   (let* ((path (car normalized))

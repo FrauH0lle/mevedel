@@ -89,7 +89,7 @@ such a binding every call reads the target.")
 
 The coordinator owns the root registration and semantic observer boundary;
 recovery does not discover session buffers by scanning Emacs global state."
-  (when-let ((root
+  (when-let* ((root
              (mevedel-session-control-transfer-root-buffer session)))
     (with-current-buffer root
       (when (and buffer-file-name (file-exists-p buffer-file-name))
@@ -201,7 +201,7 @@ Return non-nil only when the live client owns the lease after acquisition.
 Recovery installation is deliberately refused when another client still owns
 the target, leaving the local recovery directory available for a later retry."
   (or (mevedel-session-durability-lease-owned-p session)
-      (when-let ((session-dir (mevedel-session-save-path session)))
+      (when-let* ((session-dir (mevedel-session-save-path session)))
         (and
          (mevedel-session-durability-lease-acquire
           session-dir (buffer-name (current-buffer)) session)
@@ -309,7 +309,7 @@ so a later explicit abandonment can remove both sources safely."
                         (car mevedel-session-recovery--mutation-cache))))
     (when mevedel-session-recovery--mutation-cache
       (push session (car mevedel-session-recovery--mutation-cache)))
-    (when-let ((recovery
+    (when-let* ((recovery
                 (mevedel-session-recovery-read
                  (mevedel-session-save-path session))))
       (let ((pending

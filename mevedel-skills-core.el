@@ -1355,7 +1355,7 @@ sentinel is silently dropped)."
   "Tear down the watcher for DIR when no buffer consumes it."
   (let ((dir (file-name-as-directory (expand-file-name dir))))
     (unless (gethash dir mevedel-skills--dir-buffers)
-      (when-let ((desc (gethash dir mevedel-skills--watchers)))
+      (when-let* ((desc (gethash dir mevedel-skills--watchers)))
         (ignore-errors (file-notify-rm-watch desc))
         (remhash dir mevedel-skills--watchers)))))
 

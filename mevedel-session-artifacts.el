@@ -318,7 +318,7 @@ The cost bound preserves markers through ordinary edits without spending
 minutes comparing unrelated large transcripts.  The generous time bound
 is a last-resort plain replacement; callers follow either path with a full
 rerender."
-  (replace-buffer-contents source 5.0 8000))
+  (replace-region-contents (point-min) (point-max) source 5.0 8000))
 
 
 ;;
@@ -992,7 +992,7 @@ every durable mutation boundary; unchanged targets take no durability I/O."
                   (eq buffer (mevedel-session-root-buffer session)))
           (mevedel-session-control-transfer-register-root-buffer
            session buffer)))
-      (when-let ((target (mevedel-session-execution-target session)))
+      (when-let* ((target (mevedel-session-execution-target session)))
         (unless (mevedel-execution-target-incarnation-changed-p target)
           (if (mevedel-execution-target-remote-p target)
               (let ((readiness
@@ -1849,7 +1849,7 @@ must materialize a snapshot rather than record a change."
               (eq buffer (mevedel-session-root-buffer session)))
       (mevedel-session-control-transfer-register-root-buffer
        session buffer)))
-  (when-let ((buffer (mevedel-session-persistence-authoritative-buffer
+  (when-let* ((buffer (mevedel-session-persistence-authoritative-buffer
                       buffer)))
     (when (or (null (mevedel-session-root-buffer session))
               (eq buffer (mevedel-session-root-buffer session)))
@@ -2090,12 +2090,12 @@ names written."
     (let (entries written)
       (maphash
        (lambda (path pre-content)
-         (when-let ((entry (mevedel-session-artifacts--file-history-maybe-snapshot
+         (when-let* ((entry (mevedel-session-artifacts--file-history-maybe-snapshot
                             session path pre-content)))
            (push entry entries)
-           (when-let ((name (plist-get (cdr entry) :backup-name)))
+           (when-let* ((name (plist-get (cdr entry) :backup-name)))
              (push name written))
-           (when-let ((name (plist-get (cdr entry) :pre-backup-name)))
+           (when-let* ((name (plist-get (cdr entry) :pre-backup-name)))
              (push name written))))
        pre-snapshots)
       ;; Sort entries by path so two saves with identical state

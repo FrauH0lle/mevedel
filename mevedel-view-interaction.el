@@ -639,7 +639,7 @@ overlay references untouched.  Callbacks are never settled here."
         (let ((mevedel-view--interaction-render-suppressed t))
           (mevedel-view--interaction-clear-for-rebuild)
           (when-let* ((session (mevedel-view--session)))
-            (when-let ((descriptor
+            (when-let* ((descriptor
                         (mevedel-view-control-transfer-current-descriptor)))
               (mevedel-view--interaction-register descriptor))
             (when (mevedel-session-pending-plan-approval session)

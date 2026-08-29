@@ -300,7 +300,7 @@ Return BUFFER so lifecycle hooks can use this as their value."
        (remhash id mevedel-session-control-transfer--roots)))
    mevedel-session-control-transfer--roots)
   (mevedel-session-set-root-buffer session buffer)
-  (when-let ((id (mevedel-session-session-id session)))
+  (when-let* ((id (mevedel-session-session-id session)))
     (puthash id buffer mevedel-session-control-transfer--roots))
   buffer)
 
@@ -309,7 +309,7 @@ Return BUFFER so lifecycle hooks can use this as their value."
   "Clear SESSION's root registration when it names BUFFER."
   (when (and session (eq buffer (mevedel-session-root-buffer session)))
     (mevedel-session-set-root-buffer session nil)
-    (when-let ((id (mevedel-session-session-id session)))
+    (when-let* ((id (mevedel-session-session-id session)))
       (when (eq buffer (gethash id mevedel-session-control-transfer--roots))
         (remhash id mevedel-session-control-transfer--roots))))
   nil)
@@ -322,7 +322,7 @@ Return BUFFER so lifecycle hooks can use this as their value."
 
 (defun mevedel-session-control-transfer-root-buffer-for-id (session-id)
   "Return the registered live root buffer for SESSION-ID, or nil."
-  (when-let ((buffer (gethash session-id
+  (when-let* ((buffer (gethash session-id
                              mevedel-session-control-transfer--roots)))
     (if (and (buffer-live-p buffer)
              (with-current-buffer buffer
@@ -450,7 +450,7 @@ owner's side repoints the visited file here too."
   "Attach SESSION's live runtime owners to REFRESHED for staged adoption."
   (mevedel-session-set-execution-target
    refreshed
-   (when-let ((target (mevedel-session-execution-target session)))
+   (when-let* ((target (mevedel-session-execution-target session)))
      (copy-sequence target)))
   (mevedel-session-adopt-committed-state
    refreshed
@@ -775,7 +775,7 @@ the owner can see what a handoff is still waiting for."
       (list :kind 'control-transfer
             :action 'status
             :title (format "Handing control to %s" label)
-            :detail (if-let ((blocker
+            :detail (if-let* ((blocker
                               (mevedel-session-control-transfer-drain-blocker
                                session)))
                         (format "Finishing %s first." blocker)

@@ -30,7 +30,7 @@
          links)
     (while pending
       (setq current (file-name-concat current (pop pending)))
-      (when-let ((target (file-symlink-p current)))
+      (when-let* ((target (file-symlink-p current)))
         (when (< (cl-decf remaining) 0)
           (signal 'mevedel-sandbox-policy-error
                   (list (format "Filesystem symlink chain is too deep: %s"

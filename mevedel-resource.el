@@ -584,7 +584,7 @@ digest remains the authority a readable key resolves to."
 (defun mevedel-resource--skill-root (skill)
   "Return SKILL's package root, deriving it from its source when needed."
   (or (mevedel-skill-source-dir skill)
-      (when-let ((source (mevedel-skill-source-file skill)))
+      (when-let* ((source (mevedel-skill-source-file skill)))
         (file-name-directory source))))
 
 (defun mevedel-resource--skill-address (skill &optional components)
@@ -655,7 +655,7 @@ SCHEME is nil, include metadata for every scheme."
           (delq nil
                 (mapcar
                  (lambda (skill)
-                   (when-let ((address
+                   (when-let* ((address
                                (condition-case nil
                                    (mevedel-resource--skill-address skill)
                                  (error nil))))
@@ -1176,7 +1176,7 @@ parent is discarded."
         (let ((alias-counts (make-hash-table :test #'equal))
               rows)
           (dolist (skill skills)
-            (when-let ((alias (mevedel-resource--skill-alias-address skill)))
+            (when-let* ((alias (mevedel-resource--skill-alias-address skill)))
               (puthash alias (1+ (gethash alias alias-counts 0)) alias-counts)))
           (dolist (skill skills)
             (let ((description (or (mevedel-skill-description skill) ""))
@@ -1530,7 +1530,7 @@ errors before any content or handler is reached."
       (setq data (plist-put data :logical-p logical-p))
       (let ((attempt (make-symbol "mevedel-resource-attempt-")))
         (puthash attempt data mevedel-resource--attempt-table)
-        (when-let ((cell (or (plist-get context :resource-attempts-cell)
+        (when-let* ((cell (or (plist-get context :resource-attempts-cell)
                              mevedel-resource-attempts-cell)))
           (when (consp cell)
             (setcar cell (cons attempt (car cell)))))

@@ -186,9 +186,9 @@ query -- so a collapsed tool row says what the call did."
 Shared by the canonical tool record and the live pending record so both
 carry the same operand summary and, for ApplyPatch, the authored patch."
   (append
-   (when-let ((detail (mevedel-collaboration--tool-detail args)))
+   (when-let* ((detail (mevedel-collaboration--tool-detail args)))
      (list :detail detail))
-   (when-let (((equal (format "%s" name) "ApplyPatch"))
+   (when-let* (((equal (format "%s" name) "ApplyPatch"))
               (patch (plist-get args :patch))
               ((stringp patch)))
      (list :diff (mevedel-collaboration--truncate-bytes

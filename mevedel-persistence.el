@@ -396,11 +396,16 @@ up-to-date, not the actual file on the disk being outdated."
 Runs on the global `kill-buffer-hook' for the buffer being killed.
 It must be one named function registered once: a per-buffer closure
 per instruction buffer grows the global hook without bound and runs
-every closure on every kill in Emacs."
+every closure on every kill in Emacs.
+
+A buffer with no file is left alone before anything else happens.  This
+hook sees every buffer Emacs kills, including internal ones such as
+` *Compiler Input*', and instructions are stashed by file: resolving a
+workspace for a buffer that has none can only cost time or fail."
   (let ((buffer (current-buffer)))
-    (mevedel--instruction-activate-buffer buffer)
-    (when (mevedel--buffer-has-instructions-p buffer)
-      (when-let* ((file (buffer-file-name buffer)))
+    (when-let* ((file (buffer-file-name buffer)))
+      (mevedel--instruction-activate-buffer buffer)
+      (when (mevedel--buffer-has-instructions-p buffer)
         (if (file-exists-p file)
             (let ((file-contents
                    (with-temp-buffer
@@ -668,7 +673,7 @@ restoring overlays."
                       (with-temp-buffer
                         (insert original-content)
                         (restore-overlays (current-buffer) instructions t)
-                        (replace-buffer-contents new-buffer)
+                        (replace-region-contents (point-min) (point-max) new-buffer)
                         (restore-overlays
                          buffer
                          (mevedel--instructions-in (point-min) (point-max))

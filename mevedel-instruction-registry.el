@@ -85,27 +85,43 @@ Each value is a plist with keys `:instructions', `:id-counter',
 
 (defmacro mevedel--instruction-alist ()
   "Return the active workspace's instruction alist as a settable place."
-  '(plist-get (mevedel--instruction-state
-               (mevedel--instruction-operation-state-key))
-              :instructions))
+  ;; Copied, not shared: the byte compiler destructively attaches the
+  ;; call position to a macro's returned form, which would corrupt a
+  ;; literal for every later expansion.
+  (copy-sequence
+   '(plist-get (mevedel--instruction-state
+                (mevedel--instruction-operation-state-key))
+               :instructions)))
 
 (defmacro mevedel--instruction-id-counter ()
   "Return the active workspace's instruction ID counter as a settable place."
-  '(plist-get (mevedel--instruction-state
-               (mevedel--instruction-operation-state-key))
-              :id-counter))
+  ;; Copied, not shared: the byte compiler destructively attaches the
+  ;; call position to a macro's returned form, which would corrupt a
+  ;; literal for every later expansion.
+  (copy-sequence
+   '(plist-get (mevedel--instruction-state
+                (mevedel--instruction-operation-state-key))
+               :id-counter)))
 
 (defmacro mevedel--instruction-id-usage-map ()
   "Return the active workspace's used-ID table as a settable place."
-  '(plist-get (mevedel--instruction-state
-               (mevedel--instruction-operation-state-key))
-              :id-usage-map))
+  ;; Copied, not shared: the byte compiler destructively attaches the
+  ;; call position to a macro's returned form, which would corrupt a
+  ;; literal for every later expansion.
+  (copy-sequence
+   '(plist-get (mevedel--instruction-state
+                (mevedel--instruction-operation-state-key))
+               :id-usage-map)))
 
 (defmacro mevedel--instruction-retired-ids ()
   "Return the active workspace's retired IDs as a settable place."
-  '(plist-get (mevedel--instruction-state
-               (mevedel--instruction-operation-state-key))
-              :retired-ids))
+  ;; Copied, not shared: the byte compiler destructively attaches the
+  ;; call position to a macro's returned form, which would corrupt a
+  ;; literal for every later expansion.
+  (copy-sequence
+   '(plist-get (mevedel--instruction-state
+                (mevedel--instruction-operation-state-key))
+               :retired-ids)))
 
 (gv-define-setter mevedel--instruction-state (value &optional key)
   `(puthash (or ,key :global) ,value mevedel--instruction-states))

@@ -627,7 +627,7 @@ the targets behind."
             (dolist (restriction restrictions)
               (let* ((path (plist-get restriction :path))
                      (existing (assoc path resolved)))
-                (when-let ((symlink
+                (when-let* ((symlink
                             (mevedel-sandbox--writable-symlink-component
                              path writable-roots)))
                   (signal

@@ -1192,7 +1192,7 @@
             ;; Restarting for the same session reuses the room.
             (should (eq room (mevedel-collaboration--start
                               session (current-buffer)))))
-        (when-let ((timer (plist-get mevedel-collaboration--room :ttl-timer)))
+        (when-let* ((timer (plist-get mevedel-collaboration--room :ttl-timer)))
           (cancel-timer timer))
         (setq mevedel-collaboration--room nil)
         (remove-hook 'kill-emacs-hook

@@ -886,7 +886,7 @@
                 (should
                  (mevedel-session-durability-lease-acquire
                   session-dir "*owner*" owner))
-                (when-let ((timer
+                (when-let* ((timer
                             (mevedel-session-lease-renewal-timer owner)))
                   (cancel-timer timer)
                   (setf (mevedel-session-lease-renewal-timer owner) nil)))
@@ -1001,7 +1001,7 @@
                 (should
                  (mevedel-session-durability-lease-acquire
                   session-dir "*owner*" owner))
-                (when-let ((timer
+                (when-let* ((timer
                             (mevedel-session-lease-renewal-timer owner)))
                   (cancel-timer timer)
                   (setf (mevedel-session-lease-renewal-timer owner) nil)))

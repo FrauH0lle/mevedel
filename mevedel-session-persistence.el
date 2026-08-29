@@ -1214,7 +1214,7 @@ Called opportunistically from the `mevedel' session chooser."
   "Buffer-local `kill-buffer-hook' that releases session mutation authority."
   (when (and (boundp 'mevedel--session)
              mevedel--session)
-    (when-let ((dir (mevedel-session-save-path mevedel--session)))
+    (when-let* ((dir (mevedel-session-save-path mevedel--session)))
       (condition-case _
           (mevedel-session-persistence-lock-release dir mevedel--session)
         (error nil)))))
@@ -1766,7 +1766,7 @@ mentions-shown reset to empty hash tables on load."
                 (when (and repair-callback
                            self-healed-predecessor
                            (file-regular-p self-healed-predecessor))
-                  (if-let ((artifact
+                  (if-let* ((artifact
                             (cl-find
                              self-healed-predecessor repair-artifacts
                              :key (lambda (candidate)
@@ -2103,7 +2103,7 @@ one field with no bound on its length."
 
 (defun mevedel-session-persistence--entry-live-buffer (entry)
   "Return the live root buffer already open for session ENTRY, or nil."
-  (when-let ((session-id (plist-get (plist-get entry :summary) :session-id)))
+  (when-let* ((session-id (plist-get (plist-get entry :summary) :session-id)))
     (mevedel-session-control-transfer-root-buffer-for-id session-id)))
 
 (defun mevedel-session-persistence--entry-authority (workspace entry)
@@ -2120,7 +2120,7 @@ because nobody is writing it any more.
 A whole lease observation per candidate is one target round trip per row, so
 the state and the holder are read together."
   (cond
-   ((when-let ((buffer (mevedel-session-persistence--entry-live-buffer entry)))
+   ((when-let* ((buffer (mevedel-session-persistence--entry-live-buffer entry)))
       (list :action "Switch"
             :detail (if (buffer-local-value 'mevedel-session--read-only-mode
                                             buffer)
@@ -2170,7 +2170,7 @@ and follows the owner from there, and an expired lease is taken over."
   ;; nothing has cleaned up after a previous invocation.
   (mevedel-session-persistence-cleanup-expired workspace)
   (mevedel-session-persistence--sweep-stale-locks workspace)
-  (when-let ((sessions
+  (when-let* ((sessions
               (mevedel-session-persistence-list-sessions workspace)))
     (let* ((new-label "Start new session")
            (held-p nil)
@@ -2638,7 +2638,7 @@ bad buffer can't block exit."
             (ignore-errors
               (mevedel-session-persistence--flush-diagnostic-logs-now
                mevedel--session))
-            (when-let ((dir (mevedel-session-save-path mevedel--session)))
+            (when-let* ((dir (mevedel-session-save-path mevedel--session)))
               (cl-pushnew dir lock-dirs :test #'equal))))))
     ;; Keep live locks through cleanup so an exit-save failure cannot expose
     ;; an old session directory for deletion.

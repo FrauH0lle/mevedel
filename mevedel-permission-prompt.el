@@ -110,7 +110,7 @@
 (defun mevedel-permission--prompt-approve-once ()
   "Allow this tool invocation once."
   (interactive)
-  (if-let ((ov (mevedel--prompt--overlay-at-point
+  (if-let* ((ov (mevedel--prompt--overlay-at-point
                 'mevedel-permission-prompt)))
       (let ((entry (overlay-get ov 'mevedel-view-interaction-entry)))
         (if (and (plist-get entry :mutation-p)
@@ -124,7 +124,7 @@
 (defun mevedel-permission--prompt-approve-session ()
   "Allow this tool for the rest of the session."
   (interactive)
-  (if-let ((ov (mevedel--prompt--overlay-at-point
+  (if-let* ((ov (mevedel--prompt--overlay-at-point
                 'mevedel-permission-prompt)))
       (if (overlay-get ov 'mevedel-permission-suppress-allow-session)
           (message "Session allow is not available for this prompt")
@@ -134,7 +134,7 @@
 (defun mevedel-permission--prompt-approve-always ()
   "Always allow this tool (persisted to disk)."
   (interactive)
-  (if-let ((ov (mevedel--prompt--overlay-at-point
+  (if-let* ((ov (mevedel--prompt--overlay-at-point
                 'mevedel-permission-prompt)))
       (if (not (overlay-get ov 'mevedel-permission-include-always))
           (message "Persistent allow is not available for this prompt")

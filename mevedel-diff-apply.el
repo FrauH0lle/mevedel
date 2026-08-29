@@ -5,7 +5,7 @@
 ;; `mevedel-diff-apply-buffer' resolves unified diff hunks with Emacs, stages
 ;; each file's final text, and commits every touched path through ApplyPatch's
 ;; shared rollback transaction.  Visited buffers are synchronized with
-;; `replace-buffer-contents', so normal instruction edit hooks own overlay and
+;; `replace-region-contents', so normal instruction edit hooks own overlay and
 ;; directive lifecycle updates.
 
 ;;; Code:
@@ -56,6 +56,28 @@
                            (point)))
                   (looking-at-p diff-hunk-header-re))))
     (list files-to-create files-to-remove)))
+
+(defun mevedel-diff-apply--source-location (source-buffer diff-buffer
+                                                       no-prompt)
+  "Locate the hunk at point in DIFF-BUFFER within SOURCE-BUFFER.
+
+Emacs matches hunk text case-insensitively and, when both the old and the
+new variant match, reports the hunk as already applied and hands back the
+reversed replacement.  A case-only change matches both ways, so the text
+lookup here is exact.  NO-PROMPT is passed through."
+  (cl-letf* ((find-text (symbol-function 'diff-find-text))
+             ((symbol-function 'diff-find-text)
+              (lambda (text)
+                (let ((case-fold-search nil))
+                  (funcall find-text text)))))
+    (if source-buffer
+        (with-current-buffer source-buffer
+          (save-restriction
+            (widen)
+            (with-current-buffer diff-buffer
+              (diff-find-source-location nil nil no-prompt))))
+      (diff-find-source-location nil nil no-prompt))))
+
 
 (defun mevedel-diff-apply--stage-buffer (buffer edits)
   "Return BUFFER text after applying resolved EDITS from last to first."
@@ -155,18 +177,16 @@ repair heuristically instead of prompting or modifying the diff."
                               (find-buffer-visiting source-path))
                              (diff-buffer (current-buffer))
                              (location
-                              (if source-buffer
-                                  (with-current-buffer source-buffer
-                                    (save-restriction
-                                      (widen)
-                                      (with-current-buffer diff-buffer
-                                        (diff-find-source-location
-                                         nil nil no-prompt))))
-                                (diff-find-source-location
-                                 nil nil no-prompt)))
+                              (mevedel-diff-apply--source-location
+                               source-buffer diff-buffer no-prompt))
                              (`(,buf ,line-offset ,pos ,_src ,dst ,switched)
                               location))
-                  (if (and line-offset (not switched))
+                  ;; A deleted file's hunk replaces its text with nothing,
+                  ;; which Emacs finds everywhere and reports as already
+                  ;; applied.  The staged text is discarded for a delete, so
+                  ;; only the buffer identity matters here.
+                  (if (or (member source-path files-to-remove)
+                          (and line-offset (not switched)))
                       (push (list :buf buf :pos pos :dst dst)
                             buffer-edits)
                     (setq failures (1+ failures)))

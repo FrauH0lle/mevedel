@@ -157,7 +157,7 @@ consulted; no candidate file is opened."
   (format " [%s] %s%s"
           kind
           (mevedel-skill-name skill)
-          (if-let ((description (mevedel-skill-description skill)))
+          (if-let* ((description (mevedel-skill-description skill)))
               (format " - %s" description)
             "")))
 
@@ -230,7 +230,7 @@ doubled by digests nobody reads."
         aliases
         exacts)
     (dolist (entry (plist-get metadata :skills))
-      (when-let ((alias (plist-get entry :alias)))
+      (when-let* ((alias (plist-get entry :alias)))
         (puthash alias (1+ (gethash alias alias-counts 0)) alias-counts)))
     (dolist (entry (plist-get metadata :skills))
       (let* ((skill (plist-get entry :skill))

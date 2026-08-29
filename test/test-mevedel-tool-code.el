@@ -569,7 +569,8 @@ formatter without a compiled grammar."
     (unwind-protect
         (progn
           (with-temp-file tmp
-            (insert (format "(defun %s () nil)\n" alpha)
+            (insert ";;; -*- lexical-binding: t -*-\n"
+                    (format "(defun %s () nil)\n" alpha)
                     (format "(defun %s () nil)\n" beta)))
           (load tmp nil t)
           (when (featurep 'apropos)

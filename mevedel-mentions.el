@@ -641,7 +641,7 @@ teardown instead of letting gptel read PATH."
       (unless (and request (mevedel-request-p request))
         (error "Cannot stage session media without an active request"))
       (let* ((owner (current-buffer))
-             (suffix (when-let ((extension (file-name-extension path)))
+             (suffix (when-let* ((extension (file-name-extension path)))
                        (concat "." extension)))
              (temporary
               (make-temp-file "mevedel-mention-media-" nil suffix))
