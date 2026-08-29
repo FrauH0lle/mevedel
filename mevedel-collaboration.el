@@ -176,16 +176,40 @@ filename can never steer a write.")
 A human re-sending the same text this fast is a double-fired client
 event (double click, stale viewer), not a second question.")
 
-(defvar mevedel-collaboration--room nil
-  "The one process-wide live collaboration room, or nil.")
+(defvar mevedel-collaboration--rooms (make-hash-table :test #'eq)
+  "Live collaboration rooms, keyed by their owning data buffer.
+Each shared session has its own room, key, bearer links, TTL, and
+guest set; nothing about one room reaches another room's guests.")
 
 ;;
 ;;; Small data helpers
 
-(defun mevedel-collaboration--room-data-buffer (&optional room)
+(defun mevedel-collaboration--room-for-buffer (data-buffer)
+  "Return the live room owned by DATA-BUFFER, or nil."
+  (and (bufferp data-buffer)
+       (gethash data-buffer mevedel-collaboration--rooms)))
+
+(defun mevedel-collaboration--room-list ()
+  "Return every live collaboration room."
+  (let (rooms)
+    (maphash (lambda (_buffer room) (push room rooms))
+             mevedel-collaboration--rooms)
+    (nreverse rooms)))
+
+(defun mevedel-collaboration--room-for-overlay (overlay)
+  "Return the room an interaction OVERLAY belongs to, or nil.
+Interactions render into a session's view buffer, whose
+`mevedel--data-buffer' names the owning data buffer."
+  (when-let* ((buffer (overlay-buffer overlay))
+              ((buffer-live-p buffer)))
+    (or (mevedel-collaboration--room-for-buffer buffer)
+        (and (local-variable-p 'mevedel--data-buffer buffer)
+             (mevedel-collaboration--room-for-buffer
+              (buffer-local-value 'mevedel--data-buffer buffer))))))
+
+(defun mevedel-collaboration--room-data-buffer (room)
   "Return the live data buffer for ROOM, or nil."
-  (let ((buffer (plist-get (or room mevedel-collaboration--room)
-                           :data-buffer)))
+  (let ((buffer (plist-get room :data-buffer)))
     (and (buffer-live-p buffer) buffer)))
 
 (defun mevedel-collaboration--current-data-buffer ()
@@ -298,9 +322,8 @@ The name is display-only everywhere and never enters model context."
     (when (> (hash-table-count guests) 0)
       (mevedel-collaboration--transport-send transport 0 frame))))
 
-(defun mevedel-collaboration--publish (&optional room)
+(defun mevedel-collaboration--publish (room)
   "Publish changed records from ROOM to its connected guests."
-  (setq room (or room mevedel-collaboration--room))
   (when room
     (let* ((old (plist-get room :records))
            (new (mevedel-collaboration--reuse-record-ids
@@ -334,7 +357,6 @@ The name is display-only everywhere and never enters model context."
                               record))
                         new))
       (setq room (plist-put room :records new))
-      (setq mevedel-collaboration--room room)
       (dolist (record changed)
         (mevedel-collaboration--broadcast
          room (list :t "record"
@@ -369,47 +391,43 @@ enqueue and this call makes possible."
                                   :test #'equal)))
     (1+ index)))
 
-(defun mevedel-collaboration--publish-queue (&optional room)
+(defun mevedel-collaboration--publish-queue (room)
   "Broadcast ROOM's queue state to its guests when it has changed."
-  (setq room (or room mevedel-collaboration--room))
   (when room
     (let ((state (mevedel-collaboration--queue-state room)))
       (unless (equal state (plist-get room :queue))
-        (setq mevedel-collaboration--room (plist-put room :queue state))
+        (setq room (plist-put room :queue state))
         (when state
           (mevedel-collaboration--broadcast
            room (list :t "queue"
                       :pending (plist-get state :pending)
                       :paused (plist-get state :paused))))))))
 
-(defun mevedel-collaboration--publish-timer ()
-  "Run the coalesced collaboration publication timer."
-  (let ((room mevedel-collaboration--room))
-    (when room
-      (setq mevedel-collaboration--room
-            (plist-put room :publish-timer nil))
-      (mevedel-collaboration--publish room))))
+(defun mevedel-collaboration--publish-timer (data-buffer)
+  "Run the coalesced publication timer for DATA-BUFFER's room."
+  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
+    (setq room (plist-put room :publish-timer nil))
+    (mevedel-collaboration--publish room)))
 
 (defun mevedel-collaboration--safe-accepted-prompt (data-buffer)
   "Publish DATA-BUFFER immediately after an accepted prompt is inserted.
 
 This observer is failure-isolated so a collaboration viewer cannot block the
 request or prompt transaction."
-  (condition-case nil
-      (when-let* ((room mevedel-collaboration--room))
-        (when (eq data-buffer (plist-get room :data-buffer))
-          (mevedel-collaboration--publish room)))
-    (error (mevedel-collaboration--observer-failure)))
+  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
+    (condition-case nil
+        (mevedel-collaboration--publish room)
+      (error (mevedel-collaboration--observer-failure room))))
   nil)
 
-(defun mevedel-collaboration--schedule-publish ()
-  "Coalesce assistant stream updates for the active room."
-  (when-let* ((room mevedel-collaboration--room))
-    (unless (plist-get room :publish-timer)
-      (setq mevedel-collaboration--room
-            (plist-put room :publish-timer
-                       (run-at-time mevedel-collaboration--publish-delay nil
-                                    #'mevedel-collaboration--publish-timer))))))
+(defun mevedel-collaboration--schedule-publish (room)
+  "Coalesce assistant stream updates for ROOM."
+  (when (and room (not (plist-get room :publish-timer)))
+    (setq room
+          (plist-put room :publish-timer
+                     (run-at-time mevedel-collaboration--publish-delay nil
+                                  #'mevedel-collaboration--publish-timer
+                                  (plist-get room :data-buffer))))))
 
 ;;
 ;;; Snapshot delivery
@@ -522,8 +540,8 @@ output to the answering guest.")
 A re-render of the same interaction -- the permission queue redraws its
 head on every selection change -- reuses the existing request id, so a
 guest sees one card updated in place instead of an accumulating pile."
-  (when-let* ((room mevedel-collaboration--room)
-             (remote (overlay-get overlay 'mevedel--remote)))
+  (when-let* ((room (mevedel-collaboration--room-for-overlay overlay))
+              (remote (overlay-get overlay 'mevedel--remote)))
     (when mevedel-collaboration-remote-interactions
       (let* ((requests (plist-get room :ui-requests))
              (interaction-id
@@ -550,8 +568,11 @@ guest sees one card updated in place instead of an accumulating pile."
              (plist-get room :transport) peer frame)))))))
 
 (defun mevedel-collaboration--on-prompt-settled (overlay)
-  "Dismiss OVERLAY's ui-request from every guest surface."
-  (when-let* ((room mevedel-collaboration--room))
+  "Dismiss OVERLAY's ui-request from every guest surface.
+Every room is searched rather than the overlay's buffer resolved: a
+settled overlay may already be deleted, and a deleted overlay no longer
+knows where it lived."
+  (dolist (room (mevedel-collaboration--room-list))
     (let ((requests (plist-get room :ui-requests)))
       (maphash
        (lambda (request-id tracked)
@@ -856,32 +877,32 @@ budget -- drops the whole set rather than attaching a partial one."
                 (mevedel-view-abort))
             (mevedel-view--abort-data-buffer data-buffer)))))))
 
-(defun mevedel-collaboration--on-frame (peer frame)
-  "Dispatch decoded guest FRAME from PEER for the active room.
+(defun mevedel-collaboration--on-frame (data-buffer peer frame)
+  "Dispatch decoded guest FRAME from PEER for DATA-BUFFER's room.
 
 Failure isolation mirrors the gptel observers: a fault in guest input
 handling stops the room instead of leaking into the session."
-  (condition-case nil
-      (when-let* ((room mevedel-collaboration--room))
+  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
+    (condition-case nil
         (pcase (plist-get frame :t)
           ("hello" (mevedel-collaboration--handle-hello room peer frame))
           ("prompt" (mevedel-collaboration--handle-prompt room peer frame))
           ("abort" (mevedel-collaboration--handle-abort room peer))
           ("ui-response"
-           (mevedel-collaboration--handle-ui-response room peer frame))))
-    (error (mevedel-collaboration--observer-failure))))
+           (mevedel-collaboration--handle-ui-response room peer frame)))
+      (error (mevedel-collaboration--observer-failure room)))))
 
-(defun mevedel-collaboration--on-control (event peer)
-  "Handle relay control EVENT for PEER."
-  (when-let* ((room mevedel-collaboration--room))
+(defun mevedel-collaboration--on-control (data-buffer event peer)
+  "Handle relay control EVENT for PEER in DATA-BUFFER's room."
+  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
     (pcase event
       ;; A joined peer becomes a guest only through its hello frame.
       ('peer-joined nil)
       ('peer-left (remhash peer (plist-get room :guests))))))
 
-(defun mevedel-collaboration--on-state (state)
-  "Track relay transport STATE for the active room."
-  (when-let* ((room mevedel-collaboration--room))
+(defun mevedel-collaboration--on-state (data-buffer state)
+  "Track relay transport STATE for DATA-BUFFER's room."
+  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
     (pcase state
       ;; The relay garbage-collects the room with the host connection, so
       ;; a drop invalidated every guest; they rejoin and re-hello against
@@ -893,17 +914,21 @@ handling stops the room instead of leaking into the session."
 ;;
 ;;; Room lifecycle
 
-(defun mevedel-collaboration--stop-internal (&optional reason)
-  "Stop the active room and all associated processes and timers."
-  (when-let* ((room mevedel-collaboration--room))
+(defun mevedel-collaboration--stop-internal (room &optional reason)
+  "Stop ROOM and all associated processes and timers."
+  (when (and room
+             (eq room (mevedel-collaboration--room-for-buffer
+                       (plist-get room :data-buffer))))
     ;; Clear the authority before any teardown operation can signal.  The
     ;; local ROOM still supplies the transport and timers to close below.
-    (setq mevedel-collaboration--room nil)
-    (remove-hook 'kill-emacs-hook #'mevedel-collaboration--stop-for-emacs)
-    (remove-hook 'mevedel-interaction-prompt-created-hook
-                 #'mevedel-collaboration--on-prompt-created)
-    (remove-hook 'mevedel-interaction-prompt-settled-hook
-                 #'mevedel-collaboration--on-prompt-settled)
+    (remhash (plist-get room :data-buffer) mevedel-collaboration--rooms)
+    ;; The global hooks serve every room; they leave with the last one.
+    (when (zerop (hash-table-count mevedel-collaboration--rooms))
+      (remove-hook 'kill-emacs-hook #'mevedel-collaboration--stop-for-emacs)
+      (remove-hook 'mevedel-interaction-prompt-created-hook
+                   #'mevedel-collaboration--on-prompt-created)
+      (remove-hook 'mevedel-interaction-prompt-settled-hook
+                   #'mevedel-collaboration--on-prompt-settled))
     (when-let* ((data-buffer (plist-get room :data-buffer)))
       (when (buffer-live-p data-buffer)
         (with-current-buffer data-buffer
@@ -927,35 +952,35 @@ handling stops the room instead of leaking into the session."
 
 (defun mevedel-collaboration--stop-for-buffer ()
   "Stop sharing when the owning data buffer is killed."
-  (when (eq (current-buffer)
-            (mevedel-collaboration--room-data-buffer))
-    (mevedel-collaboration--stop-internal 'data-buffer-killed)))
+  (when-let* ((room (mevedel-collaboration--room-for-buffer
+                     (current-buffer))))
+    (mevedel-collaboration--stop-internal room 'data-buffer-killed)))
 
 (defun mevedel-collaboration--stop-for-session ()
   "Stop sharing from a data buffer's SessionEnd hook."
   (mevedel-collaboration--stop-for-buffer))
 
 (defun mevedel-collaboration--stop-for-emacs ()
-  "Stop sharing before Emacs exits."
-  (mevedel-collaboration--stop-internal 'emacs-exit))
+  "Stop every share before Emacs exits."
+  (dolist (room (mevedel-collaboration--room-list))
+    (mevedel-collaboration--stop-internal room 'emacs-exit)))
 
-(defun mevedel-collaboration--stop-for-ttl ()
-  "Stop sharing when the share TTL expires."
-  (when mevedel-collaboration--room
-    (mevedel-collaboration--stop-internal 'ttl-expired)
-    (message "mevedel: collaboration share expired")))
+(defun mevedel-collaboration--stop-for-ttl (data-buffer)
+  "Stop DATA-BUFFER's share when its TTL expires."
+  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
+    (mevedel-collaboration--stop-internal room 'ttl-expired)
+    (message "mevedel: collaboration share expired for %s"
+             (plist-get room :session-label))))
 
 (cl-defun mevedel-collaboration--start (session data-buffer)
   "Start a room for SESSION and DATA-BUFFER and return the room.
 
-The early return below needs the block a `cl-defun' establishes; a plain
-`defun' would signal `no-catch' instead of returning the live room."
-  (when (plist-get mevedel-collaboration--room :transport)
-    (let ((room mevedel-collaboration--room))
-      (if (eq session (plist-get room :session))
-          (cl-return-from mevedel-collaboration--start room)
-        (user-error "Collaboration already belongs to session %s"
-                    (plist-get room :session-label)))))
+Each session gets its own room; sharing a second session never touches
+the first.  The early return below needs the block a `cl-defun'
+establishes; a plain `defun' would signal `no-catch' instead of
+returning the live room."
+  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
+    (cl-return-from mevedel-collaboration--start room))
   (pcase-let* ((`(,ws-origin . ,web-origin)
                 (mevedel-collaboration--relay-origins))
                (room-id (mevedel-collaboration--base64url
@@ -974,10 +999,16 @@ The early return below needs the block a `cl-defun' establishes; a plain
                    (format "%s/r/%s?role=host" ws-origin room-id)
                    key
                    :headers (mevedel-collaboration--host-headers)
-                   :on-frame #'mevedel-collaboration--on-frame
-                   :on-control #'mevedel-collaboration--on-control
-                   :on-state #'mevedel-collaboration--on-state))
-            (setq mevedel-collaboration--room
+                   :on-frame (lambda (peer frame)
+                               (mevedel-collaboration--on-frame
+                                data-buffer peer frame))
+                   :on-control (lambda (event peer)
+                                 (mevedel-collaboration--on-control
+                                  data-buffer event peer))
+                   :on-state (lambda (state)
+                               (mevedel-collaboration--on-state
+                                data-buffer state))))
+            (puthash data-buffer
                   (list :transport transport
                         :session session
                         :data-buffer data-buffer
@@ -1005,7 +1036,9 @@ The early return below needs the block a `cl-defun' establishes; a plain
                         :ttl-timer
                         (when mevedel-collaboration-share-ttl
                           (run-at-time mevedel-collaboration-share-ttl nil
-                                       #'mevedel-collaboration--stop-for-ttl))))
+                                       #'mevedel-collaboration--stop-for-ttl
+                                       data-buffer)))
+                  mevedel-collaboration--rooms)
             (with-current-buffer data-buffer
               (add-hook 'kill-buffer-hook
                         #'mevedel-collaboration--stop-for-buffer nil t)
@@ -1021,15 +1054,15 @@ The early return below needs the block a `cl-defun' establishes; a plain
                       #'mevedel-collaboration--on-prompt-created)
             (add-hook 'mevedel-interaction-prompt-settled-hook
                       #'mevedel-collaboration--on-prompt-settled)
-            mevedel-collaboration--room)
+            (mevedel-collaboration--room-for-buffer data-buffer))
         (error
          (condition-case nil
-             (if (and mevedel-collaboration--room
-                      (eq (plist-get mevedel-collaboration--room :transport)
-                          transport))
-                 (mevedel-collaboration--stop-internal 'start-failed)
-               (when transport
-                 (mevedel-collaboration--transport-stop transport)))
+             (let ((room (mevedel-collaboration--room-for-buffer
+                          data-buffer)))
+               (if (and room (eq (plist-get room :transport) transport))
+                   (mevedel-collaboration--stop-internal room 'start-failed)
+                 (when transport
+                   (mevedel-collaboration--transport-stop transport))))
            (error nil))
          (signal (car error-data) (cdr error-data)))))))
 
@@ -1053,15 +1086,12 @@ The early return below needs the block a `cl-defun' establishes; a plain
                        (with-current-buffer data-buffer
                          (and (boundp 'mevedel--session)
                               mevedel--session))))
-         (room mevedel-collaboration--room))
+         (room (mevedel-collaboration--room-for-buffer data-buffer)))
     (unless (and data-buffer session)
       (user-error "No active mevedel session in this buffer"))
     (cond
-     ((and room (eq session (plist-get room :session)))
-      (mevedel-collaboration--report-links room))
      (room
-      (user-error "Collaboration already belongs to session %s"
-                  (plist-get room :session-label)))
+      (mevedel-collaboration--report-links room))
      ((not
        (yes-or-no-p
         (concat
@@ -1074,34 +1104,49 @@ The early return below needs the block a `cl-defun' establishes; a plain
        (mevedel-collaboration--start session data-buffer))))))
 
 (defun mevedel-collaboration-stop ()
-  "Stop the active collaboration room."
+  "Stop the current session's share, or every share outside one."
   (interactive)
-  (if mevedel-collaboration--room
-      (progn
-        (mevedel-collaboration--stop-internal 'user-stop)
-        (message "mevedel: collaboration stopped"))
-    (message "mevedel: collaboration is not active")))
+  (let ((rooms (mevedel-collaboration--room-list)))
+    (cond
+     ((null rooms)
+      (message "mevedel: collaboration is not active"))
+     ((when-let* ((room (mevedel-collaboration--room-for-buffer
+                         (mevedel-collaboration--current-data-buffer))))
+        (mevedel-collaboration--stop-internal room 'user-stop)
+        (message "mevedel: collaboration stopped for %s"
+                 (plist-get room :session-label))
+        t))
+     (t
+      (dolist (room rooms)
+        (mevedel-collaboration--stop-internal room 'user-stop))
+      (message "mevedel: stopped %d collaboration share%s"
+               (length rooms) (if (= 1 (length rooms)) "" "s"))))))
+
+(defun mevedel-collaboration--room-status (room)
+  "Return a status line for ROOM without exposing its secrets."
+  (let ((transport (plist-get room :transport))
+        (guests (plist-get room :guests))
+        names)
+    (maphash (lambda (_peer guest)
+               (push (format "%s%s" (plist-get guest :name)
+                             (if (plist-get guest :writable) "" " (view)"))
+                     names))
+             guests)
+    (format "%s: relay %s; %s"
+            (plist-get room :session-label)
+            (if (mevedel-collaboration--transport-open-p transport)
+                "connected" "reconnecting")
+            (if names
+                (format "guests: %s"
+                        (mapconcat #'identity (nreverse names) ", "))
+              "no guest connected"))))
 
 (defun mevedel-collaboration-status ()
-  "Report active collaboration status without exposing its secrets."
+  "Report every active share's status without exposing its secrets."
   (interactive)
-  (if-let* ((room mevedel-collaboration--room))
-      (let* ((transport (plist-get room :transport))
-             (guests (plist-get room :guests))
-             names)
-        (maphash (lambda (_peer guest)
-                   (push (format "%s%s" (plist-get guest :name)
-                                 (if (plist-get guest :writable) "" " (view)"))
-                         names))
-                 guests)
-        (message "mevedel: collaboration active for %s; relay %s; %s"
-                 (plist-get room :session-label)
-                 (if (mevedel-collaboration--transport-open-p transport)
-                     "connected" "reconnecting")
-                 (if names
-                     (format "guests: %s"
-                             (mapconcat #'identity (nreverse names) ", "))
-                   "no guest connected")))
+  (if-let* ((rooms (mevedel-collaboration--room-list)))
+      (message "mevedel: collaboration active for %s"
+               (mapconcat #'mevedel-collaboration--room-status rooms "; "))
     (message "mevedel: collaboration inactive")))
 
 
@@ -1109,9 +1154,11 @@ The early return below needs the block a `cl-defun' establishes; a plain
 ;;; gptel and lifecycle hooks
 
 (defun mevedel-collaboration--pre-tool (info)
-  "Publish a running tool record for gptel tool-call INFO."
-  (when-let* ((room mevedel-collaboration--room))
-    (when (eq (current-buffer) (plist-get room :data-buffer))
+  "Publish a running tool record for gptel tool-call INFO.
+Runs from a buffer-local hook, so the current buffer names the room."
+  (when-let* ((room (mevedel-collaboration--room-for-buffer
+                     (current-buffer))))
+    (progn
       (let* ((name (format "%s" (plist-get info :name)))
              (call-key (mevedel-collaboration--tool-call-key info))
              (pending (plist-get room :pending-tools))
@@ -1154,8 +1201,7 @@ The early return below needs the block a `cl-defun' establishes; a plain
                           name (plist-get info :args)))))
             (puthash call-key (1+ occurrence) occurrences)
             (setq room (plist-put room :pending-tools
-                                  (append pending (list entry))))
-            (setq mevedel-collaboration--room room)))
+                                  (append pending (list entry))))))
         ;; Tool start is intentionally published immediately.  A short tool
         ;; still has a truthful completion transition, while a long tool is
         ;; visible as running before it produces a result.
@@ -1163,9 +1209,11 @@ The early return below needs the block a `cl-defun' establishes; a plain
   nil)
 
 (defun mevedel-collaboration--post-tool (info)
-  "Publish the settled result for gptel tool-call INFO."
-  (when-let* ((room mevedel-collaboration--room))
-    (when (eq (current-buffer) (plist-get room :data-buffer))
+  "Publish the settled result for gptel tool-call INFO.
+Runs from a buffer-local hook, so the current buffer names the room."
+  (when-let* ((room (mevedel-collaboration--room-for-buffer
+                     (current-buffer))))
+    (progn
       (let* ((pending (plist-get room :pending-tools))
              entry)
         (dolist (candidate pending)
@@ -1186,21 +1234,24 @@ The early return below needs the block a `cl-defun' establishes; a plain
   "Run the live tool-start observer without signaling into gptel."
   (condition-case nil
       (mevedel-collaboration--pre-tool info)
-    (error (mevedel-collaboration--observer-failure)))
+    (error (mevedel-collaboration--observer-failure
+            (mevedel-collaboration--room-for-buffer (current-buffer)))))
   nil)
 
 (defun mevedel-collaboration--safe-post-tool (info)
   "Run the live tool-settlement observer without signaling into gptel."
   (condition-case nil
       (mevedel-collaboration--post-tool info)
-    (error (mevedel-collaboration--observer-failure)))
+    (error (mevedel-collaboration--observer-failure
+            (mevedel-collaboration--room-for-buffer (current-buffer)))))
   nil)
 
-(defun mevedel-collaboration--observer-failure ()
-  "Stop the room after an observer failure without affecting the request."
-  (condition-case nil
-      (mevedel-collaboration--stop-internal 'observer-failure)
-    (error nil))
+(defun mevedel-collaboration--observer-failure (room)
+  "Stop ROOM after an observer failure without affecting the request."
+  (when room
+    (condition-case nil
+        (mevedel-collaboration--stop-internal room 'observer-failure)
+      (error nil)))
   (condition-case nil
       (display-warning
        'mevedel "Live collaboration stopped after an observer failure" :warning)
@@ -1208,25 +1259,29 @@ The early return below needs the block a `cl-defun' establishes; a plain
 
 (defun mevedel-collaboration--post-stream ()
   "Schedule a coalesced publication after gptel inserts response text."
-  (when (eq (current-buffer) (mevedel-collaboration--room-data-buffer))
-    (mevedel-collaboration--schedule-publish)))
+  (when-let* ((room (mevedel-collaboration--room-for-buffer
+                     (current-buffer))))
+    (mevedel-collaboration--schedule-publish room)))
 
 (defun mevedel-collaboration--post-response (_start _end)
   "Publish the settled response for the active data buffer."
-  (when (eq (current-buffer) (mevedel-collaboration--room-data-buffer))
-    (mevedel-collaboration--schedule-publish)))
+  (when-let* ((room (mevedel-collaboration--room-for-buffer
+                     (current-buffer))))
+    (mevedel-collaboration--schedule-publish room)))
 
 (defun mevedel-collaboration--safe-post-stream ()
   "Run the stream observer without signaling into gptel."
   (condition-case nil
       (mevedel-collaboration--post-stream)
-    (error (mevedel-collaboration--observer-failure))))
+    (error (mevedel-collaboration--observer-failure
+            (mevedel-collaboration--room-for-buffer (current-buffer))))))
 
 (defun mevedel-collaboration--safe-post-response (start end)
   "Run the response observer without signaling into gptel."
   (condition-case nil
       (mevedel-collaboration--post-response start end)
-    (error (mevedel-collaboration--observer-failure))))
+    (error (mevedel-collaboration--observer-failure
+            (mevedel-collaboration--room-for-buffer (current-buffer))))))
 
 (provide 'mevedel-collaboration)
 ;;; mevedel-collaboration.el ends here

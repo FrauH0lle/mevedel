@@ -31,6 +31,14 @@
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-ui)
 
+(defun mevedel-collab-test--rooms (&rest rooms)
+  "Return a room registry holding ROOMS, keyed by their data buffers."
+  (let ((table (make-hash-table :test #'eq)))
+    (dolist (room rooms)
+      (puthash (or (plist-get room :data-buffer) (make-symbol "room"))
+               room table))
+    table))
+
 
 ;;
 ;;; Credentials and links
@@ -292,7 +300,7 @@
                        :tool-call-occurrences (make-hash-table :test #'equal)
                        :guests (make-hash-table :test #'eql)))
            (info '(:name "Bash" :args (:command "true")))
-           (mevedel-collaboration--room room)
+           (mevedel-collaboration--rooms (mevedel-collab-test--rooms room))
            canonical)
       (cl-letf (((symbol-function 'mevedel-collaboration--canonical-records)
                  (lambda (_) canonical)))
@@ -376,14 +384,13 @@
          (guests (make-hash-table :test #'eql))
          (room (list :records old :transport 'transport :guests guests)))
     (puthash 1 (list :name "g" :writable nil :ready t) guests)
-    (let ((mevedel-collaboration--room room))
-      (cl-letf (((symbol-function 'mevedel-collaboration--project-records)
-                 (lambda (_) new))
-                ((symbol-function 'mevedel-collaboration--transport-send)
-                 (lambda (_transport peer frame)
-                   (push (cons peer frame) sent)
-                   t)))
-        (mevedel-collaboration--publish room)))
+    (cl-letf (((symbol-function 'mevedel-collaboration--project-records)
+               (lambda (_) new))
+              ((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_transport peer frame)
+                 (push (cons peer frame) sent)
+                 t)))
+      (mevedel-collaboration--publish room))
     (setq sent (nreverse sent))
     (should (equal '(0 0) (mapcar #'car sent)))
     (should (equal '("record" "record")
@@ -449,23 +456,22 @@
 (mevedel-deftest mevedel-collaboration--safe-accepted-prompt
   (:doc "publishes accepted prompt insertion and isolates observer failure")
   (with-temp-buffer
-    (let ((room (list :data-buffer (current-buffer)))
-          published stopped)
-      (let ((mevedel-collaboration--room room))
-        (cl-letf (((symbol-function 'mevedel-collaboration--publish)
-                   (lambda (_room) (setq published t))))
-          (should-not (mevedel-collaboration--safe-accepted-prompt
-                       (current-buffer)))
-          (should published)))
-      (let ((mevedel-collaboration--room room))
-        (cl-letf (((symbol-function 'mevedel-collaboration--publish)
-                   (lambda (_) (error "viewer failed")))
-                  ((symbol-function 'mevedel-collaboration--stop-internal)
-                   (lambda (reason) (setq stopped reason)))
-                  ((symbol-function 'display-warning) (lambda (&rest _) nil)))
-          (should-not (mevedel-collaboration--safe-accepted-prompt
-                       (current-buffer)))
-          (should (eq 'observer-failure stopped)))))))
+    (let* ((room (list :data-buffer (current-buffer)))
+           (mevedel-collaboration--rooms (mevedel-collab-test--rooms room))
+           published stopped)
+      (cl-letf (((symbol-function 'mevedel-collaboration--publish)
+                 (lambda (_room) (setq published t))))
+        (should-not (mevedel-collaboration--safe-accepted-prompt
+                     (current-buffer)))
+        (should published))
+      (cl-letf (((symbol-function 'mevedel-collaboration--publish)
+                 (lambda (_) (error "viewer failed")))
+                ((symbol-function 'mevedel-collaboration--stop-internal)
+                 (lambda (_room reason) (setq stopped reason)))
+                ((symbol-function 'display-warning) (lambda (&rest _) nil)))
+        (should-not (mevedel-collaboration--safe-accepted-prompt
+                     (current-buffer)))
+        (should (eq 'observer-failure stopped))))))
 
 (mevedel-deftest mevedel-collaboration--accepted-prompt-insertion-seams
   (:doc "publishes ordinary composer and generated turns at insertion")
@@ -506,13 +512,11 @@
                         ((symbol-function 'gptel-send) (lambda () nil)))
                 (mevedel-view--forward-input-now "ordinary prompt")))
           (with-current-buffer data-buffer
-            (let ((mevedel-collaboration--room
-                   (list :data-buffer data-buffer)))
-              (cl-letf (((symbol-function 'mevedel-collaboration--safe-accepted-prompt)
-                         (lambda (buffer) (setq generated (eq buffer data-buffer))))
-                        ((symbol-function 'mevedel-view--begin-external-turn)
-                         (lambda (&rest _) nil)))
-                (mevedel--insert-local-user-turn "generated prompt"))))
+            (cl-letf (((symbol-function 'mevedel-collaboration--safe-accepted-prompt)
+                       (lambda (buffer) (setq generated (eq buffer data-buffer))))
+                      ((symbol-function 'mevedel-view--begin-external-turn)
+                       (lambda (&rest _) nil)))
+              (mevedel--insert-local-user-turn "generated prompt")))
           (should ordinary)
           (should generated)
           (with-current-buffer data-buffer
@@ -877,7 +881,6 @@
          (guests (make-hash-table :test #'eql))
          (room (list :session session :guests guests
                      :transport 'transport :queue nil))
-         (mevedel-collaboration--room nil)
          sent)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
@@ -1013,6 +1016,7 @@
     (let* ((guests (make-hash-table :test #'eql))
            (requests (make-hash-table :test #'eql))
            (room (list :transport 'transport :guests guests
+                       :data-buffer (current-buffer)
                        :ui-requests requests))
            (overlay (make-overlay 1 5))
            sent)
@@ -1024,7 +1028,7 @@
       (overlay-put overlay 'mevedel-view-interaction-id 'patch-review)
       (puthash 1 (list :name "phone" :writable t :ready t) guests)
       (puthash 2 (list :name "laptop" :writable nil :ready t) guests)
-      (let ((mevedel-collaboration--room room)
+      (let ((mevedel-collaboration--rooms (mevedel-collab-test--rooms room))
             (mevedel-collaboration-remote-interactions t))
         (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                    (lambda (_transport peer frame)
@@ -1077,6 +1081,7 @@
     (let* ((guests (make-hash-table :test #'eql))
            (requests (make-hash-table :test #'eql))
            (room (list :transport 'transport :guests guests
+                       :data-buffer (current-buffer)
                        :ui-requests requests))
            (overlay (make-overlay 1 5))
            (accepted nil)
@@ -1089,7 +1094,7 @@
       (puthash 1 (list :name "phone" :writable t :ready t) guests)
       (puthash 2 (list :name "laptop" :writable nil :ready t) guests)
       (puthash 41 overlay requests)
-      (let ((mevedel-collaboration--room room)
+      (let ((mevedel-collaboration--rooms (mevedel-collab-test--rooms room))
             (mevedel-collaboration-remote-interactions t))
         (cl-letf (((symbol-function 'mevedel--prompt--settle)
                    (lambda (_overlay outcome) (setq settled outcome)))
@@ -1190,44 +1195,51 @@
 
 (mevedel-deftest mevedel-collaboration--on-frame
   (:doc "dispatches known frames and stops the room on handler failure")
-  (let ((room (list :guests (make-hash-table :test #'eql)))
-        handled stopped)
-    (let ((mevedel-collaboration--room room))
+  (with-temp-buffer
+    (let* ((room (list :data-buffer (current-buffer)
+                       :guests (make-hash-table :test #'eql)))
+           (mevedel-collaboration--rooms (mevedel-collab-test--rooms room))
+           handled stopped)
       (cl-letf (((symbol-function 'mevedel-collaboration--handle-hello)
                  (lambda (_room peer _frame) (setq handled peer))))
-        (mevedel-collaboration--on-frame 5 (list :t "hello" :proto 2)))
+        (mevedel-collaboration--on-frame (current-buffer) 5
+                                         (list :t "hello" :proto 2)))
       (should (= 5 handled))
       ;; Unknown frame types are tolerated.
-      (mevedel-collaboration--on-frame 5 (list :t "future-frame"))
+      (mevedel-collaboration--on-frame (current-buffer) 5
+                                       (list :t "future-frame"))
       (cl-letf (((symbol-function 'mevedel-collaboration--handle-prompt)
                  (lambda (&rest _) (error "Handler fault")))
                 ((symbol-function 'mevedel-collaboration--stop-internal)
-                 (lambda (reason) (setq stopped reason)))
+                 (lambda (_room reason) (setq stopped reason)))
                 ((symbol-function 'display-warning) (lambda (&rest _) nil)))
-        (mevedel-collaboration--on-frame 5 (list :t "prompt" :text "x"))
+        (mevedel-collaboration--on-frame (current-buffer) 5
+                                         (list :t "prompt" :text "x"))
         (should (eq 'observer-failure stopped))))))
 
 (mevedel-deftest mevedel-collaboration--on-control
   (:doc "drops a guest on peer-left and waits for hello on peer-joined")
-  (let* ((guests (make-hash-table :test #'eql))
-         (room (list :guests guests))
-         (mevedel-collaboration--room room))
-    (mevedel-collaboration--on-control 'peer-joined 1)
-    (should (= 0 (hash-table-count guests)))
-    (puthash 1 (list :name "g") guests)
-    (mevedel-collaboration--on-control 'peer-left 1)
-    (should (= 0 (hash-table-count guests)))))
+  (with-temp-buffer
+    (let* ((guests (make-hash-table :test #'eql))
+           (room (list :data-buffer (current-buffer) :guests guests))
+           (mevedel-collaboration--rooms (mevedel-collab-test--rooms room)))
+      (mevedel-collaboration--on-control (current-buffer) 'peer-joined 1)
+      (should (= 0 (hash-table-count guests)))
+      (puthash 1 (list :name "g") guests)
+      (mevedel-collaboration--on-control (current-buffer) 'peer-left 1)
+      (should (= 0 (hash-table-count guests))))))
 
 (mevedel-deftest mevedel-collaboration--on-state
   (:doc "clears the guest registry when the relay connection drops")
-  (let* ((guests (make-hash-table :test #'eql))
-         (room (list :guests guests))
-         (mevedel-collaboration--room room))
-    (puthash 1 (list :name "g") guests)
-    (mevedel-collaboration--on-state 'down)
-    (should (= 0 (hash-table-count guests)))
-    (mevedel-collaboration--on-state 'open)
-    (mevedel-collaboration--on-state 'stopped)))
+  (with-temp-buffer
+    (let* ((guests (make-hash-table :test #'eql))
+           (room (list :data-buffer (current-buffer) :guests guests))
+           (mevedel-collaboration--rooms (mevedel-collab-test--rooms room)))
+      (puthash 1 (list :name "g") guests)
+      (mevedel-collaboration--on-state (current-buffer) 'down)
+      (should (= 0 (hash-table-count guests)))
+      (mevedel-collaboration--on-state (current-buffer) 'open)
+      (mevedel-collaboration--on-state (current-buffer) 'stopped))))
 
 ;;
 ;;; Room lifecycle
@@ -1237,7 +1249,7 @@
   (with-temp-buffer
     (let ((mevedel-collaboration-relay-url "ws://127.0.0.1:1")
           (mevedel-collaboration-share-ttl 60)
-          (mevedel-collaboration--room nil)
+          (mevedel-collaboration--rooms (make-hash-table :test #'eq))
           (session (mevedel-session--create :name "share"))
           dialed room)
       (unwind-protect
@@ -1277,18 +1289,66 @@
             ;; Restarting for the same session reuses the room.
             (should (eq room (mevedel-collaboration--start
                               session (current-buffer)))))
-        (when-let* ((timer (plist-get mevedel-collaboration--room :ttl-timer)))
+        (when-let* ((timer (plist-get room :ttl-timer)))
           (cancel-timer timer))
-        (setq mevedel-collaboration--room nil)
         (remove-hook 'kill-emacs-hook
-                     #'mevedel-collaboration--stop-for-emacs)))))
+                     #'mevedel-collaboration--stop-for-emacs)
+        (remove-hook 'mevedel-interaction-prompt-created-hook
+                     #'mevedel-collaboration--on-prompt-created)
+        (remove-hook 'mevedel-interaction-prompt-settled-hook
+                     #'mevedel-collaboration--on-prompt-settled)))))
 
-(mevedel-deftest mevedel-collaboration--second-session
-  (:doc "rejects a second session while one room is active")
-  (let ((mevedel-collaboration--room
-         (list :transport 'transport :session 'first :session-label "first")))
-    (should-error (mevedel-collaboration--start 'second (current-buffer))
-                  :type 'user-error)))
+(mevedel-deftest mevedel-collaboration--multi-room
+  (:doc "gives each shared session its own independent room")
+  (let ((data-a (generate-new-buffer " *collab-multi-a*"))
+        (data-b (generate-new-buffer " *collab-multi-b*"))
+        (mevedel-collaboration-relay-url "ws://127.0.0.1:1")
+        (mevedel-collaboration-share-ttl nil)
+        (mevedel-collaboration--rooms (make-hash-table :test #'eq))
+        (session-a (mevedel-session--create :name "a"))
+        (session-b (mevedel-session--create :name "b"))
+        stopped-transports room-a room-b)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-open)
+                   (lambda (url &rest _) (list :url url)))
+                  ((symbol-function 'mevedel-collaboration--transport-stop)
+                   (lambda (transport) (push transport stopped-transports)))
+                  ((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (&rest _) t))
+                  ((symbol-function 'mevedel-collaboration--canonical-records)
+                   (lambda (_) nil)))
+          (setq room-a (mevedel-collaboration--start session-a data-a)
+                room-b (mevedel-collaboration--start session-b data-b))
+          ;; Two live rooms with distinct credentials and links.
+          (should (= 2 (length (mevedel-collaboration--room-list))))
+          (should-not (eq room-a room-b))
+          (should-not (equal (plist-get room-a :key)
+                             (plist-get room-b :key)))
+          (should-not (equal (plist-get room-a :link-view)
+                             (plist-get room-b :link-view)))
+          ;; A frame for one data buffer reaches only that room.
+          (let (handled)
+            (cl-letf (((symbol-function 'mevedel-collaboration--handle-hello)
+                       (lambda (room _peer _frame) (push room handled))))
+              (mevedel-collaboration--on-frame data-a 1
+                                               (list :t "hello" :proto 2)))
+            (should (equal (list room-a) handled)))
+          ;; Stopping one room leaves the other live and untouched.
+          (mevedel-collaboration--stop-internal room-a 'user-stop)
+          (should (equal (list room-b)
+                         (mevedel-collaboration--room-list)))
+          (should (equal (list (plist-get room-a :transport))
+                         stopped-transports))
+          (mevedel-collaboration--stop-internal room-b 'user-stop)
+          (should-not (mevedel-collaboration--room-list)))
+      (kill-buffer data-a)
+      (kill-buffer data-b)
+      (remove-hook 'kill-emacs-hook
+                   #'mevedel-collaboration--stop-for-emacs)
+      (remove-hook 'mevedel-interaction-prompt-created-hook
+                   #'mevedel-collaboration--on-prompt-created)
+      (remove-hook 'mevedel-interaction-prompt-settled-hook
+                   #'mevedel-collaboration--on-prompt-settled))))
 
 (mevedel-deftest mevedel-collaboration--stop-internal
   (:doc "says bye to guests, stops the transport, and cancels timers")
@@ -1303,7 +1363,7 @@
                        :publish-timer 'publish-timer
                        :ttl-timer 'ttl-timer)))
       (puthash 1 (list :name "g") guests)
-      (let ((mevedel-collaboration--room room))
+      (let ((mevedel-collaboration--rooms (mevedel-collab-test--rooms room)))
         (cl-letf (((symbol-function 'cancel-timer)
                    (lambda (timer) (push timer cancelled)))
                   ((symbol-function 'mevedel-collaboration--transport-send)
@@ -1312,8 +1372,8 @@
                      t))
                   ((symbol-function 'mevedel-collaboration--transport-stop)
                    (lambda (_transport) (setq transport-stopped t))))
-          (mevedel-collaboration--stop-internal 'user-stop)))
-      (should-not mevedel-collaboration--room)
+          (mevedel-collaboration--stop-internal room 'user-stop))
+        (should-not (mevedel-collaboration--room-list)))
       (should (equal '(publish-timer ttl-timer) (nreverse cancelled)))
       (should (equal "bye" (plist-get (cdr (car sent)) :t)))
       (should transport-stopped))))
@@ -1321,28 +1381,28 @@
 (mevedel-deftest mevedel-collaboration--lifecycle-hooks
   (:doc "stops on data-buffer, session, TTL, and Emacs lifecycle teardown")
   (with-temp-buffer
-    (let ((room (list :data-buffer (current-buffer)))
-          reasons)
-      (let ((mevedel-collaboration--room room))
-        (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
-                   (lambda (reason) (push reason reasons)))
-                  ((symbol-function 'message) (lambda (&rest _) nil)))
-          (mevedel-collaboration--stop-for-buffer)
-          (mevedel-collaboration--stop-for-session)
-          (mevedel-collaboration--stop-for-ttl)
-          (mevedel-collaboration--stop-for-emacs))
-        (should (equal '(emacs-exit ttl-expired data-buffer-killed
-                                    data-buffer-killed)
-                       reasons))))))
+    (let* ((room (list :data-buffer (current-buffer)))
+           (mevedel-collaboration--rooms (mevedel-collab-test--rooms room))
+           reasons)
+      (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
+                 (lambda (_room reason) (push reason reasons)))
+                ((symbol-function 'message) (lambda (&rest _) nil)))
+        (mevedel-collaboration--stop-for-buffer)
+        (mevedel-collaboration--stop-for-session)
+        (mevedel-collaboration--stop-for-ttl (current-buffer))
+        (mevedel-collaboration--stop-for-emacs))
+      (should (equal '(emacs-exit ttl-expired data-buffer-killed
+                                  data-buffer-killed)
+                     reasons)))))
 
 (mevedel-deftest mevedel-collaboration--stop-for-session
   (:doc "stops the room when its owning data buffer ends the session")
   (with-temp-buffer
-    (let ((stopped nil)
-          (mevedel-collaboration--room
-           (list :data-buffer (current-buffer))))
+    (let* ((stopped nil)
+           (room (list :data-buffer (current-buffer)))
+           (mevedel-collaboration--rooms (mevedel-collab-test--rooms room)))
       (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
-                 (lambda (reason) (setq stopped reason))))
+                 (lambda (_room reason) (setq stopped reason))))
         (mevedel-collaboration--stop-for-session)
         (should (eq 'data-buffer-killed stopped))))))
 
@@ -1351,27 +1411,30 @@
 
 (mevedel-deftest mevedel-collaboration--safe-post-stream
   (:doc "contains observer failures without signaling into the request")
-  (let ((stopped nil))
-    (cl-letf (((symbol-function 'mevedel-collaboration--post-stream)
-               (lambda () (error "Observer failure")))
-              ((symbol-function 'mevedel-collaboration--stop-internal)
-               (lambda (reason) (setq stopped reason)))
-              ((symbol-function 'display-warning) (lambda (&rest _) nil)))
-      (should-not (mevedel-collaboration--safe-post-stream))
-      (should (eq 'observer-failure stopped)))))
+  (with-temp-buffer
+    (let* ((stopped nil)
+           (room (list :data-buffer (current-buffer)))
+           (mevedel-collaboration--rooms (mevedel-collab-test--rooms room)))
+      (cl-letf (((symbol-function 'mevedel-collaboration--post-stream)
+                 (lambda () (error "Observer failure")))
+                ((symbol-function 'mevedel-collaboration--stop-internal)
+                 (lambda (_room reason) (setq stopped reason)))
+                ((symbol-function 'display-warning) (lambda (&rest _) nil)))
+        (should-not (mevedel-collaboration--safe-post-stream))
+        (should (eq 'observer-failure stopped))))))
 
 (mevedel-deftest mevedel-collaboration-status
   (:doc "reports safe active and inactive status without exposing secrets")
   (let* ((messages nil)
          (guests (make-hash-table :test #'eql))
-         (mevedel-collaboration--room
-          (list :session-label "share"
-                :transport 'transport
-                :key "secret-key-bytes"
-                :write-token "secret-token"
-                :link-full "http://example/#room.full-secret"
-                :link-view "http://example/#room.view-secret"
-                :guests guests)))
+         (room (list :session-label "share"
+                     :transport 'transport
+                     :key "secret-key-bytes"
+                     :write-token "secret-token"
+                     :link-full "http://example/#room.full-secret"
+                     :link-view "http://example/#room.view-secret"
+                     :guests guests))
+         (mevedel-collaboration--rooms (mevedel-collab-test--rooms room)))
     (puthash 1 (list :name "Phone" :writable t :ready t) guests)
     (puthash 2 (list :name "Laptop" :writable nil :ready t) guests)
     (cl-letf (((symbol-function 'message)
@@ -1385,7 +1448,7 @@
       (should (string-match-p "Phone" (car messages)))
       (should (string-match-p "Laptop (view)" (car messages)))
       (should-not (string-match-p "secret" (car messages)))
-      (setq mevedel-collaboration--room nil)
+      (clrhash mevedel-collaboration--rooms)
       (mevedel-collaboration-status)
       (should (string-match-p "inactive" (car messages))))))
 
@@ -1393,28 +1456,29 @@
   (:doc "preserves a multiline composer draft beginning with >")
   (with-temp-buffer
     (insert "> first line\nsecond line\n> third line")
-    (let ((before (buffer-string))
-          (mevedel-collaboration--room
-           (list :session-label "draft" :transport nil
-                 :guests (make-hash-table :test #'eql))))
+    (let* ((before (buffer-string))
+           (room (list :session-label "draft" :transport nil
+                       :guests (make-hash-table :test #'eql)))
+           (mevedel-collaboration--rooms (mevedel-collab-test--rooms room)))
       (cl-letf (((symbol-function 'message) (lambda (&rest _) nil)))
         (mevedel-collaboration-status))
       (should (equal before (buffer-string))))))
 
 (mevedel-deftest mevedel-collaboration-stop
-  (:doc "stops an active room through the public command")
-  (let ((stopped nil)
-        (messages nil)
-        (mevedel-collaboration--room (list :transport 'transport)))
+  (:doc "stops the current or only room through the public command")
+  (let* ((stopped nil)
+         (messages nil)
+         (room (list :transport 'transport :session-label "share"))
+         (mevedel-collaboration--rooms (mevedel-collab-test--rooms room)))
     (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
-               (lambda (reason) (setq stopped reason)))
+               (lambda (_room reason) (setq stopped reason)))
               ((symbol-function 'message)
                (lambda (format-string &rest args)
                  (push (apply #'format format-string args) messages))))
       (mevedel-collaboration-stop)
       (should (eq 'user-stop stopped))
       (should (string-match-p "stopped" (car messages)))
-      (setq mevedel-collaboration--room nil)
+      (clrhash mevedel-collaboration--rooms)
       (mevedel-collaboration-stop)
       (should (string-match-p "not active" (car messages))))))
 
