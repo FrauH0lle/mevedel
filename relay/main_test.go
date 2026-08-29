@@ -261,6 +261,17 @@ func TestHealthzAndViewer(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "mevedel") {
 		t.Fatalf("viewer index: %d, body %q...", resp.StatusCode, body[:min(len(body), 80)])
 	}
+	// The installable-viewer assets ship in the embedded bundle.
+	for _, path := range []string{"/manifest.json", "/icon.svg", "/icon.png"} {
+		resp, err = http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d", path, resp.StatusCode)
+		}
+	}
 }
 
 func TestViewerNotCached(t *testing.T) {

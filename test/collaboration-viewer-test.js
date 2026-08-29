@@ -153,12 +153,30 @@ async function main() {
                'composer', 'composer-input', 'composer-name',
                'send-button', 'stop-button', 'filter', 'requests',
                'session-label', 'queue-state', 'attachments',
-               'attach-button', 'image-input'];
+               'attach-button', 'image-input', 'notify-button',
+               'composer-scope'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.composer.hidden = true;
+  nodes.filter.hidden = true;
+  nodes['notify-button'].hidden = true;
   const sockets = [];
   let timer;
   const storage = new Map();
+  // Web Notification stand-in: permission flows and constructed
+  // notifications are observable, nothing is displayed.
+  const shownNotifications = [];
+  class FakeNotification {
+    constructor(title, options = {}) {
+      this.title = title;
+      this.body = options.body || '';
+      shownNotifications.push(this);
+    }
+    static permission = 'default';
+    static async requestPermission() {
+      FakeNotification.permission = 'granted';
+      return 'granted';
+    }
+  }
   const window = {
     location: {
       href: `http://127.0.0.1:1/index.html#${roomId}.${fullSecret}`,
@@ -177,6 +195,7 @@ async function main() {
     getElementById(id) { return nodes[id]; },
     createElement(tag) { return new Element(tag); },
     documentElement: {scrollHeight: 100},
+    hidden: false,
   };
   class TestWebSocket extends Socket {
     constructor(url) { super(); this.url = url; sockets.push(this); }
@@ -184,7 +203,7 @@ async function main() {
   const context = {
     document, window, WebSocket: TestWebSocket, URL, console,
     crypto, TextEncoder, TextDecoder, atob, btoa, Date,
-    Event: FakeEvent,
+    Event: FakeEvent, Notification: FakeNotification,
     localStorage: {
       getItem: k => (storage.has(k) ? storage.get(k) : null),
       setItem: (k, v) => storage.set(k, v),
@@ -254,6 +273,11 @@ async function main() {
      guest: 'roland'},
   ]});
   assert.equal(nodes.transcript.children.length, 4);
+
+  // The filter strip is visible from connection on, even before any
+  // directive record exists.
+  assert.equal(nodes.filter.hidden, false);
+  assert.match(textOf(nodes.filter.children[0]), /^All/);
 
   // ApplyPatch tool row: the authored patch renders as a diff pane and the
   // result summary stays a plain line.
@@ -327,16 +351,18 @@ async function main() {
   await waitFor(() => first.sent.length === 3, 'sealed abort');
   assert.deepEqual(await unseal(key, first.sent[2]), {t: 'abort'});
 
-  // Directive-tagged records grow a client-side filter; selecting a
+  // Directive-tagged records grow the client-side filter; selecting a
   // directive hides everything outside it, per guest, no round-trips.
-  assert.equal(nodes.filter.hidden, true);
   await deliver({t: 'record', record: {
     id: 'directive-user', kind: 'user', revision: 0,
     text: 'Refactor the parser\nwith details', directive: 'dir-1',
   }});
   assert.equal(nodes.filter.hidden, false);
   const labels = nodes.filter.children.map(textOf);
-  assert.deepEqual(labels, ['All', 'Main chat', '◆ Refactor the parser']);
+  assert.equal(labels.length, 3);
+  assert.match(labels[0], /^All/);
+  assert.match(labels[1], /^Main chat/);
+  assert.match(labels[2], /Refactor the parser/);
   nodes.filter.children[2].dispatch('click');
   assert.equal(findByRecordId(nodes.transcript, 'assistant').hidden, true);
   assert.equal(findByRecordId(nodes.transcript, 'directive-user').hidden, false);
@@ -348,15 +374,32 @@ async function main() {
   // All carry none. The composer says where the prompt will go.
   nodes.filter.children[2].dispatch('click');
   assert.match(nodes['composer-input'].placeholder, /Refactor the parser/);
+  // The composer scope pill names the directive the prompt will land in
+  // and disappears for unscoped filters.
+  assert.equal(nodes['composer-scope'].hidden, false);
+  assert.match(textOf(nodes['composer-scope']), /Refactor the parser/);
   nodes['composer-input'].value = 'and this one?';
   nodes.composer.dispatch('submit');
   await waitFor(() => first.sent.length === 4, 'directive-scoped prompt');
   assert.equal((await unseal(key, first.sent[3])).directive, 'dir-1');
   nodes.filter.children[1].dispatch('click'); // Main chat
+  assert.equal(nodes['composer-scope'].hidden, true);
   nodes['composer-input'].value = 'main chat';
   nodes.composer.dispatch('submit');
   await waitFor(() => first.sent.length === 5, 'unscoped prompt');
   assert.equal((await unseal(key, first.sent[4])).directive, undefined);
+
+  // Activity in a thread the guest is not looking at marks its tab with
+  // an unseen dot until the tab is selected.
+  const dirTab = () => nodes.filter.children.find(
+    b => /Refactor/.test(textOf(b)));
+  await deliver({t: 'record', record: {
+    id: 'directive-user', kind: 'user', revision: 1,
+    text: 'Refactor the parser\nwith more details', directive: 'dir-1',
+  }});
+  assert.match(dirTab().className, /unseen/);
+  dirTab().dispatch('click');
+  assert.doesNotMatch(dirTab().className, /unseen/);
   nodes.filter.children[0].dispatch('click'); // All
 
   // Attachments are not only photos: an allowlisted text type rides the
@@ -377,6 +420,23 @@ async function main() {
                'log line\n');
   assert.equal(nodes.attachments.children.length, 0);
 
+  // Notifications are opt-in through the bell and fire only while the
+  // tab is hidden: turn settlement (busy true -> false) and interaction
+  // arrival notify; nothing else does.
+  assert.equal(nodes['notify-button'].hidden, false);
+  nodes['notify-button'].dispatch('click');
+  await waitFor(() => FakeNotification.permission === 'granted',
+                'notification permission');
+  await deliver({t: 'status', busy: true});
+  assert.equal(shownNotifications.length, 0);
+  document.hidden = true;
+  await deliver({t: 'status', busy: false});
+  assert.equal(shownNotifications.length, 1);
+  assert.match(shownNotifications[0].title, /finished/i);
+  // An unchanged busy state does not re-notify.
+  await deliver({t: 'status', busy: false});
+  assert.equal(shownNotifications.length, 1);
+
   // A ui-request renders a card whose buttons and feedback field answer
   // through sealed ui-response frames; a diff body gets diff rendering;
   // ui-request-end dismisses the card.
@@ -385,6 +445,10 @@ async function main() {
                  options: [{id: 0, label: 'Allow once'}, {id: 1, label: 'Deny'}],
                  allowFeedback: true});
   assert.equal(nodes.requests.children.length, 1);
+  // The hidden tab is told an interaction arrived.
+  assert.equal(shownNotifications.length, 2);
+  assert.match(shownNotifications[1].title, /interaction/i);
+  document.hidden = false;
   const card = nodes.requests.children[0];
   assert.match(textOf(card), /Run rm -rf \/tmp\/x\?/);
   const controls = card.children.find(c => c.className === 'request-controls');

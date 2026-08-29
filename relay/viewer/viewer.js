@@ -17,6 +17,8 @@
   const attachButton = document.getElementById('attach-button');
   const imageInput = document.getElementById('image-input');
   const sessionLabel = document.getElementById('session-label');
+  const notifyButton = document.getElementById('notify-button');
+  const composerScope = document.getElementById('composer-scope');
 
   const PROTO = 2;
   const GIVE_UP_MS = 3 * 60 * 1000;
@@ -36,6 +38,11 @@
     elements: new Map(),
     staging: null,
     filter: 'all',
+    connected: false,
+    // Tab values ('main' or a directive id) with activity the guest has
+    // not looked at since it arrived.
+    unseen: new Set(),
+    busy: null,
     // Frames must apply in order; WebCrypto is async, so decryption is
     // serialized through this promise chain.
     inbound: Promise.resolve(),
@@ -162,6 +169,39 @@
 
   function updateLiveAffordance() {
     setLiveButton(!atLiveEdge());
+  }
+
+  /* ── Notifications ────────────────────────────────────────────────── */
+  // Opt-in through the bell; fired only while the tab is hidden, for the
+  // two moments a pocketed phone cares about: the session needs an
+  // answer, and the turn the guest was waiting on finished.
+
+  function notificationsSupported() {
+    return typeof Notification !== 'undefined';
+  }
+
+  function notificationsEnabled() {
+    let optedIn = false;
+    try { optedIn = localStorage.getItem('mevedel-notify') === 'on'; }
+    catch (_error) { /* storage unavailable: stay off */ }
+    return optedIn && notificationsSupported()
+      && Notification.permission === 'granted';
+  }
+
+  function renderNotifyButton() {
+    if (!notifyButton) return;
+    notifyButton.hidden = !(state.connected && notificationsSupported());
+    const on = notificationsEnabled();
+    notifyButton.setAttribute('aria-pressed', on ? 'true' : 'false');
+    notifyButton.className = `bell${on ? ' on' : ''}`;
+    notifyButton.textContent = on ? '🔔' : '🔕';
+  }
+
+  function maybeNotify(title, body) {
+    if (!document.hidden || !notificationsEnabled()) return;
+    try {
+      new Notification(title, body ? {body} : {});
+    } catch (_error) { /* constructor may throw where unsupported */ }
   }
 
   /* ── Markdown (DOM-built, textContent only, XSS-safe) ─────────────── */
@@ -496,6 +536,7 @@
     const follow = atLiveEdge();
     state.records.clear();
     state.elements.clear();
+    state.unseen.clear();
     transcript.replaceChildren();
     records.forEach(record => {
       if (record && typeof record.id === 'string') state.records.set(record.id, record);
@@ -511,6 +552,8 @@
     if (!record || typeof record.id !== 'string') return;
     const follow = atLiveEdge();
     state.records.set(record.id, record);
+    // Activity outside the selected filter earns its tab an unseen dot.
+    if (!recordVisible(record)) state.unseen.add(record.directive || 'main');
     updateRecordElement(record);
     refreshFilter();
     markContinuations();
@@ -552,24 +595,40 @@
   function refreshFilter() {
     if (filterNav) {
       const ids = [];
+      const counts = {all: 0, main: 0};
       state.records.forEach(record => {
-        if (record.directive && !ids.includes(record.directive)) {
-          ids.push(record.directive);
+        counts.all++;
+        if (record.directive) {
+          if (!ids.includes(record.directive)) ids.push(record.directive);
+          counts[record.directive] = (counts[record.directive] || 0) + 1;
+        } else {
+          counts.main++;
         }
       });
-      filterNav.hidden = ids.length === 0;
+      // The strip is part of the surface once connected, even with no
+      // directive yet: an always-present control needs no discovering.
+      filterNav.hidden = !state.connected;
       if (state.filter !== 'all' && state.filter !== 'main'
           && !ids.includes(state.filter)) {
         state.filter = 'all';
       }
       filterNav.replaceChildren();
       const add = (value, label, dir) => {
-        const button = el('button', dir ? 'dir' : '', label);
+        const unseen = state.unseen.has(value);
+        const button = el('button',
+                          `${dir ? 'dir' : ''}${unseen ? ' unseen' : ''}`,
+                          label);
         button.type = 'button';
         button.setAttribute('aria-pressed',
                             state.filter === value ? 'true' : 'false');
+        if (counts[value]) {
+          button.append(el('span', 'cnt', String(counts[value])));
+        }
         button.addEventListener('click', () => {
           state.filter = value;
+          // Selecting a tab is looking at it; All shows everything.
+          if (value === 'all') state.unseen.clear();
+          else state.unseen.delete(value);
           refreshFilter();
         });
         filterNav.append(button);
@@ -583,11 +642,17 @@
       if (turn) turn.hidden = !recordVisible(record);
     });
     // The composer follows the filter, so say where a prompt will land.
+    const scoped = state.filter !== 'all' && state.filter !== 'main';
     if (composerInput) {
-      composerInput.placeholder =
-        (state.filter !== 'all' && state.filter !== 'main')
-          ? `Discuss ◆ ${directiveLabel(state.filter)}…`
-          : 'Queue a follow-up for the session…';
+      composerInput.placeholder = scoped
+        ? `Discuss ◆ ${directiveLabel(state.filter)}…`
+        : 'Queue a follow-up for the session…';
+    }
+    if (composerScope) {
+      composerScope.hidden = !scoped;
+      composerScope.textContent = scoped
+        ? `Sends to ◆ ${directiveLabel(state.filter)} · discuss`
+        : '';
     }
   }
 
@@ -878,6 +943,8 @@
     if (frame.t === 'welcome') {
       state.readOnly = frame.readOnly !== false;
       state.staging = {records: [], live: []};
+      state.connected = true;
+      renderNotifyButton();
       setComposerVisible(!state.readOnly);
       // Active ui-requests are re-sent after the snapshot on every hello.
       clearRequests();
@@ -913,8 +980,17 @@
       showQueueState(frame);
     } else if (frame.t === 'ui-request') {
       renderRequest(frame);
+      maybeNotify('Pending interaction',
+                  typeof frame.body === 'string'
+                  ? frame.body.slice(0, 120) : '');
     } else if (frame.t === 'ui-request-end') {
       removeRequest(frame.reqId);
+    } else if (frame.t === 'status') {
+      if (state.busy === true && frame.busy !== true) {
+        maybeNotify('Turn finished',
+                    'The mevedel session is idle again.');
+      }
+      state.busy = frame.busy === true;
     } else if (frame.t === 'bye') {
       state.ended = true;
       setConnection('Session ended', 'ended');
@@ -1044,6 +1120,25 @@
     if (composerName) {
       composerName.value = localStorage.getItem('mevedel-guest-name') || '';
     }
+  }
+
+  if (notifyButton) {
+    notifyButton.addEventListener('click', async () => {
+      if (notificationsEnabled()) {
+        try { localStorage.setItem('mevedel-notify', 'off'); }
+        catch (_error) { /* off is also the unset default */ }
+      } else if (notificationsSupported()) {
+        const permission = await Notification.requestPermission();
+        try {
+          localStorage.setItem('mevedel-notify',
+                               permission === 'granted' ? 'on' : 'off');
+        } catch (_error) { /* opt-in then lasts for this page only */ }
+        if (permission !== 'granted') {
+          flashNotice('Notifications are blocked for this site.');
+        }
+      }
+      renderNotifyButton();
+    });
   }
 
   liveButton.addEventListener('click', () => {
