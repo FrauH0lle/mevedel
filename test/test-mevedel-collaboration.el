@@ -609,7 +609,21 @@
       (should (= 1 (plist-get welcome :recordCount)))
       (should (equal "snapshot-chunk" (plist-get chunk :t)))
       (should (eq t (plist-get chunk :final)))
-      (should (= 1 (length (plist-get chunk :records)))))))
+      (should (= 1 (length (plist-get chunk :records)))))
+    ;; The skill roster rides the welcome for writable guests only.
+    (let ((mevedel-collaboration-guest-skills '("plan")))
+      (setq sent nil)
+      (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (_transport peer frame)
+                   (push (cons peer frame) sent)
+                   t)))
+        (mevedel-collaboration--send-snapshot room 7)
+        (should (equal ["plan"]
+                       (plist-get (cdr (car (last sent))) :skills)))
+        (puthash 8 (list :name "viewer" :writable nil :ready t) guests)
+        (setq sent nil)
+        (mevedel-collaboration--send-snapshot room 8)
+        (should-not (plist-member (cdr (car (last sent))) :skills))))))
 
 ;;
 ;;; Inbound guest frames
@@ -1086,6 +1100,71 @@
                               :data (base64-encode-string "x")))))
           (should-not (mevedel-collaboration--save-guest-attachments nil)))
       (delete-directory dir t))))
+
+(mevedel-deftest mevedel-collaboration--handle-skill
+  (:doc "queues only host-allowlisted skill names from writable guests")
+  (with-temp-buffer
+    (let* ((guests (make-hash-table :test #'eql))
+           (room (list :data-buffer (current-buffer) :guests guests
+                       :transport 'transport
+                       :session 'session))
+           (mevedel-collaboration-guest-skills '("plan" "review"))
+           enqueued sent)
+      (puthash 1 (list :name "Phone" :writable t :ready t
+                       :guest-id "phone-guest-id")
+               guests)
+      (puthash 2 (list :name "Viewer" :writable nil :ready t) guests)
+      (cl-letf (((symbol-function 'mevedel-view-enqueue-external-follow-up)
+                 (lambda (_data-buffer text &rest keys)
+                   (setq enqueued (cons text keys))
+                   (list :id 9 :input text)))
+                ((symbol-function 'mevedel-collaboration--queue-position)
+                 (lambda (&rest _) 1))
+                ((symbol-function 'mevedel-collaboration--publish-queue)
+                 (lambda (_room) nil))
+                ((symbol-function 'mevedel-collaboration--transport-send)
+                 (lambda (_transport peer frame)
+                   (push (cons peer frame) sent)
+                   t)))
+        ;; A name outside the allowlist, a non-string, and a read-only
+        ;; guest are all ignored; free text is never parsed for slashes.
+        (mevedel-collaboration--handle-skill
+         room 1 (list :name "compact"))
+        (mevedel-collaboration--handle-skill
+         room 1 (list :name 42))
+        (mevedel-collaboration--handle-skill
+         room 2 (list :name "plan"))
+        (should-not enqueued)
+        (should-not sent)
+        ;; An allowlisted invocation queues the slash line with skill
+        ;; planning live, marked for the delivery-time recheck.
+        (mevedel-collaboration--handle-skill
+         room 1 (list :name "plan"))
+        (should (equal "/plan" (car enqueued)))
+        (should (equal "plan" (plist-get (cdr enqueued) :skill)))
+        (should (equal "phone-guest-id"
+                       (plist-get (cdr enqueued) :guest-id)))
+        (should (equal '(1 . (:t "queued" :id 9 :position 1))
+                       (car sent)))))))
+
+(mevedel-deftest mevedel-view--drop-disallowed-guest-skills
+  (:doc "drops queued guest skill entries the allowlist no longer names"
+   :quiet t)
+  (let ((session (mevedel-session--create :name "s"))
+        (mevedel-collaboration-guest-skills '("plan")))
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up '(:input "/plan" :guest-skill "plan"))
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up '(:input "/review" :guest-skill "review"))
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up '(:input "plain question"))
+    (should (equal '("/plan" "plain question")
+                   (mapcar (lambda (entry) (plist-get entry :input))
+                           (mevedel-view--drop-disallowed-guest-skills
+                            session))))
+    ;; Nothing to drop leaves the queue untouched and quiet.
+    (should (= 2 (length (mevedel-view--drop-disallowed-guest-skills
+                          session))))))
 
 (mevedel-deftest mevedel-collaboration--handle-abort ()
   ,test

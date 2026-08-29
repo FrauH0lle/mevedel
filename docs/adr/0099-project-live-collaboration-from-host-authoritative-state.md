@@ -1,6 +1,6 @@
 # Project live collaboration from host-authoritative state
 
-Status: accepted (amended 2026-08-29)
+Status: accepted (amended 2026-08-29, twice)
 
 Live collaboration keeps the original Emacs process authoritative and exposes
 only an allowlisted semantic projection of its canonical session state. A
@@ -142,3 +142,38 @@ old budget could produce a prompt frame over the relay's 2 MiB read limit --
 which the relay answers by closing the connection. Images are downscaled to
 fit; anything else is refused, because a log cannot be made smaller by
 resampling.
+
+## Amendment: allowlisted skill frames and per-session rooms (2026-08-29)
+
+Two decisions moved in the viewer overhaul that followed the daily-use
+review.
+
+**A typed skill frame from a host-curated allowlist may invoke a skill.**
+The previous amendment kept guest input skill-inert, and for free text that
+holds unchanged and permanently: no slash parser runs over anything a guest
+types, and `$skill` tokens stay literal. What moved is that skill invocation
+now exists as its own frame kind. The deferral's real objection was
+authority -- which trusted prompt bodies may an untrusted bearer inject, and
+how would a guest even discover them -- and a host-curated
+`mevedel-collaboration-guest-skills` allowlist answers both: the host picks
+the roster, the welcome frame publishes it to write-token guests as
+buttons, and the frame names exactly one entry, validated against the same
+defcustom when it arrives and again when the queued invocation is
+delivered, so shrinking the list takes effect immediately. The invocation
+enters the ordinary pending-input queue and runs the same deterministic
+slash-planning path host-typed input runs, so remote invocation has no
+special semantics. What moved the decision: daily phone control stopped at
+free text, and the workflows that make controlling a session useful --
+plan, review, compaction -- were exactly the part the phone could not
+reach.
+
+**One room per shared session, never a session switcher inside a room.**
+The landing note accepted one room per Emacs process as a limitation and
+reserved an additive `session-list`/`switch-session` extension. The
+limitation fell -- the singleton became a registry keyed by the owning data
+buffer, and each shared session now has its own key, bearer links, TTL, and
+guest set -- but the reserved extension is rejected rather than deferred:
+one bearer link that grants every shared session is a strictly worse
+credential than one link per session, and "switching" on a guest device is
+a browser tab. Interaction prompts now also route only to the room whose
+session owns them, which the single-room design never had to distinguish.

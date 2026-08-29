@@ -769,6 +769,27 @@ code, pre {
 }
 .own-entry .request-controls { padding: 0 .9rem; }
 
+.skill-chips {
+  display: flex;
+  gap: .35rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin: 0 0 6px;
+}
+.skill-chips[hidden] { display: none; }
+.skill-chip {
+  flex-shrink: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .74rem;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .25rem .7rem;
+  cursor: pointer;
+}
+.skill-chip:hover { border-color: var(--accent); }
+
 .composer-scope {
   margin: 0 0 6px;
   align-self: flex-start;

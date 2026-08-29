@@ -149,6 +149,20 @@ a crashed host; this timer is the policy."
                  (integer :tag "Seconds"))
   :group 'mevedel)
 
+(defcustom mevedel-collaboration-guest-skills nil
+  "Skill and command names a full-link guest may invoke as buttons.
+
+Each name is offered to write-token guests as a tappable chip and
+validated against this same list when the typed skill frame arrives
+and again when the queued invocation is delivered, so removing a name
+takes effect immediately.  Names are slash lines without the slash:
+\"plan\" runs what typing /plan in the composer would.
+
+Guest free text is never parsed for slash commands regardless of this
+list; the typed frame is the only skill surface a guest has."
+  :type '(repeat string)
+  :group 'mevedel)
+
 (defcustom mevedel-collaboration-remote-interactions t
   "Whether full-link guests may answer pending interactions.
 
@@ -557,13 +571,19 @@ session for every guest."
                      (list nil))))
     (mevedel-collaboration--transport-send
      transport peer
-     (list :t "welcome"
-           :proto mevedel-collaboration--protocol-version
-           :readOnly (if (plist-get guest :writable) :json-false t)
-           ;; Count what is actually sent: a record too large for a frame of
-           ;; its own is dropped, and promising it would leave the guest
-           ;; waiting for a chunk that never arrives.
-           :recordCount (apply #'+ (mapcar #'length chunks))))
+     (append
+      (list :t "welcome"
+            :proto mevedel-collaboration--protocol-version
+            :readOnly (if (plist-get guest :writable) :json-false t)
+            ;; Count what is actually sent: a record too large for a frame of
+            ;; its own is dropped, and promising it would leave the guest
+            ;; waiting for a chunk that never arrives.
+            :recordCount (apply #'+ (mapcar #'length chunks)))
+      ;; The host-curated skill roster is the guest's whole discovery
+      ;; surface; a view link gets none, having no way to use it.
+      (when (and (plist-get guest :writable)
+                 mevedel-collaboration-guest-skills)
+        (list :skills (vconcat mevedel-collaboration-guest-skills)))))
     (cl-loop for rest on chunks do
              (mevedel-collaboration--transport-send
               transport peer
@@ -958,6 +978,37 @@ budget -- drops the whole set rather than attaching a partial one."
                 (when (file-exists-p path)
                   (ignore-errors (delete-file path)))))))))))
 
+(defun mevedel-collaboration--handle-skill (room peer frame)
+  "Queue the allowlisted skill FRAME names for writable guest PEER.
+
+The name is validated against `mevedel-collaboration-guest-skills'
+here and rechecked at delivery.  This typed frame is a guest's only
+skill surface: free text is never parsed for slash commands, so a
+pasted log line starting with a slash can never invoke anything."
+  (let ((guest (mevedel-collaboration--guest room peer))
+        (name (plist-get frame :name)))
+    (when (and guest
+               (plist-get guest :writable)
+               (stringp name)
+               (member name mevedel-collaboration-guest-skills))
+      (when-let* ((data-buffer (mevedel-collaboration--room-data-buffer
+                                room))
+                  (queued (mevedel-view-enqueue-external-follow-up
+                           data-buffer (concat "/" name)
+                           :guest-name (plist-get guest :name)
+                           :guest-id (plist-get guest :guest-id)
+                           :skill name)))
+        (mevedel-collaboration--transport-send
+         (plist-get room :transport) peer
+         (append
+          (list :t "queued")
+          (when-let* ((id (plist-get queued :id)))
+            (list :id id))
+          (when-let* ((position (mevedel-collaboration--queue-position
+                                 room queued)))
+            (list :position position))))
+        (mevedel-collaboration--publish-queue room)))))
+
 (defun mevedel-collaboration--handle-retract (room peer frame)
   "Remove the pending entry FRAME names when guest PEER queued it.
 
@@ -1016,6 +1067,7 @@ handling stops the room instead of leaking into the session."
           ("hello" (mevedel-collaboration--handle-hello room peer frame))
           ("prompt" (mevedel-collaboration--handle-prompt room peer frame))
           ("abort" (mevedel-collaboration--handle-abort room peer))
+          ("skill" (mevedel-collaboration--handle-skill room peer frame))
           ("retract" (mevedel-collaboration--handle-retract room peer frame))
           ("ui-response"
            (mevedel-collaboration--handle-ui-response room peer frame)))
