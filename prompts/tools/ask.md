@@ -27,21 +27,26 @@ provide custom input.
   calls)
 - Each question MUST provide predefined answer options
 - Options may be plain strings or objects with `label`, `description`,
-  and `preview` fields. Object options still return the selected label
+  and `sample` fields. Object options still return the selected label
   as the answer.
 - The tool automatically presents a custom input option to users; do
   NOT include a "custom", "other" or similar choice in your options list
-- Questions are presented one at a time with navigation:
-  - Users can go back to previous questions
-  - Users can edit answers before submitting
-  - Final confirmation screen shows all answers for review
+- Every question is shown at once in a single form. Users move freely
+  between them, change an answer by moving back to its question, and
+  submit the form when they are done. A question left unanswered is
+  submitted as an explicit "no preference" rather than being blocked.
 - Format questions clearly and make options concise
 - Provide 2-4 good default options per question
 - Mark exactly one option per question as recommended by appending
   ` (Recommended)` to that option label. Do not add a separate
   recommendation field.
-- Use `description` for a short trade-off note and `preview` only when
+- Use `description` for a short trade-off note and `sample` only when
   the user needs to compare proposed output before selecting an option.
+  A `sample` opens a side frame beside the option list and updates as
+  the user moves between options, so give one to every option of that
+  question or to none of them -- an option without a sample closes the
+  frame. Do not use samples for simple preference questions where
+  labels and descriptions suffice.
 
 ### Examples of good usage
 
@@ -50,7 +55,7 @@ Ask(questions=[{question: "Which authentication method should we use?", options:
 </example>
 
 <example>
-Ask(questions=[{question: "Which files should I write?", options: [{label: "Project AGENTS.md (Recommended)", description: "Shared repo guidance.", preview: "# Repository Guidelines\n- Use pnpm.\n- Run focused tests."}, {label: "Personal AGENTS.local.md", description: "Private checkout notes."}]}])
+Ask(questions=[{question: "Which files should I write?", options: [{label: "Project AGENTS.md (Recommended)", description: "Shared repo guidance.", sample: "# Repository Guidelines\n- Use pnpm.\n- Run focused tests."}, {label: "Personal AGENTS.local.md", description: "Private checkout notes.", sample: "# Local notes\n- Skip the slow suite."}]}])
 </example>
 
 ### Examples of bad usage

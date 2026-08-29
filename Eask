@@ -28,7 +28,7 @@
 (source "gnu")
 (source "melpa")
 
-(depends-on "emacs" "30.2")
+(depends-on "emacs" "31.1")
 (depends-on "gptel")
 (depends-on "gptel-agent")
 (depends-on "websocket")

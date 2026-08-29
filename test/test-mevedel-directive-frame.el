@@ -108,16 +108,15 @@ directive turn.  BODY runs inside the view buffer."
          (delete-directory root t)))))
 
 (mevedel-deftest mevedel-directive-frame--available-p
-  (:doc "`mevedel-directive-frame--available-p' gates on child frame support")
+  (:doc "`mevedel-directive-frame--available-p' gates on a usable display")
   ,test
   (test)
-  :doc "reports unavailable on a non-graphical Emacs 30"
-  (let ((emacs-major-version 30))
-    (unless (display-graphic-p)
-      (should-not (mevedel-directive-frame--available-p))))
+  :doc "reports unavailable in batch, where `make-frame' has no terminal"
+  (let ((noninteractive t))
+    (should-not (mevedel-directive-frame--available-p)))
 
-  :doc "reports available on Emacs 31, which supports terminal child frames"
-  (let ((emacs-major-version 31))
+  :doc "reports available in an interactive session, graphical or not"
+  (let ((noninteractive nil))
     (should (mevedel-directive-frame--available-p))))
 
 (mevedel-deftest mevedel-directive-frame--turn-spans
@@ -214,18 +213,6 @@ directive turn.  BODY runs inside the view buffer."
   (:doc "`mevedel-directive-frame-display' creates and reuses directive views")
   ,test
   (test)
-  :doc "falls back to an ordinary window and creates no frame"
-  (mevedel-directive-frame-test--with-view
-    (let ((frames (length (frame-list)))
-          (view (current-buffer)))
-      (save-window-excursion
-        (cl-letf (((symbol-function 'mevedel-directive-frame--available-p)
-                   #'ignore))
-          (mevedel-directive-frame-display nil view))
-        (should (get-buffer-window view t)))
-      (should (= frames (length (frame-list))))
-      (should-not mevedel-directive-frame--frame)))
-
   :doc "reuses a live frame already showing the view instead of rebuilding it"
   (mevedel-directive-frame-test--with-view
     (let ((view (current-buffer))

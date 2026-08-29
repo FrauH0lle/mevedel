@@ -279,7 +279,7 @@ Support
 
 ## External dependencies
 
-- **gptel**, **gptel-agent**, **websocket**, **Emacs >=30.2**, **org-mode**
+- **gptel**, **gptel-agent**, **websocket**, **Emacs >=31.1**, **org-mode**
 
 Eask dependency installs can get stale. 
 Run `npx @emacs-eask/cli upgrade PACKAGE` to update. For example:
