@@ -58,7 +58,7 @@ rule matches against.  At most one specifier is allowed per rule:
                    Bash-style PREFIX:*).  Used by Bash and by qualified
                    full-escalation Eval rules.
   :domain  GLOB  - host name (supports *)
-                   Used by WebFetch, WebSearch, YouTube.
+                   Used by WebFetch and WebSearch.
   :name    GLOB  - match name (supports *)
                    Used by Agent (task_name).
 

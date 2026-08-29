@@ -137,7 +137,7 @@ created as a side effect of registration and handles serialization."
     ("ListSkills" "Skill" mevedel-tool-skills mevedel-tool-skills--register)
     ("TaskCreate" "TaskGet" "TaskList" "TaskNote" "TaskUpdate"
      mevedel-tool-task mevedel-tool-task--register)
-    ("WebFetch" "WebSearch" "YouTube"
+    ("WebFetch" "WebSearch"
      mevedel-tool-web mevedel-tool-web--register))
   "Built-in tool names followed by their feature and registrar.")
 
@@ -692,7 +692,7 @@ Optional (both forms):
   :get-pattern      FN           Extract command string from input for
                                  `:pattern' rules (Bash and similar)
   :get-domain       FN           Extract host from input for `:domain' rules
-                                 (WebFetch, WebSearch, YouTube)
+                                 (WebFetch, WebSearch)
   :get-name         FN           Extract match name from input for `:name'
                                  rules (Agent subagent types, etc.)
   :max-result-size  INTEGER      Char limit before persisting result to disk

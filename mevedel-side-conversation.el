@@ -212,7 +212,7 @@
 (defconst mevedel-side-conversation--tool-names
   '("Read" "Glob" "Grep"
     "XrefReferences" "XrefDefinitions" "Imenu" "Treesitter"
-    "WebSearch" "WebFetch" "YouTube"
+    "WebSearch" "WebFetch"
     "ApplyPatch" "Bash" "WriteStdin" "ListExecutions" "StopExecution")
   "Exact tool surface available to an ephemeral side conversation.")
 

@@ -272,16 +272,17 @@ only the owner of a call can release them; and a source whose advertised
 schema its own implementation does not honour cannot be wrapped either,
 because the frozen schema is the lie -- WebSearch is registered natively so
 mevedel stops offering the `count` argument the upstream callback hardcodes
-away. YouTube is registered natively for the first reason: the mevedel handler resolves the
-upstream asynchronous function through `gptel-get-tool` on every call, so
-upstream keeps owning the protocol, while mevedel owns the response buffers the
-call retrieves. `url-http` records the retrieval arguments in every response
-buffer it creates and carries them across redirects, and the upstream handler
-passes its callback among those arguments at every stage, so the handler's own
-continuation identifies exactly its buffers, including the one YouTube's
-watch-page redirect adds, and no buffer belonging to anything else. They are
-killed when the call settles, once; a call that never settles keeps its
-buffers.
+away. WebFetch is registered natively for the first reason: upstream serves
+YouTube URLs from the same handler and kills none of the buffers that path
+retrieves. The mevedel handler resolves the upstream asynchronous function
+through `gptel-get-tool` on every call, so upstream keeps owning the protocol,
+while mevedel owns the response buffers the call retrieves. `url-http` records
+the retrieval arguments in every response buffer it creates and carries them
+across redirects, and the upstream handler passes its callback among those
+arguments at every stage, so the handler's own continuation identifies exactly
+its buffers, including the one the watch-page redirect adds, and no buffer
+belonging to anything else. They are killed when the call settles, once; a
+call that never settles keeps its buffers.
 
 Preset application also resolves its tool specs from the current registry.
 Reloading a native tool therefore updates the next request's schema and
@@ -626,7 +627,7 @@ workspace → no persistence.
 
 Per-tool limits match Claude Code's approach: Grep 20k, Bash/Eval 30k,
 Glob 30k, Ask 30k, Xref*/Imenu 20k, Treesitter 30k,
-WebFetch/YouTube 50k. Read/ApplyPatch: nil (self-bounded or short). Agent
+WebFetch 50k. Read/ApplyPatch: nil (self-bounded or short). Agent
 `RESULT` mailbox records inline at most a 32 KiB preview of the final response;
 the retained agent resource keeps the complete latest settled payload and
 terminal outcome.
