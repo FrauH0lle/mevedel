@@ -633,16 +633,22 @@
       (mevedel-collaboration--handle-hello
        room 1 (list :proto mevedel-collaboration--protocol-version
                     :name "Phone"
+                    :guestId "phone-guest-id"
                     :writeToken (mevedel-collaboration--base64url token)))
       (mevedel-collaboration--handle-hello
        room 2 (list :proto mevedel-collaboration--protocol-version
                     :name "Laptop\n<evil>"
+                    :guestId "in valid!"
                     :writeToken (mevedel-collaboration--base64url
                                  (mevedel-collaboration--random-bytes 16))))
       (let ((writer (gethash 1 guests))
             (viewer (gethash 2 guests)))
         (should (plist-get writer :writable))
         (should (equal "Phone" (plist-get writer :name)))
+        ;; The stable guest identity survives from hello; a malformed
+        ;; one is dropped rather than stored.
+        (should (equal "phone-guest-id" (plist-get writer :guest-id)))
+        (should-not (plist-get viewer :guest-id))
         (should-not (plist-get viewer :writable))
         (should (equal "Laptop <evil>" (plist-get viewer :name))))
       (let ((welcomes (cl-remove-if-not
@@ -742,7 +748,9 @@
          enqueued rebuilt drained sent granted)
     (unwind-protect
         (progn
-          (puthash 1 (list :name "Phone" :writable t :ready t) guests)
+          (puthash 1 (list :name "Phone" :writable t :ready t
+                           :guest-id "phone-guest-id")
+                   guests)
           (with-current-buffer data-buffer
             (setq-local mevedel--view-buffer view-buffer)
             ;; A real struct: the turn-count accessor is a defsubst that
@@ -751,7 +759,8 @@
                         (mevedel-session--create :name "share")))
           (cl-letf (((symbol-function 'mevedel-session-enqueue-pending-input)
                      (lambda (_session category entry)
-                       (setq enqueued (cons category entry))))
+                       (setq enqueued (cons category entry))
+                       (plist-put (copy-sequence entry) :id 7)))
                     ((symbol-function 'mevedel--normalize-message-text)
                      (lambda (text) (string-trim text)))
                     ((symbol-function 'mevedel-view--interaction-rebuild)
@@ -785,8 +794,15 @@
           (should (equal "DonHugo !" (plist-get (cdr enqueued) :guest-name)))
           (should (equal "DonHugo !" (plist-get (gethash 1 guests) :name)))
           (should (numberp (plist-get (cdr enqueued) :queued-at-turn)))
-          ;; The guest gets a targeted queued acknowledgement.
-          (should (equal '(1 . (:t "queued")) (car sent)))
+          ;; The entry remembers who queued it and which files it owns,
+          ;; which is what the retract seam checks against.
+          (should (equal "phone-guest-id"
+                         (plist-get (cdr enqueued) :guest-id)))
+          (should (equal '("/tmp/media/guest-1.jpg")
+                         (plist-get (cdr enqueued) :guest-paths)))
+          ;; The guest gets a targeted queued acknowledgement carrying
+          ;; the entry id its retract control needs.
+          (should (equal '(1 . (:t "queued" :id 7)) (car sent)))
           (should rebuilt)
           (should drained)
           ;; A byte-identical repeat within the duplicate window is a
@@ -887,11 +903,13 @@
                    (lambda (_transport peer frame)
                      (push (cons peer frame) sent)
                      t)))
-          (puthash 1 (list :name "Phone" :writable t :ready t) guests)
+          (puthash 1 (list :name "Phone" :writable t :ready t
+                           :guest-id "phone-guest-id")
+                   guests)
           (mevedel-collaboration--publish-queue room)
-          (should (equal '((0 . (:t "queue" :pending 0 :paused nil)))
+          (should (equal '((1 . (:t "queue" :pending 0 :paused nil)))
                          sent))
-          ;; An unchanged queue is not re-broadcast.
+          ;; An unchanged queue is not re-sent.
           (setq sent nil)
           (mevedel-collaboration--publish-queue room)
           (should-not sent)
@@ -899,19 +917,128 @@
           (let ((entry (mevedel-session-enqueue-pending-input
                         session 'follow-up (list :input "later"))))
             (mevedel-collaboration--publish-queue room)
-            (should (equal '((0 . (:t "queue" :pending 1 :paused nil)))
+            (should (equal '((1 . (:t "queue" :pending 1 :paused nil)))
                            sent))
             ;; The ack tells the sender where in line it landed.
             (should (= 1 (mevedel-collaboration--queue-position room entry)))
             (setq sent nil)
             (mevedel-session-set-pending-input-paused session t)
             (mevedel-collaboration--publish-queue room)
-            (should (equal '((0 . (:t "queue" :pending 1 :paused t)))
+            (should (equal '((1 . (:t "queue" :pending 1 :paused t)))
                            sent))
             ;; An entry that drained between enqueue and ack has no place.
             (mevedel-session-set-pending-inputs session 'follow-up nil)
-            (should-not (mevedel-collaboration--queue-position room entry))))
+            (should-not (mevedel-collaboration--queue-position room entry)))
+          ;; A guest's own entries ride its queue frame -- id, live
+          ;; position, and its own text echoed back -- and only its own:
+          ;; another guest's unsent text never travels to it.
+          (setq sent nil)
+          (mevedel-session-set-pending-input-paused session nil)
+          (mevedel-session-enqueue-pending-input
+           session 'follow-up (list :input "someone else's"
+                                    :guest-id "other-guest-id"))
+          (let ((mine (mevedel-session-enqueue-pending-input
+                       session 'follow-up
+                       (list :input "my question"
+                             :guest-id "phone-guest-id"))))
+            (mevedel-collaboration--publish-queue room)
+            (let* ((frame (cdr (car (last sent))))
+                   (own (plist-get frame :own)))
+              (should (= 2 (plist-get frame :pending)))
+              (should (= 1 (length own)))
+              (let ((record (aref (vconcat own) 0)))
+                (should (equal (plist-get mine :id)
+                               (cdr (assoc "id" record))))
+                (should (= 2 (cdr (assoc "position" record))))
+                (should (equal "my question"
+                               (cdr (assoc "text" record))))))))
       (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-collaboration--handle-retract
+  (:doc "removes only the sender's own pending entry with its attachments")
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project "/tmp/collab-retract/" "/tmp/collab-retract/"
+                     "cr"))
+         (session (mevedel-session-create "main" workspace))
+         (guests (make-hash-table :test #'eql))
+         (data-buffer (generate-new-buffer " *collab-retract-data*"))
+         (view-buffer (generate-new-buffer " *collab-retract-view*"))
+         (media (make-temp-file "mevedel-retract-media-" nil ".jpg" "img"))
+         (room (list :session session :guests guests
+                     :data-buffer data-buffer :transport 'transport))
+         rebuilt)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local mevedel--view-buffer view-buffer))
+          (puthash 1 (list :name "Phone" :writable t :ready t
+                           :guest-id "phone-guest-id")
+                   guests)
+          (puthash 2 (list :name "Tablet" :writable t :ready t
+                           :guest-id "tablet-guest-id")
+                   guests)
+          (let ((mine (mevedel-session-enqueue-pending-input
+                       session 'follow-up
+                       (list :input "mine" :guest-id "phone-guest-id"
+                             :guest-paths (list media))))
+                (theirs (mevedel-session-enqueue-pending-input
+                         session 'follow-up
+                         (list :input "theirs"
+                               :guest-id "tablet-guest-id"))))
+            (cl-letf (((symbol-function 'mevedel-view--interaction-rebuild)
+                       (lambda () (setq rebuilt t)))
+                      ((symbol-function
+                        'mevedel-collaboration--transport-send)
+                       (lambda (&rest _) t)))
+              ;; Another guest cannot retract it, nor can a bogus id.
+              (mevedel-collaboration--handle-retract
+               room 2 (list :id (plist-get mine :id)))
+              (mevedel-collaboration--handle-retract
+               room 1 (list :id 999))
+              (should (= 2 (length
+                            (mevedel-session-pending-follow-ups session))))
+              (should (file-exists-p media))
+              ;; The owner can, and the attachment leaves with it.
+              (mevedel-collaboration--handle-retract
+               room 1 (list :id (plist-get mine :id)))
+              (should (equal (list theirs)
+                             (mevedel-session-pending-follow-ups session)))
+              (should-not (file-exists-p media))
+              (should rebuilt))))
+      (when (file-exists-p media) (delete-file media))
+      (kill-buffer view-buffer)
+      (kill-buffer data-buffer)
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-collaboration--publish-status
+  (:doc "broadcasts busy transitions once and tells a joining guest directly")
+  (let* ((guests (make-hash-table :test #'eql))
+         (data-buffer (generate-new-buffer " *collab-status-data*"))
+         (room (list :data-buffer data-buffer :guests guests
+                     :transport 'transport :busy nil))
+         sent)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame)
+                     (push (cons peer frame) sent)
+                     t)))
+          (puthash 1 (list :name "g" :writable nil :ready t) guests)
+          ;; Idle at first: no transition, nothing broadcast.
+          (mevedel-collaboration--publish-status room)
+          (should-not sent)
+          (with-current-buffer data-buffer
+            (setq-local mevedel--current-request 'request))
+          (mevedel-collaboration--publish-status room)
+          (should (equal '((0 . (:t "status" :busy t))) sent))
+          ;; Unchanged state is not repeated.
+          (setq sent nil)
+          (mevedel-collaboration--publish-status room)
+          (should-not sent)
+          (with-current-buffer data-buffer
+            (setq-local mevedel--current-request nil))
+          (mevedel-collaboration--publish-status room)
+          (should (equal '((0 . (:t "status" :busy :json-false))) sent)))
+      (kill-buffer data-buffer))))
 
 (mevedel-deftest mevedel-collaboration--save-guest-attachments
   (:doc "saves accepted types within budget and drops invalid sets whole")
@@ -1170,7 +1297,25 @@
                                    (1+ mevedel-collaboration--max-prompt-bytes)
                                    ?x)))
           (should-not settled)
-          ;; A questionnaire overlay's frame carries the questions.
+          ;; A cancel response runs the remote cancel handler when the
+          ;; interaction offers one; without a handler, or from a
+          ;; read-only guest, it is ignored.
+          (let ((cancelled nil))
+            (mevedel-collaboration--handle-ui-response
+             room 1 (list :reqId 41 :cancel t))
+            (should-not cancelled)
+            (overlay-put overlay 'mevedel--remote
+                         (append (overlay-get overlay 'mevedel--remote)
+                                 (list :cancel
+                                       (lambda () (setq cancelled t)))))
+            (mevedel-collaboration--handle-ui-response
+             room 2 (list :reqId 41 :cancel t))
+            (should-not cancelled)
+            (mevedel-collaboration--handle-ui-response
+             room 1 (list :reqId 41 :cancel t))
+            (should cancelled))
+          ;; A questionnaire overlay's frame carries the questions and
+          ;; advertises its cancel affordance.
           (overlay-put overlay 'mevedel--remote
                        (append (overlay-get overlay 'mevedel--remote)
                                (list :questions
@@ -1181,7 +1326,8 @@
             (should (equal "Which?"
                            (cdr (assoc "question"
                                        (aref (plist-get frame :questions)
-                                             0))))))
+                                             0)))))
+            (should (eq t (plist-get frame :allowCancel))))
           ;; Settlement dismisses the request everywhere writable.
           (mevedel-collaboration--on-prompt-settled overlay)
           (should (= 0 (hash-table-count requests)))

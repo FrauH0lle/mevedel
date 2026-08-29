@@ -80,6 +80,8 @@
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (record))
 (declare-function mevedel-session-pending-follow-ups "mevedel-structs" (session))
+(declare-function mevedel-session-set-pending-inputs
+                  "mevedel-structs" (session category entries))
 (declare-function mevedel-session-pending-input-failure-paused
                   "mevedel-structs" (session))
 (declare-function mevedel-session-pending-input-paused
@@ -87,11 +89,17 @@
 (declare-function mevedel-session-session-id "mevedel-structs" (session))
 (declare-function mevedel-session-workspace "mevedel-structs" (session))
 (declare-function mevedel-workspace-directives "mevedel-structs" (workspace))
+(defvar mevedel--current-request)
 
 ;; `mevedel-view'
 (declare-function mevedel-view--abort-data-buffer
                   "mevedel-view" (data-buffer))
 (autoload 'mevedel-view--abort-data-buffer "mevedel-view")
+
+;; `mevedel-view-interaction'
+(declare-function mevedel-view--interaction-rebuild
+                  "mevedel-view-interaction" ())
+(autoload 'mevedel-view--interaction-rebuild "mevedel-view-interaction")
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
@@ -312,6 +320,15 @@ The name is display-only everywhere and never enters model context."
            (substring clean 0 mevedel-collaboration--max-guest-name-chars))
           (t clean))))
 
+(defun mevedel-collaboration--sanitize-guest-id (value)
+  "Return VALUE when it is a well-formed stable guest id, else nil.
+The viewer mints one random id per browser so a guest's own queued
+entries survive reconnects; peer numbers do not, so they cannot be the
+identity.  The id never enters model context or the transcript."
+  (and (stringp value)
+       (string-match-p "\\`[A-Za-z0-9_-]\\{8,64\\}\\'" value)
+       value))
+
 ;;
 ;;; Room publication
 
@@ -364,7 +381,8 @@ The name is display-only everywhere and never enters model context."
       (when removed
         (mevedel-collaboration--broadcast
          room (list :t "remove" :ids (vconcat removed))))
-      (mevedel-collaboration--publish-queue room))))
+      (mevedel-collaboration--publish-queue room)
+      (mevedel-collaboration--publish-status room))))
 
 (defun mevedel-collaboration--queue-state (room)
   "Return ROOM's guest-visible pending queue state as a plist.
@@ -391,17 +409,73 @@ enqueue and this call makes possible."
                                   :test #'equal)))
     (1+ index)))
 
+(defun mevedel-collaboration--guest-queue-state (room guest)
+  "Return the queue state GUEST in ROOM should see, or nil.
+
+The global part is the pending count and paused flag.  A guest with a
+stable id additionally sees its own entries -- id, live position, and
+its own text echoed back so a reloaded viewer can rebuild its card.
+Only its own: another guest's unsent text never travels to it."
+  (when-let* ((state (mevedel-collaboration--queue-state room))
+              (session (plist-get room :session)))
+    (let ((guest-id (plist-get guest :guest-id))
+          (position 0)
+          own)
+      (when guest-id
+        (dolist (entry (mevedel-session-pending-follow-ups session))
+          (cl-incf position)
+          (when (equal guest-id (plist-get entry :guest-id))
+            (push (list :id (plist-get entry :id)
+                        :position position
+                        :text (or (plist-get entry :input) ""))
+                  own))))
+      (append state (when own (list :own (nreverse own)))))))
+
+(defun mevedel-collaboration--send-queue-state (room peer guest &optional force)
+  "Send PEER its queue state for ROOM when it changed, or on FORCE.
+GUEST caches the last state sent so an unchanged queue costs nothing."
+  (when-let* ((state (mevedel-collaboration--guest-queue-state room guest)))
+    (when (or force (not (equal state (plist-get guest :queue-state))))
+      (plist-put guest :queue-state state)
+      (mevedel-collaboration--transport-send
+       (plist-get room :transport) peer
+       (append (list :t "queue"
+                     :pending (plist-get state :pending)
+                     :paused (plist-get state :paused))
+               (when-let* ((own (plist-get state :own)))
+                 (list :own
+                       (vconcat
+                        (mapcar
+                         (lambda (entry)
+                           `(("id" . ,(plist-get entry :id))
+                             ("position" . ,(plist-get entry :position))
+                             ("text" . ,(plist-get entry :text))))
+                         own)))))))))
+
 (defun mevedel-collaboration--publish-queue (room)
-  "Broadcast ROOM's queue state to its guests when it has changed."
+  "Send ROOM's queue state to each registered guest when it changed.
+Per-peer rather than broadcast, because a guest's frame carries that
+guest's own pending entries."
   (when room
-    (let ((state (mevedel-collaboration--queue-state room)))
-      (unless (equal state (plist-get room :queue))
-        (setq room (plist-put room :queue state))
-        (when state
-          (mevedel-collaboration--broadcast
-           room (list :t "queue"
-                      :pending (plist-get state :pending)
-                      :paused (plist-get state :paused))))))))
+    (maphash (lambda (peer guest)
+               (when (plist-get guest :ready)
+                 (mevedel-collaboration--send-queue-state room peer guest)))
+             (plist-get room :guests))))
+
+(defun mevedel-collaboration--busy-p (room)
+  "Return non-nil while ROOM's session has a running request."
+  (when-let* ((data-buffer (mevedel-collaboration--room-data-buffer room)))
+    (and (buffer-local-value 'mevedel--current-request data-buffer) t)))
+
+(defun mevedel-collaboration--publish-status (room)
+  "Broadcast ROOM's busy state to its guests when it has changed.
+The busy true-to-false transition is what a hidden viewer tab turns
+into its turn-finished notification."
+  (let ((busy (mevedel-collaboration--busy-p room)))
+    (unless (eq busy (plist-get room :busy))
+      (setq room (plist-put room :busy busy))
+      (mevedel-collaboration--broadcast
+       room (list :t "status" :busy (if busy t :json-false))))))
 
 (defun mevedel-collaboration--publish-timer (data-buffer)
   "Run the coalesced publication timer for DATA-BUFFER's room."
@@ -529,6 +603,10 @@ output to the answering guest.")
                      collect `(("id" . ,index) ("label" . ,label))))
            :allowFeedback
            (if (plist-get remote :feedback) t :json-false))
+     ;; A cancel handler settles just this interaction -- for the Ask
+     ;; questionnaire, the run continues -- so the guest gets a Dismiss.
+     (when (plist-get remote :cancel)
+       (list :allowCancel t))
      ;; A questionnaire travels structurally; the guest answers all
      ;; questions atomically through the :answers response field.
      (when-let* ((questions (plist-get remote :questions)))
@@ -626,8 +704,14 @@ answer can execute the same path the host key binding would."
                (answers (plist-get frame :answers))
                (feedback-handler (plist-get remote :feedback))
                (answer-handler (plist-get remote :answer))
+               (cancel-handler (plist-get remote :cancel))
                (outcome
                 (cond
+                 ;; A cancel settles just this interaction through the
+                 ;; handler the prompt offered; nothing else is touched.
+                 ((and (eq (plist-get frame :cancel) t)
+                       (functionp cancel-handler))
+                  cancel-handler)
                  ;; A complete questionnaire response: every answer a
                  ;; nonblank string, submitted atomically.
                  ((and answers
@@ -684,18 +768,20 @@ answer can execute the same path the host key binding would."
              (claimed (mevedel-collaboration--base64url-decode
                        (plist-get frame :writeToken)))
              (writable (and claimed
-                            (equal claimed (plist-get room :write-token)))))
-        (puthash peer (list :name name :writable writable :ready t)
-                 (plist-get room :guests))
+                            (equal claimed (plist-get room :write-token))))
+             (guest (list :name name :writable writable :ready t
+                          :guest-id (mevedel-collaboration--sanitize-guest-id
+                                     (plist-get frame :guestId)))))
+        (puthash peer guest (plist-get room :guests))
         (mevedel-collaboration--send-snapshot room peer)
-        ;; Queue state is broadcast only on change, so a joining guest
-        ;; is told the current one directly.
-        (when-let* ((state (mevedel-collaboration--queue-state room)))
-          (mevedel-collaboration--transport-send
-           (plist-get room :transport) peer
-           (list :t "queue"
-                 :pending (plist-get state :pending)
-                 :paused (plist-get state :paused))))
+        ;; Queue and busy state travel only on change, so a joining
+        ;; guest is told the current ones directly.
+        (mevedel-collaboration--send-queue-state room peer guest t)
+        (mevedel-collaboration--transport-send
+         (plist-get room :transport) peer
+         (list :t "status"
+               :busy (if (mevedel-collaboration--busy-p room)
+                         t :json-false)))
         (when (and writable mevedel-collaboration-remote-interactions)
           (mevedel-collaboration--send-ui-requests room peer))))))
 
@@ -767,6 +853,7 @@ never enters model-visible context."
                           (mevedel-view-enqueue-external-follow-up
                            data-buffer text
                            :guest-name (plist-get guest :name)
+                           :guest-id (plist-get guest :guest-id)
                            :paths paths
                            :directive-id
                            (mevedel-collaboration--guest-directive-id
@@ -776,6 +863,8 @@ never enters model-visible context."
                        (plist-get room :transport) peer
                        (append
                         (list :t "queued")
+                        (when-let* ((id (plist-get queued :id)))
+                          (list :id id))
                         (when-let* ((position
                                      (mevedel-collaboration--queue-position
                                       room queued)))
@@ -865,6 +954,41 @@ budget -- drops the whole set rather than attaching a partial one."
                 (when (file-exists-p path)
                   (ignore-errors (delete-file path)))))))))))
 
+(defun mevedel-collaboration--handle-retract (room peer frame)
+  "Remove the pending entry FRAME names when guest PEER queued it.
+
+Authority is per entry: the id must belong to an entry this guest's
+stable id queued, so no guest can delete another guest's or the host's
+pending input.  The entry's attachment files leave with it, mirroring
+the failed-enqueue cleanup."
+  (let ((guest (mevedel-collaboration--guest room peer))
+        (id (plist-get frame :id)))
+    (when (and guest
+               (plist-get guest :writable)
+               (plist-get guest :guest-id)
+               (integerp id))
+      (when-let* ((session (plist-get room :session))
+                  (entries (mevedel-session-pending-follow-ups session))
+                  (entry (cl-find-if
+                          (lambda (candidate)
+                            (and (equal id (plist-get candidate :id))
+                                 (equal (plist-get guest :guest-id)
+                                        (plist-get candidate :guest-id))))
+                          entries)))
+        (mevedel-session-set-pending-inputs
+         session 'follow-up (delq entry entries))
+        (dolist (path (plist-get entry :guest-paths))
+          (when (file-exists-p path)
+            (ignore-errors (delete-file path))))
+        (when-let* ((data-buffer (mevedel-collaboration--room-data-buffer
+                                  room))
+                    (view-buffer (buffer-local-value 'mevedel--view-buffer
+                                                     data-buffer))
+                    ((buffer-live-p view-buffer)))
+          (with-current-buffer view-buffer
+            (mevedel-view--interaction-rebuild)))
+        (mevedel-collaboration--publish-queue room)))))
+
 (defun mevedel-collaboration--handle-abort (room peer)
   "Abort the running request for writable guest PEER."
   (let ((guest (mevedel-collaboration--guest room peer)))
@@ -888,6 +1012,7 @@ handling stops the room instead of leaking into the session."
           ("hello" (mevedel-collaboration--handle-hello room peer frame))
           ("prompt" (mevedel-collaboration--handle-prompt room peer frame))
           ("abort" (mevedel-collaboration--handle-abort room peer))
+          ("retract" (mevedel-collaboration--handle-retract room peer frame))
           ("ui-response"
            (mevedel-collaboration--handle-ui-response room peer frame)))
       (error (mevedel-collaboration--observer-failure room)))))

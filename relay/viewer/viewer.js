@@ -19,6 +19,7 @@
   const sessionLabel = document.getElementById('session-label');
   const notifyButton = document.getElementById('notify-button');
   const composerScope = document.getElementById('composer-scope');
+  const ownQueue = document.getElementById('own-queue');
 
   const PROTO = 2;
   const GIVE_UP_MS = 3 * 60 * 1000;
@@ -727,6 +728,15 @@
       }
     });
     submitRow.append(submit);
+    // Dismiss settles only the questionnaire; the host's run continues.
+    if (frame.allowCancel === true) {
+      const dismiss = el('button', 'btn quiet', 'Dismiss');
+      dismiss.type = 'button';
+      dismiss.addEventListener('click', () => {
+        send({t: 'ui-response', reqId: frame.reqId, cancel: true});
+      });
+      submitRow.append(dismiss);
+    }
     card.append(submitRow);
   }
 
@@ -919,8 +929,51 @@
       || 'browser';
   }
 
+  // One random id per browser, minted on first use. It lets the host
+  // match this guest's own queued entries across reconnects and page
+  // reloads; peer numbers cannot, because the relay reassigns them.
+  function guestId() {
+    let id = null;
+    try { id = localStorage.getItem('mevedel-guest-id'); }
+    catch (_error) { /* storage unavailable */ }
+    if (id && /^[A-Za-z0-9_-]{8,64}$/.test(id)) return id;
+    const bytes = crypto.getRandomValues(new Uint8Array(12));
+    id = base64urlEncode(bytes);
+    try { localStorage.setItem('mevedel-guest-id', id); }
+    catch (_error) { /* per-page id then */ }
+    return id;
+  }
+
   function setComposerVisible(visible) {
     if (composer) composer.hidden = !visible;
+  }
+
+  // The guest's own pending prompts, echoed back per-peer by the host:
+  // a persistent card with live position and a retract control, so a
+  // queued prompt never reads as swallowed.
+  function showOwnQueue(entries) {
+    if (!ownQueue) return;
+    ownQueue.replaceChildren();
+    ownQueue.hidden = entries.length === 0;
+    entries.forEach(entry => {
+      if (!entry || typeof entry.id !== 'number') return;
+      const card = el('section', 'own-entry');
+      card.append(el('span', 'rhead',
+                     typeof entry.position === 'number'
+                     ? `Your queued prompt · #${entry.position} in line`
+                     : 'Your queued prompt'));
+      card.append(el('p', 'own-text',
+                     typeof entry.text === 'string' ? entry.text : ''));
+      const controls = el('div', 'request-controls');
+      const retract = el('button', 'btn quiet', 'Retract');
+      retract.type = 'button';
+      retract.addEventListener('click', () => {
+        send({t: 'retract', id: entry.id});
+      });
+      controls.append(retract);
+      card.append(controls);
+      ownQueue.append(card);
+    });
   }
 
   // How many follow-ups are waiting, and whether the host has delivery
@@ -949,8 +1002,10 @@
       // Active ui-requests are re-sent after the snapshot on every hello.
       clearRequests();
       // The host sends `queue' only when it changes, so a reconnect
-      // starts empty rather than showing the previous socket's count.
+      // starts empty rather than showing the previous socket's count;
+      // the own-entry card is rebuilt by the hello reply's echo.
       showQueueState({pending: 0});
+      showOwnQueue([]);
       setConnection('Loading…', 'connected');
     } else if (frame.t === 'snapshot-chunk') {
       if (!state.staging) return;
@@ -978,6 +1033,7 @@
                   : 'Follow-up queued for the session.');
     } else if (frame.t === 'queue') {
       showQueueState(frame);
+      showOwnQueue(Array.isArray(frame.own) ? frame.own : []);
     } else if (frame.t === 'ui-request') {
       renderRequest(frame);
       maybeNotify('Pending interaction',
@@ -1045,7 +1101,8 @@
     socket.addEventListener('open', async () => {
       state.downSince = null;
       state.backoffMs = 1000;
-      const hello = {t: 'hello', proto: PROTO, name: guestName()};
+      const hello = {t: 'hello', proto: PROTO, name: guestName(),
+                     guestId: guestId()};
       if (state.writeToken) hello.writeToken = base64urlEncode(state.writeToken);
       await send(hello);
     });

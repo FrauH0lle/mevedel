@@ -354,17 +354,19 @@ mis-attributed.")
                :help-echo "Open Pending Inputs cockpit"))))))
 
 (cl-defun mevedel-view-enqueue-external-follow-up
-    (data-buffer text &key guest-name paths directive-id)
+    (data-buffer text &key guest-name guest-id paths directive-id)
   "Queue TEXT as a follow-up that originated outside this Emacs.
 
 DATA-BUFFER owns the session.  GUEST-NAME attributes the entry to a
-collaboration guest.  PATHS are files to mention as @file tokens with
-read grants, like an Emacs-side drop.  DIRECTIVE-ID, when given, scopes
-the entry to that directive's discussion; the caller has already checked
-that the directive exists.  Skill tokens in TEXT stay literal at
-submission: external input carries prompting authority only, never skill
-invocation.  Return the queued entry, or nil without a live session
-view."
+collaboration guest; GUEST-ID is that guest's stable identity, which
+the retract seam checks so only the sender can take the entry back.
+PATHS are files to mention as @file tokens with read grants, like an
+Emacs-side drop; the entry remembers them so a retraction can delete
+them.  DIRECTIVE-ID, when given, scopes the entry to that directive's
+discussion; the caller has already checked that the directive exists.
+Skill tokens in TEXT stay literal at submission: external input carries
+prompting authority only, never skill invocation.  Return the queued
+entry, or nil without a live session view."
   (when-let* (((buffer-live-p data-buffer))
               (view-buffer (buffer-local-value 'mevedel--view-buffer
                                                data-buffer))
@@ -382,6 +384,8 @@ view."
                       session 'follow-up
                       (list :input input
                             :guest-name guest-name
+                            :guest-id guest-id
+                            :guest-paths paths
                             :inert-skills t
                             ;; External input can only discuss.  The
                             ;; sender knows a directive id and nothing
