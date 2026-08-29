@@ -842,9 +842,15 @@ connection charges for, so the program path is proved here too."
                   (test-mevedel-execution--start-managed
                    session remote-root '("sh" "-c" "printf output")
                    :yield-time-ms nil)))
-          (should
-           (eq 'output-write-failed
-               (plist-get (plist-get result :facts) :termination)))
+          ;; A proven local write failure only stays proven while the
+          ;; target's process-group identity was received: without it the
+          ;; managed layer has to call the outcome unknown.  Assert both in
+          ;; one form so a failure names which half went missing.
+          (let ((facts (plist-get result :facts)))
+            (should
+             (equal (list 'output-write-failed t)
+                    (list (plist-get facts :termination)
+                          (integerp (plist-get facts :group-id))))))
           (should-not (mevedel-execution-mutation-blocked-p session))
           (should-not
            (mevedel-session-durability-unsettled-mutation-p session)))
@@ -2322,7 +2328,10 @@ work in flight genuinely unprovable rather than merely finished."
                (target (mevedel-session-execution-target session)))
           (setq root-buffer (generate-new-buffer " *remote-acceptance*"))
           (with-current-buffer root-buffer
-            (org-mode)
+            ;; A session's root data buffer is a prepared transcript, not a
+            ;; bare Org buffer: hidden audit provenance only survives a save
+            ;; through the bounds `gptel-mode' persists.
+            (mevedel-chat-prepare-transcript-buffer)
             (setq-local mevedel--workspace workspace
                         mevedel--session session)
             (setq default-directory root))
