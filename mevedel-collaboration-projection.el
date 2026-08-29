@@ -10,9 +10,6 @@
 ;; `json'
 (declare-function json-encode "json" (object))
 
-;; `mevedel-collaboration'
-(defvar mevedel-collaboration--room)
-
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
@@ -427,10 +424,9 @@ completion instead of seeing a duplicate tool card."
                                :identity-fixed t)))
           (push entry remaining))))
     (setq remaining (nreverse remaining))
-    (when (eq room mevedel-collaboration--room)
-      (setq mevedel-collaboration--room
-            (plist-put mevedel-collaboration--room
-                       :pending-tools remaining)))
+    ;; A room plist is never empty, so this mutates in place and the
+    ;; room registry keeps pointing at the same object.
+    (setq room (plist-put room :pending-tools remaining))
     (let ((pending-at nil)
           (length (length canonical))
           output)
