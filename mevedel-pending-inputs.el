@@ -354,15 +354,17 @@ mis-attributed.")
                :help-echo "Open Pending Inputs cockpit"))))))
 
 (cl-defun mevedel-view-enqueue-external-follow-up
-    (data-buffer text &key guest-name paths)
+    (data-buffer text &key guest-name paths directive-id)
   "Queue TEXT as a follow-up that originated outside this Emacs.
 
 DATA-BUFFER owns the session.  GUEST-NAME attributes the entry to a
 collaboration guest.  PATHS are files to mention as @file tokens with
-read grants, like an Emacs-side drop.  Skill tokens in TEXT stay
-literal at submission: external input carries prompting authority only,
-never skill invocation.  Return the queued entry, or nil without a live
-session view."
+read grants, like an Emacs-side drop.  DIRECTIVE-ID, when given, scopes
+the entry to that directive's discussion; the caller has already checked
+that the directive exists.  Skill tokens in TEXT stay literal at
+submission: external input carries prompting authority only, never skill
+invocation.  Return the queued entry, or nil without a live session
+view."
   (when-let* (((buffer-live-p data-buffer))
               (view-buffer (buffer-local-value 'mevedel--view-buffer
                                                data-buffer))
@@ -381,6 +383,19 @@ session view."
                       (list :input input
                             :guest-name guest-name
                             :inert-skills t
+                            ;; External input can only discuss.  The
+                            ;; sender knows a directive id and nothing
+                            ;; else, and discussion is the one directive
+                            ;; action that mutates nothing.  Delivery
+                            ;; takes the scope branch, which does not
+                            ;; consult `:inert-skills'; discussion stays
+                            ;; skill-inert because directive dispatch
+                            ;; never plans skills and already refuses
+                            ;; slash lines.  A scoped action that did
+                            ;; would have to honour the flag there.
+                            :scope (when directive-id
+                                     (list :directive-id directive-id
+                                           :action 'discuss))
                             :dropped-file-grants
                             (mevedel-view--pop-dropped-file-grants-for-input
                              input session)

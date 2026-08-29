@@ -153,12 +153,15 @@ unibyte room key.  CALLBACKS is a plist:
   :on-state   (lambda (state)) -- `open' after each (re)connect,
               `down' after a drop that will be retried, `stopped'
               after `mevedel-collaboration--transport-stop'.
+  :headers    an alist of extra handshake headers, resent on every
+              reconnect.  The relay may require one to create a room.
 
 Return the transport handle.  The connection retries with bounded
 exponential backoff until stopped; undecryptable or malformed input is
 dropped silently."
   (let ((transport (list :url url
                          :key key
+                         :headers (plist-get callbacks :headers)
                          :ws nil
                          :state 'connecting
                          :backoff mevedel-collaboration--backoff-initial
@@ -183,6 +186,7 @@ dropped silently."
        transport :ws
        (websocket-open
         (plist-get transport :url)
+        :custom-header-alist (plist-get transport :headers)
         :on-open
         (lambda (_ws)
           (plist-put transport :state 'open)

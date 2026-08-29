@@ -22,6 +22,14 @@ travels only in the share link's URL fragment.
   garbage-collects the room.
 - `GET /healthz` — liveness.
 
+With `-host-token` set, a `role=host` upgrade must carry the token in the
+`X-Mevedel-Host-Token` header or it is answered 404, which keeps strangers
+who find the endpoint from opening rooms and holding idle connections.
+Guests are never asked for it: their authority is the bearer link, and a
+stranger's room carries only their own ciphertext. Set the matching
+`mevedel-collaboration-relay-host-token` in Emacs. A header rather than a
+query parameter, because reverse proxies log query strings.
+
 The relay holds no state beyond live connections plus a lazy max-room-age
 sweep (`-max-room-age`, default 24h) as a backstop against a crashed host;
 the policy TTL lives in Emacs (`mevedel-collaboration-share-ttl`).
@@ -30,7 +38,7 @@ the policy TTL lives in Emacs (`mevedel-collaboration-share-ttl`).
 
 ```bash
 go build -o mevedel-relay .
-./mevedel-relay -addr 127.0.0.1:7466
+./mevedel-relay -addr 127.0.0.1:7466 -host-token "$(head -c 24 /dev/urandom | base64)"
 go test ./...
 ```
 

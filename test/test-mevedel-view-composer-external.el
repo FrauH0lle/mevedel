@@ -55,7 +55,20 @@
               (should (= 1 (length (plist-get entry :dropped-file-grants))))
               (should (equal entry
                              (car (mevedel-session-pending-inputs
-                                   session 'follow-up))))))
+                                   session 'follow-up))))
+              ;; Unscoped by default: an external prompt lands in main
+              ;; chat unless it names a directive.
+              (should-not (plist-get entry :scope)))
+            ;; A named directive scopes the entry to that directive's
+            ;; discussion -- the one directive action that mutates
+            ;; nothing, and the only one external input may reach.
+            (let ((scoped (mevedel-view-enqueue-external-follow-up
+                           data-buffer "and here?"
+                           :guest-name "Herr Boing"
+                           :directive-id "dir-7")))
+              (should (equal '(:directive-id "dir-7" :action discuss)
+                             (plist-get scoped :scope)))
+              (should (plist-get scoped :inert-skills))))
           (should rebuilt)
           (should drained)
           ;; No live view buffer: nothing queues.

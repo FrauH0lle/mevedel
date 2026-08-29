@@ -67,29 +67,7 @@ recommends those elements while leaving Codex room to choose the next action.
 
 - Consider making mevedel's data buffers hidden
 
-
-- Residual watch after the 2026-08-23 interaction rebuild fix (cursor jumps
-  at tick rate + garbled ApplyPatch feedback both traced to the 5s
-  control-transfer poll rebuilding the interaction zone through an
-  intermediate empty render, with new overlay objects and stale preview
-  body snapshots): non-composer point and window positions are still
-  preserved as raw integers in `mevedel-view-zone--restore-view-state` and
-  `mevedel-view--call-preserving-window-state`. If cursor drift reappears
-  during heavy history-live streaming with point on interaction text,
-  convert those captures to markers.
-
-- Deferred from the 2026-08-25 PTC profiling session (the big levers —
-  segment-classification memoization, hot-path `require` hoisting,
-  `directive-ranges` caching, `audit-spans` string scan, per-script
-  checkpoints — are done):
-  - `mevedel-view--clean-reasoning-text` still allocates ~58 MB/session via
-    `replace-regexp-in-string` in `--scaffolding-only-p`/`--thinking-summary`;
-    consider a cheap "contains only markers?" prefilter before the regexp pass.
-  - Provider reasoning dominated wall clock (95%); benchmark PTC tasks with a
-    lower effort tier or another model before further dialect tuning.
-  - doom-modeline/`format-mode-line` took ~4% of allocation during streaming;
-    user config, not mevedel — revisit only if redisplay stays hot after the
-    render fixes.
+- Markdown-ts-mode is now part of Emacs core
 
 ## Entry format
 
@@ -120,48 +98,35 @@ become implemented, obsolete, or unjustified.
 
 ### Revisit the browser viewer
 
-- **Source:** Post-review discussion on 2026-08-18; collects the viewer
-  capabilities worth a deliberate second pass now that daily phone usage
-  is real.
-- **Skills and slash commands for guests.** Guest input is deliberately
-  skill-inert today (`$skill` tokens stay literal; slash commands are
-  never parsed). If guests should invoke skills or a curated slash
-  subset, that wants an explicit design: which skills, whose authority,
-  how the viewer discovers the roster — not a lifted ride-along.
-- **General file upload, not only photos.** The attach button accepts
-  `image/*` and re-encodes through canvas. Logs, patches, CSVs, and
-  PDFs would ride the same @file-mention pipeline but need a type
-  allowlist, a size budget without canvas downscaling, and a decision on
-  which types mention as text versus media.
-- Candidates observed in use, for the same pass: guest-visible queue
-  state (what is pending beyond the flash notice), directive-scoped
-  guest prompts (send within the active filter), and a remote
-  questionnaire cancel with a confirm step.
-
-### Authenticate room creation on the collaboration relay
-
-- **Source:** Post-landing gap review of the browser-relay feature on
-  2026-08-18.
-- **What's owed:** Anyone who discovers the relay's `wss://…/r/<id>?role=host`
-  endpoint can open rooms and hold idle connections. Content is never at
-  risk -- a stranger's room carries only their own ciphertext, and
-  max-room-age bounds the lifetime -- but it is an idle-connection/DoS
-  surface on the operator's server. A `-host-token` relay flag checked at
-  the host upgrade, with a matching defcustom sent as a header or query
-  parameter, closes it in a few lines. Guests stay tokenless: their
-  authority is the bearer link.
-- **Why deferred:** Single-operator deployment behind an unpublicized
-  domain; no data exposure either way.
+- **Source:** Post-review discussion on 2026-08-18; revisited 2026-08-29
+  once daily phone usage made the deferrals observable rather than
+  hypothetical. Directive-scoped guest prompts, guest-visible queue
+  state, and general file attachment landed then; see
+  `docs/adr/0099-project-live-collaboration-from-host-authoritative-state.md`.
+- **Skills and slash commands for guests.** Still deferred, and now
+  deliberately rather than by omission. Guest input is skill-inert
+  (`$skill` tokens stay literal; slash commands are never parsed), and
+  the capability was not among those observed in use. It needs a roster
+  model, an authority model, and a discovery UI so a phone can type
+  `/plan`. If it returns, the minimum is a defcustom allowlist of skill
+  names rendered as buttons and validated against the same list at the
+  host seam -- never a slash parser over guest input.
+- **Original filenames for guest attachments.** Saved names are
+  host-generated (`guest-<stamp>-<n>.<ext>`), so a model reading a guest
+  log sees no clue what it was called. Carrying the guest's name would
+  need sanitizing a guest-supplied string that becomes a write path;
+  deferred because the guest can say what the file is in the prompt.
+- **Chunked attachment upload.** The whole attachment set caps at
+  1.25 MiB decoded so the sealed prompt frame clears the relay's 2 MiB
+  read limit alongside a maximum-length prompt. Logs and patches fit;
+  if that ever bites, chunking across frames is the upgrade path.
 
 ### Collaboration limitations accepted at landing
 
 - **Source:** Post-landing gap review of the browser-relay feature on
   2026-08-18. Recorded so real usage can promote any of them; none blocks
-  current use.
-- **Guest prompts always land in main chat.** The directive filter is
-  view-only; directive-scoped guest input was deferred by the PRD. If
-  wanted: carry the active filter's directive id in the prompt frame and
-  enqueue with the matching scope.
+  current use. Two were promoted and closed on 2026-08-29 (relay host
+  authentication and directive-scoped guest prompts).
 - **One room per Emacs process.** Two sessions cannot be shared at once.
   The frame grammar tolerates a later `session-list`/`switch-session`
   extension additively.
@@ -169,8 +134,10 @@ become implemented, obsolete, or unjustified.
   inside compacted spans vanish with the spans; tail-preserved turns keep
   theirs. Cosmetic and historical only.
 - **No remote questionnaire cancel.** Ask cancellation aborts the whole
-  request, too heavy for a phone button; guests can only submit. If
-  wanted, a cancel option would need its own confirm step.
+  request, too heavy for a phone button; guests can only submit. A guest
+  who does not want to answer simply does not, and the host answers in
+  Emacs. If wanted, a cancel option would need its own confirm step and a
+  response kind of its own.
 
 ## Skills
 
@@ -271,143 +238,6 @@ become implemented, obsolete, or unjustified.
   `<system-reminder>` blocks, at which point the feature is pure spend.
 
 ## Tools
-
-### Programmatic tool calling
-
-- **Source:** `elij/macher-agent` at commit
-  [`f6ed4c3`](https://github.com/elij/macher-agent/tree/f6ed4c35296780f61b49316af95bea0c0f50f8c1),
-  especially `macher-agent-sandbox.el`, `macher-agent-tools.el`, and its
-  skill-scoped `ptc-primitives` metadata.
-- **Problem statement:** Data-dependent tool chains currently require a model
-  continuation between stages. A model may issue known independent calls in
-  parallel, but a workflow such as Glob -> inspect returned paths -> Read each
-  match -> aggregate the results pays for another inference at every decision
-  point. That adds latency and tokens and gives the model repeated chances to
-  drift from deterministic orchestration.
-- **Implemented:** Programmatic tool calling is one model tool, ToolScript,
-  whose input is an Emacs Lisp orchestration script evaluated by an isolated,
-  yielding interpreter. Ordinary control flow and pure data transformations
-  run inside the interpreter. Calling an active primitive yields a structured
-  tool request; the driver suspends the script, executes that request through
-  `mevedel-pipeline-run-tool-outcome`, and resumes it with the canonical result. Async
-  tools therefore look synchronous to the script while every call still uses
-  mevedel's validation, hooks, permission, resource, snapshot, cancellation,
-  and telemetry path. Provider-only result persistence applies to the
-  ToolScript envelope rather than to each nested call.
-- **Skill integration:** Implemented `ptc-primitives` SKILL.md frontmatter for
-  request-owning command skills. It narrows which canonical tools may become
-  Lisp primitives for the owned request; it grants no authority, intersects
-  the request's effective tool set, and never bypasses per-call permission.
-  Instruction attachments and model-invoked skills cannot expand the parent
-  request's execution surface. Agent and coordination tools are not ToolScript
-  primitives.
-
-  ```yaml
-  ---
-  name: orchestrator
-  description: Coordinate a data-dependent repository investigation.
-  ptc-primitives:
-    - Glob
-    - Grep
-    - Read
-  ---
-  ```
-
-- **Interface sketch:** The model invokes ToolScript with a `script` string.
-  The request-time prompt describes only the selected primitives, their
-  argument contracts, the supported Lisp subset, and the returned value
-  contract. The result should be the script's pure final value; nested calls
-  remain inspectable through one owned audit/render record rather than
-  pretending to be provider-origin tool calls.
-- **Acceptance follow-up:** Measure turns whose continuations only perform
-  deterministic tool orchestration; choose one real data-dependent workflow
-  as the acceptance case. Specify the safe Lisp subset, macro expansion,
-  limits on steps/results/nesting, async suspension inside non-local exits,
-  cancellation, permission-prompt reentrancy, synthetic nested-call identity,
-  transcript evidence, render-data ownership, failure propagation, and
-  retained-agent behavior. Consult current gptel dispatch before fixing the
-  design: gptel already runs multiple tool calls from one response in
-  parallel, so known fan-out alone does not justify ToolScript.
-- **Rejected shortcut:** Do not implement ToolScript as native `eval` plus a
-  claimed function whitelist. `Glob`, `Grep`, and the mevedel pipeline are
-  asynchronous, and safely constraining native Elisp requires an interpreter
-  or an equivalently complex validator. Do not bypass the pipeline to make a
-  read-only prototype appear smaller.
-- **Do not port macher's sandbox boundary.** Its interpreter architecture is
-  worth adapting; its boundary is not, and the defects are still present
-  upstream as of `020830f`. It passes model-authored text through host
-  `macroexpand-all`, so any macro expander runs on that text --
-  `(eval-when-compile FORM)` executes FORM during expansion, which is
-  arbitrary host code from a script. Its primitive table is scraped by
-  `mapatoms` over the `pure`/`side-effect-free` properties, an open set that
-  includes host-state readers and shifts with whatever packages are loaded.
-  Its evaluator also evaluates an unknown operator's arguments before
-  rejecting the operator, so a forbidden wrapper around a real tool call runs
-  the tool first. Passing an ENVIRONMENT to `macroexpand-all` does not fix
-  the first defect: it shadows named macros but does not restrict expansion,
-  so an unlisted macro still expands from the global obarray. Guest
-  identifiers must not be interned into the host obarray either; plain `read`
-  leaks them permanently.
-- **Decision:** The durable design is recorded in
-  [`ADR 0111`](adr/0111-run-programmatic-tool-calls-in-a-closed-machine.md).
-  The explicit machine, structured nested outcome, generated request roster,
-  synthetic child identity, live aggregate row, value budgets, partial-work
-  settlement, and bounded `parallel`/`parallel-map` joins are implemented.
-- **Blast radius:** Tool registry and pipeline reentrancy, permissions and
-  prompts, request cancellation, skills frontmatter and invocation ownership,
-  prompt assembly, transcripts and audit records, render-data, telemetry,
-  agents, compaction, and security. A porous interpreter or incorrectly
-  inherited primitive set would turn skill metadata into arbitrary Emacs
-  execution or an authority escalation.
-
-### Investigate other macher-agent ideas
-
-- **Source:** The same `macher-agent` review; these are investigation leads,
-  not commitments and do not justify porting its VFS or Zero-Mem/PageRank
-  implementation.
-- **Exact history recall:** Determine whether finalized root segments and
-  numbered agent compaction archives should form searchable `history://root`
-  and `history://root/PATH` corpora for the existing `Grep` tool. Prefer the
-  resource-address seam over a separate SearchHistory tool; use regex search,
-  not semantic/PageRank retrieval.
-- **Repeated tool-result cost (resolved 2026-08-21: do not build):** Measured
-  over 43 retained chat contexts (417 completed tool results): 14 exact
-  call+result duplicates totaling roughly 64 tokens of potential saving.
-  `Read` had 0 exact duplicates -- the source-level read dedup already removes
-  the dominant repeat class -- and 3 repeated `Read` calls whose results had
-  changed, confirming that a call-signature key alone (macher-agent's design)
-  would serve stale results. Artifacts and scanner under
-  `.scratch/macher-agent/` (`tool-result-dedup-measurement.md`,
-  `measure-tool-result-dedup.el`, `tool-result-dedup-data.json`). Revisit only
-  if a future profile shows material duplicate volume; the correct design is
-  then request-time elision keyed on identical call AND result, eliding the
-  newest occurrence to keep the provider prompt-cache prefix stable, with
-  compaction invalidating any elision whose original body left the retained
-  tail.
-- **Tool-call ID ambiguity:** The dedup measurement found 5 duplicate results
-  whose persisted call IDs were reused because gptel associates parallel
-  same-name tool calls with one ID. A tool-call ID is therefore not a unique
-  referent. Audit any mevedel feature that assumes ID uniqueness (transcript
-  audit records, render-data association, compaction evidence) and consider an
-  upstream gptel fix.
-- **Verify unapplied patches:** Investigate running checks against a selected
-  ApplyPatch proposal in a disposable projected worktree. Reuse session fork,
-  patch, execution, and cleanup machinery where it actually fits, but account
-  for dirty user state, untracked files, selected hunks, dependencies, remote
-  targets, permissions, cancellation, and cleanup before treating this as a
-  patch-review action.
-- **Concurrent worker conflicts:** Measure stale ApplyPatch proposals and
-  overlapping untracked Bash/Eval mutations. The existing submission-time
-  baseline check is the preferred fail-fast seam; add isolation or locking
-  only if real incidents escape it.
-- **Large-workspace Xref:** Profile `XrefReferences` on a genuinely large
-  repository. Its output cap applies after the backend has returned a complete
-  list, so it cannot prevent a backend from allocating excessive results.
-  Prefer `Grep` for broad workspace search; pursue a backend-specific limit
-  only if profiling reproduces the failure.
-- **Status check:** Each idea has a plausible existing mevedel seam, but none
-  has usage or profiling evidence showing that another module should be
-  built.
 
 ### Bedrock backend support for deferred tool loading
 

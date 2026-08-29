@@ -1,6 +1,6 @@
 # Project live collaboration from host-authoritative state
 
-Status: accepted (amended 2026-08-17)
+Status: accepted (amended 2026-08-29)
 
 Live collaboration keeps the original Emacs process authoritative and exposes
 only an allowlisted semantic projection of its canonical session state. A
@@ -98,3 +98,47 @@ historically accurate for that transport; it does not describe the relay
 implementation. The relay contract is covered by `go test` in `relay/` and
 by the elisp stub-relay suite in
 `test/test-mevedel-collaboration-transport.el`.
+
+## Amendment: room creation is authenticated, and guest input is scoped and typed (2026-08-29)
+
+Three decisions moved after daily phone use of the viewer.
+
+**The relay authenticates room creation.** The landing note accepted an open
+host endpoint because a stranger's room carries only their own ciphertext.
+That reasoning was about confidentiality and stays true; what it did not
+cover is that an open endpoint lets anyone create rooms and hold idle
+connections on a server the operator runs for themselves. A `-host-token`
+flag, checked at the host upgrade and answered 404 on mismatch, closes that
+without touching the trust model: the relay still holds no key and reads no
+payload. Guests remain tokenless, because a guest's authority is the bearer
+link and adding a second secret would not make the first one stronger.
+
+**A guest's transcript filter is also a send scope.** The filter was
+view-only, which meant reading a directive thread and replying put the reply
+somewhere the guest was not looking. A prompt frame now carries the
+directive it was composed under. Guest-scoped input is restricted to
+`discuss`: the viewer knows a directive id and nothing else, and choosing
+between plan, retry, and request-changes would need both a UI the guest does
+not have and an authority argument the bearer link does not make. Discussion
+is also the directive action that mutates nothing, which keeps the boundary
+where the rest of this ADR puts it. Skill-inertness survives for free --
+directive dispatch never plans skills and already refuses slash lines -- but
+that is a property of the current actions, not of the scope mechanism: a
+scoped action that did plan skills would have to honour `:inert-skills` at
+the delivery seam.
+
+**Attachments are typed, not photographic.** The attach path accepted
+`image/*` because it was built for camera photos. Nothing downstream was
+image-specific: an attachment becomes an `@file` mention with a read grant,
+and Read decides text or media from the extension. The allowlist therefore
+widens to PDFs and text types rather than growing a parallel path, and the
+"text versus media" question the backlog recorded turns out not to be one.
+Saved names stay host-generated, so a guest filename can never steer a
+write.
+
+What this cost: the decoded attachment budget dropped from 1.5 MiB to
+1.25 MiB. Base64 costs a third and the prompt text shares the frame, so the
+old budget could produce a prompt frame over the relay's 2 MiB read limit --
+which the relay answers by closing the connection. Images are downscaled to
+fit; anything else is refused, because a log cannot be made smaller by
+resampling.

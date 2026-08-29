@@ -54,6 +54,15 @@ class Element {
   }
 }
 
+// A File stand-in: the viewer only reads name, type, size, and bytes.
+function fakeFile(name, type, text) {
+  const bytes = Buffer.from(text);
+  return {
+    name, type, size: bytes.length,
+    arrayBuffer: async () => bytes,
+  };
+}
+
 // textContent in the real DOM concatenates descendants; the fake keeps
 // strings and elements as children, so flatten recursively.
 function textOf(node) {
@@ -143,7 +152,8 @@ async function main() {
   const ids = ['transcript', 'connection', 'notice', 'live-button',
                'composer', 'composer-input', 'composer-name',
                'send-button', 'stop-button', 'filter', 'requests',
-               'session-label'];
+               'session-label', 'queue-state', 'attachments',
+               'attach-button', 'image-input'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.composer.hidden = true;
   const sockets = [];
@@ -295,9 +305,24 @@ async function main() {
   assert.deepEqual(prompt, {t: 'prompt', text: 'check the tests',
                             name: 'roland'});
   assert.equal(nodes['composer-input'].value, '');
-  // The host's queued acknowledgement surfaces as a notice.
+  // The host's queued acknowledgement surfaces as a notice, and names
+  // the sender's place in line when the host knows it.
   await deliver({t: 'queued'});
   assert.match(textOf(nodes.notice), /queued/i);
+  await deliver({t: 'queued', position: 2});
+  assert.match(textOf(nodes.notice), /#2/);
+
+  // Queue state tells a guest their prompt is still waiting; zero hides
+  // the line, and a host-side pause is called out.
+  assert.equal(nodes['queue-state'].hidden, true);
+  await deliver({t: 'queue', pending: 2, paused: false});
+  assert.equal(nodes['queue-state'].hidden, false);
+  assert.match(textOf(nodes['queue-state']), /2 follow-ups waiting/);
+  await deliver({t: 'queue', pending: 1, paused: true});
+  assert.match(textOf(nodes['queue-state']), /1 follow-up waiting/);
+  assert.match(textOf(nodes['queue-state']), /paused/);
+  await deliver({t: 'queue', pending: 0, paused: false});
+  assert.equal(nodes['queue-state'].hidden, true);
   nodes['stop-button'].dispatch('click');
   await waitFor(() => first.sent.length === 3, 'sealed abort');
   assert.deepEqual(await unseal(key, first.sent[2]), {t: 'abort'});
@@ -318,7 +343,39 @@ async function main() {
   nodes.filter.children[1].dispatch('click'); // Main chat
   assert.equal(findByRecordId(nodes.transcript, 'assistant').hidden, false);
   assert.equal(findByRecordId(nodes.transcript, 'directive-user').hidden, true);
+  // A prompt sent under a directive filter carries that directive, so
+  // the reply lands in the thread the guest is reading; main chat and
+  // All carry none. The composer says where the prompt will go.
+  nodes.filter.children[2].dispatch('click');
+  assert.match(nodes['composer-input'].placeholder, /Refactor the parser/);
+  nodes['composer-input'].value = 'and this one?';
+  nodes.composer.dispatch('submit');
+  await waitFor(() => first.sent.length === 4, 'directive-scoped prompt');
+  assert.equal((await unseal(key, first.sent[3])).directive, 'dir-1');
+  nodes.filter.children[1].dispatch('click'); // Main chat
+  nodes['composer-input'].value = 'main chat';
+  nodes.composer.dispatch('submit');
+  await waitFor(() => first.sent.length === 5, 'unscoped prompt');
+  assert.equal((await unseal(key, first.sent[4])).directive, undefined);
   nodes.filter.children[0].dispatch('click'); // All
+
+  // Attachments are not only photos: an allowlisted text type rides the
+  // frame verbatim, a disallowed one never leaves the browser, and the
+  // extension decides when the browser reports no type at all.
+  const api2 = context.window.mevedelViewer;
+  await api2.addFiles([fakeFile('build.log', '', 'log line\n'),
+                       fakeFile('notes.exe', 'application/x-msdownload', 'x')]);
+  assert.equal(nodes.attachments.children.length, 1);
+  assert.match(textOf(nodes.attachments), /build\.log/);
+  nodes['composer-input'].value = 'see the log';
+  nodes.composer.dispatch('submit');
+  await waitFor(() => first.sent.length === 6, 'prompt with attachment');
+  const withFile = await unseal(key, first.sent[5]);
+  assert.equal(withFile.images.length, 1);
+  assert.equal(withFile.images[0].mime, 'text/plain');
+  assert.equal(Buffer.from(withFile.images[0].data, 'base64').toString(),
+               'log line\n');
+  assert.equal(nodes.attachments.children.length, 0);
 
   // A ui-request renders a card whose buttons and feedback field answer
   // through sealed ui-response frames; a diff body gets diff rendering;

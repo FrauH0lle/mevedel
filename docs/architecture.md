@@ -23,8 +23,19 @@ self-hosted content-blind Go relay in `relay/` (which also serves the
 `relay/viewer/` HTML, CSS, and JavaScript assets); it never listens. Frames
 are AES-256-GCM sealed under a room key carried only in the bearer links'
 URL fragments; a full link additionally carries a write token granting
-prompting and interrupting. Multiple guests may join; the transport
+prompting and interrupting. A relay run with `-host-token` additionally
+requires `mevedel-collaboration-relay-host-token` in a handshake header to
+create a room, which keeps strangers who find the endpoint from opening
+rooms; guests stay tokenless, their authority being the bearer link.
+Multiple guests may join; the transport
 reconnects with bounded backoff and guests re-hello for a fresh snapshot.
+Guest prompts enter the ordinary pending-input queue; a guest whose
+transcript filter names a directive sends into that directive's discussion,
+the one directive action external input may reach. Guests see the pending
+count and their own place in line. Prompts may carry attachments -- images,
+PDFs, and text types on a fixed allowlist -- which are saved under the
+session media directory and mentioned as `@file` tokens with read grants,
+leaving Read to decide text or media.
 It also has deterministic session/buffer/Emacs teardown. It is an observer
 only: its post-stream and post-response hooks are failure-isolated so
 projection or transport errors cannot settle a model request. Tool starts
