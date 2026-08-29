@@ -86,6 +86,9 @@
 ;; `mevedel-permission-prompt'
 (declare-function mevedel-permission--format-authority-capabilities
                   "mevedel-permission-prompt" (entry))
+(declare-function mevedel-permission--elide
+                  "mevedel-permission-prompt"
+                  (text entry &optional line-limit char-limit))
 (declare-function mevedel-permission--format-remember-authority
                   "mevedel-permission-prompt" (entry))
 (declare-function mevedel-permission--prompt-async-eval
@@ -134,6 +137,11 @@
                   "mevedel-permissions" (entry &optional data-buffer))
 (declare-function mevedel-permission--one-shot-prompt-outcome
                   "mevedel-permissions" (outcome))
+
+;; `mevedel-queue'
+(declare-function mevedel-queue--entry-metadata-put
+                  "mevedel-queue" (entry key value))
+(autoload 'mevedel-queue--entry-metadata-put "mevedel-queue")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
@@ -1068,46 +1076,47 @@ Expressions longer than this are truncated with a toggle to expand."
   "Display Eval permission overlay for EXPRESSION and CALLBACK.
 
 CALLBACK is invoked once with `allow-once', `deny-once', a feedback cons,
-or `aborted'.  Long expressions are truncated in
-the display and can be toggled with TAB.  ORIGIN, when non-main,
+or `aborted'.  Long expressions are elided in the display and toggled
+with TAB.  ORIGIN, when non-main,
 renders the same attribution line used by generic and Bash permission
 prompts.  COUNT is the permission queue depth for the composite
 interaction-zone counter.  ENTRY identifies the queued prompt.  MODE and
 PRESERVE-UI describe the requested execution scope."
   (unless (fboundp 'mevedel-permission--prompt-async-eval)
     (require 'mevedel-permission-prompt))
-  (let* ((lines (split-string expression "\n"))
-         (long-p (> (length lines) mevedel-eval-expression-display-limit))
-         (display-expr (if long-p
-                           (concat
-                            (string-join
-                             (seq-take lines mevedel-eval-expression-display-limit)
-                             "\n")
-                            "\n"
-                            (propertize
-                             (format "... (%d more lines, press TAB to expand)"
-                                     (- (length lines) mevedel-eval-expression-display-limit))
-                             'font-lock-face 'shadow))
-                         expression))
-         (content (concat
-                   "The LLM is requesting permission to evaluate elisp.\n\n"
-                   (mevedel--prompt-attribution-line origin)
-                   (propertize "Mode: " 'font-lock-face 'font-lock-escape-face)
-                   (format "%s" (or mode "live"))
-                   (when (equal (or mode "live") "live")
-                     (format " (inherently unconfined; preserve_ui: %s)"
-                             (if preserve-ui "true" "false")))
-                   "\n"
-                   (when entry
-                     (concat
-                      (mevedel-permission--format-authority-capabilities
-                       entry)
-                      (mevedel-permission--format-remember-authority
-                       entry)))
-                   "\n"
-                   (propertize "Expression:\n" 'font-lock-face 'font-lock-escape-face)
-                   (propertize (format "%s\n\n" display-expr)
-                               'font-lock-face 'font-lock-string-face))))
+  (let* ((faced-expr (propertize expression
+                                'font-lock-face 'font-lock-string-face))
+         ;; Built twice: once elided for the prompt, once whole for the
+         ;; remote descriptor, whose reader has no TAB to expand with.
+         (build
+          (lambda (display-expr)
+            (concat
+             "The LLM is requesting permission to evaluate elisp.\n\n"
+             (mevedel--prompt-attribution-line origin)
+             (propertize "Mode: " 'font-lock-face 'font-lock-escape-face)
+             (format "%s" (or mode "live"))
+             (when (equal (or mode "live") "live")
+               (format " (inherently unconfined; preserve_ui: %s)"
+                       (if preserve-ui "true" "false")))
+             "\n"
+             (when entry
+               (concat
+                (mevedel-permission--format-authority-capabilities entry)
+                (mevedel-permission--format-remember-authority entry)))
+             "\n"
+             (propertize "Expression:\n"
+                         'font-lock-face 'font-lock-escape-face)
+             display-expr
+             "\n\n")))
+         (content
+          (funcall build
+                   (mevedel-permission--elide
+                    faced-expr entry
+                    mevedel-eval-expression-display-limit))))
+    (when entry
+      (mevedel-queue--entry-metadata-put
+       entry :remote-body
+       (substring-no-properties (funcall build faced-expr))))
     (if (fboundp 'mevedel-permission--prompt-async-eval)
         (mevedel-permission--prompt-async-eval content callback count entry)
       (mevedel--warn-once 'eval-permission-ui

@@ -420,6 +420,17 @@ and dangerous-command presentation, and Eval presentation. The queue retains
 ordering and outcome semantics; the shared interaction primitive retains
 overlay settlement and request cancellation.
 
+A Bash command longer than `mevedel-permission-command-display-limit` (400
+characters) and an Eval expression longer than
+`mevedel-eval-expression-display-limit` (20 lines) are elided in the prompt
+behind a `TAB` toggle, which names how much is hidden and re-renders the queue
+head in place. Only the command or expression body elides: agent attribution,
+the guardian verdict, the detected-command summary, the patterns a
+session/always allow would add, and every warning stay visible, because those
+are what the decision rests on. The `mevedel--remote` descriptor a browser
+collaborator reads always carries the whole command, elided or not -- a guest
+has no `TAB` to press and must not approve what it cannot see.
+
 `mevedel-bash-policy.el` supplies Bash classification, reusable rule patterns,
 and guardian guidance. `mevedel-tool-exec-permission.el` combines that policy
 with the generic permission chain, persists approved authority, and adapts

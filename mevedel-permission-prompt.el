@@ -220,6 +220,57 @@
     (mevedel--prompt--settle ov result)
     t))
 
+(defcustom mevedel-permission-command-display-limit 400
+  "Maximum number of characters of a Bash command shown inline.
+Longer commands are elided with a TAB toggle that reveals the rest.
+The guardian verdict and detected-command summary are never elided, and
+a remote collaborator always receives the whole command."
+  :type 'integer
+  :group 'mevedel)
+
+(defun mevedel-permission--elide (text entry &optional line-limit char-limit)
+  "Return TEXT for prompt display, elided unless ENTRY is expanded.
+LINE-LIMIT caps the collapsed line count and CHAR-LIMIT the collapsed
+character count; either may be nil.  Text properties on TEXT survive, so
+callers face TEXT before eliding it.  ENTRY owns the toggle state, so a
+prompt without one is returned whole."
+  (let* ((lines (and line-limit (split-string text "\n")))
+         (long-p (or (and line-limit (> (length lines) line-limit))
+                     (and char-limit (> (length text) char-limit)))))
+    (cond
+     ((or (null entry) (not long-p)) text)
+     ((mevedel-queue--entry-metadata-get entry :expanded)
+      (concat text "\n"
+              (mevedel--prompt-key "TAB")
+              (propertize " to collapse" 'font-lock-face 'shadow)))
+     (t
+      (let* ((head (if (and line-limit (> (length lines) line-limit))
+                       (string-join (seq-take lines line-limit) "\n")
+                     text))
+             (head (if (and char-limit (> (length head) char-limit))
+                       (substring head 0 char-limit)
+                     head)))
+        (concat head
+                (propertize "..." 'font-lock-face 'shadow)
+                "\n"
+                (propertize (format "%d more characters, "
+                                    (- (length text) (length head)))
+                            'font-lock-face 'shadow)
+                (mevedel--prompt-key "TAB")
+                (propertize " to expand" 'font-lock-face 'shadow)))))))
+
+(defun mevedel-permission--prompt-toggle-expand ()
+  "Toggle full display of the elided command or expression at point."
+  (interactive)
+  (when-let* ((ov (mevedel--prompt--overlay-at-point
+                   'mevedel-permission-prompt))
+              (entry (overlay-get ov 'mevedel-view-interaction-entry)))
+    (mevedel-queue--entry-metadata-put
+     entry :expanded
+     (not (mevedel-queue--entry-metadata-get entry :expanded)))
+    (when-let* ((session (plist-get entry :session)))
+      (mevedel-permission-queue--render-head session))))
+
 (defun mevedel-permission--prompt-body
     (content include-always &optional suppress-allow-session once-only)
   "Return the permission prompt body for CONTENT.
@@ -284,6 +335,9 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
         (unless once-only
           (define-key map "D" #'mevedel-permission--prompt-deny-session))
         (define-key map "f" #'mevedel-permission--prompt-feedback)
+        (when entry
+          (define-key map (kbd "TAB")
+                      #'mevedel-permission--prompt-toggle-expand))
         (when (and entry
                    (plist-get entry :remember-authority-cell)
                    (plist-get entry :reusable-operation-p))
@@ -329,7 +383,11 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
         ;; The remote surface gets the one-shot outcomes only: durable
         ;; session or workspace authority is never mintable from a guest.
         (overlay-put ov 'mevedel--remote
-                     (list :body (substring-no-properties content)
+                     (list :body (substring-no-properties
+                                  (or (and entry
+                                           (mevedel-queue--entry-metadata-get
+                                            entry :remote-body))
+                                      content))
                            :options '((allow-once . "Allow once")
                                       (deny-once . "Deny"))
                            :feedback t))
@@ -506,61 +564,75 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                         (or (plist-get entry :guardian)
                             (car guardian-cell))))
          (guardian-status (and guardian-cell (cadr guardian-cell)))
-         (content
-          (concat
-           (propertize
-            (if dangerous
-                "Bash Command Execution Request — DANGEROUS\n"
-              "Bash Command Execution Request\n")
-            'font-lock-face
-            (if dangerous
-                '(:inherit bold :inherit error)
-              '(:inherit bold :inherit warning)))
-           (mevedel--prompt-attribution-line origin)
-           "\n"
-           (propertize "Command: " 'font-lock-face 'font-lock-escape-face)
-           (propertize (format "%s\n" command)
-                       'font-lock-face 'font-lock-string-face)
-           (mevedel-permission--format-authority-capabilities entry)
-           (mevedel-permission--format-remember-authority entry)
-           (mevedel-permission--format-bash-guardian
-            guardian guardian-status)
-           (when commands-summary
-             (concat
-              "\n"
-              (propertize "Detected commands: "
-                          'font-lock-face 'font-lock-escape-face)
-              (propertize commands-summary
-                          'font-lock-face 'font-lock-constant-face)
-              "\n"))
-           (when (and allow-patterns (not rule-creating-disabled-p))
-             (concat
-              (propertize "Session/always allow will add: "
-                          'font-lock-face 'font-lock-escape-face)
-              (propertize
-               (mapconcat (lambda (pattern) (format "`%s'" pattern))
-                          allow-patterns ", ")
-               'font-lock-face 'font-lock-constant-face)
-              "\n"))
-           (when dangerous
-             (concat
-              (propertize "⚠ " 'font-lock-face 'error)
-              (propertize
-               "Contains a binary on `mevedel-bash-dangerous-commands'.\n"
-               'font-lock-face 'font-lock-comment-face)
-              (when rule-creating-disabled-p
+         (faced-command (propertize command
+                                    'font-lock-face 'font-lock-string-face))
+         ;; Built twice: once elided for the prompt, once whole for the
+         ;; remote descriptor, whose reader has no TAB to expand with.
+         (build
+          (lambda (shown-command)
+            (concat
+             (propertize
+              (if dangerous
+                  "Bash Command Execution Request — DANGEROUS\n"
+                "Bash Command Execution Request\n")
+              'font-lock-face
+              (if dangerous
+                  '(:inherit bold :inherit error)
+                '(:inherit bold :inherit warning)))
+             (mevedel--prompt-attribution-line origin)
+             "\n"
+             (propertize "Command: " 'font-lock-face 'font-lock-escape-face)
+             shown-command
+             "\n"
+             (mevedel-permission--format-authority-capabilities entry)
+             (mevedel-permission--format-remember-authority entry)
+             (mevedel-permission--format-bash-guardian
+              guardian guardian-status)
+             (when commands-summary
+               (concat
+                "\n"
+                (propertize "Detected commands: "
+                            'font-lock-face 'font-lock-escape-face)
+                (propertize commands-summary
+                            'font-lock-face 'font-lock-constant-face)
+                "\n"))
+             (when (and allow-patterns (not rule-creating-disabled-p))
+               (concat
+                (propertize "Session/always allow will add: "
+                            'font-lock-face 'font-lock-escape-face)
                 (propertize
-                 "Session/permanent allow is disabled for dynamic dangerous commands.\n"
-                 'font-lock-face 'font-lock-comment-face))))
-           (when unparseable
-             (concat
-              (propertize
-               "Warning: Command contains unsupported or dynamic shell syntax.\n"
-               'font-lock-face 'warning)
-              (propertize
-               "Session/permanent allow is disabled for complex Bash commands.\n"
-               'font-lock-face 'font-lock-comment-face)))
-           "\n")))
+                 (mapconcat (lambda (pattern) (format "`%s'" pattern))
+                            allow-patterns ", ")
+                 'font-lock-face 'font-lock-constant-face)
+                "\n"))
+             (when dangerous
+               (concat
+                (propertize "⚠ " 'font-lock-face 'error)
+                (propertize
+                 "Contains a binary on `mevedel-bash-dangerous-commands'.\n"
+                 'font-lock-face 'font-lock-comment-face)
+                (when rule-creating-disabled-p
+                  (propertize
+                   "Session/permanent allow is disabled for dynamic dangerous commands.\n"
+                   'font-lock-face 'font-lock-comment-face))))
+             (when unparseable
+               (concat
+                (propertize
+                 "Warning: Command contains unsupported or dynamic shell syntax.\n"
+                 'font-lock-face 'warning)
+                (propertize
+                 "Session/permanent allow is disabled for complex Bash commands.\n"
+                 'font-lock-face 'font-lock-comment-face)))
+             "\n")))
+         (content
+          (funcall build
+                   (mevedel-permission--elide
+                    faced-command entry nil
+                    mevedel-permission-command-display-limit))))
+    (when entry
+      (mevedel-queue--entry-metadata-put
+       entry :remote-body
+       (substring-no-properties (funcall build faced-command))))
     (mevedel-permission--prompt-async-with-content
      content (and include-always (not rule-creating-disabled-p))
      cont count entry rule-creating-disabled-p once-only)))
