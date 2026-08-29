@@ -125,15 +125,20 @@ code, pre {
   background: var(--surface-2);
   color: var(--muted);
   font: inherit;
-  font-size: .8rem;
+  font-size: .78rem;
   line-height: 1;
-  padding: .3rem .55rem;
+  padding: .3rem .6rem;
   border-radius: 999px;
   cursor: pointer;
+  /* A colored emoji glyph clashes with the monochrome chrome; render
+     it as text where supported and mute it everywhere else. */
+  font-variant-emoji: text;
+  filter: grayscale(1);
 }
 .bell.on {
   color: var(--ink);
   border-color: var(--accent);
+  filter: none;
 }
 .bell[hidden] { display: none; }
 .wordmark {
@@ -208,15 +213,37 @@ code, pre {
   background: var(--ok);
   box-shadow: 0 0 0 2px var(--surface);
 }
+/* The strip earns its own row on a phone; on a wide screen a lone
+   "All" pill under the wordmark looks orphaned, so it joins the line. */
+@media (min-width: 60rem) {
+  .topbar { flex-wrap: nowrap; }
+  .filter {
+    order: 1;
+    flex: 1 1 auto;
+    flex-basis: auto;
+    min-width: 0;
+    padding-bottom: 0;
+    margin-left: .5rem;
+  }
+  .conn { order: 2; }
+  .bell { order: 3; }
+}
+/* Same pill grammar as the bell beside it, so the corner reads as one
+   control group rather than two rhythms. */
 .conn {
   margin: 0;
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: .45rem;
-  font-size: .8rem;
+  font-size: .78rem;
+  line-height: 1;
   color: var(--muted);
   white-space: nowrap;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: .3rem .7rem;
 }
 .conn::before {
   content: "";
@@ -233,7 +260,7 @@ code, pre {
 .ledger {
   max-width: 46rem;
   margin: 0 auto;
-  padding: 1.4rem 1rem 16rem;
+  padding: 1.4rem 1rem 1.6rem;
   display: flex;
   flex-direction: column;
   gap: 1.1rem;
@@ -480,9 +507,12 @@ code, pre {
 .live-button[hidden] { display: none; }
 
 /* ── Dock: interactions, notice, composer ───────────────────────────── */
+/* In flow after the transcript, sticky at the viewport bottom: a short
+   session shows the composer right under its last turn instead of
+   across a void, while a long one keeps it pinned during scroll. */
 .dock {
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
+  position: sticky;
+  bottom: 0;
   z-index: 20;
   background: linear-gradient(transparent,
     color-mix(in srgb, var(--ground) 96%, transparent) 14%,
@@ -649,7 +679,7 @@ code, pre {
 /* ── Small screens ──────────────────────────────────────────────────── */
 @media (max-width: 520px) {
   .topbar { padding: .5rem .7rem; gap: .6rem; }
-  .ledger { padding: 1rem .6rem 14rem; gap: .9rem; }
+  .ledger { padding: 1rem .6rem 1.2rem; gap: .9rem; }
   .turn { grid-template-columns: 1.7rem 1fr; gap: .55rem; }
   .glyph {
     width: 1.7rem;
