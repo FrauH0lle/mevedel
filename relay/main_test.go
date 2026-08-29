@@ -17,7 +17,7 @@ const testRoom = "abcdefghij0123456789"
 
 func startRelay(t *testing.T) (*relay, *httptest.Server) {
 	t.Helper()
-	rl := newRelay(24 * time.Hour)
+	rl := newRelay(24*time.Hour, "")
 	srv := httptest.NewServer(rl.mux())
 	t.Cleanup(srv.Close)
 	return rl, srv
@@ -33,6 +33,43 @@ func dial(t *testing.T, srv *httptest.Server, roomID, role string) *websocket.Co
 	}
 	t.Cleanup(func() { c.CloseNow() })
 	return c
+}
+
+func TestHostTokenGatesRoomCreation(t *testing.T) {
+	rl := newRelay(24*time.Hour, "s3cret")
+	srv := httptest.NewServer(rl.mux())
+	t.Cleanup(srv.Close)
+
+	hostDial := func(token string) (*websocket.Conn, *http.Response, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		opts := &websocket.DialOptions{HTTPHeader: http.Header{}}
+		if token != "" {
+			opts.HTTPHeader.Set(hostTokenHeader, token)
+		}
+		return websocket.Dial(ctx, srv.URL+"/r/"+testRoom+"?role=host", opts)
+	}
+
+	for _, token := range []string{"", "wrong"} {
+		c, resp, err := hostDial(token)
+		if err == nil {
+			c.CloseNow()
+			t.Fatalf("host token %q was accepted", token)
+		}
+		if resp == nil || resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("host token %q: want 404, got %v", token, resp)
+		}
+	}
+
+	// A guest is never asked for the token, but it needs a room to join.
+	host, _, err := hostDial("s3cret")
+	if err != nil {
+		t.Fatalf("dial with the right token: %v", err)
+	}
+	t.Cleanup(func() { host.CloseNow() })
+	guest := dial(t, srv, testRoom, "guest")
+	expectText(t, host, `{"t":"peer-joined","peer":1}`)
+	guest.CloseNow()
 }
 
 func read(t *testing.T, c *websocket.Conn) (websocket.MessageType, []byte) {

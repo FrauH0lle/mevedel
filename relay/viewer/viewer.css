@@ -666,3 +666,30 @@ code, pre {
   line-height: 1;
   cursor: pointer;
 }
+
+/* Non-image attachments have nothing to show but their name. */
+.attachment-name {
+  display: inline-flex;
+  align-items: center;
+  max-width: 11rem;
+  height: 3.4rem;
+  padding: 0 .6rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: .78rem;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+}
+
+.queue-state {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.queue-state.paused {
+  color: var(--running);
+}

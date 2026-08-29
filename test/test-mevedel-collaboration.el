@@ -27,6 +27,7 @@
 (require 'mevedel-view-composer)
 (require 'mevedel-view-input-files)
 (require 'mevedel-view-render)
+(require 'mevedel-workspace)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-ui)
 
@@ -757,7 +758,7 @@
                      (lambda (_input _session) '(grant)))
                     ((symbol-function 'mevedel-session-add-dropped-file-grant)
                      (lambda (_session path) (push path granted)))
-                    ((symbol-function 'mevedel-collaboration--save-guest-images)
+                    ((symbol-function 'mevedel-collaboration--save-guest-attachments)
                      (lambda (images)
                        (when images '("/tmp/media/guest-1.jpg"))))
                     ((symbol-function 'mevedel-collaboration--transport-send)
@@ -832,13 +833,90 @@
       (kill-buffer view-buffer)
       (kill-buffer data-buffer))))
 
-(mevedel-deftest mevedel-collaboration--save-guest-images
-  (:doc "saves accepted image types within budget and drops invalid sets whole")
+(mevedel-deftest mevedel-collaboration--host-headers
+  (:doc "sends the relay host token as a header only when one is configured")
+  (let ((mevedel-collaboration-relay-host-token nil))
+    (should-not (mevedel-collaboration--host-headers))
+    (setq mevedel-collaboration-relay-host-token "")
+    (should-not (mevedel-collaboration--host-headers))
+    (setq mevedel-collaboration-relay-host-token "s3cret")
+    (should (equal '(("X-Mevedel-Host-Token" . "s3cret"))
+                   (mevedel-collaboration--host-headers)))))
+
+(mevedel-deftest mevedel-collaboration--guest-directive-id
+  (:doc "accepts an id the workspace still has and drops anything else")
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project "/tmp/collab-dir/" "/tmp/collab-dir/" "collab"))
+         (session (mevedel-session-create "main" workspace))
+         (room (list :session session)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-workspace-directives workspace)
+                (list (mevedel-directive--create :id "dir-1")))
+          (should (equal "dir-1"
+                         (mevedel-collaboration--guest-directive-id
+                          room (list :directive "dir-1"))))
+          ;; A stale filter, a non-string, and no filter at all all send
+          ;; to main chat rather than failing the prompt.
+          (should-not (mevedel-collaboration--guest-directive-id
+                       room (list :directive "dir-gone")))
+          (should-not (mevedel-collaboration--guest-directive-id
+                       room (list :directive 42)))
+          (should-not (mevedel-collaboration--guest-directive-id
+                       room (list :text "no filter")))
+          ;; A room with no session cannot resolve anything.
+          (should-not (mevedel-collaboration--guest-directive-id
+                       (list :session nil) (list :directive "dir-1"))))
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-collaboration--publish-queue
+  (:doc "broadcasts pending queue state to guests only when it changes")
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project "/tmp/collab-queue/" "/tmp/collab-queue/" "cq"))
+         (session (mevedel-session-create "main" workspace))
+         (guests (make-hash-table :test #'eql))
+         (room (list :session session :guests guests
+                     :transport 'transport :queue nil))
+         (mevedel-collaboration--room nil)
+         sent)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame)
+                     (push (cons peer frame) sent)
+                     t)))
+          (puthash 1 (list :name "Phone" :writable t :ready t) guests)
+          (mevedel-collaboration--publish-queue room)
+          (should (equal '((0 . (:t "queue" :pending 0 :paused nil)))
+                         sent))
+          ;; An unchanged queue is not re-broadcast.
+          (setq sent nil)
+          (mevedel-collaboration--publish-queue room)
+          (should-not sent)
+          ;; A queued entry and a pause both move the state.
+          (let ((entry (mevedel-session-enqueue-pending-input
+                        session 'follow-up (list :input "later"))))
+            (mevedel-collaboration--publish-queue room)
+            (should (equal '((0 . (:t "queue" :pending 1 :paused nil)))
+                           sent))
+            ;; The ack tells the sender where in line it landed.
+            (should (= 1 (mevedel-collaboration--queue-position room entry)))
+            (setq sent nil)
+            (mevedel-session-set-pending-input-paused session t)
+            (mevedel-collaboration--publish-queue room)
+            (should (equal '((0 . (:t "queue" :pending 1 :paused t)))
+                           sent))
+            ;; An entry that drained between enqueue and ack has no place.
+            (mevedel-session-set-pending-inputs session 'follow-up nil)
+            (should-not (mevedel-collaboration--queue-position room entry))))
+      (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-collaboration--save-guest-attachments
+  (:doc "saves accepted types within budget and drops invalid sets whole")
   (let ((dir (make-temp-file "mevedel-guest-images" t)))
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-view--media-dir)
                    (lambda () dir)))
-          (let ((paths (mevedel-collaboration--save-guest-images
+          (let ((paths (mevedel-collaboration--save-guest-attachments
                         (list (list :mime "image/jpeg"
                                     :data (base64-encode-string "jpegbytes"))
                               (list :mime "image/png"
@@ -851,25 +929,32 @@
                              (set-buffer-multibyte nil)
                              (insert-file-contents-literally (nth 0 paths))
                              (buffer-string)))))
+          ;; A text attachment rides the same path; Read decides text
+          ;; or media from the extension downstream.
+          (let ((paths (mevedel-collaboration--save-guest-attachments
+                        (list (list :mime "text/x-patch"
+                                    :data (base64-encode-string "--- a\n"))))))
+            (should (= 1 (length paths)))
+            (should (string-suffix-p ".patch" (car paths))))
           ;; Unknown type, malformed data, over-budget, and too many
-          ;; images each drop the whole set.
-          (should-not (mevedel-collaboration--save-guest-images
+          ;; attachments each drop the whole set.
+          (should-not (mevedel-collaboration--save-guest-attachments
                        (list (list :mime "image/svg+xml"
                                    :data (base64-encode-string "x")))))
-          (should-not (mevedel-collaboration--save-guest-images
+          (should-not (mevedel-collaboration--save-guest-attachments
                        (list (list :mime "image/png" :data "not base64!"))))
-          (should-not (mevedel-collaboration--save-guest-images
+          (should-not (mevedel-collaboration--save-guest-attachments
                        (list (list :mime "image/png"
                                    :data (base64-encode-string
                                           (make-string
-                                           (1+ mevedel-collaboration--max-image-bytes)
+                                           (1+ mevedel-collaboration--max-attachment-bytes)
                                            ?x))))))
-          (should-not (mevedel-collaboration--save-guest-images
+          (should-not (mevedel-collaboration--save-guest-attachments
                        (make-list
-                        (1+ mevedel-collaboration--max-prompt-images)
+                        (1+ mevedel-collaboration--max-prompt-attachments)
                         (list :mime "image/png"
                               :data (base64-encode-string "x")))))
-          (should-not (mevedel-collaboration--save-guest-images nil)))
+          (should-not (mevedel-collaboration--save-guest-attachments nil)))
       (delete-directory dir t))))
 
 (mevedel-deftest mevedel-collaboration--handle-abort ()

@@ -22,6 +22,7 @@
       <div id="requests" class="requests" aria-label="Pending interactions"></div>
       <p id="notice" class="notice" role="status" hidden></p>
       <form id="composer" class="composer" hidden>
+        <p id="queue-state" class="queue-state" role="status" hidden></p>
         <textarea id="composer-input" class="composer-input" rows="2"
                   placeholder="Queue a follow-up for the session…"
                   aria-label="Prompt"></textarea>
@@ -29,9 +30,10 @@
         <div class="composer-row">
           <input id="composer-name" class="composer-name" type="text"
                  maxlength="32" placeholder="Your name" aria-label="Display name">
-          <input id="image-input" type="file" accept="image/*" multiple hidden>
+          <input id="image-input" type="file" multiple hidden
+                 accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json,.log,.patch,.diff,.md,.csv,.json,.txt">
           <button id="attach-button" class="btn quiet" type="button"
-                  aria-label="Attach images">📷</button>
+                  aria-label="Attach files">📎</button>
           <span class="composer-spacer"></span>
           <button id="stop-button" class="btn danger" type="button">Interrupt</button>
           <button id="send-button" class="btn" type="submit">Send</button>

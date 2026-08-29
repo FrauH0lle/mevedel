@@ -78,7 +78,15 @@
 (autoload 'mevedel-view-enqueue-external-follow-up "mevedel-pending-inputs")
 
 ;; `mevedel-structs'
+(declare-function mevedel-directive-id "mevedel-structs" (record))
+(declare-function mevedel-session-pending-follow-ups "mevedel-structs" (session))
+(declare-function mevedel-session-pending-input-failure-paused
+                  "mevedel-structs" (session))
+(declare-function mevedel-session-pending-input-paused
+                  "mevedel-structs" (session))
 (declare-function mevedel-session-session-id "mevedel-structs" (session))
+(declare-function mevedel-session-workspace "mevedel-structs" (session))
+(declare-function mevedel-workspace-directives "mevedel-structs" (workspace))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--abort-data-buffer
@@ -106,6 +114,19 @@ without a path, for example `wss://collab.example.net'."
   :type 'string
   :group 'mevedel)
 
+(defcustom mevedel-collaboration-relay-host-token nil
+  "Token this host sends when creating a relay room, or nil for none.
+
+A relay started with `-host-token' refuses to create a room without
+it, which keeps strangers who discover the endpoint from opening rooms
+and holding idle connections on the operator's server.  Guests never
+send it: their authority is the bearer link.  It travels as a
+handshake header rather than a query parameter because reverse proxies
+log query strings."
+  :type '(choice (const :tag "None" nil)
+                 (string :tag "Token"))
+  :group 'mevedel)
+
 (defcustom mevedel-collaboration-share-ttl 3600
   "Seconds after which an active share stops itself, or nil for no limit.
 
@@ -128,15 +149,28 @@ When nil, full links are capped at prompting and interrupting."
 (defconst mevedel-collaboration--publish-delay 0.1)
 (defconst mevedel-collaboration--max-prompt-bytes (* 256 1024))
 (defconst mevedel-collaboration--max-guest-name-chars 32)
-(defconst mevedel-collaboration--max-prompt-images 3)
-(defconst mevedel-collaboration--max-image-bytes (* 1536 1024)
-  "Total decoded image bytes one guest prompt may carry.
-The sealed frame must clear the relay's 2 MiB read limit with base64
-and envelope overhead included, so the viewer downscales to this
-budget and the host enforces it.")
-(defconst mevedel-collaboration--image-extensions
-  '(("image/jpeg" . "jpg") ("image/png" . "png") ("image/webp" . "webp"))
-  "Accepted guest image MIME types and their file extensions.")
+(defconst mevedel-collaboration--max-prompt-attachments 3)
+(defconst mevedel-collaboration--max-attachment-bytes (* 1280 1024)
+  "Total decoded attachment bytes one guest prompt may carry.
+
+The whole sealed prompt frame must clear the relay's 2 MiB read limit,
+and the relay closes the connection that overruns it.  Base64 costs a
+third, and the prompt text beside the attachments is worth 256 KiB of
+the same frame, so the decoded budget has to leave room for both:
+base64 of this budget plus a maximum-length prompt still lands about
+85 KiB short of the limit.  Images are downscaled to fit; anything
+else is refused, because a log cannot be made smaller by resampling.")
+(defconst mevedel-collaboration--attachment-extensions
+  '(("image/jpeg" . "jpg") ("image/png" . "png") ("image/webp" . "webp")
+    ("application/pdf" . "pdf") ("text/plain" . "txt")
+    ("text/markdown" . "md") ("text/csv" . "csv")
+    ("application/json" . "json") ("text/x-patch" . "patch"))
+  "Accepted guest attachment MIME types and their file extensions.
+
+Extensions the Read tool treats as media -- pdf and the image types --
+reach the model as media; the rest reach it as text.  Nothing here
+comes from the guest: the saved name is host-generated, so a guest
+filename can never steer a write.")
 (defconst mevedel-collaboration--duplicate-prompt-window 3.0
   "Seconds within which an identical prompt from one guest is dropped.
 A human re-sending the same text this fast is a double-fired client
@@ -215,6 +249,13 @@ event (double click, stale viewer), not a second question.")
       (condition-case nil
           (base64-decode-string padded)
         (error nil)))))
+
+(defun mevedel-collaboration--host-headers ()
+  "Return the extra handshake headers for this host's relay dial."
+  (when (and (stringp mevedel-collaboration-relay-host-token)
+             (not (string-empty-p mevedel-collaboration-relay-host-token)))
+    (list (cons "X-Mevedel-Host-Token"
+                mevedel-collaboration-relay-host-token))))
 
 (defun mevedel-collaboration--relay-origins ()
   "Return (WS-ORIGIN . WEB-ORIGIN) from the configured relay URL.
@@ -300,7 +341,46 @@ The name is display-only everywhere and never enters model context."
                     :record (mevedel-collaboration--json-record record))))
       (when removed
         (mevedel-collaboration--broadcast
-         room (list :t "remove" :ids (vconcat removed)))))))
+         room (list :t "remove" :ids (vconcat removed))))
+      (mevedel-collaboration--publish-queue room))))
+
+(defun mevedel-collaboration--queue-state (room)
+  "Return ROOM's guest-visible pending queue state as a plist.
+
+Only the count and the paused flag: a delivered prompt shows up in the
+transcript on its own, and per-entry previews would hand every guest
+every other guest's unsent text."
+  (when-let* ((session (plist-get room :session)))
+    (list :pending (length (mevedel-session-pending-follow-ups session))
+          :paused (and (or (mevedel-session-pending-input-paused session)
+                           (mevedel-session-pending-input-failure-paused
+                            session))
+                       t))))
+
+(defun mevedel-collaboration--queue-position (room entry)
+  "Return ENTRY's 1-based place in ROOM's pending follow-up queue.
+Nil when the entry is no longer queued, which a drain between the
+enqueue and this call makes possible."
+  (when-let* ((session (plist-get room :session))
+              (index (cl-position (plist-get entry :id)
+                                  (mevedel-session-pending-follow-ups session)
+                                  :key (lambda (candidate)
+                                         (plist-get candidate :id))
+                                  :test #'equal)))
+    (1+ index)))
+
+(defun mevedel-collaboration--publish-queue (&optional room)
+  "Broadcast ROOM's queue state to its guests when it has changed."
+  (setq room (or room mevedel-collaboration--room))
+  (when room
+    (let ((state (mevedel-collaboration--queue-state room)))
+      (unless (equal state (plist-get room :queue))
+        (setq mevedel-collaboration--room (plist-put room :queue state))
+        (when state
+          (mevedel-collaboration--broadcast
+           room (list :t "queue"
+                      :pending (plist-get state :pending)
+                      :paused (plist-get state :paused))))))))
 
 (defun mevedel-collaboration--publish-timer ()
   "Run the coalesced collaboration publication timer."
@@ -587,6 +667,14 @@ answer can execute the same path the host key binding would."
         (puthash peer (list :name name :writable writable :ready t)
                  (plist-get room :guests))
         (mevedel-collaboration--send-snapshot room peer)
+        ;; Queue state is broadcast only on change, so a joining guest
+        ;; is told the current one directly.
+        (when-let* ((state (mevedel-collaboration--queue-state room)))
+          (mevedel-collaboration--transport-send
+           (plist-get room :transport) peer
+           (list :t "queue"
+                 :pending (plist-get state :pending)
+                 :paused (plist-get state :paused))))
         (when (and writable mevedel-collaboration-remote-interactions)
           (mevedel-collaboration--send-ui-requests room peer))))))
 
@@ -609,7 +697,7 @@ never enters model-visible context."
                                 (plist-get frame :name))))
       ;; Drop a byte-identical repeat inside the duplicate window: a
       ;; double-fired client submit, not a second question.  Prompts
-      ;; carrying images are never deduplicated -- consecutive photo
+      ;; carrying attachments are never deduplicated -- consecutive
       ;; sends legitimately reuse the same placeholder text.
       (let ((last (plist-get guest :last-prompt))
             (now (float-time)))
@@ -624,16 +712,18 @@ never enters model-visible context."
                                  (buffer-local-value 'mevedel--view-buffer
                                                      data-buffer))))
           (when (buffer-live-p view-buffer)
-            ;; Attached images ride the same pipeline as clipboard images
+            ;; Attachments ride the same pipeline as clipboard images
             ;; pasted in Emacs: saved under the session media directory,
-            ;; then mentioned and read-granted by the queue seam.
+            ;; then mentioned and read-granted by the queue seam.  Read
+            ;; decides text or media from the extension, so nothing here
+            ;; has to.
             ;; Both are durable, and the queue seam still refuses a prompt
             ;; whose session view is not live, so neither outlives a prompt
             ;; that was not queued.
             (let ((paths
                    (condition-case err
                        (with-current-buffer view-buffer
-                         (mevedel-collaboration--save-guest-images
+                         (mevedel-collaboration--save-guest-attachments
                           (plist-get frame :images)))
                      (error
                       ;; A failed media write is this prompt's problem, not
@@ -641,7 +731,7 @@ never enters model-visible context."
                       ;; tears the session down for every guest.
                       (display-warning
                        'mevedel
-                       (format "Guest image could not be saved: %s"
+                       (format "Guest attachment could not be saved: %s"
                                (error-message-string err))
                        :warning)
                       (cl-return-from
@@ -656,31 +746,58 @@ never enters model-visible context."
                           (mevedel-view-enqueue-external-follow-up
                            data-buffer text
                            :guest-name (plist-get guest :name)
-                           :paths paths))
+                           :paths paths
+                           :directive-id
+                           (mevedel-collaboration--guest-directive-id
+                            room frame)))
                     (when queued
                       (mevedel-collaboration--transport-send
                        (plist-get room :transport) peer
-                       (list :t "queued"))))
+                       (append
+                        (list :t "queued")
+                        (when-let* ((position
+                                     (mevedel-collaboration--queue-position
+                                      room queued)))
+                          (list :position position))))
+                      ;; The periodic publish only runs while a request
+                      ;; streams, so an idle session would leave every
+                      ;; other guest's count stale until one starts.
+                      (mevedel-collaboration--publish-queue room)))
                 (unless queued
                   (plist-put guest :last-prompt nil)
                   (dolist (path paths)
                     (when (file-exists-p path)
                       (ignore-errors (delete-file path)))))))))))))
 
-(defun mevedel-collaboration--save-guest-images (images)
-  "Save valid guest IMAGES under the session media directory.
+(defun mevedel-collaboration--guest-directive-id (room frame)
+  "Return the directive id FRAME asks ROOM to scope its prompt to, or nil.
+
+The viewer sends the id its transcript filter is showing.  An id for a
+directive the workspace no longer has yields nil, so a stale filter
+sends to main chat instead of failing the prompt."
+  (when-let* ((id (plist-get frame :directive))
+              ((stringp id))
+              (session (plist-get room :session))
+              (workspace (mevedel-session-workspace session))
+              ((cl-find id (mevedel-workspace-directives workspace)
+                        :key #'mevedel-directive-id :test #'equal)))
+    id))
+
+(defun mevedel-collaboration--save-guest-attachments (images)
+  "Save valid guest attachments IMAGES under the session media directory.
 IMAGES is the decoded frame list of (:mime STRING :data BASE64) plists.
 Return the saved absolute paths.  Runs in the view buffer.  Anything
 invalid -- unknown type, undecodable data, or a set over the byte
 budget -- drops the whole set rather than attaching a partial one."
   (when (and images (listp images)
-             (<= (length images) mevedel-collaboration--max-prompt-images))
+             (<= (length images)
+                 mevedel-collaboration--max-prompt-attachments))
     (catch 'invalid
       (let ((total 0)
             (decoded nil))
         (dolist (image images)
           (let* ((extension (cdr (assoc (plist-get image :mime)
-                                        mevedel-collaboration--image-extensions)))
+                                        mevedel-collaboration--attachment-extensions)))
                  (bytes (and extension
                              (stringp (plist-get image :data))
                              (condition-case nil
@@ -690,7 +807,7 @@ budget -- drops the whole set rather than attaching a partial one."
             (unless (and bytes (> (length bytes) 0))
               (throw 'invalid nil))
             (cl-incf total (length bytes))
-            (when (> total mevedel-collaboration--max-image-bytes)
+            (when (> total mevedel-collaboration--max-attachment-bytes)
               (throw 'invalid nil))
             (push (cons extension bytes) decoded)))
         (let ((dir (mevedel-view--media-dir))
@@ -856,6 +973,7 @@ The early return below needs the block a `cl-defun' establishes; a plain
                   (mevedel-collaboration--transport-open
                    (format "%s/r/%s?role=host" ws-origin room-id)
                    key
+                   :headers (mevedel-collaboration--host-headers)
                    :on-frame #'mevedel-collaboration--on-frame
                    :on-control #'mevedel-collaboration--on-control
                    :on-state #'mevedel-collaboration--on-state))
@@ -877,6 +995,7 @@ The early return below needs the block a `cl-defun' establishes; a plain
                                 (mevedel-collaboration--base64url
                                  (concat key write-token)))
                         :records records
+                        :queue nil
                         :pending-tools nil
                         :tool-call-occurrences
                         (make-hash-table :test #'equal)

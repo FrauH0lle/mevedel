@@ -14,10 +14,14 @@
 //	relay -> guest: {"t":"room-closed"}
 //
 // Close codes: 4001 room closed, 4004 no such room, 4009 second host.
+//
+// With -host-token set, a role=host upgrade must carry the token in the
+// X-Mevedel-Host-Token header or it is answered 404.
 package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/binary"
 	"flag"
@@ -55,6 +59,10 @@ const (
 
 var roomIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{10,64}$`)
 
+// hostTokenHeader carries -host-token. A header rather than a query
+// parameter: reverse proxies log query strings.
+const hostTokenHeader = "X-Mevedel-Host-Token"
+
 type room struct {
 	host     *websocket.Conn
 	guests   map[uint32]*websocket.Conn
@@ -67,10 +75,18 @@ type relay struct {
 	mu         sync.Mutex
 	rooms      map[string]*room
 	maxRoomAge time.Duration
+	// hostToken, when non-empty, is required in the X-Mevedel-Host-Token
+	// header of a role=host upgrade. Guests stay tokenless: their authority
+	// is the bearer link, and their room carries only its host's ciphertext.
+	hostToken string
 }
 
-func newRelay(maxRoomAge time.Duration) *relay {
-	return &relay{rooms: make(map[string]*room), maxRoomAge: maxRoomAge}
+func newRelay(maxRoomAge time.Duration, hostToken string) *relay {
+	return &relay{
+		rooms:      make(map[string]*room),
+		maxRoomAge: maxRoomAge,
+		hostToken:  hostToken,
+	}
 }
 
 // send writes one message with a bounded deadline so a stalled peer cannot
@@ -111,6 +127,14 @@ func (rl *relay) handleRoom(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/r/")
 	role := r.URL.Query().Get("role")
 	if !roomIDPattern.MatchString(id) || (role != "host" && role != "guest") {
+		http.NotFound(w, r)
+		return
+	}
+	// 404 rather than 401: an unauthenticated prober learns nothing the
+	// unknown-path response does not already tell them.
+	if role == "host" && rl.hostToken != "" &&
+		subtle.ConstantTimeCompare([]byte(r.Header.Get(hostTokenHeader)),
+			[]byte(rl.hostToken)) != 1 {
 		http.NotFound(w, r)
 		return
 	}
@@ -276,8 +300,10 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:7466", "listen address")
 	maxRoomAge := flag.Duration("max-room-age", 24*time.Hour,
 		"backstop: close rooms older than this")
+	hostToken := flag.String("host-token", "",
+		"require this token in "+hostTokenHeader+" to create a room")
 	flag.Parse()
-	rl := newRelay(*maxRoomAge)
+	rl := newRelay(*maxRoomAge, *hostToken)
 	go rl.sweepLoop()
 	log.Printf("mevedel relay listening on %s", *addr)
 	srv := &http.Server{

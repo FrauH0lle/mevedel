@@ -8,6 +8,7 @@
   const liveButton = document.getElementById('live-button');
   const composer = document.getElementById('composer');
   const composerInput = document.getElementById('composer-input');
+  const queueState = document.getElementById('queue-state');
   const composerName = document.getElementById('composer-name');
   const stopButton = document.getElementById('stop-button');
   const filterNav = document.getElementById('filter');
@@ -581,6 +582,13 @@
       const turn = state.elements.get(record.id);
       if (turn) turn.hidden = !recordVisible(record);
     });
+    // The composer follows the filter, so say where a prompt will land.
+    if (composerInput) {
+      composerInput.placeholder =
+        (state.filter !== 'all' && state.filter !== 'main')
+          ? `Discuss ◆ ${directiveLabel(state.filter)}…`
+          : 'Queue a follow-up for the session…';
+    }
   }
 
   /* ── Pending interactions ─────────────────────────────────────────── */
@@ -709,36 +717,69 @@
     if (requests) requests.replaceChildren();
   }
 
-  /* ── Image attachments ────────────────────────────────────────────── */
-  // Phone photos are downscaled client-side to fit the sealed frame under
-  // the relay's read limit; the host enforces the same budget.
+  /* ── Attachments ──────────────────────────────────────────────────── */
+  // Photos are downscaled client-side to fit the sealed prompt frame under
+  // the relay's read limit; other files are refused when they overrun it,
+  // because a log cannot be made smaller by resampling. The host enforces
+  // the same allowlist and budget.
 
-  const MAX_IMAGES = 3;
-  const IMAGE_BUDGET = 1536 * 1024; // total decoded bytes, all images
-  const pendingImages = []; // {mime, data (base64), bytes, url}
+  const MAX_FILES = 3;
+  // Decoded bytes, all attachments. Base64 costs a third and the prompt
+  // text shares the frame, so this leaves the 2 MiB relay limit ~85 KiB
+  // of headroom even with a maximum-length prompt beside it.
+  const FILE_BUDGET = 1280 * 1024;
+  // Mirrors the host's allowlist. Read decides text or media downstream.
+  const MIME_BY_EXTENSION = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+    webp: 'image/webp', pdf: 'application/pdf', txt: 'text/plain',
+    log: 'text/plain', text: 'text/plain', md: 'text/markdown',
+    csv: 'text/csv', json: 'application/json',
+    patch: 'text/x-patch', diff: 'text/x-patch',
+  };
+  const ALLOWED_MIME = new Set(Object.values(MIME_BY_EXTENSION));
+  const pendingFiles = []; // {mime, label, data (base64), bytes, url}
+
+  // Browsers report "" or application/octet-stream for .log, .patch, and
+  // friends, so the extension decides whenever the type is not one we take.
+  function attachmentMime(file) {
+    if (ALLOWED_MIME.has(file.type)) return file.type;
+    const extension = (file.name || '').split('.').pop().toLowerCase();
+    return MIME_BY_EXTENSION[extension] || null;
+  }
 
   function renderAttachments() {
     if (!attachments) return;
     attachments.replaceChildren();
-    pendingImages.forEach((image, index) => {
+    pendingFiles.forEach((item, index) => {
       const chip = el('span', 'attachment');
-      const thumb = el('img', 'attachment-thumb');
-      thumb.src = image.url;
-      thumb.alt = `attachment ${index + 1}`;
+      if (item.url) {
+        const thumb = el('img', 'attachment-thumb');
+        thumb.src = item.url;
+        thumb.alt = `attachment ${index + 1}`;
+        chip.append(thumb);
+      } else {
+        chip.append(el('span', 'attachment-name', item.label));
+      }
       const removeButton = el('button', 'attachment-remove', '✕');
       removeButton.type = 'button';
       removeButton.setAttribute('aria-label', `Remove attachment ${index + 1}`);
       removeButton.addEventListener('click', () => {
-        pendingImages.splice(index, 1);
+        pendingFiles.splice(index, 1);
         renderAttachments();
       });
-      chip.append(thumb, removeButton);
+      chip.append(removeButton);
       attachments.append(chip);
     });
   }
 
-  function pendingImageBytes() {
-    return pendingImages.reduce((sum, image) => sum + image.bytes, 0);
+  function pendingFileBytes() {
+    return pendingFiles.reduce((sum, item) => sum + item.bytes, 0);
+  }
+
+  function base64OfBytes(buffer) {
+    let binary = '';
+    buffer.forEach(byte => { binary += String.fromCharCode(byte); });
+    return btoa(binary);
   }
 
   async function downscaleImage(file, budget) {
@@ -760,28 +801,47 @@
     return null;
   }
 
-  async function addImages(files) {
+  async function addFiles(files) {
     for (const file of files) {
-      if (!file.type.startsWith('image/')) continue;
-      if (pendingImages.length >= MAX_IMAGES) {
-        flashNotice(`At most ${MAX_IMAGES} images per prompt.`);
-        break;
-      }
-      const budget = IMAGE_BUDGET - pendingImageBytes();
-      const blob = await downscaleImage(file, budget).catch(() => null);
-      if (!blob) {
-        flashNotice('Image too large for the frame budget.');
+      const mime = attachmentMime(file);
+      if (!mime) {
+        flashNotice(`${file.name || 'That file'} is not an accepted type.`);
         continue;
       }
-      const buffer = new Uint8Array(await blob.arrayBuffer());
-      let binary = '';
-      buffer.forEach(byte => { binary += String.fromCharCode(byte); });
-      pendingImages.push({
-        mime: 'image/jpeg',
-        data: btoa(binary),
-        bytes: buffer.length,
-        url: URL.createObjectURL(blob),
-      });
+      if (pendingFiles.length >= MAX_FILES) {
+        flashNotice(`At most ${MAX_FILES} attachments per prompt.`);
+        break;
+      }
+      const budget = FILE_BUDGET - pendingFileBytes();
+      if (mime.startsWith('image/')) {
+        const blob = await downscaleImage(file, budget).catch(() => null);
+        if (!blob) {
+          flashNotice('Image too large for the frame budget.');
+          continue;
+        }
+        const buffer = new Uint8Array(await blob.arrayBuffer());
+        pendingFiles.push({
+          mime: 'image/jpeg',
+          label: file.name || 'photo',
+          data: base64OfBytes(buffer),
+          bytes: buffer.length,
+          url: URL.createObjectURL(blob),
+        });
+      } else {
+        if (file.size > budget) {
+          flashNotice(`${file.name || 'That file'} is over the `
+                      + `${Math.floor(budget / 1024)} KB left in this prompt.`);
+          continue;
+        }
+        const buffer = new Uint8Array(await file.arrayBuffer());
+        pendingFiles.push({
+          mime,
+          label: file.name || 'attachment',
+          data: base64OfBytes(buffer),
+          bytes: buffer.length,
+          url: null,
+        });
+      }
     }
     renderAttachments();
   }
@@ -798,6 +858,19 @@
     if (composer) composer.hidden = !visible;
   }
 
+  // How many follow-ups are waiting, and whether the host has delivery
+  // paused -- otherwise a queued prompt on a busy session looks dropped.
+  function showQueueState(frame) {
+    if (!queueState) return;
+    const pending = typeof frame.pending === 'number' ? frame.pending : 0;
+    queueState.hidden = pending === 0;
+    queueState.className = `queue-state${frame.paused === true ? ' paused' : ''}`;
+    if (pending === 0) return;
+    queueState.textContent =
+      `${pending} follow-up${pending === 1 ? '' : 's'} waiting`
+      + (frame.paused === true ? ' — delivery paused in Emacs' : '');
+  }
+
   /* ── Frame handling ───────────────────────────────────────────────── */
 
   function handleFrame(frame) {
@@ -808,6 +881,9 @@
       setComposerVisible(!state.readOnly);
       // Active ui-requests are re-sent after the snapshot on every hello.
       clearRequests();
+      // The host sends `queue' only when it changes, so a reconnect
+      // starts empty rather than showing the previous socket's count.
+      showQueueState({pending: 0});
       setConnection('Loading…', 'connected');
     } else if (frame.t === 'snapshot-chunk') {
       if (!state.staging) return;
@@ -830,7 +906,11 @@
       if (state.staging) state.staging.live.push({t: 'remove', ids: frame.ids});
       else removeRecords(frame.ids);
     } else if (frame.t === 'queued') {
-      flashNotice('Follow-up queued for the session.');
+      flashNotice(typeof frame.position === 'number'
+                  ? `Queued — #${frame.position} in line.`
+                  : 'Follow-up queued for the session.');
+    } else if (frame.t === 'queue') {
+      showQueueState(frame);
     } else if (frame.t === 'ui-request') {
       renderRequest(frame);
     } else if (frame.t === 'ui-request-end') {
@@ -918,21 +998,28 @@
     composer.addEventListener('submit', async event => {
       event.preventDefault();
       const text = composerInput.value;
-      if (!text.trim() && !pendingImages.length) return;
+      if (!text.trim() && !pendingFiles.length) return;
       if (new TextEncoder().encode(text).length > MAX_PROMPT_BYTES) {
         flashNotice('Prompt too large.');
         return;
       }
       localStorage.setItem('mevedel-guest-name', guestName());
-      const frame = {t: 'prompt', text: text.trim() || 'See the attached image.',
+      const frame = {t: 'prompt',
+                     text: text.trim() || 'See the attached file.',
                      name: guestName()};
-      if (pendingImages.length) {
-        frame.images = pendingImages.map(
-          image => ({mime: image.mime, data: image.data}));
+      // Filtering to a directive sends into that directive's discussion,
+      // so the reply lands in the thread being read. The host drops an id
+      // whose directive is gone and sends to main chat instead.
+      if (state.filter !== 'all' && state.filter !== 'main') {
+        frame.directive = state.filter;
+      }
+      if (pendingFiles.length) {
+        frame.images = pendingFiles.map(
+          item => ({mime: item.mime, data: item.data}));
       }
       await send(frame);
       composerInput.value = '';
-      pendingImages.length = 0;
+      pendingFiles.length = 0;
       renderAttachments();
     });
     // The Send button is type="submit", so the form's submit event already
@@ -941,18 +1028,17 @@
     if (attachButton && imageInput) {
       attachButton.addEventListener('click', () => imageInput.click());
       imageInput.addEventListener('change', () => {
-        addImages([...imageInput.files]);
+        addFiles([...imageInput.files]);
         imageInput.value = '';
       });
     }
     if (composerInput) {
       composerInput.addEventListener('paste', event => {
         const files = [...(event.clipboardData?.items || [])]
-          .filter(item => item.kind === 'file'
-                  && item.type.startsWith('image/'))
+          .filter(item => item.kind === 'file')
           .map(item => item.getAsFile())
           .filter(Boolean);
-        if (files.length) addImages(files);
+        if (files.length) addFiles(files);
       });
     }
     if (composerName) {
@@ -987,6 +1073,6 @@
   }
 
   window.mevedelViewer = Object.freeze({
-    parseFragment, atLiveEdge, base64urlDecode, base64urlEncode,
+    parseFragment, atLiveEdge, base64urlDecode, base64urlEncode, addFiles,
   });
 })();
