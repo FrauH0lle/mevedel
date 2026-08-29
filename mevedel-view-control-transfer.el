@@ -231,7 +231,7 @@ transfer in flight wants a cadence the idle session does not."
         ('reset-agent-ephemeral-state
          (mevedel-view-reset-agent-ephemeral-state))
         ('refresh-status
-         (when-let ((data (mevedel-view--control-transfer-data-buffer)))
+         (when-let* ((data (mevedel-view--control-transfer-data-buffer)))
            (with-current-buffer data
              (when (and buffer-file-name (file-exists-p buffer-file-name))
                (setq buffer-file-truename (file-truename buffer-file-name))
@@ -260,7 +260,7 @@ The timer passes its owning view explicitly; it must not depend on the
 ambient current buffer, which may be an unrelated buffer when a timer fires."
   (when (buffer-live-p (or view (current-buffer)))
     (with-current-buffer (or view (current-buffer))
-      (when-let ((data (mevedel-view--control-transfer-data-buffer)))
+      (when-let* ((data (mevedel-view--control-transfer-data-buffer)))
         (let* ((session (buffer-local-value 'mevedel--session data))
                (read-only-p
                 (with-current-buffer data
@@ -350,7 +350,7 @@ the same reason a granted transfer waits for it."
   (pcase-let ((`(,data . ,session) (mevedel-view--control-transfer-session)))
     (when (buffer-local-value 'mevedel-session--read-only-mode data)
       (user-error "This session is already read-only here"))
-    (when-let ((blocker
+    (when-let* ((blocker
                 (mevedel-session-control-transfer-drain-blocker session)))
       (user-error "Cannot release control while %s is outstanding" blocker))
     (mevedel-session-artifacts-save session data t)

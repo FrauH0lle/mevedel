@@ -670,7 +670,7 @@ the view parser, persistence) keeps seeing the full block."
         (let* ((media-by-index nil)
                (session (bound-and-true-p mevedel--session))
                (tool-results-dir
-                (when-let ((save-path (and session
+                (when-let* ((save-path (and session
                                            (mevedel-session-save-path session))))
                   (file-name-concat save-path "tool-results"))))
           (dolist (tc tool-use)

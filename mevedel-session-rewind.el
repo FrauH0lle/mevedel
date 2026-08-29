@@ -1324,7 +1324,7 @@ step that fails afterwards has to name its own frame."
   "Install STAGING-BUFFER as BUFFER for rewound SESSION at TARGET."
   (with-current-buffer buffer
     (let ((inhibit-read-only t))
-      ;; `replace-buffer-contents' runs `after-change-functions', where
+      ;; `replace-region-contents' runs `after-change-functions', where
       ;; org-fold's fragility check walks one character back from a
       ;; folded region.  A transcript whose folded drawer or block starts
       ;; at point-min makes that `backward-char' signal
@@ -1333,7 +1333,7 @@ step that fails afterwards has to name its own frame."
       ;; rerender below rebuilds the display from the new text anyway.
       (let ((inhibit-modification-hooks t))
         (mevedel-session-artifacts-replace-transcript-contents staging-buffer))
-      ;; `replace-buffer-contents' keeps the properties on text it did
+      ;; `replace-region-contents' keeps the properties on text it did
       ;; not have to change, so the retained leading blank lines still
       ;; carry the discarded turns' transcript properties.
       (mevedel-session-rewind--strip-blank-transcript-properties)

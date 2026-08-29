@@ -1028,7 +1028,7 @@ If PATCH-CONTENT is empty, does nothing."
 (defun mevedel-clear-patch-buffer ()
   "Clear the patch buffer."
   (interactive)
-  (when-let ((buf (mevedel--patch-buffer)))
+  (when-let* ((buf (mevedel--patch-buffer)))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)))

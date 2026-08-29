@@ -868,7 +868,7 @@ local `:source' files."
   "Return session-local ARTIFACTS in last-write-wins order."
   (let (result)
     (dolist (artifact artifacts)
-      (when-let ((logical (plist-get artifact :logical)))
+      (when-let* ((logical (plist-get artifact :logical)))
         (setq result
               (append
                (cl-remove logical result
@@ -1141,7 +1141,7 @@ component and retries once."
                       (setf (mevedel-session-publication-queue session) nil))))
             (setq current (pop remaining))
             (mevedel-session-publication--publish-batch session current)
-            (if-let ((marker
+            (if-let* ((marker
                       (mevedel-session-publication--batch-marker current)))
                 (let ((transaction
                        (append
@@ -1304,7 +1304,7 @@ that error so their lifecycle owner can classify it."
   (setq session (or session
                     (mevedel-session-publication--current-session)))
   (mevedel-session-recovery-refresh session)
-  (when-let ((pending (mevedel-session-pending-publication session)))
+  (when-let* ((pending (mevedel-session-pending-publication session)))
     (let ((specialized-p (plist-get pending :manual-recovery-marker)))
       (unless
           (yes-or-no-p
@@ -1318,7 +1318,7 @@ that error so their lifecycle owner can classify it."
         (user-error "Pending publication was not abandoned"))
       (when specialized-p
         (mevedel-session-recovery--abandon session))
-      (when-let ((local-recovery
+      (when-let* ((local-recovery
                   (plist-get pending :manual-recovery-local)))
         (condition-case err
             (mevedel-session-recovery--delete-local local-recovery)

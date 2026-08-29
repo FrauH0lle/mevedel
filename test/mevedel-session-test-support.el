@@ -777,7 +777,7 @@ workspace tree."
 
 (defun test-mevedel-session-persistence--cleanup (tempdir)
   "Tear down a test session: kill data buffer and remove TEMPDIR."
-  (when-let ((buf (get-buffer "*test-data-buf*")))
+  (when-let* ((buf (get-buffer "*test-data-buf*")))
     (with-current-buffer buf (set-buffer-modified-p nil))
     (kill-buffer buf))
   (when (file-directory-p tempdir)
@@ -979,19 +979,19 @@ The result is a plist whose :tempdir owns every created file."
 
 (defun test-mevedel-session-persistence--cleanup-fork-fixture (fixture)
   "Delete the real files and buffer owned by FIXTURE."
-  (when-let ((buf (plist-get fixture :buffer)))
+  (when-let* ((buf (plist-get fixture :buffer)))
     (when (buffer-live-p buf)
       (with-current-buffer buf (set-buffer-modified-p nil))
       (kill-buffer buf)))
-  (when-let ((agent-buffer (plist-get fixture :source-agent-buffer)))
+  (when-let* ((agent-buffer (plist-get fixture :source-agent-buffer)))
     (when (buffer-live-p agent-buffer)
       (with-current-buffer agent-buffer
         (set-buffer-modified-p nil))
       (kill-buffer agent-buffer)))
-  (when-let ((view-buffer (plist-get fixture :root-view-buffer)))
+  (when-let* ((view-buffer (plist-get fixture :root-view-buffer)))
     (when (buffer-live-p view-buffer)
       (kill-buffer view-buffer)))
-  (when-let ((tempdir (plist-get fixture :tempdir)))
+  (when-let* ((tempdir (plist-get fixture :tempdir)))
     (when (file-directory-p tempdir)
       (delete-directory tempdir t)))
   (mevedel-workspace-clear-registry))

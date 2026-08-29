@@ -68,7 +68,7 @@ STATE is a plist placed in a cons cell so handlers can mutate it."
                           :peer-of
                           (cons (cons ws peer)
                                 (plist-get plist :peer-of))))
-           (when-let ((host (plist-get (car state) :host)))
+           (when-let* ((host (plist-get (car state) :host)))
              (websocket-send-text
               host (format "{\"t\":\"peer-joined\",\"peer\":%d}" peer))))))))
    :on-message
@@ -90,7 +90,7 @@ STATE is a plist placed in a cons cell so handlers can mutate it."
                                   (mevedel-test--relay-send-binary
                                    guest payload))
                                 guests))
-                   (when-let ((guest (and guests (gethash peer guests))))
+                   (when-let* ((guest (and guests (gethash peer guests))))
                      (mevedel-test--relay-send-binary guest payload))))
              (when host
                (let* ((peer (or (cdr (assq ws (plist-get plist :peer-of))) 0))

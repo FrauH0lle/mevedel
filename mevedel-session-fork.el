@@ -506,7 +506,7 @@ caches never become fork authority."
       (error "Fork source buffer has no session"))
     (make-directory (file-name-concat staging-path "agents") t)
     (make-directory (file-name-concat staging-path "file-history") t)
-    (when-let ((local-source
+    (when-let* ((local-source
                 (and parent-save-path
                      (file-name-concat parent-save-path "local")))
                ((file-directory-p local-source)))

@@ -166,7 +166,7 @@ Returns (project . ROOT) if the buffer is in a project, nil otherwise."
 (defun mevedel-workspace--file-workspace ()
   "Detect file workspace for the current buffer.
 Returns (file . FILENAME) if the buffer is visiting a file, nil otherwise."
-  (when-let ((filename (buffer-file-name)))
+  (when-let* ((filename (buffer-file-name)))
     (cons 'file filename)))
 
 

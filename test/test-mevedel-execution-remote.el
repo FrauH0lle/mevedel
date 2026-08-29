@@ -70,7 +70,7 @@ The root must already exist, be writable, and be reachable through normal
   (let ((value (getenv variable)))
     (unless value
       (ert-skip (format "%s is not set" variable)))
-    (when-let ((config (and (eq method 'ssh)
+    (when-let* ((config (and (eq method 'ssh)
                             (getenv "MEVEDEL_TEST_SSH_CONFIG"))))
       (setq tramp-use-connection-share t
             tramp-ssh-controlmaster-options
@@ -1556,7 +1556,7 @@ connection charges for, so the program path is proved here too."
         (root-b (getenv "MEVEDEL_TEST_SSH_ALIAS_B_ROOT")))
     (unless (and root-a root-b)
       (ert-skip "SSH alias roots are not configured"))
-    (when-let ((config (getenv "MEVEDEL_TEST_SSH_CONFIG")))
+    (when-let* ((config (getenv "MEVEDEL_TEST_SSH_CONFIG")))
       (setq tramp-use-connection-share t
             tramp-ssh-controlmaster-options
             (format "-F %s" (shell-quote-argument config))))

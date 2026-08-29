@@ -1127,7 +1127,7 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
                               (with-current-buffer source
                                 (insert (plist-get change :content)))
                               (set-visited-file-modtime)
-                              (replace-buffer-contents source)
+                              (replace-region-contents (point-min) (point-max) source)
                               (set-visited-file-modtime)
                               (set-buffer-modified-p nil))
                           (kill-buffer source))))))))

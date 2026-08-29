@@ -77,7 +77,7 @@ must never signal out of the transport."
                     mevedel-collaboration--tag-bytes)))
     (let ((nonce (substring sealed 0 mevedel-collaboration--nonce-bytes))
           (input (substring sealed mevedel-collaboration--nonce-bytes)))
-      (when-let ((result (condition-case nil
+      (when-let* ((result (condition-case nil
                              (gnutls-symmetric-decrypt
                               "AES-256-GCM" (copy-sequence key) nonce input)
                            (error nil))))
@@ -171,7 +171,7 @@ dropped silently."
 
 (defun mevedel-collaboration--transport-notify (transport state)
   "Report STATE through TRANSPORT's `:on-state' callback, if any."
-  (when-let ((callback (plist-get transport :on-state)))
+  (when-let* ((callback (plist-get transport :on-state)))
     (funcall callback state)))
 
 (defun mevedel-collaboration--transport-dial (transport)
@@ -248,7 +248,7 @@ dropped silently."
 (defun mevedel-collaboration--transport-open-p (transport)
   "Return non-nil when TRANSPORT has a live relay connection."
   (and (eq (plist-get transport :state) 'open)
-       (when-let ((ws (plist-get transport :ws)))
+       (when-let* ((ws (plist-get transport :ws)))
          (websocket-openp ws))))
 
 (defun mevedel-collaboration--transport-send (transport peer frame)
@@ -286,10 +286,10 @@ the relay collects the room, ending the session for every guest."
 (defun mevedel-collaboration--transport-stop (transport)
   "Stop TRANSPORT: cancel retries and close the connection."
   (plist-put transport :state 'stopped)
-  (when-let ((timer (plist-get transport :reconnect-timer)))
+  (when-let* ((timer (plist-get transport :reconnect-timer)))
     (cancel-timer timer)
     (plist-put transport :reconnect-timer nil))
-  (when-let ((ws (plist-get transport :ws)))
+  (when-let* ((ws (plist-get transport :ws)))
     (plist-put transport :ws nil)
     (condition-case nil
         (websocket-close ws)

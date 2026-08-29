@@ -554,7 +554,7 @@ BUFFER identifies the former owner when DIRECTIVE has already evaporated."
   (let ((pending (prog1 mevedel--pending-directive-detachments
                    (setq mevedel--pending-directive-detachments nil))))
     (dolist (entry pending)
-      ;; A captured range is not proof of deletion: `replace-buffer-contents'
+      ;; A captured range is not proof of deletion: `replace-region-contents'
       ;; signals one change over the whole replaced region while editing only
       ;; the parts that differ.  The directive is gone only when its overlay
       ;; evaporated or collapsed to zero width.

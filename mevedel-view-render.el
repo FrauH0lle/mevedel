@@ -1457,7 +1457,7 @@ caller's `plist-put' cannot corrupt the memo."
                     (mapcar
                      (lambda (range)
                        (plist-put range :render-id
-                                  (cl-gensym "mevedel-view-directive-turn-")))
+                                  (gensym "mevedel-view-directive-turn-")))
                      (mevedel-transcript-buffer-directive-ranges allow-open)))
               mevedel-view--directive-ranges-cache cache))
       (mapcar #'copy-sequence (nth 2 cache)))))
@@ -2588,7 +2588,7 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
 
 (defun mevedel-view--refresh-tool-row (data-buffer tool-use-id)
   "Refresh only TOOL-USE-ID's visible row from DATA-BUFFER."
-  (when-let ((region
+  (when-let* ((region
               (mevedel-view--tool-row-region data-buffer tool-use-id)))
     (let* ((start (nth 0 region))
            (end (nth 1 region))
@@ -2599,7 +2599,7 @@ The result is `(VIEW-START VIEW-END SOURCE-BOUNDS)' or nil."
            (turn-id (get-text-property start 'mevedel-view-turn-id)))
       (when (hash-table-p mevedel-view--tool-rendering-cache)
         (clrhash mevedel-view--tool-rendering-cache))
-      (when-let ((rendering
+      (when-let* ((rendering
                   (mevedel-view--segment-rendering
                    data-buffer (car source) (cdr source))))
         (unless (or (plist-get rendering :force-expanded-p)
@@ -3669,7 +3669,7 @@ CONTINUATION-P appends an already-started assistant turn without a new header."
                          (get-text-property
                           (1- insert-start) 'mevedel-view-turn-id))
                     (plist-get turn :render-id)
-                    (cl-gensym "mevedel-view-turn-"))
+                    (gensym "mevedel-view-turn-"))
                ,@(when directive
                    `(mevedel-view-directive ,directive
                      mevedel-view-turn-role directive)))))))))))
@@ -3933,7 +3933,7 @@ SOURCE, when non-nil, is the source range in the data buffer.
 EXPANDED means insert the disclosure body expanded."
   (when-let* ((events (mevedel-view--normalize-hook-context-events events)))
     (let ((start (point))
-          (id (cl-gensym "mevedel-hook-context-")))
+          (id (gensym "mevedel-hook-context-")))
       (insert (mevedel-view--format-hook-context-block events expanded))
       (add-text-properties
        start (point)
@@ -4163,7 +4163,7 @@ hint.  Searches that region."
                 (delete-region open-start open-end)
                 (goto-char open-start)
                 (let ((card-start (point))
-                      (card-id (cl-gensym "mevedel-view-mailbox-")))
+                      (card-id (gensym "mevedel-view-mailbox-")))
                   (insert "  ")
                   (insert (propertize
                            (cond

@@ -1067,7 +1067,7 @@ are deliberately ignored."
   (let* ((bytes (progn
                   (mevedel-session-artifacts-read-artifact
                    session logical)))
-         (suffix (when-let ((extension (file-name-extension path)))
+         (suffix (when-let* ((extension (file-name-extension path)))
                    (concat "." extension)))
          (temporary (make-temp-file "mevedel-session-artifact-" nil suffix)))
     (unwind-protect
@@ -1097,7 +1097,7 @@ ARGS is a plist with :file_path and optional :offset, :limit, :pages,
            (filename (plist-get args :file_path))
            (offset (plist-get args :offset))
            (limit (plist-get args :limit)))
-      (when-let ((artifact
+      (when-let* ((artifact
                   (mevedel-tool-fs-read--session-artifact-context filename)))
         (when (plist-get args :pages)
           (error "Parameter pages is only supported for PDF files"))

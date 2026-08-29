@@ -187,7 +187,7 @@
 (defun test-mevedel-execution-remote-client--session
     (root session-id client-id)
   "Restore SESSION-ID from target ROOT and return (BUFFER . SESSION)."
-  (when-let ((config (getenv "MEVEDEL_TEST_SSH_CONFIG")))
+  (when-let* ((config (getenv "MEVEDEL_TEST_SSH_CONFIG")))
     (setq tramp-use-connection-share t
           tramp-ssh-controlmaster-options
           (format "-F %s" (shell-quote-argument config))))

@@ -293,6 +293,21 @@
            :type 'user-error))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel--stash-instructions-on-kill
+  ()
+  ,test
+  (test)
+  :doc "leaves a buffer with no file alone, registry untouched"
+  (let ((activations 0))
+    (cl-letf (((symbol-function 'mevedel--instruction-activate-buffer)
+               (lambda (&rest _) (setq activations (1+ activations)))))
+      (with-temp-buffer
+        (mevedel--stash-instructions-on-kill))
+      ;; The global hook sees every buffer Emacs kills, internal ones
+      ;; included; none of them can carry a stashable instruction.
+      (should (zerop activations)))))
+
+
 (mevedel-deftest mevedel--setup-buffer-hooks
   ()
   ,test

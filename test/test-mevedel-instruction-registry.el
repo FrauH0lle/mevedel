@@ -24,6 +24,18 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-instruction-test-support"))
 
+(mevedel-deftest mevedel--instruction-alist ()
+  ,test
+  (test)
+  :doc "expands to fresh structure the compiler cannot posify in place"
+  (dolist (place '(mevedel--instruction-alist
+                   mevedel--instruction-id-counter
+                   mevedel--instruction-id-usage-map
+                   mevedel--instruction-retired-ids))
+    (should-not (eq (macroexpand (list place))
+                    (macroexpand (list place))))))
+
+
 (mevedel-deftest mevedel--instruction-state-rollback ()
   ,test
   (test)

@@ -198,7 +198,7 @@ Both sources consulted here are already in memory."
         (line (button-get button 'mevedel-view-line))
         (session (button-get button 'mevedel-view-session))
         (logical (button-get button 'mevedel-view-session-artifact)))
-    (when-let ((buffer
+    (when-let* ((buffer
                 (cond
                  ((and session logical)
                   (pop-to-buffer
