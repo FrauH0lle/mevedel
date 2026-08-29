@@ -188,6 +188,10 @@
 (autoload 'mevedel-request-active-p "mevedel-turn")
 (autoload 'mevedel-turn-busy-p "mevedel-turn")
 
+;; `mevedel-utilities'
+(declare-function mevedel--transcript-org-mode "mevedel-utilities" ())
+(autoload 'mevedel--transcript-org-mode "mevedel-utilities")
+
 (defcustom mevedel-session-follow-published t
   "Whether a non-owner session buffer follows the owner's committed state.
 
@@ -423,6 +427,11 @@ owner's side repoints the visited file here too."
          (content
           (mevedel-session-artifacts-read-artifact session logical t)))
     (with-current-buffer buffer
+      ;; The staging buffer is a transcript, not scratch text: the segment's
+      ;; hidden records and persisted gptel bounds are only parseable in the
+      ;; transcript's own major mode, and `gptel-mode' refuses any other.
+      (unless (derived-mode-p 'org-mode)
+        (mevedel--transcript-org-mode))
       (setq buffer-file-name segment-path
             buffer-file-truename nil
             default-directory (mevedel-session-working-directory session))
