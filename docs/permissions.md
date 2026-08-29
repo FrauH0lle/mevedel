@@ -362,6 +362,23 @@ pointing the variable directly at `notifications-notify` shows an empty
 notification.
 
 ```elisp
+;; One formatter, reused by every wrapper below.  A notification is a
+;; glance surface: name the session, name the tool, and give one
+;; truncated line of the command -- never the whole thing.
+(defun my/mevedel-permission-summary (entry)
+  (let ((session (plist-get entry :session)))
+    (format "%s%s: %s"
+            (if session (concat (mevedel-session-name session) " ") "")
+            (or (plist-get entry :tool-name) (plist-get entry :kind))
+            (truncate-string-to-width
+             (replace-regexp-in-string
+              "[ \t\n]+" " "
+              (or (plist-get entry :command)
+                  (plist-get entry :expression)
+                  (plist-get entry :specifier-value)
+                  ""))
+             110 nil nil t))))
+
 ;; Desktop notification via Emacs's built-in DBus client
 ;; (notifications.el ships with Emacs and talks to the same
 ;; freedesktop daemon notify-send does):
@@ -372,13 +389,7 @@ notification.
          :title "mevedel needs permission"
          :urgency 'critical
          :timeout 0
-         :body (format "%s %s"
-                       (or (plist-get entry :tool-name)
-                           (plist-get entry :kind))
-                       (or (plist-get entry :command)
-                           (plist-get entry :expression)
-                           (plist-get entry :specifier-value)
-                           "")))))
+         :body (my/mevedel-permission-summary entry))))
 
 ;; The same through the notify-send binary; destination 0 makes
 ;; call-process fire-and-forget:
@@ -388,22 +399,14 @@ notification.
                       "--app-name=mevedel" "--urgency=critical"
                       "--expire-time=0"
                       "mevedel needs permission"
-                      (format "%s %s"
-                              (or (plist-get entry :tool-name)
-                                  (plist-get entry :kind))
-                              (or (plist-get entry :command)
-                                  (plist-get entry :expression)
-                                  (plist-get entry :specifier-value)
-                                  "")))))
+                      (my/mevedel-permission-summary entry))))
 
 ;; Phone push through ntfy, for the prompt that opens after you have
 ;; left the desk:
 (setq mevedel-permission-notify-function
       (lambda (entry)
         (call-process "curl" nil 0 nil "-s"
-                      "-d" (format "Permission prompt: %s"
-                                   (or (plist-get entry :tool-name)
-                                       (plist-get entry :kind)))
+                      "-d" (my/mevedel-permission-summary entry)
                       "https://ntfy.sh/YOUR-TOPIC")))
 ```
 
