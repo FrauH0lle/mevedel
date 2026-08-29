@@ -854,7 +854,10 @@ connection charges for, so the program path is proved here too."
                           (integerp (plist-get facts :group-id))
                           (error-message-string
                            (plist-get result :error))))))
-          (should-not (mevedel-execution-mutation-blocked-p session))
+          ;; The decision-point predicate, not the pollable one: a
+          ;; settlement a busy connection refused is owed, and this is
+          ;; where it is written.
+          (should-not (mevedel-execution-mutation-refused-p session))
           (should-not
            (mevedel-session-durability-unsettled-mutation-p session)))
       (when session
@@ -1194,15 +1197,15 @@ connection charges for, so the program path is proved here too."
             (should
              (eq 'output-write-failed
                  (plist-get (plist-get result :facts) :termination)))
-            (should-not (mevedel-execution-mutation-blocked-p session))
-            ;; The write is owed, not lost: the retry lands it once the
-            ;; connection is free again.
-            (test-mevedel-execution--wait
-             (lambda ()
-               (not (mevedel-session-durability-unsettled-mutation-p
-                     session))))
-            (should-not (mevedel-execution-mutation-blocked-p session))))
-      (mevedel-transport-cancel-pending)
+            ;; The write is owed, not lost, and the target latch says so
+            ;; until it lands.
+            (should
+             (mevedel-session-durability-unsettled-mutation-p session))
+            (should (mevedel-execution-mutation-blocked-p session))
+            ;; The next decision point writes it with the connection free.
+            (should-not (mevedel-execution-mutation-refused-p session))
+            (should-not
+             (mevedel-session-durability-unsettled-mutation-p session))))
       (when session
         (mevedel-execution-teardown-session session))
       (delete-directory root t))))

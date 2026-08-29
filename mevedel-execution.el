@@ -160,10 +160,7 @@
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p
                   "mevedel-transport" (&optional path))
-(declare-function mevedel-transport-run-when-idle
-                  "mevedel-transport" (key path thunk &optional on-cancel))
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
-(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-push-canceller
@@ -222,6 +219,7 @@ Values below 0.25 are clamped so the UI receives at most four per second."
                (:constructor mevedel-execution--state-create))
   "Opaque per-session execution state."
   next-id
+  owed-settlement
   records
   scheduler
   unknown-outcome)
@@ -428,28 +426,43 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
 
 Settlement is reached from a process filter or a timer, so this write can
 come due while the target connection is mid-command.  The control
-filesystem refuses to nest, and that refusal is not evidence about the
-target: the write never ran.  Treating it as evidence would call a proven
-outcome unprovable and block the session\'s mutating executions over a
-transient nesting, so re-arm and retry once the connection is free.  Only
-a write that ran and failed leaves the outcome unknown."
-  (condition-case err
-      (unless (mevedel-session-durability-set-unsettled-mutation
-               authority nil)
-        (error "Remote mutation authority changed before settlement"))
-    (mevedel-session-control-fs-busy
-     (setf (mevedel-execution--record-mutation-armed-p record) t)
-     (unless (mevedel-transport-run-when-idle
-              (list 'execution-mutation-settlement
-                    (mevedel-execution--record-execution-id record))
-              (mevedel-execution--record-workdir record)
-              (lambda ()
-                (mevedel-execution--write-mutation-settlement
-                 record authority)))
-       (mevedel-execution--mark-unknown record err)))
-    (error
-     (setf (mevedel-execution--record-mutation-armed-p record) t)
-     (mevedel-execution--mark-unknown record err))))
+filesystem refuses to nest rather than let a crossed reply through, and
+that refusal is not evidence about the target: the write never ran.
+Treating it as evidence would call a proven outcome unprovable and block
+the session\'s mutating executions over a nesting that clears itself, so
+record the write as owed instead and let the next decision point issue it.
+Only a write that ran and failed leaves the outcome unknown."
+  (let* ((session (mevedel-execution--origin-session
+                   (mevedel-execution--record-origin record)))
+         (state (mevedel-execution--state-for-session session)))
+    (condition-case err
+        (progn
+          (unless (mevedel-session-durability-set-unsettled-mutation
+                   authority nil)
+            (error "Remote mutation authority changed before settlement"))
+          (setf (mevedel-execution--state-owed-settlement state) nil))
+      (mevedel-session-control-fs-busy
+       (setf (mevedel-execution--state-owed-settlement state) authority))
+      (error
+       (setf (mevedel-execution--record-mutation-armed-p record) t)
+       (mevedel-execution--mark-unknown record err)))))
+
+(defun mevedel-execution--flush-owed-mutation-settlement (session)
+  "Write a settlement for SESSION that a busy connection refused earlier.
+
+The owed authority is this client\'s own proof that its mutation finished,
+so writing it here is not an acknowledgement of somebody else\'s latch.
+Here is a decision point rather than a filter or a timer, so the
+connection is the caller\'s to use."
+  (let ((state (mevedel-execution--state-for-session session)))
+    (when-let* ((authority (mevedel-execution--state-owed-settlement state)))
+      (condition-case nil
+          (when (mevedel-session-durability-set-unsettled-mutation
+                 authority nil)
+            (setf (mevedel-execution--state-owed-settlement state) nil))
+        ;; Still refused or still failing: the write stays owed, and the
+        ;; session stays blocked, which is the safe direction.
+        (error nil)))))
 
 (defun mevedel-execution--settle-mutation (record)
   "Clear RECORD\'s durable latch after every armed mutation is proved settled."
@@ -531,9 +544,11 @@ Return non-nil when the block was cleared."
 
 (defun mevedel-execution-mutation-refused-p (session)
   "Return non-nil when SESSION must refuse a mutating request now.
-Re-proves a recorded unknown outcome against the target before refusing,
-so a session whose remote process is long gone recovers on its own."
+Writes a settlement a busy transport refused earlier and re-proves a
+recorded unknown outcome against the target before refusing, so a session
+whose remote work is long finished recovers on its own."
   (when (mevedel-execution-mutation-blocked-p session)
+    (mevedel-execution--flush-owed-mutation-settlement session)
     (mevedel-execution-reprove-unknown-outcome session)
     (mevedel-execution-mutation-blocked-p session)))
 
