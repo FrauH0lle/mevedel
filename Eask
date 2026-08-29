@@ -32,6 +32,7 @@
 (depends-on "gptel")
 (depends-on "gptel-agent")
 (depends-on "websocket")
+(depends-on "qrencode")
 
 (development
  (depends-on "mcp"))

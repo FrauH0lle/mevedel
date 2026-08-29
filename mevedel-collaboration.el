@@ -109,6 +109,10 @@
 (declare-function mevedel-view--media-dir "mevedel-view-input-files" ())
 (autoload 'mevedel-view--media-dir "mevedel-view-input-files")
 
+;; `qrencode'
+(declare-function qrencode "ext:qrencode"
+                  (s &optional mode errcorr return-raw))
+
 ;;
 ;;; Customization and state
 
@@ -1191,15 +1195,120 @@ returning the live room."
            (error nil))
          (signal (car error-data) (cdr error-data)))))))
 
+;;
+;;; Share surface
+
+(defvar-local mevedel-collaboration--share-room nil
+  "Room whose bearer links this share buffer presents.")
+
+(defvar-local mevedel-collaboration--share-which 'view
+  "Which link's QR the share buffer shows: `view' or `full'.")
+
+(defun mevedel-collaboration--share-content (room which)
+  "Return the share buffer text for ROOM showing WHICH link's QR.
+
+WHICH is `view' or `full'.  One QR at a time, the view link by
+default: two codes side by side is how a colleague scans the wrong one
+and walks away with write authority."
+  (require 'qrencode)
+  (let* ((full (eq which 'full))
+         (link (plist-get room (if full :link-full :link-view))))
+    (concat
+     (propertize (format "Share: %s\n" (plist-get room :session-label))
+                 'face 'bold)
+     (if full
+         (propertize
+          "FULL CONTROL link — grants prompting, interrupting, answering\n"
+          'face 'error)
+       (propertize "View link — read-only\n" 'face 'success))
+     "\n"
+     ;; Scaled so a phone camera resolves the half-block modules from a
+     ;; normal viewing distance.
+     (propertize (qrencode link) 'face '(:height 1.6))
+     "\n\n"
+     link
+     "\n\n"
+     (propertize
+      (concat "TAB show " (if full "view" "full control") " QR"
+              "  ·  c copy view  ·  f copy full  ·  q close\n"
+              "Links are bearer credentials; treat them like secrets.")
+      'face 'shadow))))
+
+(defun mevedel-collaboration--share-render ()
+  "Repaint the current share buffer from its room and selection."
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (insert (mevedel-collaboration--share-content
+             mevedel-collaboration--share-room
+             mevedel-collaboration--share-which))
+    (goto-char (point-min))))
+
+(defun mevedel-collaboration-share-toggle ()
+  "Show the other bearer link's QR."
+  (interactive)
+  (setq mevedel-collaboration--share-which
+        (if (eq mevedel-collaboration--share-which 'full) 'view 'full))
+  (mevedel-collaboration--share-render))
+
+(defun mevedel-collaboration-share-copy-view ()
+  "Copy the view link to the kill ring."
+  (interactive)
+  (kill-new (plist-get mevedel-collaboration--share-room :link-view))
+  (message "mevedel: view link copied"))
+
+(defun mevedel-collaboration-share-copy-full ()
+  "Copy the full-control link to the kill ring."
+  (interactive)
+  (kill-new (plist-get mevedel-collaboration--share-room :link-full))
+  (message "mevedel: full-control link copied"))
+
+(defun mevedel-collaboration-share-quit ()
+  "Close the share surface."
+  (interactive)
+  (if (frame-parent (selected-frame))
+      (delete-frame)
+    (quit-window t)))
+
+(defvar-keymap mevedel-collaboration--share-map
+  :doc "Keys available in the collaboration share buffer."
+  "TAB" #'mevedel-collaboration-share-toggle
+  "<tab>" #'mevedel-collaboration-share-toggle
+  "c" #'mevedel-collaboration-share-copy-view
+  "f" #'mevedel-collaboration-share-copy-full
+  "q" #'mevedel-collaboration-share-quit)
+
+(defun mevedel-collaboration--show-share-frame (room)
+  "Present ROOM's bearer links and QR code on a dedicated surface.
+A child frame on a graphical display, an ordinary window otherwise."
+  (let ((buffer (get-buffer-create "*mevedel share*")))
+    (with-current-buffer buffer
+      (setq-local mevedel-collaboration--share-room room)
+      (setq-local mevedel-collaboration--share-which 'view)
+      (setq buffer-read-only t
+            truncate-lines t
+            cursor-type nil)
+      (use-local-map mevedel-collaboration--share-map)
+      (mevedel-collaboration--share-render))
+    (if (display-graphic-p)
+        (when-let* ((window
+                     (display-buffer
+                      buffer
+                      '((display-buffer-in-child-frame)
+                        (child-frame-parameters
+                         . ((minibuffer . nil)
+                            (undecorated . t))))))
+                    (frame (window-frame window)))
+          (fit-frame-to-buffer frame)
+          (select-frame-set-input-focus frame))
+      (pop-to-buffer buffer))))
+
 (defun mevedel-collaboration--report-links (room)
-  "Copy ROOM's full link and report both bearer links."
+  "Copy ROOM's full link and open the share surface with both links.
+The links render there rather than in *Messages*, whose log is durable
+and easy to leak."
   (kill-new (plist-get room :link-full))
-  (message
-   (concat "mevedel: full-control link copied to kill ring\n"
-           "full: %s\nview: %s\n"
-           "Anyone holding a link gets its powers; share both like secrets")
-   (plist-get room :link-full)
-   (plist-get room :link-view)))
+  (mevedel-collaboration--show-share-frame room)
+  (message "mevedel: full-control link copied to kill ring"))
 
 (defun mevedel-collaboration-view ()
   "Start live collaboration, or report the active room's links."
