@@ -578,7 +578,7 @@ the agent), and `ToolSearch` (look up deferred tool schemas on demand)
 evaluation, confirmed in `ask` and `edits`, automatic in `full-auto`; supports
 `live` and `batch` modes, with optional UI preservation for live evaluation)
 
-**Web:** `WebSearch`, `WebFetch`, `YouTube` (via
+**Web:** `WebSearch`, `WebFetch` (via
 [gptel-agent](https://github.com/karthink/gptel-agent))
 
 **Skills:** `Skill` (invoke an active skill by name from the model side)
@@ -716,7 +716,7 @@ commands, web fetches, sub-agent spawns. Permission rules live on the unified
 |------------|------------------------|------------------------------------|
 | `:path`    | path (glob, `~` exp.)  | `Read`, `ApplyPatch`, `Glob`, …    |
 | `:pattern` | command string (glob)  | `Bash`                             |
-| `:domain`  | host name (glob)       | `WebFetch`, `YouTube`              |
+| `:domain`  | host name (glob)       | `WebFetch`, `WebSearch`            |
 | `:name`    | free-form name (glob)  | `Agent` (`task_name`)              |
 
 Precedence: specifier rules outrank generic; within a group `deny > ask >

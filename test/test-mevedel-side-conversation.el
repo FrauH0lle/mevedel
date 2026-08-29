@@ -756,7 +756,7 @@
                  (equal
                   '("Read" "Glob" "Grep" "XrefReferences"
                     "XrefDefinitions" "Imenu" "Treesitter" "WebSearch"
-                    "WebFetch" "YouTube" "ApplyPatch" "Bash"
+                    "WebFetch" "ApplyPatch" "Bash"
                     "WriteStdin" "ListExecutions" "StopExecution")
                   (mapcar #'gptel-tool-name gptel-tools)))
                 (let ((fsm (gptel-make-fsm

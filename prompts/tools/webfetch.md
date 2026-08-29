@@ -3,6 +3,9 @@ Fetch and read the text content of a URL.
 Returns the text content of the URL (not raw HTML) formatted for
 reading. HTML is converted to readable text.
 
+For a YouTube video URL it returns the video description and transcript
+(timestamped paragraphs) instead.
+
 Request times out after 30 seconds.
 
 ### When to use `WebFetch`
@@ -11,11 +14,11 @@ Request times out after 30 seconds.
 - Fetching content from URLs found via `WebSearch`
 - Reading blog posts, articles, or static web pages
 - Accessing online resources referenced in code
+- Reading a YouTube video's description and transcript
 
 ### When NOT to use `WebFetch`
 
 - Searching for URLs -> use `WebSearch` first
-- YouTube videos -> use `YouTube` tool instead
 - JavaScript-heavy single-page applications (may not render)
 - Large files or binary content
 
@@ -31,6 +34,11 @@ Request times out after 30 seconds.
 <example>
 - Read documentation page:
 WebFetch(url="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise")
+</example>
+
+<example>
+- Read a video's transcript:
+WebFetch(url="https://www.youtube.com/watch?v=H2qJRnV8ZGA")
 </example>
 
 ### Examples of bad usage

@@ -155,7 +155,7 @@ One specifier per rule:
 |------------|------------------------|-----------------------------------|
 | `:path`    | path (glob, `~` exp.)  | Read, ApplyPatch, Glob, Grep, ... |
 | `:pattern` | command/expression glob | Bash; full-escalation Eval rules |
-| `:domain`  | host name (glob)       | WebFetch, YouTube                 |
+| `:domain`  | host name (glob)       | WebFetch, WebSearch               |
 | `:name`    | free-form name (glob)  | Agent (`role`)                    |
 
 Precedence: specifier rules outrank generic; within a group

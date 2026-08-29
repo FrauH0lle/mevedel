@@ -257,7 +257,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-code.el        XrefReferences, XrefDefinitions, Imenu, Treesitter
   mevedel-tool-exec-permission.el Bash/Eval authority and prompt adapters
   mevedel-tool-exec.el        Bash/Eval lifecycle, rendering, registration
-  mevedel-tool-web.el         WebSearch, WebFetch, YouTube
+  mevedel-tool-web.el         WebSearch, WebFetch
   mevedel-interaction-prompt.el  shared interaction overlay lifecycle
   mevedel-permission-prompt.el   generic, Bash, Eval, and execution-authority prompt UI
   mevedel-tool-ask.el         Ask questionnaire, handler, renderer

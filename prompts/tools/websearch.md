@@ -17,7 +17,7 @@ Timeout after 30 seconds per search.
 ### When NOT to use `WebSearch`
 
 - Reading known URLs -> use `WebFetch`
-- Fetching YouTube transcripts -> use `YouTube`
+- Fetching YouTube transcripts -> use `WebFetch`
 - Information likely in local codebase -> use `Grep` or delegate
 - When offline access is required
 
