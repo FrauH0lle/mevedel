@@ -20,6 +20,7 @@
   const notifyButton = document.getElementById('notify-button');
   const composerScope = document.getElementById('composer-scope');
   const ownQueue = document.getElementById('own-queue');
+  const skillChips = document.getElementById('skill-chips');
 
   const PROTO = 2;
   const GIVE_UP_MS = 3 * 60 * 1000;
@@ -948,6 +949,26 @@
     if (composer) composer.hidden = !visible;
   }
 
+  // The welcome's host-curated roster is the whole discovery surface:
+  // one chip per allowed skill, each sending a typed frame the host
+  // validates against the same list. Composer text is never parsed.
+  function showSkillChips(names) {
+    if (!skillChips) return;
+    skillChips.replaceChildren();
+    const valid = (Array.isArray(names) ? names : [])
+      .filter(name => typeof name === 'string' && name);
+    skillChips.hidden = valid.length === 0;
+    valid.forEach(name => {
+      const chip = el('button', 'skill-chip', `/${name}`);
+      chip.type = 'button';
+      chip.addEventListener('click', () => {
+        send({t: 'skill', name});
+        flashNotice(`/${name} queued for the session.`);
+      });
+      skillChips.append(chip);
+    });
+  }
+
   // The guest's own pending prompts, echoed back per-peer by the host:
   // a persistent card with live position and a retract control, so a
   // queued prompt never reads as swallowed.
@@ -999,6 +1020,7 @@
       state.connected = true;
       renderNotifyButton();
       setComposerVisible(!state.readOnly);
+      showSkillChips(state.readOnly ? [] : frame.skills);
       // Active ui-requests are re-sent after the snapshot on every hello.
       clearRequests();
       // The host sends `queue' only when it changes, so a reconnect

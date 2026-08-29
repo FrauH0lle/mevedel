@@ -55,6 +55,9 @@
 (declare-function mevedel-cockpit-surface-selected
                   "mevedel-cockpit" (&optional no-error))
 
+;; `mevedel-collaboration'
+(defvar mevedel-collaboration-guest-skills)
+
 ;; `mevedel-compact-run'
 (defvar mevedel-compact-run-in-flight)
 
@@ -354,7 +357,7 @@ mis-attributed.")
                :help-echo "Open Pending Inputs cockpit"))))))
 
 (cl-defun mevedel-view-enqueue-external-follow-up
-    (data-buffer text &key guest-name guest-id paths directive-id)
+    (data-buffer text &key guest-name guest-id paths directive-id skill)
   "Queue TEXT as a follow-up that originated outside this Emacs.
 
 DATA-BUFFER owns the session.  GUEST-NAME attributes the entry to a
@@ -364,9 +367,14 @@ PATHS are files to mention as @file tokens with read grants, like an
 Emacs-side drop; the entry remembers them so a retraction can delete
 them.  DIRECTIVE-ID, when given, scopes the entry to that directive's
 discussion; the caller has already checked that the directive exists.
-Skill tokens in TEXT stay literal at submission: external input carries
-prompting authority only, never skill invocation.  Return the queued
-entry, or nil without a live session view."
+
+Skill tokens in TEXT stay literal at submission: external free text
+carries prompting authority only, never skill invocation.  The one
+exception is SKILL, a name the caller has already validated against
+its own allowlist: TEXT is then that skill's slash line, delivered
+with skill planning live and rechecked against the same allowlist at
+delivery.  Return the queued entry, or nil without a live session
+view."
   (when-let* (((buffer-live-p data-buffer))
               (view-buffer (buffer-local-value 'mevedel--view-buffer
                                                data-buffer))
@@ -386,7 +394,8 @@ entry, or nil without a live session view."
                             :guest-name guest-name
                             :guest-id guest-id
                             :guest-paths paths
-                            :inert-skills t
+                            :guest-skill skill
+                            :inert-skills (not skill)
                             ;; External input can only discuss.  The
                             ;; sender knows a directive id and nothing
                             ;; else, and discussion is the one directive
@@ -591,6 +600,27 @@ longer accepts the prepared input."
 ;;
 ;;; Automatic delivery
 
+(defun mevedel-view--drop-disallowed-guest-skills (session)
+  "Drop SESSION's queued guest skill entries the allowlist no longer names.
+A guest skill invocation is validated when its frame arrives and again
+here at delivery, so shrinking `mevedel-collaboration-guest-skills'
+takes effect for entries already waiting.  Return the remaining queue."
+  (let ((entries (mevedel-session-pending-follow-ups session))
+        (allowed (bound-and-true-p mevedel-collaboration-guest-skills))
+        dropped)
+    (dolist (entry entries)
+      (when-let* ((skill (plist-get entry :guest-skill))
+                  ((not (member skill allowed))))
+        (push entry dropped)))
+    (when dropped
+      (mevedel-session-set-pending-inputs
+       session 'follow-up
+       (cl-remove-if (lambda (entry) (memq entry dropped)) entries))
+      (message
+       "mevedel: dropped %d queued guest skill invocation%s no longer allowed"
+       (length dropped) (if (= 1 (length dropped)) "" "s")))
+    (mevedel-session-pending-follow-ups session)))
+
 (defun mevedel-view--drain-follow-up (data-buffer)
   "Submit the next pending follow-up for DATA-BUFFER.
 
@@ -613,7 +643,8 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                       (string-empty-p (mevedel-view--input-text)))
              (mevedel-session-artifacts-assert-new-mutation-authority
               session)
-             (when-let* ((queue (mevedel-view--pending-follow-ups session)))
+             (when-let* ((queue (mevedel-view--drop-disallowed-guest-skills
+                                 session)))
                (let* ((workflow (mevedel-session-directive-planning session))
                       (entry
                        (if workflow

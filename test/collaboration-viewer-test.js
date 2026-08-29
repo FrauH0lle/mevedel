@@ -154,7 +154,7 @@ async function main() {
                'send-button', 'stop-button', 'filter', 'requests',
                'session-label', 'queue-state', 'attachments',
                'attach-button', 'image-input', 'notify-button',
-               'composer-scope', 'own-queue'];
+               'composer-scope', 'own-queue', 'skill-chips'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.composer.hidden = true;
   nodes.filter.hidden = true;
@@ -258,8 +258,13 @@ async function main() {
 
   // Welcome for a writable guest reveals the composer; the snapshot loads
   // through final-flagged chunks with live updates queued behind it.
-  await deliver({t: 'welcome', proto: 2, readOnly: false, recordCount: 3});
+  await deliver({t: 'welcome', proto: 2, readOnly: false, recordCount: 3,
+                 skills: ['plan', 'review']});
   assert.equal(nodes.composer.hidden, false);
+  // The host-curated skill roster renders as tappable chips.
+  assert.equal(nodes['skill-chips'].hidden, false);
+  assert.equal(nodes['skill-chips'].children.length, 2);
+  assert.match(textOf(nodes['skill-chips'].children[0]), /plan/);
   await deliver({t: 'snapshot-chunk', final: false, records: [
     {id: 'assistant', kind: 'assistant', revision: 0,
      text: 'Some **bold** and `inline` text.\n\n```elisp\n(defun demo ()\n  "doc")\n```'},
@@ -445,6 +450,14 @@ async function main() {
                    {t: 'retract', id: 7});
   await deliver({t: 'queue', pending: 1, paused: false});
   assert.equal(nodes['own-queue'].hidden, true);
+
+  // Tapping a skill chip sends the typed skill frame; nothing is ever
+  // parsed out of composer text.
+  const skillBefore = first.sent.length;
+  nodes['skill-chips'].children[0].dispatch('click');
+  await waitFor(() => first.sent.length === skillBefore + 1, 'skill frame');
+  assert.deepEqual(await unseal(key, first.sent[skillBefore]),
+                   {t: 'skill', name: 'plan'});
 
   // Notifications are opt-in through the bell and fire only while the
   // tab is hidden: turn settlement (busy true -> false) and interaction
