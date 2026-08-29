@@ -208,6 +208,7 @@ async function main() {
     localStorage: {
       getItem: k => (storage.has(k) ? storage.get(k) : null),
       setItem: (k, v) => storage.set(k, v),
+      removeItem: k => storage.delete(k),
     },
     setTimeout: window.setTimeout,
     clearTimeout: () => {},
@@ -466,6 +467,10 @@ async function main() {
   nodes['notify-button'].dispatch('click');
   await waitFor(() => FakeNotification.permission === 'granted',
                 'notification permission');
+  // Opting into notifications is the install use-case, so the share
+  // credentials persist for the installed app to relaunch with.
+  await waitFor(() => storage.has('mevedel-last-share'), 'persisted share');
+  assert.equal(storage.get('mevedel-last-share'), `${roomId}.${fullSecret}`);
   await deliver({t: 'status', busy: true});
   assert.equal(shownNotifications.length, 0);
   document.hidden = true;
@@ -487,6 +492,13 @@ async function main() {
   // The hidden tab is told an interaction arrived.
   assert.equal(shownNotifications.length, 2);
   assert.match(shownNotifications[1].title, /interaction/i);
+  // The host re-sends the same request on every head redraw and on
+  // every re-hello; one interaction is one notification.
+  await deliver({t: 'ui-request', reqId: 41, body: 'Run rm -rf /tmp/x?',
+                 bodyKind: 'text',
+                 options: [{id: 0, label: 'Allow once'}, {id: 1, label: 'Deny'}],
+                 allowFeedback: true});
+  assert.equal(shownNotifications.length, 2);
   document.hidden = false;
   const card = nodes.requests.children[0];
   assert.match(textOf(card), /Run rm -rf \/tmp\/x\?/);
@@ -595,6 +607,8 @@ async function main() {
   sockets[1].dispatch('message', {data: await seal(key, 1, {t: 'bye', reason: 'user-stop'})});
   await waitFor(() => textOf(nodes.connection).includes('Session ended'), 'bye');
   assert.equal(nodes.composer.hidden, true);
+  // A dead room's persisted credentials die with it.
+  assert.equal(storage.has('mevedel-last-share'), false);
   sockets[1].dispatch('close', {code: 4001});
   assert.equal(timer, null);
 
