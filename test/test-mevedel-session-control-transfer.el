@@ -196,6 +196,47 @@
                      (mevedel-session-control-transfer-drain-blocker
                       session))))))
 
+(mevedel-deftest mevedel-session-control-transfer--insert-committed-segment ()
+  ,test
+  (test)
+  :doc "prepares a bare staging buffer as a transcript before restoring state"
+  ;; The staging buffer is created with `generate-new-buffer\', so it starts
+  ;; in `fundamental-mode\': the segment\'s persisted gptel state is only
+  ;; restorable in the transcript\'s own major mode, and `gptel-mode\'
+  ;; refuses every other one outright.
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-transfer-stage-" t)))
+         (save-path (file-name-as-directory
+                     (file-name-concat root "session")))
+         (session (mevedel-session--create
+                   :name "stage" :authority-mode 'pid-lock))
+         (buffer (generate-new-buffer " *mevedel-transfer-stage*")))
+    (unwind-protect
+        (progn
+          (make-directory save-path t)
+          (write-region "committed transcript\n" nil
+                        (mevedel-session-artifacts-segment-path save-path 1)
+                        nil 'silent)
+          (setf (mevedel-session-save-path session) save-path
+                (mevedel-session-current-segment session) 1
+                (mevedel-session-working-directory session) root)
+          (should (eq 'fundamental-mode
+                      (buffer-local-value 'major-mode buffer)))
+          (mevedel-session-control-transfer--insert-committed-segment
+           session buffer)
+          (with-current-buffer buffer
+            (should (derived-mode-p 'org-mode))
+            (should (bound-and-true-p gptel-mode))
+            (should (string-match-p "committed transcript" (buffer-string)))
+            (should-not (buffer-modified-p))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil)
+          (setq-local kill-buffer-hook nil))
+        (kill-buffer buffer))
+      (delete-directory root t))))
+
+
 (mevedel-deftest mevedel-session-control-transfer--follow-published ()
   ,test
   (test)
