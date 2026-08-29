@@ -1385,16 +1385,22 @@ A child frame on a graphical display, an ordinary window otherwise."
       (use-local-map mevedel-collaboration--share-map)
       (mevedel-collaboration--share-render))
     (if (display-graphic-p)
-        (when-let* ((window
-                     (display-buffer
-                      buffer
-                      '((display-buffer-in-child-frame)
-                        (child-frame-parameters
-                         . ((minibuffer . nil)
-                            (undecorated . t))))))
-                    (frame (window-frame window)))
-          (fit-frame-to-buffer frame)
-          (select-frame-set-input-focus frame))
+        (condition-case nil
+            (when-let* ((window
+                         (display-buffer
+                          buffer
+                          '((display-buffer-in-child-frame)
+                            (child-frame-parameters
+                             . ((minibuffer . nil)
+                                (undecorated . t))))))
+                        (frame (window-frame window)))
+              (fit-frame-to-buffer frame)
+              (select-frame-set-input-focus frame))
+          ;; Creating a frame realizes every face for it, so a defect
+          ;; entirely outside mevedel -- a theme whose face specs form
+          ;; an inheritance cycle -- signals here.  The share must still
+          ;; be presentable: fall back to an ordinary window.
+          (error (pop-to-buffer buffer)))
       (pop-to-buffer buffer))))
 
 (defun mevedel-collaboration--report-links (room)
