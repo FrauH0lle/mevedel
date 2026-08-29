@@ -160,7 +160,10 @@
 ;; `mevedel-transport'
 (declare-function mevedel-transport-busy-p
                   "mevedel-transport" (&optional path))
+(declare-function mevedel-transport-run-when-idle
+                  "mevedel-transport" (key path thunk &optional on-cancel))
 (autoload 'mevedel-transport-busy-p "mevedel-transport")
+(autoload 'mevedel-transport-run-when-idle "mevedel-transport")
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-push-canceller
@@ -420,8 +423,36 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
           (mevedel-execution--state-unknown-outcome state) outcome)
     outcome))
 
+(defun mevedel-execution--write-mutation-settlement (record authority)
+  "Clear AUTHORITY\'s unsettled-mutation latch for RECORD.
+
+Settlement is reached from a process filter or a timer, so this write can
+come due while the target connection is mid-command.  The control
+filesystem refuses to nest, and that refusal is not evidence about the
+target: the write never ran.  Treating it as evidence would call a proven
+outcome unprovable and block the session\'s mutating executions over a
+transient nesting, so re-arm and retry once the connection is free.  Only
+a write that ran and failed leaves the outcome unknown."
+  (condition-case err
+      (unless (mevedel-session-durability-set-unsettled-mutation
+               authority nil)
+        (error "Remote mutation authority changed before settlement"))
+    (mevedel-session-control-fs-busy
+     (setf (mevedel-execution--record-mutation-armed-p record) t)
+     (unless (mevedel-transport-run-when-idle
+              (list 'execution-mutation-settlement
+                    (mevedel-execution--record-execution-id record))
+              (mevedel-execution--record-workdir record)
+              (lambda ()
+                (mevedel-execution--write-mutation-settlement
+                 record authority)))
+       (mevedel-execution--mark-unknown record err)))
+    (error
+     (setf (mevedel-execution--record-mutation-armed-p record) t)
+     (mevedel-execution--mark-unknown record err))))
+
 (defun mevedel-execution--settle-mutation (record)
-  "Clear RECORD's durable latch after every armed mutation is proved settled."
+  "Clear RECORD\'s durable latch after every armed mutation is proved settled."
   (when (and (mevedel-execution--record-mutation-armed-p record)
              (not (eq 'unknown
                       (mevedel-execution--record-termination record))))
@@ -430,15 +461,7 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
            (authority (mevedel-execution--mutation-target session)))
       (setf (mevedel-execution--record-mutation-armed-p record) nil)
       (unless (mevedel-execution--armed-mutation-records session)
-        (condition-case err
-            (progn
-              (unless
-                  (mevedel-session-durability-set-unsettled-mutation
-                   authority nil)
-                (error "Remote mutation authority changed before settlement")))
-          (error
-           (setf (mevedel-execution--record-mutation-armed-p record) t)
-           (mevedel-execution--mark-unknown record err)))))))
+        (mevedel-execution--write-mutation-settlement record authority)))))
 
 (defun mevedel-execution-unknown-outcome (session)
   "Return SESSION's unproved target process outcome, if any."

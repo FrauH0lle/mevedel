@@ -1120,6 +1120,8 @@ connection charges for, so the program path is proved here too."
         (mevedel-execution-teardown-session session))
       (delete-directory root t))))
 
+
+
 (mevedel-deftest mevedel-execution-unsettled-mutation-p ()
   ,test
   (test)
@@ -1143,7 +1145,68 @@ connection charges for, so the program path is proved here too."
         (mevedel-session-durability-lease-release
          (mevedel-session-save-path session) session))
       (when (file-directory-p root)
-        (delete-directory root t)))))
+        (delete-directory root t))))
+
+  :doc "settles a proven spool failure whose latch write finds a busy transport"
+  ;; Settlement is reached from a filter or a timer, so the durable write
+  ;; can come due mid-command.  The control filesystem refuses to nest, and
+  ;; that refusal says nothing about the target: spending the proven cause
+  ;; on it would block every later mutating execution in the session.
+  (let* ((root (make-temp-file "mevedel-remote-busy-settlement-" t))
+         (remote-root
+          (format "/mevedelmock:%s:%s/" (system-name) root))
+         (mevedel-sandbox-mode 'off)
+         (original-write-region (symbol-function 'write-region))
+         (original-set-unsettled
+          (symbol-function 'mevedel-session-durability-set-unsettled-mutation))
+         (refusals 0)
+         session result)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (setq session (test-mevedel-execution--session remote-root))
+          (cl-letf
+              (((symbol-function
+                 'mevedel-session-durability-set-unsettled-mutation)
+                (lambda (authority value)
+                  ;; Only the settling write meets a busy connection, and
+                  ;; only until the operation in flight completes.
+                  (if (and (null value) (zerop refusals))
+                      (progn
+                        (setq refusals (1+ refusals))
+                        (signal 'mevedel-session-control-fs-busy
+                                (list "/target/.lease")))
+                    (funcall original-set-unsettled authority value))))
+               ((symbol-function 'write-region)
+                (lambda (start end filename &rest args)
+                  (if (and (stringp filename)
+                           (string-match-p
+                            "/\\.mevedel-pending-executions/execution-"
+                            filename)
+                           (car args))
+                      (signal 'file-error '("Injected spool failure"))
+                    (apply original-write-region
+                           start end filename args)))))
+            (setq result
+                  (test-mevedel-execution--start-managed
+                   session remote-root '("sh" "-c" "printf output")
+                   :yield-time-ms nil))
+            (should (= 1 refusals))
+            (should
+             (eq 'output-write-failed
+                 (plist-get (plist-get result :facts) :termination)))
+            (should-not (mevedel-execution-mutation-blocked-p session))
+            ;; The write is owed, not lost: the retry lands it once the
+            ;; connection is free again.
+            (test-mevedel-execution--wait
+             (lambda ()
+               (not (mevedel-session-durability-unsettled-mutation-p
+                     session))))
+            (should-not (mevedel-execution-mutation-blocked-p session))))
+      (mevedel-transport-cancel-pending)
+      (when session
+        (mevedel-execution-teardown-session session))
+      (delete-directory root t))))
+
 
 
 ;;
