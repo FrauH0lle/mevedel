@@ -808,7 +808,12 @@ The handler turns this into an error result the model can act on."
                                 (format "Ask · %d question%s"
                                         count (if (= count 1) "" "s"))
                                 :questions #'remote-questions
-                                :answer #'remote-answer))
+                                :answer #'remote-answer
+                                ;; A guest may decline to answer: this
+                                ;; settles only the questionnaire, exactly
+                                ;; like the local `q' binding, and the run
+                                ;; continues.
+                                :cancel #'cancel-questionnaire))
              (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
              (mevedel--prompt--register-canceller source-buffer overlay)
              (when announce

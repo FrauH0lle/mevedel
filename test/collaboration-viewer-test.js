@@ -154,11 +154,12 @@ async function main() {
                'send-button', 'stop-button', 'filter', 'requests',
                'session-label', 'queue-state', 'attachments',
                'attach-button', 'image-input', 'notify-button',
-               'composer-scope'];
+               'composer-scope', 'own-queue'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.composer.hidden = true;
   nodes.filter.hidden = true;
   nodes['notify-button'].hidden = true;
+  nodes['own-queue'].hidden = true;
   const sockets = [];
   let timer;
   const storage = new Map();
@@ -241,6 +242,10 @@ async function main() {
   assert.equal(hello.proto, 2);
   assert.equal(hello.writeToken, base64url(writeToken));
   assert.equal(typeof hello.name, 'string');
+  // The stable per-browser guest id rides every hello, so the host can
+  // match this guest's own queued entries across reconnects.
+  assert.match(hello.guestId, /^[A-Za-z0-9_-]{8,64}$/);
+  assert.equal(storage.get('mevedel-guest-id'), hello.guestId);
 
   let delivered = 0;
   const deliver = async frame => {
@@ -420,6 +425,27 @@ async function main() {
                'log line\n');
   assert.equal(nodes.attachments.children.length, 0);
 
+  // A guest's own queued entries render as a persistent card with live
+  // position and a retract control; a frame without them clears it.
+  await deliver({t: 'queue', pending: 2, paused: false,
+                 own: [{id: 7, position: 2, text: 'my queued question'}]});
+  assert.equal(nodes['own-queue'].hidden, false);
+  assert.match(textOf(nodes['own-queue']), /my queued question/);
+  assert.match(textOf(nodes['own-queue']), /#2/);
+  const ownButtons = [];
+  (function collectOwn(node) {
+    if (typeof node === 'string') return;
+    if (node.tagName === 'button') ownButtons.push(node);
+    node.children.forEach(collectOwn);
+  })(nodes['own-queue']);
+  const retractBefore = first.sent.length;
+  ownButtons[0].dispatch('click');
+  await waitFor(() => first.sent.length === retractBefore + 1, 'retract');
+  assert.deepEqual(await unseal(key, first.sent[retractBefore]),
+                   {t: 'retract', id: 7});
+  await deliver({t: 'queue', pending: 1, paused: false});
+  assert.equal(nodes['own-queue'].hidden, true);
+
   // Notifications are opt-in through the bell and fire only while the
   // tab is hidden: turn settlement (busy true -> false) and interaction
   // arrival notify; nothing else does.
@@ -509,9 +535,33 @@ async function main() {
                    {t: 'ui-response', reqId: 43,
                     answers: ['MVP first (Recommended)', 'main']});
 
+  // A questionnaire that offers cancellation gets a Dismiss control,
+  // which settles only the questionnaire host-side.
+  await deliver({t: 'ui-request', reqId: 44, body: 'Ask · 1 question',
+                 bodyKind: 'text', options: [], allowFeedback: false,
+                 allowCancel: true,
+                 questions: [{question: 'Keep going?',
+                              options: [{label: 'Yes'}]}]});
+  const cancelCard = nodes.requests.children.find(
+    c => c.dataset.reqId === '44');
+  const cancelButtons = [];
+  (function collectCancel(node) {
+    if (typeof node === 'string') return;
+    if (node.tagName === 'button') cancelButtons.push(node);
+    node.children.forEach(collectCancel);
+  })(cancelCard);
+  const dismiss = cancelButtons.find(b => /dismiss/i.test(textOf(b)));
+  assert.ok(dismiss, 'questionnaire has a Dismiss control');
+  const dismissBefore = first.sent.length;
+  dismiss.dispatch('click');
+  await waitFor(() => first.sent.length === dismissBefore + 1, 'dismiss');
+  assert.deepEqual(await unseal(key, first.sent[dismissBefore]),
+                   {t: 'ui-response', reqId: 44, cancel: true});
+
   await deliver({t: 'ui-request-end', reqId: 41});
   await deliver({t: 'ui-request-end', reqId: 42});
   await deliver({t: 'ui-request-end', reqId: 43});
+  await deliver({t: 'ui-request-end', reqId: 44});
   assert.equal(nodes.requests.children.length, 0);
 
   // Unknown future frames are tolerated.
