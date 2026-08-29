@@ -1650,21 +1650,52 @@
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer)))))
 
+(mevedel-deftest mevedel-collaboration--share-content
+  (:doc "renders the selected link's QR, its scope, and the key legend")
+  (let* ((room (list :session-label "share"
+                     :key "raw-key"
+                     :link-view "http://x/#room.view-secret"
+                     :link-full "http://x/#room.full-secret"))
+         (view (mevedel-collaboration--share-content room 'view))
+         (full (mevedel-collaboration--share-content room 'full)))
+    ;; The view side shows only the view link and says it is read-only;
+    ;; the full side is loud about what its bearer can do.
+    (should (string-match-p "room\\.view-secret" view))
+    (should-not (string-match-p "room\\.full-secret" view))
+    (should (string-match-p "read-only" view))
+    (should (string-match-p "room\\.full-secret" full))
+    (should-not (string-match-p "room\\.view-secret" full))
+    (should (string-match-p "FULL CONTROL" full))
+    ;; A real QR block is present and the two codes differ.
+    (should (string-match-p "█" view))
+    (should-not (equal view full))
+    ;; The raw key never renders, and the key legend does.
+    (dolist (content (list view full))
+      (should-not (string-match-p "raw-key" content))
+      (should (string-match-p "TAB" content))
+      (should (string-match-p "bearer" content)))))
+
 (mevedel-deftest mevedel-collaboration--report-links
-  (:doc "copies the full link and reports both without other secrets")
+  (:doc "copies the full link, opens the share frame, and keeps links out of messages")
   (let ((room (list :link-full "http://x/#room.full"
                     :link-view "http://x/#room.view"
+                    :session-label "share"
                     :key "raw-key"))
-        killed messages)
+        killed shown messages)
     (cl-letf (((symbol-function 'kill-new)
                (lambda (text) (setq killed text)))
+              ((symbol-function 'mevedel-collaboration--show-share-frame)
+               (lambda (shown-room) (setq shown shown-room)))
               ((symbol-function 'message)
                (lambda (format-string &rest args)
                  (push (apply #'format format-string args) messages))))
       (mevedel-collaboration--report-links room))
     (should (equal "http://x/#room.full" killed))
-    (should (string-match-p "http://x/#room\\.full" (car messages)))
-    (should (string-match-p "http://x/#room\\.view" (car messages)))
+    (should (eq room shown))
+    ;; The links live in the share frame now; *Messages* is durable and
+    ;; carries neither bearer link.
+    (should-not (string-match-p "room\\.full" (car messages)))
+    (should-not (string-match-p "room\\.view" (car messages)))
     (should-not (string-match-p "raw-key" (car messages)))))
 
 (mevedel-deftest mevedel-cmd--collab
