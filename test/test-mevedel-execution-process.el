@@ -219,14 +219,17 @@
                   (mevedel-execution-process-create
                    :workdir remote-root :spool-path spool
                    :terminal-function
-                   (lambda (_child value) (setq result value)))
-                  started-at (float-time))
+                   (lambda (_child value) (setq result value))))
             (mevedel-execution-process-start
              child :name "mevedel-test-process-wedged"
              :command
              '("sh" "-c"
                "ps -o pgid= -p $$ | tr -d ' ' > group.pid; sleep 30")
              :coding 'utf-8-unix :timeout 0.05)
+            ;; The bound covers the escalation, not the launch: opening the
+            ;; transport is a real remote round trip whose cost belongs to
+            ;; the host, not to this child's settlement budget.
+            (setq started-at (float-time))
             (test-mevedel-execution-process--wait (lambda () result))
             (setq group-id
                   (string-to-number
