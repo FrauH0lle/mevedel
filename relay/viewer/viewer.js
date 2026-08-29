@@ -30,6 +30,9 @@
     roomId: null,
     key: null,
     writeToken: null,
+    // The raw "<roomId>.<secret>" this page was opened with, kept so an
+    // opt-in can persist it for installed-app relaunches.
+    fragment: null,
     socket: null,
     ended: false,
     readOnly: true,
@@ -204,6 +207,29 @@
     try {
       new Notification(title, body ? {body} : {});
     } catch (_error) { /* constructor may throw where unsupported */ }
+  }
+
+  // An installed home-screen app relaunches at start_url, which carries
+  // no fragment; the credentials persist only after the notification
+  // opt-in -- the gesture that install exists for -- and die with the
+  // room.
+  function persistShare() {
+    if (!state.fragment) return;
+    try { localStorage.setItem('mevedel-last-share', state.fragment); }
+    catch (_error) { /* storage unavailable */ }
+  }
+
+  function forgetShare() {
+    try {
+      if (localStorage.getItem('mevedel-last-share') === state.fragment) {
+        localStorage.removeItem('mevedel-last-share');
+      }
+    } catch (_error) { /* storage unavailable */ }
+  }
+
+  function storedShare() {
+    try { return localStorage.getItem('mevedel-last-share'); }
+    catch (_error) { return null; }
   }
 
   /* ── Markdown (DOM-built, textContent only, XSS-safe) ─────────────── */
@@ -962,8 +988,9 @@
       const chip = el('button', 'skill-chip', `/${name}`);
       chip.type = 'button';
       chip.addEventListener('click', () => {
+        // No optimistic notice: the host's queued acknowledgement is
+        // the only truthful confirmation, and it flashes on arrival.
         send({t: 'skill', name});
-        flashNotice(`/${name} queued for the session.`);
       });
       skillChips.append(chip);
     });
@@ -1012,6 +1039,9 @@
 
   /* ── Frame handling ───────────────────────────────────────────────── */
 
+  // Request ids already notified about, so a re-sent card stays silent.
+  const notifiedRequests = new Set();
+
   function handleFrame(frame) {
     if (!frame || typeof frame.t !== 'string') return;
     if (frame.t === 'welcome') {
@@ -1058,11 +1088,17 @@
       showOwnQueue(Array.isArray(frame.own) ? frame.own : []);
     } else if (frame.t === 'ui-request') {
       renderRequest(frame);
-      maybeNotify('Pending interaction',
-                  typeof frame.body === 'string'
-                  ? frame.body.slice(0, 120) : '');
+      // The host re-sends the same request id on every head redraw and
+      // re-hello; one interaction earns one notification.
+      if (!notifiedRequests.has(frame.reqId)) {
+        notifiedRequests.add(frame.reqId);
+        maybeNotify('Pending interaction',
+                    typeof frame.body === 'string'
+                    ? frame.body.slice(0, 120) : '');
+      }
     } else if (frame.t === 'ui-request-end') {
       removeRequest(frame.reqId);
+      notifiedRequests.delete(frame.reqId);
     } else if (frame.t === 'status') {
       if (state.busy === true && frame.busy !== true) {
         maybeNotify('Turn finished',
@@ -1071,6 +1107,7 @@
       state.busy = frame.busy === true;
     } else if (frame.t === 'bye') {
       state.ended = true;
+      forgetShare();
       setConnection('Session ended', 'ended');
       showNotice('The shared session has ended.');
       setComposerVisible(false);
@@ -1101,6 +1138,7 @@
     if (!state.downSince) state.downSince = Date.now();
     if (Date.now() - state.downSince > GIVE_UP_MS) {
       state.ended = true;
+      forgetShare();
       setConnection('Room closed', 'ended');
       showNotice('The room did not come back; the link is dead.');
       setComposerVisible(false);
@@ -1212,7 +1250,9 @@
           localStorage.setItem('mevedel-notify',
                                permission === 'granted' ? 'on' : 'off');
         } catch (_error) { /* opt-in then lasts for this page only */ }
-        if (permission !== 'granted') {
+        if (permission === 'granted') {
+          persistShare();
+        } else {
           flashNotice('Notifications are blocked for this site.');
         }
       }
@@ -1226,16 +1266,25 @@
   });
   window.addEventListener('scroll', updateLiveAffordance, {passive: true});
 
-  const credentials = parseFragment(window.location.hash);
+  // An installed app relaunches without the fragment; fall back to the
+  // credentials the notification opt-in persisted.
+  const rawFragment = String(window.location.hash || '').replace(/^#/, '')
+    || storedShare() || '';
+  const credentials = parseFragment(`#${rawFragment}`);
   if (!credentials) {
     setConnection('Invalid link', 'ended');
-    showNotice('This collaboration link is missing or malformed.');
+    showNotice('This collaboration link is missing or malformed. '
+               + 'Open the share link from the host again.');
   } else if (!(crypto && crypto.subtle)) {
     setConnection('Insecure context', 'ended');
     showNotice('This page needs HTTPS (or localhost) to unseal the session.');
   } else {
+    state.fragment = rawFragment;
     state.roomId = credentials.roomId;
     state.writeToken = credentials.writeToken;
+    // Keep an existing opt-in's persisted share pointing at the room
+    // most recently opened.
+    if (notificationsEnabled()) persistShare();
     if (sessionLabel) sessionLabel.textContent = state.roomId.slice(0, 8);
     // The key remains only in this page's memory; remove it from the URL
     // and history before opening the socket.

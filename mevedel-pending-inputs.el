@@ -97,6 +97,7 @@
                   "mevedel-skills-ui" (text))
 
 ;; `mevedel-structs'
+(declare-function mevedel-directive-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-fsm "mevedel-structs" (cl-x) t)
@@ -139,6 +140,8 @@
 (declare-function mevedel-session-set-pending-inputs
                   "mevedel-structs" (session category entries))
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-directives "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -678,6 +681,7 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                         ;; delivered, and a later failure keeps the grant.
                         (release
                          (lambda ()
+                           (plist-put entry :delivering nil)
                            (unless delivered
                              (mevedel-session--set-active-dropped-file-grants
                               session active-grants-before))
@@ -715,6 +719,11 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                    ;; inserted; cleared on every blocked or failed path.
                    (setq mevedel-view--pending-guest-attribution
                          (plist-get entry :guest-name))
+                   ;; Delivery is asynchronous and the entry stays queued
+                   ;; until the transcript commit; the flag keeps a guest
+                   ;; retraction from deleting attachment files an
+                   ;; in-flight prompt is about to read.
+                   (plist-put entry :delivering t)
                    ;; A blocked dispatch reports through its own callback,
                    ;; but preparation and the submit hook re-signal instead,
                    ;; so both exits have to release what `before-send' took.
@@ -729,6 +738,27 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                                (funcall after-insert))
                            (error
                             (funcall release)
+                            ;; A directive that no longer exists can never
+                            ;; deliver, and the drain always picks the
+                            ;; head: keeping the entry would wedge every
+                            ;; follow-up queued behind it.  Transient
+                            ;; failures keep the entry for a later drain.
+                            (when-let* ((directive-id
+                                         (plist-get scope :directive-id))
+                                        (workspace
+                                         (mevedel-session-workspace session))
+                                        ((not (cl-find
+                                               directive-id
+                                               (mevedel-workspace-directives
+                                                workspace)
+                                               :key #'mevedel-directive-id
+                                               :test #'equal))))
+                              (mevedel-view--set-pending-follow-ups
+                               (delq entry (mevedel-view--pending-follow-ups
+                                            session))
+                               session)
+                              (mevedel-view--interaction-rebuild)
+                              (mevedel-view--schedule-late-follow-up-drain))
                             (message
                              "mevedel: queued directive follow-up failed: %s"
                              (error-message-string scope-err)))))
@@ -1192,6 +1222,10 @@ an unrelated remote operation started by redisplay or another package included
       (user-error "Pending input is already steering"))
     (when (plist-get entry :scope)
       (user-error "Directive follow-ups cannot be converted to steering"))
+    ;; The follow-up drain owns the delivery-time allowlist recheck a
+    ;; guest skill invocation gets; steering delivery has no such seam.
+    (when (plist-get entry :guest-skill)
+      (user-error "Guest skill invocations cannot be converted to steering"))
     (when mevedel-pending-inputs--converting-id
       (user-error "Pending-input conversion is still running"))
     (unless (and fsm
@@ -1240,7 +1274,12 @@ an unrelated remote operation started by redisplay or another package included
                    (when (buffer-live-p cockpit)
                      (with-current-buffer cockpit
                        (setq mevedel-pending-inputs--converting-id nil))))
-               (funcall restore-grants))))
+               (funcall restore-grants)))
+           nil
+           ;; External input stays skill-inert through conversion: the
+           ;; entry's own flag rides along instead of defaulting to live
+           ;; skill planning.
+           (plist-get entry :inert-skills))
         (error
          (funcall restore-grants)
          (setq mevedel-pending-inputs--converting-id nil)

@@ -225,13 +225,23 @@ guest set; nothing about one room reaches another room's guests.")
 (defun mevedel-collaboration--room-for-overlay (overlay)
   "Return the room an interaction OVERLAY belongs to, or nil.
 Interactions render into a session's view buffer, whose
-`mevedel--data-buffer' names the owning data buffer."
+`mevedel--data-buffer' names the owning data buffer.  A /btw side
+conversation renders prompts in its own side view; those belong to the
+parent session's room, reached through the side data buffer's parent."
   (when-let* ((buffer (overlay-buffer overlay))
               ((buffer-live-p buffer)))
     (or (mevedel-collaboration--room-for-buffer buffer)
-        (and (local-variable-p 'mevedel--data-buffer buffer)
-             (mevedel-collaboration--room-for-buffer
-              (buffer-local-value 'mevedel--data-buffer buffer))))))
+        (when-let* ((data-buffer
+                     (and (local-variable-p 'mevedel--data-buffer buffer)
+                          (buffer-local-value 'mevedel--data-buffer buffer)))
+                    ((buffer-live-p data-buffer)))
+          (or (mevedel-collaboration--room-for-buffer data-buffer)
+              (when-let* (((boundp
+                            'mevedel-side-conversation--parent-buffer))
+                          (parent (buffer-local-value
+                                   'mevedel-side-conversation--parent-buffer
+                                   data-buffer)))
+                (mevedel-collaboration--room-for-buffer parent)))))))
 
 (defun mevedel-collaboration--room-data-buffer (room)
   "Return the live data buffer for ROOM, or nil."
@@ -991,23 +1001,38 @@ pasted log line starting with a slash can never invoke anything."
                (plist-get guest :writable)
                (stringp name)
                (member name mevedel-collaboration-guest-skills))
-      (when-let* ((data-buffer (mevedel-collaboration--room-data-buffer
-                                room))
-                  (queued (mevedel-view-enqueue-external-follow-up
-                           data-buffer (concat "/" name)
-                           :guest-name (plist-get guest :name)
-                           :guest-id (plist-get guest :guest-id)
-                           :skill name)))
-        (mevedel-collaboration--transport-send
-         (plist-get room :transport) peer
-         (append
-          (list :t "queued")
-          (when-let* ((id (plist-get queued :id)))
-            (list :id id))
-          (when-let* ((position (mevedel-collaboration--queue-position
-                                 room queued)))
-            (list :position position))))
-        (mevedel-collaboration--publish-queue room)))))
+      ;; A chip is even easier to double-fire than a submit button; the
+      ;; prompt path's duplicate window covers the same event class.
+      (let ((line (concat "/" name))
+            (last (plist-get guest :last-prompt))
+            (now (float-time)))
+        (unless (and last
+                     (equal (car last) line)
+                     (< (- now (cdr last))
+                        mevedel-collaboration--duplicate-prompt-window))
+          (plist-put guest :last-prompt (cons line now))
+          (let ((queued
+                 (when-let* ((data-buffer
+                              (mevedel-collaboration--room-data-buffer
+                               room)))
+                   (mevedel-view-enqueue-external-follow-up
+                    data-buffer line
+                    :guest-name (plist-get guest :name)
+                    :guest-id (plist-get guest :guest-id)
+                    :skill name))))
+            (if (null queued)
+                (plist-put guest :last-prompt nil)
+              (mevedel-collaboration--transport-send
+               (plist-get room :transport) peer
+               (append
+                (list :t "queued")
+                (when-let* ((id (plist-get queued :id)))
+                  (list :id id))
+                (when-let* ((position
+                             (mevedel-collaboration--queue-position
+                              room queued)))
+                  (list :position position))))
+              (mevedel-collaboration--publish-queue room))))))))
 
 (defun mevedel-collaboration--handle-retract (room peer frame)
   "Remove the pending entry FRAME names when guest PEER queued it.
@@ -1028,7 +1053,11 @@ the failed-enqueue cleanup."
                           (lambda (candidate)
                             (and (equal id (plist-get candidate :id))
                                  (equal (plist-get guest :guest-id)
-                                        (plist-get candidate :guest-id))))
+                                        (plist-get candidate :guest-id))
+                                 ;; The drain is delivering it: the files
+                                 ;; are about to be read mid-turn, so it
+                                 ;; is no longer the guest's to take back.
+                                 (not (plist-get candidate :delivering))))
                           entries)))
         (mevedel-session-set-pending-inputs
          session 'follow-up (delq entry entries))
@@ -1088,8 +1117,22 @@ handling stops the room instead of leaking into the session."
       ;; The relay garbage-collects the room with the host connection, so
       ;; a drop invalidated every guest; they rejoin and re-hello against
       ;; the re-created room.
-      ('down (clrhash (plist-get room :guests)))
-      ('open nil)
+      ('down
+       (clrhash (plist-get room :guests))
+       ;; The links and QR are handed out before the async dial settles.
+       ;; A dial that has never succeeded -- wrong relay URL, missing or
+       ;; stale host token answered 404 -- would otherwise retry forever
+       ;; with the user none the wiser that the share is dead.
+       (unless (or (plist-get room :was-open)
+                   (plist-get room :dial-warned))
+         (setq room (plist-put room :dial-warned t))
+         (display-warning
+          'mevedel
+          (concat "Collaboration relay dial failing; the share is not "
+                  "live. Check `mevedel-collaboration-relay-url' and "
+                  "`mevedel-collaboration-relay-host-token'.")
+          :warning)))
+      ('open (setq room (plist-put room :was-open t)))
       ('stopped nil))))
 
 ;;
@@ -1390,18 +1433,24 @@ and easy to leak."
        (mevedel-collaboration--start session data-buffer))))))
 
 (defun mevedel-collaboration-stop ()
-  "Stop the current session's share, or every share outside one."
+  "Stop the current session's share, or every share outside a session.
+Run from a session that is not shared, another session's share is
+never touched: that is a report, not a teardown."
   (interactive)
-  (let ((rooms (mevedel-collaboration--room-list)))
+  (let ((rooms (mevedel-collaboration--room-list))
+        (data-buffer (mevedel-collaboration--current-data-buffer)))
     (cond
      ((null rooms)
       (message "mevedel: collaboration is not active"))
      ((when-let* ((room (mevedel-collaboration--room-for-buffer
-                         (mevedel-collaboration--current-data-buffer))))
+                         data-buffer)))
         (mevedel-collaboration--stop-internal room 'user-stop)
         (message "mevedel: collaboration stopped for %s"
                  (plist-get room :session-label))
         t))
+     (data-buffer
+      (message "mevedel: no active share for this session; %d share%s live elsewhere"
+               (length rooms) (if (= 1 (length rooms)) "" "s")))
      (t
       (dolist (room rooms)
         (mevedel-collaboration--stop-internal room 'user-stop))

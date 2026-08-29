@@ -1012,6 +1012,15 @@
               (should (= 2 (length
                             (mevedel-session-pending-follow-ups session))))
               (should (file-exists-p media))
+              ;; An entry the drain is delivering right now is no longer
+              ;; retractable: its files are about to be read mid-turn.
+              (plist-put mine :delivering t)
+              (mevedel-collaboration--handle-retract
+               room 1 (list :id (plist-get mine :id)))
+              (should (= 2 (length
+                            (mevedel-session-pending-follow-ups session))))
+              (should (file-exists-p media))
+              (plist-put mine :delivering nil)
               ;; The owner can, and the attachment leaves with it.
               (mevedel-collaboration--handle-retract
                room 1 (list :id (plist-get mine :id)))
@@ -1145,7 +1154,17 @@
         (should (equal "phone-guest-id"
                        (plist-get (cdr enqueued) :guest-id)))
         (should (equal '(1 . (:t "queued" :id 9 :position 1))
-                       (car sent)))))))
+                       (car sent)))
+        ;; A double-fired tap inside the duplicate window is one
+        ;; invocation, exactly like a double-fired prompt submit.
+        (setq enqueued nil)
+        (mevedel-collaboration--handle-skill
+         room 1 (list :name "plan"))
+        (should-not enqueued)
+        ;; A different skill inside the window still goes through.
+        (mevedel-collaboration--handle-skill
+         room 1 (list :name "review"))
+        (should (equal "/review" (car enqueued)))))))
 
 (mevedel-deftest mevedel-view--drop-disallowed-guest-skills
   (:doc "drops queued guest skill entries the allowlist no longer names"
@@ -1690,22 +1709,80 @@
       (should (equal before (buffer-string))))))
 
 (mevedel-deftest mevedel-collaboration-stop
-  (:doc "stops the current or only room through the public command")
+  (:doc "stops the current or only room and never another session's share")
   (let* ((stopped nil)
          (messages nil)
          (room (list :transport 'transport :session-label "share"))
          (mevedel-collaboration--rooms (mevedel-collab-test--rooms room)))
     (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
-               (lambda (_room reason) (setq stopped reason)))
+               (lambda (stop-room reason) (push (cons stop-room reason)
+                                                stopped)))
               ((symbol-function 'message)
                (lambda (format-string &rest args)
                  (push (apply #'format format-string args) messages))))
-      (mevedel-collaboration-stop)
-      (should (eq 'user-stop stopped))
+      ;; From a session that is not shared, another session's share must
+      ;; survive: report instead of tearing it down.
+      (with-temp-buffer
+        (cl-letf (((symbol-function
+                    'mevedel-collaboration--current-data-buffer)
+                   (lambda () (current-buffer))))
+          (mevedel-collaboration-stop)))
+      (should-not stopped)
+      (should (string-match-p "no active share" (car messages)))
+      ;; Outside any session context, stop falls back to every share.
+      (cl-letf (((symbol-function
+                  'mevedel-collaboration--current-data-buffer)
+                 (lambda () nil)))
+        (mevedel-collaboration-stop))
+      (should (equal (list (cons room 'user-stop)) stopped))
       (should (string-match-p "stopped" (car messages)))
       (clrhash mevedel-collaboration--rooms)
       (mevedel-collaboration-stop)
       (should (string-match-p "not active" (car messages))))))
+
+(mevedel-deftest mevedel-collaboration--room-for-overlay
+  (:doc "resolves side-conversation interaction overlays to the parent session's room")
+  (let* ((parent-data (generate-new-buffer " *collab-overlay-parent*"))
+         (side-data (generate-new-buffer " *collab-overlay-side*"))
+         (side-view (generate-new-buffer " *collab-overlay-view*"))
+         (room (list :data-buffer parent-data))
+         (mevedel-collaboration--rooms (mevedel-collab-test--rooms room)))
+    (unwind-protect
+        (progn
+          (require 'mevedel-side-conversation)
+          (with-current-buffer side-data
+            (setq-local mevedel-side-conversation--parent-buffer
+                        parent-data))
+          (with-current-buffer side-view
+            (setq-local mevedel--data-buffer side-data)
+            (insert "prompt")
+            ;; A /btw permission prompt renders in the side view; its
+            ;; authority surface is the parent session's room.
+            (should (eq room (mevedel-collaboration--room-for-overlay
+                              (make-overlay 1 2))))))
+      (kill-buffer side-view)
+      (kill-buffer side-data)
+      (kill-buffer parent-data))))
+
+(mevedel-deftest mevedel-collaboration--dead-dial-warning
+  (:doc "warns once when the relay dial never opens, and never after it has")
+  (with-temp-buffer
+    (let* ((room (list :data-buffer (current-buffer)
+                       :guests (make-hash-table :test #'eql)))
+           (mevedel-collaboration--rooms (mevedel-collab-test--rooms room))
+           warnings)
+      (cl-letf (((symbol-function 'display-warning)
+                 (lambda (_type text &rest _) (push text warnings))))
+        ;; A share whose dial never succeeded is not live; say so once.
+        (mevedel-collaboration--on-state (current-buffer) 'down)
+        (mevedel-collaboration--on-state (current-buffer) 'down)
+        (should (= 1 (length warnings)))
+        (should (string-match-p "not live" (car warnings)))
+        ;; An ordinary drop after a working connection stays quiet.
+        (setq warnings nil)
+        (mevedel-collaboration--on-state (current-buffer) 'open)
+        (mevedel-collaboration--on-state (current-buffer) 'down)
+        (should-not warnings)))))
 
 (mevedel-deftest mevedel-collaboration-view
   (:doc "discloses secrets and bearer-link scope before starting")
