@@ -200,6 +200,57 @@
         (ignore-errors
           (funcall original-signal-process (- group-id) 'KILL)))
       (delete-directory root t)))
+  :doc "keeps a proven stop reason when a transient ambiguity resolves"
+  ;; A group leader that exits a moment before its last member reads as
+  ;; ambiguous for exactly that moment.  The escalation re-probes, so the
+  ;; window must not spend the child's already proven stop reason.
+  (let* ((root (make-temp-file "mevedel-process-transient-ambiguity-" t))
+         (pid-file (file-name-concat root "group.pid"))
+         (remote-root (format "/mevedelmock:%s:%s/" (system-name) root))
+         (spool (file-name-concat root "output"))
+         (original-signal-process (symbol-function 'signal-process))
+         (mevedel-execution-process--child-kill-delay 0.02)
+         (probes 0)
+         child result group-id)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp nil
+          (cl-letf
+              (((symbol-function
+                 'mevedel-execution-process--remote-group-status)
+                (lambda (_child)
+                  (setq probes (1+ probes))
+                  (if (= probes 1) 'ambiguous 'dead))))
+            (write-region "" nil spool nil 'silent)
+            (setq child
+                  (mevedel-execution-process-create
+                   :workdir remote-root :spool-path spool
+                   :terminal-function
+                   (lambda (_child value) (setq result value))))
+            (mevedel-execution-process-start
+             child :name "mevedel-test-process-transient-ambiguity"
+             :command
+             '("sh" "-c"
+               "ps -o pgid= -p $$ | tr -d ' ' > group.pid; sleep 30")
+             :coding 'utf-8-unix)
+            (test-mevedel-execution-process--wait
+             (lambda () (mevedel-execution-process--child-group-id child)))
+            (mevedel-execution-process-stop child 'output-write-failed)
+            (test-mevedel-execution-process--wait (lambda () result))
+            (should (< 1 probes))
+            (should (eq 'output-write-failed
+                        (plist-get result :termination)))))
+      (when child (mevedel-execution-process-release child))
+      (when (file-exists-p pid-file)
+        (setq group-id
+              (string-to-number
+               (string-trim
+                (with-temp-buffer
+                  (insert-file-contents pid-file)
+                  (buffer-string))))))
+      (when (and group-id (> group-id 0))
+        (ignore-errors
+          (funcall original-signal-process (- group-id) 'KILL)))
+      (delete-directory root t)))
   :doc "bounds a timed-out remote child whose stop escalation wedges"
   (let* ((root (make-temp-file "mevedel-process-wedged-" t))
          (pid-file (file-name-concat root "group.pid"))
