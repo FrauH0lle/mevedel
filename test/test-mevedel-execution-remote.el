@@ -843,14 +843,17 @@ connection charges for, so the program path is proved here too."
                    session remote-root '("sh" "-c" "printf output")
                    :yield-time-ms nil)))
           ;; A proven local write failure only stays proven while the
-          ;; target's process-group identity was received: without it the
-          ;; managed layer has to call the outcome unknown.  Assert both in
-          ;; one form so a failure names which half went missing.
+          ;; target's process-group identity was received and nothing in
+          ;; the escalation replaced the cause.  Assert all three in one
+          ;; form, so a settlement that went unknown names what it settled
+          ;; on instead of only disagreeing about the termination.
           (let ((facts (plist-get result :facts)))
             (should
-             (equal (list 'output-write-failed t)
+             (equal (list 'output-write-failed t "Injected spool failure")
                     (list (plist-get facts :termination)
-                          (integerp (plist-get facts :group-id))))))
+                          (integerp (plist-get facts :group-id))
+                          (error-message-string
+                           (plist-get result :error))))))
           (should-not (mevedel-execution-mutation-blocked-p session))
           (should-not
            (mevedel-session-durability-unsettled-mutation-p session)))
