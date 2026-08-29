@@ -188,12 +188,11 @@ frame accepts focus and shows a cursor, so `no-accept-focus',
 ;;; Availability
 
 (defun mevedel-directive-frame--available-p ()
-  "Return non-nil when child frames can be used on this display.
-Emacs 30 supports child frames only on graphical displays; Emacs 31
-supports them on terminals as well.  This is the single gate for the
-whole module, so tightening it later needs no call-site changes."
-  (or (display-graphic-p)
-      (>= emacs-major-version 31)))
+  "Return non-nil when a child frame can be created in this session.
+Emacs 31 supports child frames on terminal displays as well as graphical
+ones, so the Emacs version no longer decides this.  A batch session
+still does: it has no terminal at all and `make-frame' signals there."
+  (not noninteractive))
 
 
 ;;
@@ -371,18 +370,29 @@ the caller centers the frame on its parent."
     (when-let* ((position (window-absolute-pixel-position
                            (overlay-end directive) window)))
       (let* ((frame (window-frame window))
+             ;; `window-absolute-pixel-position' answers in display
+             ;; coordinates while a child frame's `left' and `top' are
+             ;; relative to its parent's native frame.  Without this
+             ;; translation the anchor carries the parent's own screen
+             ;; position, and the clamp below pins the frame to the right
+             ;; edge of any Emacs frame not sitting at the display origin.
+             ;; Terminal frames report a native origin of (0, 0), so the
+             ;; subtraction is inert there.
+             (native (frame-edges frame 'native-edges))
+             (anchor-x (- (car position) (nth 0 native)))
+             (anchor-y (- (cdr position) (nth 1 native)))
              (parent-width (frame-pixel-width frame))
              (parent-height (frame-pixel-height frame))
              (width (round (* mevedel-directive-frame-width parent-width)))
              (height (* mevedel-directive-frame-height
                         (frame-char-height frame)))
              (line-height (frame-char-height frame))
-             (x (max 0 (min (car position) (- parent-width width))))
-             (below (+ (cdr position) line-height))
+             (x (max 0 (min anchor-x (- parent-width width))))
+             (below (+ anchor-y line-height))
              ;; Flip above the directive when there is no room below.
              (y (if (<= (+ below height) parent-height)
                     below
-                  (max 0 (- (cdr position) height)))))
+                  (max 0 (- anchor-y height)))))
         (cons x y)))))
 
 (defun mevedel-directive-frame--size (parent)
@@ -486,13 +496,20 @@ WINDOW is supplied by `window-scroll-functions'."
                          (or (null window) (eq window source)))
                 (make-frame-invisible frame))
             (when-let* ((anchor (mevedel-directive-frame--anchor
-                                 directive source))
-                        (current (frame-position frame)))
+                                 directive source)))
               ;; Only move on a real change: setting the position from a
-              ;; redisplay hook triggers redisplay again.
-              (unless (and (= (car anchor) (car current))
-                           (= (cdr anchor) (cdr current)))
-                (set-frame-position frame (car anchor) (cdr anchor))))
+              ;; redisplay hook triggers redisplay again.  Compare against
+              ;; the frame's own parameters, which `set-frame-position'
+              ;; wrote and which share the anchor's parent-relative space;
+              ;; `frame-position' answers in display coordinates and would
+              ;; report a difference on every single scroll event.
+              (let ((left (frame-parameter frame 'left))
+                    (top (frame-parameter frame 'top)))
+                (unless (and (numberp left)
+                             (numberp top)
+                             (= (car anchor) left)
+                             (= (cdr anchor) top))
+                  (set-frame-position frame (car anchor) (cdr anchor)))))
             (unless (frame-visible-p frame)
               (make-frame-visible frame)))))))))
 
