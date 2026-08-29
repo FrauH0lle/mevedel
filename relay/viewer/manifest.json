@@ -1,0 +1,13 @@
+{
+  "name": "MevView",
+  "short_name": "MevView",
+  "description": "mevedel live session viewer",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#14161a",
+  "theme_color": "#14161a",
+  "icons": [
+    {"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml"},
+    {"src": "/icon.png", "sizes": "180x180", "type": "image/png"}
+  ]
+}

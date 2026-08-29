@@ -6,12 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <title>mevedel live session</title>
     <link rel="stylesheet" href="/viewer.css">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/icon.png">
   </head>
   <body>
     <header class="topbar">
       <div class="wordmark">MevView<small id="session-label">live session</small></div>
-      <nav id="filter" class="filter" aria-label="Transcript filter" hidden></nav>
       <p id="connection" class="conn" role="status">Connecting…</p>
+      <button id="notify-button" class="bell" type="button" hidden
+              aria-pressed="false" aria-label="Toggle notifications">🔔</button>
+      <nav id="filter" class="filter" aria-label="Transcript filter" hidden></nav>
     </header>
     <main id="transcript" class="ledger" aria-live="polite"
           aria-label="Shared session transcript"></main>
@@ -23,6 +28,7 @@
       <p id="notice" class="notice" role="status" hidden></p>
       <form id="composer" class="composer" hidden>
         <p id="queue-state" class="queue-state" role="status" hidden></p>
+        <p id="composer-scope" class="composer-scope" hidden></p>
         <textarea id="composer-input" class="composer-input" rows="2"
                   placeholder="Queue a follow-up for the session…"
                   aria-label="Prompt"></textarea>

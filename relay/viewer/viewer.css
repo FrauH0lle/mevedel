@@ -112,13 +112,30 @@ code, pre {
   top: 0;
   z-index: 10;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 1rem;
+  gap: .5rem 1rem;
   padding: .55rem 1.1rem;
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--line);
 }
+.bell {
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: .8rem;
+  line-height: 1;
+  padding: .3rem .55rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.bell.on {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+.bell[hidden] { display: none; }
 .wordmark {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: .82rem;
@@ -136,36 +153,61 @@ code, pre {
   color: var(--muted);
   font-size: .72rem;
 }
+/* The filter is its own full-width row under the topbar line: it is
+   also the send scope, so it must not hide until a directive exists or
+   fight the wordmark for space on a phone. */
 .filter {
-  margin-left: auto;
+  flex-basis: 100%;
   display: flex;
-  gap: .25rem;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: .2rem;
+  gap: .3rem;
   font-size: .8rem;
   overflow-x: auto;
-  max-width: 60%;
+  scrollbar-width: none;
+  padding-bottom: .1rem;
 }
 .filter[hidden] { display: none; }
 .filter button {
-  border: 0;
-  background: transparent;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
   color: var(--muted);
   font: inherit;
   padding: .25rem .75rem;
   border-radius: 999px;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .filter button[aria-pressed="true"] {
   background: var(--surface);
   color: var(--ink);
+  border-color: var(--accent);
   box-shadow: var(--shadow);
   font-weight: 600;
 }
 .filter button.dir { color: var(--accent); }
+.filter button .cnt {
+  font-size: .68rem;
+  line-height: 1;
+  padding: .12rem .38rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 60%, transparent);
+  color: var(--muted);
+}
+.filter button.unseen::after {
+  content: "";
+  position: absolute;
+  top: -.1rem;
+  right: -.1rem;
+  width: .5rem;
+  height: .5rem;
+  border-radius: 999px;
+  background: var(--ok);
+  box-shadow: 0 0 0 2px var(--surface);
+}
 .conn {
   margin: 0;
   margin-left: auto;
@@ -176,7 +218,6 @@ code, pre {
   color: var(--muted);
   white-space: nowrap;
 }
-.filter:not([hidden]) ~ .conn { margin-left: 0; }
 .conn::before {
   content: "";
   width: .55rem;
@@ -693,3 +734,15 @@ code, pre {
 .queue-state.paused {
   color: var(--running);
 }
+
+.composer-scope {
+  margin: 0 0 6px;
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: 999px;
+  padding: .15rem .6rem;
+}
+.composer-scope[hidden] { display: none; }
