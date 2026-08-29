@@ -655,6 +655,59 @@
     (should-not (string-match-p
                  "Session/always allow will add" captured-content))))
 
+
+;;
+;;; Elision
+
+(mevedel-deftest mevedel-permission--elide
+  ()
+  ,test
+  (test)
+  :doc "returns short text whole"
+  (let ((entry (list :kind 'bash)))
+    (should (equal "ls -A" (mevedel-permission--elide "ls -A" entry nil 400))))
+
+  :doc "returns long text whole without an entry to hold toggle state"
+  (should (equal (make-string 500 ?x)
+                 (mevedel-permission--elide (make-string 500 ?x) nil nil 400)))
+
+  :doc "elides past the character limit and names the hidden remainder"
+  (let* ((entry (list :kind 'bash))
+         (shown (substring-no-properties
+                 (mevedel-permission--elide (make-string 500 ?x)
+                                            entry nil 400))))
+    (should (string-prefix-p (make-string 400 ?x) shown))
+    (should (string-match-p "100 more characters, TAB to expand" shown))
+    (should-not (string-match-p (make-string 401 ?x) shown)))
+
+  :doc "elides past the line limit"
+  (let* ((entry (list :kind 'eval))
+         (text (mapconcat #'number-to-string (number-sequence 1 30) "\n"))
+         (shown (substring-no-properties
+                 (mevedel-permission--elide text entry 20))))
+    (should (string-prefix-p "1\n2\n" shown))
+    (should-not (string-match-p "^21$" shown))
+    (should (string-match-p "TAB to expand" shown)))
+
+  :doc "shows everything once the entry is expanded"
+  (let* ((entry (list :kind 'bash))
+         (text (make-string 500 ?x)))
+    (mevedel-queue--entry-metadata-put entry :expanded t)
+    (let ((shown (substring-no-properties
+                  (mevedel-permission--elide text entry nil 400))))
+      (should (string-prefix-p text shown))
+      (should (string-match-p "TAB to collapse" shown))))
+
+  :doc "keeps text properties across elision"
+  (let ((entry (list :kind 'bash)))
+    (should (eq 'font-lock-string-face
+                (get-text-property
+                 0 'font-lock-face
+                 (mevedel-permission--elide
+                  (propertize (make-string 500 ?x)
+                              'font-lock-face 'font-lock-string-face)
+                  entry nil 400))))))
+
 (provide 'test-mevedel-permission-prompt)
 
 ;;; test-mevedel-permission-prompt.el ends here
