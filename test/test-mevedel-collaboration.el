@@ -1831,6 +1831,29 @@
       (should (string-match-p "TAB" content))
       (should (string-match-p "bearer" content)))))
 
+(mevedel-deftest mevedel-collaboration--show-share-frame
+  (:doc "falls back to a window when child-frame creation signals")
+  (let ((room (list :session-label "share"
+                    :link-view "http://x/#room.view"
+                    :link-full "http://x/#room.full"))
+        popped)
+    (unwind-protect
+        ;; A theme with a cyclic face spec makes any make-frame signal
+        ;; (seen live with doom-one's gnus faces); the share must still
+        ;; be presentable.
+        (cl-letf (((symbol-function 'display-graphic-p)
+                   (lambda (&optional _) t))
+                  ((symbol-function 'display-buffer)
+                   (lambda (&rest _)
+                     (error "Face inheritance results in inheritance cycle")))
+                  ((symbol-function 'pop-to-buffer)
+                   (lambda (buffer &rest _) (setq popped buffer))))
+          (mevedel-collaboration--show-share-frame room)
+          (should (buffer-live-p popped))
+          (should (equal "*mevedel share*" (buffer-name popped))))
+      (when-let* ((buffer (get-buffer "*mevedel share*")))
+        (kill-buffer buffer)))))
+
 (mevedel-deftest mevedel-collaboration--report-links
   (:doc "copies the full link, opens the share frame, and keeps links out of messages")
   (let ((room (list :link-full "http://x/#room.full"
