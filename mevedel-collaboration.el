@@ -1447,6 +1447,10 @@ and walks away with write authority."
     (menu-bar-lines . 0)
     (tool-bar-lines . 0)
     (tab-bar-lines . 0)
+    ;; Without this `tab-bar-mode' puts its bar back on every new
+    ;; frame, which is why the panel grew a tab strip the directive
+    ;; frame never shows.
+    (tab-bar-lines-keep-state . t)
     (no-other-frame . t)
     (unsplittable . t)
     (undecorated . t)
@@ -1456,6 +1460,23 @@ and walks away with write authority."
   "Child frame parameters for the share surface.
 The same shape the directive frame uses: a bordered panel that accepts
 focus, with none of the chrome a real frame carries.")
+
+(defun mevedel-collaboration--fit-share-frame (frame parent)
+  "Size FRAME to its buffer in pixels, bounded by PARENT.
+
+`fit-frame-to-buffer\=' works in canonical character heights, and the QR
+is scaled well above one: the rounding loses part of a line and clips
+the key legend off the bottom.  Pixels are what the content actually
+occupies."
+  (let* ((window (frame-root-window frame))
+         (border (* 2 (or (frame-parameter frame 'internal-border-width) 0)))
+         (max-width (max 200 (- (frame-pixel-width parent) 80)))
+         (max-height (max 200 (- (frame-pixel-height parent) 80)))
+         (size (window-text-pixel-size window nil nil max-width max-height)))
+    (set-frame-size frame
+                    (min max-width (+ (car size) border))
+                    (min max-height (+ (cdr size) border))
+                    t)))
 
 (defun mevedel-collaboration--center-frame (frame parent)
   "Place FRAME at the centre of PARENT."
@@ -1511,7 +1532,7 @@ otherwise."
                                            :background nil t)))
                 (set-face-background 'internal-border color frame)
                 (set-face-background 'child-frame-border color frame))
-              (fit-frame-to-buffer frame)
+              (mevedel-collaboration--fit-share-frame frame parent)
               (mevedel-collaboration--center-frame frame parent)
               (make-frame-visible frame)
               (select-frame-set-input-focus frame)
