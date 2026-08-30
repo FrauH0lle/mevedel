@@ -197,6 +197,8 @@ async function main() {
   const document = {
     getElementById(id) { return nodes[id]; },
     createElement(tag) { return new Element(tag); },
+    hasFocus() { return this.focused !== false; },
+    title: 'mevedel live session',
     documentElement: {
       scrollHeight: 100,
       attributes: {},
@@ -625,13 +627,24 @@ async function main() {
   await deliver({t: 'status', busy: true, model: 'deepseek-v4-flash',
                  mode: 'edits'});
   assert.doesNotMatch(textOf(nodes.modeline), /plan/);
-  document.hidden = true;
+  // Being away is not only a backgrounded tab: a guest looking at Emacs
+  // on another monitor has this tab visible but unfocused.
+  document.hidden = false;
+  document.focused = false;
+  await deliver({t: 'status', busy: true});
   await deliver({t: 'status', busy: false});
   assert.equal(shownNotifications.length, 1);
+  // The tab title carries a marker too, which needs no permission.
+  assert.match(document.title, /^●/);
+  document.focused = true;
+  document.hidden = true;
+  await deliver({t: 'status', busy: true});
+  await deliver({t: 'status', busy: false});
+  assert.equal(shownNotifications.length, 2);
   assert.match(shownNotifications[0].title, /finished/i);
   // An unchanged busy state does not re-notify.
   await deliver({t: 'status', busy: false});
-  assert.equal(shownNotifications.length, 1);
+  assert.equal(shownNotifications.length, 2);
 
   // A ui-request renders a card whose buttons and feedback field answer
   // through sealed ui-response frames; a diff body gets diff rendering;
@@ -642,15 +655,41 @@ async function main() {
                  allowFeedback: true});
   assert.equal(nodes.requests.children.length, 1);
   // The hidden tab is told an interaction arrived.
-  assert.equal(shownNotifications.length, 2);
-  assert.match(shownNotifications[1].title, /interaction/i);
+  assert.equal(shownNotifications.length, 3);
+  assert.match(shownNotifications[2].title, /interaction/i);
   // The host re-sends the same request on every head redraw and on
   // every re-hello; one interaction is one notification.
   await deliver({t: 'ui-request', reqId: 41, body: 'Run rm -rf /tmp/x?',
                  bodyKind: 'text',
                  options: [{id: 0, label: 'Allow once'}, {id: 1, label: 'Deny'}],
                  allowFeedback: true});
-  assert.equal(shownNotifications.length, 2);
+  assert.equal(shownNotifications.length, 3);
+  // An identical re-send keeps the very same card, so a guest reading a
+  // long rationale is not scrolled back to the top on every redraw.
+  const beforeCard = nodes.requests.children.find(
+    c => c.dataset.reqId === '41');
+  beforeCard.bodyEl.scrollTop = 120;
+  await deliver({t: 'ui-request', reqId: 41, body: 'Run rm -rf /tmp/x?',
+                 bodyKind: 'text',
+                 options: [{id: 0, label: 'Allow once'}, {id: 1, label: 'Deny'}],
+                 allowFeedback: true});
+  const afterCard = nodes.requests.children.find(
+    c => c.dataset.reqId === '41');
+  assert.equal(afterCard, beforeCard);
+  assert.equal(afterCard.bodyEl.scrollTop, 120);
+  // A changed body rebuilds, but keeps the reader where they were.
+  await deliver({t: 'ui-request', reqId: 41, body: 'Run rm -rf /tmp/y?',
+                 bodyKind: 'text',
+                 options: [{id: 0, label: 'Allow once'}, {id: 1, label: 'Deny'}],
+                 allowFeedback: true});
+  const rebuilt = nodes.requests.children.find(c => c.dataset.reqId === '41');
+  assert.notEqual(rebuilt, beforeCard);
+  assert.equal(rebuilt.bodyEl.scrollTop, 120);
+  // Put the original body back for the assertions below.
+  await deliver({t: 'ui-request', reqId: 41, body: 'Run rm -rf /tmp/x?',
+                 bodyKind: 'text',
+                 options: [{id: 0, label: 'Allow once'}, {id: 1, label: 'Deny'}],
+                 allowFeedback: true});
   document.hidden = false;
   const card = nodes.requests.children[0];
   assert.match(textOf(card), /Run rm -rf \/tmp\/x\?/);
