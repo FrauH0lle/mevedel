@@ -325,7 +325,10 @@ target is gone, which is slow, noisy, and order dependent."
   ;; Generated-state exclusion is remembered per root for the process, so a
   ;; test that reuses a root would otherwise inherit the previous answer.
   (when (boundp 'mevedel-workspace--generated-state-ignored)
-    (clrhash mevedel-workspace--generated-state-ignored)))
+    (clrhash mevedel-workspace--generated-state-ignored))
+  ;; The Markdown fontifier keeps one buffer alive across calls by design.
+  (when (fboundp 'mevedel-view--release-markdown-fontify-buffer)
+    (mevedel-view--release-markdown-fontify-buffer)))
 
 (defun mevedel-test--assert-worktree-controls-unchanged (before)
   "Signal when a test changes worktree-root session artifacts.

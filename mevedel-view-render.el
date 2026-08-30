@@ -28,6 +28,12 @@
 ;; `gptel'
 (defvar gptel-display-buffer-action)
 
+;; `markdown-ts-mode'
+(declare-function markdown-ts-mode "ext:markdown-ts-mode" ())
+(defvar markdown-ts-enable-code-block-context-mode)
+(defvar markdown-ts-enable-table-mode)
+(defvar markdown-ts-hide-markup)
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-transcript-status
@@ -362,9 +368,23 @@
 (defcustom mevedel-view-fontify-responses t
   "Non-nil means fontify response bodies using Markdown syntax.
 Each assistant response stays as model-written Markdown in the view and
-is fontified in a temporary Markdown buffer when `markdown-ts-mode' or
-`markdown-mode' is available."
+is fontified through `markdown-ts-mode' when its tree-sitter grammars are
+installed; otherwise the raw Markdown text stays visible."
   :type 'boolean
+  :group 'mevedel)
+
+
+(defcustom mevedel-view-hide-markdown-markup t
+  "Non-nil means hide Markdown markup delimiters in the view.
+Heading hashes, emphasis asterisks, and code-span backticks stay in the
+text but are made invisible, so `**bold**' reads as bold alone: only
+display changes, never the text the view holds or the positions it maps
+back to the data buffer.  Has no effect without the `markdown-ts-mode'
+grammars."
+  :type 'boolean
+  ;; The default needs no re-render, and the setter is defined further down.
+  :initialize #'custom-initialize-default
+  :set #'mevedel-view--set-hide-markdown-markup
   :group 'mevedel)
 
 
@@ -638,7 +658,10 @@ turns rendered as usual.")
 (defun mevedel-view-render-initialize ()
   "Initialize transcript-rendering state in the current view buffer."
   (mevedel-view-render-invalidate-live-tail)
-  (require 'markdown-mode nil t)
+  ;; Loading the mode also registers its grammars in
+  ;; `treesit-language-source-alist', so the install hint has a source.
+  (require 'markdown-ts-mode nil t)
+  (mevedel-view--markdown-grammar-hint)
   (require 'org-src nil t)
   (require 'xml)
   (require 'mevedel-execution-telemetry)
@@ -1047,6 +1070,33 @@ no `mevedel-view-type' property yet."
         (setq pos next)))))
 
 
+(defmacro mevedel-view--with-quiet-mode-setup (&rest body)
+  "Run BODY with user mode hooks and mode chatter suppressed.
+BODY must not change buffers: `delay-mode-hooks\=' makes its flag
+buffer-local before binding it, so the suppression covers only the buffer
+current on entry.  Use `mevedel-view--with-render-temp-buffer\=' to set up a
+mode in a fresh buffer."
+  (declare (indent 0) (debug t))
+  ;; Modes chatter while they set themselves up (`sh-mode' announces its
+  ;; indentation setup, `python-mode' guesses its offset).  Rendering must
+  ;; not push that into the echo area.
+  `(let ((change-major-mode-after-body-hook nil)
+         (after-change-major-mode-hook nil)
+         (hack-local-variables-hook nil)
+         (enable-local-variables nil)
+         (font-lock-mode-hook nil)
+         (inhibit-message t)
+         (org-mode-hook nil))
+     (delay-mode-hooks
+       ,@body)))
+
+(defmacro mevedel-view--with-render-temp-buffer (&rest body)
+  "Run BODY in a temporary buffer with user mode hooks suppressed."
+  (declare (indent 0) (debug t))
+  `(with-temp-buffer
+     (mevedel-view--with-quiet-mode-setup
+       ,@body)))
+
 (defun mevedel-view--promote-face-to-font-lock-face (s)
   "Rename `face' text properties on S to `font-lock-face' in place.
 `text-mode' (and most other major modes) enable `font-lock-mode'
@@ -1067,12 +1117,107 @@ through font-lock refontification cycles.  Returns S."
         (setq pos next)))
     s))
 
+(defun mevedel-view--markdown-grammars-ready-p ()
+  "Return non-nil when both Markdown tree-sitter grammars are installed.
+`markdown-ts-mode\=' calls `treesit-ensure-installed\=', which offers to clone
+and compile a missing grammar.  A render must never raise that prompt, so
+availability is checked before the mode is ever invoked."
+  (and (fboundp 'treesit-language-available-p)
+       (treesit-language-available-p 'markdown)
+       (treesit-language-available-p 'markdown-inline)))
+
 (defun mevedel-view--markdown-fontify-mode ()
-  "Return the best available Markdown major mode for temp fontification."
-  (cond
-   ((fboundp 'markdown-ts-mode) 'markdown-ts-mode)
-   ((fboundp 'markdown-mode)
-    'markdown-mode)))
+  "Return the Markdown major mode to fontify view text with, or nil.
+Emacs 31.1 ships `markdown-ts-mode\=', so mevedel needs no Markdown package.
+Returns nil when its grammars are missing, which leaves view text as plain
+unfontified Markdown; `mevedel-view--markdown-grammar-hint\=' says how to
+install them."
+  (and (fboundp 'markdown-ts-mode)
+       (mevedel-view--markdown-grammars-ready-p)
+       'markdown-ts-mode))
+
+(defvar mevedel-view--markdown-fontify-buffer nil
+  "Reusable buffer whose major mode fontifies Markdown view text.
+`markdown-ts-mode\=' setup costs about 4.4ms -- two parsers, range rules
+for the embedded grammars, `outline-minor-mode\=', and a `jit-lock\='
+registration -- against roughly 0.1ms to fontify a typical response
+segment.  A fresh temp buffer per call would pay that setup on every
+streaming redraw, so the buffer and its mode are set up once and only the
+content is swapped.")
+
+(defun mevedel-view--markdown-fontify-target ()
+  "Return the live reusable Markdown fontification buffer, or nil.
+Returns nil when no Markdown mode is available."
+  (if (buffer-live-p mevedel-view--markdown-fontify-buffer)
+      mevedel-view--markdown-fontify-buffer
+    (when-let* ((mode (mevedel-view--markdown-fontify-mode)))
+      (setq mevedel-view--markdown-fontify-buffer
+            (with-current-buffer
+                (get-buffer-create " *mevedel-markdown-fontify*" t)
+              (mevedel-view--with-quiet-mode-setup
+                ;; Table and code-block context modes only add commands and
+                ;; keys; a buffer nobody visits needs neither, and the
+                ;; latter clones regions into indirect buffers.
+                (let ((markdown-ts-enable-table-mode nil)
+                      (markdown-ts-enable-code-block-context-mode nil))
+                  (funcall mode)))
+              ;; Read by the font-lock rules that put the `invisible'
+              ;; property on markup, so it must be set before fontifying,
+              ;; not just before the mode realizes its invisibility spec.
+              (setq-local markdown-ts-hide-markup
+                          mevedel-view-hide-markdown-markup)
+              ;; The mode installs its own `font-lock-defaults' after
+              ;; `outline-minor-mode' may already have locked in the
+              ;; parent's; clearing the flag lets the real ones take.
+              (setq font-lock-set-defaults nil)
+              ;; `markdown-ts-mode' registers jit-lock.  The buffer is never
+              ;; displayed, so only a stealth pass could touch it.
+              (setq-local jit-lock-stealth-time nil)
+              (buffer-disable-undo)
+              (current-buffer))))))
+
+(defun mevedel-view--set-hide-markdown-markup (symbol value)
+  "Set SYMBOL to VALUE and re-render every view that already drew markup.
+The `invisible\=' property is applied while fontifying rather than at
+display time, so the reusable Markdown buffer and every cached rendering
+predate the new setting and would otherwise keep the old look until the
+session restarted."
+  (let ((changed (not (eq (and (boundp symbol) (symbol-value symbol))
+                          value))))
+    (set-default symbol value)
+    (when (and changed (fboundp 'mevedel-view--release-markdown-fontify-buffer))
+      (mevedel-view--release-markdown-fontify-buffer)
+      (dolist (buffer (buffer-list))
+        (with-current-buffer buffer
+          (when (derived-mode-p 'mevedel-view-mode)
+            (when (hash-table-p mevedel-view--response-fontify-cache)
+              (clrhash mevedel-view--response-fontify-cache)
+              (setq-local mevedel-view--response-cache-entries 0))
+            (when (hash-table-p mevedel-view--tool-rendering-cache)
+              (clrhash mevedel-view--tool-rendering-cache)
+              (setq-local mevedel-view--render-cache-entries 0))
+            (when (buffer-live-p mevedel--data-buffer)
+              (mevedel-view--full-rerender))))))))
+
+(defun mevedel-view--release-markdown-fontify-buffer ()
+  "Kill the reusable Markdown fontification buffer."
+  (when (buffer-live-p mevedel-view--markdown-fontify-buffer)
+    (kill-buffer mevedel-view--markdown-fontify-buffer))
+  (setq mevedel-view--markdown-fontify-buffer nil))
+
+(defun mevedel-view--markdown-grammar-hint ()
+  "Warn once that Markdown view text stays unfontified, and how to fix it.
+Without this the failure is silent: responses render as raw Markdown with
+no indication that a missing grammar is the reason.  The hint is a user
+affordance, so batch Emacs -- where nobody can act on it -- stays quiet."
+  (when (and (not noninteractive)
+             mevedel-view-fontify-responses
+             (not (mevedel-view--markdown-grammars-ready-p)))
+    (mevedel--warn-once
+     'view-render-markdown-grammar
+     "Markdown responses render unfontified: the `markdown' and \
+`markdown-inline' tree-sitter grammars are not installed. \
+Run `M-x markdown-ts-mode-install-parsers' to build them")))
 
 (defun mevedel-view--visible-response-text (text)
   "Return response TEXT with model protocol hidden when appropriate."
@@ -1080,23 +1225,6 @@ through font-lock refontification cycles.  Returns S."
     (when (mevedel-view--strip-proposed-plans-p text)
       (setq text (mevedel-plan-strip-proposed text)))
     (replace-regexp-in-string "^</?proposed_plan>[ \t]*\n?" "" text)))
-
-(defmacro mevedel-view--with-render-temp-buffer (&rest body)
-  "Run BODY in a temporary buffer with user mode hooks suppressed."
-  (declare (indent 0) (debug t))
-  ;; Modes chatter while they set themselves up (`sh-mode' announces its
-  ;; indentation setup, `python-mode' guesses its offset).  Rendering must
-  ;; not push that into the echo area.
-  `(let ((change-major-mode-after-body-hook nil)
-         (after-change-major-mode-hook nil)
-         (hack-local-variables-hook nil)
-         (enable-local-variables nil)
-         (font-lock-mode-hook nil)
-         (inhibit-message t)
-         (org-mode-hook nil))
-     (with-temp-buffer
-       (delay-mode-hooks
-         ,@body))))
 
 (defun mevedel-view--render-cache-key (text)
   "Return a compact cache key for TEXT content."
@@ -1129,8 +1257,8 @@ Clear TABLE before adding beyond `mevedel-view-render-cache-max-entries'."
   "Return TEXT with view-safe Markdown face properties.
 Returns normalized TEXT without faces when
 `mevedel-view-fontify-responses' is nil or no Markdown mode is available.
-Suppresses major-mode hooks so temp-buffer fontification does not run
-user UI setup.
+MODE is resolved only to key the cache; the fontification itself goes
+through the tag so it reuses `mevedel-view--markdown-fontify-target'.
 Faces are stored as `font-lock-face' so they survive the view
 buffer's font-lock refontification cycles."
   (let* ((start-time (float-time))
@@ -1149,7 +1277,10 @@ buffer's font-lock refontification cycles."
             (let ((rendered
                    (if (and mevedel-view-fontify-responses mode)
                        (condition-case err
-                           (mevedel-view--fontify-as text mode)
+                           ;; The tag, not MODE: only the tag routes to the
+                           ;; reusable buffer, and responses are the hot path
+                           ;; the reuse exists for.
+                           (mevedel-view--fontify-as text 'markdown-mode)
                          (error
                           (mevedel--warn-once
                            'view-render-fontify
@@ -1871,26 +2002,43 @@ flag without duplicating the heuristic."
 (defun mevedel-view--fontify-as (text mode)
   "Return TEXT fontified as if displayed in MODE.
 MODE is a major-mode symbol.  Unknown or nil MODE returns TEXT verbatim.
-Uses a throwaway temp buffer with mode hooks and local variables disabled,
-and `font-lock-ensure' to force a full fontification pass.
+`markdown-mode' is a tag rather than a mode to call: it routes to
+`mevedel-view--markdown-fontify-mode' in the reusable buffer that mode was
+set up in.  Any other MODE uses a throwaway temp buffer with mode hooks and
+local variables disabled, and `font-lock-ensure' to force a full pass.
 Faces are promoted to `font-lock-face' so they survive the view
 buffer's font-lock refontification cycles."
-  (let ((mode (if (eq mode 'markdown-mode)
-                  (or (mevedel-view--markdown-fontify-mode) mode)
-                mode)))
-    (if (or (null mode)
-            (eq mode 'text-mode)
-            (eq mode 'fundamental-mode)
+  (condition-case _
+      (cond
+       ;; `markdown-mode' is the tag for "this body is Markdown", never a
+       ;; mode to call: which mode renders Markdown is
+       ;; `mevedel-view--markdown-fontify-mode's decision.
+       ((eq mode 'markdown-mode)
+        (if-let* ((buffer (mevedel-view--markdown-fontify-target)))
+            (mevedel-view--promote-face-to-font-lock-face
+             (with-current-buffer buffer
+               (let ((inhibit-read-only t))
+                 (erase-buffer)
+                 (insert text)
+                 (font-lock-ensure)
+                 (buffer-string))))
+          text))
+       ((or (null mode)
+            (memq mode '(text-mode fundamental-mode))
             (not (fboundp mode)))
-        text
-      (condition-case _
-          (mevedel-view--promote-face-to-font-lock-face
-           (mevedel-view--with-render-temp-buffer
-             (insert text)
-             (funcall mode)
-             (font-lock-ensure)
-             (buffer-string)))
-        (error text)))))
+        text)
+       (t
+        (mevedel-view--promote-face-to-font-lock-face
+         (mevedel-view--with-render-temp-buffer
+           (insert text)
+           (funcall mode)
+           ;; A mode that installs its `font-lock-defaults' after something
+           ;; in its body has already called `font-lock-set-defaults' leaves
+           ;; the buffer wired to the stale defaults and fontifies nothing.
+           (setq font-lock-set-defaults nil)
+           (font-lock-ensure)
+           (buffer-string)))))
+    (error text)))
 
 (defun mevedel-view--queue-origin-fingerprint (queue)
   "Return the ORIGIN values in QUEUE for render cache invalidation."

@@ -807,9 +807,43 @@ user major-mode hooks and local variables. Use
 Assistant response text is rendered as Markdown in the view. The data
 buffer remains org-mode for gptel state, tool parsing, and persistence,
 but the user-facing projection does not convert assistant Markdown to org.
-When available, Markdown view text is fontified through `markdown-ts-mode`
-(Emacs 31+) or `markdown-mode`; otherwise the raw Markdown text remains
-visible.
+Markdown view text is fontified through `markdown-ts-mode`, which Emacs
+31.1 ships, so mevedel needs no Markdown package. There is no
+`markdown-mode` path: `markdown-mode` is a third-party package, and
+`markdown-ts-mode` covers CommonMark and most of GFM, adds LaTeX, and
+highlights fenced code blocks with the embedded language's own grammar.
+
+Its two tree-sitter grammars (`markdown` and `markdown-inline`) are not
+shipped with Emacs and must be compiled locally, which needs a C toolchain.
+`mevedel-view--markdown-fontify-mode` returns nil until
+`treesit-language-available-p` reports both, and then view text stays plain
+unfontified Markdown - never a prompt, because `markdown-ts-mode` calls
+`treesit-ensure-installed`, which offers to clone and compile, and a render
+must never block on that. Loading the mode registers both grammars in
+`treesit-language-source-alist`, so `M-x markdown-ts-mode-install-parsers`
+has a source to build from; mevedel warns once, outside batch, when the
+grammars are missing.
+
+Setting the mode up costs about 4.4ms - two parsers, range rules for the
+embedded grammars, `outline-minor-mode`, a `jit-lock` registration - against
+roughly 0.1ms to fontify a typical response segment. A fresh temp buffer per
+call would pay that setup on every streaming redraw, so
+`mevedel-view--markdown-fontify-target` sets up one hidden buffer once and
+only the content is swapped. `mevedel-view--fontify-as` treats
+`markdown-mode` as the tag meaning "this body is Markdown" and routes it
+there; every other `:body-mode` is a real major mode and still gets a
+throwaway temp buffer.
+
+Markup delimiters -- heading hashes, emphasis asterisks, code-span
+backticks -- are hidden by default, so `**bold**` reads as bold alone. They
+are only made invisible: `markdown-ts-mode` puts an `invisible` property on
+them while fontifying, which rides into the view as an ordinary text
+property, so the text the view holds and every position it maps back to
+the data buffer are unchanged. Set
+`mevedel-view-hide-markdown-markup` to nil to see the raw delimiters.
+Because the property is applied at fontification time rather than at
+display time, changing the setting drops the reusable buffer and the
+response and tool rendering caches and re-renders every open view.
 
 Markdown rendering adds small view-only affordances:
 

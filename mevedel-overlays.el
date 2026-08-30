@@ -203,6 +203,7 @@
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--full-rerender "mevedel-view-render" ())
+(declare-function mevedel-view--markdown-fontify-mode "mevedel-view-render" ())
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -498,8 +499,8 @@ This command is useful to see what is actually being sent to the model."
             nil
           (princ request-string)
           (with-current-buffer bufname
-            (when (fboundp 'markdown-mode)
-              (markdown-mode))
+            (when-let* ((mode (mevedel-view--markdown-fontify-mode)))
+              (funcall mode))
             (read-only-mode 1)
             (visual-line-mode 1)
             (display-line-numbers-mode 1)
