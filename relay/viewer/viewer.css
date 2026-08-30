@@ -304,12 +304,20 @@ code, pre {
   font-weight: 700;
   flex-shrink: 0;
 }
+/* The rail carries the speaker's colour down the turn, so identity
+   survives past the header line on a long answer. */
 .rail::after {
   content: "";
   flex: 1;
   width: 2px;
   border-radius: 2px;
   background: var(--line);
+}
+.turn.you   .rail::after {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.turn.guest .rail::after {
+  background: color-mix(in srgb, var(--guest) 45%, transparent);
 }
 .turn.cont { margin-top: -.55rem; }
 .turn.cont .glyph { visibility: hidden; height: .4rem; }
@@ -439,7 +447,7 @@ code, pre {
   font-size: .7rem;
 }
 .tool[open] > summary::before { content: "▾"; }
-.tool .tname { font-weight: 700; white-space: nowrap; }
+.tool .tname { font-weight: 700; white-space: nowrap; color: var(--fn); }
 .tool .targ {
   color: var(--muted);
   overflow: hidden;
@@ -449,11 +457,12 @@ code, pre {
   min-width: 0;
 }
 .chip {
-  font-size: .68rem;
+  font-size: .64rem;
   font-weight: 700;
   padding: .12rem .55rem;
   border-radius: 999px;
-  letter-spacing: .04em;
+  letter-spacing: .07em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 .chip.completed { background: var(--ok-soft); color: var(--ok); }

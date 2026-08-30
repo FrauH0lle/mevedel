@@ -451,9 +451,13 @@
     return pre;
   }
 
-  // Grep prints "path:line:match", and a run can span several file
-  // types, so each line picks its own language from its own path.
+  // Grep prints "path:line:match"; Xref and Imenu print
+  // "path:line: text". One shape, so one renderer -- and a run can
+  // span several file types, so each line picks its own language from
+  // its own path.
   const GREP_LINE = /^([^\s:][^:]*):(\d+):([\s\S]*)$/;
+  const LOCATED_TOOLS = new Set(
+    ['Grep', 'XrefReferences', 'XrefDefinitions', 'Imenu']);
 
   function renderGrepResult(text) {
     const pre = el('pre', 'result');
@@ -473,9 +477,33 @@
     return pre;
   }
 
+  // Glob answers with bare paths: dimming the directory makes the
+  // basenames scannable, which is the whole point of a glob.
+  function renderPathList(text) {
+    const pre = el('pre', 'result');
+    String(text).split('\n').forEach((line, index, all) => {
+      const cut = line.lastIndexOf('/');
+      if (cut > 0 && line.trim()) {
+        pre.append(el('span', 'gpath', line.slice(0, cut + 1)));
+        pre.append(line.slice(cut + 1));
+      } else {
+        pre.append(line);
+      }
+      if (index < all.length - 1) pre.append('\n');
+    });
+    return pre;
+  }
+
   function renderToolResult(record, text) {
     const name = record.name || '';
-    if (name === 'Grep') return renderGrepResult(text);
+    if (LOCATED_TOOLS.has(name)) return renderGrepResult(text);
+    if (name === 'Glob') return renderPathList(text);
+    // Eval answers with a printed Lisp value.
+    if (name === 'Eval') {
+      const pre = el('pre', 'result');
+      highlightInto(pre, text, 'lisp');
+      return pre;
+    }
     const lang = langForPath(record.detail);
     if (lang && NUMBERED_LINE.test(text)) {
       return renderNumberedSource(text, lang);
