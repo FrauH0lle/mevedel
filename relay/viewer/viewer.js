@@ -22,6 +22,7 @@
   const ownQueue = document.getElementById('own-queue');
   const skillChips = document.getElementById('skill-chips');
   const themeButton = document.getElementById('theme-button');
+  const modeline = document.getElementById('modeline');
 
   const PROTO = 2;
   const GIVE_UP_MS = 3 * 60 * 1000;
@@ -53,6 +54,11 @@
     // the guest has armed for the next send.
     roster: [],
     armed: null,
+    model: null,
+    mode: null,
+    pending: 0,
+    paused: false,
+    guestName: null,
     // Frames must apply in order; WebCrypto is async, so decryption is
     // serialized through this promise chain.
     inbound: Promise.resolve(),
@@ -179,6 +185,28 @@
 
   function updateLiveAffordance() {
     setLiveButton(!atLiveEdge());
+  }
+
+  /* ── Status strip ─────────────────────────────────────────────────── */
+  // One home for session state, the way the Emacs mode line reports it,
+  // instead of the same facts scattered across three corners.
+  function renderModeline() {
+    if (!modeline) return;
+    modeline.replaceChildren();
+    modeline.append(connection);
+    const add = (text, className) => {
+      if (text) modeline.append(el('span', className || 'ml', text));
+    };
+    add(state.model);
+    add(state.mode);
+    const tail = el('span', 'ml tail');
+    const bits = [];
+    if (state.guestName) bits.push(state.guestName);
+    if (state.pending) {
+      bits.push(`${state.pending} queued${state.paused ? ' · paused' : ''}`);
+    }
+    tail.textContent = bits.join(' · ');
+    modeline.append(tail);
   }
 
   /* ── Colour theme ─────────────────────────────────────────────────── */
@@ -700,16 +728,23 @@
     if (record.kind === 'assistant') {
       return renderMarkdown(record.text || '');
     }
-    // Tool row.
-    const details = el('details', `tool ${record.status || ''}`);
+    // A tool call is one line: status glyph, name, target. Only things
+    // waiting on a decision get a box, so eight finished reads cannot
+    // shout as loudly as the permission holding up the run.
+    const status = record.status || '';
+    const details = el('details', `tool ${status}`);
     const summary = el('summary');
+    const glyph = {completed: '\u2713', failed: '\u2715', running: '\u25cf'}[status]
+      || '\u00b7';
+    const mark = el('span', `st ${status}`, glyph);
+    mark.setAttribute('role', 'img');
+    mark.setAttribute('aria-label', status || 'pending');
+    summary.append(mark);
     summary.append(el('span', 'tname', record.name || 'Tool'));
     summary.append(el('span', 'targ',
                       record.detail
                       || (record.summary !== record.name ? record.summary : '')
                       || ''));
-    summary.append(el('span', `chip ${record.status || ''}`,
-                      record.status || ''));
     details.append(summary);
     // A patch travels as a dedicated diff field; the result text is only
     // the application summary.
@@ -1198,9 +1233,14 @@
   /* ── Composer ─────────────────────────────────────────────────────── */
 
   function guestName() {
-    return (composerName && composerName.value.trim())
+    const name = (composerName && composerName.value.trim())
       || localStorage.getItem('mevedel-guest-name')
       || 'browser';
+    if (state.guestName !== name) {
+      state.guestName = name;
+      renderModeline();
+    }
+    return name;
   }
 
   // One random id per browser, minted on first use. It lets the host
@@ -1307,8 +1347,11 @@
   // How many follow-ups are waiting, and whether the host has delivery
   // paused -- otherwise a queued prompt on a busy session looks dropped.
   function showQueueState(frame) {
+    state.pending = typeof frame.pending === 'number' ? frame.pending : 0;
+    state.paused = frame.paused === true;
+    renderModeline();
     if (!queueState) return;
-    const pending = typeof frame.pending === 'number' ? frame.pending : 0;
+    const pending = state.pending;
     queueState.hidden = pending === 0;
     queueState.className = `queue-state${frame.paused === true ? ' paused' : ''}`;
     if (pending === 0) return;
@@ -1385,6 +1428,9 @@
                     'The mevedel session is idle again.');
       }
       state.busy = frame.busy === true;
+      if (typeof frame.model === 'string') state.model = frame.model;
+      if (typeof frame.mode === 'string') state.mode = frame.mode;
+      renderModeline();
     } else if (frame.t === 'bye') {
       state.ended = true;
       forgetShare();

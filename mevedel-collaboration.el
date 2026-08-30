@@ -77,6 +77,11 @@
                   (data-buffer text &rest keys))
 (autoload 'mevedel-view-enqueue-external-follow-up "mevedel-pending-inputs")
 
+;; `mevedel-permission-mode'
+(declare-function mevedel-permission-mode-effective
+                  "mevedel-permission-mode" (&optional session))
+(autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
+
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (record))
 (declare-function mevedel-session-pending-follow-ups "mevedel-structs" (session))
@@ -90,6 +95,7 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (session))
 (declare-function mevedel-workspace-directives "mevedel-structs" (workspace))
 (defvar mevedel--current-request)
+(defvar gptel-model)
 
 ;; `mevedel-view'
 (declare-function mevedel-view--abort-data-buffer
@@ -513,15 +519,32 @@ guest's own pending entries."
   (when-let* ((data-buffer (mevedel-collaboration--room-data-buffer room)))
     (and (buffer-local-value 'mevedel--current-request data-buffer) t)))
 
+(defun mevedel-collaboration--status-frame (room)
+  "Return ROOM\='s guest-visible session status.
+
+Busy drives the viewer\='s turn-finished notification; the model and
+permission mode are what its status strip reports, the same two facts
+the Emacs mode line carries."
+  (let ((busy (mevedel-collaboration--busy-p room))
+        (data-buffer (mevedel-collaboration--room-data-buffer room)))
+    (list :t "status"
+          :busy (if busy t :json-false)
+          :mode (when-let* ((session (plist-get room :session))
+                            (mode (ignore-errors
+                                    (mevedel-permission-mode-effective
+                                     session))))
+                  (format "%s" mode))
+          :model (when data-buffer
+                   (when-let* ((model (buffer-local-value 'gptel-model
+                                                          data-buffer)))
+                     (format "%s" model))))))
+
 (defun mevedel-collaboration--publish-status (room)
-  "Broadcast ROOM's busy state to its guests when it has changed.
-The busy true-to-false transition is what a hidden viewer tab turns
-into its turn-finished notification."
-  (let ((busy (mevedel-collaboration--busy-p room)))
-    (unless (eq busy (plist-get room :busy))
-      (setq room (plist-put room :busy busy))
-      (mevedel-collaboration--broadcast
-       room (list :t "status" :busy (if busy t :json-false))))))
+  "Broadcast ROOM\='s session status to its guests when it has changed."
+  (let ((status (mevedel-collaboration--status-frame room)))
+    (unless (equal status (plist-get room :status))
+      (setq room (plist-put room :status status))
+      (mevedel-collaboration--broadcast room status))))
 
 (defun mevedel-collaboration--publish-timer (data-buffer)
   "Run the coalesced publication timer for DATA-BUFFER's room."
@@ -884,9 +907,7 @@ answer can execute the same path the host key binding would."
         (mevedel-collaboration--send-queue-state room peer guest t)
         (mevedel-collaboration--transport-send
          (plist-get room :transport) peer
-         (list :t "status"
-               :busy (if (mevedel-collaboration--busy-p room)
-                         t :json-false)))
+         (mevedel-collaboration--status-frame room))
         (when (and writable mevedel-collaboration-remote-interactions)
           (mevedel-collaboration--send-ui-requests room peer))))))
 

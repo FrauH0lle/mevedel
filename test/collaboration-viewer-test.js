@@ -155,7 +155,8 @@ async function main() {
                'send-button', 'stop-button', 'filter', 'requests',
                'session-label', 'queue-state', 'attachments',
                'attach-button', 'image-input', 'notify-button',
-               'composer-scope', 'own-queue', 'skill-chips', 'theme-button'];
+               'composer-scope', 'own-queue', 'skill-chips', 'theme-button',
+               'modeline'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.composer.hidden = true;
   nodes.filter.hidden = true;
@@ -330,7 +331,12 @@ async function main() {
   const toolTurn = findByRecordId(nodes.transcript, 'tool');
   assert.match(textOf(toolTurn), /head -5 notes\.txt/);
   assert.match(textOf(toolTurn), /truncated/);
-  assert.match(textOf(toolTurn), /completed/);
+  // A call is a line now: the status is a glyph carrying an accessible
+  // label, not a chip spelling the word out.
+  const toolFlat = JSON.stringify(toolTurn,
+                                  (k, v) => (k === 'parent' ? undefined : v));
+  assert.match(toolFlat, /"className":"st completed"/);
+  assert.match(toolFlat, /"aria-label":"completed"/);
 
   // A Read result is highlighted from its path's extension, with the
   // line-number gutter kept out of the highlighter.
@@ -463,6 +469,7 @@ async function main() {
   assert.equal(nodes['queue-state'].hidden, true);
   await deliver({t: 'queue', pending: 2, paused: false});
   assert.equal(nodes['queue-state'].hidden, false);
+  assert.match(textOf(nodes.modeline), /2 queued/);
   assert.match(textOf(nodes['queue-state']), /2 follow-ups waiting/);
   await deliver({t: 'queue', pending: 1, paused: true});
   assert.match(textOf(nodes['queue-state']), /1 follow-up waiting/);
@@ -603,8 +610,13 @@ async function main() {
   // credentials persist for the installed app to relaunch with.
   await waitFor(() => storage.has('mevedel-last-share'), 'persisted share');
   assert.equal(storage.get('mevedel-last-share'), `${roomId}.${fullSecret}`);
-  await deliver({t: 'status', busy: true});
+  await deliver({t: 'status', busy: true, model: 'deepseek-v4-flash',
+                 mode: 'edits'});
   assert.equal(shownNotifications.length, 0);
+  // The status strip is the one home for session state.
+  assert.match(textOf(nodes.modeline), /deepseek-v4-flash/);
+  assert.match(textOf(nodes.modeline), /edits/);
+  assert.match(textOf(nodes.modeline), /Connected/);
   document.hidden = true;
   await deliver({t: 'status', busy: false});
   assert.equal(shownNotifications.length, 1);
