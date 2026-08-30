@@ -1305,9 +1305,19 @@ returning the live room."
 WHICH is `view' or `full'.  One QR at a time, the view link by
 default: two codes side by side is how a colleague scans the wrong one
 and walks away with write authority."
-  (require 'qrencode)
   (let* ((full (eq which 'full))
-         (link (plist-get room (if full :link-full :link-view))))
+         (link (plist-get room (if full :link-full :link-view)))
+         ;; The QR is the convenience; the link beneath it is the
+         ;; payload.  An encoder that is missing or signals must cost
+         ;; the code, never the share.
+         (code (condition-case error-data
+                   (progn (require 'qrencode)
+                          (propertize (qrencode link) 'face '(:height 1.6)))
+                 (error
+                  (propertize
+                   (format "QR unavailable (%s); copy the link below."
+                           (error-message-string error-data))
+                   'face 'shadow)))))
     (concat
      (propertize (format "Share: %s\n" (plist-get room :session-label))
                  'face 'bold)
@@ -1319,7 +1329,7 @@ and walks away with write authority."
      "\n"
      ;; Scaled so a phone camera resolves the half-block modules from a
      ;; normal viewing distance.
-     (propertize (qrencode link) 'face '(:height 1.6))
+     code
      "\n\n"
      link
      "\n\n"
