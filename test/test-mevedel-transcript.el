@@ -1610,5 +1610,33 @@ TOOL-PROP."
                            count)))))
       (delete-directory tool-results-dir t))))
 
+
+(mevedel-deftest mevedel-transcript--tool-block-call-readable-before-p ()
+  ,test
+  (test)
+  :doc "leaves point untouched when it sits past the scanned region"
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_tool\n(:name \"Read\" :args nil)\n#+end_tool\n"
+            "#+begin_tool\n(:name \"Grep\" :args nil)\n#+end_tool\n")
+    (goto-char (point-min))
+    (let* ((second (progn (re-search-forward "^#\\+begin_tool" nil t 2)
+                          (match-beginning 0)))
+           ;; Point past the region is exactly how the block scanner calls
+           ;; this: narrowing must not rewind its forward search.
+           (after (point)))
+      (should (mevedel-transcript--tool-block-call-readable-before-p
+               (point-min) second))
+      (should (= after (point)))))
+
+  :doc "rejects a region whose first form is not a tool call plist"
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+begin_tool\nnot a plist\n#+end_tool\n")
+    (goto-char (point-max))
+    (should-not (mevedel-transcript--tool-block-call-readable-before-p
+                 (point-min) (point-max)))
+    (should (= (point-max) (point)))))
+
 (provide 'test-mevedel-transcript)
 ;;; test-mevedel-transcript.el ends here

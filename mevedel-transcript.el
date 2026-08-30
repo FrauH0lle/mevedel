@@ -1227,9 +1227,13 @@ The returned plist includes open metadata plus `:body-start',
   "Return non-nil when START..END begins with a readable tool call plist."
   (and (< start end)
        (condition-case nil
-           (save-restriction
-             (narrow-to-region start end)
-             (save-excursion
+           ;; Narrowing clamps point into the region, and the restriction
+           ;; is lifted before an inner `save-excursion' could undo that.
+           ;; Callers scan forward from point, so the outer form is what
+           ;; keeps this predicate from rewinding their loop.
+           (save-excursion
+             (save-restriction
+               (narrow-to-region start end)
                (goto-char start)
                (forward-line 1)
                (skip-chars-forward " \t\n")
