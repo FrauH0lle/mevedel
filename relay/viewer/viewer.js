@@ -415,6 +415,79 @@
     if (last < text.length) target.append(text.slice(last));
   }
 
+  // Tool results carry a path, not a fence, so the language comes from
+  // the extension. Only families the highlighter actually knows are
+  // mapped; anything else renders as plain text rather than guessing.
+  const EXTENSION_LANG = {
+    el: 'lisp', lisp: 'lisp', scm: 'lisp', clj: 'lisp',
+    sh: 'shell', bash: 'shell', zsh: 'shell',
+    py: 'python',
+    js: 'js', mjs: 'js', cjs: 'js', ts: 'js', tsx: 'js', jsx: 'js', json: 'js',
+    go: 'go',
+  };
+
+  function langForPath(path) {
+    const match = /\.([A-Za-z0-9]+)$/.exec(String(path || '').trim());
+    return match ? (EXTENSION_LANG[match[1].toLowerCase()] || '') : '';
+  }
+
+  // Read prints "<right-aligned line number>TAB<source>". Keeping the
+  // gutter out of the highlighter stops line numbers being coloured as
+  // literals and keeps the source column aligned.
+  const NUMBERED_LINE = /^(\s*\d+\t)([\s\S]*)$/;
+
+  function renderNumberedSource(text, lang) {
+    const pre = el('pre', 'result');
+    String(text).split('\n').forEach((line, index, all) => {
+      const match = NUMBERED_LINE.exec(line);
+      if (match) {
+        pre.append(el('span', 'gutter', match[1]));
+        highlightInto(pre, match[2], lang);
+      } else {
+        pre.append(line);
+      }
+      if (index < all.length - 1) pre.append('\n');
+    });
+    return pre;
+  }
+
+  // Grep prints "path:line:match", and a run can span several file
+  // types, so each line picks its own language from its own path.
+  const GREP_LINE = /^([^\s:][^:]*):(\d+):([\s\S]*)$/;
+
+  function renderGrepResult(text) {
+    const pre = el('pre', 'result');
+    String(text).split('\n').forEach((line, index, all) => {
+      const match = GREP_LINE.exec(line);
+      if (match) {
+        pre.append(el('span', 'gpath', match[1]));
+        pre.append(el('span', 'gsep', ':'));
+        pre.append(el('span', 'gline', match[2]));
+        pre.append(el('span', 'gsep', ':'));
+        highlightInto(pre, match[3], langForPath(match[1]));
+      } else {
+        pre.append(line);
+      }
+      if (index < all.length - 1) pre.append('\n');
+    });
+    return pre;
+  }
+
+  function renderToolResult(record, text) {
+    const name = record.name || '';
+    if (name === 'Grep') return renderGrepResult(text);
+    const lang = langForPath(record.detail);
+    if (lang && NUMBERED_LINE.test(text)) {
+      return renderNumberedSource(text, lang);
+    }
+    if (lang) {
+      const pre = el('pre', 'result');
+      highlightInto(pre, text, lang);
+      return pre;
+    }
+    return el('pre', 'result', text);
+  }
+
   function renderCodeBlock(code, lang) {
     if ((lang || '').toLowerCase() === 'diff') {
       const block = el('div', 'codeblock');
@@ -505,7 +578,7 @@
         body.className = 'result diff';
         details.append(body);
       } else {
-        details.append(el('pre', 'result', result));
+        details.append(renderToolResult(record, result));
       }
       if (record.truncated) {
         details.append(el('pre', 'result', '[result truncated]'));
