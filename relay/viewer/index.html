@@ -14,16 +14,19 @@
     <header class="topbar">
       <div class="wordmark">MevView<small id="session-label">live session</small></div>
       <button id="theme-button" class="bell" type="button"
+              title="Colour theme: follow system"
               aria-label="Colour theme: follow system">◐</button>
       <button id="notify-button" class="bell" type="button" hidden
-              aria-pressed="false" aria-label="Toggle notifications">🔔</button>
+              aria-pressed="false" title="Notifications off"
+              aria-label="Notifications off">🔔</button>
       <nav id="filter" class="filter" aria-label="Transcript filter" hidden></nav>
     </header>
     <main id="transcript" class="ledger" aria-live="polite"
           aria-label="Shared session transcript"></main>
     <div class="dock">
       <div class="live-controls">
-        <button id="live-button" class="live-button" type="button" hidden>Return to live</button>
+        <button id="live-button" class="live-button" type="button" hidden
+                title="Jump back to the newest turn">Return to live</button>
       </div>
       <div id="requests" class="requests" aria-label="Pending interactions"></div>
       <div id="own-queue" class="own-queue" aria-label="Your queued prompts" hidden></div>
@@ -38,14 +41,19 @@
         <div id="attachments" class="attachments"></div>
         <div class="composer-row">
           <input id="composer-name" class="composer-name" type="text"
-                 maxlength="32" placeholder="Your name" aria-label="Display name">
+                 maxlength="32" placeholder="Your name"
+                 title="Shown beside your prompts in the transcript"
+                 aria-label="Display name">
           <input id="image-input" type="file" multiple hidden
                  accept="image/jpeg,image/png,image/webp,application/pdf,text/plain,text/markdown,text/csv,application/json,.log,.patch,.diff,.md,.csv,.json,.txt">
           <button id="attach-button" class="btn quiet" type="button"
+                  title="Attach files — images, PDFs, logs and patches"
                   aria-label="Attach files">📎</button>
           <span class="composer-spacer"></span>
-          <button id="stop-button" class="btn danger" type="button">Interrupt</button>
-          <button id="send-button" class="btn" type="submit">Send</button>
+          <button id="stop-button" class="btn danger" type="button"
+                  title="Stop the running turn in Emacs">Interrupt</button>
+          <button id="send-button" class="btn" type="submit"
+                  title="Queue this for the session">Send</button>
         </div>
       </form>
       <p id="modeline" class="modeline" role="status">
@@ -58,10 +66,14 @@
         can also prompt, interrupt, and answer pending interactions. Frames
         are sealed end to end with a key that lives only in the link; the
         relay sees ciphertext. Enabling notifications stores the link in
-        this browser so an installed app can reconnect; it is forgotten
-        when the room ends.</p>
+        this browser so an installed app can reconnect. It is cleared after
+        this viewer observes the room end or gives up reconnecting; otherwise
+        it may remain until this link is opened again or site data is cleared.</p>
       </details>
     </div>
+    <script src="/transport.js" defer></script>
+    <script src="/notifications.js" defer></script>
+    <script src="/renderer.js" defer></script>
     <script src="/viewer.js" defer></script>
   </body>
 </html>

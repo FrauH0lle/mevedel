@@ -55,8 +55,8 @@
 ;; `mevedel-view'
 (defvar mevedel-view-inline-image-max-width)
 
-;; `mevedel-view-render'
-(declare-function mevedel-view--fontify-as "mevedel-view-render" (text mode))
+;; `mevedel-view-fontify'
+(declare-function mevedel-view--fontify-as "mevedel-view-fontify" (text mode))
 
 ;; `mevedel-view-table'
 (declare-function mevedel-view-table-decorate "mevedel-view-table"

@@ -201,9 +201,11 @@
 ;; `mevedel-view-disclosure'
 (declare-function mevedel-view-toggle-section "mevedel-view-disclosure" ())
 
+;; `mevedel-view-fontify'
+(declare-function mevedel-view--markdown-fontify-mode "mevedel-view-fontify" ())
+
 ;; `mevedel-view-render'
 (declare-function mevedel-view--full-rerender "mevedel-view-render" ())
-(declare-function mevedel-view--markdown-fontify-mode "mevedel-view-render" ())
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))

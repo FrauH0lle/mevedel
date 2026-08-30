@@ -1,6 +1,6 @@
 /* collaboration-viewer-test.js -- deterministic sealed viewer assertions
  *
- * Drives relay/viewer/viewer.js through a fake DOM and WebSocket with
+ * Drives the relay viewer scripts through a fake DOM and WebSocket with
  * node's WebCrypto, which is the same API a browser uses, so host<->guest
  * sealing interop is asserted here without a browser.
  *
@@ -11,6 +11,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const runNotificationTests = require('./collaboration-notifications-test');
 
 class Element {
   constructor(tag) {
@@ -78,6 +79,7 @@ function findByRecordId(root, id) {
 
 class Socket {
   static OPEN = 1;
+  static CLOSED = 3;
   constructor() { this.listeners = {}; this.readyState = Socket.OPEN; this.sent = []; }
   addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback); }
   send(value) { this.sent.push(value); }
@@ -130,7 +132,181 @@ async function waitFor(predicate, what) {
   throw new Error(`timed out waiting for ${what}`);
 }
 
+async function testTransportLifecycle() {
+  const sockets = [];
+  let retry = null;
+  const finishSeals = [];
+  const finishDecrypts = [];
+  const received = [];
+  let opens = 0;
+  class TestSocket extends Socket {
+    constructor(url) { super(); this.url = url; sockets.push(this); }
+  }
+  const window = {
+    location: {href: 'https://relay.example/', protocol: 'https:'},
+    setTimeout(callback) { retry = callback; return 1; },
+  };
+  const context = {
+    window, WebSocket: TestSocket, URL, Date, TextEncoder, TextDecoder,
+    Uint8Array, atob, btoa, clearTimeout() {},
+    crypto: {
+      getRandomValues: value => value,
+      subtle: {
+        encrypt: (_algorithm, _key, plaintext) => new Promise(resolve => {
+          finishSeals.push({
+            frame: JSON.parse(new TextDecoder().decode(plaintext)),
+            finish: () => resolve(new ArrayBuffer(16)),
+          });
+        }),
+        decrypt: (_algorithm, _key, sealed) => {
+          const plaintext = new TextEncoder().encode(
+            JSON.stringify({id: sealed[0]}));
+          if (sealed[0] !== 3) return Promise.resolve(plaintext);
+          return new Promise(resolve => {
+            finishDecrypts.push(() => resolve(plaintext));
+          });
+        },
+      },
+    },
+  };
+  vm.runInNewContext(fs.readFileSync('relay/viewer/transport.js', 'utf8'), context);
+  const transport = window.mevedelViewerTransport.create({
+    roomId: 'roomroomroomroom', key: {}, giveUpMs: 60000,
+    hello: () => ({t: 'hello'}), onConnection() {},
+    onFrame(frame) {
+      if (frame.id === 1) throw new Error('bad frame');
+      received.push(frame.id);
+    },
+    onGiveUp() {}, async onOpen() { opens++; },
+  });
+  transport.connect();
+  const stale = sockets[0];
+  const pending = transport.send({t: 'late'});
+  await waitFor(() => finishSeals.length, 'stale frame encryption');
+  stale.close();
+  retry();
+  const current = sockets[1];
+  current.dispatch('open');
+  await waitFor(() => finishSeals.length === 2,
+                'replacement hello beside stale encryption');
+  finishSeals.splice(
+    finishSeals.findIndex(item => item.frame.t === 'hello'), 1)[0].finish();
+  await waitFor(() => opens === 1, 'replacement open continuation');
+  assert.equal(current.sent.length, 1);
+  finishSeals.splice(
+    finishSeals.findIndex(item => item.frame.t === 'late'), 1)[0].finish();
+  assert.equal(await pending, false);
+  assert.equal(stale.sent.length, 0);
+  assert.equal(current.sent.length, 1);
+
+  current.close();
+  retry();
+  const replacement = sockets[2];
+  replacement.dispatch('open');
+  await waitFor(() => finishSeals.length, 'stale hello encryption');
+  replacement.close();
+  retry();
+  const latest = sockets[3];
+  finishSeals.shift().finish();
+  await tick();
+  assert.equal(replacement.sent.length, 0);
+  assert.equal(latest.sent.length, 0);
+  assert.equal(opens, 1);
+
+  const firstSend = transport.send({t: 'first'});
+  const secondFrame = {t: 'second', answers: ['original']};
+  const secondSend = transport.send(secondFrame);
+  secondFrame.answers[0] = 'mutated';
+  await waitFor(() => finishSeals.length, 'first ordered encryption');
+  assert.equal(finishSeals.length, 1);
+  assert.equal(finishSeals[0].frame.t, 'first');
+  finishSeals.shift().finish();
+  await waitFor(() => finishSeals.length, 'second ordered encryption');
+  assert.equal(finishSeals[0].frame.t, 'second');
+  assert.deepEqual(finishSeals[0].frame.answers, ['original']);
+  finishSeals.shift().finish();
+  assert.deepEqual(await Promise.all([firstSend, secondSend]), [true, true]);
+  assert.equal(latest.sent.length, 2);
+
+  const bad = new Uint8Array(33);
+  bad[16] = 1;
+  const good = new Uint8Array(33);
+  good[16] = 2;
+  latest.dispatch('message', {data: bad.buffer});
+  latest.dispatch('message', {data: good.buffer});
+  await waitFor(() => received.length, 'frame after failed handler');
+  assert.deepEqual(received, [2]);
+
+  const staleInbound = new Uint8Array(33);
+  staleInbound[16] = 3;
+  latest.dispatch('message', {data: staleInbound.buffer});
+  await waitFor(() => finishDecrypts.length, 'stale frame decryption');
+  latest.close();
+  retry();
+  const finalSocket = sockets[4];
+  const replacementInbound = new Uint8Array(33);
+  replacementInbound[16] = 4;
+  finalSocket.dispatch('message', {data: replacementInbound.buffer});
+  await waitFor(() => received.includes(4), 'replacement inbound frame');
+  finishDecrypts.shift()();
+  await tick();
+  assert.deepEqual(received, [2, 4]);
+
+  retry = null;
+  transport.end();
+  assert.equal(finalSocket.readyState, Socket.CLOSED);
+  assert.equal(retry, null);
+}
+
+async function testTransportGiveUp() {
+  const sockets = [];
+  let retry = null;
+  let now = 1;
+  let giveUps = 0;
+  class TestSocket extends Socket {
+    constructor(url) { super(); this.url = url; sockets.push(this); }
+  }
+  const window = {
+    location: {href: 'https://relay.example/', protocol: 'https:'},
+    setTimeout(callback) { retry = callback; return 1; },
+  };
+  const context = {
+    window, WebSocket: TestSocket, URL,
+    Date: {now: () => now}, TextEncoder, TextDecoder, Uint8Array,
+    atob, btoa, clearTimeout() {},
+    crypto: {
+      getRandomValues: value => value,
+      subtle: {encrypt: async () => new ArrayBuffer(16)},
+    },
+  };
+  vm.runInNewContext(fs.readFileSync('relay/viewer/transport.js', 'utf8'), context);
+  const transport = window.mevedelViewerTransport.create({
+    roomId: 'roomroomroomroom', key: {}, giveUpMs: 100,
+    hello: () => ({t: 'hello'}), onConnection() {}, onFrame() {},
+    onGiveUp() { giveUps++; }, async onOpen() {},
+  });
+  transport.connect();
+  sockets[0].dispatch('open');
+  await tick();
+  sockets[0].close();
+  retry();
+  now = 50;
+  sockets[1].dispatch('open');
+  await tick();
+  sockets[1].close();
+  retry();
+  now = 102;
+  sockets[2].dispatch('open');
+  await tick();
+  sockets[2].close();
+  assert.equal(giveUps, 1);
+  assert.equal(sockets.length, 3);
+}
+
 async function main() {
+  await runNotificationTests();
+  await testTransportLifecycle();
+  await testTransportGiveUp();
   // Shared known-answer vector, mirrored by the ERT crypto suite: 32
   // zero-byte key, 12 zero-byte nonce, 16 zero-byte plaintext must seal to
   // this exact ciphertext||tag, pinning WebCrypto and gnutls to each other.
@@ -165,6 +341,36 @@ async function main() {
   const sockets = [];
   let timer;
   const storage = new Map();
+  let subscribedWith;
+  let unsubscribeCount = 0;
+  let bitmapCloseCount = 0;
+  let holdBitmap = false;
+  let releaseBitmap = null;
+  const createdUrls = [];
+  const revokedUrls = [];
+  const pushKey = new Uint8Array(65);
+  pushKey[0] = 4;
+  let currentPushSubscription = null;
+  const pushSubscription = {
+    endpoint: 'https://push.example/subscription',
+    options: {applicationServerKey: pushKey.slice()},
+    unsubscribe: async () => {
+      unsubscribeCount++;
+      currentPushSubscription = null;
+      return true;
+    },
+  };
+  const pushManager = {
+    getSubscription: async () => currentPushSubscription,
+    subscribe: async options => {
+      subscribedWith = options;
+      pushSubscription.options.applicationServerKey =
+        options.applicationServerKey.slice();
+      currentPushSubscription = pushSubscription;
+      return pushSubscription;
+    },
+  };
+  const serviceWorkerRegistration = {pushManager, unregister: async () => true};
   // Web Notification stand-in: permission flows and constructed
   // notifications are observable, nothing is displayed.
   const shownNotifications = [];
@@ -194,9 +400,28 @@ async function main() {
     setTimeout(callback) { timer = callback; return 1; },
     scrollTo(options) { this.scrollY = options.top; },
   };
+  class ViewerURL extends URL {}
+  ViewerURL.createObjectURL = () => {
+    const value = `blob:attachment-${createdUrls.length + 1}`;
+    createdUrls.push(value);
+    return value;
+  };
+  ViewerURL.revokeObjectURL = value => revokedUrls.push(value);
   const document = {
+    listeners: {},
+    addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback); },
     getElementById(id) { return nodes[id]; },
-    createElement(tag) { return new Element(tag); },
+    createElement(tag) {
+      const element = new Element(tag);
+      if (tag === 'canvas') {
+        element.getContext = () => ({drawImage() {}});
+        element.toBlob = callback => callback({
+          size: 4,
+          arrayBuffer: async () => Uint8Array.from([1, 2, 3, 4]),
+        });
+      }
+      return element;
+    },
     hasFocus() { return this.focused !== false; },
     title: 'mevedel live session',
     documentElement: {
@@ -211,9 +436,33 @@ async function main() {
     constructor(url) { super(); this.url = url; sockets.push(this); }
   }
   const context = {
-    document, window, WebSocket: TestWebSocket, URL, console,
+    document, window, WebSocket: TestWebSocket, URL: ViewerURL, console,
     crypto, TextEncoder, TextDecoder, atob, btoa, Date,
     Event: FakeEvent, Notification: FakeNotification,
+    PushManager: class PushManager {},
+    createImageBitmap: () => {
+      const bitmap = {width: 10, height: 10,
+                      close() { bitmapCloseCount++; }};
+      if (!holdBitmap) return Promise.resolve(bitmap);
+      return new Promise(resolve => {
+        releaseBitmap = () => resolve(bitmap);
+      });
+    },
+    navigator: {
+      serviceWorker: {
+        register: async (path, options) => {
+          assert.equal(path, '/service-worker.js');
+          assert.equal(options.scope,
+                       `/pwa/${roomId}.${fullSecret}/`);
+          return serviceWorkerRegistration;
+        },
+        getRegistration: async () => serviceWorkerRegistration,
+      },
+    },
+    fetch: async path => {
+      assert.equal(path, '/push-key');
+      return {ok: true, json: async () => ({key: base64url(pushKey)})};
+    },
     localStorage: {
       getItem: k => (storage.has(k) ? storage.get(k) : null),
       setItem: (k, v) => storage.set(k, v),
@@ -222,11 +471,16 @@ async function main() {
     setTimeout: window.setTimeout,
     clearTimeout: () => {},
   };
+  vm.runInNewContext(fs.readFileSync('relay/viewer/transport.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/notifications.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
 
   // Link grammar: view links carry the bare key, full links append the
   // write token, anything else is rejected.
   const api = context.window.mevedelViewer;
+  assert.equal((window.listeners.visibilitychange || []).length, 0);
+  assert.equal(document.listeners.visibilitychange.length, 1);
   const view = api.parseFragment(`#${roomId}.${base64url(keyBytes)}`);
   assert.equal(view.roomId, roomId);
   assert.equal(view.writeToken, null);
@@ -273,13 +527,14 @@ async function main() {
   assert.equal(storage.get('mevedel-guest-id'), hello.guestId);
 
   let delivered = 0;
-  const deliver = async frame => {
-    first.dispatch('message', {data: await seal(key, 1, frame)});
+  const deliverTo = async (socket, frame) => {
+    socket.dispatch('message', {data: await seal(key, 1, frame)});
     delivered++;
     // Wait until the viewer's serialized inbound chain has consumed it.
     await waitFor(() => context.window.mevedelViewerApplied === delivered,
                   'frame application');
   };
+  const deliver = frame => deliverTo(first, frame);
 
   // Welcome for a writable guest reveals the composer; the snapshot loads
   // through final-flagged chunks with live updates queued behind it.
@@ -291,6 +546,10 @@ async function main() {
   assert.equal(nodes['skill-chips'].hidden, false);
   assert.equal(nodes['skill-chips'].children.length, 2);
   assert.equal(textOf(nodes['skill-chips'].children[0]), '/plan');
+  // Every control says what it does on hover.
+  assert.match(nodes['skill-chips'].children[0].attributes.title,
+               /Prepare \/plan.*\[prompt\]/);
+  assert.match(nodes['theme-button'].attributes.title, /Colour theme/);
   assert.equal(textOf(nodes['skill-chips'].children[1]), '$review');
   await deliver({t: 'snapshot-chunk', final: false, records: [
     {id: 'assistant', kind: 'assistant', revision: 0,
@@ -446,6 +705,16 @@ async function main() {
   assert.match(mdFlat, /```elisp/);
   await deliver({t: 'remove', ids: ['md']});
 
+  // Single newlines are real breaks: the model means them, and Emacs
+  // renders them, so the two surfaces must not disagree.
+  await deliver({t: 'record', record: {
+    id: 'breaks', kind: 'assistant', revision: 0, text: '1\n2\n3',
+  }});
+  const breakFlat = JSON.stringify(findByRecordId(nodes.transcript, 'breaks'),
+                                   (k, v) => (k === 'parent' ? undefined : v));
+  assert.equal((breakFlat.match(/"tagName":"br"/g) || []).length, 2);
+  await deliver({t: 'remove', ids: ['breaks']});
+
   // Live removal.
   await deliver({t: 'remove', ids: ['tool', 'patch']});
   assert.equal(nodes.transcript.children.length, 2);
@@ -489,6 +758,7 @@ async function main() {
     text: 'Refactor the parser\nwith details', directive: 'dir-1',
   }});
   assert.equal(nodes.filter.hidden, false);
+  assert.match(nodes.filter.children[0].attributes.title, /every turn/i);
   const labels = nodes.filter.children.map(textOf);
   assert.equal(labels.length, 3);
   assert.match(labels[0], /^All/);
@@ -551,6 +821,55 @@ async function main() {
                'log line\n');
   assert.equal(nodes.attachments.children.length, 0);
 
+  await Promise.all([
+    api2.addFiles([fakeFile('one.log', '', '1'),
+                   fakeFile('two.log', '', '2')]),
+    api2.addFiles([fakeFile('three.log', '', '3'),
+                   fakeFile('four.log', '', '4')]),
+  ]);
+  assert.equal(nodes.attachments.children.length, 3);
+  while (nodes.attachments.children.length) {
+    nodes.attachments.children[0].children.at(-1).dispatch('click');
+  }
+
+  holdBitmap = true;
+  releaseBitmap = null;
+  const addingPhoto = api2.addFiles([
+    fakeFile('queued.png', 'image/png', 'pixels'),
+  ]);
+  await waitFor(() => releaseBitmap, 'queued image conversion');
+  const queuedSendBefore = first.sent.length;
+  nodes.filter.children[2].dispatch('click');
+  nodes['composer-name'].value = 'before-wait';
+  nodes['composer-input'].value = 'send the queued photo';
+  nodes.composer.dispatch('submit');
+  nodes.filter.children[1].dispatch('click');
+  nodes['composer-name'].value = 'after-wait';
+  await tick();
+  assert.equal(first.sent.length, queuedSendBefore);
+  assert.equal(nodes['composer-input'].value, 'send the queued photo');
+  releaseBitmap();
+  holdBitmap = false;
+  await addingPhoto;
+  await waitFor(() => first.sent.length === queuedSendBefore + 1,
+                'prompt after image conversion');
+  const queuedPhoto = await unseal(key, first.sent[queuedSendBefore]);
+  assert.equal(queuedPhoto.images.length, 1);
+  assert.equal(queuedPhoto.images[0].mime, 'image/jpeg');
+  assert.equal(queuedPhoto.directive, 'dir-1');
+  assert.equal(queuedPhoto.name, 'before-wait');
+  assert.equal(nodes['composer-input'].value, '');
+  assert.equal(nodes.attachments.children.length, 0);
+  nodes['composer-name'].value = 'roland';
+
+  await api2.addFiles([fakeFile('photo.png', 'image/png', 'pixels')]);
+  assert.equal(bitmapCloseCount, 2);
+  assert.equal(nodes.attachments.children.length, 1);
+  const removeAttachment = nodes.attachments.children[0].children.at(-1);
+  removeAttachment.dispatch('click');
+  assert.deepEqual(revokedUrls, [createdUrls[0], createdUrls[1]]);
+  assert.equal(nodes.attachments.children.length, 0);
+
   // A guest's own queued entries render as a persistent card with live
   // position and a retract control; a frame without them clears it.
   await deliver({t: 'queue', pending: 2, paused: false,
@@ -605,6 +924,7 @@ async function main() {
   // tab is hidden: turn settlement (busy true -> false) and interaction
   // arrival notify; nothing else does.
   assert.equal(nodes['notify-button'].hidden, false);
+  const pushBefore = first.sent.length;
   nodes['notify-button'].dispatch('click');
   await waitFor(() => FakeNotification.permission === 'granted',
                 'notification permission');
@@ -612,6 +932,20 @@ async function main() {
   // credentials persist for the installed app to relaunch with.
   await waitFor(() => storage.has('mevedel-last-share'), 'persisted share');
   assert.equal(storage.get('mevedel-last-share'), `${roomId}.${fullSecret}`);
+  await waitFor(() => first.sent.length === pushBefore + 1,
+                'sealed push subscription');
+  assert.deepEqual(await unseal(key, first.sent[pushBefore]),
+                   {t: 'push-subscribe', endpoint: pushSubscription.endpoint,
+                    active: true});
+  assert.equal(subscribedWith.userVisibleOnly, true);
+  assert.equal(subscribedWith.applicationServerKey.length, 65);
+  const presenceBefore = first.sent.length;
+  document.focused = false;
+  for (const listener of window.listeners.blur || []) listener();
+  await waitFor(() => first.sent.length === presenceBefore + 1,
+                'background push state');
+  assert.deepEqual(await unseal(key, first.sent[presenceBefore]),
+                   {t: 'push-state', active: false});
   await deliver({t: 'status', busy: true, model: 'deepseek-v4-flash',
                  mode: 'edits'});
   assert.equal(shownNotifications.length, 0);
@@ -633,18 +967,17 @@ async function main() {
   document.focused = false;
   await deliver({t: 'status', busy: true});
   await deliver({t: 'status', busy: false});
-  assert.equal(shownNotifications.length, 1);
+  assert.equal(shownNotifications.length, 0);
   // The tab title carries a marker too, which needs no permission.
   assert.match(document.title, /^●/);
   document.focused = true;
   document.hidden = true;
   await deliver({t: 'status', busy: true});
   await deliver({t: 'status', busy: false});
-  assert.equal(shownNotifications.length, 2);
-  assert.match(shownNotifications[0].title, /finished/i);
+  assert.equal(shownNotifications.length, 0);
   // An unchanged busy state does not re-notify.
   await deliver({t: 'status', busy: false});
-  assert.equal(shownNotifications.length, 2);
+  assert.equal(shownNotifications.length, 0);
 
   // A ui-request renders a card whose buttons and feedback field answer
   // through sealed ui-response frames; a diff body gets diff rendering;
@@ -655,15 +988,14 @@ async function main() {
                  allowFeedback: true});
   assert.equal(nodes.requests.children.length, 1);
   // The hidden tab is told an interaction arrived.
-  assert.equal(shownNotifications.length, 3);
-  assert.match(shownNotifications[2].title, /interaction/i);
+  assert.equal(shownNotifications.length, 0);
   // The host re-sends the same request on every head redraw and on
   // every re-hello; one interaction is one notification.
   await deliver({t: 'ui-request', reqId: 41, body: 'Run rm -rf /tmp/x?',
                  bodyKind: 'text',
                  options: [{id: 0, label: 'Allow once'}, {id: 1, label: 'Deny'}],
                  allowFeedback: true});
-  assert.equal(shownNotifications.length, 3);
+  assert.equal(shownNotifications.length, 0);
   // An identical re-send keeps the very same card, so a guest reading a
   // long rationale is not scrolled back to the top on every redraw.
   const beforeCard = nodes.requests.children.find(
@@ -716,13 +1048,14 @@ async function main() {
                                   (k, v) => (k === 'parent' ? undefined : v));
   assert.match(diffFlat, /line add/);
   assert.match(diffFlat, /line del/);
-  // A questionnaire renders per-question option buttons plus a custom
-  // field, requires every answer, and submits atomically.
+  // A questionnaire renders samples, accepts no-preference blanks, and
+  // submits all answers atomically.
   await deliver({t: 'ui-request', reqId: 43, body: 'Ask · 2 questions',
                  bodyKind: 'text', options: [], allowFeedback: false,
                  questions: [
                    {question: 'Which approach?',
-                    options: [{label: 'MVP first (Recommended)'},
+                    options: [{label: 'MVP first (Recommended)',
+                               sample: '# MVP first\n- ship the smallest slice'},
                               {label: 'Risk first', description: 'slower'}]},
                    {question: 'Which branch?', options: [{label: 'main'}],
                     answer: 'main'},
@@ -738,16 +1071,17 @@ async function main() {
   const submitButton = askButtons[askButtons.length - 1];
   assert.equal(textOf(submitButton), 'Submit answers');
   const askBefore = first.sent.length;
-  // Question 1 unanswered: submit refuses with a notice.
+  // Question 1 unanswered is the canonical no-preference value.
   submitButton.dispatch('click');
-  await tick();
-  assert.equal(first.sent.length, askBefore);
-  assert.match(textOf(nodes.notice), /Answer every question/);
-  // Answer question 1 by option, keep question 2's prefilled answer.
-  askButtons[0].dispatch('click');
-  submitButton.dispatch('click');
-  await waitFor(() => first.sent.length === askBefore + 1, 'ask answers');
+  await waitFor(() => first.sent.length === askBefore + 1, 'blank ask answer');
   assert.deepEqual(await unseal(key, first.sent[askBefore]),
+                   {t: 'ui-response', reqId: 43, answers: ['', 'main']});
+  // Choosing an option reveals its sample and preserves the prefilled answer.
+  askButtons[0].dispatch('click');
+  assert.match(textOf(askCard), /ship the smallest slice/);
+  submitButton.dispatch('click');
+  await waitFor(() => first.sent.length === askBefore + 2, 'ask answers');
+  assert.deepEqual(await unseal(key, first.sent[askBefore + 1]),
                    {t: 'ui-response', reqId: 43,
                     answers: ['MVP first (Recommended)', 'main']});
 
@@ -783,23 +1117,74 @@ async function main() {
   // Unknown future frames are tolerated.
   await deliver({t: 'future-frame', payload: 1});
 
-  // A drop schedules a retry and the fresh socket re-hellos.
+  // A drop schedules a retry and the fresh socket re-hellos. A send while
+  // disconnected keeps both the draft and its attachments for retry.
+  await api2.addFiles([fakeFile('retry.log', '', 'keep me')]);
   first.dispatch('close', {code: 1006});
   assert.equal(typeof timer, 'function');
+  nodes['composer-input'].value = 'keep this through reconnect';
+  nodes.composer.dispatch('submit');
+  await tick();
+  assert.equal(nodes['composer-input'].value, 'keep this through reconnect');
+  assert.equal(nodes.attachments.children.length, 1);
   timer();
   await tick();
   assert.equal(sockets.length, 2);
+  nodes['composer-input'].value = '';
+  nodes.attachments.children[0].children.at(-1).dispatch('click');
+  // If an operator replaces the persisted VAPID key, the existing browser
+  // subscription is replaced before its endpoint is registered again.
+  pushKey[1] = 1;
   sockets[1].dispatch('open');
-  await waitFor(() => sockets[1].sent.length === 1, 'second hello');
+  await waitFor(() => sockets[1].sent.length === 2, 'second hello and push subscription');
   assert.equal((await unseal(key, sockets[1].sent[0])).t, 'hello');
+  assert.equal((await unseal(key, sockets[1].sent[1])).t, 'push-subscribe');
+  assert.equal(unsubscribeCount, 1);
+
+  await deliverTo(sockets[1], {
+    t: 'ui-request', reqId: 99, body: 'Still pending', bodyKind: 'text',
+    options: [{id: 0, label: 'Continue'}], allowFeedback: false,
+  });
+  await deliverTo(sockets[1], {
+    t: 'queue', pending: 1, paused: false,
+    own: [{id: 10, position: 1, text: 'still queued'}],
+  });
+  assert.equal(nodes.requests.children.length, 1);
+  assert.equal(nodes['own-queue'].hidden, false);
+
+  await api2.addFiles([fakeFile('pending.png', 'image/png', 'pixels')]);
+  const pendingUrl = createdUrls.at(-1);
+  holdBitmap = true;
+  releaseBitmap = null;
+  const urlsBeforeStaleAttachment = createdUrls.length;
+  const staleAttachment = api2.addFiles([
+    fakeFile('stale.png', 'image/png', 'pixels'),
+  ]);
+  await waitFor(() => releaseBitmap, 'deferred image conversion');
 
   // Bye ends the session: no reconnect, composer gone.
   timer = null;
   sockets[1].dispatch('message', {data: await seal(key, 1, {t: 'bye', reason: 'user-stop'})});
   await waitFor(() => textOf(nodes.connection).includes('Session ended'), 'bye');
+  releaseBitmap();
+  await staleAttachment;
   assert.equal(nodes.composer.hidden, true);
+  assert.equal(sockets[1].readyState, 3);
+  assert.equal(nodes.requests.children.length, 0);
+  assert.equal(nodes['own-queue'].hidden, true);
+  assert.equal(nodes['queue-state'].hidden, true);
+  assert.equal(nodes.filter.hidden, true);
+  assert.equal(nodes['skill-chips'].hidden, true);
+  assert.ok(revokedUrls.includes(pendingUrl));
+  assert.equal(nodes.attachments.children.length, 0);
+  assert.equal(createdUrls.length, urlsBeforeStaleAttachment);
+  assert.equal(nodes['notify-button'].hidden, true);
   // A dead room's persisted credentials die with it.
   assert.equal(storage.has('mevedel-last-share'), false);
+  nodes['notify-button'].dispatch('click');
+  await tick();
+  assert.equal(storage.has('mevedel-last-share'), false);
+  await waitFor(() => unsubscribeCount === 2, 'push unsubscribe');
   sockets[1].dispatch('close', {code: 4001});
   assert.equal(timer, null);
 

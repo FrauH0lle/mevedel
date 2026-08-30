@@ -29,8 +29,12 @@
                                           prompt-submission))
 
 ;; `mevedel-pending-inputs'
+(declare-function mevedel-pending-inputs-follow-up-changed
+                  "mevedel-pending-inputs" (session))
 (declare-function mevedel-view--run-follow-up-drain
                   "mevedel-pending-inputs" (data-buffer))
+(autoload 'mevedel-pending-inputs-follow-up-changed
+  "mevedel-pending-inputs")
 (autoload 'mevedel-view--run-follow-up-drain "mevedel-pending-inputs")
 
 ;; `mevedel-plan'
@@ -427,7 +431,8 @@ transport rather than nesting inside a remote operation already in flight."
     (when (and (stringp steering) (not (string-blank-p steering)))
       (mevedel-session-enqueue-pending-input
        mevedel--session 'follow-up
-       (list :input (string-trim steering))))
+       (list :input (string-trim steering)))
+      (mevedel-pending-inputs-follow-up-changed mevedel--session))
     (mevedel-goal--persist mevedel--session (current-buffer))
     (mevedel-goal--schedule-continuation mevedel--session (current-buffer))
     goal))

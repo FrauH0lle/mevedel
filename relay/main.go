@@ -12,6 +12,7 @@
 //
 //	relay -> host:  {"t":"peer-joined","peer":N} / {"t":"peer-left","peer":N}
 //	relay -> guest: {"t":"room-closed"}
+//	host -> relay: Web Push subscription routing and empty wake requests
 //
 // Close codes: 4001 room closed, 4004 no such room, 4009 second host.
 //
@@ -24,6 +25,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -63,11 +65,18 @@ var roomIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{10,64}$`)
 // parameter: reverse proxies log query strings.
 const hostTokenHeader = "X-Mevedel-Host-Token"
 
+const viewerContentSecurityPolicy = "default-src 'none'; " +
+	"script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; " +
+	"connect-src 'self'; worker-src 'self'; manifest-src 'self'; " +
+	"object-src 'none'; frame-src 'none'; frame-ancestors 'none'; " +
+	"base-uri 'none'; form-action 'none'"
+
 type room struct {
-	host     *websocket.Conn
-	guests   map[uint32]*websocket.Conn
-	nextPeer uint32
-	created  time.Time
+	host          *websocket.Conn
+	guests        map[uint32]*websocket.Conn
+	subscriptions map[string]pushSubscription
+	nextPeer      uint32
+	created       time.Time
 }
 
 type relay struct {
@@ -79,13 +88,15 @@ type relay struct {
 	// header of a role=host upgrade. Guests stay tokenless: their authority
 	// is the bearer link, and their room carries only its host's ciphertext.
 	hostToken string
+	push      pushSender
 }
 
-func newRelay(maxRoomAge time.Duration, hostToken string) *relay {
+func newRelay(maxRoomAge time.Duration, hostToken string, push pushSender) *relay {
 	return &relay{
 		rooms:      make(map[string]*room),
 		maxRoomAge: maxRoomAge,
 		hostToken:  hostToken,
+		push:       push,
 	}
 }
 
@@ -114,10 +125,16 @@ func (rl *relay) mux() *http.ServeMux {
 	// cached viewer.js across relay upgrades and run stale client code.
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Content-Security-Policy", viewerContentSecurityPolicy)
 		files.ServeHTTP(w, r)
 	}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, "ok\n")
+	})
+	mux.HandleFunc("/push-key", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"key": rl.push.PublicKey()})
 	})
 	mux.HandleFunc("/r/", rl.handleRoom)
 	return mux
@@ -179,7 +196,10 @@ func (rl *relay) runHost(id string, c *websocket.Conn) {
 		c.Close(closeSecondHost, "a host is already connected for this room")
 		return
 	}
-	rm := &room{host: c, guests: make(map[uint32]*websocket.Conn), nextPeer: 1, created: time.Now()}
+	rm := &room{
+		host: c, guests: make(map[uint32]*websocket.Conn),
+		subscriptions: make(map[string]pushSubscription), nextPeer: 1, created: time.Now(),
+	}
 	rl.rooms[id] = rm
 	rl.mu.Unlock()
 	defer rl.closeRoom(id, rm)
@@ -187,6 +207,10 @@ func (rl *relay) runHost(id string, c *websocket.Conn) {
 		typ, data, err := c.Read(context.Background())
 		if err != nil {
 			return
+		}
+		if typ == websocket.MessageText {
+			rl.handleHostControl(id, rm, data)
+			continue
 		}
 		if typ != websocket.MessageBinary || len(data) < envelopeHeader {
 			continue
@@ -230,6 +254,13 @@ func (rl *relay) runGuest(id string, c *websocket.Conn) {
 		rl.mu.Lock()
 		_, live := rm.guests[peer]
 		delete(rm.guests, peer)
+		for guestID, subscription := range rm.subscriptions {
+			if subscription.peer == peer {
+				subscription.active = false
+				subscription.peer = 0
+				rm.subscriptions[guestID] = subscription
+			}
+		}
 		current := rl.rooms[id] == rm
 		rl.mu.Unlock()
 		if live && current {
@@ -301,9 +332,15 @@ func main() {
 	maxRoomAge := flag.Duration("max-room-age", 24*time.Hour,
 		"backstop: close rooms older than this")
 	hostToken := flag.String("host-token", "",
-		"require this token in "+hostTokenHeader+" to create a room")
+		"optional "+hostTokenHeader+" token for room creation")
+	vapidKeyFile := flag.String("vapid-key-file", "mevedel-relay-vapid.pem",
+		"persistent Web Push signing key")
 	flag.Parse()
-	rl := newRelay(*maxRoomAge, *hostToken)
+	push, err := loadOrCreateWebPushSender(newPushHTTPClient(), *vapidKeyFile)
+	if err != nil {
+		log.Fatalf("load Web Push key: %v", err)
+	}
+	rl := newRelay(*maxRoomAge, *hostToken, push)
 	go rl.sweepLoop()
 	log.Printf("mevedel relay listening on %s", *addr)
 	srv := &http.Server{

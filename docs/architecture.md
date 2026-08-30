@@ -17,17 +17,27 @@ flowchart TD
 
 The live browser collaboration slice is composed of the
 `mevedel-collaboration.el` room/public-command facade,
+`mevedel-collaboration-guest.el` untrusted guest protocol handler,
 `mevedel-collaboration-projection.el` canonical record projection, and
-`mevedel-collaboration-transport.el` sealed relay client. The host dials the
-self-hosted content-blind Go relay in `relay/` (which also serves the
-`relay/viewer/` HTML, CSS, and JavaScript assets); it never listens. Frames
-are AES-256-GCM sealed under a room key carried only in the bearer links'
-URL fragments; a full link additionally carries a write token granting
-prompting and interrupting. A relay run with `-host-token` additionally
-requires `mevedel-collaboration-relay-host-token` in a handshake header to
-create a room, which keeps strangers who find the endpoint from opening
-rooms; guests stay tokenless, their authority being the bearer link.
-Multiple guests may join; the transport
+`mevedel-collaboration-transport.el` sealed relay client. The focused
+`mevedel-collaboration-share.el` module presents bearer links and QR codes
+without exposing frame or share-buffer state to the room lifecycle. The host
+dials the self-hosted content-blind Go relay in `relay/` (which also serves
+the `relay/viewer/` HTML, CSS, and JavaScript assets); it never listens.
+Frames are AES-256-GCM sealed under a room key delivered in the bearer links'
+URL fragments. A notification-enabled viewer retains that bearer in browser
+local storage and registers a browser Web Push endpoint so an installed PWA
+can wake and reconnect. Push requests have empty bodies; only routing metadata
+is visible to the relay and browser push service. A full link additionally
+carries a write token granting prompting and interrupting. Public-facing
+relays may require `-host-token`; the host then sends the
+matching `mevedel-collaboration-relay-host-token` in a handshake header to
+create a room. Tokenless mode keeps localhost and test deployments simple.
+The authenticated mode keeps strangers who find a public endpoint from
+opening rooms or driving outbound Web Push; guests stay tokenless, their
+authority being the bearer link.
+Each shared session owns an independent room, and multiple guests may join;
+the transport
 reconnects with bounded backoff and guests re-hello for a fresh snapshot.
 Guest prompts enter the ordinary pending-input queue; a guest whose
 transcript filter names a directive sends into that directive's discussion,
@@ -36,6 +46,8 @@ count and their own place in line. Prompts may carry attachments -- images,
 PDFs, and text types on a fixed allowlist -- which are saved under the
 session media directory and mentioned as `@file` tokens with read grants,
 leaving Read to decide text or media.
+Full-link guests may also queue an invocation from the host-curated guest-skill
+roster, including arguments, while ordinary guest text remains skill-inert.
 It also has deterministic session/buffer/Emacs teardown. It is an observer
 only: its post-stream and post-response hooks are failure-isolated so
 projection or transport errors cannot settle a model request. Tool starts

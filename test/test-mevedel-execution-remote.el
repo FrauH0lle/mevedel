@@ -1163,10 +1163,14 @@ connection charges for, so the program path is proved here too."
          (original-set-unsettled
           (symbol-function 'mevedel-session-durability-set-unsettled-mutation))
          (refusals 0)
-         session result)
+         parent side result)
     (unwind-protect
         (mevedel-test--with-local-shell-tramp nil
-          (setq session (test-mevedel-execution--session remote-root))
+          (setq parent (test-mevedel-execution--session remote-root)
+                side (mevedel-session-create
+                      "side" (mevedel-session-workspace parent) remote-root))
+          (setf (mevedel-session-audit-session side) parent
+                (mevedel-session-sandbox-mode side) 'off)
           (cl-letf
               (((symbol-function
                  'mevedel-session-durability-set-unsettled-mutation)
@@ -1191,7 +1195,7 @@ connection charges for, so the program path is proved here too."
                            start end filename args)))))
             (setq result
                   (test-mevedel-execution--start-managed
-                   session remote-root '("sh" "-c" "printf output")
+                   side remote-root '("sh" "-c" "printf output")
                    :yield-time-ms nil))
             (should (= 1 refusals))
             (should
@@ -1200,14 +1204,16 @@ connection charges for, so the program path is proved here too."
             ;; The write is owed, not lost, and the target latch says so
             ;; until it lands.
             (should
-             (mevedel-session-durability-unsettled-mutation-p session))
-            (should (mevedel-execution-mutation-blocked-p session))
-            ;; The next decision point writes it with the connection free.
-            (should-not (mevedel-execution-mutation-refused-p session))
+             (mevedel-session-durability-unsettled-mutation-p parent))
+            (should (mevedel-execution-mutation-blocked-p parent))
+            ;; The parent decision point owns the shared mutation authority
+            ;; and writes the side conversation's settlement debt.
+            (should-not (mevedel-execution-mutation-refused-p parent))
             (should-not
-             (mevedel-session-durability-unsettled-mutation-p session))))
-      (when session
-        (mevedel-execution-teardown-session session))
+             (mevedel-session-durability-unsettled-mutation-p parent))))
+      (dolist (session (list side parent))
+        (when session
+          (mevedel-execution-teardown-session session)))
       (delete-directory root t))))
 
 

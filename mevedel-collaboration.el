@@ -2,9 +2,10 @@
 
 ;;; Commentary:
 
-;; Owns the process-wide room, public commands, guest authority, and gptel
-;; lifecycle hooks.  Canonical projection lives in the projection module;
-;; the sealed relay client lives in the transport module.
+;; Owns per-session rooms, publication, public commands, and gptel lifecycle
+;; hooks.  Canonical projection lives in the projection module; untrusted
+;; guest frames live in the guest module; the sealed relay client lives in
+;; the transport module.
 ;;
 ;; The host dials a self-hosted relay and never listens.  A share creates
 ;; one room with two bearer links: the view link carries the bare room key
@@ -19,19 +20,30 @@
   (require 'cl-lib))
 
 ;; `gptel'
+(defvar gptel-model)
 (defvar gptel-post-tool-call-functions)
 (defvar gptel-pre-tool-call-functions)
 
 ;; `mevedel-chat'
 (defvar mevedel-session-end-hook)
 
+;; `mevedel-collaboration-guest'
+(declare-function mevedel-collaboration--on-control
+                  "mevedel-collaboration-guest" (data-buffer event peer))
+(declare-function mevedel-collaboration--on-frame
+                  "mevedel-collaboration-guest" (data-buffer peer frame))
+(declare-function mevedel-collaboration--on-prompt-created
+                  "mevedel-collaboration-guest" (overlay))
+(declare-function mevedel-collaboration--on-prompt-settled
+                  "mevedel-collaboration-guest" (overlay))
+(declare-function mevedel-collaboration--on-state
+                  "mevedel-collaboration-guest" (data-buffer state))
+
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
                   "mevedel-collaboration-projection" (data-buffer))
 (declare-function mevedel-collaboration--json-record
                   "mevedel-collaboration-projection" (record))
-(declare-function mevedel-collaboration--json-string
-                  "mevedel-collaboration-projection" (object))
 (declare-function mevedel-collaboration--pending-tool-match
                   "mevedel-collaboration-projection" (info pending))
 (declare-function mevedel-collaboration--project-records
@@ -53,9 +65,16 @@
                   "mevedel-collaboration-projection" (records))
 (declare-function mevedel-collaboration--tool-result-fields
                   "mevedel-collaboration-projection" (result))
-(defvar mevedel-collaboration--protocol-version)
+
+;; `mevedel-collaboration-share'
+(declare-function mevedel-collaboration-share-dismiss
+                  "mevedel-collaboration-share" (room))
+(declare-function mevedel-collaboration-share-present
+                  "mevedel-collaboration-share" (room))
 
 ;; `mevedel-collaboration-transport'
+(declare-function mevedel-collaboration--transport-control
+                  "mevedel-collaboration-transport" (transport control))
 (declare-function mevedel-collaboration--transport-open
                   "mevedel-collaboration-transport" (url key &rest callbacks))
 (declare-function mevedel-collaboration--transport-open-p
@@ -64,18 +83,6 @@
                   "mevedel-collaboration-transport" (transport peer frame))
 (declare-function mevedel-collaboration--transport-stop
                   "mevedel-collaboration-transport" (transport))
-(defvar mevedel-collaboration--max-frame-json-bytes)
-(defvar mevedel-collaboration--max-message-bytes)
-
-;; `mevedel-interaction-prompt'
-(declare-function mevedel--prompt--settle
-                  "mevedel-interaction-prompt" (overlay outcome))
-
-;; `mevedel-pending-inputs'
-(declare-function mevedel-view-enqueue-external-follow-up
-                  "mevedel-pending-inputs"
-                  (data-buffer text &rest keys))
-(autoload 'mevedel-view-enqueue-external-follow-up "mevedel-pending-inputs")
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
@@ -89,44 +96,16 @@
 (autoload 'mevedel-plan-mode-active-p "mevedel-plan-mode")
 
 ;; `mevedel-structs'
-(declare-function mevedel-directive-id "mevedel-structs" (record))
 (declare-function mevedel-session-pending-follow-ups "mevedel-structs" (session))
-(declare-function mevedel-session-set-pending-inputs
-                  "mevedel-structs" (session category entries))
 (declare-function mevedel-session-pending-input-failure-paused
                   "mevedel-structs" (session))
 (declare-function mevedel-session-pending-input-paused
                   "mevedel-structs" (session))
 (declare-function mevedel-session-session-id "mevedel-structs" (session))
-(declare-function mevedel-session-workspace "mevedel-structs" (session))
-(declare-function mevedel-workspace-directives "mevedel-structs" (workspace))
+
+;; `mevedel-turn'
 (defvar mevedel--current-request)
-(defvar gptel-model)
 
-;; `mevedel-view'
-(declare-function mevedel-view--abort-data-buffer
-                  "mevedel-view" (data-buffer))
-(autoload 'mevedel-view--abort-data-buffer "mevedel-view")
-
-;; `mevedel-view-interaction'
-(declare-function mevedel-view--interaction-rebuild
-                  "mevedel-view-interaction" ())
-(autoload 'mevedel-view--interaction-rebuild "mevedel-view-interaction")
-
-;; `mevedel-view-composer'
-(declare-function mevedel-view-abort "mevedel-view-composer" ())
-(autoload 'mevedel-view-abort "mevedel-view-composer")
-
-;; `mevedel-view-input-files'
-(declare-function mevedel-view--media-dir "mevedel-view-input-files" ())
-(autoload 'mevedel-view--media-dir "mevedel-view-input-files")
-
-;; `mevedel-directive-frame'
-(defvar mevedel-directive-frame-border-width)
-
-;; `qrencode'
-(declare-function qrencode "ext:qrencode"
-                  (s &optional mode errcorr return-raw))
 
 ;;
 ;;; Customization and state
@@ -142,14 +121,14 @@ without a path, for example `wss://collab.example.net'."
   :group 'mevedel)
 
 (defcustom mevedel-collaboration-relay-host-token nil
-  "Token this host sends when creating a relay room, or nil for none.
+  "Token this host sends when creating a relay room.
 
-A relay started with `-host-token' refuses to create a room without
-it, which keeps strangers who discover the endpoint from opening rooms
-and holding idle connections on the operator's server.  Guests never
-send it: their authority is the bearer link.  It travels as a
-handshake header rather than a query parameter because reverse proxies
-log query strings."
+When the relay has `-host-token' configured, this value must match it.  Leave
+both unset for a tokenless localhost or test relay.  Public-facing relays
+should use a token to keep strangers from opening rooms, holding idle
+connections, or driving outbound Web Push.  Guests never send it: their
+authority is the bearer link.  It travels as a handshake header rather than a
+query parameter because reverse proxies log query strings."
   :type '(choice (const :tag "None" nil)
                  (string :tag "Token"))
   :group 'mevedel)
@@ -236,6 +215,7 @@ event (double click, stale viewer), not a second question.")
   "Live collaboration rooms, keyed by their owning data buffer.
 Each shared session has its own room, key, bearer links, TTL, and
 guest set; nothing about one room reaches another room's guests.")
+
 
 ;;
 ;;; Small data helpers
@@ -379,6 +359,7 @@ Signal `user-error' when the configured value is not a ws origin."
           (concat (if (equal (match-string 1 value) "wss") "https" "http")
                   "://" (match-string 2 value)))))
 
+
 ;;
 ;;; Guest registry
 
@@ -406,6 +387,7 @@ identity.  The id never enters model context or the transcript."
   (and (stringp value)
        (string-match-p "\\`[A-Za-z0-9_-]\\{8,64\\}\\'" value)
        value))
+
 
 ;;
 ;;; Room publication
@@ -574,10 +556,15 @@ the Emacs mode line carries."
 
 (defun mevedel-collaboration--publish-status (room)
   "Broadcast ROOM\='s session status to its guests when it has changed."
-  (let ((status (mevedel-collaboration--status-frame room)))
+  (let ((old (plist-get room :status))
+        (status (mevedel-collaboration--status-frame room)))
     (unless (equal status (plist-get room :status))
       (setq room (plist-put room :status status))
-      (mevedel-collaboration--broadcast room status))))
+      (mevedel-collaboration--broadcast room status)
+      (when (and (eq t (plist-get old :busy))
+                 (eq :json-false (plist-get status :busy)))
+        (mevedel-collaboration--transport-control
+         (plist-get room :transport) (list :t "push"))))))
 
 (defun mevedel-collaboration--publish-timer (data-buffer)
   "Run the coalesced publication timer for DATA-BUFFER's room."
@@ -605,631 +592,6 @@ request or prompt transaction."
                                   #'mevedel-collaboration--publish-timer
                                   (plist-get room :data-buffer))))))
 
-;;
-;;; Snapshot delivery
-
-(defun mevedel-collaboration--snapshot-frame-overhead ()
-  "Return the encoded bytes a snapshot frame costs before its records.
-Measured with an empty record array and the longer `final' spelling, so a
-chunk that turns out not to be the last one cannot overflow.  A JSON array
-adds one separator per record after the first, which is what the record
-sizes alone never accounted for."
-  (string-bytes
-   (mevedel-collaboration--json-string
-    (list :t "snapshot-chunk"
-          :records (vconcat nil)
-          :final :json-false))))
-
-(defun mevedel-collaboration--snapshot-chunks (records)
-  "Split RECORDS into lists of JSON records each under the wire bound.
-The bound belongs to the frame that goes on the wire, not to the records
-in it.  A record too large to travel in a frame of its own is dropped:
-emitting a frame the relay must refuse costs the host connection, and the
-relay collects the room with it, so one oversized record would end the
-session for every guest."
-  (let* ((overhead (mevedel-collaboration--snapshot-frame-overhead))
-         (limit mevedel-collaboration--max-frame-json-bytes)
-         chunks current (size 0))
-    (dolist (record records)
-      (let* ((json (mevedel-collaboration--json-record record))
-             (bytes (string-bytes
-                     (mevedel-collaboration--json-string json))))
-        (unless (> (+ overhead bytes) limit)
-          ;; One separator for every record after the first in the chunk.
-          (when (and current
-                     (> (+ overhead size 1 bytes) limit))
-            (push (nreverse current) chunks)
-            (setq current nil size 0))
-          (push json current)
-          (setq size (+ size bytes (if (cdr current) 1 0))))))
-    (when current
-      (push (nreverse current) chunks))
-    (nreverse chunks)))
-
-(defconst mevedel-collaboration--command-hints
-  '(("plan" . "[prompt]")
-    ("goal" . "[objective]")
-    ("compact" . "[instructions]")
-    ("stop" . "[execution]"))
-  "Argument hints for the local slash commands a guest may invoke.
-Only commands whose arguments a guest can meaningfully supply appear;
-anything absent is offered as an argument-less button.")
-
-(defun mevedel-collaboration--guest-invocable-p (name)
-  "Return non-nil when NAME may be invoked by a guest at all."
-  (and (stringp name)
-       (member name mevedel-collaboration-guest-skills)
-       (not (member name mevedel-collaboration-unsafe-guest-commands))))
-
-(defun mevedel-collaboration--guest-roster (room)
-  "Return ROOM's allowlisted invocations as JSON-safe descriptors.
-
-Each entry carries the name, which namespace it belongs to, and its
-argument hint, because a guest button has to render the right sigil and
-say whether the invocation wants arguments.  A name that resolves to
-neither namespace is dropped rather than offered as a button that
-cannot work."
-  (when-let* ((data-buffer (mevedel-collaboration--room-data-buffer room))
-              (view-buffer (buffer-local-value 'mevedel--view-buffer
-                                               data-buffer))
-              ((buffer-live-p view-buffer)))
-    (with-current-buffer view-buffer
-      (let ((session (plist-get room :session))
-            roster)
-        (dolist (name mevedel-collaboration-guest-skills)
-          (when (mevedel-collaboration--guest-invocable-p name)
-            (when-let* ((kind (mevedel-view-invocation-kind name session)))
-              (push (append
-                     (list (cons "name" name)
-                           (cons "kind" (symbol-name kind)))
-                     (when-let* ((hint (mevedel-collaboration--invocation-hint
-                                        name kind session)))
-                       (list (cons "hint" hint))))
-                    roster))))
-        (nreverse roster)))))
-
-(defun mevedel-collaboration--invocation-hint (name kind session)
-  "Return the argument hint for invocation NAME of KIND, or nil."
-  (pcase kind
-    ('skill
-     (when-let* ((skill (cl-find name
-                                 (mevedel-skills-user-visible-skills session)
-                                 :key #'mevedel-skill-name :test #'equal)))
-       (mevedel-skill-argument-hint skill)))
-    ('command
-     (cdr (assoc name mevedel-collaboration--command-hints)))))
-
-(defun mevedel-collaboration--send-snapshot (room peer)
-  "Send ROOM's welcome and chunked snapshot to guest PEER."
-  (let* ((transport (plist-get room :transport))
-         (guest (mevedel-collaboration--guest room peer))
-         (records (plist-get room :records))
-         (chunks (or (mevedel-collaboration--snapshot-chunks records)
-                     (list nil))))
-    (mevedel-collaboration--transport-send
-     transport peer
-     (append
-      (list :t "welcome"
-            :proto mevedel-collaboration--protocol-version
-            :readOnly (if (plist-get guest :writable) :json-false t)
-            ;; Count what is actually sent: a record too large for a frame of
-            ;; its own is dropped, and promising it would leave the guest
-            ;; waiting for a chunk that never arrives.
-            :recordCount (apply #'+ (mapcar #'length chunks)))
-      ;; The host-curated roster is the guest's whole discovery
-      ;; surface; a view link gets none, having no way to use it.
-      (when-let* (((plist-get guest :writable))
-                  (roster (mevedel-collaboration--guest-roster room)))
-        (list :commands (vconcat roster)))))
-    (cl-loop for rest on chunks do
-             (mevedel-collaboration--transport-send
-              transport peer
-              (list :t "snapshot-chunk"
-                    :records (vconcat (car rest))
-                    :final (if (cdr rest) :json-false t))))))
-
-;;
-;;; Remote interactions
-
-(defvar mevedel-collaboration--ui-request-counter 0
-  "Monotonic id source for ui-request frames within this Emacs process.")
-
-(defvar mevedel-collaboration-remote-guest nil
-  "Display name of the guest whose answer is being applied, or nil.
-Bound around a ui-response handler so downstream effects -- such as a
-plan revision request queued by remote feedback -- can attribute their
-output to the answering guest.")
-
-(defun mevedel-collaboration--writable-peers (room)
-  "Return the peer ids of ROOM's writable guests."
-  (let (peers)
-    (maphash (lambda (peer guest)
-               (when (plist-get guest :writable)
-                 (push peer peers)))
-             (plist-get room :guests))
-    (nreverse peers)))
-
-(defun mevedel-collaboration--ui-request-frame (request-id overlay)
-  "Return the ui-request frame for OVERLAY under REQUEST-ID."
-  (let ((remote (overlay-get overlay 'mevedel--remote)))
-    (append
-     (list :t "ui-request"
-           :reqId request-id
-           :body (or (plist-get remote :body) "")
-           :bodyKind (or (plist-get remote :body-kind) "text")
-           :options
-           (vconcat
-            (cl-loop for (_outcome . label) in (plist-get remote :options)
-                     for index from 0
-                     collect `(("id" . ,index) ("label" . ,label))))
-           :allowFeedback
-           (if (plist-get remote :feedback) t :json-false))
-     ;; A cancel handler settles just this interaction -- for the Ask
-     ;; questionnaire, the run continues -- so the guest gets a Dismiss.
-     (when (plist-get remote :cancel)
-       (list :allowCancel t))
-     ;; A questionnaire travels structurally; the guest answers all
-     ;; questions atomically through the :answers response field.
-     (when-let* ((questions (plist-get remote :questions)))
-       (list :questions (vconcat (funcall questions)))))))
-
-(defun mevedel-collaboration--on-prompt-created (overlay)
-  "Present prompt OVERLAY to the active room's writable guests.
-
-A re-render of the same interaction -- the permission queue redraws its
-head on every selection change -- reuses the existing request id, so a
-guest sees one card updated in place instead of an accumulating pile."
-  (when-let* ((room (mevedel-collaboration--room-for-overlay overlay))
-              (remote (overlay-get overlay 'mevedel--remote)))
-    (when mevedel-collaboration-remote-interactions
-      (let* ((requests (plist-get room :ui-requests))
-             (interaction-id
-              (overlay-get overlay 'mevedel-view-interaction-id))
-             (request-id
-              (or (and interaction-id
-                       (catch 'found
-                         (maphash
-                          (lambda (id tracked)
-                            (when (and (overlayp tracked)
-                                       (equal interaction-id
-                                              (overlay-get
-                                               tracked
-                                               'mevedel-view-interaction-id)))
-                              (throw 'found id)))
-                          requests)
-                         nil))
-                  (cl-incf mevedel-collaboration--ui-request-counter))))
-        (puthash request-id overlay requests)
-        (let ((frame (mevedel-collaboration--ui-request-frame
-                      request-id overlay)))
-          (dolist (peer (mevedel-collaboration--writable-peers room))
-            (mevedel-collaboration--transport-send
-             (plist-get room :transport) peer frame)))))))
-
-(defun mevedel-collaboration--on-prompt-settled (overlay)
-  "Dismiss OVERLAY's ui-request from every guest surface.
-Every room is searched rather than the overlay's buffer resolved: a
-settled overlay may already be deleted, and a deleted overlay no longer
-knows where it lived."
-  (dolist (room (mevedel-collaboration--room-list))
-    (let ((requests (plist-get room :ui-requests)))
-      (maphash
-       (lambda (request-id tracked)
-         (when (eq tracked overlay)
-           (remhash request-id requests)
-           (dolist (peer (mevedel-collaboration--writable-peers room))
-             (mevedel-collaboration--transport-send
-              (plist-get room :transport) peer
-              (list :t "ui-request-end" :reqId request-id)))))
-       requests))))
-
-(defun mevedel-collaboration--send-ui-requests (room peer)
-  "Send ROOM's active ui-requests to writable guest PEER."
-  (let ((requests (plist-get room :ui-requests))
-        ids)
-    (maphash (lambda (request-id _overlay) (push request-id ids)) requests)
-    (dolist (request-id (sort ids #'<))
-      (mevedel-collaboration--transport-send
-       (plist-get room :transport) peer
-       (mevedel-collaboration--ui-request-frame
-        request-id (gethash request-id requests))))))
-
-(defun mevedel-collaboration--guest-text (value)
-  "Return VALUE trimmed when it is text this host may act on, else nil.
-A guest is untrusted, and every string one sends -- a prompt, a
-questionnaire answer, interaction feedback -- reaches model-visible
-context and the transcript the same way, so one budget covers them all."
-  (and (stringp value)
-       (<= (string-bytes value) mevedel-collaboration--max-prompt-bytes)
-       (let ((trimmed (string-trim value)))
-         (and (not (string-empty-p trimmed)) trimmed))))
-
-(defun mevedel-collaboration--handle-ui-response (room peer frame)
-  "Settle the ui-request answered by writable guest PEER through FRAME.
-
-The first answer -- from Emacs or any guest -- wins; the shared settle
-already guards exactly-once, and a request no longer in the registry is
-ignored silently.  A function option runs in the prompt's buffer so an
-answer can execute the same path the host key binding would."
-  (let ((guest (mevedel-collaboration--guest room peer))
-        (request-id (plist-get frame :reqId)))
-    (when (and guest
-               (plist-get guest :writable)
-               mevedel-collaboration-remote-interactions
-               (integerp request-id))
-      (when-let* ((overlay (gethash request-id (plist-get room :ui-requests))))
-        (let* ((remote (overlay-get overlay 'mevedel--remote))
-               (options (plist-get remote :options))
-               (feedback (plist-get frame :feedback))
-               (option (plist-get frame :option))
-               (answers (plist-get frame :answers))
-               (feedback-handler (plist-get remote :feedback))
-               (answer-handler (plist-get remote :answer))
-               (cancel-handler (plist-get remote :cancel))
-               (outcome
-                (cond
-                 ;; A cancel settles just this interaction through the
-                 ;; handler the prompt offered; nothing else is touched.
-                 ((and (eq (plist-get frame :cancel) t)
-                       (functionp cancel-handler))
-                  cancel-handler)
-                 ;; A complete questionnaire response: every answer a
-                 ;; nonblank string, submitted atomically.
-                 ((and answers
-                       (functionp answer-handler)
-                       (listp answers)
-                       (let ((trimmed
-                              (mapcar #'mevedel-collaboration--guest-text
-                                      answers)))
-                         (and (not (memq nil trimmed))
-                              ;; Every answer lands in one tool result, so
-                              ;; the set shares the budget its parts pass.
-                              (<= (apply #'+ (mapcar #'string-bytes trimmed))
-                                  mevedel-collaboration--max-prompt-bytes)
-                              (lambda ()
-                                (funcall answer-handler trimmed))))))
-                 ((and feedback-handler
-                       (mevedel-collaboration--guest-text feedback))
-                  ;; A function handler owns the whole feedback flow, for
-                  ;; prompts whose feedback is not a plain settle outcome.
-                  (let ((text (mevedel-collaboration--guest-text feedback)))
-                    (if (functionp feedback-handler)
-                        (lambda () (funcall feedback-handler text))
-                      (cons 'feedback text))))
-                 ((and (integerp option) (nth option options))
-                  (car (nth option options))))))
-          (when (and outcome (buffer-live-p (overlay-buffer overlay)))
-            (message "mevedel: interaction answered by guest %s"
-                     (plist-get guest :name))
-            (with-current-buffer (overlay-buffer overlay)
-              (let ((mevedel-collaboration-remote-guest
-                     (plist-get guest :name)))
-                (condition-case err
-                    (if (functionp outcome)
-                        (funcall outcome)
-                      (mevedel--prompt--settle overlay outcome))
-                  (user-error
-                   (message "mevedel: remote answer rejected: %s"
-                            (error-message-string err))))))))))))
-
-;;
-;;; Inbound guest frames
-
-(defun mevedel-collaboration--handle-hello (room peer frame)
-  "Register guest PEER from its hello FRAME and send the snapshot."
-  (let ((proto (plist-get frame :proto)))
-    (if (not (equal proto mevedel-collaboration--protocol-version))
-        (mevedel-collaboration--transport-send
-         (plist-get room :transport) peer
-         (list :t "error"
-               :message (format "protocol mismatch: host speaks %d"
-                                mevedel-collaboration--protocol-version)))
-      (let* ((name (mevedel-collaboration--sanitize-guest-name
-                    (plist-get frame :name)))
-             (claimed (mevedel-collaboration--base64url-decode
-                       (plist-get frame :writeToken)))
-             (writable (and claimed
-                            (equal claimed (plist-get room :write-token))))
-             (guest (list :name name :writable writable :ready t
-                          :guest-id (mevedel-collaboration--sanitize-guest-id
-                                     (plist-get frame :guestId)))))
-        (puthash peer guest (plist-get room :guests))
-        (mevedel-collaboration--send-snapshot room peer)
-        ;; Queue and busy state travel only on change, so a joining
-        ;; guest is told the current ones directly.
-        (mevedel-collaboration--send-queue-state room peer guest t)
-        (mevedel-collaboration--transport-send
-         (plist-get room :transport) peer
-         (mevedel-collaboration--status-frame room))
-        (when (and writable mevedel-collaboration-remote-interactions)
-          (mevedel-collaboration--send-ui-requests room peer))))))
-
-(cl-defun mevedel-collaboration--handle-prompt (room peer frame)
-  "Queue the prompt in FRAME from writable guest PEER as a follow-up.
-
-The prompt enters the ordinary pending-input queue: delivered when the
-session is idle, queued behind a running request, paused while the
-Pending Inputs cockpit is open.  The guest name is attribution only and
-never enters model-visible context.
-
-FRAME may carry an `:invoke\=' naming an allowlisted command or skill,
-in which case the text is that invocation\='s arguments rather than a
-prompt.  The name travels as its own field and is validated here: guest
-text is never scanned for a sigil, so a pasted log line cannot invoke
-anything."
-  (let* ((guest (mevedel-collaboration--guest room peer))
-         (invoke (plist-get frame :invoke))
-         (text (plist-get frame :text)))
-    (when (and invoke
-               (not (mevedel-collaboration--guest-invocable-p invoke)))
-      (cl-return-from mevedel-collaboration--handle-prompt))
-    (when (and guest
-               (plist-get guest :writable)
-               ;; An invocation may carry no arguments at all; a plain
-               ;; prompt still has to say something.
-               (or (and invoke (or (null text) (stringp text)))
-                   (mevedel-collaboration--guest-text text)))
-      ;; The prompt frame may carry a fresher display name than the hello
-      ;; did; the badge should show what the guest typed.
-      (when (stringp (plist-get frame :name))
-        (plist-put guest :name (mevedel-collaboration--sanitize-guest-name
-                                (plist-get frame :name))))
-      ;; Drop a byte-identical repeat inside the duplicate window: a
-      ;; double-fired client submit, not a second question.  Prompts
-      ;; carrying attachments are never deduplicated -- consecutive
-      ;; sends legitimately reuse the same placeholder text.
-      (let ((last (plist-get guest :last-prompt))
-            ;; An invocation and a prompt with the same text are
-            ;; different sends, so the latch keys on both.
-            (dedup-key (if invoke (format "%s\0%s" invoke (or text "")) text))
-            (now (float-time)))
-        (when (and last
-                   (not (plist-get frame :images))
-                   (equal (car last) dedup-key)
-                   (< (- now (cdr last))
-                      mevedel-collaboration--duplicate-prompt-window))
-          (cl-return-from mevedel-collaboration--handle-prompt))
-        (let* ((data-buffer (mevedel-collaboration--room-data-buffer room))
-               (view-buffer (and data-buffer
-                                 (buffer-local-value 'mevedel--view-buffer
-                                                     data-buffer))))
-          (when (buffer-live-p view-buffer)
-            ;; Attachments ride the same pipeline as clipboard images
-            ;; pasted in Emacs: saved under the session media directory,
-            ;; then mentioned and read-granted by the queue seam.  Read
-            ;; decides text or media from the extension, so nothing here
-            ;; has to.
-            ;; Both are durable, and the queue seam still refuses a prompt
-            ;; whose session view is not live, so neither outlives a prompt
-            ;; that was not queued.
-            (let ((paths
-                   (condition-case err
-                       (with-current-buffer view-buffer
-                         (mevedel-collaboration--save-guest-attachments
-                          (plist-get frame :images)))
-                     (error
-                      ;; A failed media write is this prompt's problem, not
-                      ;; the room's: letting it reach the frame handler
-                      ;; tears the session down for every guest.
-                      (display-warning
-                       'mevedel
-                       (format "Guest attachment could not be saved: %s"
-                               (error-message-string err))
-                       :warning)
-                      (cl-return-from
-                          mevedel-collaboration--handle-prompt))))
-                  (queued nil))
-              ;; Latch before the enqueue, which redraws and can therefore
-              ;; re-enter, and give the latch back when nothing was queued.
-              (plist-put guest :last-prompt (cons dedup-key now))
-              (unwind-protect
-                  (progn
-                    (setq queued
-                          (mevedel-view-enqueue-external-follow-up
-                           data-buffer (or text "")
-                           :guest-name (plist-get guest :name)
-                           :guest-id (plist-get guest :guest-id)
-                           :paths paths
-                           :invoke invoke
-                           :directive-id
-                           (unless invoke
-                             (mevedel-collaboration--guest-directive-id
-                              room frame))))
-                    (when queued
-                      (mevedel-collaboration--transport-send
-                       (plist-get room :transport) peer
-                       (append
-                        (list :t "queued")
-                        (when-let* ((id (plist-get queued :id)))
-                          (list :id id))
-                        (when-let* ((position
-                                     (mevedel-collaboration--queue-position
-                                      room queued)))
-                          (list :position position))))
-                      ;; The periodic publish only runs while a request
-                      ;; streams, so an idle session would leave every
-                      ;; other guest's count stale until one starts.
-                      (mevedel-collaboration--publish-queue room)))
-                (unless queued
-                  (plist-put guest :last-prompt nil)
-                  (dolist (path paths)
-                    (when (file-exists-p path)
-                      (ignore-errors (delete-file path)))))))))))))
-
-(defun mevedel-collaboration--guest-directive-id (room frame)
-  "Return the directive id FRAME asks ROOM to scope its prompt to, or nil.
-
-The viewer sends the id its transcript filter is showing.  An id for a
-directive the workspace no longer has yields nil, so a stale filter
-sends to main chat instead of failing the prompt."
-  (when-let* ((id (plist-get frame :directive))
-              ((stringp id))
-              (session (plist-get room :session))
-              (workspace (mevedel-session-workspace session))
-              ((cl-find id (mevedel-workspace-directives workspace)
-                        :key #'mevedel-directive-id :test #'equal)))
-    id))
-
-(defun mevedel-collaboration--save-guest-attachments (images)
-  "Save valid guest attachments IMAGES under the session media directory.
-IMAGES is the decoded frame list of (:mime STRING :data BASE64) plists.
-Return the saved absolute paths.  Runs in the view buffer.  Anything
-invalid -- unknown type, undecodable data, or a set over the byte
-budget -- drops the whole set rather than attaching a partial one."
-  (when (and images (listp images)
-             (<= (length images)
-                 mevedel-collaboration--max-prompt-attachments))
-    (catch 'invalid
-      (let ((total 0)
-            (decoded nil))
-        (dolist (image images)
-          (let* ((extension (cdr (assoc (plist-get image :mime)
-                                        mevedel-collaboration--attachment-extensions)))
-                 (bytes (and extension
-                             (stringp (plist-get image :data))
-                             (condition-case nil
-                                 (base64-decode-string
-                                  (plist-get image :data))
-                               (error nil)))))
-            (unless (and bytes (> (length bytes) 0))
-              (throw 'invalid nil))
-            (cl-incf total (length bytes))
-            (when (> total mevedel-collaboration--max-attachment-bytes)
-              (throw 'invalid nil))
-            (push (cons extension bytes) decoded)))
-        (let ((dir (mevedel-view--media-dir))
-              (stamp (format-time-string "%Y%m%d-%H%M%S"))
-              (n 0)
-              (complete nil)
-              paths)
-          (unwind-protect
-              (progn
-                (dolist (entry (nreverse decoded))
-                  (let ((path nil))
-                    ;; `excl' makes the name its own claim: testing first and
-                    ;; writing after leaves a window another writer can take,
-                    ;; and remote media I/O can yield inside it.
-                    (while (null path)
-                      (let ((candidate
-                             (file-name-concat
-                              dir (format "guest-%s-%d.%s" stamp
-                                          (cl-incf n) (car entry))))
-                            (coding-system-for-write 'binary))
-                        (condition-case nil
-                            (progn
-                              (write-region (cdr entry) nil candidate nil
-                                            'silent nil 'excl)
-                              (setq path candidate))
-                          (file-already-exists nil))))
-                    (push path paths)))
-                (setq complete t)
-                (nreverse paths))
-            ;; A set is attached whole or not at all, so a set that failed
-            ;; part way through takes its own files with it.
-            (unless complete
-              (dolist (path paths)
-                (when (file-exists-p path)
-                  (ignore-errors (delete-file path)))))))))))
-
-(defun mevedel-collaboration--handle-retract (room peer frame)
-  "Remove the pending entry FRAME names when guest PEER queued it.
-
-Authority is per entry: the id must belong to an entry this guest's
-stable id queued, so no guest can delete another guest's or the host's
-pending input.  The entry's attachment files leave with it, mirroring
-the failed-enqueue cleanup."
-  (let ((guest (mevedel-collaboration--guest room peer))
-        (id (plist-get frame :id)))
-    (when (and guest
-               (plist-get guest :writable)
-               (plist-get guest :guest-id)
-               (integerp id))
-      (when-let* ((session (plist-get room :session))
-                  (entries (mevedel-session-pending-follow-ups session))
-                  (entry (cl-find-if
-                          (lambda (candidate)
-                            (and (equal id (plist-get candidate :id))
-                                 (equal (plist-get guest :guest-id)
-                                        (plist-get candidate :guest-id))
-                                 ;; The drain is delivering it: the files
-                                 ;; are about to be read mid-turn, so it
-                                 ;; is no longer the guest's to take back.
-                                 (not (plist-get candidate :delivering))))
-                          entries)))
-        (mevedel-session-set-pending-inputs
-         session 'follow-up (delq entry entries))
-        (dolist (path (plist-get entry :guest-paths))
-          (when (file-exists-p path)
-            (ignore-errors (delete-file path))))
-        (when-let* ((data-buffer (mevedel-collaboration--room-data-buffer
-                                  room))
-                    (view-buffer (buffer-local-value 'mevedel--view-buffer
-                                                     data-buffer))
-                    ((buffer-live-p view-buffer)))
-          (with-current-buffer view-buffer
-            (mevedel-view--interaction-rebuild)))
-        (mevedel-collaboration--publish-queue room)))))
-
-(defun mevedel-collaboration--handle-abort (room peer)
-  "Abort the running request for writable guest PEER."
-  (let ((guest (mevedel-collaboration--guest room peer)))
-    (when (and guest (plist-get guest :writable))
-      (when-let* ((data-buffer (mevedel-collaboration--room-data-buffer room)))
-        (let ((view-buffer
-               (buffer-local-value 'mevedel--view-buffer data-buffer)))
-          (if (buffer-live-p view-buffer)
-              (with-current-buffer view-buffer
-                (mevedel-view-abort))
-            (mevedel-view--abort-data-buffer data-buffer)))))))
-
-(defun mevedel-collaboration--on-frame (data-buffer peer frame)
-  "Dispatch decoded guest FRAME from PEER for DATA-BUFFER's room.
-
-Failure isolation mirrors the gptel observers: a fault in guest input
-handling stops the room instead of leaking into the session."
-  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (condition-case nil
-        (pcase (plist-get frame :t)
-          ("hello" (mevedel-collaboration--handle-hello room peer frame))
-          ("prompt" (mevedel-collaboration--handle-prompt room peer frame))
-          ("abort" (mevedel-collaboration--handle-abort room peer))
-          ("retract" (mevedel-collaboration--handle-retract room peer frame))
-          ("ui-response"
-           (mevedel-collaboration--handle-ui-response room peer frame)))
-      (error (mevedel-collaboration--observer-failure room)))))
-
-(defun mevedel-collaboration--on-control (data-buffer event peer)
-  "Handle relay control EVENT for PEER in DATA-BUFFER's room."
-  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (pcase event
-      ;; A joined peer becomes a guest only through its hello frame.
-      ('peer-joined nil)
-      ('peer-left (remhash peer (plist-get room :guests))))))
-
-(defun mevedel-collaboration--on-state (data-buffer state)
-  "Track relay transport STATE for DATA-BUFFER's room."
-  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (pcase state
-      ;; The relay garbage-collects the room with the host connection, so
-      ;; a drop invalidated every guest; they rejoin and re-hello against
-      ;; the re-created room.
-      ('down
-       (clrhash (plist-get room :guests))
-       ;; The links and QR are handed out before the async dial settles.
-       ;; A dial that has never succeeded -- wrong relay URL, missing or
-       ;; stale host token answered 404 -- would otherwise retry forever
-       ;; with the user none the wiser that the share is dead.
-       (unless (or (plist-get room :was-open)
-                   (plist-get room :dial-warned))
-         (setq room (plist-put room :dial-warned t))
-         (display-warning
-          'mevedel
-          (concat "Collaboration relay dial failing; the share is not "
-                  "live. Check `mevedel-collaboration-relay-url' and "
-                  "`mevedel-collaboration-relay-host-token'.")
-          :warning)))
-      ('open (setq room (plist-put room :was-open t)))
-      ('stopped nil))))
 
 ;;
 ;;; Room lifecycle
@@ -1242,6 +604,9 @@ handling stops the room instead of leaking into the session."
     ;; Clear the authority before any teardown operation can signal.  The
     ;; local ROOM still supplies the transport and timers to close below.
     (remhash (plist-get room :data-buffer) mevedel-collaboration--rooms)
+    (condition-case nil
+        (mevedel-collaboration-share-dismiss room)
+      (error nil))
     ;; The global hooks serve every room; they leave with the last one.
     (when (zerop (hash-table-count mevedel-collaboration--rooms))
       (remove-hook 'kill-emacs-hook #'mevedel-collaboration--stop-for-emacs)
@@ -1301,6 +666,7 @@ establishes; a plain `defun' would signal `no-catch' instead of
 returning the live room."
   (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
     (cl-return-from mevedel-collaboration--start room))
+  (require 'mevedel-collaboration-guest)
   (pcase-let* ((`(,ws-origin . ,web-origin)
                 (mevedel-collaboration--relay-origins))
                (room-id (mevedel-collaboration--base64url
@@ -1351,6 +717,7 @@ returning the live room."
                         :tool-call-occurrences
                         (make-hash-table :test #'equal)
                         :guests (make-hash-table :test #'eql)
+                        :push-guests (make-hash-table :test #'equal)
                         :ui-requests (make-hash-table :test #'eql)
                         :publish-timer nil
                         :ttl-timer
@@ -1386,230 +753,11 @@ returning the live room."
            (error nil))
          (signal (car error-data) (cdr error-data)))))))
 
-;;
-;;; Share surface
-
-(defface mevedel-collaboration-share-border
-  '((t :inherit mevedel-directive-frame-border))
-  "Border colour of the share child frame.
-The share panel borrows the directive frame\='s border so both float
-above the session with the same weight."
-  :group 'mevedel)
-
-(defvar mevedel-collaboration--share-frame nil
-  "Live share child frame, or nil.")
-
-(defvar-local mevedel-collaboration--share-room nil
-  "Room whose bearer links this share buffer presents.")
-
-(defvar-local mevedel-collaboration--share-which 'view
-  "Which link's QR the share buffer shows: `view' or `full'.")
-
-(defun mevedel-collaboration--share-content (room which)
-  "Return the share buffer text for ROOM showing WHICH link's QR.
-
-WHICH is `view' or `full'.  One QR at a time, the view link by
-default: two codes side by side is how a colleague scans the wrong one
-and walks away with write authority."
-  (let* ((full (eq which 'full))
-         (link (plist-get room (if full :link-full :link-view)))
-         ;; The QR is the convenience; the link beneath it is the
-         ;; payload.  An encoder that is missing or signals must cost
-         ;; the code, never the share.
-         (code (condition-case error-data
-                   (progn (require 'qrencode)
-                          (propertize (qrencode link) 'face '(:height 1.6)))
-                 (error
-                  (propertize
-                   (format "QR unavailable (%s); copy the link below."
-                           (error-message-string error-data))
-                   'face 'shadow)))))
-    (concat
-     (propertize (format "Share: %s\n" (plist-get room :session-label))
-                 'face 'bold)
-     (if full
-         (propertize
-          "FULL CONTROL link — grants prompting, interrupting, answering\n"
-          'face 'error)
-       (propertize "View link — read-only\n" 'face 'success))
-     "\n"
-     ;; Scaled so a phone camera resolves the half-block modules from a
-     ;; normal viewing distance.
-     code
-     "\n\n"
-     link
-     "\n\n"
-     (propertize
-      (concat "TAB show " (if full "view" "full control") " QR"
-              "  ·  c copy view  ·  f copy full  ·  q close\n"
-              "Links are bearer credentials; treat them like secrets.")
-      'face 'shadow))))
-
-(defun mevedel-collaboration--share-render ()
-  "Repaint the current share buffer from its room and selection."
-  (let ((inhibit-read-only t))
-    (erase-buffer)
-    (insert (mevedel-collaboration--share-content
-             mevedel-collaboration--share-room
-             mevedel-collaboration--share-which))
-    (goto-char (point-min))))
-
-(defun mevedel-collaboration-share-toggle ()
-  "Show the other bearer link's QR."
-  (interactive)
-  (setq mevedel-collaboration--share-which
-        (if (eq mevedel-collaboration--share-which 'full) 'view 'full))
-  (mevedel-collaboration--share-render))
-
-(defun mevedel-collaboration-share-copy-view ()
-  "Copy the view link to the kill ring."
-  (interactive)
-  (kill-new (plist-get mevedel-collaboration--share-room :link-view))
-  (message "mevedel: view link copied"))
-
-(defun mevedel-collaboration-share-copy-full ()
-  "Copy the full-control link to the kill ring."
-  (interactive)
-  (kill-new (plist-get mevedel-collaboration--share-room :link-full))
-  (message "mevedel: full-control link copied"))
-
-(defun mevedel-collaboration-share-quit ()
-  "Close the share surface."
-  (interactive)
-  (let ((frame mevedel-collaboration--share-frame))
-    (setq mevedel-collaboration--share-frame nil)
-    (cond
-     ((frame-parent (selected-frame)) (delete-frame))
-     ((frame-live-p frame) (delete-frame frame))
-     (t (quit-window t)))))
-
-(defvar-keymap mevedel-collaboration--share-map
-  :doc "Keys available in the collaboration share buffer."
-  "TAB" #'mevedel-collaboration-share-toggle
-  "<tab>" #'mevedel-collaboration-share-toggle
-  "c" #'mevedel-collaboration-share-copy-view
-  "f" #'mevedel-collaboration-share-copy-full
-  "q" #'mevedel-collaboration-share-quit)
-
-(defconst mevedel-collaboration--share-frame-parameters
-  '((min-width . t)
-    (min-height . t)
-    (border-width . 0)
-    (outer-border-width . 0)
-    (vertical-scroll-bars . nil)
-    (horizontal-scroll-bars . nil)
-    (menu-bar-lines . 0)
-    (tool-bar-lines . 0)
-    (tab-bar-lines . 0)
-    ;; Without this `tab-bar-mode' puts its bar back on every new
-    ;; frame, which is why the panel grew a tab strip the directive
-    ;; frame never shows.
-    (tab-bar-lines-keep-state . t)
-    (no-other-frame . t)
-    (unsplittable . t)
-    (undecorated . t)
-    (fullscreen . nil)
-    (no-special-glyphs . t)
-    (desktop-dont-save . t))
-  "Child frame parameters for the share surface.
-The same shape the directive frame uses: a bordered panel that accepts
-focus, with none of the chrome a real frame carries.")
-
-(defun mevedel-collaboration--fit-share-frame (frame parent)
-  "Size FRAME to its buffer in pixels, bounded by PARENT.
-
-`fit-frame-to-buffer\=' works in canonical character heights, and the QR
-is scaled well above one: the rounding loses part of a line and clips
-the key legend off the bottom.  Pixels are what the content actually
-occupies."
-  (let* ((window (frame-root-window frame))
-         (border (* 2 (or (frame-parameter frame 'internal-border-width) 0)))
-         (max-width (max 200 (- (frame-pixel-width parent) 80)))
-         (max-height (max 200 (- (frame-pixel-height parent) 80)))
-         (size (window-text-pixel-size window nil nil max-width max-height)))
-    (set-frame-size frame
-                    (min max-width (+ (car size) border))
-                    (min max-height (+ (cdr size) border))
-                    t)))
-
-(defun mevedel-collaboration--center-frame (frame parent)
-  "Place FRAME at the centre of PARENT."
-  (let ((width (frame-pixel-width frame))
-        (height (frame-pixel-height frame)))
-    (set-frame-position
-     frame
-     (max 0 (/ (- (frame-pixel-width parent) width) 2))
-     (max 0 (/ (- (frame-pixel-height parent) height) 2)))))
-
-(defun mevedel-collaboration--show-share-frame (room)
-  "Present ROOM\='s bearer links and QR code on a dedicated surface.
-A centred child frame on a graphical display, an ordinary window
-otherwise."
-  ;; Cold entry point: the border face inherits the directive frame's,
-  ;; and an unrealized parent face would leave the border invisible.
-  (require 'mevedel-directive-frame)
-  (let ((buffer (get-buffer-create "*mevedel share*"))
-        (parent (selected-frame)))
-    (with-current-buffer buffer
-      (setq-local mevedel-collaboration--share-room room)
-      (setq-local mevedel-collaboration--share-which 'view)
-      (setq buffer-read-only t
-            truncate-lines t
-            cursor-type nil
-            mode-line-format nil)
-      (use-local-map mevedel-collaboration--share-map)
-      (mevedel-collaboration--share-render))
-    (if (display-graphic-p parent)
-        (condition-case nil
-            (let ((frame
-                   (make-frame
-                    `((name . "mevedel-share")
-                      (parent-frame . ,parent)
-                      (minibuffer . ,(minibuffer-window parent))
-                      (font . ,(frame-parameter parent 'font))
-                      (internal-border-width
-                       . ,mevedel-directive-frame-border-width)
-                      (child-frame-border-width
-                       . ,mevedel-directive-frame-border-width)
-                      (width . 0) (height . 0) (visibility . nil)
-                      ,@mevedel-collaboration--share-frame-parameters))))
-              (let ((window (frame-root-window frame)))
-                (set-window-buffer window buffer)
-                (set-window-dedicated-p window t)
-                ;; A window parameter rather than the buffer\='s own
-                ;; setting, so a fallback window elsewhere keeps its
-                ;; mode line.
-                (set-window-parameter window 'mode-line-format 'none)
-                (set-window-fringes window 0 0))
-              ;; The border only draws once the faces carry a colour.
-              (let ((color (face-attribute 'mevedel-collaboration-share-border
-                                           :background nil t)))
-                (set-face-background 'internal-border color frame)
-                (set-face-background 'child-frame-border color frame))
-              (mevedel-collaboration--fit-share-frame frame parent)
-              (mevedel-collaboration--center-frame frame parent)
-              (make-frame-visible frame)
-              (select-frame-set-input-focus frame)
-              (setq mevedel-collaboration--share-frame frame))
-          ;; Creating a frame realizes every face for it, so a defect
-          ;; entirely outside mevedel -- a theme whose face specs form
-          ;; an inheritance cycle -- signals here.  The share must still
-          ;; be presentable: fall back to an ordinary window.
-          (error (pop-to-buffer buffer)))
-      (pop-to-buffer buffer))))
-
-(defun mevedel-collaboration--report-links (room)
-  "Copy ROOM's full link and open the share surface with both links.
-The links render there rather than in *Messages*, whose log is durable
-and easy to leak."
-  (kill-new (plist-get room :link-full))
-  (mevedel-collaboration--show-share-frame room)
-  (message "mevedel: full-control link copied to kill ring"))
-
 (defun mevedel-collaboration-view ()
   "Start live collaboration, or report the active room's links."
   (interactive)
   (require 'mevedel-collaboration-projection)
+  (require 'mevedel-collaboration-share)
   (require 'mevedel-collaboration-transport)
   (let* ((data-buffer (mevedel-collaboration--current-data-buffer))
          (session (and data-buffer
@@ -1621,7 +769,7 @@ and easy to leak."
       (user-error "No active mevedel session in this buffer"))
     (cond
      (room
-      (mevedel-collaboration--report-links room))
+      (mevedel-collaboration-share-present room))
      ((not
        (yes-or-no-p
         (concat
@@ -1630,7 +778,7 @@ and easy to leak."
          "sealed end to end; the links are bearer credentials. ")))
       (user-error "Collaboration not started"))
      (t
-      (mevedel-collaboration--report-links
+      (mevedel-collaboration-share-present
        (mevedel-collaboration--start session data-buffer))))))
 
 (defun mevedel-collaboration-stop ()

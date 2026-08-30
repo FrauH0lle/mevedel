@@ -432,9 +432,7 @@ Treating it as evidence would call a proven outcome unprovable and block
 the session\'s mutating executions over a nesting that clears itself, so
 record the write as owed instead and let the next decision point issue it.
 Only a write that ran and failed leaves the outcome unknown."
-  (let* ((session (mevedel-execution--origin-session
-                   (mevedel-execution--record-origin record)))
-         (state (mevedel-execution--state-for-session session)))
+  (let ((state (mevedel-execution--state-for-session authority)))
     (condition-case err
         (progn
           (unless (mevedel-session-durability-set-unsettled-mutation
@@ -454,7 +452,8 @@ The owed authority is this client\'s own proof that its mutation finished,
 so writing it here is not an acknowledgement of somebody else\'s latch.
 Here is a decision point rather than a filter or a timer, so the
 connection is the caller\'s to use."
-  (let ((state (mevedel-execution--state-for-session session)))
+  (let* ((authority (mevedel-execution--mutation-target session))
+         (state (mevedel-execution--state-for-session authority)))
     (when-let* ((authority (mevedel-execution--state-owed-settlement state)))
       (condition-case nil
           (when (mevedel-session-durability-set-unsettled-mutation
@@ -572,6 +571,9 @@ whose remote work is long finished recovers on its own."
                 (list "Could not clear remote mutation authority"))))
     (dolist (record records)
       (setf (mevedel-execution--record-mutation-armed-p record) nil))
+    (setf (mevedel-execution--state-owed-settlement
+           (mevedel-execution--state-for-session authority))
+          nil)
     (maphash
      (lambda (candidate _present)
        (when (eq authority (mevedel-execution--mutation-target candidate))

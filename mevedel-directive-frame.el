@@ -160,7 +160,7 @@ A plist of :frame, :window, and :origin handed from
   'mevedel-view-other-directive
   "Invisibility symbol applied to turns outside the framed directive.")
 
-(defconst mevedel-directive-frame--parameters
+(defconst mevedel--child-frame-parameters
   '((min-width . t)
     (min-height . t)
     (border-width . 0)
@@ -178,7 +178,7 @@ A plist of :frame, :window, and :origin handed from
     (no-special-glyphs . t)
     (desktop-dont-save . t)
     (inhibit-double-buffering . t))
-  "Child frame parameters shared by every directive frame.
+  "Parameters shared by mevedel child frames.
 Adapted from `corfu--frame-parameters'.  Unlike a completion popup this
 frame accepts focus and shows a cursor, so `no-accept-focus',
 `no-focus-on-map', and a nil `cursor-type' are deliberately absent.")
@@ -413,7 +413,7 @@ display type, and recreates it otherwise."
             (internal-border-width . ,mevedel-directive-frame-border-width)
             (child-frame-border-width
              . ,mevedel-directive-frame-border-width)
-            ,@mevedel-directive-frame--parameters)))
+            ,@mevedel--child-frame-parameters)))
     (unless (and (frame-live-p frame)
                  (eq (frame-parent frame) parent)
                  (eq graphic (display-graphic-p frame))

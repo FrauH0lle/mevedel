@@ -1814,14 +1814,17 @@
          (owner-id (make-string 64 ?a))
          (successor-id (make-string 64 ?b))
          (observer-id (make-string 64 ?c))
-         restored)
-    (unwind-protect
-        (mevedel-test--with-local-shell-tramp (list host)
-          (cl-destructuring-bind (workspace owner session-dir _segment)
+         restored
+         (mevedel-session-durability--disclosed-targets
+          (make-hash-table :test #'equal)))
+    (cl-letf (((symbol-function 'yes-or-no-p)
+               (lambda (&rest _)
+                 (ert-fail "Unsettled-mutation restore prompted"))))
+      (unwind-protect
+          (mevedel-test--with-local-shell-tramp (list host)
+            (cl-destructuring-bind (workspace owner session-dir _segment)
               (test-mevedel-session-persistence--make-remote-restore-fixture
                host local-root "Published transcript\n")
-            (let ((mevedel-session-durability--disclosed-targets
-                   (make-hash-table :test #'equal)))
               (puthash
                (mevedel-execution-target-identity
                 (mevedel-session-execution-target owner))
@@ -1843,34 +1846,35 @@
                       #'ignore))
                   (setq restored
                         (mevedel-session-persistence-restore
-                         session-dir nil nil workspace)))
-                (with-current-buffer restored
-                  (should
-                   (mevedel-execution-mutation-blocked-p mevedel--session))
-                  (mevedel-execution-acknowledge-unknown mevedel--session)
-                  (should-not
-                   (mevedel-execution-mutation-blocked-p mevedel--session))
-                  (should-not
-                   (mevedel-session-durability-unsettled-mutation-p
-                    mevedel--session))
-                  (mevedel-session-durability-lease-release
-                   session-dir mevedel--session)
-                  (let ((mevedel-session-durability--client-id observer-id))
+                         session-dir nil nil workspace))
+                  (with-current-buffer restored
                     (should
-                     (mevedel-session-durability-lease-acquire
-                      session-dir "*observer*" mevedel--session))
+                     (mevedel-execution-mutation-blocked-p mevedel--session))
+                    (mevedel-execution-acknowledge-unknown mevedel--session)
+                    (should-not
+                     (mevedel-execution-mutation-blocked-p mevedel--session))
                     (should-not
                      (mevedel-session-durability-unsettled-mutation-p
                       mevedel--session))
                     (mevedel-session-durability-lease-release
-                     session-dir mevedel--session)))))))
-      (mevedel-test--with-local-shell-tramp (list host)
-        (test-mevedel-session-persistence--release-and-kill
-         restored
-         (and restored (buffer-local-value 'mevedel--session restored))))
-      (when (file-directory-p local-root)
-        (delete-directory local-root t))
-      (mevedel-workspace-clear-registry))))
+                     session-dir mevedel--session)
+                    (let ((mevedel-session-durability--client-id observer-id))
+                      (should
+                       (mevedel-session-durability-lease-acquire
+                        session-dir "*observer*" mevedel--session))
+                      (should-not
+                       (mevedel-session-durability-unsettled-mutation-p
+                        mevedel--session))
+                      (mevedel-session-durability-lease-release
+                       session-dir mevedel--session)))))))
+        (mevedel-test--with-local-shell-tramp (list host)
+          (test-mevedel-session-persistence--release-and-kill
+           restored
+           (and restored
+                (buffer-local-value 'mevedel--session restored))))
+        (when (file-directory-p local-root)
+          (delete-directory local-root t))
+        (mevedel-workspace-clear-registry)))))
 
 
 ;;
