@@ -155,7 +155,7 @@ async function main() {
                'send-button', 'stop-button', 'filter', 'requests',
                'session-label', 'queue-state', 'attachments',
                'attach-button', 'image-input', 'notify-button',
-               'composer-scope', 'own-queue', 'skill-chips'];
+               'composer-scope', 'own-queue', 'skill-chips', 'theme-button'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.composer.hidden = true;
   nodes.filter.hidden = true;
@@ -196,7 +196,12 @@ async function main() {
   const document = {
     getElementById(id) { return nodes[id]; },
     createElement(tag) { return new Element(tag); },
-    documentElement: {scrollHeight: 100},
+    documentElement: {
+      scrollHeight: 100,
+      attributes: {},
+      setAttribute(name, value) { this.attributes[name] = value; },
+      removeAttribute(name) { delete this.attributes[name]; },
+    },
     hidden: false,
   };
   class TestWebSocket extends Socket {
@@ -228,6 +233,21 @@ async function main() {
   assert.equal(api.parseFragment('#short.abc'), null);
   assert.equal(api.parseFragment(`#${roomId}.${base64url(new Uint8Array(31))}`), null);
   assert.equal(api.parseFragment('#nodotsecret'), null);
+
+  // The theme switch cycles system -> light -> dark, stamping the root
+  // so an explicit choice beats the OS in either direction, and
+  // remembering it. No stamp at all means "follow the system".
+  assert.equal(document.documentElement.attributes['data-theme'], undefined);
+  assert.equal(textOf(nodes['theme-button']), '◐');
+  nodes['theme-button'].dispatch('click');
+  assert.equal(document.documentElement.attributes['data-theme'], 'light');
+  assert.equal(storage.get('mevedel-theme'), 'light');
+  nodes['theme-button'].dispatch('click');
+  assert.equal(document.documentElement.attributes['data-theme'], 'dark');
+  assert.match(nodes['theme-button'].attributes['aria-label'], /dark/i);
+  nodes['theme-button'].dispatch('click');
+  assert.equal(document.documentElement.attributes['data-theme'], undefined);
+  assert.equal(storage.get('mevedel-theme'), 'system');
 
   // The key never survives in the URL, and the guest dials the room.
   assert.equal(window.replaced, '/index.html');
