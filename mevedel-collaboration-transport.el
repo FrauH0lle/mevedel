@@ -26,6 +26,8 @@
 (declare-function json-encode "json" (object))
 
 ;; `websocket'
+(declare-function make-websocket-frame "websocket"
+                  (&rest args))
 (declare-function websocket-close "websocket" (websocket))
 (declare-function websocket-frame-opcode "websocket" (cl-x) t)
 (declare-function websocket-frame-payload "websocket" (cl-x) t)
@@ -34,8 +36,7 @@
                   (url &rest plist))
 (declare-function websocket-openp "websocket" (websocket))
 (declare-function websocket-send "websocket" (websocket frame))
-(declare-function make-websocket-frame "websocket"
-                  (&rest args))
+(declare-function websocket-send-text "websocket" (websocket text))
 
 
 ;;
@@ -119,6 +120,9 @@ The wire bound covers what is actually written: the peer header, the
 nonce, and the authentication tag travel with the sealed JSON, so they
 come out of the same budget.")
 
+(defconst mevedel-collaboration--max-control-bytes 4096
+  "Encoded bytes one unencrypted relay control may carry.")
+
 (defun mevedel-collaboration--frame-encode (frame)
   "Serialize FRAME as a JSON string.
 FRAME is a plist with keyword keys; nested values may be the alist
@@ -179,7 +183,6 @@ dropped silently."
 
 (defun mevedel-collaboration--transport-dial (transport)
   "Dial TRANSPORT's relay URL and install the socket callbacks."
-  (require 'websocket)
   (plist-put transport :reconnect-timer nil)
   (condition-case nil
       (plist-put
@@ -282,6 +285,22 @@ the relay collects the room, ending the session for every guest."
                          (plist-get transport :key)
                          encoded))
               :completep t))
+            t))
+      (websocket-closed (mevedel-collaboration--transport-down transport)
+                        nil)
+      (error nil))))
+
+(defun mevedel-collaboration--transport-control (transport control)
+  "Send unencrypted relay CONTROL through TRANSPORT.
+
+Controls carry notification routing metadata only, never session data.
+Return non-nil when the bounded JSON object was written."
+  (when (mevedel-collaboration--transport-open-p transport)
+    (condition-case nil
+        (let ((encoded (mevedel-collaboration--frame-encode control)))
+          (when (<= (string-bytes encoded)
+                    mevedel-collaboration--max-control-bytes)
+            (websocket-send-text (plist-get transport :ws) encoded)
             t))
       (websocket-closed (mevedel-collaboration--transport-down transport)
                         nil)

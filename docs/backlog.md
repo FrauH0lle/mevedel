@@ -123,10 +123,6 @@ become implemented, obsolete, or unjustified.
   cover everything short of that conjunction. If built, it is full-link
   only, read-only tools, per-peer delivery -- host `/btw` carries Bash
   and ApplyPatch and must never be handed to a bearer link as-is.
-- **Skill arguments for guest buttons.** Guest skill invocation is
-  argument-less; an argument UI is a later iteration if missed in
-  practice.
-
 ### Collaboration limitations accepted at landing
 
 - **Source:** Post-landing gap review of the browser-relay feature on

@@ -62,6 +62,38 @@
       (goto-char (mevedel-view--input-start))
       (insert text))))
 
+(mevedel-deftest mevedel-pending-inputs--set-queues ()
+  ,test
+  (test)
+  :doc "replaces both queues before publishing one guest-visible change"
+  (mevedel-pending-inputs-test--with-session
+    (let ((notifications 0))
+      (cl-letf (((symbol-function
+                  'mevedel-collaboration-notify-queue-changed)
+                 (lambda (changed-session)
+                   (should (eq session changed-session))
+                   (setq notifications (1+ notifications)))))
+        (mevedel-pending-inputs--set-queues
+         session 'steering '((:input "now"))
+         'follow-up '((:input "later")))
+        (should (equal '((:input "now"))
+                       (mevedel-session-pending-steering session)))
+        (should (equal '((:input "later"))
+                       (mevedel-session-pending-follow-ups session)))
+        (should (= 1 notifications))))))
+
+(mevedel-deftest mevedel-pending-inputs-follow-up-changed ()
+  ,test
+  (test)
+  :doc "delegates one follow-up queue change to collaboration"
+  (let ((session (mevedel-session--create :name "queue"))
+        notified)
+    (cl-letf (((symbol-function
+                'mevedel-collaboration-notify-queue-changed)
+               (lambda (changed-session) (setq notified changed-session))))
+      (mevedel-pending-inputs-follow-up-changed session)
+      (should (eq session notified)))))
+
 (mevedel-deftest mevedel-pending-inputs-open ()
   ,test
   (test)

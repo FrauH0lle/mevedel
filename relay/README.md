@@ -18,21 +18,42 @@ travels only in the share link's URL fragment.
   peerId before forwarding to the host.
 - TEXT control messages (unencrypted, no session data): relay→host
   `{"t":"peer-joined"|"peer-left","peer":N}`; relay→guest
-  `{"t":"room-closed"}`. Host disconnect closes every guest with 4001 and
-  garbage-collects the room.
+  `{"t":"room-closed"}`; host→relay Web Push subscription routing and wake
+  requests. Host disconnect closes every guest with 4001 and garbage-collects
+  the room, including its subscriptions.
+- `GET /push-key` — the relay's persistent VAPID public key. A notification
+  opt-in registers an endpoint for that room and browser guest. Wake requests
+  are empty Web Push POSTs: the push service receives no prompt, transcript,
+  room key, room id, or notification text. The service worker shows a generic
+  notification and the viewer reconnects for encrypted detail. The viewer
+  owns each subscription through a room-specific registration scope derived
+  locally from the bearer; the scope is not fetched, and notification clicks
+  put the bearer back only in the URL fragment. A fresh installed app can
+  bootstrap by locally parsing a pasted share link. The viewer reports its
+  active state; wake requests skip actively focused subscribers. Away
+  push-enabled viewers use Web Push even while their page is still live;
+  browsers without an active Push subscription use the live-page Notification
+  fallback.
 - `GET /healthz` — liveness.
 
 With `-host-token` set, a `role=host` upgrade must carry the token in the
-`X-Mevedel-Host-Token` header or it is answered 404, which keeps strangers
-who find the endpoint from opening rooms and holding idle connections.
+`X-Mevedel-Host-Token` header or it is answered 404. Use this mode for a
+public-facing relay to keep strangers from opening rooms, holding idle
+connections, or driving outbound Web Push. Omit it for a tokenless localhost
+or test relay.
 Guests are never asked for it: their authority is the bearer link, and a
 stranger's room carries only their own ciphertext. Set the matching
-`mevedel-collaboration-relay-host-token` in Emacs. A header rather than a
-query parameter, because reverse proxies log query strings.
+`mevedel-collaboration-relay-host-token` in Emacs when the relay uses one. A
+header rather than a query parameter, because reverse proxies log query
+strings.
 
-The relay holds no state beyond live connections plus a lazy max-room-age
-sweep (`-max-room-age`, default 24h) as a backstop against a crashed host;
-the policy TTL lives in Emacs (`mevedel-collaboration-share-ttl`).
+The relay holds only live connections and their Web Push endpoints plus a
+lazy max-room-age sweep (`-max-room-age`, default 24h) as a backstop against
+a crashed host; the policy TTL lives in Emacs
+(`mevedel-collaboration-share-ttl`). Push delivery accepts only bounded HTTPS
+endpoints and refuses private or otherwise non-public destination addresses.
+The Emacs host retains endpoint routing metadata while the room is live and
+replays it after a relay transport reconnect.
 
 ## Releases
 
@@ -49,7 +70,8 @@ gh release download relay-<short sha> -p 'mevedel-relay-linux-amd64'
 
 ```bash
 go build -o mevedel-relay .
-./mevedel-relay -addr 127.0.0.1:7466 -host-token "$(head -c 24 /dev/urandom | base64)"
+./mevedel-relay -addr 127.0.0.1:7466 \
+  -vapid-key-file ./mevedel-relay-vapid.pem
 go test ./...
 ```
 
@@ -80,15 +102,20 @@ Description=mevedel collaboration relay
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/mevedel-relay -addr 127.0.0.1:7466
+EnvironmentFile=/etc/mevedel-relay
+ExecStart=/usr/local/bin/mevedel-relay -addr 127.0.0.1:7466 -host-token ${MEVEDEL_HOST_TOKEN} -vapid-key-file /var/lib/mevedel-relay/vapid.pem
 DynamicUser=yes
+StateDirectory=mevedel-relay
 Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Then set `mevedel-collaboration-relay-url` to `wss://collab.example.net`.
+Create `/etc/mevedel-relay` as a root-owned mode-0600 file containing
+`MEVEDEL_HOST_TOKEN=<random-token>`. Then set
+`mevedel-collaboration-relay-url` to `wss://collab.example.net` and
+`mevedel-collaboration-relay-host-token` to the same token.
 
 ### yunohost
 
@@ -109,5 +136,7 @@ yunohost user permission update redirect.main --add visitors
 
 Check that the generated nginx location carries the WebSocket `Upgrade`
 headers and a `proxy_read_timeout` above the relay's 30s keepalive ping
-(add them via a conf.d drop-in if not). The browser needs HTTPS anyway
-because WebCrypto only unseals in a secure context.
+(add them via a conf.d drop-in if not). Keep `/push-key` and
+`/service-worker.js` on the same public origin as the viewer. The browser
+needs HTTPS because WebCrypto, service workers, and Web Push require a secure
+context.

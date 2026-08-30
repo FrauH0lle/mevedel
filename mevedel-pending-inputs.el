@@ -179,8 +179,6 @@
                   "mevedel-view-composer" (scope input))
 (declare-function mevedel-view--dispatch-prepared-outcome
                   "mevedel-view-composer" (submission data-buffer &rest keys))
-(declare-function mevedel-view-run-invocation
-                  "mevedel-view-composer" (name args &rest keys))
 (declare-function mevedel-view--ensure-interactive-chat-view
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--input-text "mevedel-view-composer" ())
@@ -201,6 +199,8 @@
                   "mevedel-view-composer" (&optional scope))
 (declare-function mevedel-view-refresh-input-prompt
                   "mevedel-view-composer" ())
+(declare-function mevedel-view-run-invocation
+                  "mevedel-view-composer" (name args &rest keys))
 (declare-function mevedel-view-send "mevedel-view-composer" ())
 (defvar mevedel-view--composer-scope)
 (defvar mevedel-view--pending-skill-submission)
@@ -263,14 +263,22 @@ mis-attributed.")
   (when-let* ((sess (or session (mevedel-view--session))))
     (mevedel-session-pending-follow-ups sess)))
 
-(defun mevedel-view--set-pending-follow-ups (entries &optional session)
-  "Set SESSION's pending follow-up ENTRIES."
-  (when-let* ((sess (or session (mevedel-view--session))))
-    (mevedel-session-set-pending-inputs sess 'follow-up entries)
-    ;; A collaboration guest sees the queue it is waiting in, and this
-    ;; is the one place that queue changes.
-    (when (fboundp 'mevedel-collaboration-notify-queue-changed)
-      (mevedel-collaboration-notify-queue-changed sess))))
+(defun mevedel-pending-inputs-follow-up-changed (session)
+  "Notify observers that SESSION's follow-up queue changed."
+  (when (fboundp 'mevedel-collaboration-notify-queue-changed)
+    (mevedel-collaboration-notify-queue-changed session)))
+
+(defun mevedel-pending-inputs--set-queues (session &rest replacements)
+  "Replace SESSION queue CATEGORY ENTRIES pairs and notify guests once."
+  (let (follow-up-changed)
+    (while replacements
+      (let ((category (pop replacements))
+            (entries (pop replacements)))
+        (when (eq category 'follow-up)
+          (setq follow-up-changed t))
+        (mevedel-session-set-pending-inputs session category entries)))
+    (when follow-up-changed
+      (mevedel-pending-inputs-follow-up-changed session))))
 
 (defun mevedel-view--follow-up-auto-drain-blocked-p (&optional session)
   "Return non-nil when SESSION follow-ups should wait for user action."
@@ -426,6 +434,7 @@ queued entry, or nil without a live session view."
                             :queued-at-time (float-time)
                             :queued-at-turn
                             (or (mevedel-session-turn-count session) 0)))))
+          (mevedel-pending-inputs-follow-up-changed session)
           (mevedel-view--interaction-rebuild)
           (mevedel-view--schedule-late-follow-up-drain)
           entry)))))
@@ -462,6 +471,7 @@ queued entry, or nil without a live session view."
       (mevedel-view-history-add input)
       (when (equal-including-properties (mevedel-view--input-text) input)
         (mevedel-view--clear-input))
+      (mevedel-pending-inputs-follow-up-changed session)
       (mevedel-view--interaction-rebuild)
       (message "mevedel: queued follow-up for a separate turn")
       (mevedel-view--schedule-late-follow-up-drain)
@@ -625,13 +635,81 @@ waiting.  Return the remaining queue."
                              (mevedel-collaboration--guest-invocable-p name)))))
         (push entry dropped)))
     (when dropped
-      (mevedel-session-set-pending-inputs
+      (mevedel-pending-inputs--set-queues
        session 'follow-up
        (cl-remove-if (lambda (entry) (memq entry dropped)) entries))
+      (mevedel-view--interaction-rebuild)
       (message
        "mevedel: dropped %d queued guest invocation%s no longer allowed"
        (length dropped) (if (= 1 (length dropped)) "" "s")))
     (mevedel-session-pending-follow-ups session)))
+
+(defun mevedel-view--pending-follow-up-kind (entry)
+  "Return the delivery kind derived from pending follow-up ENTRY."
+  (cond
+   ((plist-get entry :scope) 'directive)
+   ((plist-get entry :guest-invoke) 'invocation)
+   ((plist-get entry :submission) 'prepared)
+   (t 'prompt)))
+
+(defun mevedel-view--dispatch-directive-follow-up
+    (entry input session before-send after-insert release)
+  "Dispatch directive follow-up ENTRY with INPUT in SESSION.
+Call BEFORE-SEND before dispatch and AFTER-INSERT after acceptance.
+Call RELEASE on failure, dropping a permanently stale directive entry."
+  (let ((scope (plist-get entry :scope)))
+    (condition-case scope-err
+        (progn
+          (funcall before-send)
+          (mevedel-view--dispatch-directive-input scope input)
+          (funcall after-insert))
+      (error
+       (funcall release)
+       ;; A directive that no longer exists can never deliver, and the drain
+       ;; always picks the head: keeping the entry would wedge every follow-up
+       ;; queued behind it.  Transient failures keep it for a later drain.
+       (when-let* ((directive-id (plist-get scope :directive-id))
+                   (workspace (mevedel-session-workspace session))
+                   ((not (cl-find directive-id
+                                  (mevedel-workspace-directives workspace)
+                                  :key #'mevedel-directive-id
+                                  :test #'equal))))
+         (mevedel-pending-inputs--set-queues
+          session 'follow-up
+          (delq entry (mevedel-view--pending-follow-ups session)))
+         (mevedel-view--interaction-rebuild)
+         (mevedel-view--schedule-late-follow-up-drain))
+       (message "mevedel: queued directive follow-up failed: %s"
+                (error-message-string scope-err))))))
+
+(defun mevedel-view--dispatch-follow-up-entry
+    (kind entry input session data-buffer before-send after-insert release)
+  "Dispatch follow-up ENTRY of KIND with INPUT for SESSION.
+DATA-BUFFER owns the root transcript.  BEFORE-SEND, AFTER-INSERT, and RELEASE
+implement the drain's shared delivery transaction."
+  (pcase kind
+    ('directive
+     (mevedel-view--dispatch-directive-follow-up
+      entry input session before-send after-insert release))
+    ('invocation
+     ;; A guest invocation is a command or skill name, not a prompt: it has
+     ;; to reach the same dispatch typing the line in the composer would.
+     (funcall before-send)
+     (mevedel-view-run-invocation
+      (plist-get entry :guest-invoke) input
+      :on-quiet after-insert
+      :on-sent after-insert))
+    ('prepared
+     (mevedel-view--dispatch-prepared-outcome
+      (plist-get entry :submission) data-buffer
+      :before-send before-send
+      :after-insert after-insert
+      :on-block release))
+    ('prompt
+     (mevedel-view--submit-planned-input
+      input before-send release nil after-insert
+      (plist-get entry :inert-skills)))
+    (_ (error "Unknown pending follow-up kind: %S" kind))))
 
 (defun mevedel-view--drain-follow-up (data-buffer)
   "Submit the next pending follow-up for DATA-BUFFER.
@@ -669,9 +747,8 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                                                        :directive-id)))))
                             queue)
                          (car queue)))
+                      (kind (mevedel-view--pending-follow-up-kind entry))
                       (input (mevedel-view--pending-input-text entry))
-                      (scope (plist-get entry :scope))
-                      (submission (plist-get entry :submission))
                       (dropped-file-grants
                        (plist-get entry :dropped-file-grants)))
                  (let* ((active-grants-before
@@ -719,10 +796,10 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                                    (mevedel-goal-id
                                     (mevedel-session-goal session)))))
                            (setq delivered t)
-                           (mevedel-view--set-pending-follow-ups
+                           (mevedel-pending-inputs--set-queues
+                            session 'follow-up
                             (delq entry
-                                  (mevedel-view--pending-follow-ups session))
-                            session)
+                                  (mevedel-view--pending-follow-ups session)))
                            (mevedel-view--interaction-rebuild))))
                    ;; Consumed where the prompt and its hook audits are
                    ;; inserted; cleared on every blocked or failed path.
@@ -737,61 +814,9 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                    ;; but preparation and the submit hook re-signal instead,
                    ;; so both exits have to release what `before-send' took.
                    (condition-case err
-                       (cond
-                        (scope
-                         (condition-case scope-err
-                             (progn
-                               (funcall before-send)
-                               (mevedel-view--dispatch-directive-input
-                                scope input)
-                               (funcall after-insert))
-                           (error
-                            (funcall release)
-                            ;; A directive that no longer exists can never
-                            ;; deliver, and the drain always picks the
-                            ;; head: keeping the entry would wedge every
-                            ;; follow-up queued behind it.  Transient
-                            ;; failures keep the entry for a later drain.
-                            (when-let* ((directive-id
-                                         (plist-get scope :directive-id))
-                                        (workspace
-                                         (mevedel-session-workspace session))
-                                        ((not (cl-find
-                                               directive-id
-                                               (mevedel-workspace-directives
-                                                workspace)
-                                               :key #'mevedel-directive-id
-                                               :test #'equal))))
-                              (mevedel-view--set-pending-follow-ups
-                               (delq entry (mevedel-view--pending-follow-ups
-                                            session))
-                               session)
-                              (mevedel-view--interaction-rebuild)
-                              (mevedel-view--schedule-late-follow-up-drain))
-                            (message
-                             "mevedel: queued directive follow-up failed: %s"
-                             (error-message-string scope-err)))))
-                        ;; A guest invocation is a command or skill name,
-                        ;; not a prompt: it has to reach the same dispatch
-                        ;; typing the line in the composer would, or a
-                        ;; local command would land as literal text.
-                        ((plist-get entry :guest-invoke)
-                         (funcall before-send)
-                         (mevedel-view-run-invocation
-                          (plist-get entry :guest-invoke) input
-                          :on-quiet after-insert
-                          :on-sent after-insert))
-                        (submission
-                         (mevedel-view--dispatch-prepared-outcome
-                          submission data-buffer
-                          :before-send before-send
-                          :after-insert after-insert
-                          :on-block release))
-                        (t
-                         (mevedel-view--submit-planned-input
-                          input before-send release
-                          nil after-insert
-                          (plist-get entry :inert-skills))))
+                       (mevedel-view--dispatch-follow-up-entry
+                        kind entry input session data-buffer
+                        before-send after-insert release)
                      ((error quit)
                       (funcall release)
                       (signal (car err) (cdr err))))))))))))))
@@ -936,7 +961,7 @@ an unrelated remote operation started by redisplay or another package included
       (user-error "Pending input is no longer queued"))
     (let ((updated (copy-sequence entries)))
       (setcar (nthcdr position updated) replacement)
-      (mevedel-session-set-pending-inputs session category updated))
+      (mevedel-pending-inputs--set-queues session category updated))
     replacement))
 
 (defun mevedel-pending-inputs--move-between
@@ -947,15 +972,13 @@ an unrelated remote operation started by redisplay or another package included
                      :key (lambda (entry) (plist-get entry :id))
                      :test #'equal)
       (user-error "Pending input is no longer queued"))
-    (mevedel-session-set-pending-inputs
-     session source
-     (cl-remove id source-entries
-                :key (lambda (entry) (plist-get entry :id))
-                :test #'equal))
-    (mevedel-session-set-pending-inputs
-     session target
-     (append (mevedel-session-pending-inputs session target)
-             (list replacement)))
+    (mevedel-pending-inputs--set-queues
+     session
+     source (cl-remove id source-entries
+                       :key (lambda (entry) (plist-get entry :id))
+                       :test #'equal)
+     target (append (mevedel-session-pending-inputs session target)
+                    (list replacement)))
     replacement))
 
 (defun mevedel-pending-inputs--restore-entry-metadata
@@ -1170,7 +1193,7 @@ an unrelated remote operation started by redisplay or another package included
     (unless (and target (>= target 0) (< target (length entries)))
       (user-error "Pending input is already at the category boundary"))
     (cl-rotatef (nth index entries) (nth target entries))
-    (mevedel-session-set-pending-inputs session category entries)
+    (mevedel-pending-inputs--set-queues session category entries)
     (mevedel-pending-inputs--refresh id)))
 
 (defun mevedel-pending-inputs-move-up ()
@@ -1384,16 +1407,14 @@ an unrelated remote operation started by redisplay or another package included
                      "s")))
       (mevedel-session-artifacts-assert-new-mutation-authority session)
       (mevedel-pending-inputs--discard (append steering follow-ups))
-      (mevedel-session-set-pending-inputs
-       session 'steering
-       (cl-remove-if
-        (lambda (entry) (memq entry steering))
-        (mevedel-session-pending-steering session)))
-      (mevedel-session-set-pending-inputs
-       session 'follow-up
-       (cl-remove-if
-        (lambda (entry) (memq entry follow-ups))
-        (mevedel-session-pending-follow-ups session)))
+      (mevedel-pending-inputs--set-queues
+       session
+       'steering (cl-remove-if
+                  (lambda (entry) (memq entry steering))
+                  (mevedel-session-pending-steering session))
+       'follow-up (cl-remove-if
+                   (lambda (entry) (memq entry follow-ups))
+                   (mevedel-session-pending-follow-ups session)))
       (setq mevedel-pending-inputs--marked-ids nil)
       (mevedel-pending-inputs--refresh))))
 
@@ -1418,8 +1439,8 @@ an unrelated remote operation started by redisplay or another package included
                      "s")))
       (mevedel-session-artifacts-assert-new-mutation-authority session)
       (mevedel-pending-inputs--discard (append steering follow-ups))
-      (mevedel-session-set-pending-inputs session 'steering nil)
-      (mevedel-session-set-pending-inputs session 'follow-up nil)
+      (mevedel-pending-inputs--set-queues
+       session 'steering nil 'follow-up nil)
       (when (buffer-live-p view)
         (with-current-buffer view
           (mevedel-view--interaction-rebuild)))

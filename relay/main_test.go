@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +14,30 @@ import (
 	"github.com/coder/websocket"
 )
 
-const testRoom = "abcdefghij0123456789"
+type fakePushSender struct {
+	key  string
+	sent chan string
+}
+
+func (s *fakePushSender) PublicKey() string { return s.key }
+
+func (s *fakePushSender) Send(_ context.Context, endpoint string) (int, error) {
+	s.sent <- endpoint
+	return http.StatusCreated, nil
+}
+
+const (
+	testHostToken = "test-host-token"
+	testRoom      = "abcdefghij0123456789"
+)
 
 func startRelay(t *testing.T) (*relay, *httptest.Server) {
 	t.Helper()
-	rl := newRelay(24*time.Hour, "")
+	push, err := newWebPushSender(newPushHTTPClient())
+	if err != nil {
+		t.Fatalf("new push sender: %v", err)
+	}
+	rl := newRelay(24*time.Hour, testHostToken, push)
 	srv := httptest.NewServer(rl.mux())
 	t.Cleanup(srv.Close)
 	return rl, srv
@@ -27,7 +47,12 @@ func dial(t *testing.T, srv *httptest.Server, roomID, role string) *websocket.Co
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, _, err := websocket.Dial(ctx, srv.URL+"/r/"+roomID+"?role="+role, nil)
+	options := &websocket.DialOptions{HTTPHeader: http.Header{}}
+	if role == "host" {
+		options.HTTPHeader.Set(hostTokenHeader, testHostToken)
+	}
+	c, _, err := websocket.Dial(
+		ctx, srv.URL+"/r/"+roomID+"?role="+role, options)
 	if err != nil {
 		t.Fatalf("dial %s as %s: %v", roomID, role, err)
 	}
@@ -35,8 +60,12 @@ func dial(t *testing.T, srv *httptest.Server, roomID, role string) *websocket.Co
 	return c
 }
 
-func TestHostTokenGatesRoomCreation(t *testing.T) {
-	rl := newRelay(24*time.Hour, "s3cret")
+func TestHostTokenModes(t *testing.T) {
+	push, err := newWebPushSender(newPushHTTPClient())
+	if err != nil {
+		t.Fatalf("new push sender: %v", err)
+	}
+	rl := newRelay(24*time.Hour, "s3cret", push)
 	srv := httptest.NewServer(rl.mux())
 	t.Cleanup(srv.Close)
 
@@ -70,6 +99,18 @@ func TestHostTokenGatesRoomCreation(t *testing.T) {
 	guest := dial(t, srv, testRoom, "guest")
 	expectText(t, host, `{"t":"peer-joined","peer":1}`)
 	guest.CloseNow()
+
+	openRelay := newRelay(24*time.Hour, "", push)
+	openServer := httptest.NewServer(openRelay.mux())
+	t.Cleanup(openServer.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	openHost, _, err := websocket.Dial(
+		ctx, openServer.URL+"/r/"+testRoom+"?role=host", nil)
+	if err != nil {
+		t.Fatalf("dial tokenless relay: %v", err)
+	}
+	t.Cleanup(func() { openHost.CloseNow() })
 }
 
 func read(t *testing.T, c *websocket.Conn) (websocket.MessageType, []byte) {
@@ -125,6 +166,24 @@ func writeBinary(t *testing.T, c *websocket.Conn, data []byte) {
 	}
 }
 
+func writeText(t *testing.T, c *websocket.Conn, text string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.Write(ctx, websocket.MessageText, []byte(text)); err != nil {
+		t.Fatalf("write text: %v", err)
+	}
+}
+
+func expectNoPush(t *testing.T, sent <-chan string) {
+	t.Helper()
+	select {
+	case endpoint := <-sent:
+		t.Fatalf("unexpected push to %s", endpoint)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestRouting(t *testing.T) {
 	_, srv := startRelay(t)
 	host := dial(t, srv, testRoom, "host")
@@ -151,6 +210,100 @@ func TestRouting(t *testing.T) {
 	// is a fresh broadcast, not the targeted one.
 	writeBinary(t, host, envelope(0, "again"))
 	expectBinary(t, guest1, envelope(0, "again"))
+}
+
+func TestPushSubscriptionLifecycle(t *testing.T) {
+	rl, srv := startRelay(t)
+	sender := &fakePushSender{key: "vapid-public", sent: make(chan string, 4)}
+	rl.push = sender
+
+	resp, err := http.Get(srv.URL + "/push-key")
+	if err != nil {
+		t.Fatalf("push key: %v", err)
+	}
+	var key struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&key); err != nil {
+		t.Fatalf("decode push key: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || key.Key != sender.key {
+		t.Fatalf("push key: status %d, key %q", resp.StatusCode, key.Key)
+	}
+
+	host := dial(t, srv, testRoom, "host")
+	phone := dial(t, srv, testRoom, "guest")
+	expectText(t, host, `{"t":"peer-joined","peer":1}`)
+	tablet := dial(t, srv, testRoom, "guest")
+	expectText(t, host, `{"t":"peer-joined","peer":2}`)
+	writeText(t, host,
+		`{"t":"push-subscribe","peer":1,"guestId":"phone-guest","endpoint":"https://push.example/subscription"}`)
+	writeText(t, host,
+		`{"t":"push-subscribe","peer":2,"guestId":"tablet-guest","endpoint":"https://push.example/tablet","active":true}`)
+	writeText(t, host, `{"t":"push","guestIds":["phone-guest"]}`)
+	select {
+	case endpoint := <-sender.sent:
+		if endpoint != "https://push.example/subscription" {
+			t.Fatalf("push endpoint %q", endpoint)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("push was not sent")
+	}
+	expectNoPush(t, sender.sent)
+	writeText(t, host, `{"t":"push"}`)
+	select {
+	case endpoint := <-sender.sent:
+		if endpoint != "https://push.example/subscription" {
+			t.Fatalf("active guest suppression sent to %q", endpoint)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("broadcast push was not sent")
+	}
+	expectNoPush(t, sender.sent)
+	writeText(t, host,
+		`{"t":"push-state","peer":2,"guestId":"tablet-guest","active":false}`)
+	writeText(t, host, `{"t":"push"}`)
+	woken := map[string]bool{}
+	for range 2 {
+		select {
+		case endpoint := <-sender.sent:
+			woken[endpoint] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("broadcast push was not sent")
+		}
+	}
+	if !woken["https://push.example/subscription"] ||
+		!woken["https://push.example/tablet"] {
+		t.Fatalf("broadcast push endpoints: %v", woken)
+	}
+
+	writeText(t, host,
+		`{"t":"push-unsubscribe","guestId":"phone-guest"}`)
+	writeText(t, host, `{"t":"push","guestIds":["phone-guest"]}`)
+	expectNoPush(t, sender.sent)
+	writeText(t, host,
+		`{"t":"push-unsubscribe","guestId":"tablet-guest"}`)
+
+	writeText(t, host,
+		`{"t":"push-subscribe","peer":1,"guestId":"phone-guest","endpoint":"http://internal.invalid/subscription"}`)
+	writeText(t, host, `{"t":"push"}`)
+	expectNoPush(t, sender.sent)
+	// The Emacs host can replay a remembered endpoint after its relay
+	// transport reconnects, before the suspended guest has a live peer.
+	writeText(t, host,
+		`{"t":"push-subscribe","peer":0,"guestId":"phone-guest","endpoint":"https://push.example/restored"}`)
+	writeText(t, host, `{"t":"push","guestIds":["phone-guest"]}`)
+	select {
+	case endpoint := <-sender.sent:
+		if endpoint != "https://push.example/restored" {
+			t.Fatalf("restored push endpoint %q", endpoint)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("restored push was not sent")
+	}
+	phone.CloseNow()
+	tablet.CloseNow()
 }
 
 func TestGuestLeaveNotifiesHost(t *testing.T) {
@@ -262,7 +415,11 @@ func TestHealthzAndViewer(t *testing.T) {
 		t.Fatalf("viewer index: %d, body %q...", resp.StatusCode, body[:min(len(body), 80)])
 	}
 	// The installable-viewer assets ship in the embedded bundle.
-	for _, path := range []string{"/manifest.json", "/icon.svg", "/icon.png"} {
+	for _, path := range []string{
+		"/manifest.json", "/icon.svg", "/icon.png", "/notifications.js",
+		"/renderer.js", "/transport.js",
+		"/service-worker.js",
+	} {
 		resp, err = http.Get(srv.URL + path)
 		if err != nil {
 			t.Fatalf("%s: %v", path, err)
@@ -274,7 +431,7 @@ func TestHealthzAndViewer(t *testing.T) {
 	}
 }
 
-func TestViewerNotCached(t *testing.T) {
+func TestViewerHeaders(t *testing.T) {
 	_, srv := startRelay(t)
 	resp, err := http.Get(srv.URL + "/viewer.js")
 	if err != nil {
@@ -283,5 +440,13 @@ func TestViewerNotCached(t *testing.T) {
 	resp.Body.Close()
 	if got := resp.Header.Get("Cache-Control"); got != "no-cache" {
 		t.Fatalf("Cache-Control = %q, want no-cache", got)
+	}
+	if got := resp.Header.Get("Content-Security-Policy"); got != viewerContentSecurityPolicy {
+		t.Fatalf("Content-Security-Policy = %q, want %q",
+			got, viewerContentSecurityPolicy)
+	}
+	if !strings.Contains(viewerContentSecurityPolicy, "img-src 'self' blob:;") {
+		t.Fatalf("Content-Security-Policy blocks blob image previews: %q",
+			viewerContentSecurityPolicy)
 	}
 }

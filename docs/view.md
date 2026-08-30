@@ -600,14 +600,15 @@ normal managed-zone path, preserving composer text, point, and windows.
 
 ## Live browser collaboration
 
-`/collab` starts the one process-wide room for the current session, dialing
-the relay at `mevedel-collaboration-relay-url` as a WebSocket client, and
+`/collab` starts a room for the current session, dialing the relay at
+`mevedel-collaboration-relay-url` as a WebSocket client, and
 reports two bearer links (the full-control link is copied to the kill ring).
 `/collab status` reports the room, relay connectivity, and guest names
-without printing any secret, and `/collab stop` ends the room. A second
-session cannot replace an active room. Killing the data buffer, ending its
-session, exiting Emacs, or the `mevedel-collaboration-share-ttl` timer also
-tears the room down; the room id and both links die with it.
+without printing any secret, and `/collab stop` ends that session's room.
+Sessions may be shared concurrently; each has an independent room, key,
+guest set, and TTL. Killing the owning data buffer, ending its session,
+exiting Emacs, or the `mevedel-collaboration-share-ttl` timer tears its room
+down. The share surface is a singleton QR panel for the selected room.
 
 The relay (the Go binary in `relay/`, which also serves the static viewer)
 is content-blind: every frame is sealed with AES-256-GCM under a room key
@@ -639,12 +640,51 @@ authority is never mintable remotely), plan approval (accept with the
 host-configured axes; Worktree acceptance and feedback drafts stay in
 Emacs), ApplyPatch review (apply the staged selection or request a
 revision with whole-patch feedback; side-by-side editing stays in
-Emacs), and Ask questionnaires (the frame carries questions, options, and
-current answers; the guest answers atomically) — and the first answer,
+Emacs), and Ask questionnaires (the frame carries questions, option
+descriptions and samples, and current answers; the guest answers atomically,
+with a blank answer meaning no preference, or dismisses only the
+questionnaire) — and the first answer,
 from Emacs or any guest, settles everywhere.
 `mevedel-collaboration-remote-interactions` gates that surface. Lease
 transfer, save, rewind, fork, publication, and execution-target changes are
 impossible from the browser regardless of link strength.
+
+A full-link welcome also publishes the host-curated
+`mevedel-collaboration-guest-skills` roster. The guest may queue one of those
+commands or skills with arguments through a typed invocation frame; free text
+remains skill-inert, and the host revalidates the name on receipt and delivery.
+The viewer supports installable-PWA presentation, host-synchronized theme,
+and opt-in system notifications for attention-worthy session changes. On
+platforms with the Push API, opt-in registers a service worker and a
+room-scoped Web Push endpoint. Pending interactions wake only the subscribed
+writable guests they target; a completed turn wakes all subscribers. The
+relay sends an empty push, so browser push services receive no session
+content; the service worker displays a generic notice and the viewer
+reconnects for sealed detail. This works for supporting Android browsers as
+well as an iOS/iPadOS Home Screen web app.
+
+Notification preferences and Push subscriptions are owned per room, with the
+subscriptions separated by service-worker registration scopes derived locally
+from the bearer. The scope itself is never fetched, and the worker script and
+empty push carry no bearer. Opting out of one room therefore does not affect
+another. A notification click opens the owning room with its credentials in
+the URL fragment. A freshly installed Home Screen app with no shared browser
+storage asks the user to paste the full share link and extracts that fragment
+locally without submitting it.
+
+An actively focused viewer reports itself active and receives no Web Push.
+When a push-enabled viewer moves away, it receives Web Push whether its page
+is still live, suspended, or disconnected. When service-worker Push is
+unsupported or its subscription is unavailable, the viewer uses the live-page
+Notification fallback. The host retains
+endpoint routing metadata in memory and replays it after a relay transport
+reconnect, so background delivery survives an ordinary host network blip.
+
+Notification opt-in retains the bearer link in browser local storage so a
+suspended PWA can reconnect. The viewer clears it and unsubscribes after
+observing room termination or exhausting reconnects; otherwise browser site
+data can outlive the room, although an expired room id and key no longer
+authorize a live share.
 
 The host reconnects to the relay with bounded backoff after a network blip;
 the relay garbage-collects the room with the host connection, so guests
@@ -802,7 +842,9 @@ it was just rendered as settled history.
 Temporary buffers used only to fontify or render view text must suppress
 user major-mode hooks and local variables. Use
 `mevedel-view--with-render-temp-buffer` rather than raw
-`with-temp-buffer` plus mode activation.
+`with-temp-buffer` plus mode activation. The shared mode setup and Markdown
+fontification buffer live in `mevedel-view-fontify.el`; response cache policy
+and invalidation remain in `mevedel-view-render.el`.
 
 Assistant response text is rendered as Markdown in the view. The data
 buffer remains org-mode for gptel state, tool parsing, and persistence,

@@ -951,6 +951,14 @@ See also:
 ;;
 ;;; Test Functions
 
+(defun mevedel-test-room-registry (&rest rooms)
+  "Return a room registry holding ROOMS, keyed by their data buffers."
+  (let ((table (make-hash-table :test #'eq)))
+    (dolist (room rooms)
+      (puthash (or (plist-get room :data-buffer) (make-symbol "room"))
+               room table))
+    table))
+
 (defun mevedel-test-tabulated-row-cells (row)
   "Return ROW's displayed cells as plain strings.
 ROW may be a `tabulated-list-entries' entry or its cell vector."

@@ -1,6 +1,6 @@
 # Project live collaboration from host-authoritative state
 
-Status: accepted (amended 2026-08-29, twice)
+Status: accepted (amended 2026-08-29, twice; 2026-08-30; 2026-08-31)
 
 Live collaboration keeps the original Emacs process authoritative and exposes
 only an allowlisted semantic projection of its canonical session state. A
@@ -103,15 +103,24 @@ by the elisp stub-relay suite in
 
 Three decisions moved after daily phone use of the viewer.
 
-**The relay authenticates room creation.** The landing note accepted an open
-host endpoint because a stranger's room carries only their own ciphertext.
-That reasoning was about confidentiality and stays true; what it did not
-cover is that an open endpoint lets anyone create rooms and hold idle
-connections on a server the operator runs for themselves. A `-host-token`
-flag, checked at the host upgrade and answered 404 on mismatch, closes that
-without touching the trust model: the relay still holds no key and reads no
-payload. Guests remain tokenless, because a guest's authority is the bearer
-link and adding a second secret would not make the first one stronger.
+**The relay can authenticate room creation.** The landing note accepted an
+open host endpoint because a stranger's room carries only their own
+ciphertext. That reasoning was about confidentiality and stays true; what it
+did not cover is that an open endpoint lets anyone create rooms, hold idle
+connections, and drive outbound Web Push on a server the operator runs for
+themselves. The optional `-host-token`, checked at the host upgrade and
+answered 404 on mismatch, closes that without touching the trust model: the
+relay still holds no key and reads no payload. Public-facing deployments
+should configure it. Omitting it explicitly selects tokenless mode for
+localhost and test deployments.
+
+The token was briefly mandatory. Deployment experience moved that decision:
+a server-wide credential had to be generated and copied to every Emacs
+installation even when the relay was reachable only on localhost. Making the
+existing token optional preserves the public-deployment security boundary
+without imposing it where the network boundary already supplies isolation.
+Guests remain tokenless, because a guest's authority is the bearer link and
+adding a second secret would not make the first one stronger.
 
 **A guest's transcript filter is also a send scope.** The filter was
 view-only, which meant reading a directive thread and replying put the reply
@@ -177,3 +186,64 @@ one bearer link that grants every shared session is a strictly worse
 credential than one link per session, and "switching" on a guest device is
 a browser tab. Interaction prompts now also route only to the room whose
 session owns them, which the single-room design never had to distinguish.
+
+## Amendment: notification opt-in retains the browser bearer (2026-08-30)
+
+The statement that the room key lives only in the URL fragment no longer
+describes notification-enabled viewers. Opting into browser notifications now
+stores the full bearer link in origin-scoped local storage so an installed PWA
+can reconnect after it has been suspended and relaunched. What moved the
+decision was the browser lifecycle: an in-memory key is lost across that
+ordinary Home Screen lifecycle.
+
+The viewer clears the stored bearer when it observes the room ending or its
+bounded reconnect window expires. If the viewer is never opened again, site
+data may retain the link beyond the room's lifetime; room collection and the
+host TTL still make that bearer unusable against a live share. The disclosure
+states this persistence explicitly. The relay remains content-blind because it
+still receives ciphertext rather than the key.
+
+## Amendment: content-blind background Web Push (2026-08-31)
+
+Daily phone use showed that reconnect credentials alone do not wake a
+suspended viewer. Notification opt-in now registers a browser-native Push API
+subscription through a service worker and sends its endpoint, inside the
+sealed guest channel, to the authenticated Emacs host. The host forwards only
+the guest id, current relay peer id, and endpoint as relay control metadata.
+Pending interactions target the writable subscribers that received the
+interaction; a completed turn wakes every subscriber in the room.
+The viewer reports whether it is actively focused, and the relay suppresses
+Web Push for active subscriptions. A push-enabled viewer receives Web Push
+when its page is away, suspended, or disconnected; only browsers without Push
+use the live-page Notification fallback. The Emacs host retains each endpoint
+as routing metadata and replays it as inactive when its relay transport
+reconnects, so an ordinary host network blip does not strand a suspended
+viewer.
+
+The relay sends an empty Web Push POST authenticated by a VAPID key persisted
+in an operator-owned state file. Persistence keeps existing restricted Push
+subscriptions valid across relay restarts. Consequently the browser push
+service receives no prompt, transcript,
+room id, room key, notification title, or other session content. The service
+worker displays fixed generic text, and opening it lets the viewer reconnect
+for end-to-end-sealed state. Endpoints are bounded HTTPS URLs and delivery
+refuses private or otherwise non-public resolved addresses. Browser opt-out
+and true room teardown delete the subscription; relay connection teardown may
+discard its copy because the live Emacs room can replay it. No push library or
+provider-specific service is added; the relay implements the small VAPID
+request with Go's standard library and the viewer uses platform APIs.
+
+Each room uses its own service-worker registration scope, derived locally from
+the bearer fragment. The scope is registration metadata, not a fetched URL;
+the service-worker script request and every push remain credential-free. This
+keeps one room's opt-out, opt-in preference, or VAPID-key replacement from
+affecting another room. A notification click reconstructs the matching room
+link as a URL fragment, which browsers do not send to the relay.
+
+This is Web Push, not an iOS-only path: it covers supporting Android browsers
+and desktop PWAs too. iOS/iPadOS requires the viewer to be installed on the
+Home Screen before Web Push is available. If that installed app starts with a
+fresh storage partition, it asks the user to paste the full share link and
+parses it entirely in the client; the bearer is never submitted as form or
+request data. Browsers without an active Push subscription keep the live-page
+Notification fallback.

@@ -146,6 +146,10 @@
 (declare-function mevedel-view--input-start "mevedel-view-composer"
 		  nil)
 
+;; `mevedel-view-fontify'
+(declare-function mevedel-view--fontify-as "mevedel-view-fontify"
+                  (text mode))
+
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add "mevedel-view-history" (input))
 (autoload 'mevedel-view-history-add "mevedel-view-history")
@@ -157,10 +161,6 @@
 		  "mevedel-view-interaction" (chat-buffer))
 (declare-function mevedel-view--interaction-unregister
                   "mevedel-view-interaction" (id))
-
-;; `mevedel-view-markdown'
-(declare-function mevedel-view--fontify-as "mevedel-view-markdown"
-		  (text mode))
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-collect-status "mevedel-worktree"

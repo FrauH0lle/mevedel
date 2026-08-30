@@ -18,6 +18,7 @@
 (require 'mevedel-pending-inputs)
 (require 'mevedel-permission-mode)
 (require 'mevedel-skills-input)
+(require 'mevedel-skills-ui)
 
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
@@ -2330,9 +2331,6 @@ their local dispatch path."
 Local slash commands and skills are separate namespaces reached with
 different sigils -- `/name\=' runs a command, `$name\=' runs a skill -- so
 anything dispatching a bare name has to ask which one it is."
-  ;; Cold entry point for both dispatch callers; the command table and
-  ;; skill roster both live in the UI module.
-  (require 'mevedel-skills-ui)
   (cond
    ((assoc name mevedel-slash-commands) 'command)
    ((let ((session (or session (mevedel-view--session))))
@@ -2353,10 +2351,12 @@ This is the one place that decides between the two invocation
 namespaces.  Composer input and queued external invocations both route
 through it, so a collaboration guest\='s button runs exactly what typing
 the same line in the composer would."
-  (require 'mevedel-skills-ui)
-  (let ((local (assoc name mevedel-slash-commands))
+  (let* ((local (assoc name mevedel-slash-commands))
+         (kind (if local
+                   'command
+                 (mevedel-view-invocation-kind name)))
         (display (or display
-                     (concat (if (eq (mevedel-view-invocation-kind name) 'skill)
+                     (concat (if (eq kind 'skill)
                                  "$" "/")
                              name
                              (if (and args (not (string-blank-p args)))
@@ -2393,7 +2393,7 @@ the same line in the composer would."
             (when on-sent (funcall on-sent))
           (when (stringp result) (message "%s" result))
           (when on-quiet (funcall on-quiet)))))
-     ((eq (mevedel-view-invocation-kind name) 'skill)
+     ((eq kind 'skill)
       ;; A skill is invoked with its own sigil and planned like any
       ;; other authored `$skill\=' line.
       (mevedel-view--submit-planned-input

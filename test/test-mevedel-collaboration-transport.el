@@ -212,6 +212,7 @@ relay's room plist."
     (should-not (mevedel-collaboration--unseal key "short"))
     (should-not (mevedel-collaboration--unseal key nil))))
 
+
 ;;
 ;;; Envelope and frame codec
 
@@ -247,6 +248,7 @@ relay's room plist."
                        (mevedel-collaboration--frame-encode frame))))))
       (should (equal "record" (plist-get roundtrip :t)))
       (should (equal "a" (plist-get (plist-get roundtrip :record) :id))))))
+
 
 ;;
 ;;; Live relay contract
@@ -366,6 +368,24 @@ relay's room plist."
         transport 1
         (list :t "record"
               :text (make-string mevedel-collaboration--max-message-bytes ?x))))
+      (should (= 1 (length sent))))))
+
+(mevedel-deftest mevedel-collaboration--transport-control
+  (:doc "sends bounded unencrypted relay controls only on an open transport")
+  (let* ((transport (list :state 'open :ws 'ws))
+         sent)
+    (cl-letf (((symbol-function 'websocket-openp) (lambda (_ws) t))
+              ((symbol-function 'websocket-send-text)
+               (lambda (_ws text) (push text sent))))
+      (should (mevedel-collaboration--transport-control
+               transport (list :t "push")))
+      (should (equal "push"
+                     (plist-get (json-parse-string
+                                 (car sent) :object-type 'plist)
+                                :t)))
+      (plist-put transport :state 'down)
+      (should-not (mevedel-collaboration--transport-control
+                   transport (list :t "push")))
       (should (= 1 (length sent))))))
 
 (mevedel-deftest mevedel-collaboration--transport-down

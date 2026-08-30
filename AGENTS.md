@@ -198,8 +198,11 @@ Chat / view
   mevedel-view-audit.el       audit disclosure rendering
   mevedel-view-zone.el        managed view-zone lifecycle + fragments
   mevedel-view-history.el     view input history ring and persistence
+  mevedel-view-fontify.el     quiet generic and reusable Markdown fontification
   mevedel-collaboration.el    live browser room and lifecycle facade
+  mevedel-collaboration-guest.el  untrusted guest protocol and input handling
   mevedel-collaboration-projection.el canonical browser transcript projection
+  mevedel-collaboration-share.el bearer-link and QR presentation surface
   mevedel-collaboration-transport.el sealed relay WebSocket client
   mevedel-view-markdown.el    Markdown links, images, paths, source panels
   mevedel-view-path.el        deferred target path verification and memoization
@@ -260,7 +263,8 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-web.el         WebSearch, WebFetch
   mevedel-interaction-prompt.el  shared interaction overlay lifecycle
   mevedel-permission-prompt.el   generic, Bash, Eval, and execution-authority prompt UI
-  mevedel-tool-ask.el         Ask questionnaire, handler, renderer
+  mevedel-tool-ask.el         Ask handler, result renderer, registration
+  mevedel-tool-ask-ui.el      Ask form state, controllers, and presentation
   mevedel-tool-ui.el          Agent/InterruptAgent/ToolSearch/SendMessage assembly
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
