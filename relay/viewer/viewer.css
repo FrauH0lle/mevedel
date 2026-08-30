@@ -145,6 +145,12 @@ code, pre {
   font-variant-emoji: text;
   filter: grayscale(1);
 }
+/* A blocked permission is not the same as "off": the guest has to know
+   the browser is refusing, not that they forgot to press it. */
+.bell.blocked {
+  color: var(--failed);
+  border-color: color-mix(in srgb, var(--failed) 45%, transparent);
+}
 .bell.on {
   color: var(--ink);
   border-color: var(--accent);

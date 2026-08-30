@@ -264,16 +264,44 @@
     if (!notifyButton) return;
     notifyButton.hidden = !(state.connected && notificationsSupported());
     const on = notificationsEnabled();
+    const blocked = notificationsSupported()
+      && Notification.permission === 'denied';
     notifyButton.setAttribute('aria-pressed', on ? 'true' : 'false');
-    notifyButton.className = `bell${on ? ' on' : ''}`;
+    notifyButton.setAttribute(
+      'aria-label',
+      blocked ? 'Notifications blocked by the browser'
+        : on ? 'Notifications on' : 'Notifications off');
+    notifyButton.className = `bell${on ? ' on' : ''}${blocked ? ' blocked' : ''}`;
     notifyButton.textContent = on ? '🔔' : '🔕';
   }
 
+  // "Away" is not the same as "tab in the background": switching to
+  // Emacs on another monitor leaves this tab visible, which is exactly
+  // when a guest most wants telling. Focus is the honest test.
+  function pageIsAway() {
+    return document.hidden
+      || (typeof document.hasFocus === 'function' && !document.hasFocus());
+  }
+
+  // A marker on the tab title needs no permission and no platform
+  // support, so it is the fallback whenever a real notification cannot
+  // be shown -- and a second signal when one can.
+  const BASE_TITLE = (typeof document.title === 'string' && document.title)
+    || 'mevedel live session';
+  function markTitle(on) {
+    document.title = on ? `\u25cf ${BASE_TITLE}` : BASE_TITLE;
+  }
+
   function maybeNotify(title, body) {
-    if (!document.hidden || !notificationsEnabled()) return;
+    if (!pageIsAway()) return;
+    markTitle(true);
+    if (!notificationsEnabled()) return;
     try {
       new Notification(title, body ? {body} : {});
-    } catch (_error) { /* constructor may throw where unsupported */ }
+    } catch (_error) {
+      // Some platforms only deliver notifications through a service
+      // worker; the title marker above is what the guest still gets.
+    }
   }
 
   // An installed home-screen app relaunches at start_url, which carries
@@ -1056,20 +1084,36 @@
 
   function renderRequest(frame) {
     if (!requests) return;
+    // The host re-sends the same request on every queue redraw. Rebuilding
+    // an unchanged card throws away whatever the guest had scrolled to in
+    // a long guardian rationale, so an identical frame is left alone.
+    const key = JSON.stringify([frame.body, frame.bodyKind, frame.options,
+                                frame.questions, frame.allowFeedback,
+                                frame.allowCancel]);
+    const existing = [...requests.children].find(
+      c => c.dataset && c.dataset.reqId === String(frame.reqId));
+    if (existing && existing.frameKey === key) return;
+    const scrolled = existing && existing.bodyEl
+      ? existing.bodyEl.scrollTop : 0;
     removeRequest(frame.reqId);
     const card = el('section', 'request-card');
+    card.frameKey = key;
     card.dataset.reqId = String(frame.reqId);
     card.append(el('span', 'rhead', 'Pending interaction'));
     if (frame.bodyKind === 'diff') {
       const body = renderDiff(frame.body || '');
+      card.bodyEl = body;
       card.append(body);
     } else if (frame.body) {
-      card.append(el('pre', 'request-body',
-                     typeof frame.body === 'string' ? frame.body : ''));
+      const body = el('pre', 'request-body',
+                      typeof frame.body === 'string' ? frame.body : '');
+      card.bodyEl = body;
+      card.append(body);
     }
     if (Array.isArray(frame.questions) && frame.questions.length) {
       renderQuestionnaire(card, frame);
       requests.append(card);
+      if (scrolled && card.bodyEl) card.bodyEl.scrollTop = scrolled;
       return;
     }
     const controls = el('div', 'request-controls');
@@ -1100,6 +1144,8 @@
       card.append(feedbackRow);
     }
     requests.append(card);
+    // A changed body still keeps the reader where they were.
+    if (scrolled && card.bodyEl) card.bodyEl.scrollTop = scrolled;
   }
 
   function clearRequests() {
@@ -1616,6 +1662,11 @@
     setLiveButton(false);
   });
   window.addEventListener('scroll', updateLiveAffordance, {passive: true});
+  ['focus', 'visibilitychange'].forEach(event => {
+    window.addEventListener(event, () => {
+      if (!pageIsAway()) markTitle(false);
+    });
+  });
 
   // An installed app relaunches without the fragment; fall back to the
   // credentials the notification opt-in persisted.
