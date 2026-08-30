@@ -1,90 +1,90 @@
 /* viewer.css -- MevView: the mevedel live-session guest */
 
 :root {
-  --ground: #F5F7FA;
+  --ground: #F6F7F6;
   --surface: #FFFFFF;
-  --surface-2: #EDF1F6;
-  --ink: #1C242E;
-  --muted: #61707F;
-  --line: #DCE3EB;
-  --accent: #2D6BE0;
-  --accent-soft: #E3ECFB;
-  --guest: #8A4FD8;
-  --guest-soft: #EFE7FB;
-  --running: #B45309;
-  --running-soft: #FBF0E1;
-  --ok: #15803D;
-  --ok-soft: #E4F3EA;
-  --failed: #BE123C;
-  --failed-soft: #FBE7EC;
-  --diff-add: #E4F3EA;
-  --diff-add-ink: #166534;
-  --diff-del: #FBE7EC;
-  --diff-del-ink: #9F1239;
-  --code-bg: #F0F3F7;
-  --kw: #7C3AED;
-  --str: #15803D;
-  --fn: #2D6BE0;
-  --com: #8B96A5;
-  --shadow: 0 1px 3px rgb(16 24 40 / 8%), 0 8px 24px rgb(16 24 40 / 6%);
+  --surface-2: #EDEFEE;
+  --ink: #1A211F;
+  --muted: #5C6764;
+  --line: #DCE0DE;
+  --accent: #14707A;
+  --accent-soft: #DCEEEF;
+  --guest: #A44A30;
+  --guest-soft: #F6E6E0;
+  --running: #14707A;
+  --running-soft: #DCEEEF;
+  --ok: #2E7D32;
+  --ok-soft: #E3F0E4;
+  --failed: #9B1C2E;
+  --failed-soft: #F7E4E7;
+  --diff-add: #E3F0E4;
+  --diff-add-ink: #1F5F23;
+  --diff-del: #F7E4E7;
+  --diff-del-ink: #8A1626;
+  --code-bg: #F1F3F2;
+  --kw: #7A3E9D;
+  --str: #2E7D32;
+  --fn: #14707A;
+  --com: #6E7A77;
+  --shadow: 0 1px 2px rgb(20 30 28 / 6%), 0 6px 20px rgb(20 30 28 / 5%);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --ground: #0F141A;
-    --surface: #171E27;
-    --surface-2: #1E2733;
-    --ink: #E7ECF2;
-    --muted: #8FA0B0;
-    --line: #2A3441;
-    --accent: #7AA5F7;
-    --accent-soft: #1D2C48;
-    --guest: #B08DF0;
-    --guest-soft: #2B2140;
-    --running: #E0A458;
-    --running-soft: #33270F;
-    --ok: #4CC38A;
-    --ok-soft: #12291C;
-    --failed: #F26D85;
-    --failed-soft: #391520;
-    --diff-add: #12291C;
-    --diff-add-ink: #6EE7A7;
-    --diff-del: #391520;
-    --diff-del-ink: #FDA4AF;
-    --code-bg: #131A22;
-    --kw: #C4A5FA;
-    --str: #6EE7A7;
-    --fn: #7AA5F7;
-    --com: #64748B;
-    --shadow: 0 1px 3px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 30%);
+    --ground: #101413;
+    --surface: #171D1C;
+    --surface-2: #1E2624;
+    --ink: #E4E9E7;
+    --muted: #8A9895;
+    --line: #2A3331;
+    --accent: #5FC2CC;
+    --accent-soft: #12312F;
+    --guest: #E08A6E;
+    --guest-soft: #33201A;
+    --running: #5FC2CC;
+    --running-soft: #12312F;
+    --ok: #6BBF73;
+    --ok-soft: #14291A;
+    --failed: #F08A8A;
+    --failed-soft: #351A1D;
+    --diff-add: #14291A;
+    --diff-add-ink: #8FD79A;
+    --diff-del: #351A1D;
+    --diff-del-ink: #F5A9A9;
+    --code-bg: #0C1110;
+    --kw: #C8A0E8;
+    --str: #6BBF73;
+    --fn: #5FC2CC;
+    --com: #788582;
+    --shadow: 0 1px 2px rgb(0 0 0 / 45%), 0 6px 20px rgb(0 0 0 / 35%);
   }
 }
 :root[data-theme="dark"] {
-  --ground: #0F141A;
-  --surface: #171E27;
-  --surface-2: #1E2733;
-  --ink: #E7ECF2;
-  --muted: #8FA0B0;
-  --line: #2A3441;
-  --accent: #7AA5F7;
-  --accent-soft: #1D2C48;
-  --guest: #B08DF0;
-  --guest-soft: #2B2140;
-  --running: #E0A458;
-  --running-soft: #33270F;
-  --ok: #4CC38A;
-  --ok-soft: #12291C;
-  --failed: #F26D85;
-  --failed-soft: #391520;
-  --diff-add: #12291C;
-  --diff-add-ink: #6EE7A7;
-  --diff-del: #391520;
-  --diff-del-ink: #FDA4AF;
-  --code-bg: #131A22;
-  --kw: #C4A5FA;
-  --str: #6EE7A7;
-  --fn: #7AA5F7;
-  --com: #64748B;
-  --shadow: 0 1px 3px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 30%);
+    --ground: #101413;
+  --surface: #171D1C;
+  --surface-2: #1E2624;
+  --ink: #E4E9E7;
+  --muted: #8A9895;
+  --line: #2A3331;
+  --accent: #5FC2CC;
+  --accent-soft: #12312F;
+  --guest: #E08A6E;
+  --guest-soft: #33201A;
+  --running: #5FC2CC;
+  --running-soft: #12312F;
+  --ok: #6BBF73;
+  --ok-soft: #14291A;
+  --failed: #F08A8A;
+  --failed-soft: #351A1D;
+  --diff-add: #14291A;
+  --diff-add-ink: #8FD79A;
+  --diff-del: #351A1D;
+  --diff-del-ink: #F5A9A9;
+  --code-bg: #0C1110;
+  --kw: #C8A0E8;
+  --str: #6BBF73;
+  --fn: #5FC2CC;
+  --com: #788582;
+  --shadow: 0 1px 2px rgb(0 0 0 / 45%), 0 6px 20px rgb(0 0 0 / 35%);
 }
 
 * { box-sizing: border-box; }
@@ -94,12 +94,22 @@ html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
+/* Monospace is the register this reader already lives in, so it is the
+   default; the one thing that is prose gets a reading face. Both are
+   system stacks: a guest on a phone should not have to fetch a font
+   from a third party to read a private session. */
 body {
   background: var(--ground);
   color: var(--ink);
-  font: 15px/1.6 "Seravek", "Segoe UI Variable Text", "Segoe UI",
-    system-ui, -apple-system, sans-serif;
+  font: 14px/1.6 ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code",
+    Menlo, Consolas, monospace;
   overflow-x: clip;
+}
+.prose, .request-card .rbody, .own-entry .own-text {
+  font-family: Charter, "Bitstream Charter", "Iowan Old Style",
+    "Source Serif 4", Georgia, serif;
+  font-size: 1.06em;
+  line-height: 1.66;
 }
 code, pre {
   font-family: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code",
@@ -141,6 +151,9 @@ code, pre {
   filter: none;
 }
 .bell[hidden] { display: none; }
+/* The connection moved to the status strip, so the controls need
+   something to push them to the corner on a narrow screen. */
+#theme-button { margin-left: auto; }
 .wordmark {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: .82rem;
@@ -225,36 +238,31 @@ code, pre {
     padding-bottom: 0;
     margin-left: .5rem;
   }
-  .conn { order: 2; }
-  .bell { order: 3; }
+  .bell { order: 2; }
 }
 /* Same pill grammar as the bell beside it, so the corner reads as one
    control group rather than two rhythms. */
 .conn {
   margin: 0;
-  margin-left: auto;
   display: flex;
   align-items: center;
-  gap: .45rem;
-  font-size: .78rem;
+  gap: .4rem;
   line-height: 1;
   color: var(--muted);
   white-space: nowrap;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  border-radius: 999px;
-  padding: .3rem .7rem;
 }
+.conn.connected { color: var(--ok); }
 .conn::before {
   content: "";
-  width: .55rem;
-  height: .55rem;
+  width: .45rem;
+  height: .45rem;
   border-radius: 999px;
   background: var(--muted);
   flex-shrink: 0;
 }
-.conn.connected::before { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
-.conn.ended::before { background: var(--failed); box-shadow: 0 0 0 3px var(--failed-soft); }
+.conn.connected::before { background: var(--ok); }
+.conn.ended::before { background: var(--failed); }
+.conn.ended { color: var(--failed); }
 
 /* ── Ledger ─────────────────────────────────────────────────────────── */
 .ledger {
@@ -287,8 +295,8 @@ code, pre {
 
 .turn {
   display: grid;
-  grid-template-columns: 2.1rem 1fr;
-  gap: .75rem;
+  grid-template-columns: .5rem 1fr;
+  gap: .95rem;
   min-width: 0;
 }
 .turn[hidden] { display: none; }
@@ -298,16 +306,17 @@ code, pre {
   align-items: center;
   gap: .4rem;
 }
+/* A node on the spine, not an avatar: the transcript is one run, and
+   the speaker is a mark on it. */
 .glyph {
-  width: 2.1rem;
-  height: 2.1rem;
-  border-radius: .65rem;
-  display: grid;
-  place-items: center;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: .8rem;
-  font-weight: 700;
+  width: .5rem;
+  height: .5rem;
+  border-radius: .15rem;
+  margin-top: .45rem;
+  font-size: 0;
+  color: transparent;
   flex-shrink: 0;
+  background: var(--line);
 }
 /* The rail carries the speaker's colour down the turn, so identity
    survives past the header line on a long answer. */
@@ -324,12 +333,12 @@ code, pre {
 .turn.guest .rail::after {
   background: color-mix(in srgb, var(--guest) 45%, transparent);
 }
-.turn.cont { margin-top: -.55rem; }
-.turn.cont .glyph { visibility: hidden; height: .4rem; }
+.turn.cont { margin-top: -.7rem; }
+.turn.cont .glyph { visibility: hidden; }
 .turn.cont .who { display: none; }
-.turn.you   .glyph { background: var(--accent-soft); color: var(--accent); }
-.turn.guest .glyph { background: var(--guest-soft); color: var(--guest); }
-.turn.ai    .glyph { background: var(--surface-2); color: var(--muted); }
+.turn.you   .glyph { background: var(--ink); }
+.turn.guest .glyph { background: var(--guest); }
+.turn.ai    .glyph { background: var(--accent); }
 .content { min-width: 0; }
 
 .who {
@@ -432,31 +441,33 @@ code, pre {
 .tok-com { color: var(--com); font-style: italic; }
 
 /* ── Tool rows ──────────────────────────────────────────────────────── */
+/* One line per call. No border, no card: the box is reserved for the
+   things that are waiting on the reader. */
 .tool {
-  border: 1px solid var(--line);
-  border-radius: .7rem;
-  background: var(--surface);
-  overflow: hidden;
-  margin: .25rem 0;
+  border: 0;
+  background: none;
+  margin: 0;
 }
 .tool > summary {
   list-style: none;
   display: flex;
-  align-items: center;
-  gap: .7rem;
-  padding: .5rem .8rem;
+  align-items: baseline;
+  gap: .55rem;
+  padding: .12rem 0;
   cursor: pointer;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: .82rem;
+  font-size: .86rem;
 }
 .tool > summary::-webkit-details-marker { display: none; }
-.tool > summary::before {
-  content: "▸";
-  color: var(--muted);
-  font-size: .7rem;
+.tool > summary .st {
+  width: .7rem;
+  flex-shrink: 0;
+  font-size: .78rem;
 }
-.tool[open] > summary::before { content: "▾"; }
-.tool .tname { font-weight: 700; white-space: nowrap; color: var(--fn); }
+.tool > summary .st.completed { color: var(--ok); }
+.tool > summary .st.failed { color: var(--failed); }
+.tool > summary .st.running { color: var(--running); }
+.tool > summary:hover .tname { text-decoration: underline; }
+.tool .tname { font-weight: 600; white-space: nowrap; color: var(--fn); }
 .tool .targ {
   color: var(--muted);
   overflow: hidden;
@@ -492,12 +503,12 @@ code, pre {
   .chip.running::before { animation: none; }
 }
 .tool .result {
-  border-top: 1px solid var(--line);
+  border-left: 2px solid var(--line);
   background: var(--code-bg);
-  margin: 0;
-  padding: .6rem .9rem;
+  margin: .2rem 0 .45rem;
+  padding: .45rem .7rem;
   overflow: auto;
-  font-size: .8rem;
+  font-size: .78rem;
   line-height: 1.55;
   max-height: 24rem;
 }
@@ -816,6 +827,22 @@ code, pre {
   border: 1px solid var(--line);
   border-radius: .5rem;
 }
+
+/* One strip for session state, the way a mode line reports it. */
+.modeline {
+  width: 100%;
+  max-width: 44rem;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: .9rem;
+  padding: .3rem .1rem 0;
+  font-size: .72rem;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+.modeline .ml { white-space: nowrap; }
+.modeline .tail { margin-left: auto; }
 
 .queue-state {
   margin: 0 0 6px;

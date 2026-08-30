@@ -13,7 +13,6 @@
   <body>
     <header class="topbar">
       <div class="wordmark">MevView<small id="session-label">live session</small></div>
-      <p id="connection" class="conn" role="status">Connecting…</p>
       <button id="theme-button" class="bell" type="button"
               aria-label="Colour theme: follow system">◐</button>
       <button id="notify-button" class="bell" type="button" hidden
@@ -49,6 +48,9 @@
           <button id="send-button" class="btn" type="submit">Send</button>
         </div>
       </form>
+      <p id="modeline" class="modeline" role="status">
+        <span id="connection" class="conn">Connecting…</span>
+      </p>
       <details class="disclosure" aria-label="Sharing and security notice">
         <summary>This link is a bearer credential — treat it like a secret.</summary>
         <p>Anyone who has it can read the visible prompts, responses, paths,

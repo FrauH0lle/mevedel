@@ -392,9 +392,12 @@
                  t)))
       (mevedel-collaboration--publish room))
     (setq sent (nreverse sent))
+    ;; Publication also settles the status strip; the records are what
+    ;; this case is about.
+    (setq sent (cl-remove-if-not
+                (lambda (entry) (equal "record" (plist-get (cdr entry) :t)))
+                sent))
     (should (equal '(0 0) (mapcar #'car sent)))
-    (should (equal '("record" "record")
-                   (mapcar (lambda (entry) (plist-get (cdr entry) :t)) sent)))
     (should (equal '("a" "b")
                    (mapcar (lambda (entry)
                              (cdr (assoc "id" (plist-get (cdr entry) :record))))
@@ -1043,7 +1046,7 @@
   (let* ((guests (make-hash-table :test #'eql))
          (data-buffer (generate-new-buffer " *collab-status-data*"))
          (room (list :data-buffer data-buffer :guests guests
-                     :transport 'transport :busy nil))
+                     :transport 'transport :status nil))
          sent)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
@@ -1051,21 +1054,28 @@
                      (push (cons peer frame) sent)
                      t)))
           (puthash 1 (list :name "g" :writable nil :ready t) guests)
-          ;; Idle at first: no transition, nothing broadcast.
-          (mevedel-collaboration--publish-status room)
-          (should-not sent)
           (with-current-buffer data-buffer
-            (setq-local mevedel--current-request 'request))
+            (setq-local gptel-model 'test-model))
+          ;; The first publish establishes the baseline the guests hold.
           (mevedel-collaboration--publish-status room)
-          (should (equal '((0 . (:t "status" :busy t))) sent))
+          (let ((frame (cdr (car sent))))
+            (should (equal "status" (plist-get frame :t)))
+            (should (eq :json-false (plist-get frame :busy)))
+            ;; The strip reports what the Emacs mode line reports.
+            (should (equal "test-model" (plist-get frame :model))))
           ;; Unchanged state is not repeated.
           (setq sent nil)
           (mevedel-collaboration--publish-status room)
           (should-not sent)
           (with-current-buffer data-buffer
+            (setq-local mevedel--current-request 'request))
+          (mevedel-collaboration--publish-status room)
+          (should (eq t (plist-get (cdr (car sent)) :busy)))
+          (setq sent nil)
+          (with-current-buffer data-buffer
             (setq-local mevedel--current-request nil))
           (mevedel-collaboration--publish-status room)
-          (should (equal '((0 . (:t "status" :busy :json-false))) sent)))
+          (should (eq :json-false (plist-get (cdr (car sent)) :busy))))
       (kill-buffer data-buffer))))
 
 (mevedel-deftest mevedel-collaboration--save-guest-attachments
