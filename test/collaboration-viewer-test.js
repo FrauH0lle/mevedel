@@ -24,6 +24,7 @@ class Element {
     this.value = '';
     this.open = false;
     this.attributes = {};
+    this.style = {};
     this.scrollHeight = 100;
   }
   append(...children) {
@@ -399,6 +400,23 @@ async function main() {
   assert.match(flat, /"tagName":"code"/);
   assert.match(flat, /"className":"tok-kw"/);
   assert.match(flat, /"className":"tok-str"/);
+
+  // A pipe table renders as a real table, and a fence longer than the
+  // one nested inside it survives to its own closer.
+  await deliver({t: 'record', record: {
+    id: 'md', kind: 'assistant', revision: 0,
+    text: '````markdown\n```elisp\n(defun demo ())\n```\n````\n\n'
+      + '| Planet | Moons |\n|---|---:|\n| Venus | 0 |\n| Earth | 1 |',
+  }});
+  const mdFlat = JSON.stringify(findByRecordId(nodes.transcript, 'md'),
+                                (k, v) => (k === 'parent' ? undefined : v));
+  assert.match(mdFlat, /"tagName":"table"/);
+  assert.match(mdFlat, /"tagName":"th"/);
+  assert.match(textOf(findByRecordId(nodes.transcript, 'md')), /Venus/);
+  // The inner fence stayed inside the outer block rather than ending it,
+  // so the table is not swallowed and the elisp is not loose prose.
+  assert.match(mdFlat, /```elisp/);
+  await deliver({t: 'remove', ids: ['md']});
 
   // Live removal.
   await deliver({t: 'remove', ids: ['tool', 'patch']});

@@ -109,6 +109,9 @@
 (declare-function mevedel-view--media-dir "mevedel-view-input-files" ())
 (autoload 'mevedel-view--media-dir "mevedel-view-input-files")
 
+;; `mevedel-directive-frame'
+(defvar mevedel-directive-frame-border-width)
+
 ;; `qrencode'
 (declare-function qrencode "ext:qrencode"
                   (s &optional mode errcorr return-raw))
@@ -1332,6 +1335,16 @@ returning the live room."
 ;;
 ;;; Share surface
 
+(defface mevedel-collaboration-share-border
+  '((t :inherit mevedel-directive-frame-border))
+  "Border colour of the share child frame.
+The share panel borrows the directive frame\='s border so both float
+above the session with the same weight."
+  :group 'mevedel)
+
+(defvar mevedel-collaboration--share-frame nil
+  "Live share child frame, or nil.")
+
 (defvar-local mevedel-collaboration--share-room nil
   "Room whose bearer links this share buffer presents.")
 
@@ -1409,9 +1422,12 @@ and walks away with write authority."
 (defun mevedel-collaboration-share-quit ()
   "Close the share surface."
   (interactive)
-  (if (frame-parent (selected-frame))
-      (delete-frame)
-    (quit-window t)))
+  (let ((frame mevedel-collaboration--share-frame))
+    (setq mevedel-collaboration--share-frame nil)
+    (cond
+     ((frame-parent (selected-frame)) (delete-frame))
+     ((frame-live-p frame) (delete-frame frame))
+     (t (quit-window t)))))
 
 (defvar-keymap mevedel-collaboration--share-map
   :doc "Keys available in the collaboration share buffer."
@@ -1421,30 +1437,85 @@ and walks away with write authority."
   "f" #'mevedel-collaboration-share-copy-full
   "q" #'mevedel-collaboration-share-quit)
 
+(defconst mevedel-collaboration--share-frame-parameters
+  '((min-width . t)
+    (min-height . t)
+    (border-width . 0)
+    (outer-border-width . 0)
+    (vertical-scroll-bars . nil)
+    (horizontal-scroll-bars . nil)
+    (menu-bar-lines . 0)
+    (tool-bar-lines . 0)
+    (tab-bar-lines . 0)
+    (no-other-frame . t)
+    (unsplittable . t)
+    (undecorated . t)
+    (fullscreen . nil)
+    (no-special-glyphs . t)
+    (desktop-dont-save . t))
+  "Child frame parameters for the share surface.
+The same shape the directive frame uses: a bordered panel that accepts
+focus, with none of the chrome a real frame carries.")
+
+(defun mevedel-collaboration--center-frame (frame parent)
+  "Place FRAME at the centre of PARENT."
+  (let ((width (frame-pixel-width frame))
+        (height (frame-pixel-height frame)))
+    (set-frame-position
+     frame
+     (max 0 (/ (- (frame-pixel-width parent) width) 2))
+     (max 0 (/ (- (frame-pixel-height parent) height) 2)))))
+
 (defun mevedel-collaboration--show-share-frame (room)
-  "Present ROOM's bearer links and QR code on a dedicated surface.
-A child frame on a graphical display, an ordinary window otherwise."
-  (let ((buffer (get-buffer-create "*mevedel share*")))
+  "Present ROOM\='s bearer links and QR code on a dedicated surface.
+A centred child frame on a graphical display, an ordinary window
+otherwise."
+  ;; Cold entry point: the border face inherits the directive frame's,
+  ;; and an unrealized parent face would leave the border invisible.
+  (require 'mevedel-directive-frame)
+  (let ((buffer (get-buffer-create "*mevedel share*"))
+        (parent (selected-frame)))
     (with-current-buffer buffer
       (setq-local mevedel-collaboration--share-room room)
       (setq-local mevedel-collaboration--share-which 'view)
       (setq buffer-read-only t
             truncate-lines t
-            cursor-type nil)
+            cursor-type nil
+            mode-line-format nil)
       (use-local-map mevedel-collaboration--share-map)
       (mevedel-collaboration--share-render))
-    (if (display-graphic-p)
+    (if (display-graphic-p parent)
         (condition-case nil
-            (when-let* ((window
-                         (display-buffer
-                          buffer
-                          '((display-buffer-in-child-frame)
-                            (child-frame-parameters
-                             . ((minibuffer . nil)
-                                (undecorated . t))))))
-                        (frame (window-frame window)))
+            (let ((frame
+                   (make-frame
+                    `((name . "mevedel-share")
+                      (parent-frame . ,parent)
+                      (minibuffer . ,(minibuffer-window parent))
+                      (font . ,(frame-parameter parent 'font))
+                      (internal-border-width
+                       . ,mevedel-directive-frame-border-width)
+                      (child-frame-border-width
+                       . ,mevedel-directive-frame-border-width)
+                      (width . 0) (height . 0) (visibility . nil)
+                      ,@mevedel-collaboration--share-frame-parameters))))
+              (let ((window (frame-root-window frame)))
+                (set-window-buffer window buffer)
+                (set-window-dedicated-p window t)
+                ;; A window parameter rather than the buffer\='s own
+                ;; setting, so a fallback window elsewhere keeps its
+                ;; mode line.
+                (set-window-parameter window 'mode-line-format 'none)
+                (set-window-fringes window 0 0))
+              ;; The border only draws once the faces carry a colour.
+              (let ((color (face-attribute 'mevedel-collaboration-share-border
+                                           :background nil t)))
+                (set-face-background 'internal-border color frame)
+                (set-face-background 'child-frame-border color frame))
               (fit-frame-to-buffer frame)
-              (select-frame-set-input-focus frame))
+              (mevedel-collaboration--center-frame frame parent)
+              (make-frame-visible frame)
+              (select-frame-set-input-focus frame)
+              (setq mevedel-collaboration--share-frame frame))
           ;; Creating a frame realizes every face for it, so a defect
           ;; entirely outside mevedel -- a theme whose face specs form
           ;; an inheritance cycle -- signals here.  The share must still
