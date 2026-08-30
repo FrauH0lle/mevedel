@@ -48,6 +48,10 @@
     // not looked at since it arrived.
     unseen: new Set(),
     busy: null,
+    // Host-curated invocation roster from the welcome, and the entry
+    // the guest has armed for the next send.
+    roster: [],
+    armed: null,
     // Frames must apply in order; WebCrypto is async, so decryption is
     // serialized through this promise chain.
     inbound: Promise.resolve(),
@@ -670,17 +674,40 @@
       if (turn) turn.hidden = !recordVisible(record);
     });
     // The composer follows the filter, so say where a prompt will land.
-    const scoped = state.filter !== 'all' && state.filter !== 'main';
-    if (composerInput) {
-      composerInput.placeholder = scoped
-        ? `Discuss ◆ ${directiveLabel(state.filter)}…`
-        : 'Queue a follow-up for the session…';
+    if (composerInput && !state.armed) {
+      composerInput.placeholder = placeholderForFilter();
     }
-    if (composerScope) {
-      composerScope.hidden = !scoped;
-      composerScope.textContent = scoped
-        ? `Sends to ◆ ${directiveLabel(state.filter)} · discuss`
-        : '';
+    renderComposerScope();
+  }
+
+  function placeholderForFilter() {
+    return (state.filter !== 'all' && state.filter !== 'main')
+      ? `Discuss ◆ ${directiveLabel(state.filter)}…`
+      : 'Queue a follow-up for the session…';
+  }
+
+  // One line under the composer saying what the next send will do: run
+  // an armed invocation, or land in a directive thread.
+  function renderComposerScope() {
+    if (!composerScope) return;
+    composerScope.replaceChildren();
+    const scoped = state.filter !== 'all' && state.filter !== 'main';
+    if (state.armed) {
+      composerScope.hidden = false;
+      composerScope.className = 'composer-scope armed';
+      composerScope.append(
+        `Runs ${sigilFor(state.armed.kind)}${state.armed.name}`);
+      const clear = el('button', 'scope-clear', '✕');
+      clear.type = 'button';
+      clear.setAttribute('aria-label', 'Cancel this command');
+      clear.addEventListener('click', () => setArmedInvocation(null));
+      composerScope.append(clear);
+      return;
+    }
+    composerScope.className = 'composer-scope';
+    composerScope.hidden = !scoped;
+    if (scoped) {
+      composerScope.append(`Sends to ◆ ${directiveLabel(state.filter)} · discuss`);
     }
   }
 
@@ -975,25 +1002,58 @@
     if (composer) composer.hidden = !visible;
   }
 
-  // The welcome's host-curated roster is the whole discovery surface:
-  // one chip per allowed skill, each sending a typed frame the host
-  // validates against the same list. Composer text is never parsed.
-  function showSkillChips(names) {
+  // The welcome's host-curated roster is the whole discovery surface.
+  // Tapping a chip arms the invocation and focuses the composer rather
+  // than sending: most commands and skills take arguments, and an
+  // immediate send gives no chance to supply them. The armed name
+  // travels as its own frame field, so composer text is never parsed
+  // for a sigil.
+  function sigilFor(kind) {
+    return kind === 'skill' ? '$' : '/';
+  }
+
+  function setArmedInvocation(entry) {
+    state.armed = entry || null;
+    if (composerScope) renderComposerScope();
+    if (composerInput) {
+      composerInput.placeholder = entry
+        ? (entry.hint
+           ? `Arguments for ${sigilFor(entry.kind)}${entry.name} — ${entry.hint}`
+           : `${sigilFor(entry.kind)}${entry.name} — no arguments needed`)
+        : placeholderForFilter();
+      if (typeof composerInput.focus === 'function') composerInput.focus();
+    }
+    renderSkillChips();
+  }
+
+  function renderSkillChips() {
     if (!skillChips) return;
     skillChips.replaceChildren();
-    const valid = (Array.isArray(names) ? names : [])
-      .filter(name => typeof name === 'string' && name);
-    skillChips.hidden = valid.length === 0;
-    valid.forEach(name => {
-      const chip = el('button', 'skill-chip', `/${name}`);
+    skillChips.hidden = state.roster.length === 0;
+    state.roster.forEach(entry => {
+      const armed = state.armed && state.armed.name === entry.name;
+      const chip = el('button', `skill-chip${armed ? ' armed' : ''}`,
+                      `${sigilFor(entry.kind)}${entry.name}`);
       chip.type = 'button';
+      chip.setAttribute('aria-pressed', armed ? 'true' : 'false');
+      if (entry.hint) chip.setAttribute('title', entry.hint);
       chip.addEventListener('click', () => {
-        // No optimistic notice: the host's queued acknowledgement is
-        // the only truthful confirmation, and it flashes on arrival.
-        send({t: 'skill', name});
+        setArmedInvocation(armed ? null : entry);
       });
       skillChips.append(chip);
     });
+  }
+
+  function showSkillChips(entries) {
+    state.roster = (Array.isArray(entries) ? entries : [])
+      .filter(entry => entry && typeof entry.name === 'string' && entry.name)
+      .map(entry => ({
+        name: entry.name,
+        kind: entry.kind === 'skill' ? 'skill' : 'command',
+        hint: typeof entry.hint === 'string' ? entry.hint : null,
+      }));
+    state.armed = null;
+    renderSkillChips();
   }
 
   // The guest's own pending prompts, echoed back per-peer by the host:
@@ -1050,7 +1110,7 @@
       state.connected = true;
       renderNotifyButton();
       setComposerVisible(!state.readOnly);
-      showSkillChips(state.readOnly ? [] : frame.skills);
+      showSkillChips(state.readOnly ? [] : frame.commands);
       // Active ui-requests are re-sent after the snapshot on every hello.
       clearRequests();
       // The host sends `queue' only when it changes, so a reconnect
@@ -1191,20 +1251,27 @@
     composer.addEventListener('submit', async event => {
       event.preventDefault();
       const text = composerInput.value;
-      if (!text.trim() && !pendingFiles.length) return;
+      // An armed invocation may legitimately carry no arguments.
+      if (!text.trim() && !pendingFiles.length && !state.armed) return;
       if (new TextEncoder().encode(text).length > MAX_PROMPT_BYTES) {
         flashNotice('Prompt too large.');
         return;
       }
       localStorage.setItem('mevedel-guest-name', guestName());
-      const frame = {t: 'prompt',
-                     text: text.trim() || 'See the attached file.',
-                     name: guestName()};
-      // Filtering to a directive sends into that directive's discussion,
-      // so the reply lands in the thread being read. The host drops an id
-      // whose directive is gone and sends to main chat instead.
-      if (state.filter !== 'all' && state.filter !== 'main') {
-        frame.directive = state.filter;
+      const frame = {t: 'prompt', name: guestName()};
+      if (state.armed) {
+        // The name travels as its own field; the host resolves the
+        // sigil and validates against its allowlist. Text is arguments.
+        frame.invoke = state.armed.name;
+        frame.text = text.trim();
+      } else {
+        frame.text = text.trim() || 'See the attached file.';
+        // Filtering to a directive sends into that directive's discussion,
+        // so the reply lands in the thread being read. The host drops an id
+        // whose directive is gone and sends to main chat instead.
+        if (state.filter !== 'all' && state.filter !== 'main') {
+          frame.directive = state.filter;
+        }
       }
       if (pendingFiles.length) {
         frame.images = pendingFiles.map(
@@ -1214,6 +1281,8 @@
       composerInput.value = '';
       pendingFiles.length = 0;
       renderAttachments();
+      // One tap, one invocation: disarm so the next send is a prompt.
+      if (state.armed) setArmedInvocation(null);
     });
     // The Send button is type="submit", so the form's submit event already
     // covers it; a click handler here would double-send every prompt.

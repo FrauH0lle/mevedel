@@ -265,6 +265,21 @@ code, pre {
   flex-direction: column;
   gap: 1.1rem;
 }
+/* A desktop window is far wider than a reading measure, so the column
+   grows in steps rather than stranding the transcript in a narrow
+   ribbon with empty gutters.  Prose grows more slowly than the column:
+   tool output, diffs, and tables are what benefit from real width. */
+@media (min-width: 88rem) {
+  .ledger { max-width: 58rem; }
+  .prose { max-width: 74ch; }
+  .requests, .own-queue, .composer { max-width: 56rem; }
+}
+@media (min-width: 120rem) {
+  .ledger { max-width: 66rem; }
+  .prose { max-width: 82ch; }
+  .requests, .own-queue, .composer { max-width: 64rem; }
+}
+
 .turn {
   display: grid;
   grid-template-columns: 2.1rem 1fr;

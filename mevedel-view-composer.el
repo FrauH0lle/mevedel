@@ -295,7 +295,10 @@
 		  "mevedel-skills-ui" (skill arguments))
 (declare-function mevedel-skills-slash-capf "mevedel-skills-ui"
 		  (buffer session local-commands &optional input-start))
+(declare-function mevedel-skills-user-visible-skills
+		  "mevedel-skills-ui" (session &optional inline-only))
 (autoload 'mevedel-skills-install-font-lock "mevedel-skills-ui")
+(autoload 'mevedel-skills-user-visible-skills "mevedel-skills-ui")
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-structs'
@@ -2295,41 +2298,13 @@ their local dispatch path."
                                (error-message-string err)))))))
           (cond
            (slash-parsed
-            (let* ((name (nth 0 slash-parsed))
-                   (args (nth 1 slash-parsed))
-                   (local (assoc name mevedel-slash-commands)))
-              (cond
-               ((and local
-                     (string= name "goal")
-                     args
-                     (not (string-blank-p args))
-                     (not (member
-                           (car (split-string args "[ \t\n]+" t))
-                           '("edit" "pause" "resume" "clear"))))
-		(mevedel-view--send-local-goal input args))
-               ((and local
-                     (string= name "plan")
-                     args
-                     (not (string-blank-p args)))
-		(let ((data-buffer mevedel--data-buffer))
-                  (mevedel-view--submit-planned-input
-                   args
-                   (lambda ()
-                     (with-current-buffer data-buffer
-                       (mevedel-plan-mode-enter))
-                     (mevedel-view-history-add input)))))
-               (local
-		(let ((result (with-current-buffer mevedel--data-buffer
-				(funcall (cdr local) args))))
-                  ;; Most local slash commands don't send a turn.  A command may
-                  ;; return this sentinel when it took ownership of the input.
-                  (unless (eq result 'mevedel-view-sent)
-                    (when (stringp result)
-                      (message "%s" result))
-                    (mevedel-view-history-add input)
-                    (mevedel-view--clear-input))))
-               (t
-		(message "Unknown slash command: /%s" name)))))
+            (mevedel-view-run-invocation
+             (nth 0 slash-parsed) (nth 1 slash-parsed)
+             :display input
+             :on-quiet (lambda ()
+                         (mevedel-view-history-add input)
+                         (mevedel-view--clear-input))
+             :on-sent (lambda () (mevedel-view-history-add input))))
            (t
             (let ((source-view (current-buffer)))
               (if fork-target
@@ -2348,6 +2323,88 @@ their local dispatch path."
   ;; Rejected sends preserve the exact input-relative point.
   (unless (mevedel-view--point-in-input-region-p)
     (goto-char (point-max))))
+
+(defun mevedel-view-invocation-kind (name &optional session)
+  "Return how NAME is invoked: `command\=', `skill\=', or nil.
+
+Local slash commands and skills are separate namespaces reached with
+different sigils -- `/name\=' runs a command, `$name\=' runs a skill -- so
+anything dispatching a bare name has to ask which one it is."
+  ;; Cold entry point for both dispatch callers; the command table and
+  ;; skill roster both live in the UI module.
+  (require 'mevedel-skills-ui)
+  (cond
+   ((assoc name mevedel-slash-commands) 'command)
+   ((let ((session (or session (mevedel-view--session))))
+      (cl-find name (mevedel-skills-user-visible-skills session)
+               :key #'mevedel-skill-name :test #'equal))
+    'skill)))
+
+(cl-defun mevedel-view-run-invocation (name args &key display on-quiet on-sent)
+  "Dispatch invocation NAME with ARGS from the current view buffer.
+
+NAME is a local slash command or a user-invocable skill; ARGS is the
+argument string after it.  DISPLAY is the original input line, used
+where a command needs the text the user actually wrote.  ON-QUIET runs
+when a local command completed without starting a turn, ON-SENT when
+one was started.
+
+This is the one place that decides between the two invocation
+namespaces.  Composer input and queued external invocations both route
+through it, so a collaboration guest\='s button runs exactly what typing
+the same line in the composer would."
+  (require 'mevedel-skills-ui)
+  (let ((local (assoc name mevedel-slash-commands))
+        (display (or display
+                     (concat (if (eq (mevedel-view-invocation-kind name) 'skill)
+                                 "$" "/")
+                             name
+                             (if (and args (not (string-blank-p args)))
+                                 (concat " " args)
+                               "")))))
+    (cond
+     ((and local
+           (string= name "goal")
+           args
+           (not (string-blank-p args))
+           (not (member (car (split-string args "[ \t\n]+" t))
+                        '("edit" "pause" "resume" "clear"))))
+      (mevedel-view--send-local-goal display args)
+      (when on-sent (funcall on-sent)))
+     ;; `/plan ARGS\=' is Plan mode plus a turn: the arguments are the
+     ;; prompt, and the command itself takes none.
+     ((and local
+           (string= name "plan")
+           args
+           (not (string-blank-p args)))
+      (let ((data-buffer mevedel--data-buffer))
+        (mevedel-view--submit-planned-input
+         args
+         (lambda ()
+           (with-current-buffer data-buffer
+             (mevedel-plan-mode-enter))
+           (when on-sent (funcall on-sent))))))
+     (local
+      (let ((result (with-current-buffer mevedel--data-buffer
+                      (funcall (cdr local) args))))
+        ;; Most local slash commands don't send a turn.  A command may
+        ;; return this sentinel when it took ownership of the input.
+        (if (eq result 'mevedel-view-sent)
+            (when on-sent (funcall on-sent))
+          (when (stringp result) (message "%s" result))
+          (when on-quiet (funcall on-quiet)))))
+     ((eq (mevedel-view-invocation-kind name) 'skill)
+      ;; A skill is invoked with its own sigil and planned like any
+      ;; other authored `$skill\=' line.
+      (mevedel-view--submit-planned-input
+       (concat "$" name
+               (if (and args (not (string-blank-p args)))
+                   (concat " " args)
+                 ""))
+       (lambda () (when on-sent (funcall on-sent)))))
+     (t
+      (message "Unknown slash command: /%s" name)
+      (when on-quiet (funcall on-quiet))))))
 
 (defun mevedel-view--send-local-goal (input args)
   "Run pre-send check and start local `/goal' with ARGS.
