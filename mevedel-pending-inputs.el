@@ -179,6 +179,8 @@
                   "mevedel-view-composer" (scope input))
 (declare-function mevedel-view--dispatch-prepared-outcome
                   "mevedel-view-composer" (submission data-buffer &rest keys))
+(declare-function mevedel-view-run-invocation
+                  "mevedel-view-composer" (name args &rest keys))
 (declare-function mevedel-view--ensure-interactive-chat-view
                   "mevedel-view-composer" ())
 (declare-function mevedel-view--input-text "mevedel-view-composer" ())
@@ -360,7 +362,7 @@ mis-attributed.")
                :help-echo "Open Pending Inputs cockpit"))))))
 
 (cl-defun mevedel-view-enqueue-external-follow-up
-    (data-buffer text &key guest-name guest-id paths directive-id skill)
+    (data-buffer text &key guest-name guest-id paths directive-id invoke)
   "Queue TEXT as a follow-up that originated outside this Emacs.
 
 DATA-BUFFER owns the session.  GUEST-NAME attributes the entry to a
@@ -373,11 +375,11 @@ discussion; the caller has already checked that the directive exists.
 
 Skill tokens in TEXT stay literal at submission: external free text
 carries prompting authority only, never skill invocation.  The one
-exception is SKILL, a name the caller has already validated against
-its own allowlist: TEXT is then that skill's slash line, delivered
-with skill planning live and rechecked against the same allowlist at
-delivery.  Return the queued entry, or nil without a live session
-view."
+exception is INVOKE, a command or skill name the caller has already
+validated against its own allowlist: TEXT is then that invocation's
+arguments, dispatched through `mevedel-view-run-invocation' at
+delivery and rechecked against the same allowlist first.  Return the
+queued entry, or nil without a live session view."
   (when-let* (((buffer-live-p data-buffer))
               (view-buffer (buffer-local-value 'mevedel--view-buffer
                                                data-buffer))
@@ -397,8 +399,10 @@ view."
                             :guest-name guest-name
                             :guest-id guest-id
                             :guest-paths paths
-                            :guest-skill skill
-                            :inert-skills (not skill)
+                            :guest-invoke invoke
+                            ;; An invocation is dispatched by name at
+                            ;; delivery; its arguments stay inert text.
+                            :inert-skills t
                             ;; External input can only discuss.  The
                             ;; sender knows a directive id and nothing
                             ;; else, and discussion is the one directive
@@ -604,23 +608,24 @@ longer accepts the prepared input."
 ;;; Automatic delivery
 
 (defun mevedel-view--drop-disallowed-guest-skills (session)
-  "Drop SESSION's queued guest skill entries the allowlist no longer names.
-A guest skill invocation is validated when its frame arrives and again
-here at delivery, so shrinking `mevedel-collaboration-guest-skills'
-takes effect for entries already waiting.  Return the remaining queue."
+  "Drop SESSION's queued guest invocations the allowlist no longer names.
+A guest invocation is validated when its frame arrives and again here
+at delivery, so shrinking `mevedel-collaboration-guest-skills' or
+adding a name to the unsafe list takes effect for entries already
+waiting.  Return the remaining queue."
   (let ((entries (mevedel-session-pending-follow-ups session))
-        (allowed (bound-and-true-p mevedel-collaboration-guest-skills))
         dropped)
     (dolist (entry entries)
-      (when-let* ((skill (plist-get entry :guest-skill))
-                  ((not (member skill allowed))))
+      (when-let* ((name (plist-get entry :guest-invoke))
+                  ((not (and (fboundp 'mevedel-collaboration--guest-invocable-p)
+                             (mevedel-collaboration--guest-invocable-p name)))))
         (push entry dropped)))
     (when dropped
       (mevedel-session-set-pending-inputs
        session 'follow-up
        (cl-remove-if (lambda (entry) (memq entry dropped)) entries))
       (message
-       "mevedel: dropped %d queued guest skill invocation%s no longer allowed"
+       "mevedel: dropped %d queued guest invocation%s no longer allowed"
        (length dropped) (if (= 1 (length dropped)) "" "s")))
     (mevedel-session-pending-follow-ups session)))
 
@@ -762,6 +767,16 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                             (message
                              "mevedel: queued directive follow-up failed: %s"
                              (error-message-string scope-err)))))
+                        ;; A guest invocation is a command or skill name,
+                        ;; not a prompt: it has to reach the same dispatch
+                        ;; typing the line in the composer would, or a
+                        ;; local command would land as literal text.
+                        ((plist-get entry :guest-invoke)
+                         (funcall before-send)
+                         (mevedel-view-run-invocation
+                          (plist-get entry :guest-invoke) input
+                          :on-quiet after-insert
+                          :on-sent after-insert))
                         (submission
                          (mevedel-view--dispatch-prepared-outcome
                           submission data-buffer
@@ -1222,10 +1237,11 @@ an unrelated remote operation started by redisplay or another package included
       (user-error "Pending input is already steering"))
     (when (plist-get entry :scope)
       (user-error "Directive follow-ups cannot be converted to steering"))
-    ;; The follow-up drain owns the delivery-time allowlist recheck a
-    ;; guest skill invocation gets; steering delivery has no such seam.
-    (when (plist-get entry :guest-skill)
-      (user-error "Guest skill invocations cannot be converted to steering"))
+    ;; The follow-up drain owns both the delivery-time allowlist recheck
+    ;; and the command dispatch a guest invocation needs; steering
+    ;; delivery has neither.
+    (when (plist-get entry :guest-invoke)
+      (user-error "Guest invocations cannot be converted to steering"))
     (when mevedel-pending-inputs--converting-id
       (user-error "Pending-input conversion is still running"))
     (unless (and fsm

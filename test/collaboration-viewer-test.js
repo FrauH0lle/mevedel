@@ -260,12 +260,14 @@ async function main() {
   // Welcome for a writable guest reveals the composer; the snapshot loads
   // through final-flagged chunks with live updates queued behind it.
   await deliver({t: 'welcome', proto: 2, readOnly: false, recordCount: 3,
-                 skills: ['plan', 'review']});
+                 commands: [{name: 'plan', kind: 'command', hint: '[prompt]'},
+                            {name: 'review', kind: 'skill', hint: '[target]'}]});
   assert.equal(nodes.composer.hidden, false);
-  // The host-curated skill roster renders as tappable chips.
+  // The roster renders with each namespace's own sigil.
   assert.equal(nodes['skill-chips'].hidden, false);
   assert.equal(nodes['skill-chips'].children.length, 2);
-  assert.match(textOf(nodes['skill-chips'].children[0]), /plan/);
+  assert.equal(textOf(nodes['skill-chips'].children[0]), '/plan');
+  assert.equal(textOf(nodes['skill-chips'].children[1]), '$review');
   await deliver({t: 'snapshot-chunk', final: false, records: [
     {id: 'assistant', kind: 'assistant', revision: 0,
      text: 'Some **bold** and `inline` text.\n\n```elisp\n(defun demo ()\n  "doc")\n```'},
@@ -452,13 +454,34 @@ async function main() {
   await deliver({t: 'queue', pending: 1, paused: false});
   assert.equal(nodes['own-queue'].hidden, true);
 
-  // Tapping a skill chip sends the typed skill frame; nothing is ever
-  // parsed out of composer text.
+  // Tapping a chip arms the invocation and waits for arguments rather
+  // than sending: it is the argument-bearing commands that need this.
   const skillBefore = first.sent.length;
   nodes['skill-chips'].children[0].dispatch('click');
-  await waitFor(() => first.sent.length === skillBefore + 1, 'skill frame');
+  await tick();
+  assert.equal(first.sent.length, skillBefore);
+  assert.match(nodes['composer-input'].placeholder, /\[prompt\]/);
+  assert.match(textOf(nodes['composer-scope']), /Runs \/plan/);
+  // Sending carries the name as its own field, never a parsed sigil.
+  nodes['composer-input'].value = 'add a retry cap';
+  nodes.composer.dispatch('submit');
+  await waitFor(() => first.sent.length === skillBefore + 1, 'invocation');
   assert.deepEqual(await unseal(key, first.sent[skillBefore]),
-                   {t: 'skill', name: 'plan'});
+                   {t: 'prompt', name: 'roland', invoke: 'plan',
+                    text: 'add a retry cap'});
+  // One tap, one invocation: the next send is an ordinary prompt.
+  assert.equal(nodes['composer-scope'].hidden, true);
+  // An armed invocation may carry no arguments at all.
+  nodes['skill-chips'].children[1].dispatch('click');
+  nodes['composer-input'].value = '';
+  nodes.composer.dispatch('submit');
+  await waitFor(() => first.sent.length === skillBefore + 2, 'bare invocation');
+  assert.deepEqual(await unseal(key, first.sent[skillBefore + 1]),
+                   {t: 'prompt', name: 'roland', invoke: 'review', text: ''});
+  // Tapping the armed chip again disarms it.
+  nodes['skill-chips'].children[0].dispatch('click');
+  nodes['skill-chips'].children[0].dispatch('click');
+  assert.equal(nodes['composer-scope'].hidden, true);
 
   // Notifications are opt-in through the bell and fire only while the
   // tab is hidden: turn settlement (busy true -> false) and interaction

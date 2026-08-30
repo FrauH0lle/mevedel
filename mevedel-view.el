@@ -294,6 +294,13 @@ durable publication for state that cannot have changed in between.")
   "Face for directive action labels in the view buffer."
   :group 'mevedel)
 
+(defface mevedel-view-guest-header
+  '((t :inherit (bold font-lock-constant-face) :overline t :extend t))
+  "Face for collaboration guest message headers in the view buffer.
+A guest turn is someone else\='s input arriving in your session, so it
+reads as neither your own prompt nor the assistant."
+  :group 'mevedel)
+
 (defface mevedel-view-assistant-header
   '((t :inherit (bold font-lock-function-name-face) :overline t :extend t))
   "Face for assistant message headers in the view buffer."

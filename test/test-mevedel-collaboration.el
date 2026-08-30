@@ -610,20 +610,25 @@
       (should (equal "snapshot-chunk" (plist-get chunk :t)))
       (should (eq t (plist-get chunk :final)))
       (should (= 1 (length (plist-get chunk :records)))))
-    ;; The skill roster rides the welcome for writable guests only.
+    ;; The invocation roster rides the welcome for writable guests only.
     (let ((mevedel-collaboration-guest-skills '("plan")))
       (setq sent nil)
       (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                  (lambda (_transport peer frame)
                    (push (cons peer frame) sent)
-                   t)))
+                   t))
+                ((symbol-function 'mevedel-collaboration--guest-roster)
+                 (lambda (_room) '((("name" . "plan") ("kind" . "command"))))))
         (mevedel-collaboration--send-snapshot room 7)
-        (should (equal ["plan"]
-                       (plist-get (cdr (car (last sent))) :skills)))
+        (should (equal "plan"
+                       (cdr (assoc "name"
+                                   (aref (plist-get (cdr (car (last sent)))
+                                                    :commands)
+                                         0)))))
         (puthash 8 (list :name "viewer" :writable nil :ready t) guests)
         (setq sent nil)
         (mevedel-collaboration--send-snapshot room 8)
-        (should-not (plist-member (cdr (car (last sent))) :skills))))))
+        (should-not (plist-member (cdr (car (last sent))) :commands))))))
 
 ;;
 ;;; Inbound guest frames
@@ -1110,19 +1115,30 @@
           (should-not (mevedel-collaboration--save-guest-attachments nil)))
       (delete-directory dir t))))
 
-(mevedel-deftest mevedel-collaboration--handle-skill
-  (:doc "queues only host-allowlisted skill names from writable guests")
+(mevedel-deftest mevedel-collaboration--guest-invocable-p
+  (:doc "accepts allowlisted names and refuses unsafe ones outright")
+  (let ((mevedel-collaboration-guest-skills '("plan" "review" "mode")))
+    (should (mevedel-collaboration--guest-invocable-p "plan"))
+    (should (mevedel-collaboration--guest-invocable-p "review"))
+    ;; Listed but unsafe: `mode' reaches full-auto, so the deny-set wins
+    ;; over a mistaken allowlist entry.
+    (should-not (mevedel-collaboration--guest-invocable-p "mode"))
+    (should-not (mevedel-collaboration--guest-invocable-p "compact"))
+    (should-not (mevedel-collaboration--guest-invocable-p nil))))
+
+(mevedel-deftest mevedel-collaboration--handle-prompt--invoke
+  (:doc "queues an allowlisted invocation by name and refuses anything else")
   (with-temp-buffer
     (let* ((guests (make-hash-table :test #'eql))
            (room (list :data-buffer (current-buffer) :guests guests
-                       :transport 'transport
-                       :session 'session))
-           (mevedel-collaboration-guest-skills '("plan" "review"))
+                       :transport 'transport :session 'session))
+           (mevedel-collaboration-guest-skills '("plan" "mode"))
            enqueued sent)
       (puthash 1 (list :name "Phone" :writable t :ready t
                        :guest-id "phone-guest-id")
                guests)
       (puthash 2 (list :name "Viewer" :writable nil :ready t) guests)
+      (setq-local mevedel--view-buffer (current-buffer))
       (cl-letf (((symbol-function 'mevedel-view-enqueue-external-follow-up)
                  (lambda (_data-buffer text &rest keys)
                    (setq enqueued (cons text keys))
@@ -1135,49 +1151,76 @@
                  (lambda (_transport peer frame)
                    (push (cons peer frame) sent)
                    t)))
-        ;; A name outside the allowlist, a non-string, and a read-only
-        ;; guest are all ignored; free text is never parsed for slashes.
-        (mevedel-collaboration--handle-skill
-         room 1 (list :name "compact"))
-        (mevedel-collaboration--handle-skill
-         room 1 (list :name 42))
-        (mevedel-collaboration--handle-skill
-         room 2 (list :name "plan"))
+        ;; Unlisted, unsafe-listed, and read-only guests are all refused;
+        ;; free text is never scanned for a sigil.
+        (mevedel-collaboration--handle-prompt
+         room 1 (list :invoke "compact" :text ""))
+        (mevedel-collaboration--handle-prompt
+         room 1 (list :invoke "mode" :text "full-auto"))
+        (mevedel-collaboration--handle-prompt
+         room 2 (list :invoke "plan" :text ""))
         (should-not enqueued)
-        (should-not sent)
-        ;; An allowlisted invocation queues the slash line with skill
-        ;; planning live, marked for the delivery-time recheck.
-        (mevedel-collaboration--handle-skill
-         room 1 (list :name "plan"))
-        (should (equal "/plan" (car enqueued)))
-        (should (equal "plan" (plist-get (cdr enqueued) :skill)))
+        ;; An allowlisted invocation queues by name, with the text as its
+        ;; arguments and skill planning left inert.
+        (mevedel-collaboration--handle-prompt
+         room 1 (list :invoke "plan" :text "add a retry cap"))
+        (should (equal "add a retry cap" (car enqueued)))
+        (should (equal "plan" (plist-get (cdr enqueued) :invoke)))
         (should (equal "phone-guest-id"
                        (plist-get (cdr enqueued) :guest-id)))
-        (should (equal '(1 . (:t "queued" :id 9 :position 1))
-                       (car sent)))
-        ;; A double-fired tap inside the duplicate window is one
-        ;; invocation, exactly like a double-fired prompt submit.
+        (should (equal '(1 . (:t "queued" :id 9 :position 1)) (car sent)))
+        ;; A bare invocation carries no arguments at all.
         (setq enqueued nil)
-        (mevedel-collaboration--handle-skill
-         room 1 (list :name "plan"))
-        (should-not enqueued)
-        ;; A different skill inside the window still goes through.
-        (mevedel-collaboration--handle-skill
-         room 1 (list :name "review"))
-        (should (equal "/review" (car enqueued)))))))
+        (mevedel-collaboration--handle-prompt
+         room 1 (list :invoke "plan" :text ""))
+        (should (equal "" (car enqueued)))
+        ;; A double-fired tap inside the duplicate window is one send.
+        (setq enqueued nil)
+        (mevedel-collaboration--handle-prompt
+         room 1 (list :invoke "plan" :text ""))
+        (should-not enqueued)))))
+
+(mevedel-deftest mevedel-collaboration--guest-roster
+  (:doc "describes each allowlisted name with its namespace and hint")
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "roster"))
+           (room (list :data-buffer data-buf :session session))
+           ;; `remember' is a skill and only a skill; `review' is
+           ;; installed into the command alist at runtime by its own
+           ;; module, so it would resolve as a command here.
+           (mevedel-collaboration-guest-skills
+            '("plan" "remember" "mode" "nonexistent")))
+      (with-current-buffer data-buf
+        (setq-local mevedel--view-buffer view-buf))
+      (cl-letf (((symbol-function 'mevedel-skills-user-visible-skills)
+                 (lambda (&rest _)
+                   (list (mevedel-skill--create
+                          :name "remember" :argument-hint "[focus]")))))
+        (let ((roster (mevedel-collaboration--guest-roster room)))
+          ;; A local command and a skill are both offered, each tagged
+          ;; with the namespace the viewer needs to render its sigil.
+          (should (equal '("plan" "remember")
+                         (mapcar (lambda (e) (cdr (assoc "name" e))) roster)))
+          (should (equal '("command" "skill")
+                         (mapcar (lambda (e) (cdr (assoc "kind" e))) roster)))
+          (should (equal "[prompt]" (cdr (assoc "hint" (nth 0 roster)))))
+          (should (equal "[focus]" (cdr (assoc "hint" (nth 1 roster)))))
+          ;; Unsafe and unresolvable names never become buttons.
+          (should-not (assoc "mode" roster))
+          (should-not (assoc "nonexistent" roster)))))))
 
 (mevedel-deftest mevedel-view--drop-disallowed-guest-skills
-  (:doc "drops queued guest skill entries the allowlist no longer names"
+  (:doc "drops queued guest invocations the allowlist no longer names"
    :quiet t)
   (let ((session (mevedel-session--create :name "s"))
         (mevedel-collaboration-guest-skills '("plan")))
     (mevedel-session-enqueue-pending-input
-     session 'follow-up '(:input "/plan" :guest-skill "plan"))
+     session 'follow-up '(:input "" :guest-invoke "plan"))
     (mevedel-session-enqueue-pending-input
-     session 'follow-up '(:input "/review" :guest-skill "review"))
+     session 'follow-up '(:input "" :guest-invoke "review"))
     (mevedel-session-enqueue-pending-input
      session 'follow-up '(:input "plain question"))
-    (should (equal '("/plan" "plain question")
+    (should (equal '("" "plain question")
                    (mapcar (lambda (entry) (plist-get entry :input))
                            (mevedel-view--drop-disallowed-guest-skills
                             session))))

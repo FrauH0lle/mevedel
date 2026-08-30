@@ -150,18 +150,33 @@ a crashed host; this timer is the policy."
   :group 'mevedel)
 
 (defcustom mevedel-collaboration-guest-skills nil
-  "Skill and command names a full-link guest may invoke as buttons.
+  "Command and skill names a full-link guest may invoke as buttons.
 
-Each name is offered to write-token guests as a tappable chip and
-validated against this same list when the typed skill frame arrives
-and again when the queued invocation is delivered, so removing a name
-takes effect immediately.  Names are slash lines without the slash:
-\"plan\" runs what typing /plan in the composer would.
+A name is offered to write-token guests as a tappable chip and
+validated against this same list when the invocation arrives and again
+when the queued entry is delivered, so removing a name takes effect
+immediately.  Write the bare name without a sigil: mevedel resolves
+whether it is a local slash command or a skill and uses the right one.
 
-Guest free text is never parsed for slash commands regardless of this
-list; the typed frame is the only skill surface a guest has."
+Names in `mevedel-collaboration-unsafe-guest-commands\=' are refused
+even when listed here.  Guest free text is never parsed for slash
+commands regardless of this list; the typed frame is the only
+invocation surface a guest has."
   :type '(repeat string)
   :group 'mevedel)
+
+(defconst mevedel-collaboration-unsafe-guest-commands
+  '("mode" "model" "clear" "tools" "plugin" "skills" "prompt" "edits"
+    "collab" "help" "btw")
+  "Local slash commands a guest may never invoke, whatever the allowlist.
+
+These either escalate authority (`mode\=' reaches full-auto, whose whole
+point is skipping the permission prompts a guest would otherwise have
+to be asked), mutate durable session state (`clear\='), manage the share
+itself (`collab\='), or open a transient on the host\='s display that no
+guest can see or dismiss.  Keeping the refusal here rather than in the
+host\='s judgement means a mistaken allowlist entry cannot become an
+escalation.")
 
 (defcustom mevedel-collaboration-remote-interactions t
   "Whether full-link guests may answer pending interactions.
@@ -572,6 +587,59 @@ session for every guest."
       (push (nreverse current) chunks))
     (nreverse chunks)))
 
+(defconst mevedel-collaboration--command-hints
+  '(("plan" . "[prompt]")
+    ("goal" . "[objective]")
+    ("compact" . "[instructions]")
+    ("stop" . "[execution]"))
+  "Argument hints for the local slash commands a guest may invoke.
+Only commands whose arguments a guest can meaningfully supply appear;
+anything absent is offered as an argument-less button.")
+
+(defun mevedel-collaboration--guest-invocable-p (name)
+  "Return non-nil when NAME may be invoked by a guest at all."
+  (and (stringp name)
+       (member name mevedel-collaboration-guest-skills)
+       (not (member name mevedel-collaboration-unsafe-guest-commands))))
+
+(defun mevedel-collaboration--guest-roster (room)
+  "Return ROOM's allowlisted invocations as JSON-safe descriptors.
+
+Each entry carries the name, which namespace it belongs to, and its
+argument hint, because a guest button has to render the right sigil and
+say whether the invocation wants arguments.  A name that resolves to
+neither namespace is dropped rather than offered as a button that
+cannot work."
+  (when-let* ((data-buffer (mevedel-collaboration--room-data-buffer room))
+              (view-buffer (buffer-local-value 'mevedel--view-buffer
+                                               data-buffer))
+              ((buffer-live-p view-buffer)))
+    (with-current-buffer view-buffer
+      (let ((session (plist-get room :session))
+            roster)
+        (dolist (name mevedel-collaboration-guest-skills)
+          (when (mevedel-collaboration--guest-invocable-p name)
+            (when-let* ((kind (mevedel-view-invocation-kind name session)))
+              (push (append
+                     (list (cons "name" name)
+                           (cons "kind" (symbol-name kind)))
+                     (when-let* ((hint (mevedel-collaboration--invocation-hint
+                                        name kind session)))
+                       (list (cons "hint" hint))))
+                    roster))))
+        (nreverse roster)))))
+
+(defun mevedel-collaboration--invocation-hint (name kind session)
+  "Return the argument hint for invocation NAME of KIND, or nil."
+  (pcase kind
+    ('skill
+     (when-let* ((skill (cl-find name
+                                 (mevedel-skills-user-visible-skills session)
+                                 :key #'mevedel-skill-name :test #'equal)))
+       (mevedel-skill-argument-hint skill)))
+    ('command
+     (cdr (assoc name mevedel-collaboration--command-hints)))))
+
 (defun mevedel-collaboration--send-snapshot (room peer)
   "Send ROOM's welcome and chunked snapshot to guest PEER."
   (let* ((transport (plist-get room :transport))
@@ -589,11 +657,11 @@ session for every guest."
             ;; its own is dropped, and promising it would leave the guest
             ;; waiting for a chunk that never arrives.
             :recordCount (apply #'+ (mapcar #'length chunks)))
-      ;; The host-curated skill roster is the guest's whole discovery
+      ;; The host-curated roster is the guest's whole discovery
       ;; surface; a view link gets none, having no way to use it.
-      (when (and (plist-get guest :writable)
-                 mevedel-collaboration-guest-skills)
-        (list :skills (vconcat mevedel-collaboration-guest-skills)))))
+      (when-let* (((plist-get guest :writable))
+                  (roster (mevedel-collaboration--guest-roster room)))
+        (list :commands (vconcat roster)))))
     (cl-loop for rest on chunks do
              (mevedel-collaboration--transport-send
               transport peer
@@ -825,12 +893,25 @@ answer can execute the same path the host key binding would."
 The prompt enters the ordinary pending-input queue: delivered when the
 session is idle, queued behind a running request, paused while the
 Pending Inputs cockpit is open.  The guest name is attribution only and
-never enters model-visible context."
-  (let ((guest (mevedel-collaboration--guest room peer))
-        (text (plist-get frame :text)))
+never enters model-visible context.
+
+FRAME may carry an `:invoke\=' naming an allowlisted command or skill,
+in which case the text is that invocation\='s arguments rather than a
+prompt.  The name travels as its own field and is validated here: guest
+text is never scanned for a sigil, so a pasted log line cannot invoke
+anything."
+  (let* ((guest (mevedel-collaboration--guest room peer))
+         (invoke (plist-get frame :invoke))
+         (text (plist-get frame :text)))
+    (when (and invoke
+               (not (mevedel-collaboration--guest-invocable-p invoke)))
+      (cl-return-from mevedel-collaboration--handle-prompt))
     (when (and guest
                (plist-get guest :writable)
-               (mevedel-collaboration--guest-text text))
+               ;; An invocation may carry no arguments at all; a plain
+               ;; prompt still has to say something.
+               (or (and invoke (or (null text) (stringp text)))
+                   (mevedel-collaboration--guest-text text)))
       ;; The prompt frame may carry a fresher display name than the hello
       ;; did; the badge should show what the guest typed.
       (when (stringp (plist-get frame :name))
@@ -841,10 +922,13 @@ never enters model-visible context."
       ;; carrying attachments are never deduplicated -- consecutive
       ;; sends legitimately reuse the same placeholder text.
       (let ((last (plist-get guest :last-prompt))
+            ;; An invocation and a prompt with the same text are
+            ;; different sends, so the latch keys on both.
+            (dedup-key (if invoke (format "%s\0%s" invoke (or text "")) text))
             (now (float-time)))
         (when (and last
                    (not (plist-get frame :images))
-                   (equal (car last) text)
+                   (equal (car last) dedup-key)
                    (< (- now (cdr last))
                       mevedel-collaboration--duplicate-prompt-window))
           (cl-return-from mevedel-collaboration--handle-prompt))
@@ -880,18 +964,20 @@ never enters model-visible context."
                   (queued nil))
               ;; Latch before the enqueue, which redraws and can therefore
               ;; re-enter, and give the latch back when nothing was queued.
-              (plist-put guest :last-prompt (cons text now))
+              (plist-put guest :last-prompt (cons dedup-key now))
               (unwind-protect
                   (progn
                     (setq queued
                           (mevedel-view-enqueue-external-follow-up
-                           data-buffer text
+                           data-buffer (or text "")
                            :guest-name (plist-get guest :name)
                            :guest-id (plist-get guest :guest-id)
                            :paths paths
+                           :invoke invoke
                            :directive-id
-                           (mevedel-collaboration--guest-directive-id
-                            room frame)))
+                           (unless invoke
+                             (mevedel-collaboration--guest-directive-id
+                              room frame))))
                     (when queued
                       (mevedel-collaboration--transport-send
                        (plist-get room :transport) peer
@@ -988,52 +1074,6 @@ budget -- drops the whole set rather than attaching a partial one."
                 (when (file-exists-p path)
                   (ignore-errors (delete-file path)))))))))))
 
-(defun mevedel-collaboration--handle-skill (room peer frame)
-  "Queue the allowlisted skill FRAME names for writable guest PEER.
-
-The name is validated against `mevedel-collaboration-guest-skills'
-here and rechecked at delivery.  This typed frame is a guest's only
-skill surface: free text is never parsed for slash commands, so a
-pasted log line starting with a slash can never invoke anything."
-  (let ((guest (mevedel-collaboration--guest room peer))
-        (name (plist-get frame :name)))
-    (when (and guest
-               (plist-get guest :writable)
-               (stringp name)
-               (member name mevedel-collaboration-guest-skills))
-      ;; A chip is even easier to double-fire than a submit button; the
-      ;; prompt path's duplicate window covers the same event class.
-      (let ((line (concat "/" name))
-            (last (plist-get guest :last-prompt))
-            (now (float-time)))
-        (unless (and last
-                     (equal (car last) line)
-                     (< (- now (cdr last))
-                        mevedel-collaboration--duplicate-prompt-window))
-          (plist-put guest :last-prompt (cons line now))
-          (let ((queued
-                 (when-let* ((data-buffer
-                              (mevedel-collaboration--room-data-buffer
-                               room)))
-                   (mevedel-view-enqueue-external-follow-up
-                    data-buffer line
-                    :guest-name (plist-get guest :name)
-                    :guest-id (plist-get guest :guest-id)
-                    :skill name))))
-            (if (null queued)
-                (plist-put guest :last-prompt nil)
-              (mevedel-collaboration--transport-send
-               (plist-get room :transport) peer
-               (append
-                (list :t "queued")
-                (when-let* ((id (plist-get queued :id)))
-                  (list :id id))
-                (when-let* ((position
-                             (mevedel-collaboration--queue-position
-                              room queued)))
-                  (list :position position))))
-              (mevedel-collaboration--publish-queue room))))))))
-
 (defun mevedel-collaboration--handle-retract (room peer frame)
   "Remove the pending entry FRAME names when guest PEER queued it.
 
@@ -1096,7 +1136,6 @@ handling stops the room instead of leaking into the session."
           ("hello" (mevedel-collaboration--handle-hello room peer frame))
           ("prompt" (mevedel-collaboration--handle-prompt room peer frame))
           ("abort" (mevedel-collaboration--handle-abort room peer))
-          ("skill" (mevedel-collaboration--handle-skill room peer frame))
           ("retract" (mevedel-collaboration--handle-retract room peer frame))
           ("ui-response"
            (mevedel-collaboration--handle-ui-response room peer frame)))

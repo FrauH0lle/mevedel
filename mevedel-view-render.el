@@ -4662,21 +4662,26 @@ coordinates yet -- folds and expands the same way as a rendered turn."
       (mevedel-view--decorate-agent-result-blocks text-start (point))
       (mevedel-view--decorate-agent-message-blocks text-start (point)))
      (t
-      (let ((header-start (point)))
+      (let* ((header-start (point))
+             (guest (unless directive
+                      (mevedel-view--user-turn-guest-name
+                       segments data-buf))))
         (insert (propertize
-                 (if directive
+                 (cond
+                  (directive
                    (format "◆ %s · %s · T%s · excluded from model context\n"
                            (mevedel--truncate-display
                             (or (plist-get directive :directive-id) "?")
                             8 "…")
                            (mevedel-overlay-ui-directive-action-label
                             (plist-get directive :action))
-                           (or (plist-get directive :turn) "?"))
-                   (if-let* ((guest (mevedel-view--user-turn-guest-name
-                                     segments data-buf)))
-                       (format "%s (guest)\n" guest)
-                     "You\n"))
-                 'font-lock-face 'mevedel-view-user-header
+                           (or (plist-get directive :turn) "?")))
+                  (guest (format "%s (guest)\n" guest))
+                  (t "You\n"))
+                 'font-lock-face
+                 (if guest
+                     'mevedel-view-guest-header
+                   'mevedel-view-user-header)
                  'mevedel-view-type 'turn-header
                  'mevedel-view-turn-role
                  (if directive 'directive 'user)
@@ -7021,7 +7026,10 @@ marker at the end of the inserted block."
         (insert (propertize (if guest-name
                                 (format "%s (guest)\n" guest-name)
                               "You\n")
-                            'font-lock-face 'mevedel-view-user-header))
+                            'font-lock-face
+                            (if guest-name
+                                'mevedel-view-guest-header
+                              'mevedel-view-user-header)))
         (if (and (not (eq kind 'directive))
                  (mevedel-view--user-input-fold-p text))
             (progn
