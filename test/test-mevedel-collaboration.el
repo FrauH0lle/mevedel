@@ -1219,6 +1219,74 @@
           (should-not (assoc "mode" roster))
           (should-not (assoc "nonexistent" roster)))))))
 
+(mevedel-deftest mevedel-view--drain-guest-invocation
+  (:doc "dispatches a queued guest invocation and dequeues it"
+   :quiet t)
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "invoke"))
+          (mevedel-collaboration-guest-skills '("plan"))
+          ran)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session))
+      (mevedel-session-enqueue-pending-input
+       session 'follow-up (list :input "" :guest-invoke "plan"
+                               :guest-id "g1" :inert-skills t))
+      (cl-letf (((symbol-function 'mevedel-plan-mode-enter)
+                 (lambda (&rest _) (setq ran t)))
+                ((symbol-function
+                  'mevedel-session-artifacts-assert-new-mutation-authority)
+                 (lambda (&rest _) nil)))
+        (mevedel-view--drain-follow-up data-buf))
+      ;; The command ran, and the entry it came from is gone: a local
+      ;; command inserts no turn, so nothing else would ever clear it.
+      (should ran)
+      (should-not (mevedel-session-pending-follow-ups session)))))
+
+(mevedel-deftest mevedel-collaboration-notify-queue-changed
+  (:doc "re-publishes the queue when it changes without a request")
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project "/tmp/collab-notify/" "/tmp/collab-notify/" "cn"))
+         (session (mevedel-session-create "main" workspace))
+         (guests (make-hash-table :test #'eql))
+         (data-buffer (generate-new-buffer " *collab-notify-data*"))
+         (room (list :session session :guests guests
+                     :data-buffer data-buffer :transport 'transport
+                     :queue nil :status nil))
+         (mevedel-collaboration--rooms (mevedel-collab-test--rooms room))
+         sent)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame)
+                     (push (cons peer frame) sent)
+                     t)))
+          (puthash 1 (list :name "Phone" :writable t :ready t
+                           :guest-id "g1")
+                   guests)
+          ;; A local command drains its entry without starting a turn,
+          ;; so nothing else would tell the guest its card is stale.
+          (mevedel-session-enqueue-pending-input
+           session 'follow-up (list :input "" :guest-invoke "plan"))
+          (mevedel-collaboration-notify-queue-changed session)
+          (should (cl-find-if (lambda (entry)
+                                (equal "queue" (plist-get (cdr entry) :t)))
+                              sent))
+          (setq sent nil)
+          (mevedel-session-set-pending-inputs session 'follow-up nil)
+          (mevedel-collaboration-notify-queue-changed session)
+          (let ((queue (cl-find-if
+                        (lambda (entry)
+                          (equal "queue" (plist-get (cdr entry) :t)))
+                        sent)))
+            (should queue)
+            (should (= 0 (plist-get (cdr queue) :pending)))
+            (should-not (plist-get (cdr queue) :own)))
+          ;; An unshared session is simply not a room.
+          (should-not (mevedel-collaboration-notify-queue-changed nil)))
+      (kill-buffer data-buffer)
+      (mevedel-workspace-clear-registry))))
+
 (mevedel-deftest mevedel-view--drop-disallowed-guest-skills
   (:doc "drops queued guest invocations the allowlist no longer names"
    :quiet t)

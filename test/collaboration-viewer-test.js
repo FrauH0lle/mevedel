@@ -617,6 +617,14 @@ async function main() {
   assert.match(textOf(nodes.modeline), /deepseek-v4-flash/);
   assert.match(textOf(nodes.modeline), /edits/);
   assert.match(textOf(nodes.modeline), /Connected/);
+  assert.doesNotMatch(textOf(nodes.modeline), /plan/);
+  // Plan is enterable from a chip, so the strip has to show it is on.
+  await deliver({t: 'status', busy: true, model: 'deepseek-v4-flash',
+                 mode: 'edits', plan: true});
+  assert.match(textOf(nodes.modeline), /plan/);
+  await deliver({t: 'status', busy: true, model: 'deepseek-v4-flash',
+                 mode: 'edits'});
+  assert.doesNotMatch(textOf(nodes.modeline), /plan/);
   document.hidden = true;
   await deliver({t: 'status', busy: false});
   assert.equal(shownNotifications.length, 1);

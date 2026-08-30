@@ -56,6 +56,7 @@
     armed: null,
     model: null,
     mode: null,
+    plan: false,
     pending: 0,
     paused: false,
     guestName: null,
@@ -199,6 +200,10 @@
     };
     add(state.model);
     add(state.mode);
+    // Plan is a mode a guest can enter from a chip, so it has to be
+    // visible afterwards -- otherwise the session silently behaves
+    // differently than the transcript suggests.
+    if (state.plan) add('plan', 'ml plan');
     const tail = el('span', 'ml tail');
     const bits = [];
     if (state.guestName) bits.push(state.guestName);
@@ -1430,6 +1435,7 @@
       state.busy = frame.busy === true;
       if (typeof frame.model === 'string') state.model = frame.model;
       if (typeof frame.mode === 'string') state.mode = frame.mode;
+      state.plan = frame.plan === true;
       renderModeline();
     } else if (frame.t === 'bye') {
       state.ended = true;
