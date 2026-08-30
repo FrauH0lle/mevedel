@@ -843,6 +843,15 @@ code, pre {
 }
 .modeline .ml { white-space: nowrap; }
 .modeline .tail { margin-left: auto; }
+/* Plan changes what the session will do with what you send, so it is
+   the one status word that carries colour. */
+.modeline .plan {
+  color: var(--accent);
+  font-weight: 600;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 4px;
+  padding: 0 .35rem;
+}
 
 .queue-state {
   margin: 0 0 6px;

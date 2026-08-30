@@ -79,8 +79,14 @@
 
 ;; `mevedel-permission-mode'
 (declare-function mevedel-permission-mode-effective
-                  "mevedel-permission-mode" (&optional session))
+                  "mevedel-permission-mode"
+                  (&optional session data-buffer surface-buffer))
 (autoload 'mevedel-permission-mode-effective "mevedel-permission-mode")
+
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-mode-active-p "mevedel-plan-mode"
+                  (&optional session))
+(autoload 'mevedel-plan-mode-active-p "mevedel-plan-mode")
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (record))
@@ -238,6 +244,26 @@ guest set; nothing about one room reaches another room's guests.")
   "Return the live room owned by DATA-BUFFER, or nil."
   (and (bufferp data-buffer)
        (gethash data-buffer mevedel-collaboration--rooms)))
+
+(defun mevedel-collaboration--room-for-session (session)
+  "Return the live room sharing SESSION, or nil."
+  (when session
+    (cl-find session (mevedel-collaboration--room-list)
+             :key (lambda (room) (plist-get room :session)))))
+
+(defun mevedel-collaboration-notify-queue-changed (session)
+  "Re-publish SESSION\='s queue to its guests after a queue change.
+
+Most queue changes ride a request, whose observers publish anyway.  A
+local command drains without starting one, and a host-side edit starts
+nothing at all, so without this seam the guest keeps a card for an
+entry that is already gone."
+  (when-let* ((room (mevedel-collaboration--room-for-session session)))
+    (condition-case nil
+        (progn
+          (mevedel-collaboration--publish-queue room)
+          (mevedel-collaboration--publish-status room))
+      (error (mevedel-collaboration--observer-failure room)))))
 
 (defun mevedel-collaboration--room-list ()
   "Return every live collaboration room."
@@ -529,11 +555,18 @@ the Emacs mode line carries."
         (data-buffer (mevedel-collaboration--room-data-buffer room)))
     (list :t "status"
           :busy (if busy t :json-false)
-          :mode (when-let* ((session (plist-get room :session))
-                            (mode (ignore-errors
+          :mode (when-let* ((mode (ignore-errors
                                     (mevedel-permission-mode-effective
-                                     session))))
+                                     (plist-get room :session)
+                                     data-buffer))))
                   (format "%s" mode))
+          ;; Plan is a mode the guest can enter from a button, so the
+          ;; strip has to say when it is on.
+          :plan (if (and (plist-get room :session)
+                         (ignore-errors
+                           (mevedel-plan-mode-active-p
+                            (plist-get room :session))))
+                    t :json-false)
           :model (when data-buffer
                    (when-let* ((model (buffer-local-value 'gptel-model
                                                           data-buffer)))

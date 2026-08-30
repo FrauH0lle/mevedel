@@ -266,7 +266,11 @@ mis-attributed.")
 (defun mevedel-view--set-pending-follow-ups (entries &optional session)
   "Set SESSION's pending follow-up ENTRIES."
   (when-let* ((sess (or session (mevedel-view--session))))
-    (mevedel-session-set-pending-inputs sess 'follow-up entries)))
+    (mevedel-session-set-pending-inputs sess 'follow-up entries)
+    ;; A collaboration guest sees the queue it is waiting in, and this
+    ;; is the one place that queue changes.
+    (when (fboundp 'mevedel-collaboration-notify-queue-changed)
+      (mevedel-collaboration-notify-queue-changed sess))))
 
 (defun mevedel-view--follow-up-auto-drain-blocked-p (&optional session)
   "Return non-nil when SESSION follow-ups should wait for user action."
