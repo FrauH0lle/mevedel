@@ -112,6 +112,17 @@ pipe rows, in reverse buffer order."
 ;;
 ;;; Row parsing
 
+(defconst mevedel-view-table--raw-faces
+  '(markdown-ts-table markdown-ts-table-header markdown-ts-table-cell
+    markdown-ts-table-delimiter-cell)
+  "Faces `markdown-ts-mode\=' puts on raw table source.
+The renderer replaces pipe tables with its own box-drawing rows, so the
+source fontification must not survive into the projection.")
+
+(defun mevedel-view-table--raw-face-p (face)
+  "Return non-nil when FACE is raw table fontification."
+  (memq face mevedel-view-table--raw-faces))
+
 (defun mevedel-view-table--strip-table-faces (start end &optional object)
   "Remove raw table fontification faces between START and END in OBJECT.
 OBJECT is a string or nil for the current buffer."
@@ -124,8 +135,8 @@ OBJECT is a string or nil for the current buffer."
                (kept (cond
                       ((null value) value)
                       ((and (listp value) (not (keywordp (car value))))
-                       (remq 'markdown-table-face value))
-                      ((eq value 'markdown-table-face) nil)
+                       (seq-remove #'mevedel-view-table--raw-face-p value))
+                      ((mevedel-view-table--raw-face-p value) nil)
                       (t value))))
           (unless (equal kept value)
             (if kept

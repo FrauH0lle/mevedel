@@ -67,7 +67,6 @@ recommends those elements while leaving Codex room to choose the next action.
 
 - Consider making mevedel's data buffers hidden
 
-- Markdown-ts-mode is now part of Emacs core
 
 ## Entry format
 

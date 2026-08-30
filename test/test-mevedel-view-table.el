@@ -10,7 +10,39 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view-markdown)
+(require 'mevedel-view-render)
 (require 'mevedel-view-table)
+
+(mevedel-deftest mevedel-view-table-fontified-source ()
+  ,test
+  (test)
+
+  :doc "a table fontified as Markdown still renders as box-drawing rows"
+  ;; The renderer replaces pipe tables with its own rows and must strip the
+  ;; fontifier's table faces; a change of Markdown mode changes those face
+  ;; names, so the two are tested together rather than apart.
+  (when (mevedel-view--markdown-fontify-mode)
+    (with-temp-buffer
+      (insert (mevedel-view--fontify-as
+               "| Fn | Doc |\n|---|---|\n| lisp | head |\n"
+               'markdown-mode))
+      (mevedel-view-table-decorate (point-min) (point-max) nil)
+      (goto-char (point-min))
+      (should (search-forward "│ Fn   │ Doc  │" nil t))
+      (should (search-forward "├──────┼──────┤" nil t))
+      (should (search-forward "│ lisp │ head │" nil t))
+      (goto-char (point-min))
+      (should-not (search-forward "|---|---|" nil t))
+      ;; No raw table fontification survives into the rendered rows.
+      (let ((pos (point-min)))
+        (while (< pos (point-max))
+          (let ((next (or (next-single-property-change pos 'font-lock-face)
+                          (point-max)))
+                (face (get-text-property pos 'font-lock-face)))
+            (dolist (one (if (listp face) face (list face)))
+              (should-not (memq one mevedel-view-table--raw-faces)))
+            (setq pos next)))))))
+
 
 (mevedel-deftest mevedel-view-table-decorate ()
   ,test
@@ -160,20 +192,25 @@
   (with-temp-buffer
     (insert "| Fn | Doc |\n|---|---|\n| lisp | head |\n")
     (add-text-properties (point-min) (1- (point-max))
-                         '(font-lock-face markdown-table-face))
+                         '(font-lock-face markdown-ts-table))
+    ;; The delimiter row carries its own face.
+    (goto-char (point-min))
+    (search-forward "|---|---|")
+    (put-text-property (match-beginning 0) (match-end 0)
+                       'font-lock-face 'markdown-ts-table-delimiter-cell)
     ;; The trailing newline is fontified as part of the raw table too.
     (put-text-property (1- (point-max)) (point-max)
-                       'font-lock-face 'markdown-table-face)
+                       'font-lock-face 'markdown-ts-table)
     ;; A cell mixing the table face with another face keeps the other.
     (goto-char (point-min))
     (search-forward "lisp")
     (put-text-property (match-beginning 0) (match-end 0)
-                       'font-lock-face '(markdown-inline-code
-                                         markdown-table-face))
+                       'font-lock-face '(markdown-ts-code-span
+                                         markdown-ts-table-cell))
     (mevedel-view-table-decorate (point-min) (point-max) nil)
     (goto-char (point-min))
     (search-forward "lisp")
-    (should (eq 'markdown-inline-code
+    (should (eq 'markdown-ts-code-span
                 (get-text-property (match-beginning 0) 'font-lock-face)))
     (search-forward "head")
     (should-not (get-text-property (match-beginning 0) 'font-lock-face))
