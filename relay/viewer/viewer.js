@@ -21,6 +21,7 @@
   const composerScope = document.getElementById('composer-scope');
   const ownQueue = document.getElementById('own-queue');
   const skillChips = document.getElementById('skill-chips');
+  const themeButton = document.getElementById('theme-button');
 
   const PROTO = 2;
   const GIVE_UP_MS = 3 * 60 * 1000;
@@ -178,6 +179,35 @@
 
   function updateLiveAffordance() {
     setLiveButton(!atLiveEdge());
+  }
+
+  /* ── Colour theme ─────────────────────────────────────────────────── */
+  // Three states, matching the stylesheet: no stamp follows the system,
+  // an explicit stamp wins over it in either direction.
+  const THEMES = ['system', 'light', 'dark'];
+  const THEME_GLYPH = {system: '◐', light: '☀', dark: '☾'};
+  const THEME_LABEL = {
+    system: 'Colour theme: follow system',
+    light: 'Colour theme: light',
+    dark: 'Colour theme: dark',
+  };
+
+  function storedTheme() {
+    let value = null;
+    try { value = localStorage.getItem('mevedel-theme'); }
+    catch (_error) { /* storage unavailable */ }
+    return THEMES.includes(value) ? value : 'system';
+  }
+
+  function applyTheme(theme) {
+    const root = document.documentElement;
+    if (theme === 'system') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', theme);
+    if (themeButton) {
+      themeButton.textContent = THEME_GLYPH[theme];
+      themeButton.setAttribute('aria-label', THEME_LABEL[theme]);
+      themeButton.className = `bell${theme === 'system' ? '' : ' on'}`;
+    }
   }
 
   /* ── Notifications ────────────────────────────────────────────────── */
@@ -1496,6 +1526,16 @@
     if (composerName) {
       composerName.value = localStorage.getItem('mevedel-guest-name') || '';
     }
+  }
+
+  applyTheme(storedTheme());
+  if (themeButton) {
+    themeButton.addEventListener('click', () => {
+      const next = THEMES[(THEMES.indexOf(storedTheme()) + 1) % THEMES.length];
+      try { localStorage.setItem('mevedel-theme', next); }
+      catch (_error) { /* the choice then lasts for this page only */ }
+      applyTheme(next);
+    });
   }
 
   if (notifyButton) {
