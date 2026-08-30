@@ -269,15 +269,20 @@ code, pre {
    grows in steps rather than stranding the transcript in a narrow
    ribbon with empty gutters.  Prose grows more slowly than the column:
    tool output, diffs, and tables are what benefit from real width. */
-@media (min-width: 88rem) {
-  .ledger { max-width: 58rem; }
-  .prose { max-width: 74ch; }
-  .requests, .own-queue, .composer { max-width: 56rem; }
+@media (min-width: 72rem) {
+  .ledger { max-width: 62rem; }
+  .prose { max-width: 76ch; }
+  .requests, .own-queue, .composer { max-width: 60rem; }
 }
-@media (min-width: 120rem) {
-  .ledger { max-width: 66rem; }
-  .prose { max-width: 82ch; }
-  .requests, .own-queue, .composer { max-width: 64rem; }
+@media (min-width: 100rem) {
+  .ledger { max-width: 78rem; }
+  .prose { max-width: 84ch; }
+  .requests, .own-queue, .composer { max-width: 74rem; }
+}
+@media (min-width: 130rem) {
+  .ledger { max-width: 92rem; }
+  .prose { max-width: 90ch; }
+  .requests, .own-queue, .composer { max-width: 86rem; }
 }
 
 .turn {
@@ -496,6 +501,28 @@ code, pre {
 /* Structure inside a tool result: line-number gutters and the
    path:line prefix grep puts in front of every match. These are
    scaffolding, so they recede and let the source carry the colour. */
+/* Pipe tables: the viewer renders them, so they need the same
+   restraint as the rest -- hairlines, a tinted head, and their own
+   scroll container so a wide table never scrolls the page. */
+.tablewrap { overflow-x: auto; margin: .1rem 0 .6rem; }
+.mdtable {
+  border-collapse: collapse;
+  font-size: .86rem;
+  min-width: 100%;
+}
+.mdtable th, .mdtable td {
+  border: 1px solid var(--line);
+  padding: .3rem .6rem;
+  vertical-align: top;
+}
+.mdtable th {
+  background: var(--surface-2);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.mdtable td { font-variant-numeric: tabular-nums; }
+.mdtable tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface-2) 45%, transparent); }
+
 .result .gutter { color: var(--com); user-select: none; }
 .result .gpath { color: var(--muted); }
 .result .gline { color: var(--fn); }

@@ -264,6 +264,65 @@
     if (last < text.length) target.append(text.slice(last));
   }
 
+  // GitHub-style pipe tables: a header row, a delimiter row of dashes,
+  // then body rows. The delimiter row is what distinguishes a table
+  // from prose that happens to contain a pipe.
+  function splitRow(line) {
+    const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+    return trimmed.split('|').map(cell => cell.trim());
+  }
+
+  function isTableStart(lines, index) {
+    const header = lines[index];
+    const delimiter = lines[index + 1];
+    if (!header || !delimiter) return false;
+    if (!header.includes('|') || !delimiter.includes('|')) return false;
+    if (!/^[\s|:-]+$/.test(delimiter)) return false;
+    const cells = splitRow(delimiter);
+    return cells.length > 1
+      && cells.every(cell => /^:?-{1,}:?$/.test(cell));
+  }
+
+  function columnAlignments(line) {
+    return splitRow(line).map(cell => {
+      const left = cell.startsWith(':');
+      const right = cell.endsWith(':');
+      if (left && right) return 'center';
+      if (right) return 'right';
+      return 'left';
+    });
+  }
+
+  function renderTable(rows) {
+    const wrap = el('div', 'tablewrap');
+    const table = el('table', 'mdtable');
+    const align = columnAlignments(rows[1]);
+    const head = el('thead');
+    const headRow = el('tr');
+    splitRow(rows[0]).forEach((cell, column) => {
+      const th = el('th');
+      if (align[column]) th.style.textAlign = align[column];
+      renderInline(th, cell);
+      headRow.append(th);
+    });
+    head.append(headRow);
+    table.append(head);
+    const body = el('tbody');
+    rows.slice(2).forEach(row => {
+      const tr = el('tr');
+      splitRow(row).forEach((cell, column) => {
+        const td = el('td');
+        if (align[column]) td.style.textAlign = align[column];
+        renderInline(td, cell);
+        tr.append(td);
+      });
+      body.append(tr);
+    });
+    table.append(body);
+    wrap.append(table);
+    return wrap;
+  }
+
   function renderMarkdown(text) {
     const root = el('div', 'prose');
     const lines = String(text || '').split('\n');
@@ -279,17 +338,35 @@
     };
     while (index < lines.length) {
       const line = lines[index];
-      const fence = line.match(/^```(\S*)\s*$/);
+      // A fence closes only on a run of the same character that is at
+      // least as long as the opener, so a ```elisp block nested inside
+      // a ````markdown one no longer ends the outer block early.
+      const fence = line.match(/^(\s{0,3})(`{3,}|~{3,})\s*(\S*)\s*$/);
       if (fence) {
         flush();
+        const marker = fence[2];
+        const closer = new RegExp(
+          `^\\s{0,3}${marker[0] === '`' ? '`' : '~'}{${marker.length},}\\s*$`);
         const code = [];
         index++;
-        while (index < lines.length && !/^```\s*$/.test(lines[index])) {
+        while (index < lines.length && !closer.test(lines[index])) {
           code.push(lines[index]);
           index++;
         }
         index++; // closing fence
-        root.append(renderCodeBlock(code.join('\n'), fence[1]));
+        root.append(renderCodeBlock(code.join('\n'), fence[3]));
+        continue;
+      }
+      // A pipe table needs its delimiter row to be a table at all.
+      if (isTableStart(lines, index)) {
+        flush();
+        const rows = [];
+        while (index < lines.length && /\|/.test(lines[index])
+               && lines[index].trim()) {
+          rows.push(lines[index]);
+          index++;
+        }
+        root.append(renderTable(rows));
         continue;
       }
       const heading = line.match(/^(#{1,4})\s+(.*)$/);
@@ -380,6 +457,16 @@
       [/`[^`]*`|"(?:[^"\\]|\\.)*"/, 'tok-str'],
       [/\b(?:func|return|if|else|for|range|type|struct|interface|package|import|var|const|go|defer|select|case|switch|nil|true|false)\b/, 'tok-kw'],
     ],
+    // Reading a doc is as common as reading source, so markdown gets
+    // its own rules: structure as keyword, code spans as string.
+    markdown: [
+      [/^\s{0,3}#{1,6}\s.*$/m, 'tok-kw'],
+      [/^\s{0,3}(?:[-*+]|\d+\.)\s/m, 'tok-kw'],
+      [/^\s{0,3}>.*$/m, 'tok-com'],
+      [/`[^`\n]+`/, 'tok-str'],
+      [/\*\*[^*\n]+\*\*|__[^_\n]+__/, 'tok-fn'],
+      [/\[[^\]\n]*\]\([^)\n]*\)/, 'tok-fn'],
+    ],
   };
   const LANG_ALIASES = {
     'emacs-lisp': 'lisp', elisp: 'lisp', lisp: 'lisp', scheme: 'lisp',
@@ -387,6 +474,7 @@
     python: 'python', py: 'python',
     js: 'js', javascript: 'js', typescript: 'js', ts: 'js', json: 'js',
     go: 'go', golang: 'go',
+    md: 'markdown', markdown: 'markdown', mdown: 'markdown',
   };
 
   function highlightInto(target, text, lang) {
@@ -424,6 +512,7 @@
     py: 'python',
     js: 'js', mjs: 'js', cjs: 'js', ts: 'js', tsx: 'js', jsx: 'js', json: 'js',
     go: 'go',
+    md: 'markdown', markdown: 'markdown', org: 'markdown', txt: '',
   };
 
   function langForPath(path) {
