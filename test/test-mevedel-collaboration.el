@@ -1829,7 +1829,15 @@
     (dolist (content (list view full))
       (should-not (string-match-p "raw-key" content))
       (should (string-match-p "TAB" content))
-      (should (string-match-p "bearer" content)))))
+      (should (string-match-p "bearer" content)))
+    ;; The QR is the convenience; the link is the payload.  An
+    ;; unavailable or failing encoder must not take the links with it.
+    (cl-letf (((symbol-function 'qrencode)
+               (lambda (&rest _) (error "No QR for you"))))
+      (let ((degraded (mevedel-collaboration--share-content room 'view)))
+        (should (string-match-p "room\\.view-secret" degraded))
+        (should (string-match-p "QR unavailable" degraded))
+        (should (string-match-p "TAB" degraded))))))
 
 (mevedel-deftest mevedel-collaboration--show-share-frame
   (:doc "falls back to a window when child-frame creation signals")
