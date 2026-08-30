@@ -326,13 +326,6 @@ code, pre {
 .turn.guest .glyph { background: var(--guest-soft); color: var(--guest); }
 .turn.ai    .glyph { background: var(--surface-2); color: var(--muted); }
 .content { min-width: 0; }
-/* A guest turn is someone else's input arriving in your session, so it
-   gets a bracket of its own beside the rail -- the one turn kind worth
-   marking twice. */
-.turn.guest .content {
-  border-left: 2px solid color-mix(in srgb, var(--guest) 45%, transparent);
-  padding-left: .7rem;
-}
 
 .who {
   display: flex;
