@@ -267,22 +267,22 @@ code, pre {
 }
 /* A desktop window is far wider than a reading measure, so the column
    grows in steps rather than stranding the transcript in a narrow
-   ribbon with empty gutters.  Prose grows more slowly than the column:
-   tool output, diffs, and tables are what benefit from real width. */
+   ribbon with empty gutters.  Everything in the transcript shares that
+   one width; the type grows with it so a long line stays readable
+   instead of the prose being capped narrower than the tool rows. */
 @media (min-width: 72rem) {
   .ledger { max-width: 62rem; }
-  .prose { max-width: 76ch; }
   .requests, .own-queue, .composer { max-width: 60rem; }
 }
 @media (min-width: 100rem) {
-  .ledger { max-width: 78rem; }
-  .prose { max-width: 84ch; }
-  .requests, .own-queue, .composer { max-width: 74rem; }
+  body { font-size: 16px; }
+  .ledger { max-width: 70rem; }
+  .requests, .own-queue, .composer { max-width: 68rem; }
 }
 @media (min-width: 130rem) {
-  .ledger { max-width: 92rem; }
-  .prose { max-width: 90ch; }
-  .requests, .own-queue, .composer { max-width: 86rem; }
+  body { font-size: 17px; }
+  .ledger { max-width: 76rem; }
+  .requests, .own-queue, .composer { max-width: 74rem; }
 }
 
 .turn {
@@ -368,7 +368,11 @@ code, pre {
 }
 
 /* ── Prose / markdown ───────────────────────────────────────────────── */
-.prose { max-width: 62ch; overflow-wrap: break-word; }
+/* Prose takes the column, exactly like the tool rows beside it: two
+   different widths in one transcript read as a layout bug, whichever
+   one is "correct".  A wide display is answered with larger type
+   above, so the line stays readable while the column grows. */
+.prose { overflow-wrap: break-word; }
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
 .prose p { margin: .5rem 0; }
