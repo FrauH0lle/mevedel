@@ -239,6 +239,7 @@
     if (themeButton) {
       themeButton.textContent = THEME_GLYPH[theme];
       themeButton.setAttribute('aria-label', THEME_LABEL[theme]);
+      themeButton.setAttribute('title', `${THEME_LABEL[theme]} — click to change`);
       themeButton.className = `bell${theme === 'system' ? '' : ' on'}`;
     }
   }
@@ -267,10 +268,13 @@
     const blocked = notificationsSupported()
       && Notification.permission === 'denied';
     notifyButton.setAttribute('aria-pressed', on ? 'true' : 'false');
-    notifyButton.setAttribute(
-      'aria-label',
-      blocked ? 'Notifications blocked by the browser'
-        : on ? 'Notifications on' : 'Notifications off');
+    const label = blocked
+      ? 'Notifications blocked by the browser'
+      : on
+        ? 'Notifications on — you will be told while this tab is away'
+        : 'Notifications off — click to be told when the session needs you';
+    notifyButton.setAttribute('aria-label', label);
+    notifyButton.setAttribute('title', label);
     notifyButton.className = `bell${on ? ' on' : ''}${blocked ? ' blocked' : ''}`;
     notifyButton.textContent = on ? '🔔' : '🔕';
   }
@@ -422,7 +426,15 @@
     const flush = () => {
       if (paragraph.length) {
         const p = el('p');
-        renderInline(p, paragraph.join('\n'));
+        // A single newline is a real line break here, not a space.
+        // Strict CommonMark would fold these into one line, but the
+        // model means them -- "one number per line" arrives as forty
+        // newlines -- and Emacs renders them, so the two surfaces
+        // would otherwise disagree about the same answer.
+        paragraph.forEach((line, index) => {
+          if (index) p.append(el('br'));
+          renderInline(p, line);
+        });
         root.append(p);
         paragraph = [];
       }
@@ -941,6 +953,11 @@
         button.type = 'button';
         button.setAttribute('aria-pressed',
                             state.filter === value ? 'true' : 'false');
+        button.setAttribute(
+          'title',
+          value === 'all' ? 'Show every turn'
+            : value === 'main' ? 'Show only the main conversation'
+              : `Show and reply in ◆ ${directiveLabel(value)}`);
         if (counts[value]) {
           button.append(el('span', 'cnt', String(counts[value])));
         }
@@ -1074,6 +1091,8 @@
     if (frame.allowCancel === true) {
       const dismiss = el('button', 'btn quiet', 'Dismiss');
       dismiss.type = 'button';
+      dismiss.setAttribute(
+        'title', 'Decline the questionnaire; the turn keeps running');
       dismiss.addEventListener('click', () => {
         send({t: 'ui-response', reqId: frame.reqId, cancel: true});
       });
@@ -1120,6 +1139,7 @@
     (Array.isArray(frame.options) ? frame.options : []).forEach(option => {
       const button = el('button', 'btn', option.label);
       button.type = 'button';
+      button.setAttribute('title', `Answer with "${option.label}"`);
       button.addEventListener('click', () => {
         send({t: 'ui-response', reqId: frame.reqId, option: option.id});
       });
@@ -1134,6 +1154,8 @@
       feedback.setAttribute('aria-label', 'Feedback');
       const sendFeedback = el('button', 'btn quiet', 'Send feedback');
       sendFeedback.type = 'button';
+      sendFeedback.setAttribute(
+        'title', 'Answer with a comment instead of choosing an option');
       sendFeedback.addEventListener('click', () => {
         if (feedback.value.trim()) {
           send({t: 'ui-response', reqId: frame.reqId,
@@ -1347,7 +1369,10 @@
                       `${sigilFor(entry.kind)}${entry.name}`);
       chip.type = 'button';
       chip.setAttribute('aria-pressed', armed ? 'true' : 'false');
-      if (entry.hint) chip.setAttribute('title', entry.hint);
+      chip.setAttribute(
+        'title',
+        `${armed ? 'Cancel' : 'Prepare'} ${sigilFor(entry.kind)}${entry.name}`
+        + (entry.hint ? ` — arguments: ${entry.hint}` : ' — takes no arguments'));
       chip.addEventListener('click', () => {
         setArmedInvocation(armed ? null : entry);
       });
@@ -1386,6 +1411,7 @@
       const controls = el('div', 'request-controls');
       const retract = el('button', 'btn quiet', 'Retract');
       retract.type = 'button';
+      retract.setAttribute('title', 'Take this prompt back out of the queue');
       retract.addEventListener('click', () => {
         send({t: 'retract', id: entry.id});
       });

@@ -291,6 +291,10 @@ async function main() {
   assert.equal(nodes['skill-chips'].hidden, false);
   assert.equal(nodes['skill-chips'].children.length, 2);
   assert.equal(textOf(nodes['skill-chips'].children[0]), '/plan');
+  // Every control says what it does on hover.
+  assert.match(nodes['skill-chips'].children[0].attributes.title,
+               /Prepare \/plan.*\[prompt\]/);
+  assert.match(nodes['theme-button'].attributes.title, /Colour theme/);
   assert.equal(textOf(nodes['skill-chips'].children[1]), '$review');
   await deliver({t: 'snapshot-chunk', final: false, records: [
     {id: 'assistant', kind: 'assistant', revision: 0,
@@ -446,6 +450,16 @@ async function main() {
   assert.match(mdFlat, /```elisp/);
   await deliver({t: 'remove', ids: ['md']});
 
+  // Single newlines are real breaks: the model means them, and Emacs
+  // renders them, so the two surfaces must not disagree.
+  await deliver({t: 'record', record: {
+    id: 'breaks', kind: 'assistant', revision: 0, text: '1\n2\n3',
+  }});
+  const breakFlat = JSON.stringify(findByRecordId(nodes.transcript, 'breaks'),
+                                   (k, v) => (k === 'parent' ? undefined : v));
+  assert.equal((breakFlat.match(/"tagName":"br"/g) || []).length, 2);
+  await deliver({t: 'remove', ids: ['breaks']});
+
   // Live removal.
   await deliver({t: 'remove', ids: ['tool', 'patch']});
   assert.equal(nodes.transcript.children.length, 2);
@@ -489,6 +503,7 @@ async function main() {
     text: 'Refactor the parser\nwith details', directive: 'dir-1',
   }});
   assert.equal(nodes.filter.hidden, false);
+  assert.match(nodes.filter.children[0].attributes.title, /every turn/i);
   const labels = nodes.filter.children.map(textOf);
   assert.equal(labels.length, 3);
   assert.match(labels[0], /^All/);
