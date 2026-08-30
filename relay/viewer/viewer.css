@@ -484,6 +484,13 @@ code, pre {
   max-height: 24rem;
 }
 .tool.failed .result { color: var(--failed); }
+/* Structure inside a tool result: line-number gutters and the
+   path:line prefix grep puts in front of every match. These are
+   scaffolding, so they recede and let the source carry the colour. */
+.result .gutter { color: var(--com); user-select: none; }
+.result .gpath { color: var(--muted); }
+.result .gline { color: var(--fn); }
+.result .gsep { color: var(--com); }
 .tool .result.diff { padding: .4rem 0; }
 
 /* ── Diff ───────────────────────────────────────────────────────────── */

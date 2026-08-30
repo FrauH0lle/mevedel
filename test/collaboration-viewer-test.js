@@ -311,6 +311,45 @@ async function main() {
   assert.match(textOf(toolTurn), /truncated/);
   assert.match(textOf(toolTurn), /completed/);
 
+  // A Read result is highlighted from its path's extension, with the
+  // line-number gutter kept out of the highlighter.
+  await deliver({t: 'record', record: {
+    id: 'read', kind: 'tool', revision: 0, name: 'Read', status: 'completed',
+    summary: 'Read', detail: 'mevedel-view.el',
+    result: '  1\t(defun demo ()\n  2\t  "doc")',
+  }});
+  const readFlat = JSON.stringify(findByRecordId(nodes.transcript, 'read'),
+                                  (k, v) => (k === 'parent' ? undefined : v));
+  assert.match(readFlat, /"className":"gutter"/);
+  assert.match(readFlat, /"className":"tok-kw"/);
+  assert.match(readFlat, /"className":"tok-str"/);
+  // The gutter text survives verbatim beside the highlighted source.
+  assert.match(textOf(findByRecordId(nodes.transcript, 'read')), /1\t\(defun/);
+
+  // Grep rows carry path and line as their own structure, and each
+  // match line picks its language from its own path.
+  await deliver({t: 'record', record: {
+    id: 'grep', kind: 'tool', revision: 0, name: 'Grep', status: 'completed',
+    summary: 'Grep', detail: 'defun',
+    result: 'mevedel-view.el:42:(defun demo ()\nrelay/main.go:9:func main() {',
+  }});
+  const grepFlat = JSON.stringify(findByRecordId(nodes.transcript, 'grep'),
+                                  (k, v) => (k === 'parent' ? undefined : v));
+  assert.match(grepFlat, /"className":"gpath"/);
+  assert.match(grepFlat, /"className":"gline"/);
+  assert.match(grepFlat, /"className":"tok-kw"/);
+
+  // A result with no language to infer stays plain text.
+  await deliver({t: 'record', record: {
+    id: 'plain', kind: 'tool', revision: 0, name: 'Bash', status: 'completed',
+    summary: 'Bash', detail: 'ls -l', result: 'total 0',
+  }});
+  const plainFlat = JSON.stringify(findByRecordId(nodes.transcript, 'plain'),
+                                   (k, v) => (k === 'parent' ? undefined : v));
+  assert.doesNotMatch(plainFlat, /"className":"tok-/);
+  assert.match(textOf(findByRecordId(nodes.transcript, 'plain')), /total 0/);
+  await deliver({t: 'remove', ids: ['read', 'grep', 'plain']});
+
   // Guest badge renders on the attributed prompt only.
   const guestTurn = findByRecordId(nodes.transcript, 'guest-user');
   assert.equal(guestTurn.dataset.role, 'guest');
