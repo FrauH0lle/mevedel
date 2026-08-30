@@ -348,7 +348,39 @@ async function main() {
                                    (k, v) => (k === 'parent' ? undefined : v));
   assert.doesNotMatch(plainFlat, /"className":"tok-/);
   assert.match(textOf(findByRecordId(nodes.transcript, 'plain')), /total 0/);
-  await deliver({t: 'remove', ids: ['read', 'grep', 'plain']});
+  // Xref and Imenu print the same path:line: shape as Grep.
+  await deliver({t: 'record', record: {
+    id: 'xref', kind: 'tool', revision: 0, name: 'XrefReferences',
+    status: 'completed', summary: 'XrefReferences', detail: 'demo',
+    result: 'mevedel-view.el:42: (defun demo ()',
+  }});
+  const xrefFlat = JSON.stringify(findByRecordId(nodes.transcript, 'xref'),
+                                  (k, v) => (k === 'parent' ? undefined : v));
+  assert.match(xrefFlat, /"className":"gline"/);
+  assert.match(xrefFlat, /"className":"tok-kw"/);
+
+  // Glob dims the directory so basenames scan.
+  await deliver({t: 'record', record: {
+    id: 'glob', kind: 'tool', revision: 0, name: 'Glob', status: 'completed',
+    summary: 'Glob', detail: '**/*.el', result: 'relay/viewer/viewer.js',
+  }});
+  const globFlat = JSON.stringify(findByRecordId(nodes.transcript, 'glob'),
+                                  (k, v) => (k === 'parent' ? undefined : v));
+  assert.match(globFlat, /"className":"gpath"/);
+  assert.match(textOf(findByRecordId(nodes.transcript, 'glob')),
+               /relay\/viewer\/viewer\.js/);
+
+  // Eval answers with a printed Lisp value.
+  await deliver({t: 'record', record: {
+    id: 'eval', kind: 'tool', revision: 0, name: 'Eval', status: 'completed',
+    summary: 'Eval', detail: '(+ 1 2)', result: '(setq x "done")',
+  }});
+  assert.match(JSON.stringify(findByRecordId(nodes.transcript, 'eval'),
+                              (k, v) => (k === 'parent' ? undefined : v)),
+               /"className":"tok-str"/);
+
+  await deliver({t: 'remove',
+                 ids: ['read', 'grep', 'plain', 'xref', 'glob', 'eval']});
 
   // Guest badge renders on the attributed prompt only.
   const guestTurn = findByRecordId(nodes.transcript, 'guest-user');
