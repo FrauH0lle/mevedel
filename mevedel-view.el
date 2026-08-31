@@ -757,9 +757,12 @@ new view buffer is created."
       (let* ((data-name (buffer-name data-buf))
              ;; Derive view buffer name from data buffer name:
              ;; *mevedel:main@proj* -> *mevedel:main@proj:view*
-             (derived-name (if (string-match "\\*$" data-name)
-                               (replace-match ":view*" t t data-name)
-                             (concat data-name ":view")))
+             (derived-name
+              (replace-regexp-in-string
+               "\\`[[:space:]]+" ""
+               (if (string-match "\\*$" data-name)
+                   (replace-match ":view*" t t data-name)
+                 (concat data-name ":view"))))
              (view-name (or view-name derived-name))
              (existing (get-buffer view-name))
              (view-buf (or existing (get-buffer-create view-name)))
