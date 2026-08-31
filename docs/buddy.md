@@ -44,9 +44,9 @@ the code exists, and can be retracted once you have acted on it. Guidance opens
 a thread; review closes it. Do not partition notes by originating channel — the
 composition is the point.
 
-Guidance preempts an automatic review already in flight, abandoning it without
-recording its changes as reviewed. The request you made outranks the one a
-timer made.
+Guidance cancels its source buffer's queued automatic review and preempts one
+already in flight, abandoning it without recording its changes as reviewed.
+The request you made outranks the one a timer made.
 
 ## Scope
 

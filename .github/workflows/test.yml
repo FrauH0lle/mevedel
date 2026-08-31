@@ -61,12 +61,6 @@ jobs:
     - name: Clean Eask state
       run: eask clean all
 
-    # HACK: Work around package.el skipping bundled package upgrades during
-    #   dependency installation; gptel needs a newer transient than Emacs 30.2
-    #   ships.
-    - name: Install transient
-      run: eask install transient --force
-
     - name: Install dependencies
       run: eask install-deps --dev
 
@@ -118,9 +112,6 @@ jobs:
     # exercises cannot start.
     - name: Permit unprivileged user namespaces
       run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-
-    - name: Install transient
-      run: npx @emacs-eask/cli install transient --force
 
     - name: Install dependencies
       run: npx @emacs-eask/cli install-deps --dev
