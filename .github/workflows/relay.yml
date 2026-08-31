@@ -1,8 +1,8 @@
 name: relay
 
 # The viewer assets are `go:embed'-ed into the binary, so a CSS or JS change
-# produces a different relay just as a .go change does; the path filter
-# covers the whole directory rather than *.go.
+# produces a different relay just as a .go change does; the path filter covers
+# the whole directory rather than *.go.
 on:
   push:
     branches: [master]
@@ -43,8 +43,8 @@ jobs:
           go test ./...
 
       # CGO off makes the binary static, so it does not care what glibc the
-      # deployment host has. arm64 costs one more invocation and saves
-      # guessing whether the server is x86.
+      # deployment host has. arm64 costs one more invocation and saves guessing
+      # whether the server is x86.
       - name: Build
         run: |
           mkdir -p dist
@@ -74,5 +74,5 @@ jobs:
             gh release upload "$TAG" dist/mevedel-relay-* dist/SHA256SUMS --clobber
           else
             gh release create "$TAG" dist/mevedel-relay-* dist/SHA256SUMS \
-              --title "relay $TAG" --notes-file dist/NOTES.md
+              --title "$TAG" --notes-file dist/NOTES.md
           fi
