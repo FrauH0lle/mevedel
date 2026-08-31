@@ -64,6 +64,29 @@
      '((:namespace interaction :id prompt :body "uvwxyz")))
     (should (eq (char-after) ?x)))
 
+  :doc "preserves point at a fragment's final character across redraws"
+  (with-temp-buffer
+    (mevedel-view-zone-test--setup-markers)
+    (mevedel-view-zone-reconcile
+     'status (point-min) (point-min)
+     '((:namespace status :id tasks :body "Long task status")))
+    (let ((bounds (mevedel-view-zone-fragment-bounds 'status 'tasks)))
+      (goto-char (1- (plist-get bounds :end)))
+      (should (= (plist-get bounds :start)
+                 (plist-get (mevedel-view-zone--bounds-at) :start))))
+    (mevedel-view-zone-reconcile
+     'status (point-min) (point-min)
+     '((:namespace status :id tasks :body "Short")))
+    (let ((final-position (point)))
+      (should (= final-position
+                 (1- (plist-get
+                      (mevedel-view-zone-fragment-bounds 'status 'tasks)
+                      :end))))
+      (mevedel-view-zone-reconcile
+       'status (point-min) (point-min)
+       '((:namespace status :id tasks :body "Short")))
+      (should (= final-position (point)))))
+
   :doc "does not mutate an unchanged managed fragment"
   (with-temp-buffer
     (mevedel-view-zone-test--setup-markers)
