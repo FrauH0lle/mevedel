@@ -480,6 +480,8 @@
       (let ((side-data
              (buffer-local-value 'mevedel--data-buffer side-view)))
         (should (buffer-live-p side-data))
+        (should (string-prefix-p " " (buffer-name side-data)))
+        (should-not (string-prefix-p " " (buffer-name side-view)))
         (with-current-buffer side-data
           (should-not (mevedel-session-plan-mode mevedel--session))
           (should (string-match-p "Parent prompt" (buffer-string)))

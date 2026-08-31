@@ -306,6 +306,25 @@
 (mevedel-deftest mevedel-view--ensure ()
   ,test
   (test)
+
+  :doc "derived view names do not inherit an internal buffer prefix"
+  (let ((data-buf (generate-new-buffer " *mevedel-view-hidden-data*"))
+        view-buf)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode))
+          (setq view-buf (mevedel-view--ensure data-buf))
+          (should-not (string-prefix-p " " (buffer-name view-buf)))
+          (should (eq data-buf
+                      (buffer-local-value 'mevedel--data-buffer view-buf)))
+          (should (eq view-buf
+                      (buffer-local-value 'mevedel--view-buffer data-buf))))
+      (when (buffer-live-p view-buf)
+        (kill-buffer view-buf))
+      (when (buffer-live-p data-buf)
+        (kill-buffer data-buf))))
+
   :doc "setup failure removes only the newly created partial view"
   (let ((data-buf (generate-new-buffer " *mevedel-view-ensure-data*"))
         (view-name " *mevedel-view-ensure-partial*"))
