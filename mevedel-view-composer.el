@@ -804,6 +804,7 @@ ALLOW-ARMED-FORK permits submission of an already armed session fork."
   "C-c RET" #'mevedel-view-send
   "C-c TAB" #'mevedel-view-send-follow-up
   "C-c C-k" #'mevedel-view-abort
+  "C-c C-z" #'mevedel-side-conversation-close
   "C-y" #'mevedel-view-yank-dwim)
 
 (define-key mevedel-view--composer-keymap
