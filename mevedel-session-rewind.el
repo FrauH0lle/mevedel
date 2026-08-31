@@ -1408,7 +1408,8 @@ head CAS."
                   publication)
                  (let ((rechecked
                         (mevedel-session-rewind-restore-plan
-                         session (plist-get target :cum-turn) t)))
+                         session (plist-get target :cum-turn)
+                         (not (eq boundary 'after)))))
                    (unless
                        (equal
                         (sort (copy-sequence plan)
@@ -1630,7 +1631,8 @@ head CAS."
            session candidate target staging-path staging-buffer)
           (let ((rechecked
                  (mevedel-session-rewind-restore-plan
-                  session (plist-get target :cum-turn) t)))
+                  session (plist-get target :cum-turn)
+                  (not (eq boundary 'after)))))
             (unless (equal
                      (sort (copy-sequence plan)
                            (lambda (a b)
