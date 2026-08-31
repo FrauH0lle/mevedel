@@ -22,7 +22,7 @@ jobs:
         # Windows job measures nothing the product claims to support.
         os: [ubuntu-latest]
         emacs-version:
-          - 31.1
+          - &emacs-version '31.1'
         experimental: [false]
         # include:
         # - os: ubuntu-latest
@@ -106,7 +106,7 @@ jobs:
 
     - uses: jcs090218/setup-emacs@master
       with:
-        version: 30.2
+        version: *emacs-version
 
     - name: Install system dependencies
       run: |
