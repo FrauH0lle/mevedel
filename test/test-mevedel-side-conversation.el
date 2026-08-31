@@ -87,7 +87,33 @@
       (should-not (buffer-live-p side-data))
       (should (buffer-live-p data-buf))
       (with-current-buffer data-buf
-        (should-not mevedel-side-conversation--side-buffer)))))
+        (should-not mevedel-side-conversation--side-buffer))))
+
+  :doc "stops an unsettled remote mutation before the close query runs"
+  (let* ((workspace
+          (mevedel-workspace--create
+           :type 'file :id "btw-command-mutation" :root "/tmp"
+           :name "btw-command-mutation"))
+         (session (mevedel-session-create "main" workspace))
+         (unsettled t)
+         (teardown-count 0))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session
+                    mevedel-view--side-conversation-p t))
+      (cl-letf (((symbol-function 'mevedel-execution-unsettled-mutation-p)
+                 (lambda (_session) unsettled))
+                ((symbol-function 'mevedel-execution-teardown-session)
+                 (lambda (_session)
+                   (cl-incf teardown-count)
+                   (setq unsettled nil))))
+        (with-current-buffer view-buf
+          (mevedel-side-conversation-close)))
+      (should (> teardown-count 0))
+      (should-not (buffer-live-p view-buf))
+      (should-not (buffer-live-p data-buf)))))
 
 (mevedel-deftest mevedel-view-send/btw (:quiet t)
   ,test

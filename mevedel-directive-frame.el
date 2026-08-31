@@ -230,14 +230,18 @@ inherit the hidden turns."
   (let ((buffer (or view-buffer mevedel-directive-frame--view-buffer)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (remove-from-invisibility-spec
-         mevedel-directive-frame--invisible-symbol)
         (with-silent-modifications
-          (let ((inhibit-read-only t))
-            (remove-text-properties
-             (point-min) (point-max)
-             (list 'invisible
-                   mevedel-directive-frame--invisible-symbol))))))
+          (let ((inhibit-read-only t)
+                match)
+            (save-excursion
+              (goto-char (point-min))
+              (while (setq match
+                           (text-property-search-forward
+                            'invisible
+                            mevedel-directive-frame--invisible-symbol t))
+                (remove-text-properties
+                 (prop-match-beginning match) (prop-match-end match)
+                 '(invisible nil))))))))
     (setq mevedel-directive-frame--filtered-p nil)))
 
 (defun mevedel-directive-frame--apply-filter ()
@@ -252,18 +256,22 @@ view buffer is displayed outside the directive frame."
       (with-current-buffer buffer
         (with-silent-modifications
           (let ((inhibit-read-only t))
-            (remove-text-properties
-             (point-min) (point-max)
-             (list 'invisible
-                   mevedel-directive-frame--invisible-symbol))
-            (pcase-dolist (`(,start ,end . ,id)
-                           (mevedel-directive-frame--turn-spans))
-              (unless (equal id mevedel-directive-frame--directive-id)
-                (put-text-property
-                 start end 'invisible
-                 mevedel-directive-frame--invisible-symbol)))))
-        (add-to-invisibility-spec
-         mevedel-directive-frame--invisible-symbol))
+            (mevedel-directive-frame--clear-filter buffer)
+            (save-excursion
+              (pcase-dolist (`(,start ,end . ,id)
+                             (mevedel-directive-frame--turn-spans))
+                (unless (equal id mevedel-directive-frame--directive-id)
+                  (save-restriction
+                    (narrow-to-region start end)
+                    (goto-char (point-min))
+                    (let (match)
+                      (while (setq match
+                                   (text-property-search-forward
+                                    'invisible nil t))
+                        (put-text-property
+                         (prop-match-beginning match) (prop-match-end match)
+                         'invisible
+                         mevedel-directive-frame--invisible-symbol))))))))))
       (setq mevedel-directive-frame--filtered-p t))))
 
 (defun mevedel-directive-frame-refresh-filter ()

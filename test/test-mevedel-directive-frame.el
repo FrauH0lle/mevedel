@@ -143,15 +143,35 @@ directive turn.  BODY runs inside the view buffer."
   (mevedel-directive-frame-test--with-view
     (setq mevedel-directive-frame--view-buffer (current-buffer)
           mevedel-directive-frame--directive-id "d1")
-    (mevedel-directive-frame--apply-filter)
-    (should mevedel-directive-frame--filtered-p)
-    (let ((spans (mevedel-directive-frame--turn-spans)))
+    (let* ((spans (mevedel-directive-frame--turn-spans))
+           (preserved-pos (1+ (car (car spans)))))
+      (with-silent-modifications
+        (let ((inhibit-read-only t))
+          (put-text-property
+           preserved-pos (1+ preserved-pos) 'invisible
+           'mevedel-view-mailbox-collapsed)))
+      (mevedel-directive-frame--apply-filter)
+      (should mevedel-directive-frame--filtered-p)
       (should (eq mevedel-directive-frame--invisible-symbol
                   (get-text-property (car (car spans)) 'invisible)))
+      (should (eq 'mevedel-view-mailbox-collapsed
+                  (get-text-property preserved-pos 'invisible)))
+      (should (invisible-p preserved-pos))
       (should-not
        (get-text-property (car (car (last spans))) 'invisible)))
-    (should (memq mevedel-directive-frame--invisible-symbol
-                  buffer-invisibility-spec)))
+    (should (eq buffer-invisibility-spec t)))
+
+  :doc "preserves a multiline composer draft and point while filtering"
+  (mevedel-directive-frame-test--with-view
+    (setq mevedel-directive-frame--view-buffer (current-buffer)
+          mevedel-directive-frame--directive-id "d1")
+    (goto-char (mevedel-view--input-start))
+    (insert "> first line\nsecond line")
+    (let ((draft (mevedel-view--input-text))
+          (saved-point (point)))
+      (mevedel-directive-frame--apply-filter)
+      (should (= saved-point (point)))
+      (should (equal draft (mevedel-view--input-text)))))
 
   :doc "leaves the header visible"
   (mevedel-directive-frame-test--with-view
@@ -181,17 +201,32 @@ directive turn.  BODY runs inside the view buffer."
   (:doc "`mevedel-directive-frame--clear-filter' restores the whole transcript")
   ,test
   (test)
-  :doc "removes both the invisible properties and the spec entry"
+  :doc "removes only filter invisibility and preserves the wildcard spec"
   (mevedel-directive-frame-test--with-view
     (setq mevedel-directive-frame--view-buffer (current-buffer)
           mevedel-directive-frame--directive-id "d1")
-    (mevedel-directive-frame--apply-filter)
-    (mevedel-directive-frame--clear-filter)
-    (should-not mevedel-directive-frame--filtered-p)
-    (should-not (memq mevedel-directive-frame--invisible-symbol
-                      buffer-invisibility-spec))
-    (let ((spans (mevedel-directive-frame--turn-spans)))
-      (should-not (get-text-property (car (car spans)) 'invisible)))))
+    (let* ((spans (mevedel-directive-frame--turn-spans))
+           (preserved-pos (1+ (car (car spans)))))
+      (with-silent-modifications
+        (let ((inhibit-read-only t))
+          (put-text-property
+           preserved-pos (1+ preserved-pos) 'invisible
+           'mevedel-view-mailbox-collapsed)))
+      (mevedel-directive-frame--apply-filter)
+      (goto-char (mevedel-view--input-start))
+      (insert "> first line\nsecond line")
+      (goto-char (+ (mevedel-view--input-start) 2))
+      (let ((draft (mevedel-view--input-text))
+            (saved-point (point)))
+        (mevedel-directive-frame--clear-filter)
+        (should (= saved-point (point)))
+        (should (equal draft (mevedel-view--input-text))))
+      (should-not mevedel-directive-frame--filtered-p)
+      (should (eq buffer-invisibility-spec t))
+      (should-not (get-text-property (car (car spans)) 'invisible))
+      (should (eq 'mevedel-view-mailbox-collapsed
+                  (get-text-property preserved-pos 'invisible)))
+      (should (invisible-p preserved-pos)))))
 
 (mevedel-deftest mevedel-directive-frame--filter-elsewhere-p
   (:doc "`mevedel-directive-frame--filter-elsewhere-p' detects other windows")

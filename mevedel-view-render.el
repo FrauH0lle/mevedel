@@ -4855,6 +4855,35 @@ added when the text before point does not already end with a blank line
            (mevedel-view--hook-audit-only-segment-p
             data-buf (cadr seg) (caddr seg)))))
 
+(defun mevedel-view--tool-segment-entry (seg data-buf)
+  "Return SEG's normalized tool rendering entry in DATA-BUF, or nil."
+  (let* ((seg-start (cadr seg))
+         (seg-end (caddr seg))
+         (source (mevedel-view-disclosure-source-range
+                  data-buf seg-start seg-end))
+         (rendering (mevedel-view--segment-rendering
+                     data-buf seg-start seg-end t))
+         (vtype (or (plist-get rendering :vtype) 'tool-summary))
+         (state (and rendering
+                     (mevedel-view-disclosure-state-entry source vtype))))
+    (when (and state (not (cdr state)))
+      (setq rendering
+            (or (mevedel-view--segment-rendering
+                 data-buf seg-start seg-end)
+                rendering)))
+    (let ((group-child (plist-get rendering :group-child)))
+      (when group-child
+        (setq rendering
+              (plist-put (copy-sequence rendering) :group-child nil)))
+      (unless (plist-get rendering :hidden-p)
+        (list :kind 'tool
+              :start seg-start
+              :end seg-end
+              :source source
+              :rendering rendering
+              :group-child group-child
+              :count 1)))))
+
 (defun mevedel-view--thinking-group-entry (segments data-buf)
   "Return one grouped reasoning entry for SEGMENTS in DATA-BUF, or nil."
   (when segments
@@ -4898,86 +4927,64 @@ added when the text before point does not already end with a blank line
         (if (eq (car seg) 'tool)
             (progn
               (flush-thinking)
-              (push (list :kind 'tool
-                          :start (cadr seg)
-                          :end (caddr seg))
-                    out))
+              (when-let* ((entry (mevedel-view--tool-segment-entry
+                                  seg data-buf)))
+                (push entry out)))
           (push seg thinking-group)))
       (flush-thinking))
     (nreverse out)))
 
-(defun mevedel-view--tool-activity-groupable-p (segments data-buf)
-  "Return non-nil when tool activity SEGMENTS may fold across thinking."
-  (let ((tool-segments
-         (mevedel-view--merge-tool-hook-audit-segments
-          (cl-remove-if-not
-           (lambda (seg)
-             (mevedel-view--tool-activity-tool-segment-p seg data-buf))
-           segments)
-          data-buf)))
+(defun mevedel-view--tool-activity-groupable-p (entries)
+  "Return non-nil when activity ENTRIES may fold across thinking."
+  (let ((tool-entries
+         (cl-remove-if-not
+          (lambda (entry) (eq (plist-get entry :kind) 'tool))
+          entries)))
     (and (> mevedel-view-tool-group-collapse-threshold 0)
-         (> (length tool-segments)
+         (> (length tool-entries)
             mevedel-view-tool-group-collapse-threshold)
          (cl-every
-          (lambda (seg)
-            (let* ((seg-start (cadr seg))
-                   (seg-end (caddr seg))
-                   (source (mevedel-view-disclosure-source-range
-                            data-buf seg-start seg-end))
-                   (rendering (mevedel-view--segment-rendering
-                               data-buf seg-start seg-end t))
-                   (vtype (or (plist-get rendering :vtype)
-                              'tool-summary))
-                   (state
-                    (and rendering
-                         (mevedel-view-disclosure-state-entry source vtype))))
-              (when (and state (not (cdr state)))
-                (setq rendering
-                      (or (mevedel-view--segment-rendering
-                           data-buf seg-start seg-end)
-                          rendering)))
-              (and (null (plist-get rendering :coalesce-key))
-                   (mevedel-view--tool-group-entry-p
-                    (list :count 1
-                          :rendering
-                          (when rendering
-                            (plist-put (copy-sequence rendering)
-                                       :group-child nil)))))))
-          tool-segments))))
+          (lambda (entry)
+            (and (null (plist-get (plist-get entry :rendering)
+                                  :coalesce-key))
+                 (mevedel-view--tool-group-entry-p entry)))
+          tool-entries))))
 
 (defun mevedel-view--render-tool-activity (segments data-buf)
   "Render tool activity SEGMENTS from DATA-BUF in source order.
 Thinking segments are transparent when every tool row can form one folded
 group.  Otherwise tool and thinking runs retain their original order."
-  (cond
-   ((cl-every
-     (lambda (seg)
-       (mevedel-view--tool-activity-tool-segment-p seg data-buf))
-     segments)
-    (mevedel-view--render-tool-group segments data-buf))
-   ((mevedel-view--tool-activity-groupable-p segments data-buf)
-    (let* ((unit-start (point))
-           (entries (mevedel-view--tool-activity-entries segments data-buf)))
-      (mevedel-view--insert-activity-rule-after-response)
-      (mevedel-view--insert-tool-group entries data-buf)
-      (mevedel-view--mark-live-render-unit
-       unit-start (cadr (car segments)))))
-   (t
-    (let (tool-group thinking-group)
-      (dolist (seg segments)
-        (if (mevedel-view--tool-activity-tool-segment-p seg data-buf)
-            (progn
-              (when thinking-group
-                (mevedel-view--flush-thinking-group thinking-group data-buf)
-                (setq thinking-group nil))
-              (push seg tool-group))
+  (if (cl-every
+       (lambda (seg)
+         (mevedel-view--tool-activity-tool-segment-p seg data-buf))
+       segments)
+      (mevedel-view--render-tool-group segments data-buf)
+    (let ((entries (mevedel-view--tool-activity-entries segments data-buf)))
+      (if (mevedel-view--tool-activity-groupable-p entries)
+          (let ((unit-start (point)))
+            (mevedel-view--insert-activity-rule-after-response)
+            (mevedel-view--insert-tool-group entries data-buf)
+            (mevedel-view--mark-live-render-unit
+             unit-start (cadr (car segments))))
+        (let (tool-group thinking-group)
+          (dolist (seg segments)
+            (if (mevedel-view--tool-activity-tool-segment-p seg data-buf)
+                (progn
+                  (when thinking-group
+                    (mevedel-view--flush-thinking-group
+                     thinking-group data-buf)
+                    (setq thinking-group nil))
+                  (push seg tool-group))
+              (when tool-group
+                (mevedel-view--render-tool-group
+                 (nreverse tool-group) data-buf)
+                (setq tool-group nil))
+              (push seg thinking-group)))
           (when tool-group
-            (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
-            (setq tool-group nil))
-          (push seg thinking-group)))
-      (when tool-group
-        (mevedel-view--render-tool-group (nreverse tool-group) data-buf))
-      (mevedel-view--flush-thinking-group thinking-group data-buf)))))
+            (mevedel-view--render-tool-group
+             (nreverse tool-group) data-buf))
+          (mevedel-view--flush-thinking-group
+           thinking-group data-buf))))))
 
 (defun mevedel-view--render-assistant-turn
     (segments data-buf &optional variant-button directive continuation-p)
@@ -5360,36 +5367,11 @@ grouped activity row that expands into compound-tool nested rows."
          (entries
           (let (out)
             (dolist (seg tool-segments (nreverse out))
-              (let* ((seg-start (cadr seg))
-                     (seg-end (caddr seg))
-                     (source (mevedel-view-disclosure-source-range
-                              data-buf seg-start seg-end))
-                     (rendering (mevedel-view--segment-rendering
-                                 data-buf seg-start seg-end t))
-                     (vtype (or (plist-get rendering :vtype)
-                                'tool-summary))
-                     (state
-                      (and rendering
-                           (mevedel-view-disclosure-state-entry
-                            source vtype))))
-                (when (and state (not (cdr state)))
-                  (setq rendering
-                        (or (mevedel-view--segment-rendering
-                             data-buf seg-start seg-end)
-                            rendering)))
-                (let ((group-child (plist-get rendering :group-child)))
-                  (when group-child
-                    (setq rendering
-                          (plist-put (copy-sequence rendering)
-                                     :group-child nil)))
-                (unless (plist-get rendering :hidden-p)
-                  (let* ((entry
-                          (list :start seg-start :end seg-end
-                                :source source :rendering rendering
-                                :group-child group-child
-                                :count 1))
-                         (key (plist-get rendering :coalesce-key))
-                         (previous (car out)))
+              (when-let* ((entry (mevedel-view--tool-segment-entry
+                                  seg data-buf)))
+                (let* ((rendering (plist-get entry :rendering))
+                       (key (plist-get rendering :coalesce-key))
+                       (previous (car out)))
                     (if (and key
                              previous
                              (equal
@@ -5413,7 +5395,7 @@ grouped activity row that expands into compound-tool nested rows."
                                  :count
                                  (1+ (plist-get previous :count))))
                           (setcar out entry))
-                      (push entry out)))))))))
+                      (push entry out)))))))
         (start-time (float-time))
         (inserted-rule nil)
         (rendered 0)

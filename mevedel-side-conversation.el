@@ -54,6 +54,10 @@
 (autoload 'mevedel-compact-evidence-context-snapshot
   "mevedel-compact-evidence")
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-teardown-session
+                  "mevedel-execution" (session))
+
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-effective-rules
                   "mevedel-hooks"
@@ -890,6 +894,9 @@ FROZEN-CONTEXT is the materialized gptel context plist."
   (interactive)
   (unless (bound-and-true-p mevedel-view--side-conversation-p)
     (user-error "This is not a /btw side conversation"))
+  ;; Settle remote mutation authority before the ordinary close guard runs.
+  (when mevedel--session
+    (mevedel-execution-teardown-session mevedel--session))
   (kill-buffer (current-buffer)))
 
 (defun mevedel-side-conversation-send ()
