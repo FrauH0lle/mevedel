@@ -275,9 +275,29 @@
         (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-view--decorate-markdown-in-range
-  (:doc "`mevedel-view--decorate-markdown-in-range' renders pipe tables")
+  (:doc "`mevedel-view--decorate-markdown-in-range' renders Markdown affordances")
   ,test
   (test)
+  :doc "displayed image paths are not also buttonized"
+  (let ((file (make-temp-file "mevedel-image-decoration-" nil ".png")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (format "path: %s\n" file))
+          (cl-letf (((symbol-function 'display-images-p)
+                     (lambda (&optional _display) t))
+                    ((symbol-function 'create-image)
+                     (lambda (path &rest _)
+                       (list 'image :file path))))
+            (mevedel-view--decorate-markdown-in-range
+             (point-min) (point-max)))
+          (goto-char (point-min))
+          (search-forward file)
+          (let ((start (match-beginning 0)))
+            (should (equal (list 'image :file file)
+                           (get-text-property start 'display)))
+            (should-not (button-at start))))
+      (delete-file file)))
+
   :doc "renders pipe tables and preserves view-owned properties"
   (let ((text "| Name | Role |\n|---|---|\n| Ada | Developer |\n"))
     (with-temp-buffer

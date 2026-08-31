@@ -717,7 +717,8 @@ file.el#L12."
                (raw (buffer-substring-no-properties mb (match-end 1)))
                (suffix-start (or (match-beginning 2) (match-beginning 3)))
                (suffix-end (or (match-end 2) (match-end 3)))
-               (resolved (and (not (mevedel-view--decoration-blocked-p
+               (resolved (and (not (get-text-property mb 'display))
+                              (not (mevedel-view--decoration-blocked-p
                                     mb src-ranges))
                               (mevedel-view--path-candidate-p raw)
                               (mevedel-view--path-context-candidate-p mb raw)
