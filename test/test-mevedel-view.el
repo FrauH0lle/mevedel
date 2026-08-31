@@ -515,6 +515,27 @@
       ;; to one newline, so the blank has to travel as a suffix.
       (should (equal "\n" (plist-get executions :body-suffix)))))))
 
+(mevedel-deftest mevedel-view--render-status
+  (:doc "nudges the session's collaboration room after a status render")
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "status-nudge"))
+          notified)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (cl-letf (((symbol-function 'mevedel-execution-count-user)
+                 (lambda (_session) 0))
+                ((symbol-function 'mevedel-view-agent-status-fragment)
+                 #'ignore)
+                ((symbol-function
+                  'mevedel-collaboration-notify-agents-changed)
+                 (lambda (seen) (push seen notified))))
+        (with-current-buffer view-buf
+          (mevedel-view--render-status data-buf)))
+      ;; Retained agents change state while the root request is idle,
+      ;; when no gptel observer publishes; the status render is the one
+      ;; funnel every visible agent transition passes through.
+      (should (equal (list session) notified)))))
+
 (mevedel-deftest mevedel-view--execution-state-changed ()
   ,test
   (test)

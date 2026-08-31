@@ -129,6 +129,7 @@
 ;; `mevedel-view-agent'
 (declare-function mevedel-view--on-agent-transcript-data-killed
                   "mevedel-view-agent" ())
+(declare-function mevedel-view--session "mevedel-view-agent" ())
 (declare-function mevedel-view-agent-cleanup-parent
                   "mevedel-view-agent" (parent-view))
 (declare-function mevedel-view-agent-handle-view-kill
@@ -1378,7 +1379,15 @@ the editable composer signal instead of settling queued interactions."
                          (or (not input-pos) (<= interaction-pos input-pos)))
                     interaction-pos
                   start)))
-      (mevedel-view-zone-reconcile 'status start end fragments))))
+      (mevedel-view-zone-reconcile 'status start end fragments)
+      ;; Every path that changes visible agent state ends in a status
+      ;; render, including retained agents working while the root
+      ;; request is idle, when no gptel observer publishes for them.
+      ;; The collaboration side latches on change, so an unchanged
+      ;; roster costs one coalesced comparison.
+      (when (fboundp 'mevedel-collaboration-notify-agents-changed)
+        (mevedel-collaboration-notify-agents-changed
+         (mevedel-view--session))))))
 
 (defun mevedel-view--zone-separator (label)
   "Return a propertized zone separator line for LABEL.

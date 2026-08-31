@@ -24,6 +24,9 @@
 (defvar gptel-post-tool-call-functions)
 (defvar gptel-pre-tool-call-functions)
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-record-role "mevedel-agent-control" (record))
+
 ;; `mevedel-chat'
 (defvar mevedel-session-end-hook)
 
@@ -96,6 +99,7 @@
 (autoload 'mevedel-plan-mode-active-p "mevedel-plan-mode")
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-agent-registry "mevedel-structs" (session))
 (declare-function mevedel-session-pending-follow-ups "mevedel-structs" (session))
 (declare-function mevedel-session-pending-input-failure-paused
                   "mevedel-structs" (session))
@@ -105,6 +109,10 @@
 
 ;; `mevedel-turn'
 (defvar mevedel--current-request)
+
+;; `mevedel-view-agent'
+(declare-function mevedel-view--agent-record-status
+                  "mevedel-view-agent" (record))
 
 
 ;;
@@ -442,7 +450,8 @@ identity.  The id never enters model context or the transcript."
         (mevedel-collaboration--broadcast
          room (list :t "remove" :ids (vconcat removed))))
       (mevedel-collaboration--publish-queue room)
-      (mevedel-collaboration--publish-status room))))
+      (mevedel-collaboration--publish-status room)
+      (mevedel-collaboration--publish-agents room))))
 
 (defun mevedel-collaboration--queue-state (room)
   "Return ROOM's guest-visible pending queue state as a plist.
@@ -565,6 +574,53 @@ the Emacs mode line carries."
                  (eq :json-false (plist-get status :busy)))
         (mevedel-collaboration--transport-control
          (plist-get room :transport) (list :t "push"))))))
+
+(defun mevedel-collaboration--agent-rows (room)
+  "Return ROOM's guest-visible live agent rows, sorted by path.
+
+Only active agents travel: a settled agent already tells its story
+through the transcript's tool records, so the roster covers exactly
+what the transcript cannot show -- who is working or stuck right now.
+The canonical path is the only address sent; it is the same
+model-visible name the transcript's handles use."
+  (when-let* ((session (plist-get room :session)))
+    (let (rows)
+      (dolist (pair (mevedel-session-agent-registry session))
+        (when-let* ((status (mevedel-view--agent-record-status (cdr pair))))
+          (push (append
+                 (list (cons "path" (car pair))
+                       (cons "status" (symbol-name status)))
+                 (when-let* ((role (mevedel-agent-record-role (cdr pair))))
+                   (list (cons "role" (format "%s" role)))))
+                rows)))
+      (sort rows (lambda (left right)
+                   (string-lessp (cdr (assoc "path" left))
+                                 (cdr (assoc "path" right))))))))
+
+(defun mevedel-collaboration--agents-frame (room)
+  "Return ROOM's live agent roster frame."
+  (list :t "agents"
+        :agents (vconcat (mevedel-collaboration--agent-rows room))))
+
+(defun mevedel-collaboration--publish-agents (room)
+  "Broadcast ROOM's live agent roster to its guests when it has changed."
+  (let ((frame (mevedel-collaboration--agents-frame room)))
+    (unless (equal frame (plist-get room :agents))
+      (setq room (plist-put room :agents frame))
+      (mevedel-collaboration--broadcast room frame))))
+
+(defun mevedel-collaboration-notify-agents-changed (session)
+  "Schedule SESSION's publication after retained agent state changed.
+
+While the root request runs, its gptel observers publish anyway.  A
+retained agent keeps working after the parent turn ends: its activity
+transitions and render-data patches change what a guest should see
+with no observer left to fire, so the view's status render nudges the
+same coalesced publication instead."
+  (when-let* ((room (mevedel-collaboration--room-for-session session)))
+    (condition-case nil
+        (mevedel-collaboration--schedule-publish room)
+      (error (mevedel-collaboration--observer-failure room)))))
 
 (defun mevedel-collaboration--publish-timer (data-buffer)
   "Run the coalesced publication timer for DATA-BUFFER's room."

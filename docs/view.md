@@ -634,6 +634,35 @@ record too large to travel in a frame of its own is dropped rather than
 sent: the relay refuses an oversized frame by closing the connection, and
 for the host connection it collects the room with it.
 
+Guests of either link strength also receive the live agent roster: the
+canonical path, role, and blocked/waiting/running status of every active
+retained agent, broadcast on change and told to a joining guest directly.
+Only active agents travel -- a settled agent already tells its story
+through the transcript's tool records -- and the roster is read state,
+which is why a view link gets it too. It rides the same coalesced
+publication as the transcript; the view's status render nudges that
+publication so a retained agent working while the root request is idle,
+when no gptel observer fires, still reaches the strip. The viewer renders
+the roster as chips above the interaction cards and marks a blocked or
+waiting agent, so a session that fans out workers never reads as an
+opaque gap.
+
+Tapping a chip opens that agent's live transcript as a full-screen
+sheet. The viewer polls with `fetch-agent` frames while the sheet is
+open and refetches promptly on a roster change; the host validates the
+path against the agent registry -- never the filesystem -- and answers
+with targeted `agent` frames chunked under the wire bound. The reply
+crosses `mevedel-collaboration--canonical-records` over the agent's
+resident conversation buffer, the same projection that scrubs the root
+transcript, so only visible user text, response text, and settled tool
+records travel -- never hidden audit or render data. A digest rides
+each reply; a poll carrying a still-matching digest is answered with
+one `unchanged` frame instead of the transcript, and a per-guest
+throttle bounds what a hostile client can make the host project. A
+cold or historical agent is refused rather than hydrated: a guest poll
+must never start target I/O. Agent control -- chat, interrupt, kill --
+stays in Emacs.
+
 Full-link guests are also presented pending interactions as `ui-request`
 frames — generic requests (approve/deny/feedback), permission prompts
 (one-shot allow-once/deny-once/feedback; session, workspace, and always
