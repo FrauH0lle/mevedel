@@ -18,11 +18,11 @@ jobs:
       fail-fast: false
       matrix:
         # mevedel is Linux-only: portable session storage needs procfs, GNU
-        # stat, and bash, and refuses every other host outright.  A macOS or
+        # stat, and bash, and refuses every other host outright. A macOS or
         # Windows job measures nothing the product claims to support.
         os: [ubuntu-latest]
         emacs-version:
-          - 30.2
+          - 31.1
         experimental: [false]
         # include:
         # - os: ubuntu-latest
@@ -41,9 +41,9 @@ jobs:
         version: 'snapshot'
 
     # Bubblewrap: the confinement cases skip without it, and Ubuntu confines
-    # unprivileged user namespaces through AppArmor, which stops Bubblewrap
-    # from starting at all.  A skip renders as "passed", so neither absence
-    # would show up in a green run.
+    # unprivileged user namespaces through AppArmor, which stops Bubblewrap from
+    # starting at all. A skip renders as "passed", so neither absence would show
+    # up in a green run.
     - name: Install system dependencies
       # A runner whose Ubuntu mirror is unreachable leaves `apt-get' retrying
       # until the job's own budget is gone, which reads as "the tests hung".
@@ -62,8 +62,8 @@ jobs:
       run: eask clean all
 
     # HACK: Work around package.el skipping bundled package upgrades during
-    # dependency installation; gptel needs a newer transient than Emacs 30.2
-    # ships.
+    #   dependency installation; gptel needs a newer transient than Emacs 30.2
+    #   ships.
     - name: Install transient
       run: eask install transient --force
 
@@ -71,10 +71,10 @@ jobs:
       run: eask install-deps --dev
 
     # The Bash analyzer behaves differently once a grammar is present, and the
-    # cases covering that path skip without one.  Install it where the test
-    # run looks -- Eask's own user-emacs-directory -- and prove Emacs accepts
-    # it: a grammar too old for this Emacs loads as `version-mismatch', which
-    # skips the same cases as no grammar at all and reads as "passed".
+    # cases covering that path skip without one. Install it where the test run
+    # looks -- Eask's own user-emacs-directory -- and prove Emacs accepts it: a
+    # grammar too old for this Emacs loads as `version-mismatch', which skips
+    # the same cases as no grammar at all and reads as "passed".
     - name: Install Bash tree-sitter grammar
       run: |
         eask emacs --batch --eval "(progn
@@ -113,9 +113,9 @@ jobs:
         sudo apt-get update
         sudo apt-get -y install podman ripgrep
 
-    # Ubuntu 24.04 confines unprivileged user namespaces through AppArmor, and
-    # the restriction reaches into the containers, so the sandbox the
-    # acceptance run exercises cannot start.
+    # Ubuntu confines unprivileged user namespaces through AppArmor, and the
+    # restriction reaches into the containers, so the sandbox the acceptance run
+    # exercises cannot start.
     - name: Permit unprivileged user namespaces
       run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
