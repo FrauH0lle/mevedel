@@ -543,6 +543,20 @@
     (mevedel-buddy--preempt)
     (should-not mevedel-buddy--running)))
 
+(mevedel-deftest mevedel-buddy-guide
+  (:after-each (mevedel-test--buddy-cleanup))
+  ,test
+  (test)
+
+  :doc "`mevedel-buddy-guide' cancels the queued automatic review"
+  (let ((buf (mevedel-test--buddy-buffer "guide-timer.el" "alpha\n")))
+    (with-current-buffer buf
+      (mevedel-buddy--schedule)
+      (should mevedel-buddy--idle-timer)
+      (cl-letf (((symbol-function 'mevedel-buddy--request) #'ignore))
+        (mevedel-buddy-guide))
+      (should-not mevedel-buddy--idle-timer))))
+
 ;;
 ;;; Record hygiene
 
