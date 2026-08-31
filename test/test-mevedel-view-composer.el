@@ -1734,8 +1734,10 @@
                              (car candidates)))))))
       (delete-directory save-path t))))
 
-(mevedel-deftest mevedel-view-side-resource-capf
-  (:doc "side composers install resource-address completion")
+(mevedel-deftest mevedel-view-side-resource-capf ()
+  ,test
+  (test)
+  :doc "side composers install resource-address completion"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       ;; The setup above creates a normal composer.  Reinitialize the same
@@ -1746,7 +1748,47 @@
       (setq-local mevedel-view--side-conversation-p t)
       (mevedel-view-composer-initialize)
       (should (memq #'mevedel-resource-capf
-                    completion-at-point-functions)))))
+                    completion-at-point-functions))))
+
+  :doc "side composers invalidate file bindings extended with line ranges"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (remove-hook 'after-change-functions
+                   #'mevedel-view--refresh-skill-argument-hint-after-change t)
+      (setq-local mevedel-view--side-conversation-p t)
+      (mevedel-view-composer-initialize)
+      (should (memq #'mevedel-view--refresh-skill-argument-hint-after-change
+                    after-change-functions))
+      (goto-char (mevedel-view--input-start))
+      (let* ((workflow-token
+              "@file:/tmp/.github/workflows/test.yml")
+             (ranged-token (concat workflow-token "#L25"))
+             (png-token "@file:/tmp/screenshot.png")
+             (workflow-start (point)))
+        (insert workflow-token " " png-token)
+        (mevedel-mention-bindings-set
+         workflow-start (+ workflow-start (length workflow-token))
+         (list :kind 'file :token workflow-token
+               :path "/tmp/.github/workflows/test.yml"))
+        (let ((png-start (+ workflow-start (length workflow-token) 1)))
+          (mevedel-mention-bindings-set
+           png-start (+ png-start (length png-token))
+           (list :kind 'file :token png-token :path "/tmp/screenshot.png")))
+        (goto-char (+ workflow-start (length workflow-token)))
+        (insert "#L25")
+        (should-not (get-text-property
+                     workflow-start 'mevedel-mention-binding))
+        (should (get-text-property
+                 (+ workflow-start (length ranged-token) 1)
+                 'mevedel-mention-binding))
+        (let* ((prepared
+                (mevedel-mentions-prepare-user-input
+                 (mevedel-view--input-text)))
+               (tokens
+                (mapcar (lambda (range)
+                          (plist-get (plist-get range :binding) :token))
+                        (mevedel-mention-bindings-ranges prepared))))
+          (should (equal (list ranged-token png-token) tokens)))))))
 
 (mevedel-deftest mevedel-view--refresh-skill-argument-hint ()
   ,test
