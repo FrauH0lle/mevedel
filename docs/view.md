@@ -22,7 +22,8 @@ ephemeral projection state.
 `mevedel-view-stream.el` owns request progress and streaming redraw scheduling;
 `mevedel-gptel-stream-bridge.el` owns private gptel stream compatibility.
 `mevedel-side-conversation.el` owns transient
-`/btw` conversations. The data buffer remains the model-visible transcript.
+`/btw` conversations. The data buffer remains the model-visible transcript;
+`C-c C-z` closes the ephemeral side and returns its resources to the parent.
 
 ## Buffer Roles
 

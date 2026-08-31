@@ -29,6 +29,53 @@
 
 (defvar gptel--known-backends)
 
+(mevedel-deftest mevedel-side-conversation-close
+  (:quiet t)
+  ,test
+  (test)
+
+  :doc "refuses to close an ordinary chat view"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (should-error (mevedel-side-conversation-close) :type 'user-error)))
+
+  :doc "closes the paired side buffers and clears the parent link"
+  (let* ((workspace
+          (mevedel-workspace--create
+           :type 'file :id "btw-command-close" :root "/tmp"
+           :name "btw-command-close"))
+         (session (mevedel-session-create "main" workspace))
+         side-view side-data)
+    (mevedel-view-test--with-buffers
+      (with-current-buffer data-buf
+        (setq-local mevedel--workspace workspace
+                    mevedel--session session)
+        (insert "*** Parent prompt\n")
+        (let ((start (point)))
+          (insert "Parent answer\n")
+          (put-text-property start (point) 'gptel 'response)))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (goto-char (mevedel-view--input-start))
+        (insert "/btw")
+        (cl-letf (((symbol-function 'pop-to-buffer)
+                   (lambda (buffer &rest _)
+                     (setq side-view buffer))))
+          (mevedel-view-send)))
+      (setq side-data (buffer-local-value 'mevedel--data-buffer side-view))
+      (with-current-buffer side-view
+        (should (eq #'mevedel-side-conversation-close
+                    (lookup-key (current-local-map) (kbd "C-c C-z"))))
+        (should (eq #'mevedel-side-conversation-close
+                    (lookup-key mevedel-view--side-conversation-keymap
+                                (kbd "C-c C-z"))))
+        (mevedel-side-conversation-close))
+      (should-not (buffer-live-p side-view))
+      (should-not (buffer-live-p side-data))
+      (should (buffer-live-p data-buf))
+      (with-current-buffer data-buf
+        (should-not mevedel-side-conversation--side-buffer)))))
+
 (mevedel-deftest mevedel-view-send/btw (:quiet t)
   ,test
   (test)
@@ -916,7 +963,8 @@
                          (should (eq side-data buffer))
                          (cl-incf provider-aborts)
                          (setq gptel--request-alist nil))))
-              (kill-buffer side-view)))
+              (with-current-buffer side-view
+                (mevedel-side-conversation-close))))
           (should (= 1 provider-aborts))
           (should (= 1 callback-count))
           (should (string-prefix-p "Error:" result))

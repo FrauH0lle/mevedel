@@ -828,11 +828,16 @@ FROZEN-CONTEXT is the materialized gptel context plist."
     (insert (plist-get frozen :snapshot))
     (setq-local mevedel-view--abort-function
                 #'mevedel-side-conversation--abort)
-    (let ((transcript-start (copy-marker (point-max) nil)))
-      (mevedel-view--ensure
-       side-data nil
-       (list :side-conversation-p t
-             :transcript-start transcript-start)))))
+    (let* ((transcript-start (copy-marker (point-max) nil))
+           (side-view
+            (mevedel-view--ensure
+             side-data nil
+             (list :side-conversation-p t
+                   :transcript-start transcript-start))))
+      (with-current-buffer side-view
+        (use-local-map (copy-keymap (current-local-map)))
+        (local-set-key (kbd "C-c C-z") #'mevedel-side-conversation-close))
+      side-view)))
 
 (defun mevedel-side-conversation--create (parent-data callback)
   "Create a side view forked from PARENT-DATA, then call CALLBACK."
@@ -878,6 +883,14 @@ FROZEN-CONTEXT is the materialized gptel context plist."
 
 ;;
 ;;; Commands
+
+;;;###autoload
+(defun mevedel-side-conversation-close ()
+  "Close the current ephemeral /btw side conversation."
+  (interactive)
+  (unless (bound-and-true-p mevedel-view--side-conversation-p)
+    (user-error "This is not a /btw side conversation"))
+  (kill-buffer (current-buffer)))
 
 (defun mevedel-side-conversation-send ()
   "Send the current side-composer prompt as an independent turn."
