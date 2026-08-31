@@ -863,9 +863,14 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
                        (mevedel--directive-truncated-text instruction)
                      (mevedel--directive-text instruction))
                    "")))
+                (display-typename
+                 (if (and bufferlevel-p
+                          (equal directive-typename "DIRECTIVE"))
+                     "BUFFER DIRECTIVE"
+                   directive-typename))
                 (prefix
                  (format "%s %s"
-                         directive-typename
+                         display-typename
                          (stylized-id
                           (mevedel--instruction-id instruction)))))
            (append-label
