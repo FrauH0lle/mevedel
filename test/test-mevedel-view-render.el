@@ -6269,7 +6269,14 @@
   :doc "a single unknown tool shows its bare name"
   (should (equal "Read 2 files, LspRename"
                  (mevedel-view--tool-group-header
-                  '((:tool "Read") (:tool "LspRename") (:tool "Read"))))))
+                  '((:tool "Read") (:tool "LspRename") (:tool "Read")))))
+  :doc "reasoning occurrences use singular or plural wording"
+  (should (equal "Read 1 file, thought 1 time"
+                 (mevedel-view--tool-group-header
+                  '((:tool "Read") (:kind reasoning)))))
+  (should (equal "Read 1 file, thought 2 times"
+                 (mevedel-view--tool-group-header
+                  '((:kind reasoning) (:tool "Read") (:kind reasoning))))))
 
 (mevedel-deftest mevedel-view--tool-group-entry-p ()
   ,test
@@ -6365,6 +6372,83 @@
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Read 4 files" text))
         (should-not (string-match-p "f0\\.el\\|content 0" text)))))
+  :doc "reasoning is transparent to a long plain tool run"
+  (mevedel-view-test--with-buffers
+    (dotimes (i 4)
+      (mevedel-view-test--insert-data
+       data-buf
+       (format
+        "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\ncontent %d\n"
+        i i)
+       `(tool . ,(format "call_%d" i)))
+      (when (< i 3)
+        (mevedel-view-test--insert-data
+         data-buf
+         (format "#+begin_reasoning\nthought %d\n#+end_reasoning\n" i)
+         'ignore)))
+    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer data-buf
+      (mevedel-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Read 4 files, thought 3 times" text))
+        (should-not (string-match-p "Thinking" text))
+        (should-not (string-match-p "f0\\.el\\|thought 0" text)))
+      (goto-char (point-min))
+      (search-forward "Read 4 files, thought 3 times")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "f0\\.el" text))
+        (should (string-match-p "f3\\.el" text))
+        (should (string-match-p "Thinking" text))
+        (should-not (string-match-p "thought 0" text)))
+      (goto-char (point-min))
+      (search-forward "f0.el")
+      (search-forward "Thinking")
+      (search-forward "f1.el")
+      (search-forward "Thinking")
+      (search-forward "f2.el")
+      (search-forward "Thinking")
+      (search-forward "f3.el")
+      (goto-char (point-min))
+      (search-forward "Thinking")
+      (goto-char (match-beginning 0))
+      (should (eq 'tool-child
+                  (get-text-property (point) 'mevedel-view-type)))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "thought 0" text))
+        (should (string-match-p "f0\\.el" text))
+        (should-not (string-match-p "thought 1\\|thought 2" text)))))
+  :doc "a short interleaved run keeps source order"
+  (mevedel-view-test--with-buffers
+    (dotimes (i 2)
+      (mevedel-view-test--insert-data
+       data-buf
+       (format
+        "(:name \"Read\" :args (:file_path \"/tmp/f%d.el\"))\n\ncontent %d\n"
+        i i)
+       `(tool . ,(format "call_%d" i)))
+      (when (= i 0)
+        (mevedel-view-test--insert-data
+         data-buf
+         "#+begin_reasoning\nshort thought\n#+end_reasoning\n"
+         'ignore)))
+    (mevedel-view-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer data-buf
+      (mevedel-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (goto-char (point-min))
+      (search-forward "f0.el")
+      (search-forward "Thinking")
+      (search-forward "f1.el")
+      (should-not (save-excursion
+                    (goto-char (point-min))
+                    (search-forward "Read 2 files" nil t)))))
   :doc "a failed call marks the group but leaves it collapsed"
   (mevedel-view-test--with-buffers
     (dotimes (i 3)
