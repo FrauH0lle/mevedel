@@ -29,6 +29,19 @@
 
 (defvar gptel--known-backends)
 
+(mevedel-deftest mevedel-side-conversation--interrupted-boundary ()
+  ,test
+  (test)
+
+  :doc "bookends model-visible reminder text with ignored delimiters"
+  (let* ((body "The inherited parent turn is incomplete.")
+         (boundary (mevedel-side-conversation--interrupted-boundary body))
+         (body-start (string-match (regexp-quote body) boundary)))
+    (should (eq 'ignore (get-text-property 0 'gptel boundary)))
+    (should-not (get-text-property body-start 'gptel boundary))
+    (should (eq 'ignore
+                (get-text-property (1- (length boundary)) 'gptel boundary)))))
+
 (mevedel-deftest mevedel-side-conversation-close
   (:quiet t)
   ,test
