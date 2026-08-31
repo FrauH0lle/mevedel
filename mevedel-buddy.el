@@ -946,9 +946,10 @@ Sends the active region, or the whole buffer, and annotates it with
 suggestions, missing pieces, and the decisions still open.  Works in
 any buffer; `mevedel-buddy-mode' need not be enabled.
 
-An automatic review already in flight is abandoned first: the request
-you made outranks the one a timer made."
+A queued or running automatic review is abandoned first: the request you
+made outranks one started by a timer."
   (interactive)
+  (mevedel-buddy--cancel-timer)
   (mevedel-buddy--preempt)
   (when mevedel-buddy--running
     (user-error "A buddy request is already running; %s"
