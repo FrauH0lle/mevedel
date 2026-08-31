@@ -22,6 +22,7 @@
 (require 'mevedel-collaboration-guest)
 (require 'mevedel-pending-inputs)
 (require 'mevedel-prompt-submission)
+(require 'mevedel-session-artifacts)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-transcript)
@@ -174,7 +175,12 @@
                       :text "answer" :render-data "hidden")
                 (list :id "tool" :kind "tool" :revision 0 :name "Bash"
                       :status "completed" :summary "Bash" :result "done"
-                      :permission "secret" :execution-target "/target")))
+                      :permission "secret" :execution-target "/target")
+                (list :id "artifact" :kind "tool" :revision 0
+                      :name "ApplyPatch"
+                      :status "completed" :summary "ApplyPatch" :result "ok"
+                      :artifact "mockup.html" :size 11
+                      :artifact-path "/home/secret/artifacts/mockup.html")))
          (payload (mapcar #'mevedel-collaboration--json-record records)))
     (should (equal '(("id" . "user") ("kind" . "user")
                      ("revision" . 0) ("text" . "visible"))
@@ -186,6 +192,11 @@
     (should (equal '("id" "kind" "revision" "name" "status" "summary"
                      "result")
                    (mapcar #'car (caddr payload))))
+    ;; An artifact record exposes its name and size, never the
+    ;; host-side filesystem path it resolves to.
+    (should (equal '("id" "kind" "revision" "name" "status" "summary"
+                     "result" "artifact" "size")
+                   (mapcar #'car (nth 3 payload))))
     (should-not (string-match-p "secret\\|script\\|target"
                                 (mevedel-collaboration--json-string payload)))))
 
@@ -259,36 +270,57 @@
   (:doc "marks empty settled tool output completed rather than running")
   (with-temp-buffer
     (insert "tool")
-    (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)
-               (lambda (_buffer _start _end)
-                 '(:name "Bash" :result ""))))
-      (let ((record (mevedel-collaboration--tool-record
-                     (current-buffer) '(tool 1 5))))
-        (should (equal "completed" (plist-get record :status)))
-        (should (equal "" (plist-get record :result)))))
+    (let ((record (mevedel-collaboration--tool-record
+                   '(:name "Bash" :result "") "tool")))
+      (should (equal "completed" (plist-get record :status)))
+      (should (equal "" (plist-get record :result))))
     ;; Leading spaces on the first result line are significant alignment
     ;; (Read's right-aligned line numbers); only newlines are trimmed.
-    (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)
-               (lambda (_buffer _start _end)
-                 '(:name "Read" :args (:file_path "/tmp/a.el")
-                   :result "\n  1\t;;; header\n  2\tbody\n"))))
-      (let ((record (mevedel-collaboration--tool-record
-                     (current-buffer) '(tool 1 5))))
-        (should (string-prefix-p "  1\t" (plist-get record :result)))
-        (should (equal "/tmp/a.el" (plist-get record :detail)))))
+    (let ((record (mevedel-collaboration--tool-record
+                   '(:name "Read" :args (:file_path "/tmp/a.el")
+                     :result "\n  1\t;;; header\n  2\tbody\n")
+                   "tool")))
+      (should (string-prefix-p "  1\t" (plist-get record :result)))
+      (should (equal "/tmp/a.el" (plist-get record :detail))))
     ;; ApplyPatch carries the authored patch as a dedicated diff field.
-    (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)
-               (lambda (_buffer _start _end)
-                 '(:name "ApplyPatch"
-                   :args (:patch "@@ -1 +1 @@\n-old\n+new")
-                   :result "Applied patch: 1 changes"))))
-      (let ((record (mevedel-collaboration--tool-record
-                     (current-buffer) '(tool 1 5))))
-        (should (equal "@@ -1 +1 @@\n-old\n+new" (plist-get record :diff)))
-        (should (equal "@@ -1 +1 @@\n-old\n+new"
-                       (cdr (assoc "diff"
-                                   (mevedel-collaboration--json-record
-                                    record)))))))))
+    (let ((record (mevedel-collaboration--tool-record
+                   '(:name "ApplyPatch"
+                     :args (:patch "@@ -1 +1 @@\n-old\n+new")
+                     :result "Applied patch: 1 changes")
+                   "tool")))
+      (should (equal "@@ -1 +1 @@\n-old\n+new" (plist-get record :diff)))
+      (should (equal "@@ -1 +1 @@\n-old\n+new"
+                     (cdr (assoc "diff"
+                                 (mevedel-collaboration--json-record
+                                  record))))))
+    ;; Settled selected ApplyPatch render data is the artifact authority.
+    (let* ((save-path (make-temp-file "mevedel-collab-tool-artifact-" t))
+           (dir (mevedel-session-artifacts-artifacts-dir save-path))
+           (path (file-name-concat dir "mockup.html")))
+      (unwind-protect
+          (progn
+            (setq-local mevedel--session
+                        (mevedel-session--create :name "s"
+                                                 :save-path save-path))
+            (make-directory dir t)
+            (write-region "<h1>hi</h1>" nil path nil 'silent)
+            (cl-letf (((symbol-function 'mevedel-view--tool-call-parse)
+                       (lambda (_buffer _start _end)
+                         `(:name "ApplyPatch" :args (:patch "patch")
+                           :result "Applied patch: 1 changes"
+                           :render-data
+                           (:kind patch :files
+                            ((:kind add :path ,path)))))))
+              (let* ((record (car (mevedel-collaboration--tool-segment-records
+                                   (current-buffer) '(tool 1 5))))
+                     (json (mevedel-collaboration--json-record record)))
+                (should (equal "mockup.html" (plist-get record :artifact)))
+                (should (= 11 (cdr (assoc "size" json))))
+                (should (equal "mockup.html" (cdr (assoc "artifact" json))))
+                (should-not (assoc "artifact-path" json)))))
+        (kill-local-variable 'mevedel--session)
+        (mevedel-collaboration--artifact-stat-invalidate)
+        (delete-directory save-path t)))))
 
 (mevedel-deftest mevedel-collaboration--pre-tool
   (:doc "publishes one stable running tool record before settled completion")
@@ -299,9 +331,12 @@
                        :guests (make-hash-table :test #'eql)))
            (info '(:name "Bash" :args (:command "true")))
          (mevedel-collaboration--rooms (mevedel-test-room-registry room))
-           canonical)
+           canonical invalidated)
       (cl-letf (((symbol-function 'mevedel-collaboration--canonical-records)
-                 (lambda (_) canonical)))
+                 (lambda (_) canonical))
+                ((symbol-function
+                  'mevedel-collaboration--artifact-stat-invalidate)
+                 (lambda () (setq invalidated t))))
         (should-not (mevedel-collaboration--pre-tool info))
         (let* ((pending (plist-get room :pending-tools))
                (entry (car pending))
@@ -321,7 +356,14 @@
           (should (equal id (plist-get entry :id)))
           (should (equal "completed" (plist-get entry :status)))
           (should (equal "" (plist-get entry :result)))
-          (should-not (plist-get room :pending-tools)))))))
+          (should-not (plist-get room :pending-tools))
+          (should-not invalidated)
+          ;; ApplyPatch can settle several target-native paths, so the small
+          ;; qualified-path stat cache is cleared wholesale.
+          (mevedel-collaboration--post-tool
+           '(:name "ApplyPatch" :args (:patch "patch")
+             :result ""))
+          (should invalidated))))))
 
 (mevedel-deftest mevedel-collaboration--project-records
   (:doc "merges a pending tool with its landed canonical record even when the settlement info missed it")
@@ -653,94 +695,6 @@
           (mevedel-collaboration--publish-status room)
           (should-not sent)
           (should-not controls))
-      (kill-buffer data-buffer))))
-
-(mevedel-deftest mevedel-collaboration--agent-rows
-  (:doc "lists active agents sorted by path and drops settled ones")
-  (let* ((registry
-          (list (cons "/root/worker-2"
-                      (mevedel-agent-record--create
-                       :path "/root/worker-2" :role 'worker
-                       :activity 'running))
-                (cons "/root/explorer-1"
-                      (mevedel-agent-record--create
-                       :path "/root/explorer-1" :role 'explorer
-                       :activity 'permission-blocked))
-                (cons "/root/worker-1"
-                      (mevedel-agent-record--create
-                       :path "/root/worker-1"
-                       :activity 'waiting))
-                (cons "/root/worker-3"
-                      (mevedel-agent-record--create
-                       :path "/root/worker-3" :role 'worker
-                       :activity 'idle))))
-         (session (mevedel-session--create :name "agents"
-                                           :agent-registry registry))
-         (rows (mevedel-collaboration--agent-rows
-                (list :session session))))
-    (should (equal '("/root/explorer-1" "/root/worker-1" "/root/worker-2")
-                   (mapcar (lambda (row) (cdr (assoc "path" row))) rows)))
-    (should (equal '("blocked" "waiting" "running")
-                   (mapcar (lambda (row) (cdr (assoc "status" row))) rows)))
-    (should (equal "explorer" (cdr (assoc "role" (nth 0 rows)))))
-    ;; A record without a role sends no role field at all.
-    (should-not (assoc "role" (nth 1 rows)))
-    ;; A room without a session has no roster.
-    (should-not (mevedel-collaboration--agent-rows (list :session nil)))))
-
-(mevedel-deftest mevedel-collaboration--publish-agents
-  (:doc "broadcasts the roster once per change, an emptied roster included")
-  (let* ((guests (make-hash-table :test #'eql))
-         (session (mevedel-session--create
-                   :name "agents"
-                   :agent-registry
-                   (list (cons "/root/worker-1"
-                               (mevedel-agent-record--create
-                                :path "/root/worker-1" :role 'worker
-                                :activity 'running)))))
-         (room (list :session session :guests guests :transport 'transport))
-         sent)
-    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
-               (lambda (_transport peer frame)
-                 (push (cons peer frame) sent)
-                 t)))
-      (puthash 1 (list :name "g" :writable nil :ready t) guests)
-      (mevedel-collaboration--publish-agents room)
-      (let ((frame (cdr (car sent))))
-        (should (equal "agents" (plist-get frame :t)))
-        (should (= 1 (length (plist-get frame :agents))))
-        (should (equal "/root/worker-1"
-                       (cdr (assoc "path"
-                                   (aref (plist-get frame :agents) 0))))))
-      ;; An unchanged roster is not repeated.
-      (setq sent nil)
-      (mevedel-collaboration--publish-agents room)
-      (should-not sent)
-      ;; Settling the last agent broadcasts the empty roster, so the
-      ;; guest's strip is cleared rather than frozen on stale rows.
-      (setf (mevedel-session-agent-registry session) nil)
-      (mevedel-collaboration--publish-agents room)
-      (should (equal [] (plist-get (cdr (car sent)) :agents))))))
-
-(mevedel-deftest mevedel-collaboration-notify-agents-changed
-  (:doc "schedules the shared room's coalesced publication and ignores others")
-  (let* ((data-buffer (generate-new-buffer " *collab-agents-data*"))
-         (session (mevedel-session--create :name "agents"))
-         (room (list :session session :data-buffer data-buffer
-                     :guests (make-hash-table :test #'eql)
-                     :transport 'transport))
-         (mevedel-collaboration--rooms (mevedel-test-room-registry room))
-         scheduled)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-collaboration--schedule-publish)
-                   (lambda (target) (push target scheduled))))
-          (mevedel-collaboration-notify-agents-changed session)
-          (should (equal (list room) scheduled))
-          ;; An unshared session is simply not a room.
-          (mevedel-collaboration-notify-agents-changed
-           (mevedel-session--create :name "other"))
-          (should (= 1 (length scheduled)))
-          (should-not (mevedel-collaboration-notify-agents-changed nil)))
       (kill-buffer data-buffer))))
 
 (mevedel-deftest mevedel-view--drain-guest-invocation

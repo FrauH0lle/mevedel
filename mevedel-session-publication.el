@@ -162,7 +162,8 @@
   "Return non-nil when BATCH still owns a staged source."
   (cl-some
    (lambda (artifact)
-     (file-exists-p (plist-get artifact :source)))
+     (or (plist-get artifact :delete)
+         (file-exists-p (plist-get artifact :source))))
    (plist-get batch :artifacts)))
 
 (defun mevedel-session-publication--retain-uncommitted-batch (session batch)
@@ -285,7 +286,8 @@ elsewhere on the same execution target receive nil."
     (let* ((local-p (string-prefix-p session-dir path))
            (logical (and local-p (substring path (length session-dir))))
            (marker (plist-get artifact :commit-marker))
-           (replace (plist-get artifact :replace)))
+         (replace (plist-get artifact :replace))
+         (delete (plist-get artifact :delete)))
       (when (and logical
                  (not (mevedel-session-publication-logical-path-p
                        logical)))
@@ -296,6 +298,12 @@ elsewhere on the same execution target receive nil."
         (error "Publication replacement marker must be t"))
       (when (and replace (not marker))
         (error "Publication replacement requires the commit marker"))
+      (when (and delete (not (eq delete t)))
+        (error "Publication deletion marker must be t"))
+      (when (and delete (or marker replace))
+        (error "Publication deletion cannot be a commit marker"))
+      (when (and delete (null logical))
+        (error "Publication deletion must name session-local storage"))
       (when (and marker (not (equal logical "session.meta.el")))
         (error "Publication commit marker must be session.meta.el"))
       (let ((normalized (copy-sequence artifact)))
@@ -343,9 +351,11 @@ never enters the snapshot, so it can never be answered from a manifest."
           (mevedel-session-publication--artifact-for-session session artifact))
          (logical (plist-get normalized :logical))
          (entry (and logical (cdr (assoc logical entries)))))
-    (and entry
-         (equal (plist-get entry :sha256)
-                (mevedel-session-publication--content-sha256 normalized)))))
+    (if (plist-get normalized :delete)
+        (null entry)
+      (and entry
+           (equal (plist-get entry :sha256)
+                  (mevedel-session-publication--content-sha256 normalized))))))
 
 (defun mevedel-session-publication-committed-p (session artifacts)
   "Return non-nil when SESSION already committed ARTIFACTS byte for byte.
@@ -816,8 +826,8 @@ when they read those artifacts."
   "Copy SESSION publication ARTIFACTS into one local recovery batch.
 
 Each input artifact is a plist containing `:path', `:content', and optional
-`:coding'.  Other metadata is preserved.  Return a batch whose artifacts name
-local `:source' files."
+`:coding', or `:path' and `:delete t'.  Other metadata is preserved.  Return a
+batch whose written artifacts name local `:source' files."
   (let ((directory (make-temp-file "mevedel-publication-" t))
         staged
         (marker-count 0))
@@ -832,23 +842,28 @@ local `:source' files."
            for content = (plist-get normalized :content)
            for source = (file-name-concat directory (format "%06d" index))
            do
-           (unless (and (stringp target) (stringp content))
+           (unless (and (stringp target)
+                        (or (plist-get normalized :delete)
+                            (stringp content)))
              (error "Publication artifact requires string path and content"))
            (when (plist-get normalized :commit-marker)
              (cl-incf marker-count))
-           (with-temp-buffer
-             (set-buffer-multibyte (multibyte-string-p content))
-             (insert content)
-             (let ((coding-system-for-write
-                    (if (multibyte-string-p content)
-                        (or (plist-get normalized :coding) 'utf-8-unix)
-                      'no-conversion)))
-               (write-region (point-min) (point-max) source nil 'silent)))
+           (unless (plist-get normalized :delete)
+             (with-temp-buffer
+               (set-buffer-multibyte (multibyte-string-p content))
+               (insert content)
+               (let ((coding-system-for-write
+                      (if (multibyte-string-p content)
+                          (or (plist-get normalized :coding) 'utf-8-unix)
+                        'no-conversion)))
+                 (write-region (point-min) (point-max) source nil 'silent))))
            (setq normalized
                  (cl-loop for (key value) on normalized by #'cddr
                           unless (eq key :content)
                           append (list key value))
-                 normalized (plist-put normalized :source source))
+                 normalized (if (plist-get normalized :delete)
+                                normalized
+                              (plist-put normalized :source source)))
            (push normalized staged))
           (when (> marker-count 1)
             (error "Publication requires exactly one commit marker"))
@@ -941,10 +956,16 @@ collision simply picks another name."
              (payloads
               (cl-loop for artifact in artifacts
                        for index from 1
+                       unless (plist-get artifact :delete)
                        collect (mevedel-session-publication--immutable-entry
                                 directory artifact index session-dir)))
              (overlaid entries)
              manifest manifest-path operations results)
+        (dolist (artifact artifacts)
+          (when (plist-get artifact :delete)
+            (setq overlaid
+                  (cl-remove (plist-get artifact :logical) overlaid
+                             :key #'car :test #'equal))))
         (dolist (payload payloads)
           (setq overlaid
                 (mevedel-session-publication--overlay-entry
@@ -1040,9 +1061,11 @@ the target's fixed cache or mutates the publication accumulator."
            (mevedel-session-publication-queue session))))
       (dolist (artifact (reverse (plist-get batch :artifacts)))
         (when (equal logical (plist-get artifact :logical))
-          (let ((source (plist-get artifact :source)))
-            (when (and source (file-exists-p source))
-              (throw 'source source))))))))
+          (if (plist-get artifact :delete)
+              (throw 'source nil)
+            (let ((source (plist-get artifact :source)))
+              (when (and source (file-exists-p source))
+                (throw 'source source)))))))))
 
 (defvar mevedel-session-publication--ensured-directories nil
   "Cons cell collecting directories this publication created, or nil.
@@ -1103,7 +1126,8 @@ component and retries once."
     (dolist (artifact artifacts)
       (unless (mevedel-session-durability--renew-publication-lease session)
         (user-error "Portable session lease was lost during publication"))
-      (mevedel-session-publication--publish-artifact artifact))
+      (unless (plist-get artifact :delete)
+        (mevedel-session-publication--publish-artifact artifact)))
     ;; Ownership is proved immediately before every write and once after the
     ;; last one.  Renewing after each write as well only repeated the next
     ;; iteration's proof, with no target write in between, and a renewal is
@@ -1220,10 +1244,11 @@ component and retries once."
     (session artifacts &optional require-commit)
   "Serialize and publish SESSION's critical ARTIFACTS.
 
-Each artifact is `(:path TARGET-PATH :content STRING [:coding CODING])'.  One
-in-session `session.meta.el' may carry `:commit-marker t' and optional
-`:replace t' to commit an immutable logical snapshot.  The complete batch is
-staged locally before target I/O.  Pre-commit failure retains the staged batch
+Each artifact is `(:path TARGET-PATH :content STRING [:coding CODING])' or a
+session-local `(:path TARGET-PATH :delete t)' tombstone.  One in-session
+`session.meta.el' may carry `:commit-marker t' and optional `:replace t' to
+commit an immutable logical snapshot.  The complete batch is staged locally
+before target I/O.  Pre-commit failure retains the staged batch
 in SESSION and blocks later mutation.  When REQUIRE-COMMIT is non-nil, reject
 reentrant queueing so the caller returns only after its own batch commits, and
 treat a post-commit cleanup error as diagnostic.  Ordinary callers receive

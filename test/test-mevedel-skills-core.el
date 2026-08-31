@@ -417,7 +417,21 @@ paths:
     (should (string-match-p "best-effort and read-only" body))
     (should (string-match-p "git worktree list --porcelain" body))
     (should (string-match-p
-             "You cannot invoke slash commands yourself" body)))
+             "You cannot invoke slash commands yourself" body))
+    ;; The artifact skill is bundled, user-invocable as /artifact, and
+    ;; carries the Eval grant its directory-lookup injection needs.
+    (let* ((artifact (cl-find "artifact" skills
+                              :key #'mevedel-skill-name :test #'equal))
+           (artifact-body (and artifact
+                               (mevedel-skill-load-body artifact))))
+      (should artifact)
+      (should (eq 'bundled (mevedel-skill-source artifact)))
+      (should (mevedel-skill-user-invocable-p artifact))
+      (should (mevedel-skill-model-invocable-p artifact))
+      (should (equal '("Eval") (mevedel-skill-allowed-tools artifact)))
+      (should (string-match-p "Self-contained, always" artifact-body))
+      (should (string-match-p "mevedel-session-artifacts-artifacts-dir"
+                              artifact-body))))
 
   :doc "bundled skills are suppressed when include-bundled is nil"
   (let* ((mevedel-skills-include-bundled nil)

@@ -114,6 +114,9 @@ Layout:
   local/                              ; lazy session-owned shared resources
     plans/current.md                 ; mutable Plan draft/proposal
     plans/accepted-*.md              ; immutable accepted plans
+  artifacts/                         ; durable session artifacts (mockups,
+                                     ; documents); cockpit inventory and
+                                     ; collaboration byte source
   agents/                            ; sub-agent transcript .chat.org files
 ```
 
@@ -332,6 +335,16 @@ ownership proofs are avoided.  The commit marker always publishes, because it is
 the transaction's commit point rather than a payload.  `mevedel-save-session`
 publishes regardless, for a user who wants a snapshot rather than a record of a
 change.
+
+The free-form `artifacts/` subtree is included recursively as literal regular
+files in every portable save candidate. Its absent committed entries are
+explicit `:delete t` tombstones: ordinary omission still means unchanged, while
+a tombstone removes that logical from the overlaid manifest at the same marker
+commit. Symlinks are not publication inputs. This makes the immutable manifest,
+not a remote fixed cache, authority for artifact bytes after Resume, Save As,
+and Fork. After an owned cold Resume fences and revalidates the publication
+head, it replaces the fixed `artifacts/` subtree from verified manifest bytes;
+a read-only inspector never performs that reconciliation.
 
 The marker transaction copies the merged logical artifacts into a unique,
 never-overwritten directory below `.publications/`, records each target-native
@@ -723,9 +736,10 @@ publishes a complete `:replace t` child snapshot, then moves the staged tree
 with its `.lease/` and `.publications/` control state while the bounded lease is
 reserved.  The child's save path changes immediately and restore retains that
 same generation; it is never released and reacquired at a discoverable path.
-The replacement manifest contains only the selected transcript, accepted-plan
-evidence, retained agent transcripts, and file-history artifacts resolved from
-the Source's committed manifest, never its fixed caches.
+The replacement manifest contains the selected transcript, accepted-plan
+evidence, retained agent transcripts, file-history artifacts, and the current
+`artifacts/` subtree resolved from the Source's committed manifest, never its
+fixed caches.
 
 Portable project Rewind does not rename or exchange the session directory.  It
 materializes only logical committed artifacts, excludes `.lease/` and
@@ -987,8 +1001,8 @@ inspection, while `C-n`/`C-p` move through user queries. These navigation action
 neither transcript nor session state; Rewind remains a separate explicit
 operation.
 
-Rewind is an in-place logical transaction. It discards every transcript and
-session artifact after the boundary, restores every captured working-tree file
+Rewind is an in-place logical transaction. It discards historical transcript
+and managed session state after the boundary, restores every captured working-tree file
 to the state that boundary owned, and keeps the same session identity, name,
 directory, working directory, and lineage. The candidate session state is the
 single place the boundary is decided; the transcript cutoff, instruction
@@ -999,6 +1013,8 @@ File-workspace sessions stage and swap a session directory with a rollback
 tree.  Portable project sessions leave the directory and control state in
 place and commit one complete replacement manifest through the owned lease
 head.
+The current free-form `artifacts/` folder is preserved unchanged: it is durable
+session content like `local/`, not a turn-indexed snapshot.
 The impact lists the discarded prompt suffix in order, including ordinary chat
 and complete directive turns, alongside restored files and every known gap.
 External working-tree changes to captured files are overwritten. Git HEAD and
@@ -1162,6 +1178,9 @@ unrelated evidence are discarded, and only an accepted artifact that is valid
 at the fork point is preserved. There is no compatibility migration for
 discarded plan state. Only dropped-file grants referenced by the transferred
 draft move to Child.
+The Source's current free-form `artifacts/` subtree is copied into independent
+child state. Portable forks materialize its committed immutable bytes; PID-lock
+forks copy the physical folder.
 
 Conversation children use the first unused direct-child name
 `<source> · conversation N`, receive a normal unique session ID, and can be

@@ -1399,6 +1399,58 @@ cannot leave stale request configuration behind."
   "Return the instruction snapshot directory under SAVE-PATH."
   (file-name-concat save-path "instructions"))
 
+(defun mevedel-session-artifacts-artifacts-dir (save-path)
+  "Return the session artifacts directory under SAVE-PATH.
+Files the model writes here -- mockups, prototypes, documents -- are
+listed by the artifacts cockpit.  A settled ApplyPatch projects each
+selected destination in this directory into a live collaboration room;
+deleting a file unpublishes it from the cockpit and marks any existing
+conversation card missing."
+  (file-name-concat save-path "artifacts"))
+
+(defun mevedel-session-artifacts-materialize-published-artifacts
+    (session destination-save-path)
+  "Replace DESTINATION-SAVE-PATH's artifact folder from SESSION's publication.
+All committed bytes are verified and staged before the existing folder is
+removed.  The immutable publication therefore remains recoverable if staging
+fails, and absent manifest entries remove stale fixed-cache files."
+  (let* ((publication
+          (or (mevedel-session-publication session)
+              (setf (mevedel-session-publication session)
+                    (mevedel-session-publication-read
+                     (mevedel-session-save-path session)))
+              (error "Session publication is unavailable")))
+         (destination
+          (mevedel-session-artifacts-artifacts-dir destination-save-path))
+         (staging
+          (file-name-as-directory
+           (make-temp-file
+            (expand-file-name ".mevedel-artifacts-" destination-save-path)
+            t))))
+    (unwind-protect
+        (progn
+          (dolist (entry (plist-get publication :artifacts))
+            (let ((logical (car entry)))
+              (when (string-prefix-p "artifacts/" logical)
+                (let ((path
+                       (file-name-concat
+                        staging (substring logical (length "artifacts/"))))
+                      (content
+                       (mevedel-session-artifacts-read-artifact
+                        session logical t)))
+                  (make-directory (file-name-directory path) t)
+                  (let ((coding-system-for-write 'no-conversion))
+                    (write-region content nil path nil 'silent))))))
+          (cond
+           ((file-symlink-p destination) (delete-file destination))
+           ((file-directory-p destination) (delete-directory destination t))
+           ((file-exists-p destination) (delete-file destination)))
+          (rename-file (directory-file-name staging)
+                       (directory-file-name destination))
+          (setq staging nil))
+      (when (and staging (file-directory-p staging))
+        (delete-directory staging t)))))
+
 (defun mevedel-session-artifacts-instructions-current-path (save-path)
   "Return the current instruction snapshot path under SAVE-PATH."
   (file-name-concat
@@ -1717,7 +1769,38 @@ continues to wait for the root turn's completed-turn publication boundary."
                  save-path turn)
                 :content
                 (mevedel-session-artifacts-printed-value
-                 (mevedel--serialize-instructions workspace-root nil)))))))))
+               (mevedel--serialize-instructions workspace-root nil)))))))))
+
+(defun mevedel-session-artifacts--published-artifact-files (session)
+  "Return current artifact-folder files and required deletion tombstones.
+Regular non-symlink files are captured recursively with literal bytes.  For a
+portable session, a committed artifact-folder entry that is now absent gets a
+tombstone so manifest overlay cannot resurrect it during Resume, Save As, or
+Fork."
+  (let* ((save-path (mevedel-session-save-path session))
+         (directory (mevedel-session-artifacts-artifacts-dir save-path))
+         (publication (mevedel-session-publication session))
+         current-logicals artifacts)
+    (when (file-directory-p directory)
+      (dolist (path (directory-files-recursively directory "." nil nil nil))
+        (when (and (file-regular-p path) (not (file-symlink-p path)))
+          (let ((logical (file-relative-name path save-path)))
+            (push logical current-logicals)
+            (push (list :path path
+                        :content
+                        (with-temp-buffer
+                          (set-buffer-multibyte nil)
+                          (let ((coding-system-for-read 'no-conversion))
+                            (insert-file-contents-literally path))
+                          (buffer-string)))
+                  artifacts)))))
+    (dolist (entry (plist-get publication :artifacts))
+      (let ((logical (car entry)))
+        (when (and (string-prefix-p "artifacts/" logical)
+                   (not (member logical current-logicals)))
+          (push (list :path (file-name-concat save-path logical) :delete t)
+                artifacts))))
+    (nreverse artifacts)))
 
 (defun mevedel-session-artifacts--sidecar-artifact (session buffer)
   "Return SESSION's sidecar publication artifact derived from BUFFER.
@@ -1769,7 +1852,8 @@ calling this serializer."
              (and segment-artifact (list segment-artifact))
              (nreverse mevedel-session-artifacts--critical-artifacts)
              (mevedel-session-artifacts--instruction-artifacts
-              session buffer)))
+              session buffer)
+             (mevedel-session-artifacts--published-artifact-files session)))
            (artifacts
             (append leading
                     (list (mevedel-session-artifacts--sidecar-artifact

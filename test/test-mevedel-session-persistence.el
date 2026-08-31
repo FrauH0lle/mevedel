@@ -1165,16 +1165,40 @@
             (let* ((mevedel-session-durability--client-id
                     (make-string 64 ?a))
                    (mevedel-session-durability--disclosed-targets
-                    (make-hash-table :test #'equal)))
+                    (make-hash-table :test #'equal))
+                   (artifact-dir
+                    (mevedel-session-artifacts-artifacts-dir session-dir))
+                   (artifact
+                    (file-name-concat artifact-dir "nested" "mockup.html"))
+                   (stale (file-name-concat artifact-dir "stale.txt")))
               (puthash
                (mevedel-execution-target-identity
                 (mevedel-session-execution-target fixture-session))
                t mevedel-session-durability--disclosed-targets)
+              (should
+               (mevedel-session-durability-lease-acquire
+                session-dir "*artifact-publisher*" fixture-session))
+              (unwind-protect
+                  (mevedel-session-publication-publish
+                   fixture-session
+                   (list
+                    (list :path artifact :content "Published artifact\n")
+                    (list
+                     :path (mevedel-session-artifacts-sidecar-path session-dir)
+                     :content
+                     (mevedel-session-artifacts-read-artifact
+                      fixture-session "session.meta.el" t)
+                     :commit-marker t)))
+                (mevedel-session-durability-lease-release
+                 session-dir fixture-session))
               (write-region "(:poisoned fixed sidecar)" nil
                             (mevedel-session-artifacts-sidecar-path
                              session-dir)
                             nil 'silent)
               (write-region "Poisoned fixed transcript\n" nil segment nil 'silent)
+              (make-directory (file-name-directory artifact) t)
+              (write-region "Poisoned artifact\n" nil artifact nil 'silent)
+              (write-region "Stale artifact\n" nil stale nil 'silent)
               (cl-letf
                   (((symbol-function 'mevedel--probe-session-target) #'ignore)
                    ((symbol-function 'mevedel--chat-buffer-init-common) #'ignore)
@@ -1192,7 +1216,13 @@
                          "Published transcript" (buffer-string)))
                 (should-not
                  (string-match-p "Poisoned fixed" (buffer-string)))
-                (should (mevedel-session-publication mevedel--session))))))
+                (should (mevedel-session-publication mevedel--session)))
+              (should
+               (equal "Published artifact\n"
+                      (with-temp-buffer
+                        (insert-file-contents-literally artifact)
+                        (buffer-string))))
+              (should-not (file-exists-p stale)))))
       (mevedel-test--with-local-shell-tramp (list host)
         (test-mevedel-session-persistence--release-and-kill
          restored

@@ -201,6 +201,9 @@ Chat / view
   mevedel-view-fontify.el     quiet generic and reusable Markdown fontification
   mevedel-collaboration.el    live browser room and lifecycle facade
   mevedel-collaboration-guest.el  untrusted guest protocol and input handling
+  mevedel-collaboration-agent.el  browser agent roster and transcript fetch
+  mevedel-collaboration-artifact-projection.el ApplyPatch artifact projection
+  mevedel-collaboration-artifact.el browser artifact fetch and notifications
   mevedel-collaboration-projection.el canonical browser transcript projection
   mevedel-collaboration-share.el bearer-link and QR presentation surface
   mevedel-collaboration-transport.el sealed relay WebSocket client
@@ -211,6 +214,7 @@ Chat / view
   mevedel-menu.el             session cockpit transient and model selection
   mevedel-gptel-bridge.el     view-launched gptel menu and restoration
   mevedel-executions-list.el  session-wide live execution cockpit and user controls
+  mevedel-artifacts-list.el   session artifacts cockpit: list, open, delete-as-unpublish
   mevedel-permissions-list.el remembered authority cockpit and per-row revoke
   mevedel-worktree.el         Git worktrees, status/list surfaces, fork plumbing
   mevedel-instruction-registry.el workspace instruction buckets, IDs, links

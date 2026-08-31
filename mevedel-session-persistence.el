@@ -167,6 +167,7 @@
 (declare-function mevedel-session-artifacts-find-artifact-noselect "mevedel-session-artifacts" (session logical &optional inspection))
 (declare-function mevedel-session-artifacts-inhibit-so-long "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn directive-records preserve-directives-p))
+(declare-function mevedel-session-artifacts-materialize-published-artifacts "mevedel-session-artifacts" (session destination-save-path))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
 (declare-function mevedel-session-artifacts-publish-text "mevedel-session-artifacts" (session path content &optional coding))
 (declare-function mevedel-session-artifacts-reconcile-relocation "mevedel-session-artifacts" (session saved-workspace-plist))
@@ -1713,15 +1714,21 @@ mentions-shown reset to empty hash tables on load."
               ;; comparison because they have no immutable publication head.
               (when (and acquired (not live))
                 (if portable-p
-                    (let ((current
-                           (mevedel-session-publication-read
-                            session-dir)))
-                      (unless (and current
-                                   (equal (plist-get publication :head)
-                                          (plist-get current :head)))
-                        (user-error
-                         "Session state changed while acquiring its lease; retry restore"))
-                      (setf (mevedel-session-publication session) current))
+                    (mevedel-session-durability-call-with-reserved-lease
+                     session
+                     (lambda ()
+                       (let ((current
+                              (mevedel-session-publication-read
+                               session-dir)))
+                         (unless (and current
+                                      (equal (plist-get publication :head)
+                                             (plist-get current :head)))
+                           (user-error
+                            "Session state changed while acquiring its lease; retry restore"))
+                         (setf (mevedel-session-publication session) current)
+                         (unless session-override
+                           (mevedel-session-artifacts-materialize-published-artifacts
+                            session session-dir)))))
                   (unless
                       (equal
                        sidecar

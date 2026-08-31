@@ -23,6 +23,14 @@
 ;; `gptel-request'
 (declare-function gptel-backend-models "ext:gptel-request" (cl-x) t)
 
+;; `mevedel-artifacts-list'
+(declare-function mevedel-artifacts-list-count
+                  "mevedel-artifacts-list" (session))
+(declare-function mevedel-artifacts-list-open
+                  "mevedel-artifacts-list" (&optional context))
+(autoload 'mevedel-artifacts-list-count "mevedel-artifacts-list")
+(autoload 'mevedel-artifacts-list-open "mevedel-artifacts-list")
+
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-call-in-data
                   "mevedel-cockpit" (context function &rest args))
@@ -683,6 +691,16 @@ unavailable until it changes."
      (format "%d live" count)
      (if (> count 0) 'warning 'transient-inactive-value))))
 
+(defun mevedel-menu--artifacts-description ()
+  "Return the top-level artifacts row description."
+  (let* ((session (mevedel-cockpit-context-session
+                   (mevedel-menu--context)))
+         (count (mevedel-artifacts-list-count session)))
+    (mevedel-menu--state-description
+     "Artifacts"
+     (format "%d file%s" count (if (= 1 count) "" "s"))
+     (if (> count 0) 'warning 'transient-inactive-value))))
+
 (defun mevedel-menu--skills-description ()
   "Return the top-level skills row description."
   (let ((context (mevedel-menu--context)))
@@ -1113,6 +1131,9 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
       ('executions
        (mevedel-cockpit-call-in-data
         context #'mevedel-executions-list-open context))
+      ('artifacts
+       (mevedel-cockpit-call-in-data
+        context #'mevedel-artifacts-list-open context))
       ('worktree
        (mevedel-cockpit-call-in-data
         context #'mevedel-worktree-status-open))
@@ -1326,6 +1347,11 @@ nothing to restore."
   (interactive)
   (mevedel-menu-open 'executions))
 
+(defun mevedel-menu--open-artifacts ()
+  "Open the session artifacts cockpit surface."
+  (interactive)
+  (mevedel-menu-open 'artifacts))
+
 (defun mevedel-menu--open-skills ()
   "Open the skills cockpit surface."
   (interactive)
@@ -1392,6 +1418,7 @@ nothing to restore."
      "/model                      Model"
      "Cockpit G / P               Goal / Preset model team"
      "Cockpit u                   Remembered permission authority"
+     "Cockpit A                   Session artifacts"
      "Cockpit i                   Session info panel"
      "/tools, /tools list         Tools"
      "/ps                         Live executions"
@@ -1486,6 +1513,8 @@ nothing to restore."
      :description mevedel-menu--tools-description)
     ("x" mevedel-menu--open-executions
      :description mevedel-menu--executions-description)
+    ("A" mevedel-menu--open-artifacts
+     :description mevedel-menu--artifacts-description)
     ("s" mevedel-menu--open-skills
      :description mevedel-menu--skills-description)
     ("p" mevedel-menu--open-plugins

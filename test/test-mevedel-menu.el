@@ -174,6 +174,7 @@
   :doc "opens requested tools, executions, skills, and plugins surfaces"
   (mevedel-menu-test--with-buffers
     (let (tools-context tools-buffer executions-context executions-buffer
+          artifacts-context artifacts-buffer
           skills-context skills-buffer
           plugins-context plugins-buffer)
       (cl-letf (((symbol-function 'mevedel-tools-list-open)
@@ -184,6 +185,10 @@
                  (lambda (context)
                    (setq executions-context context
                          executions-buffer (current-buffer))))
+                ((symbol-function 'mevedel-artifacts-list-open)
+                 (lambda (context)
+                   (setq artifacts-context context
+                         artifacts-buffer (current-buffer))))
                 ((symbol-function 'mevedel-skills-list-open)
                  (lambda (context)
                    (setq skills-context context
@@ -195,6 +200,7 @@
         (with-current-buffer view-buf
           (mevedel-menu-open 'tools)
           (mevedel-menu-open 'executions)
+          (mevedel-menu-open 'artifacts)
           (mevedel-menu-open 'skills)
           (mevedel-menu-open 'plugins)))
       (should (eq (mevedel-cockpit-context-session tools-context) session))
@@ -210,6 +216,11 @@
       (should (eq (mevedel-cockpit-context-view-buffer executions-context)
                   view-buf))
       (should (eq executions-buffer data-buf))
+      (should (eq (mevedel-cockpit-context-session artifacts-context)
+                  session))
+      (should (eq (mevedel-cockpit-context-view-buffer artifacts-context)
+                  view-buf))
+      (should (eq artifacts-buffer data-buf))
       (should (eq (mevedel-cockpit-context-session skills-context)
                   session))
       (should (eq (mevedel-cockpit-context-view-buffer skills-context)

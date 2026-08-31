@@ -247,3 +247,50 @@ fresh storage partition, it asks the user to paste the full share link and
 parses it entirely in the client; the bearer is never submitted as form or
 request data. Browsers without an active Push subscription keep the live-page
 Notification fallback.
+
+## Amendment: session artifacts as records, bytes on demand (2026-09-01)
+
+The model can now build things a guest is meant to look at -- an HTML
+mockup, a Markdown document -- and the room needed a way to show them.
+The alternative considered was relay-side file hosting with its own TTL;
+it was rejected because it ends the relay's content-blindness and adds
+storage, quotas, and a URL that leaks outside the room. Instead an
+artifact is a file the model applies into `<save-path>/artifacts/` with the
+canonical ApplyPatch tool. Persisted selected-only patch render data is the
+publication seam: it reflects what patch review actually applied, unlike the
+authored patch arguments, and supports several artifact destinations in one
+call. The folder remains the cockpit inventory and byte source; collaboration
+authority is the settled transcript record. Each record carries only name and
+size (a later-deleted file projects as missing), while its resolved path stays
+host-side in an unserialized field. The relay is unchanged.
+
+Bytes travel only on demand. A guest's `artifact-get` names a record id,
+which the host resolves against root records or agent records already
+published to that guest -- never a guest-supplied path. Agent artifact ids are
+first hashed with their canonical agent path because record ids are otherwise
+only transcript-local. The host accepts only nonnegative JavaScript-safe
+request ids, re-verifies the resolved path inside the artifacts directory,
+bounds in size, throttles per guest, and answers as targeted sealed
+`artifact` frames chunked under the wire bound. Any guest may fetch:
+the card is read state like the tool record that carries it. The viewer
+renders HTML inside `<iframe sandbox="allow-scripts">` without
+`allow-same-origin` (the pair together would hand the artifact the
+viewer origin holding the decrypted transcript and room key) and with a
+prepended `default-src 'none'` CSP, so the bundled `artifact` skill's
+self-contained rule is enforced, not merely requested. "Open in tab"
+opens a same-origin shell synchronously from the click with the bytes
+already in hand, containing only the same sandboxed frame. Guests
+author artifacts through the model only; there is no upload path.
+An artifact's public lifetime remains the room's: the existing share
+TTL and relay max-room-age already cover it, so no artifact-specific
+retention exists.
+
+Portable session publication now includes recursive regular files below
+`artifacts/`; a session-local tombstone removes a deleted file from an
+overlaid immutable manifest. Existing publication materialization therefore
+carries artifacts through Resume, Save As, and both Fork forms without a
+second artifact manifest. Rewind deliberately preserves the current folder:
+these files are durable session state, not per-turn file snapshots.
+The cockpit and the next save still consume the fixed folder, so an owned cold
+Resume replaces that cache from digest-verified manifest bytes after fencing
+and head revalidation. Read-only inspection does not mutate the cache.

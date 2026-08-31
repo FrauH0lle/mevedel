@@ -1,0 +1,13 @@
+.agent-dot {
+  flex-shrink: 0;
+  width: .5rem;
+  height: .5rem;
+  border-radius: 50%;
+  background: var(--running);
+}
+.dock-chip.stuck .agent-dot { background: var(--failed); }
+.agent-ledger {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  width: 100%;
+}

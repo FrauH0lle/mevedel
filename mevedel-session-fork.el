@@ -37,9 +37,11 @@
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p "mevedel-session-artifacts" (session logical &optional committed-only))
+(declare-function mevedel-session-artifacts-artifacts-dir "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-assert-mutation-authority "mevedel-session-artifacts" (session &optional buffer))
 (declare-function mevedel-session-artifacts-build-sidecar "mevedel-session-artifacts" (session buffer))
 (declare-function mevedel-session-artifacts-compute-id "mevedel-session-artifacts" (name))
+(declare-function mevedel-session-artifacts-materialize-published-artifacts "mevedel-session-artifacts" (session destination-save-path))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
 (declare-function mevedel-session-artifacts-publish-text "mevedel-session-artifacts" (session path content &optional coding))
 (declare-function mevedel-session-artifacts-read-artifact "mevedel-session-artifacts" (session logical &optional committed-only))
@@ -51,11 +53,15 @@
 (declare-function mevedel-session-artifacts-sidecar-path "mevedel-session-artifacts" (save-path))
 (autoload 'mevedel-session-artifacts-artifact-present-p
   "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-artifacts-dir
+  "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-assert-mutation-authority
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-build-sidecar
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-compute-id "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-materialize-published-artifacts
+  "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-printed-value
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-publish-text
@@ -519,6 +525,18 @@ caches never become fork authority."
       (let ((plans (file-name-concat staging-path "local" "plans")))
         (when (file-directory-p plans)
           (delete-directory plans t))))
+    (if (mevedel-session-codec-portable-authority-p source)
+        (mevedel-session-artifacts-materialize-published-artifacts
+         source staging-path)
+      (when-let* ((artifact-source
+                   (and parent-save-path
+                        (mevedel-session-artifacts-artifacts-dir
+                         parent-save-path)))
+                  ((file-directory-p artifact-source)))
+        (copy-directory
+         artifact-source
+         (mevedel-session-artifacts-artifacts-dir staging-path)
+         nil t t)))
     (when-let* ((source source)
                 (metadata (mevedel-session-plan-metadata source))
                 ((eq (plist-get metadata :status) 'accepted))

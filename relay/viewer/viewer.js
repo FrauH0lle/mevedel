@@ -20,12 +20,6 @@
   const notifyButton = document.getElementById('notify-button');
   const composerScope = document.getElementById('composer-scope');
   const ownQueue = document.getElementById('own-queue');
-  const agentsPanel = document.getElementById('agents');
-  const agentPanel = document.getElementById('agent-panel');
-  const agentTitle = document.getElementById('agent-title');
-  const agentMeta = document.getElementById('agent-meta');
-  const agentClose = document.getElementById('agent-close');
-  const agentTranscript = document.getElementById('agent-transcript');
   const skillChips = document.getElementById('skill-chips');
   const themeButton = document.getElementById('theme-button');
   const modeline = document.getElementById('modeline');
@@ -109,6 +103,13 @@
     }, 4000);
   }
 
+  const artifacts = window.mevedelArtifactView.create({
+    send, el, flash: flashNotice,
+  });
+  const agents = window.mevedelAgentView.create({
+    send, el, directiveLabel, openArtifact: artifacts.open,
+  });
+
   function setLiveButton(visible) {
     liveButton.hidden = !visible;
   }
@@ -187,13 +188,14 @@
   function updateRecordElement(record) {
     let turn = state.elements.get(record.id);
     if (!turn) {
-      turn = window.mevedelTranscriptRenderer.renderRecord(record, directiveLabel);
+      turn = window.mevedelTranscriptRenderer.renderRecord(
+        record, directiveLabel, artifacts.open);
       state.elements.set(record.id, turn);
       transcript.append(turn);
     } else {
       const wasOpen = !!(turn.toolDetails && turn.toolDetails.open);
       const fresh = window.mevedelTranscriptRenderer.renderRecord(
-        record, directiveLabel);
+        record, directiveLabel, artifacts.open);
       if (wasOpen && fresh.toolDetails) fresh.toolDetails.open = true;
       fresh.hidden = turn.hidden;
       turn.replaceWith(fresh);
@@ -317,6 +319,7 @@
       const turn = state.elements.get(record.id);
       if (turn) turn.hidden = !recordVisible(record);
     });
+    artifacts.render(state.records);
     // The composer follows the filter, so say where a prompt will land.
     if (composerInput && !state.armed) {
       composerInput.placeholder = placeholderForFilter();
@@ -810,148 +813,6 @@
     });
   }
 
-  function agentMetaText(row) {
-    const status = typeof row.status === 'string' ? row.status : 'running';
-    const bits = [];
-    if (typeof row.role === 'string' && row.role) bits.push(row.role);
-    bits.push(status);
-    return bits.join(' · ');
-  }
-
-  // Which retained sub-agents are working or stuck right now. Settled
-  // agents tell their story through the transcript's tool records; the
-  // strip covers exactly what those cannot show. Each chip opens that
-  // agent's live transcript.
-  function showAgents(rows) {
-    if (!agentsPanel) return;
-    agentsPanel.replaceChildren();
-    agentsPanel.hidden = rows.length === 0;
-    let watched = null;
-    rows.forEach(row => {
-      if (!row || typeof row.path !== 'string') return;
-      const status = typeof row.status === 'string' ? row.status : 'running';
-      const stuck = status !== 'running';
-      const chip = el('button', `agent-chip${stuck ? ' stuck' : ''}`);
-      chip.type = 'button';
-      chip.title = stuck
-        ? `${row.path} is ${status} — it needs the host before it can continue`
-        : `${row.path} is working — tap to watch`;
-      chip.append(el('span', 'agent-dot'));
-      chip.append(el('span', 'agent-path', row.path));
-      const meta = agentMetaText(row);
-      if (meta) chip.append(el('span', 'agent-meta', meta));
-      chip.addEventListener('click', () => openAgentPanel(row));
-      agentsPanel.append(chip);
-      if (row.path === agentView.path) watched = row;
-    });
-    // Keep an open panel's header honest, and refresh its transcript
-    // promptly on a state change instead of waiting out the poll. A
-    // settled agent leaves the roster but its resident transcript stays
-    // fetchable, so the panel stays open and says so.
-    if (agentView.path) {
-      if (agentMeta) {
-        agentMeta.textContent = watched ? agentMetaText(watched) : 'settled';
-      }
-      if (watched) fetchAgent();
-    }
-  }
-
-  /* -- Sub-agent transcript panel -------------------------------------- */
-
-  const AGENT_POLL_MS = 2500;
-  const agentView = {path: null, reqId: 0, digest: null, staging: null,
-                     timer: null};
-  let agentReqSeq = 0;
-
-  function agentAtLiveEdge() {
-    if (!agentTranscript) return true;
-    const gap = agentTranscript.scrollHeight
-          - (agentTranscript.scrollTop || 0)
-          - (agentTranscript.clientHeight || 0);
-    return gap < 60;
-  }
-
-  function fetchAgent() {
-    if (!agentView.path) return;
-    agentView.reqId = ++agentReqSeq;
-    agentView.staging = null;
-    const frame = {t: 'fetch-agent', reqId: agentView.reqId,
-                   path: agentView.path};
-    if (agentView.digest) frame.known = agentView.digest;
-    send(frame);
-  }
-
-  function renderAgentRecords(records) {
-    if (!agentTranscript) return;
-    const follow = agentAtLiveEdge();
-    agentTranscript.replaceChildren();
-    records.forEach(record => {
-      if (!record || typeof record.id !== 'string') return;
-      agentTranscript.append(
-        window.mevedelTranscriptRenderer.renderRecord(record, directiveLabel));
-    });
-    if (records.length === 0) {
-      agentTranscript.append(
-        el('p', 'agent-note', 'Nothing visible in this transcript yet.'));
-    }
-    if (follow) agentTranscript.scrollTop = agentTranscript.scrollHeight;
-  }
-
-  function openAgentPanel(row) {
-    if (!agentPanel) return;
-    agentView.path = row.path;
-    agentView.digest = null;
-    agentView.staging = null;
-    if (agentTitle) agentTitle.textContent = row.path;
-    if (agentMeta) agentMeta.textContent = agentMetaText(row);
-    if (agentTranscript) {
-      agentTranscript.replaceChildren();
-      agentTranscript.append(el('p', 'agent-note', 'Loading…'));
-    }
-    agentPanel.hidden = false;
-    fetchAgent();
-    if (agentView.timer) clearInterval(agentView.timer);
-    agentView.timer = setInterval(fetchAgent, AGENT_POLL_MS);
-  }
-
-  function closeAgentPanel() {
-    if (agentView.timer) clearInterval(agentView.timer);
-    agentView.timer = null;
-    agentView.path = null;
-    agentView.digest = null;
-    agentView.staging = null;
-    if (agentPanel) agentPanel.hidden = true;
-    if (agentTranscript) agentTranscript.replaceChildren();
-  }
-
-  if (agentClose) agentClose.addEventListener('click', closeAgentPanel);
-
-  function handleAgentFrame(frame) {
-    // Stale replies -- an earlier request, or a panel since closed --
-    // are dropped; every chunk of one reply shares its request id.
-    if (!agentView.path || frame.reqId !== agentView.reqId) return;
-    if (typeof frame.error === 'string') {
-      if (agentTranscript) {
-        agentTranscript.replaceChildren();
-        agentTranscript.append(el('p', 'agent-note', frame.error));
-      }
-      return;
-    }
-    if (frame.unchanged === true) return;
-    (agentView.staging ||= []).push(
-      ...(Array.isArray(frame.records) ? frame.records : []));
-    if (frame.final === true) {
-      const records = agentView.staging;
-      agentView.staging = null;
-      agentView.digest =
-        typeof frame.digest === 'string' ? frame.digest : null;
-      renderAgentRecords(records);
-    }
-  }
-
-  // How many follow-ups are waiting, and whether the host has delivery
-  // paused -- otherwise a queued prompt on a busy session looks dropped.
-
   // How many follow-ups are waiting, and whether the host has delivery
   // paused -- otherwise a queued prompt on a busy session looks dropped.
   function showQueueState(frame) {
@@ -981,8 +842,9 @@
     clearAttachments();
     clearRequests();
     showOwnQueue([]);
-    closeAgentPanel();
-    showAgents([]);
+    agents.close();
+    artifacts.close();
+    agents.show([]);
     showQueueState({pending: 0});
     showSkillChips([]);
     setComposerVisible(false);
@@ -1010,7 +872,7 @@
       showOwnQueue([]);
       // The host re-sends the roster right after this hello's status,
       // so a reconnect starts clean instead of keeping stale chips.
-      showAgents([]);
+      agents.show([]);
       setConnection('Loading…', 'connected');
     } else if (frame.t === 'snapshot-chunk') {
       if (!state.staging) return;
@@ -1040,9 +902,11 @@
       showQueueState(frame);
       showOwnQueue(Array.isArray(frame.own) ? frame.own : []);
     } else if (frame.t === 'agents') {
-      showAgents(Array.isArray(frame.agents) ? frame.agents : []);
+      agents.show(Array.isArray(frame.agents) ? frame.agents : []);
     } else if (frame.t === 'agent') {
-      handleAgentFrame(frame);
+      agents.handle(frame);
+    } else if (frame.t === 'artifact') {
+      artifacts.handle(frame);
     } else if (frame.t === 'ui-request') {
       renderRequest(frame);
       // The host re-sends the same request id on every head redraw and
