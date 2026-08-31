@@ -281,7 +281,7 @@ Callers re-render RECORD (which emits the warning via
   "Return a model-visible interrupted-context boundary containing BODY."
   (concat (propertize "\n" 'gptel 'ignore)
           (mevedel-reminders-format-block body)
-          "\n"))
+          (propertize "\n" 'gptel 'ignore)))
 
 (defun mevedel-side-conversation--request-locals ()
   "Return the current buffer's frozen gptel request locals."
