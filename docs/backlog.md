@@ -115,6 +115,16 @@ become implemented, obsolete, or unjustified.
   1.25 MiB decoded so the sealed prompt frame clears the relay's 2 MiB
   read limit alongside a maximum-length prompt. Logs and patches fit;
   if that ever bites, chunking across frames is the upgrade path.
+- **Guest agent control.** The live agent roster and transcript viewing
+  both landed on 2026-08-31: guests of either link strength see the
+  canonical path, role, and blocked/waiting/running status of every
+  active retained agent as chips, and tapping one opens its transcript
+  as a polled, digest-latched, throttled `fetch-agent`/`agent` frame
+  exchange over the same canonical projection that scrubs the root
+  transcript (see `docs/view.md`). Control (chat, interrupt, kill)
+  stays in Emacs deliberately; if a control is ever wanted, it is
+  interrupt-only and rides the ui-request one-shot discipline, not a
+  new authority class.
 - **Guest /btw.** Deferred with an explicit acceptance bar: build it
   only when a need is observed that is simultaneously private (not
   visible to host and other guests), ephemeral (not part of the durable

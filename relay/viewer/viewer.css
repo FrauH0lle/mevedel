@@ -286,17 +286,17 @@ code, pre {
    instead of the prose being capped narrower than the tool rows. */
 @media (min-width: 72rem) {
   .ledger { max-width: 62rem; }
-  .requests, .own-queue, .composer { max-width: 60rem; }
+  .requests, .own-queue, .agents, .composer { max-width: 60rem; }
 }
 @media (min-width: 100rem) {
   body { font-size: 16px; }
   .ledger { max-width: 70rem; }
-  .requests, .own-queue, .composer { max-width: 68rem; }
+  .requests, .own-queue, .agents, .composer { max-width: 68rem; }
 }
 @media (min-width: 130rem) {
   body { font-size: 17px; }
   .ledger { max-width: 76rem; }
-  .requests, .own-queue, .composer { max-width: 74rem; }
+  .requests, .own-queue, .agents, .composer { max-width: 74rem; }
 }
 
 .turn {
@@ -902,6 +902,89 @@ code, pre {
   overflow-wrap: break-word;
 }
 .own-entry .request-controls { padding: 0 .9rem; }
+
+.agents {
+  width: 100%;
+  max-width: 44rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+}
+.agents[hidden] { display: none; }
+.agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .74rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .25rem .7rem;
+}
+.agent-dot {
+  flex-shrink: 0;
+  width: .5rem;
+  height: .5rem;
+  border-radius: 50%;
+  background: var(--running);
+}
+.agent-chip { cursor: pointer; }
+.agent-chip:hover { border-color: var(--accent); }
+.agent-chip.stuck .agent-dot { background: var(--failed); }
+.agent-meta { color: var(--muted); }
+
+/* The open agent's transcript is a full-screen sheet over the session:
+   one thing at a time on a phone, and Close returns to the room. */
+.agent-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--ground);
+}
+.agent-panel[hidden] { display: none; }
+.agent-head {
+  display: flex;
+  align-items: center;
+  gap: .8rem;
+  padding: .55rem 1.1rem;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.agent-headline {
+  display: flex;
+  align-items: baseline;
+  gap: .6rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.agent-title {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .85rem;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-head .agent-meta {
+  font-size: .74rem;
+  white-space: nowrap;
+}
+.agent-ledger {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  width: 100%;
+}
+.agent-note {
+  margin: 0;
+  font-size: .8rem;
+  color: var(--muted);
+}
 
 .skill-chips {
   display: flex;

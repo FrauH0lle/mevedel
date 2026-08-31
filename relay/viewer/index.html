@@ -23,11 +23,25 @@
     </header>
     <main id="transcript" class="ledger" aria-live="polite"
           aria-label="Shared session transcript"></main>
+    <section id="agent-panel" class="agent-panel" hidden
+             role="dialog" aria-label="Sub-agent transcript">
+      <header class="agent-head">
+        <div class="agent-headline">
+          <span id="agent-title" class="agent-title"></span>
+          <span id="agent-meta" class="agent-meta"></span>
+        </div>
+        <button id="agent-close" class="btn quiet" type="button"
+                title="Close this agent's transcript">Close</button>
+      </header>
+      <div id="agent-transcript" class="ledger agent-ledger"
+           aria-live="polite"></div>
+    </section>
     <div class="dock">
       <div class="live-controls">
         <button id="live-button" class="live-button" type="button" hidden
                 title="Jump back to the newest turn">Return to live</button>
       </div>
+      <nav id="agents" class="agents" aria-label="Live sub-agents" hidden></nav>
       <div id="requests" class="requests" aria-label="Pending interactions"></div>
       <div id="own-queue" class="own-queue" aria-label="Your queued prompts" hidden></div>
       <p id="notice" class="notice" role="status" hidden></p>

@@ -16,6 +16,7 @@
           "helpers"))
 (require 'cl-lib)
 (require 'gptel)
+(require 'mevedel-agent-control)
 (require 'mevedel-collaboration-projection)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration)
@@ -186,7 +187,16 @@
                        (lambda (entry)
                          (equal "welcome" (plist-get (cdr entry) :t)))
                        sent)))
-        (should (= 2 (length welcomes)))))))
+        (should (= 2 (length welcomes))))
+      ;; The roster broadcast is latched on change, so both joining
+      ;; guests -- the view link included -- are told the current one
+      ;; directly, even when it is empty.
+      (let ((agents (cl-remove-if-not
+                     (lambda (entry)
+                       (equal "agents" (plist-get (cdr entry) :t)))
+                     sent)))
+        (should (equal '(1 2) (sort (mapcar #'car agents) #'<)))
+        (should (equal [] (plist-get (cdr (car agents)) :agents)))))))
 
 (mevedel-deftest mevedel-collaboration--handle-push-subscription
   (:doc "forwards valid subscriptions and removal only for an authenticated guest")
@@ -713,6 +723,104 @@
           ;; Unsafe and unresolvable names never become buttons.
           (should-not (assoc "mode" roster))
           (should-not (assoc "nonexistent" roster)))))))
+
+(mevedel-deftest mevedel-collaboration--agent-conversation
+  (:doc "resolves a registry path to its live conversation buffer only")
+  (let* ((buffer (generate-new-buffer " *agent-conversation*"))
+         (record (mevedel-agent-record--create
+                  :path "/root/worker-1" :conversation-buffer buffer))
+         (session (mevedel-session--create
+                   :name "s"
+                   :agent-registry (list (cons "/root/worker-1" record))))
+         (room (list :session session)))
+    (unwind-protect
+        (progn
+          (should (eq buffer (mevedel-collaboration--agent-conversation
+                              room "/root/worker-1")))
+          ;; A path outside the registry never reaches the filesystem.
+          (should-not (mevedel-collaboration--agent-conversation
+                       room "/root/worker-2"))
+          (should-not (mevedel-collaboration--agent-conversation room 5))
+          (should-not (mevedel-collaboration--agent-conversation
+                       (list :session nil) "/root/worker-1"))
+          ;; A cold agent is refused rather than hydrated.
+          (kill-buffer buffer)
+          (should-not (mevedel-collaboration--agent-conversation
+                       room "/root/worker-1")))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(mevedel-deftest mevedel-collaboration--handle-fetch-agent
+  (:doc "answers chunked projected records with an unchanged latch and a throttle")
+  (let* ((buffer (generate-new-buffer " *agent-fetch*"))
+         (record (mevedel-agent-record--create
+                  :path "/root/worker-1" :conversation-buffer buffer))
+         (session (mevedel-session--create
+                   :name "s"
+                   :agent-registry (list (cons "/root/worker-1" record))))
+         (guests (make-hash-table :test #'eql))
+         (room (list :session session :guests guests :transport 'transport))
+         (now 1000.0)
+         sent)
+    ;; A read-only guest may fetch: the transcript is read state.
+    (puthash 1 (list :name "viewer" :writable nil :ready t) guests)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport peer frame)
+                     (push (cons peer frame) sent)
+                     t))
+                  ((symbol-function 'float-time)
+                   (lambda (&optional _) now))
+                  ((symbol-function 'mevedel-collaboration--canonical-records)
+                   (lambda (seen)
+                     (should (eq buffer seen))
+                     (list (list :id "u" :kind "user" :revision 0
+                                 :text "find the bug")
+                           (list :id "a" :kind "assistant" :revision 0
+                                 :text "Looking")))))
+          ;; A path outside the registry earns a targeted refusal.
+          (mevedel-collaboration--handle-fetch-agent
+           room 1 (list :reqId 1 :path "/root/missing"))
+          (should (equal '(1) (mapcar #'car sent)))
+          (should (equal "agent" (plist-get (cdr (car sent)) :t)))
+          (should (stringp (plist-get (cdr (car sent)) :error)))
+          ;; A registry path answers final-flagged records with a digest.
+          (setq now 1002.0 sent nil)
+          (mevedel-collaboration--handle-fetch-agent
+           room 1 (list :reqId 2 :path "/root/worker-1"))
+          (should (= 1 (length sent)))
+          (let ((frame (cdr (car sent))))
+            (should (equal "agent" (plist-get frame :t)))
+            (should (= 2 (plist-get frame :reqId)))
+            (should (equal "/root/worker-1" (plist-get frame :path)))
+            (should (eq t (plist-get frame :final)))
+            (should (= 2 (length (plist-get frame :records))))
+            (should (equal "u" (cdr (assoc "id"
+                                           (aref (plist-get frame :records)
+                                                 0)))))
+            (should (stringp (plist-get frame :digest)))
+            ;; A matching known digest earns one unchanged frame instead
+            ;; of the transcript again.
+            (setq now 1004.0 sent nil)
+            (mevedel-collaboration--handle-fetch-agent
+             room 1 (list :reqId 3 :path "/root/worker-1"
+                          :known (plist-get frame :digest)))
+            (should (= 1 (length sent)))
+            (should (eq t (plist-get (cdr (car sent)) :unchanged)))
+            (should-not (plist-member (cdr (car sent)) :records)))
+          ;; A repeat inside the throttle window is dropped silently;
+          ;; the viewer's next poll catches up.
+          (setq now 1004.5 sent nil)
+          (mevedel-collaboration--handle-fetch-agent
+           room 1 (list :reqId 4 :path "/root/worker-1"))
+          (should-not sent)
+          ;; An unregistered peer and a malformed request id get nothing.
+          (setq now 1010.0 sent nil)
+          (mevedel-collaboration--handle-fetch-agent
+           room 9 (list :reqId 5 :path "/root/worker-1"))
+          (mevedel-collaboration--handle-fetch-agent
+           room 1 (list :reqId "5" :path "/root/worker-1"))
+          (should-not sent))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
 
 (mevedel-deftest mevedel-collaboration--handle-abort ()
   ,test

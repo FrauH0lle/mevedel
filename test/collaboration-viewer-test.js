@@ -331,15 +331,21 @@ async function main() {
                'send-button', 'stop-button', 'filter', 'requests',
                'session-label', 'queue-state', 'attachments',
                'attach-button', 'image-input', 'notify-button',
-               'composer-scope', 'own-queue', 'skill-chips', 'theme-button',
-               'modeline'];
+               'composer-scope', 'own-queue', 'agents', 'agent-panel',
+               'agent-title', 'agent-meta', 'agent-close',
+               'agent-transcript', 'skill-chips',
+               'theme-button', 'modeline'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.composer.hidden = true;
   nodes.filter.hidden = true;
   nodes['notify-button'].hidden = true;
   nodes['own-queue'].hidden = true;
+  nodes.agents.hidden = true;
+  nodes['agent-panel'].hidden = true;
+  nodes['agent-transcript'].scrollTop = 0;
   const sockets = [];
   let timer;
+  let agentPoll = null;
   const storage = new Map();
   let subscribedWith;
   let unsubscribeCount = 0;
@@ -470,6 +476,8 @@ async function main() {
     },
     setTimeout: window.setTimeout,
     clearTimeout: () => {},
+    setInterval: callback => { agentPoll = callback; return 7; },
+    clearInterval: id => { if (id === 7) agentPoll = null; },
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/transport.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/notifications.js', 'utf8'), context);
@@ -747,6 +755,23 @@ async function main() {
   assert.match(textOf(nodes['queue-state']), /paused/);
   await deliver({t: 'queue', pending: 0, paused: false});
   assert.equal(nodes['queue-state'].hidden, true);
+
+  // The live agent strip shows who is working or stuck; a stuck agent
+  // is marked, and the emptied roster hides the strip again.
+  assert.equal(nodes.agents.hidden, true);
+  await deliver({t: 'agents', agents: [
+    {path: '/root/explorer-1', role: 'explorer', status: 'blocked'},
+    {path: '/root/worker-1', role: 'worker', status: 'running'},
+  ]});
+  assert.equal(nodes.agents.hidden, false);
+  assert.equal(nodes.agents.children.length, 2);
+  assert.match(textOf(nodes.agents), /\/root\/explorer-1/);
+  assert.match(textOf(nodes.agents), /explorer · blocked/);
+  assert.match(nodes.agents.children[0].className, /stuck/);
+  assert.doesNotMatch(nodes.agents.children[1].className, /stuck/);
+  await deliver({t: 'agents', agents: []});
+  assert.equal(nodes.agents.hidden, true);
+
   nodes['stop-button'].dispatch('click');
   await waitFor(() => first.sent.length === 3, 'sealed abort');
   assert.deepEqual(await unseal(key, first.sent[2]), {t: 'abort'});
@@ -869,6 +894,58 @@ async function main() {
   removeAttachment.dispatch('click');
   assert.deepEqual(revokedUrls, [createdUrls[0], createdUrls[1]]);
   assert.equal(nodes.attachments.children.length, 0);
+
+  // Tapping a roster chip opens the agent sheet and fetches its
+  // transcript; chunked replies render through the shared renderer.
+  await deliver({t: 'agents', agents: [
+    {path: '/root/worker-1', role: 'worker', status: 'running'},
+  ]});
+  const agentFetchBefore = first.sent.length;
+  nodes.agents.children[0].dispatch('click');
+  assert.equal(nodes['agent-panel'].hidden, false);
+  assert.equal(textOf(nodes['agent-title']), '/root/worker-1');
+  await waitFor(() => first.sent.length === agentFetchBefore + 1,
+                'sealed agent fetch');
+  const agentFetch = await unseal(key, first.sent[agentFetchBefore]);
+  assert.equal(agentFetch.t, 'fetch-agent');
+  assert.equal(agentFetch.path, '/root/worker-1');
+  assert.equal(agentFetch.known, undefined);
+  await deliver({t: 'agent', reqId: agentFetch.reqId,
+                 path: '/root/worker-1', digest: 'd1', final: false,
+                 records: [{id: 'u1', kind: 'user', text: 'find the bug'}]});
+  await deliver({t: 'agent', reqId: agentFetch.reqId,
+                 path: '/root/worker-1', digest: 'd1', final: true,
+                 records: [{id: 'a1', kind: 'assistant', text: 'Looking'}]});
+  assert.equal(nodes['agent-transcript'].children.length, 2);
+  assert.match(textOf(nodes['agent-transcript']), /find the bug/);
+  assert.match(textOf(nodes['agent-transcript']), /Looking/);
+  // The poll resends the digest; unchanged keeps the rendered sheet,
+  // and a stale reply from a superseded request is dropped.
+  agentPoll();
+  await waitFor(() => first.sent.length === agentFetchBefore + 2,
+                'sealed agent poll');
+  const agentPollFetch = await unseal(key, first.sent[agentFetchBefore + 1]);
+  assert.equal(agentPollFetch.known, 'd1');
+  await deliver({t: 'agent', reqId: agentPollFetch.reqId,
+                 path: '/root/worker-1', digest: 'd1', unchanged: true});
+  assert.equal(nodes['agent-transcript'].children.length, 2);
+  await deliver({t: 'agent', reqId: agentFetch.reqId,
+                 path: '/root/worker-1', digest: 'dX', final: true,
+                 records: []});
+  assert.equal(nodes['agent-transcript'].children.length, 2);
+  // A roster change while the sheet is open updates its header and
+  // refetches promptly instead of waiting out the poll.
+  await deliver({t: 'agents', agents: [
+    {path: '/root/worker-1', role: 'worker', status: 'blocked'},
+  ]});
+  assert.match(textOf(nodes['agent-meta']), /blocked/);
+  await waitFor(() => first.sent.length === agentFetchBefore + 3,
+                'roster-change refetch');
+  // Close hides the sheet and stops the poll.
+  nodes['agent-close'].dispatch('click');
+  assert.equal(nodes['agent-panel'].hidden, true);
+  assert.equal(agentPoll, null);
+  await deliver({t: 'agents', agents: []});
 
   // A guest's own queued entries render as a persistent card with live
   // position and a retract control; a frame without them clears it.

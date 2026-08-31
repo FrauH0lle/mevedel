@@ -13,7 +13,13 @@
 (eval-when-compile
   (require 'cl-lib))
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-record-conversation-buffer
+                  "mevedel-agent-control" (record))
+
 ;; `mevedel-collaboration'
+(declare-function mevedel-collaboration--agents-frame
+                  "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--base64url-decode
                   "mevedel-collaboration" (string))
 (declare-function mevedel-collaboration--guest
@@ -50,6 +56,8 @@
 (defvar mevedel-collaboration-unsafe-guest-commands)
 
 ;; `mevedel-collaboration-projection'
+(declare-function mevedel-collaboration--canonical-records
+                  "mevedel-collaboration-projection" (data-buffer))
 (declare-function mevedel-collaboration--json-record
                   "mevedel-collaboration-projection" (record))
 (declare-function mevedel-collaboration--json-string
@@ -85,6 +93,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (record))
+(declare-function mevedel-session-agent-registry "mevedel-structs" (session))
 (declare-function mevedel-session-pending-follow-ups
                   "mevedel-structs" (session))
 (declare-function mevedel-session-set-pending-inputs
@@ -129,14 +138,16 @@ sizes alone never accounted for."
           :records (vconcat nil)
           :final :json-false))))
 
-(defun mevedel-collaboration--snapshot-chunks (records)
+(defun mevedel-collaboration--snapshot-chunks (records &optional overhead)
   "Split RECORDS into lists of JSON records each under the wire bound.
 The bound belongs to the frame that goes on the wire, not to the records
 in it.  A record too large to travel in a frame of its own is dropped:
 emitting a frame the relay must refuse costs the host connection, and the
 relay collects the room with it, so one oversized record would end the
-session for every guest."
-  (let* ((overhead (mevedel-collaboration--snapshot-frame-overhead))
+session for every guest.  OVERHEAD is the encoded bytes the carrying
+frame costs before its records; it defaults to the snapshot frame's."
+  (let* ((overhead (or overhead
+                       (mevedel-collaboration--snapshot-frame-overhead)))
          (limit mevedel-collaboration--max-frame-json-bytes)
          chunks current (size 0))
     (dolist (record records)
@@ -463,6 +474,12 @@ answer can execute the same path the host key binding would."
         (mevedel-collaboration--transport-send
          (plist-get room :transport) peer
          (mevedel-collaboration--status-frame room))
+        ;; The roster broadcast is latched on change, so a joining guest
+        ;; is told the current one directly -- an empty roster included,
+        ;; because a reconnecting viewer must clear stale rows.
+        (mevedel-collaboration--transport-send
+         (plist-get room :transport) peer
+         (mevedel-collaboration--agents-frame room))
         (when (and writable mevedel-collaboration-remote-interactions)
           (mevedel-collaboration--send-ui-requests room peer))))))
 
@@ -757,6 +774,94 @@ the failed-enqueue cleanup."
             (mevedel-view--interaction-rebuild)))
         (mevedel-collaboration--publish-queue room)))))
 
+(defconst mevedel-collaboration--agent-fetch-window 1.0
+  "Seconds within which repeated agent fetches from one guest are dropped.
+A viewer polls an open agent every few seconds; anything faster is a
+misbehaving or hostile client, and each fetch costs a projection of the
+agent's conversation buffer on the host.")
+
+(defun mevedel-collaboration--agent-frame-overhead (req-id path)
+  "Return the encoded bytes an agent frame for REQ-ID and PATH costs
+before its records.  Measured like the snapshot overhead: an empty
+record array, the longer `final' spelling, and a full-length digest."
+  (string-bytes
+   (mevedel-collaboration--json-string
+    (list :t "agent"
+          :reqId req-id
+          :path path
+          :digest (make-string 64 ?0)
+          :records (vconcat nil)
+          :final :json-false))))
+
+(defun mevedel-collaboration--agent-conversation (room path)
+  "Return the live conversation buffer for canonical PATH in ROOM, or nil.
+PATH is looked up in the agent registry, never treated as a filesystem
+path.  A cold or historical agent yields nil rather than hydrating:
+a guest poll must never start target I/O."
+  (when-let* ((session (plist-get room :session))
+              ((stringp path))
+              (entry (assoc path (mevedel-session-agent-registry session)))
+              (buffer (mevedel-agent-record-conversation-buffer (cdr entry)))
+              ((buffer-live-p buffer)))
+    buffer))
+
+(defun mevedel-collaboration--handle-fetch-agent (room peer frame)
+  "Answer guest PEER's agent-transcript fetch FRAME for ROOM.
+
+Any guest may fetch: the transcript is read state, like the roster that
+advertises it, and it crosses the same projection that scrubs the root
+transcript -- visible text and settled tool records only, never hidden
+audit or render data.  Replies are targeted `agent' frames sharing
+FRAME's request id, chunked under the wire bound; when the guest's
+`known' digest still matches, one `unchanged' frame answers instead of
+resending the transcript."
+  (let ((guest (mevedel-collaboration--guest room peer))
+        (req-id (plist-get frame :reqId))
+        (path (plist-get frame :path))
+        (transport (plist-get room :transport))
+        (now (float-time)))
+    (when (and guest (numberp req-id))
+      ;; ponytail: flat per-guest throttle; per-path budgets if a viewer
+      ;; ever watches several agents at once.  A dropped poll is caught
+      ;; up by the viewer's next tick.
+      (let ((last (plist-get guest :last-agent-fetch)))
+        (unless (and last (< (- now last)
+                             mevedel-collaboration--agent-fetch-window))
+          (plist-put guest :last-agent-fetch now)
+          (let ((buffer (mevedel-collaboration--agent-conversation
+                         room path)))
+            (if (null buffer)
+                (mevedel-collaboration--transport-send
+                 transport peer
+                 (list :t "agent" :reqId req-id
+                       :error "This agent's transcript is not available"))
+              (let* ((records (mevedel-collaboration--canonical-records
+                               buffer))
+                     (chunks
+                      (or (mevedel-collaboration--snapshot-chunks
+                           records
+                           (mevedel-collaboration--agent-frame-overhead
+                            req-id path))
+                          (list nil)))
+                     (digest
+                      (secure-hash
+                       'sha256
+                       (mapconcat #'mevedel-collaboration--json-string
+                                  (apply #'append chunks) "\n"))))
+                (if (equal digest (plist-get frame :known))
+                    (mevedel-collaboration--transport-send
+                     transport peer
+                     (list :t "agent" :reqId req-id :path path
+                           :digest digest :unchanged t))
+                  (cl-loop
+                   for rest on chunks do
+                   (mevedel-collaboration--transport-send
+                    transport peer
+                    (list :t "agent" :reqId req-id :path path
+                          :digest digest
+                          :records (vconcat (car rest))
+                          :final (if (cdr rest) :json-false t)))))))))))))
+
 (defun mevedel-collaboration--handle-abort (room peer)
   "Abort the running request for writable guest PEER."
   (let ((guest (mevedel-collaboration--guest room peer)))
@@ -783,6 +888,8 @@ handling stops the room instead of leaking into the session."
             room peer frame))
           ("prompt" (mevedel-collaboration--handle-prompt room peer frame))
           ("abort" (mevedel-collaboration--handle-abort room peer))
+          ("fetch-agent"
+           (mevedel-collaboration--handle-fetch-agent room peer frame))
           ("retract" (mevedel-collaboration--handle-retract room peer frame))
           ("ui-response"
            (mevedel-collaboration--handle-ui-response room peer frame)))

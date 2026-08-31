@@ -15,6 +15,7 @@
           "helpers"))
 (require 'cl-lib)
 (require 'gptel)
+(require 'mevedel-agent-control)
 (require 'mevedel-collaboration-projection)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration)
@@ -27,6 +28,7 @@
 (require 'mevedel-transcript-audit)
 (require 'mevedel-chat)
 (require 'mevedel-view)
+(require 'mevedel-view-agent)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-input-files)
 (require 'mevedel-view-render)
@@ -651,6 +653,94 @@
           (mevedel-collaboration--publish-status room)
           (should-not sent)
           (should-not controls))
+      (kill-buffer data-buffer))))
+
+(mevedel-deftest mevedel-collaboration--agent-rows
+  (:doc "lists active agents sorted by path and drops settled ones")
+  (let* ((registry
+          (list (cons "/root/worker-2"
+                      (mevedel-agent-record--create
+                       :path "/root/worker-2" :role 'worker
+                       :activity 'running))
+                (cons "/root/explorer-1"
+                      (mevedel-agent-record--create
+                       :path "/root/explorer-1" :role 'explorer
+                       :activity 'permission-blocked))
+                (cons "/root/worker-1"
+                      (mevedel-agent-record--create
+                       :path "/root/worker-1"
+                       :activity 'waiting))
+                (cons "/root/worker-3"
+                      (mevedel-agent-record--create
+                       :path "/root/worker-3" :role 'worker
+                       :activity 'idle))))
+         (session (mevedel-session--create :name "agents"
+                                           :agent-registry registry))
+         (rows (mevedel-collaboration--agent-rows
+                (list :session session))))
+    (should (equal '("/root/explorer-1" "/root/worker-1" "/root/worker-2")
+                   (mapcar (lambda (row) (cdr (assoc "path" row))) rows)))
+    (should (equal '("blocked" "waiting" "running")
+                   (mapcar (lambda (row) (cdr (assoc "status" row))) rows)))
+    (should (equal "explorer" (cdr (assoc "role" (nth 0 rows)))))
+    ;; A record without a role sends no role field at all.
+    (should-not (assoc "role" (nth 1 rows)))
+    ;; A room without a session has no roster.
+    (should-not (mevedel-collaboration--agent-rows (list :session nil)))))
+
+(mevedel-deftest mevedel-collaboration--publish-agents
+  (:doc "broadcasts the roster once per change, an emptied roster included")
+  (let* ((guests (make-hash-table :test #'eql))
+         (session (mevedel-session--create
+                   :name "agents"
+                   :agent-registry
+                   (list (cons "/root/worker-1"
+                               (mevedel-agent-record--create
+                                :path "/root/worker-1" :role 'worker
+                                :activity 'running)))))
+         (room (list :session session :guests guests :transport 'transport))
+         sent)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_transport peer frame)
+                 (push (cons peer frame) sent)
+                 t)))
+      (puthash 1 (list :name "g" :writable nil :ready t) guests)
+      (mevedel-collaboration--publish-agents room)
+      (let ((frame (cdr (car sent))))
+        (should (equal "agents" (plist-get frame :t)))
+        (should (= 1 (length (plist-get frame :agents))))
+        (should (equal "/root/worker-1"
+                       (cdr (assoc "path"
+                                   (aref (plist-get frame :agents) 0))))))
+      ;; An unchanged roster is not repeated.
+      (setq sent nil)
+      (mevedel-collaboration--publish-agents room)
+      (should-not sent)
+      ;; Settling the last agent broadcasts the empty roster, so the
+      ;; guest's strip is cleared rather than frozen on stale rows.
+      (setf (mevedel-session-agent-registry session) nil)
+      (mevedel-collaboration--publish-agents room)
+      (should (equal [] (plist-get (cdr (car sent)) :agents))))))
+
+(mevedel-deftest mevedel-collaboration-notify-agents-changed
+  (:doc "schedules the shared room's coalesced publication and ignores others")
+  (let* ((data-buffer (generate-new-buffer " *collab-agents-data*"))
+         (session (mevedel-session--create :name "agents"))
+         (room (list :session session :data-buffer data-buffer
+                     :guests (make-hash-table :test #'eql)
+                     :transport 'transport))
+         (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+         scheduled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-collaboration--schedule-publish)
+                   (lambda (target) (push target scheduled))))
+          (mevedel-collaboration-notify-agents-changed session)
+          (should (equal (list room) scheduled))
+          ;; An unshared session is simply not a room.
+          (mevedel-collaboration-notify-agents-changed
+           (mevedel-session--create :name "other"))
+          (should (= 1 (length scheduled)))
+          (should-not (mevedel-collaboration-notify-agents-changed nil)))
       (kill-buffer data-buffer))))
 
 (mevedel-deftest mevedel-view--drain-guest-invocation
