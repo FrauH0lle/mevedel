@@ -2224,8 +2224,9 @@ the raw tool segment.  When `:hidden-p' is non-nil, insert nothing."
 CHILD is one `:child-calls' entry.  The nested tool's own registered
 renderer produces the row, which is why a nested Grep gets Grep's header
 and `grep-mode' body without the compound tool formatting anything
-itself.  A failed row renders expanded: its output is the reason the
-reader opened the block.
+itself.  A reasoning child carries its prepared thinking rendering.  A
+failed row renders expanded: its output is the reason the reader opened
+the block.
 
 A nested compound call keeps its own `:child-calls', so expanding it
 inside a block or an activity group shows the calls it ran rather than
@@ -2237,10 +2238,12 @@ the text it returned."
          (failed (not (eq (plist-get child :status) 'success)))
          (tool (and (stringp name) (mevedel-tool-get name)))
          (rendering
-          (or (and tool
-                   (mevedel-view--invoke-renderer tool render-data args result))
-              (mevedel-view--generic-tool-rendering
-               name args result nil render-data))))
+          (if (eq (plist-get child :kind) 'reasoning)
+              (plist-get child :rendering)
+            (or (and tool
+                     (mevedel-view--invoke-renderer tool render-data args result))
+                (mevedel-view--generic-tool-rendering
+                 name args result nil render-data)))))
     (when rendering
       (setq rendering (copy-sequence rendering))
       (dolist (cell (list (cons :vtype 'tool-child)
@@ -4845,13 +4848,145 @@ added when the text before point does not already end with a blank line
                         'mevedel-view-type 'activity-separator
                         'mevedel-view-collapsed nil))))
 
+(defun mevedel-view--tool-activity-tool-segment-p (seg data-buf)
+  "Return non-nil when SEG belongs to a tool run in DATA-BUF."
+  (or (eq (car seg) 'tool)
+      (and (eq (car seg) 'ignored)
+           (mevedel-view--hook-audit-only-segment-p
+            data-buf (cadr seg) (caddr seg)))))
+
+(defun mevedel-view--thinking-group-entry (segments data-buf)
+  "Return one grouped reasoning entry for SEGMENTS in DATA-BUF, or nil."
+  (when segments
+    (let* ((first-start (cadr (car segments)))
+           (last-end (caddr (car (last segments))))
+           (bounds (mevedel-view--reasoning-source-bounds
+                    data-buf first-start last-end))
+           (start (or (car-safe bounds) first-start))
+           (end (or (cdr-safe bounds) last-end))
+           (summary (mevedel-view--thinking-summary data-buf start end))
+           (body
+            (with-current-buffer data-buf
+              (mevedel-view--clean-reasoning-text
+               (buffer-substring-no-properties start end)))))
+      (unless (or (string-empty-p summary)
+                  (string-empty-p (string-trim body)))
+        (list :kind 'reasoning
+              :start start
+              :end end
+              :group-child
+              (list :kind 'reasoning
+                    :status 'success
+                    :rendering
+                    (list :header summary
+                          :body body
+                          :body-mode 'markdown-mode)))))))
+
+(defun mevedel-view--tool-activity-entries (segments data-buf)
+  "Return ordered tool and reasoning entries for SEGMENTS in DATA-BUF."
+  (let (out thinking-group)
+    (cl-labels
+        ((flush-thinking
+          ()
+          (when thinking-group
+            (when-let* ((entry (mevedel-view--thinking-group-entry
+                                (nreverse thinking-group) data-buf)))
+              (push entry out))
+            (setq thinking-group nil))))
+      (dolist (seg (mevedel-view--merge-tool-hook-audit-segments
+                    segments data-buf))
+        (if (eq (car seg) 'tool)
+            (progn
+              (flush-thinking)
+              (push (list :kind 'tool
+                          :start (cadr seg)
+                          :end (caddr seg))
+                    out))
+          (push seg thinking-group)))
+      (flush-thinking))
+    (nreverse out)))
+
+(defun mevedel-view--tool-activity-groupable-p (segments data-buf)
+  "Return non-nil when tool activity SEGMENTS may fold across thinking."
+  (let ((tool-segments
+         (mevedel-view--merge-tool-hook-audit-segments
+          (cl-remove-if-not
+           (lambda (seg)
+             (mevedel-view--tool-activity-tool-segment-p seg data-buf))
+           segments)
+          data-buf)))
+    (and (> mevedel-view-tool-group-collapse-threshold 0)
+         (> (length tool-segments)
+            mevedel-view-tool-group-collapse-threshold)
+         (cl-every
+          (lambda (seg)
+            (let* ((seg-start (cadr seg))
+                   (seg-end (caddr seg))
+                   (source (mevedel-view-disclosure-source-range
+                            data-buf seg-start seg-end))
+                   (rendering (mevedel-view--segment-rendering
+                               data-buf seg-start seg-end t))
+                   (vtype (or (plist-get rendering :vtype)
+                              'tool-summary))
+                   (state
+                    (and rendering
+                         (mevedel-view-disclosure-state-entry source vtype))))
+              (when (and state (not (cdr state)))
+                (setq rendering
+                      (or (mevedel-view--segment-rendering
+                           data-buf seg-start seg-end)
+                          rendering)))
+              (and (null (plist-get rendering :coalesce-key))
+                   (mevedel-view--tool-group-entry-p
+                    (list :count 1
+                          :rendering
+                          (when rendering
+                            (plist-put (copy-sequence rendering)
+                                       :group-child nil)))))))
+          tool-segments))))
+
+(defun mevedel-view--render-tool-activity (segments data-buf)
+  "Render tool activity SEGMENTS from DATA-BUF in source order.
+Thinking segments are transparent when every tool row can form one folded
+group.  Otherwise tool and thinking runs retain their original order."
+  (cond
+   ((cl-every
+     (lambda (seg)
+       (mevedel-view--tool-activity-tool-segment-p seg data-buf))
+     segments)
+    (mevedel-view--render-tool-group segments data-buf))
+   ((mevedel-view--tool-activity-groupable-p segments data-buf)
+    (let* ((unit-start (point))
+           (entries (mevedel-view--tool-activity-entries segments data-buf)))
+      (mevedel-view--insert-activity-rule-after-response)
+      (mevedel-view--insert-tool-group entries data-buf)
+      (mevedel-view--mark-live-render-unit
+       unit-start (cadr (car segments)))))
+   (t
+    (let (tool-group thinking-group)
+      (dolist (seg segments)
+        (if (mevedel-view--tool-activity-tool-segment-p seg data-buf)
+            (progn
+              (when thinking-group
+                (mevedel-view--flush-thinking-group thinking-group data-buf)
+                (setq thinking-group nil))
+              (push seg tool-group))
+          (when tool-group
+            (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
+            (setq tool-group nil))
+          (push seg thinking-group)))
+      (when tool-group
+        (mevedel-view--render-tool-group (nreverse tool-group) data-buf))
+      (mevedel-view--flush-thinking-group thinking-group data-buf)))))
+
 (defun mevedel-view--render-assistant-turn
     (segments data-buf &optional variant-button directive continuation-p)
   "Render assistant SEGMENTS from DATA-BUF.
 Response text is shown inline, tool calls as collapsed one-liners,
-reasoning blocks as collapsed summaries.  Adjacent thinking segments
-are merged into a single summary.  VARIANT-BUTTON, when non-nil, is
-inserted beside the header.  CONTINUATION-P suppresses that header."
+reasoning blocks as collapsed summaries.  Reasoning inside a plain tool
+activity run does not prevent that run from folding.  Adjacent thinking
+segments are merged into a single summary.  VARIANT-BUTTON, when non-nil,
+is inserted beside the header.  CONTINUATION-P suppresses that header."
   (unless (or directive continuation-p)
     (let ((header-start (point)))
       (insert "Assistant")
@@ -4874,7 +5009,8 @@ inserted beside the header.  CONTINUATION-P suppresses that header."
            (mevedel-view--flush-thinking-group thinking-group data-buf)
            (setq thinking-group nil)
            (when tool-group
-             (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
+             (mevedel-view--render-tool-activity
+              (nreverse tool-group) data-buf)
              (setq tool-group nil))
            ;; Insert response text with source tracking
            (let ((seg-start (cadr seg))
@@ -4921,7 +5057,8 @@ inserted beside the header.  CONTINUATION-P suppresses that header."
            (mevedel-view--flush-thinking-group thinking-group data-buf)
            (setq thinking-group nil)
            (when tool-group
-             (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
+             (mevedel-view--render-tool-activity
+              (nreverse tool-group) data-buf)
              (setq tool-group nil))
            (mevedel-view--render-system-reminder-segment seg data-buf))
           ('request-summary
@@ -4930,7 +5067,7 @@ inserted beside the header.  CONTINUATION-P suppresses that header."
            (mevedel-view--flush-thinking-group thinking-group data-buf)
            (setq thinking-group nil)
            (when tool-group
-             (mevedel-view--render-tool-group
+             (mevedel-view--render-tool-activity
               (nreverse tool-group) data-buf)
              (setq tool-group nil))
            (let ((text (mevedel-view--user-turn-text (list seg) data-buf))
@@ -4951,7 +5088,7 @@ inserted beside the header.  CONTINUATION-P suppresses that header."
              (unless (mevedel-view--scaffolding-only-p
                       data-buf seg-start seg-end)
                (when tool-group
-                 (mevedel-view--render-tool-group
+                 (mevedel-view--render-tool-activity
                   (nreverse tool-group) data-buf)
                  (setq tool-group nil))
                (push seg thinking-group))))
@@ -4976,9 +5113,9 @@ inserted beside the header.  CONTINUATION-P suppresses that header."
              (mevedel-view--flush-thinking-group thinking-group data-buf)
              (setq thinking-group nil)
              (when tool-group
-               (mevedel-view--render-tool-group
+               (mevedel-view--render-tool-activity
                 (nreverse tool-group) data-buf)
-             (setq tool-group nil))
+               (setq tool-group nil))
              (mevedel-view--render-collaboration-event-segment data-buf seg))
             ((and tool-group
                   (mevedel-view--hook-audit-only-segment-p
@@ -4990,17 +5127,16 @@ inserted beside the header.  CONTINUATION-P suppresses that header."
                ;; between adjacent tool blocks.  Skip without flushing the
                ;; tool-group so consecutive tool segments separated only
                ;; by glue still group / render together.
-               ;; Flush tool group before thinking
-               (when tool-group
-                 (mevedel-view--render-tool-group
-                  (nreverse tool-group) data-buf)
-                 (setq tool-group nil))
-               ;; Accumulate consecutive thinking segments
-               (push seg thinking-group)))))))
+               ;; Thinking after a tool stays pending so a long plain tool run
+               ;; can fold across it.  Leading thinking keeps its old path.
+               (if tool-group
+                   (push seg tool-group)
+                 (push seg thinking-group))))))))
     ;; Flush remaining groups
     (mevedel-view--flush-thinking-group thinking-group data-buf)
     (when tool-group
-      (mevedel-view--render-tool-group (nreverse tool-group) data-buf))
+      (mevedel-view--render-tool-activity
+       (nreverse tool-group) data-buf))
     (dolist (seg (nreverse request-summary-group))
       (mevedel-view--render-request-summary-segment seg data-buf))))
 
@@ -5070,25 +5206,33 @@ without an entry -- MCP tools included -- fall back to \"NAME xN\".")
 
 (defun mevedel-view--tool-group-header (children)
   "Return the one-line activity summary for grouped CHILDREN."
-  (let (names counts)
+  (let (names counts (thought-count 0))
     (dolist (child children)
-      (let ((name (or (plist-get child :tool) "Tool")))
-        (unless (member name names)
-          (push name names))
-        (cl-incf (alist-get name counts 0 nil #'equal))))
+      (if (eq (plist-get child :kind) 'reasoning)
+          (cl-incf thought-count)
+        (let ((name (or (plist-get child :tool) "Tool")))
+          (unless (member name names)
+            (push name names))
+          (cl-incf (alist-get name counts 0 nil #'equal)))))
     (setq names (nreverse names))
     (let* ((parts
-            (mapcar
-             (lambda (name)
-               (let ((count (alist-get name counts 0 nil #'equal))
-                     (verb (assoc name mevedel-view--tool-group-verbs)))
-                 (cond
-                  (verb
-                   (format (if (= count 1) (nth 1 verb) (nth 2 verb))
-                           count))
-                  ((= count 1) name)
-                  (t (format "%s ×%d" name count)))))
-             names))
+            (append
+             (mapcar
+              (lambda (name)
+                (let ((count (alist-get name counts 0 nil #'equal))
+                      (verb (assoc name mevedel-view--tool-group-verbs)))
+                  (cond
+                   (verb
+                    (format (if (= count 1) (nth 1 verb) (nth 2 verb))
+                            count))
+                   ((= count 1) name)
+                   (t (format "%s ×%d" name count)))))
+              names)
+             (when (> thought-count 0)
+               (list (format (if (= thought-count 1)
+                                 "thought %d time"
+                               "thought %d times")
+                             thought-count)))))
            (summary (string-join parts ", ")))
       ;; Capitalize only a verb phrase; a leading tool name keeps its
       ;; own casing.
@@ -5099,7 +5243,7 @@ without an entry -- MCP tools included -- fall back to \"NAME xN\".")
         summary))))
 
 (defun mevedel-view--tool-group-child (entry data-buf index)
-  "Return the nested-call plist for tool ENTRY in DATA-BUF, or nil.
+  "Return the nested-call plist for activity ENTRY in DATA-BUF, or nil.
 INDEX discriminates the row's disclosure key from its siblings.  A
 segment whose own rendering is hidden yields nil so grouping does not
 resurrect rows the renderer suppressed."
@@ -5121,13 +5265,12 @@ resurrect rows the renderer suppressed."
     (append (list :id (format "%d" index) :order index) child)))
 
 (defun mevedel-view--tool-group-rendering (entries data-buf)
-  "Return the grouped rendering for tool ENTRIES in DATA-BUF, or nil.
-The result reuses the compound-tool row machinery: each grouped call is
-a `:child-calls' entry rendered by its own tool's renderer, so the
-expanded group has the same layout, per-row disclosure, and toggles as a
-ToolScript block.  A run with any failed call carries a warning marker but
-still renders collapsed: the marker says something went wrong, and the
-reader opens the group when they want to know what."
+  "Return the grouped rendering for activity ENTRIES in DATA-BUF, or nil.
+The result reuses the compound-tool row machinery: each tool or reasoning
+occurrence is a `:child-calls' entry with its own disclosure state.  A run
+with any failed call carries a warning marker but still renders collapsed:
+the marker says something went wrong, and the reader opens the group when
+they want to know what."
   (let* ((children
           (let ((index 0)
                 out)
@@ -5150,19 +5293,13 @@ reader opens the group when they want to know what."
 
 (defun mevedel-view--tool-group-rendering-from-source
     (data-buf start end)
-  "Rebuild a grouped tool rendering for DATA-BUF's START..END disclosure."
+  "Rebuild a grouped activity rendering for DATA-BUF START..END."
   (let ((entries
          (with-current-buffer data-buf
            (save-restriction
              (widen)
-             (mapcar
-              (lambda (segment)
-                (list :start (cadr segment) :end (caddr segment)))
-              (mevedel-view--merge-tool-hook-audit-segments
-               (cl-remove-if-not
-                (lambda (segment) (eq (car segment) 'tool))
-                (mevedel-transcript-segments start end))
-               data-buf))))))
+             (mevedel-view--tool-activity-entries
+              (mevedel-transcript-segments start end) data-buf)))))
     (mevedel-view--tool-group-rendering entries data-buf)))
 
 (defun mevedel-view--tool-group-entry-p (entry)
@@ -5192,7 +5329,7 @@ note is dropped rather than repeated one fold deeper."
                    (not (plist-get rendering :initially-collapsed-p)))))))
 
 (defun mevedel-view--insert-tool-group (entries data-buf)
-  "Insert grouped ENTRIES from DATA-BUF as one expandable activity row.
+  "Insert grouped activity ENTRIES as one expandable row for DATA-BUF.
 Return non-nil when the group row was inserted."
   (let* ((group-start (plist-get (car entries) :start))
          (group-end (plist-get (car (last entries)) :end))

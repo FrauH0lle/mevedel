@@ -204,19 +204,19 @@ containing org block markers stay unfolded so their block decorations
 remain visible.
 
 Runs of more than `mevedel-view-tool-group-collapse-threshold` (default 3)
-consecutive plain tool rows fold into one grouped activity row such as
-`Searched 5 patterns, read 1 file, ran 5 commands`; tools without a verb
-mapping — MCP tools included — appear as `NAME ×N`. The expanded group
-reuses the compound-tool nested-row machinery: each call is a `tool-child`
-row rendered by its own tool's renderer with its own collapse state, and
-collapsing the group takes its rows with it. Rows that demand individual
-presentation — agent handles, compound tools, rows carrying hook audits or
-a sandbox warning, rows their renderer wants expanded or compact, and
-coalesced rows — never fold into a group; they split the run around
-themselves. A `note`-class sandbox line folds like any other row: nested
-rows do not carry the summary, so the note is dropped rather than repeated
-one level in. A group containing a failed call keeps its warning marker but
-starts collapsed.
+plain tool rows fold into one grouped activity row such as
+`Searched 5 patterns, read 1 file, ran 5 commands, thought 8 times`; tools
+without a verb mapping — MCP tools included — appear as `NAME ×N`. The
+expanded group reuses the compound-tool nested-row machinery: each tool call
+and substantive reasoning occurrence is a `tool-child` row in chronological
+order with its own collapse state, and collapsing the group takes its rows
+with it. Rows that demand individual presentation — agent handles, compound
+tools, rows carrying hook audits or a sandbox warning, rows their renderer
+wants expanded or compact, and coalesced rows — never fold into a group; they
+split the run around themselves. A `note`-class sandbox line folds like any
+other row: nested rows do not carry the summary, so the note is dropped rather
+than repeated one level in. A group containing a failed call keeps its warning
+marker but starts collapsed.
 
 After an interactive ApplyPatch review settles, the applied patch row opens
 expanded on a preview of its first two changes with an `… N more changes`
@@ -750,8 +750,9 @@ the authoritative data buffer and keep source-coordinate disclosure state.
 Provider failures are expanded by default and preserve the complete provider
 message for manual retry. `mevedel-view-render-live-update` retains completed
 semantic units in the view and reparses only the mutable source-backed tail.
-Reasoning summaries and consecutive tool groups are units; response prose
-advances at the last blank-line boundary outside fenced code. Terminal
+Standalone reasoning summaries and grouped activity runs are units; reasoning
+nested in a qualifying activity run belongs to that one group unit. Response
+prose advances at the last blank-line boundary outside fenced code. Terminal
 settlement calls `mevedel-view-render-settle` for one exact whole-turn
 reconciliation. A full rerender, a new turn, or stream cancellation invalidates
 the retained tail. `mevedel-view-stream.el` schedules live updates and owns
