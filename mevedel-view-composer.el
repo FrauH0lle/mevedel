@@ -1145,6 +1145,9 @@ all displayed windows plus the editable composer text around THUNK."
     (mevedel-view--install-dnd)
     (add-hook 'completion-at-point-functions
               #'mevedel-resource-capf nil t)
+    (add-hook 'after-change-functions
+              #'mevedel-view--refresh-skill-argument-hint-after-change
+              nil t)
     (unless mevedel-view--side-conversation-p
       (mevedel-view-history-load mevedel--session)
       (add-hook 'completion-at-point-functions
@@ -1154,10 +1157,7 @@ all displayed windows plus the editable composer text around THUNK."
       ;; hundreds of milliseconds per keystroke on a long session.
       (mevedel-skills-install-font-lock #'mevedel-view--input-start)
       (add-hook 'post-command-hook
-                #'mevedel-view--refresh-skill-argument-hint nil t)
-      (add-hook 'after-change-functions
-                #'mevedel-view--refresh-skill-argument-hint-after-change
-                nil t))
+                #'mevedel-view--refresh-skill-argument-hint nil t))
     (add-hook 'kill-buffer-hook
               #'mevedel-view--cancel-pending-submission nil t)
     (setq mevedel-view--composer-keymap-overlay
