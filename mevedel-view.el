@@ -620,6 +620,10 @@ request progress row, and input zone.  The input zone starts at
 the editable composer body.
 
 \\{mevedel-view-mode-map}"
+  ;; View projection uses several independent symbolic invisibility categories.
+  ;; Keep the wildcard form so adding or removing one category cannot expose
+  ;; unrelated collapsed content.
+  (setq-local buffer-invisibility-spec t)
   ;; Copying a rendered table yields its canonical pipe Markdown.
   (setq-local filter-buffer-substring-function
               #'mevedel-view--buffer-substring-filter)

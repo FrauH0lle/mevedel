@@ -5472,7 +5472,7 @@
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
-     "<agent-message sender=\"/root/explorer\" recipient=\"/root\">\nhello\n</agent-message>\n"
+     "<agent-message type=\"MAIL\" sender=\"/root/explorer\" recipient=\"/root\">\nhello\n</agent-message>\n"
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -5480,7 +5480,10 @@
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "^  ✉ message from /root/explorer" text))
         (should (string-match-p "hello" text))
-        (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))))
+        (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))
+      (goto-char (point-min))
+      (search-forward "hello")
+      (should (invisible-p (match-beginning 0)))))
 
   :doc "incomplete agent-message opener stays ordinary user text"
   (mevedel-view-test--with-buffers
@@ -5543,6 +5546,10 @@
         (should-not (string-match-p "<bash-execution" text)))
       ;; The sender used to be inserted bare, so it rendered in the
       ;; default face between two styled runs.
+      (goto-char (point-min))
+      (search-forward "Bash completed")
+      (search-forward "exec-000001")
+      (should (invisible-p (match-beginning 0)))
       (goto-char (point-min))
       (search-forward "Bash completed")
       (search-forward "/root")
@@ -5732,7 +5739,10 @@
        "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nline one\nline two\n</agent-result>\n"
        nil)
       (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> quoted\nsecond line" 3)
         (mevedel-view--full-rerender)
+        (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 3)))
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "✓ Finished /root/worker" text))
@@ -5745,7 +5755,12 @@
           (goto-char (point-min))
           (search-forward "line two")
           (should (eq (get-text-property (match-beginning 0) 'invisible)
-                      'mevedel-view-mailbox-collapsed)))
+                      'mevedel-view-mailbox-collapsed))
+          (should (invisible-p (match-beginning 0)))
+          (mevedel-view-composer-set-historical-visible nil)
+          (should (invisible-p (match-beginning 0)))
+          (mevedel-view-composer-set-historical-visible t)
+          (should (invisible-p (match-beginning 0))))
         (goto-char (point-min))
         (search-forward "✓ Finished /root/worker")
         (goto-char (match-beginning 0))
