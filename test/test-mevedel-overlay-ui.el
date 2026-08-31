@@ -138,6 +138,52 @@
 (mevedel-deftest mevedel--instruction-label ()
   ,test
   (test)
+  :doc "distinguishes a whole-buffer reference in its primary label"
+  (with-temp-buffer
+    (insert "reference")
+    (let ((reference (make-overlay (point-min) (point-max)))
+          (mevedel-reference-color "reference-color"))
+      (overlay-put reference 'mevedel-id 1)
+      (overlay-put reference 'mevedel-instruction-type 'reference)
+      (let ((presentation
+             (mevedel--instruction-label
+              (list :instruction reference :type 'reference
+                    :padding "" :bufferlevel-p t))))
+        (should
+         (string-prefix-p
+          "BUFFER REFERENCE #1"
+          (substring-no-properties (plist-get presentation :label)))))))
+
+  :doc "distinguishes a whole-buffer directive in its primary label"
+  (with-temp-buffer
+    (insert "directive")
+    (let ((directive (make-overlay (point-min) (point-max))))
+      (overlay-put directive 'mevedel-id 2)
+      (overlay-put directive 'mevedel-instruction-type 'directive)
+      (cl-letf (((symbol-function 'mevedel--directive-status)
+                 (lambda (_) nil))
+                ((symbol-function 'mevedel--instruction-directive-color)
+                 (lambda (_) "directive-color"))
+                ((symbol-function 'mevedel--directive-text)
+                 (lambda (_) "Update workflow"))
+                ((symbol-function 'mevedel--directive-record)
+                 (lambda (_) nil))
+                ((symbol-function 'mevedel--parent-instruction)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'mevedel--topmost-instruction)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'mevedel--detached-directive-p)
+                 (lambda (_) nil)))
+        (let ((presentation
+               (mevedel--instruction-label
+                (list :instruction directive :type 'directive
+                      :directive-typename "DIRECTIVE"
+                      :padding "" :bufferlevel-p t))))
+          (should
+           (string-prefix-p
+            "BUFFER DIRECTIVE #2: Update workflow"
+            (substring-no-properties (plist-get presentation :label))))))))
+
   :doc "labels same-type reference links as reference links"
   (with-temp-buffer
     (insert "reference")
