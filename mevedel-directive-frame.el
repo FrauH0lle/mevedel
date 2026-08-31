@@ -230,14 +230,18 @@ inherit the hidden turns."
   (let ((buffer (or view-buffer mevedel-directive-frame--view-buffer)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (remove-from-invisibility-spec
-         mevedel-directive-frame--invisible-symbol)
         (with-silent-modifications
-          (let ((inhibit-read-only t))
-            (remove-text-properties
-             (point-min) (point-max)
-             (list 'invisible
-                   mevedel-directive-frame--invisible-symbol))))))
+          (let ((inhibit-read-only t)
+                (pos (point-min))
+                (limit (point-max)))
+            (while (< pos limit)
+              (let ((next (or (next-single-property-change
+                               pos 'invisible nil limit)
+                              limit)))
+                (when (eq (get-text-property pos 'invisible)
+                          mevedel-directive-frame--invisible-symbol)
+                  (remove-text-properties pos next '(invisible nil)))
+                (setq pos next)))))))
     (setq mevedel-directive-frame--filtered-p nil)))
 
 (defun mevedel-directive-frame--apply-filter ()
@@ -252,19 +256,21 @@ view buffer is displayed outside the directive frame."
       (with-current-buffer buffer
         (with-silent-modifications
           (let ((inhibit-read-only t))
-            (remove-text-properties
-             (point-min) (point-max)
-             (list 'invisible
-                   mevedel-directive-frame--invisible-symbol))
+            (mevedel-directive-frame--clear-filter buffer)
             (pcase-dolist (`(,start ,end . ,id)
                            (mevedel-directive-frame--turn-spans))
               (unless (equal id mevedel-directive-frame--directive-id)
-                (put-text-property
-                 start end 'invisible
-                 mevedel-directive-frame--invisible-symbol)))))
-        (add-to-invisibility-spec
-         mevedel-directive-frame--invisible-symbol))
-      (setq mevedel-directive-frame--filtered-p t))))
+                (let ((pos start))
+                  (while (< pos end)
+                    (let ((next (or (next-single-property-change
+                                     pos 'invisible nil end)
+                                    end)))
+                      (unless (get-text-property pos 'invisible)
+                        (put-text-property
+                         pos next 'invisible
+                         mevedel-directive-frame--invisible-symbol))
+                      (setq pos next))))))))
+      (setq mevedel-directive-frame--filtered-p t)))))
 
 (defun mevedel-directive-frame-refresh-filter ()
   "Re-apply directive filtering and refit the frame after a re-render.

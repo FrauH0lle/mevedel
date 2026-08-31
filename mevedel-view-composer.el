@@ -682,10 +682,7 @@ composer body.")
     (delete-overlay mevedel-view--historical-composer-overlay)
     (setq mevedel-view--historical-composer-overlay nil))
   (if visible
-      (progn
-        (remove-from-invisibility-spec 'mevedel-view-historical-composer)
-        (setq buffer-read-only nil))
-    (add-to-invisibility-spec 'mevedel-view-historical-composer)
+      (setq buffer-read-only nil)
     (setq mevedel-view--historical-composer-overlay
           (make-overlay
            (mevedel-view--input-marker-position) (point-max)

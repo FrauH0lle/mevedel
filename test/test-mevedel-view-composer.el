@@ -762,14 +762,24 @@
   :doc "hides and restores the exact multiline composer draft"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (insert (propertize "hidden mailbox body\n"
+                            'invisible 'mevedel-view-mailbox-collapsed)))
+      (should (eq buffer-invisibility-spec t))
+      (should (invisible-p (point-min)))
       (goto-char (mevedel-view--input-start))
       (insert "> exact draft\nsecond line")
       (mevedel-view-composer-set-historical-visible nil)
       (should buffer-read-only)
       (should (invisible-p (mevedel-view--input-start)))
+      (should (eq buffer-invisibility-spec t))
+      (should (invisible-p (point-min)))
       (mevedel-view-composer-set-historical-visible t)
       (should-not buffer-read-only)
       (should-not (invisible-p (mevedel-view--input-start)))
+      (should (eq buffer-invisibility-spec t))
+      (should (invisible-p (point-min)))
       (should (equal "> exact draft\nsecond line"
                      (mevedel-view--input-text))))))
 
