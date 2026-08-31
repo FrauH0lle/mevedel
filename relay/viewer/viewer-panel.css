@@ -1,0 +1,68 @@
+.dock-strip {
+  width: 100%;
+  max-width: 44rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+}
+.dock-strip[hidden] { display: none; }
+.dock-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .74rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .25rem .7rem;
+  cursor: pointer;
+}
+.dock-chip:hover { border-color: var(--accent); }
+.dock-chip-meta { color: var(--muted); }
+
+/* Full-screen sheet over the session; Close returns to the room. */
+.viewer-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--ground);
+}
+.viewer-panel[hidden] { display: none; }
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: .8rem;
+  padding: .55rem 1.1rem;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.panel-headline {
+  display: flex;
+  align-items: baseline;
+  gap: .6rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.panel-title {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .85rem;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.panel-head .panel-meta {
+  font-size: .74rem;
+  white-space: nowrap;
+}
+.panel-note {
+  margin: 0;
+  font-size: .8rem;
+  color: var(--muted);
+}

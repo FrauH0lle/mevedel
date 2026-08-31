@@ -10,6 +10,10 @@
 ;; `json'
 (declare-function json-encode "json" (object))
 
+;; `mevedel-collaboration-artifact-projection'
+(declare-function mevedel-collaboration--artifact-fields
+                  "mevedel-collaboration-artifact-projection" (render-data))
+
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
@@ -34,6 +38,7 @@
                   "mevedel-view-render" (text))
 
 (require 'json)
+(require 'mevedel-collaboration-artifact-projection)
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
 (require 'mevedel-utilities)
@@ -147,10 +152,13 @@ key."
     copy))
 
 (defun mevedel-collaboration--json-record (record)
-  "Return JSON-safe alist representation of RECORD."
+  "Return JSON-safe alist representation of RECORD.
+An artifact record's `:artifact-path' stays host-side: guests address
+an artifact only by its record id, never by a filesystem path."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
-                       :truncated :guest :directive :detail :diff))
+                       :truncated :guest :directive :detail :diff
+                       :artifact :size :missing))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -191,42 +199,85 @@ carry the same operand summary and, for ApplyPatch, the authored patch."
      (list :diff (mevedel-collaboration--truncate-bytes
                   patch mevedel-collaboration--max-tool-result-bytes)))))
 
-(defun mevedel-collaboration--tool-record (data-buffer segment &optional occurrence)
-  "Return an allowlisted tool record for SEGMENT in DATA-BUFFER."
+
+(defun mevedel-collaboration--tool-record (parsed raw &optional occurrence)
+  "Return an allowlisted tool record from PARSED and transcript RAW text."
+  (let* ((name (plist-get parsed :name))
+         (result (or (plist-get parsed :result) ""))
+         (tool-use-id (plist-get parsed :tool-use-id)))
+    (unless (stringp name)
+      (error "Canonical tool projection failed"))
+    (let* ((id (if tool-use-id
+                   (format "tool-%s" tool-use-id)
+                 (mevedel-collaboration--stable-record-id
+                  "tool" raw occurrence)))
+           (result (mevedel--trim-tool-result
+                    (if (stringp result) result "")))
+           (status (if (string-match-p
+                        mevedel-collaboration--tool-error-regexp result)
+                       "failed"
+                     "completed"))
+           (result (mevedel-collaboration--truncate-bytes
+                    result mevedel-collaboration--max-tool-result-bytes))
+           (truncated (string-suffix-p "\n[truncated]" result)))
+      (apply #'mevedel-collaboration--record
+             id "tool"
+             :revision 0
+             :name (format "%s" name)
+             :status status
+             :summary (format "%s" name)
+             :result result
+             :truncated (and truncated t)
+             :identity-fixed (and tool-use-id t)
+             (mevedel-collaboration--tool-extras
+              name (plist-get parsed :args))))))
+
+(defun mevedel-collaboration--tool-segment-records
+    (data-buffer segment &optional occurrence)
+  "Return canonical records for tool SEGMENT in DATA-BUFFER.
+A settled ApplyPatch may produce several artifact cards.  A patch touching
+only artifact destinations reuses its ordinary tool record as the first card;
+a mixed patch retains the ordinary row and adds child cards."
   (with-current-buffer data-buffer
     (let* ((start (cadr segment))
            (end (caddr segment))
            (parsed (mevedel-view--tool-call-parse data-buffer start end))
-           (name (plist-get parsed :name))
-           (result (or (plist-get parsed :result) ""))
-           (tool-use-id (plist-get parsed :tool-use-id))
-           (raw (buffer-substring-no-properties start end)))
-      (unless (stringp name)
-        (error "Canonical tool projection failed"))
-      (let* ((id (if tool-use-id
-                     (format "tool-%s" tool-use-id)
-                   (mevedel-collaboration--stable-record-id
-                    "tool" raw occurrence)))
-             (result (mevedel--trim-tool-result
-                      (if (stringp result) result "")))
-             (status (if (string-match-p
-                          mevedel-collaboration--tool-error-regexp result)
-                         "failed"
-                       "completed"))
-             (result (mevedel-collaboration--truncate-bytes
-                      result mevedel-collaboration--max-tool-result-bytes))
-             (truncated (string-suffix-p "\n[truncated]" result)))
-        (apply #'mevedel-collaboration--record
-               id "tool"
-               :revision 0
-               :name (format "%s" name)
-               :status status
-               :summary (format "%s" name)
-               :result result
-               :truncated (and truncated t)
-               :identity-fixed (and tool-use-id t)
-               (mevedel-collaboration--tool-extras
-                name (plist-get parsed :args)))))))
+           (base (mevedel-collaboration--tool-record
+                  parsed (buffer-substring-no-properties start end)
+                  occurrence))
+           (files (and (equal (plist-get base :name) "ApplyPatch")
+                       (equal (plist-get base :status) "completed")
+                       (mevedel-collaboration--artifact-fields
+                        (plist-get parsed :render-data))))
+           (all-files (and (eq (plist-get (plist-get parsed :render-data)
+                                          :kind)
+                               'patch)
+                           (plist-get (plist-get parsed :render-data) :files)))
+           (pure (and files (= (length files) (length all-files))))
+           cards)
+      (dolist (fields files)
+        (let* ((relative (plist-get fields :artifact))
+               (first (null cards))
+               (record (if (and pure first)
+                           (copy-sequence base)
+                         (list :id (format "%s-artifact-%s"
+                                           (plist-get base :id)
+                                           (substring
+                                            (secure-hash 'sha256 relative)
+                                            0 12))
+                               :kind "tool"
+                               :revision 0
+                               :name "Artifact"
+                               :status "completed"
+                               :summary "Artifact"
+                               :result ""
+                               :truncated nil
+                               :identity-fixed t
+                               :artifact-child t))))
+          (setq record (append record fields))
+          (push record cards)))
+      (setq cards (nreverse cards))
+      (if pure cards (cons base cards)))))
 
 (defun mevedel-collaboration--directive-at (ranges position)
   "Return the directive id owning POSITION per directive RANGES, or nil."
@@ -314,8 +365,8 @@ attributed to a collaboration guest carry that guest's name."
                      (key (list "tool" raw))
                      (occurrence (gethash key occurrences 0)))
                 (puthash key (1+ occurrence) occurrences)
-                (let ((record (mevedel-collaboration--tool-record
-                               data-buffer segment occurrence)))
+                (dolist (record (mevedel-collaboration--tool-segment-records
+                                 data-buffer segment occurrence))
                   (when directive
                     (setq record (plist-put record :directive directive)))
                   (push record records)))))))
@@ -326,7 +377,8 @@ attributed to a collaboration guest carry that guest's name."
   "Return the tool records in RECORDS, preserving their order."
   (let (tools)
     (dolist (record records)
-      (when (equal (plist-get record :kind) "tool")
+      (when (and (equal (plist-get record :kind) "tool")
+                 (not (plist-get record :artifact-child)))
         (push record tools)))
     (nreverse tools)))
 

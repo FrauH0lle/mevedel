@@ -660,8 +660,10 @@ each reply; a poll carrying a still-matching digest is answered with
 one `unchanged` frame instead of the transcript, and a per-guest
 throttle bounds what a hostile client can make the host project. A
 cold or historical agent is refused rather than hydrated: a guest poll
-must never start target I/O. Agent control -- chat, interrupt, kill --
-stays in Emacs.
+must never start target I/O. Artifact cards in an agent reply receive
+room-wide ids derived from the agent path and transcript-local id, so they
+remain openable without colliding with a root-transcript card. Agent control
+-- chat, interrupt, kill -- stays in Emacs.
 
 Full-link guests are also presented pending interactions as `ui-request`
 frames — generic requests (approve/deny/feedback), permission prompts
@@ -723,6 +725,64 @@ a fresh welcome and snapshot within a bounded give-up window.
 
 Starting a room confirms that visible text, paths, and tool results may
 contain credentials or secrets and that the links are bearer credentials.
+
+## Session artifacts
+
+A settled ApplyPatch whose selected render data creates, updates, or moves a
+file into `<save-path>/artifacts/` publishes that file as a session artifact:
+an HTML mockup, a Markdown document, or an image the user is meant to open.
+The folder remains the host cockpit's inventory and byte source; the settled
+transcript record is collaboration publication authority. There is no new
+mutation tool or artifact registry.
+The bundled `artifact` skill carries the conventions (write there,
+self-contained, keep it small) and resolves the concrete directory at
+invocation. In Emacs, the artifacts cockpit (cockpit `A`) lists the
+folder, opens a file locally, and deletes it, telling a live room
+through `mevedel-collaboration-notify-artifacts-changed`. All of this
+works with no room and no relay.
+
+In a room, the projection turns each selected applied artifact destination
+into a card carrying name and size -- never the bytes, and never the host-side
+path, which stays in the unserialized `:artifact-path` field. A multi-file
+patch produces one card per artifact destination; rejected changes produce
+none, and a mixed code/artifact patch retains its ordinary tool row.
+File stats are memoized against per-publish-tick target round trips and
+invalidated when ApplyPatch settles. A deleted artifact still
+projects, marked missing, so it reads as deleted rather than as a gap
+in the log. The viewer also derives a strip of chips (last record per
+name wins) so reopening one never means scrolling the log.
+
+Bytes travel only on demand: opening a card sends `artifact-get` with
+the record id -- resolution is by identity against the root records or agent
+records already published to that guest, never by a guest-supplied path. Agent
+artifact ids are namespaced before publication because canonical ids are only
+transcript-local. The request id must be a nonnegative JavaScript-safe integer
+before projection or file I/O starts, the resolved path is re-verified inside
+the artifacts directory before a byte is read, files over a bound are
+refused, and a per-guest throttle applies. The host answers targeted
+`artifact` frames with base64 chunks under the wire bound. The viewer
+renders HTML in an `<iframe sandbox="allow-scripts">` (never
+`allow-same-origin`, which beside `allow-scripts` would hand the
+artifact the viewer's origin -- the decrypted transcript and the room
+key) with a prepended CSP of `default-src 'none'`, so a self-contained
+page runs fully and nothing can phone home; Markdown goes through the
+DOM-built XSS-safe renderer, images display inline, plain text shows as
+text, and anything else is offered as a download. "Open in tab" puts an
+HTML artifact beside the conversation: a same-origin shell opened
+synchronously from the click -- the bytes are already in hand, so no
+popup blocker races the transfer -- whose only content is the same
+sandboxed frame. Guests author artifacts through the model: they ask,
+the model writes, everyone gets the card. There is no guest upload
+path, and the relay is untouched -- artifact frames are sealed like
+every other frame.
+
+Artifact files are ordinary session-owned state. PID-lock sessions carry the
+folder through their existing directory transactions. Portable sessions add
+its recursive regular-file bytes to the immutable publication manifest and
+commit deletions as tombstones, so Resume, Save As, Conversation Fork, and
+Worktree Fork resolve the same bytes without trusting fixed caches. Rewind
+preserves the current artifact folder; free-form artifacts are not historical
+turn snapshots.
 
 ## Managed-zone chrome
 

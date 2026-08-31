@@ -528,6 +528,11 @@
                   (plist-get fixture :parent-path) "local" "notes.md")))
             (make-directory (file-name-directory parent-local) t)
             (write-region "parent local\n" nil parent-local nil 'silent))
+          (let ((artifact
+                 (file-name-concat (plist-get fixture :parent-path)
+                                   "artifacts" "nested" "mockup.html")))
+            (make-directory (file-name-directory artifact) t)
+            (write-region "local artifact" nil artifact nil 'silent))
           (mevedel-session-fork--stage-fork
            child buf staging-buffer (plist-get fixture :parent-path)
            staging-path 2 2)
@@ -556,6 +561,11 @@
           (should (file-exists-p
                    (mevedel-session-artifacts-instructions-current-path
                     staging-path)))
+          (should
+           (equal "local artifact"
+                  (mevedel-session-artifacts--file-text
+                   (file-name-concat staging-path "artifacts" "nested"
+                                     "mockup.html"))))
           ;; Mutation authority belongs to `--publish-fork' and must already
           ;; exist before this staging helper starts target writes.
           (should-not
@@ -611,6 +621,9 @@
                        (agent-relative "agents/explorer.chat.org")
                        (agent-path
                         (expand-file-name agent-relative parent-path))
+                       (artifact-relative "artifacts/nested/mockup.html")
+                       (artifact-path
+                        (expand-file-name artifact-relative parent-path))
                        (sidecar
                         (mevedel-session-artifacts-sidecar-path parent-path))
                        (sessions-dir
@@ -657,6 +670,7 @@
               (list :path plan-path :content "published accepted plan")
               (list :path backup-path :content "published backup bytes")
               (list :path agent-path :content "published agent transcript")
+              (list :path artifact-path :content "published artifact")
               (list
                :path sidecar
                :content
@@ -673,6 +687,8 @@
               (delete-file backup-path))
             (make-directory (file-name-directory agent-path) t)
             (write-region "poison agent" nil agent-path nil 'silent)
+            (make-directory (file-name-directory artifact-path) t)
+            (write-region "poison artifact" nil artifact-path nil 'silent)
             (setq staging-path
                   (file-name-as-directory
                    (file-name-concat sessions-dir ".fork-artifacts"))
@@ -715,6 +731,10 @@
              (equal "published agent transcript"
                     (mevedel-session-artifacts--file-text
                      (expand-file-name agent-relative staging-path))))
+            (should
+             (equal "published artifact"
+                    (mevedel-session-artifacts--file-text
+                     (expand-file-name artifact-relative staging-path))))
             (mevedel-session-persistence-lock-release staging-path child)
             (setq child nil)))
       (when child

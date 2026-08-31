@@ -58,6 +58,10 @@
 (declare-function mevedel-agent-invocation-verdict "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 
+;; `mevedel-collaboration-agent'
+(declare-function mevedel-collaboration-notify-agents-changed
+                  "mevedel-collaboration-agent" (session))
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
                   "mevedel-session-artifacts"
@@ -1122,7 +1126,13 @@ collapsed marker; expanded row content is rendered from Agent handles."
 
 (defun mevedel-view--render-agent-status ()
   "Render or remove the aggregate live agent status text."
-  (mevedel-view--render-status))
+  (mevedel-view--render-status)
+  ;; Retained agents keep changing after the root request becomes idle.
+  ;; This is the one funnel for their visible transitions; the room latches
+  ;; the resulting roster, so an unchanged state is not broadcast.
+  (when (fboundp 'mevedel-collaboration-notify-agents-changed)
+    (mevedel-collaboration-notify-agents-changed
+     (mevedel-view--session))))
 
 (defun mevedel-view--agent-status-region-position-p (pos)
   "Return non-nil when POS is inside the aggregate status fragment."

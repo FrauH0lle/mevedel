@@ -552,6 +552,7 @@
             (kill-buffer buf)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
+
   :doc "leaves no Emacs backup or lock beside the segment"
   ;; A backup is one whole-segment copy over the connection and a lock is a
   ;; symlink per modify-and-save cycle, both answering questions the
@@ -770,6 +771,90 @@
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
+
+(mevedel-deftest mevedel-session-artifacts--published-artifact-files
+  (:doc "captures nested literal files and tombstones committed deletions")
+  (let* ((save-path (make-temp-file "mevedel-published-artifacts-" t))
+         (dir (mevedel-session-artifacts-artifacts-dir save-path))
+         (nested (file-name-concat dir "nested" "mockup.bin"))
+         (missing (file-name-concat dir "gone.html"))
+         (session (mevedel-session--create :name "s" :save-path save-path)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory nested) t)
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert (unibyte-string 0 255 1))
+            (let ((coding-system-for-write 'no-conversion))
+              (write-region nil nil nested nil 'silent)))
+          (setf (mevedel-session-publication session)
+                (list :artifacts
+                      `(("artifacts/nested/mockup.bin" :published "unused"
+                         :sha256 ,(make-string 64 ?a))
+                        ("artifacts/gone.html" :published "unused"
+                         :sha256 ,(make-string 64 ?b)))))
+          (let* ((artifacts
+                  (mevedel-session-artifacts--published-artifact-files session))
+                 (current (cl-find nested artifacts
+                                   :key (lambda (artifact)
+                                          (plist-get artifact :path))
+                                   :test #'equal))
+                 (deleted (cl-find missing artifacts
+                                   :key (lambda (artifact)
+                                          (plist-get artifact :path))
+                                   :test #'equal)))
+            (should (equal (unibyte-string 0 255 1)
+                           (plist-get current :content)))
+            (should (eq t (plist-get deleted :delete)))))
+      (delete-directory save-path t))))
+
+(mevedel-deftest mevedel-session-artifacts-materialize-published-artifacts
+  (:doc "replaces stale fixed artifacts only after verifying every committed byte")
+  (let* ((source-root (make-temp-file "mevedel-artifact-source-" t))
+         (destination-root (make-temp-file "mevedel-artifact-target-" t))
+         (published (file-name-concat source-root "mockup.bin"))
+         (destination-dir
+          (mevedel-session-artifacts-artifacts-dir destination-root))
+         (destination
+          (file-name-concat destination-dir "nested" "mockup.bin"))
+         (stale (file-name-concat destination-dir "stale.txt"))
+         (content (unibyte-string 0 255 1))
+         (session
+          (mevedel-session--create
+           :name "portable" :save-path source-root :authority-mode 'portable)))
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert content)
+            (let ((coding-system-for-write 'no-conversion))
+              (write-region nil nil published nil 'silent)))
+          (setf (mevedel-session-publication session)
+                `(:artifacts
+                  (("artifacts/nested/mockup.bin"
+                    :published ,published
+                    :sha256 ,(secure-hash 'sha256 content)))))
+          (make-directory (file-name-directory destination) t)
+          (write-region "poison" nil destination nil 'silent)
+          (write-region "stale" nil stale nil 'silent)
+          (mevedel-session-artifacts-materialize-published-artifacts
+           session destination-root)
+          (with-temp-buffer
+            (set-buffer-multibyte nil)
+            (insert-file-contents-literally destination)
+            (should (equal content (buffer-string))))
+          (should-not (file-exists-p stale))
+          ;; Verification failure leaves the current folder intact.
+          (write-region "corrupt" nil published nil 'silent)
+          (write-region "keep" nil destination nil 'silent)
+          (should-error
+           (mevedel-session-artifacts-materialize-published-artifacts
+            session destination-root))
+          (with-temp-buffer
+            (insert-file-contents-literally destination)
+            (should (equal "keep" (buffer-string)))))
+      (delete-directory source-root t)
+      (delete-directory destination-root t))))
 
 (mevedel-deftest mevedel-session-artifacts-save-agent-registry (:quiet t)
   ,test

@@ -4,8 +4,9 @@
 
 ;; Owns per-session rooms, publication, public commands, and gptel lifecycle
 ;; hooks.  Canonical projection lives in the projection module; untrusted
-;; guest frames live in the guest module; the sealed relay client lives in
-;; the transport module.
+;; guest frames live in the guest module; agent and artifact sharing live in
+;; their feature modules; the sealed relay client lives in the transport
+;; module.
 ;;
 ;; The host dials a self-hosted relay and never listens.  A share creates
 ;; one room with two bearer links: the view link carries the bare room key
@@ -24,11 +25,16 @@
 (defvar gptel-post-tool-call-functions)
 (defvar gptel-pre-tool-call-functions)
 
-;; `mevedel-agent-control'
-(declare-function mevedel-agent-record-role "mevedel-agent-control" (record))
-
 ;; `mevedel-chat'
 (defvar mevedel-session-end-hook)
+
+;; `mevedel-collaboration-agent'
+(declare-function mevedel-collaboration--publish-agents
+                  "mevedel-collaboration-agent" (room))
+
+;; `mevedel-collaboration-artifact-projection'
+(declare-function mevedel-collaboration--artifact-stat-invalidate
+                  "mevedel-collaboration-artifact-projection" ())
 
 ;; `mevedel-collaboration-guest'
 (declare-function mevedel-collaboration--on-control
@@ -99,7 +105,6 @@
 (autoload 'mevedel-plan-mode-active-p "mevedel-plan-mode")
 
 ;; `mevedel-structs'
-(declare-function mevedel-session-agent-registry "mevedel-structs" (session))
 (declare-function mevedel-session-pending-follow-ups "mevedel-structs" (session))
 (declare-function mevedel-session-pending-input-failure-paused
                   "mevedel-structs" (session))
@@ -109,11 +114,6 @@
 
 ;; `mevedel-turn'
 (defvar mevedel--current-request)
-
-;; `mevedel-view-agent'
-(declare-function mevedel-view--agent-record-status
-                  "mevedel-view-agent" (record))
-
 
 ;;
 ;;; Customization and state
@@ -575,53 +575,6 @@ the Emacs mode line carries."
         (mevedel-collaboration--transport-control
          (plist-get room :transport) (list :t "push"))))))
 
-(defun mevedel-collaboration--agent-rows (room)
-  "Return ROOM's guest-visible live agent rows, sorted by path.
-
-Only active agents travel: a settled agent already tells its story
-through the transcript's tool records, so the roster covers exactly
-what the transcript cannot show -- who is working or stuck right now.
-The canonical path is the only address sent; it is the same
-model-visible name the transcript's handles use."
-  (when-let* ((session (plist-get room :session)))
-    (let (rows)
-      (dolist (pair (mevedel-session-agent-registry session))
-        (when-let* ((status (mevedel-view--agent-record-status (cdr pair))))
-          (push (append
-                 (list (cons "path" (car pair))
-                       (cons "status" (symbol-name status)))
-                 (when-let* ((role (mevedel-agent-record-role (cdr pair))))
-                   (list (cons "role" (format "%s" role)))))
-                rows)))
-      (sort rows (lambda (left right)
-                   (string-lessp (cdr (assoc "path" left))
-                                 (cdr (assoc "path" right))))))))
-
-(defun mevedel-collaboration--agents-frame (room)
-  "Return ROOM's live agent roster frame."
-  (list :t "agents"
-        :agents (vconcat (mevedel-collaboration--agent-rows room))))
-
-(defun mevedel-collaboration--publish-agents (room)
-  "Broadcast ROOM's live agent roster to its guests when it has changed."
-  (let ((frame (mevedel-collaboration--agents-frame room)))
-    (unless (equal frame (plist-get room :agents))
-      (setq room (plist-put room :agents frame))
-      (mevedel-collaboration--broadcast room frame))))
-
-(defun mevedel-collaboration-notify-agents-changed (session)
-  "Schedule SESSION's publication after retained agent state changed.
-
-While the root request runs, its gptel observers publish anyway.  A
-retained agent keeps working after the parent turn ends: its activity
-transitions and render-data patches change what a guest should see
-with no observer left to fire, so the view's status render nudges the
-same coalesced publication instead."
-  (when-let* ((room (mevedel-collaboration--room-for-session session)))
-    (condition-case nil
-        (mevedel-collaboration--schedule-publish room)
-      (error (mevedel-collaboration--observer-failure room)))))
-
 (defun mevedel-collaboration--publish-timer (data-buffer)
   "Run the coalesced publication timer for DATA-BUFFER's room."
   (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
@@ -954,6 +907,13 @@ Runs from a buffer-local hook, so the current buffer names the room."
   (when-let* ((room (mevedel-collaboration--room-for-buffer
                      (current-buffer))))
     (progn
+      ;; A settled ApplyPatch may have replaced a published artifact, whose
+      ;; cached stat would otherwise keep the old size on its card.
+      (when (equal (format "%s" (plist-get info :name)) "ApplyPatch")
+        ;; Clear the small shared cache instead of translating the tool's
+        ;; target-native paths a second time.  In particular, a remote patch
+        ;; does not name the TRAMP-qualified keys stored by projection.
+        (mevedel-collaboration--artifact-stat-invalidate))
       (let* ((pending (plist-get room :pending-tools))
              entry)
         (dolist (candidate pending)

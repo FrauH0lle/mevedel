@@ -3340,6 +3340,45 @@
           (mevedel-session-publication--delete-batch batch)))
       (mevedel-session-durability--cancel-renewal session)
       (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
+  :doc "a deletion tombstone removes an overlaid manifest entry atomically"
+  (let* ((local-root (file-name-as-directory
+                      (make-temp-file "mevedel-publication-delete-" t)))
+         (session-dir (file-name-as-directory
+                       (file-name-concat local-root "session")))
+         (artifact (file-name-concat session-dir "artifacts" "mockup.html"))
+         (sidecar (file-name-concat session-dir "session.meta.el"))
+         (session (test-mevedel-session-durability--local-session local-root))
+         (mevedel-session-durability--client-id (make-string 64 ?a)))
+    (make-directory session-dir t)
+    (setf (mevedel-session-save-path session) session-dir)
+    (unwind-protect
+        (progn
+          (should (mevedel-session-durability-lease-acquire
+                   session-dir "*publisher*" session))
+          (mevedel-session-publication-publish
+           session
+           (list (list :path artifact :content "mockup")
+                 (list :path sidecar :content "one" :commit-marker t)))
+          (should (assoc "artifacts/mockup.html"
+                         (plist-get (mevedel-session-publication-read session-dir)
+                                    :artifacts)))
+          (mevedel-session-publication-publish
+           session
+           (list (list :path artifact :delete t)
+                 (list :path sidecar :content "two" :commit-marker t)))
+          (should-not
+           (assoc "artifacts/mockup.html"
+                  (plist-get (mevedel-session-publication-read session-dir)
+                             :artifacts)))
+          (should-error
+           (mevedel-session-publication-publish
+            session
+            (list (list :path (file-name-concat local-root "outside")
+                        :delete t)))))
+      (mevedel-session-durability-lease-release session-dir session)
+      (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
 (mevedel-deftest mevedel-session-publication-append-diagnostic

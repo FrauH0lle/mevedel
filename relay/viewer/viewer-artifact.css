@@ -1,0 +1,56 @@
+.artifact-card {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .45rem .7rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+  max-width: 28rem;
+}
+.artifact-name {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .8rem;
+  font-weight: 700;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.artifact-size {
+  flex-shrink: 0;
+  font-size: .72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.artifact-open { flex-shrink: 0; }
+.artifact-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+.artifact-frame {
+  border: 0;
+  width: 100%;
+  flex: 1 1 auto;
+  background: #fff;
+}
+.artifact-prose {
+  padding: 1rem 1.1rem;
+  max-width: 44rem;
+}
+.artifact-text {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  overflow: auto;
+}
+.artifact-image {
+  max-width: 100%;
+  align-self: center;
+  margin: 1rem;
+}
+.artifact-body .panel-note { padding: 1rem 1.1rem; }

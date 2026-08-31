@@ -6,6 +6,9 @@
     <meta name="color-scheme" content="light dark">
     <title>mevedel live session</title>
     <link rel="stylesheet" href="/viewer.css">
+    <link rel="stylesheet" href="/viewer-panel.css">
+    <link rel="stylesheet" href="/viewer-agent.css">
+    <link rel="stylesheet" href="/viewer-artifact.css">
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" href="/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="/icon.png">
@@ -23,12 +26,12 @@
     </header>
     <main id="transcript" class="ledger" aria-live="polite"
           aria-label="Shared session transcript"></main>
-    <section id="agent-panel" class="agent-panel" hidden
+    <section id="agent-panel" class="viewer-panel" hidden
              role="dialog" aria-label="Sub-agent transcript">
-      <header class="agent-head">
-        <div class="agent-headline">
-          <span id="agent-title" class="agent-title"></span>
-          <span id="agent-meta" class="agent-meta"></span>
+      <header class="panel-head">
+        <div class="panel-headline">
+          <span id="agent-title" class="panel-title"></span>
+          <span id="agent-meta" class="panel-meta"></span>
         </div>
         <button id="agent-close" class="btn quiet" type="button"
                 title="Close this agent's transcript">Close</button>
@@ -36,12 +39,29 @@
       <div id="agent-transcript" class="ledger agent-ledger"
            aria-live="polite"></div>
     </section>
+    <section id="artifact-panel" class="viewer-panel" hidden
+             role="dialog" aria-label="Session artifact">
+      <header class="panel-head">
+        <div class="panel-headline">
+          <span id="artifact-title" class="panel-title"></span>
+          <span id="artifact-meta" class="panel-meta"></span>
+        </div>
+        <button id="artifact-tab" class="btn quiet" type="button" hidden
+                title="Open this artifact in its own browser tab, beside the chat">Open in tab</button>
+        <button id="artifact-download" class="btn quiet" type="button" hidden
+                title="Save this artifact as a file">Download</button>
+        <button id="artifact-close" class="btn quiet" type="button"
+                title="Close this artifact">Close</button>
+      </header>
+      <div id="artifact-body" class="artifact-body"></div>
+    </section>
     <div class="dock">
       <div class="live-controls">
         <button id="live-button" class="live-button" type="button" hidden
                 title="Jump back to the newest turn">Return to live</button>
       </div>
-      <nav id="agents" class="agents" aria-label="Live sub-agents" hidden></nav>
+      <nav id="agents" class="dock-strip" aria-label="Live sub-agents" hidden></nav>
+      <nav id="artifacts" class="dock-strip" aria-label="Session artifacts" hidden></nav>
       <div id="requests" class="requests" aria-label="Pending interactions"></div>
       <div id="own-queue" class="own-queue" aria-label="Your queued prompts" hidden></div>
       <p id="notice" class="notice" role="status" hidden></p>
@@ -88,6 +108,8 @@
     <script src="/transport.js" defer></script>
     <script src="/notifications.js" defer></script>
     <script src="/renderer.js" defer></script>
+    <script src="/viewer-artifact.js" defer></script>
+    <script src="/viewer-agent.js" defer></script>
     <script src="/viewer.js" defer></script>
   </body>
 </html>

@@ -433,6 +433,8 @@
       if (record.guest) who.append(el('span', 'badge', 'guest'));
     } else if (record.kind === 'assistant') {
       who.append(el('span', 'name', 'Assistant'));
+    } else if (record.artifact) {
+      who.append(el('span', 'name', 'Artifact'));
     } else {
       who.append(el('span', 'name', 'Tool'));
     }
@@ -442,7 +444,39 @@
     return who;
   }
 
-  function renderContent(record) {
+  function formatBytes(size) {
+    if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
+    if (size >= 1024) return `${Math.round(size / 1024)} KB`;
+    return `${size} B`;
+  }
+
+  // The model wrote a file into the session's artifacts folder: the card
+  // names it and Open fetches its bytes on demand, so a guest who never
+  // opens it never downloads it.
+  function renderArtifactCard(record, onArtifactOpen) {
+    const card = el('div', 'artifact-card');
+    card.append(el('span', 'artifact-name', record.artifact || 'artifact'));
+    if (record.missing === true) {
+      card.append(el('span', 'artifact-size', 'deleted on the host'));
+    } else if (typeof record.size === 'number') {
+      card.append(el('span', 'artifact-size', formatBytes(record.size)));
+    }
+    const open = el('button', 'btn quiet artifact-open', 'Open');
+    open.type = 'button';
+    open.disabled = record.missing === true;
+    open.setAttribute(
+      'title',
+      record.missing === true
+        ? 'This artifact was deleted on the host'
+        : `Open ${record.artifact || 'this artifact'}`);
+    if (onArtifactOpen && record.missing !== true) {
+      open.addEventListener('click', () => onArtifactOpen(record));
+    }
+    card.append(open);
+    return card;
+  }
+
+  function renderContent(record, onArtifactOpen) {
     if (record.kind === 'user') {
       const prose = renderMarkdown(record.text || '');
       prose.className = 'prose prompt';
@@ -450,6 +484,9 @@
     }
     if (record.kind === 'assistant') {
       return renderMarkdown(record.text || '');
+    }
+    if (record.kind === 'tool' && record.artifact) {
+      return renderArtifactCard(record, onArtifactOpen);
     }
     // A tool call is one line: status glyph, name, target. Only things
     // waiting on a decision get a box, so eight finished reads cannot
@@ -492,7 +529,7 @@
     return details;
   }
 
-  function renderRecord(record, directiveLabel) {
+  function renderRecord(record, directiveLabel, onArtifactOpen) {
     const turn = el('article', `turn ${roleOf(record)}`);
     turn.dataset.recordId = record.id;
     turn.dataset.role = roleOf(record);
@@ -503,7 +540,7 @@
     turn.append(rail);
     const content = el('div', 'content');
     content.append(whoLine(record, directiveLabel));
-    const rendered = renderContent(record);
+    const rendered = renderContent(record, onArtifactOpen);
     content.append(rendered);
     turn.append(content);
     // Tool rows keep their disclosure state across updates; stashing the
@@ -513,5 +550,6 @@
     return turn;
   }
 
-  window.mevedelTranscriptRenderer = Object.freeze({renderRecord, renderDiff});
+  window.mevedelTranscriptRenderer = Object.freeze(
+    {renderRecord, renderDiff, renderMarkdown, formatBytes});
 })();

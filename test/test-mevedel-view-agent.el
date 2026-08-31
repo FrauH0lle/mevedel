@@ -43,6 +43,21 @@
    :activity activity
    :invocation invocation))
 
+(mevedel-deftest mevedel-view--render-agent-status
+  (:doc "renders agent status and nudges the session's collaboration room")
+  (with-temp-buffer
+    (let ((session (mevedel-session--create :name "status-nudge"))
+          rendered notified)
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-view--render-status)
+                 (lambda (&optional _) (setq rendered t)))
+                ((symbol-function
+                  'mevedel-collaboration-notify-agents-changed)
+                 (lambda (seen) (setq notified seen))))
+        (mevedel-view--render-agent-status))
+      (should rendered)
+      (should (eq session notified)))))
+
 (mevedel-deftest mevedel-view-agent--handle-badge
   (:doc "maps :status + :calls/:elapsed/:reason to a state badge string")
   ,test
