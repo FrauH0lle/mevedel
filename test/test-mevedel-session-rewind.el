@@ -1348,7 +1348,7 @@
                                :turn 2)))))
                 (mevedel-workspace-add-directive workspace record)
                 (let* ((plan
-                        (mevedel-session-rewind-restore-plan session 1))
+                        (mevedel-session-rewind-restore-plan session 1 t))
                        (before-buffer (buffer-string))
                        (before-attempts
                         (mevedel-directive-attempts record))
@@ -1435,6 +1435,80 @@
           (should
            (equal "concurrent"
                   (mevedel-session-artifacts--file-text path))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (delete-directory tempdir t)))
+  :doc "boundary after rechecks with the post-turn plan instead of a false captured-files error"
+  (let* ((tempdir
+          (file-name-as-directory
+           (make-temp-file "mevedel-rewind-boundary-after-" t)))
+         (save-path (file-name-as-directory
+                     (file-name-concat tempdir "session")))
+         (path (file-name-concat tempdir "tracked.el"))
+         (workspace
+          (mevedel-workspace--create
+           :type 'file :id "rewind" :root tempdir :name "rewind"))
+         (session
+          (mevedel-session--create
+           :name "main"
+           :workspace workspace
+           :save-path save-path
+           :current-segment 1
+           :turn-count 1))
+         (buffer (generate-new-buffer " *rewind-boundary-after*"))
+         (target '(:segment 1 :turn 1 :cum-turn 1
+                   :fork-point-id "point")))
+    (unwind-protect
+        (progn
+          (make-directory save-path t)
+          (write-region "external edit" nil path nil 'silent)
+          (let ((pre (mevedel-session-artifacts--file-history-backup-name
+                      path 0))
+                (post (mevedel-session-artifacts--file-history-backup-name
+                       path 1)))
+            (mevedel-session-artifacts--file-history-write-backup
+             save-path pre "pre-turn")
+            (mevedel-session-artifacts--file-history-write-backup
+             save-path post "post-turn")
+            (setf (mevedel-session-file-snapshots session)
+                  `((1 . ((,path . (:backup-name ,post
+                                   :pre-backup-name ,pre
+                                   :version 1)))))))
+          (with-current-buffer buffer
+            (insert "transcript"))
+          (let ((plan (mevedel-session-rewind-restore-plan session 1)))
+            (should (= 1 (length plan)))
+            (cl-letf
+                (((symbol-function
+                   'mevedel-session-rewind--rewind-candidate)
+                  (lambda (&rest _) (copy-sequence session)))
+                 ((symbol-function
+                   'mevedel-session-rewind--stage-rewind)
+                  (lambda (_session _candidate _target staging-path
+                           _staging-buffer)
+                    (make-directory staging-path t)))
+                 ((symbol-function
+                   'mevedel-session-rewind--install-rewind-buffer)
+                  #'ignore)
+                 ((symbol-function
+                   'mevedel-session-artifacts-load-instructions)
+                  (lambda (&rest _) t))
+                 ((symbol-function 'mevedel-workspace-rewind-directives)
+                  #'ignore)
+                 ((symbol-function
+                   'mevedel-session-artifacts-save-instructions)
+                  #'ignore)
+                 ((symbol-function 'mevedel--restore-preserved-directives)
+                  #'ignore)
+                 ((symbol-function
+                   'mevedel-session-rewind--refresh-restored-buffers)
+                  #'ignore))
+              (should
+               (mevedel-session-rewind--commit-rewind
+                session buffer target plan 'after)))
+            (should
+             (equal "post-turn"
+                    (mevedel-session-artifacts--file-text path)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
       (delete-directory tempdir t))))
