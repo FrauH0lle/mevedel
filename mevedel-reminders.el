@@ -807,6 +807,19 @@ FSM is mandatory for the same arity-dispatch reason as
                (append (plist-get info :mevedel-reminder-commits)
                        (plist-get staged :commits))))))))
 
+(defun mevedel-reminders-stage-commit (fsm commit)
+  "Defer COMMIT until FSM's request payload provably exists.
+For consumable state whose delivery rides the prompt or the staged
+entries: `mevedel-reminders--handle-inject' runs COMMIT at WAIT even
+when no reminder entry fired, and a request that dies earlier never
+runs it."
+  (when (functionp commit)
+    (let ((info (gptel-fsm-info fsm)))
+      (setf (gptel-fsm-info fsm)
+            (plist-put info :mevedel-reminder-commits
+                       (append (plist-get info :mevedel-reminder-commits)
+                               (list commit)))))))
+
 (defun mevedel-reminders-stage-entry (fsm type body &optional commit)
   "Stage one system-reminder entry of TYPE with BODY on FSM's request.
 

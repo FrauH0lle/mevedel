@@ -107,8 +107,11 @@
 (autoload 'mevedel--wrap-terminal-handlers "mevedel-presets")
 
 ;; `mevedel-reminders'
+(declare-function mevedel-reminders--handle-inject
+                  "mevedel-reminders" (fsm))
 (declare-function mevedel-reminders-format-block
                   "mevedel-reminders" (content))
+(autoload 'mevedel-reminders--handle-inject "mevedel-reminders")
 (autoload 'mevedel-reminders-format-block "mevedel-reminders")
 
 ;; `mevedel-session-artifacts'
@@ -775,9 +778,13 @@ FROZEN-CONTEXT is the materialized gptel context plist."
      (plist-get frozen :persistent-rules)
      (plist-get frozen :persistent-grants))
     (let ((handlers (copy-tree (default-value 'gptel-send--handlers))))
+      ;; Mention expansion stages reminder entries on the fsm; without
+      ;; the reminder injector in this ephemeral chain they would never
+      ;; reach the request.
       (setcdr (assq 'WAIT handlers)
               (cons #'mevedel-side-conversation--handle-wait
-                    (cdr (assq 'WAIT handlers))))
+                    (cons #'mevedel-reminders--handle-inject
+                          (cdr (assq 'WAIT handlers)))))
       (dolist (state '(DONE ERRS ABRT))
         (let ((entry (assq state handlers)))
           (setcdr entry
