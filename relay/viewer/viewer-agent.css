@@ -11,3 +11,39 @@
   overflow-y: auto;
   width: 100%;
 }
+
+/* Settled-agent rows stay muted until hovered: they are history, not
+   attention.  The disclosure shell is shared with the task list. */
+.agents-done-list {
+  padding: 0 .5rem .5rem;
+}
+.done-row {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  width: 100%;
+  font: inherit;
+  font-size: .74rem;
+  text-align: left;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: .45rem;
+  padding: .3rem .45rem;
+  cursor: pointer;
+  min-width: 0;
+}
+.done-row:hover { background: var(--surface-2); color: var(--ink); }
+.done-row .agent-dot { background: var(--line); }
+.done-row .done-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.done-row:hover .done-path { color: var(--accent); }
+.done-row .done-meta {
+  margin-left: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
+}

@@ -338,7 +338,8 @@ async function main() {
                'artifact-meta', 'artifact-tab', 'artifact-download',
                'artifact-close', 'artifact-body',
                'theme-button', 'modeline',
-               'tasks', 'tasks-summary', 'tasks-list'];
+               'tasks', 'tasks-summary', 'tasks-list',
+               'agents-done', 'agents-done-summary', 'agents-done-list'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.composer.hidden = true;
   nodes.filter.hidden = true;
@@ -898,10 +899,15 @@ async function main() {
   assert.equal(nodes.attachments.children.length, 0);
 
   // Routed agent frames cross the sealed transport into the controller,
-  // whose detailed behavior has a focused test.
+  // whose detailed behavior has a focused test. A settled row lands in
+  // the finished-agents disclosure instead of the strip.
   await deliver({t: 'agents', agents: [
     {path: '/root/worker-1', role: 'worker', status: 'running'},
+    {path: '/root/settled-1', role: 'explorer', status: 'done'},
   ]});
+  assert.equal(nodes.agents.children.length, 1);
+  assert.equal(nodes['agents-done'].hidden, false);
+  assert.match(textOf(nodes['agents-done-summary']), /Finished agents · 1/);
   const agentFetchBefore = first.sent.length;
   nodes.agents.children[0].dispatch('click');
   await waitFor(() => first.sent.length === agentFetchBefore + 1,
@@ -916,6 +922,7 @@ async function main() {
   assert.match(textOf(nodes['agent-transcript']), /Looking/);
   nodes['agent-close'].dispatch('click');
   await deliver({t: 'agents', agents: []});
+  assert.equal(nodes['agents-done'].hidden, true);
 
   // The session task list renders as a collapsible summary with one
   // line per task: in-progress first, completed last and counted.

@@ -4,8 +4,16 @@
 (() => {
   const POLL_MS = 2500;
 
+  // Active agents stay visible; finished agents keep their retained
+  // transcripts behind the disclosure.
+  const ACTIVE = new Set(['running', 'blocked', 'waiting']);
+  const FINISHED = new Set(['done', 'errored', 'interrupted']);
+
   function create({send, el, directiveLabel, openArtifact}) {
     const nav = document.getElementById('agents');
+    const doneBox = document.getElementById('agents-done');
+    const doneSummary = document.getElementById('agents-done-summary');
+    const doneList = document.getElementById('agents-done-list');
     const panel = document.getElementById('agent-panel');
     const title = document.getElementById('agent-title');
     const metaEl = document.getElementById('agent-meta');
@@ -16,10 +24,9 @@
     let requestSequence = 0;
 
     function meta(row) {
-      const status = typeof row.status === 'string' ? row.status : 'running';
       const bits = [];
       if (typeof row.role === 'string' && row.role) bits.push(row.role);
-      bits.push(status);
+      bits.push(row.status);
       return bits.join(' · ');
     }
 
@@ -82,12 +89,14 @@
 
     function show(rows) {
       if (!nav) return;
+      const valid = rows.filter(row => row && typeof row.path === 'string'
+        && (ACTIVE.has(row.status) || FINISHED.has(row.status)));
+      const active = valid.filter(row => ACTIVE.has(row.status));
+      const done = valid.filter(row => FINISHED.has(row.status));
       nav.replaceChildren();
-      nav.hidden = rows.length === 0;
-      let watched = null;
-      rows.forEach(row => {
-        if (!row || typeof row.path !== 'string') return;
-        const status = typeof row.status === 'string' ? row.status : 'running';
+      nav.hidden = active.length === 0;
+      active.forEach(row => {
+        const status = row.status;
         const stuck = status !== 'running';
         const chip = el('button', `dock-chip${stuck ? ' stuck' : ''}`);
         chip.type = 'button';
@@ -100,9 +109,32 @@
         if (label) chip.append(el('span', 'dock-chip-meta', label));
         chip.addEventListener('click', () => open(row));
         nav.append(chip);
-        if (row.path === view.path) watched = row;
       });
+      // Settled agents keep their retained transcripts reachable, one
+      // quiet line of dock height until the reader opens the list.
+      if (doneBox) {
+        doneBox.hidden = done.length === 0;
+        if (doneSummary) {
+          doneSummary.textContent = `Finished agents · ${done.length}`;
+        }
+        if (doneList) {
+          doneList.replaceChildren();
+          done.forEach(row => {
+            const item = el('li');
+            const button = el('button', 'done-row');
+            button.type = 'button';
+            button.title = `Read ${row.path}'s transcript`;
+            button.append(el('span', 'agent-dot'));
+            button.append(el('span', 'done-path', row.path));
+            button.append(el('span', 'done-meta', meta(row)));
+            button.addEventListener('click', () => open(row));
+            item.append(button);
+            doneList.append(item);
+          });
+        }
+      }
       if (view.path) {
+        const watched = valid.find(row => row.path === view.path) || null;
         if (metaEl) metaEl.textContent = watched ? meta(watched) : 'settled';
         if (watched) fetch();
       }

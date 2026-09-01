@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Publishes the active retained-agent roster and serves projected live agent
+;; Publishes the retained-agent roster and serves projected live agent
 ;; transcripts to collaboration guests.  Agent lookup is registry-only: a
 ;; browser poll never hydrates cold state or starts target I/O.
 
@@ -15,6 +15,8 @@
 (declare-function mevedel-agent-record-conversation-buffer
                   "mevedel-agent-control" (record))
 (declare-function mevedel-agent-record-role "mevedel-agent-control" (record))
+(declare-function mevedel-agent-record-settled-outcome
+                  "mevedel-agent-control" (record))
 
 ;; `mevedel-collaboration'
 (declare-function mevedel-collaboration--broadcast
@@ -55,28 +57,41 @@
   "Seconds within which repeated agent fetches from one guest are dropped.")
 
 (defun mevedel-collaboration--agent-rows (room)
-  "Return ROOM's guest-visible live agent rows, sorted by path."
+  "Return ROOM's guest-visible retained agent rows, sorted by path.
+An active agent carries its live status; a settled one carries its
+terminal outcome (done, errored, or interrupted), so its retained
+transcript stays reachable from the viewer's finished-agents list."
+  ;; ponytail: every retained agent travels in one frame; rows are a few
+  ;; dozen fixed bytes each, so bound or paginate only if registries grow
+  ;; to thousands.
   (when-let* ((session (plist-get room :session)))
     (let (rows)
       (dolist (pair (mevedel-session-agent-registry session))
-        (when-let* ((status (mevedel-view--agent-record-status (cdr pair))))
-          (push (append
-                 (list (cons "path" (car pair))
-                       (cons "status" (symbol-name status)))
-                 (when-let* ((role (mevedel-agent-record-role (cdr pair))))
-                   (list (cons "role" (format "%s" role)))))
-                rows)))
+        (let* ((record (cdr pair))
+               (outcome (mevedel-agent-record-settled-outcome record))
+               (status
+                (or (mevedel-view--agent-record-status record)
+                    (pcase outcome
+                      ('completed 'done)
+                      ((or 'errored 'interrupted) outcome)))))
+          (when status
+            (push (append
+                   (list (cons "path" (car pair))
+                         (cons "status" (symbol-name status)))
+                   (when-let* ((role (mevedel-agent-record-role record)))
+                     (list (cons "role" (format "%s" role)))))
+                  rows))))
       (sort rows (lambda (left right)
                    (string-lessp (cdr (assoc "path" left))
                                  (cdr (assoc "path" right))))))))
 
 (defun mevedel-collaboration--agents-frame (room)
-  "Return ROOM's live agent roster frame."
+  "Return ROOM's retained agent roster frame."
   (list :t "agents"
         :agents (vconcat (mevedel-collaboration--agent-rows room))))
 
 (defun mevedel-collaboration--publish-agents (room)
-  "Broadcast ROOM's live agent roster when it has changed."
+  "Broadcast ROOM's retained agent roster when it has changed."
   (let ((frame (mevedel-collaboration--agents-frame room)))
     (unless (equal frame (plist-get room :agents))
       (plist-put room :agents frame)

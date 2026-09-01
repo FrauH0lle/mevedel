@@ -286,17 +286,17 @@ code, pre {
    instead of the prose being capped narrower than the tool rows. */
 @media (min-width: 72rem) {
   .ledger { max-width: 62rem; }
-  .requests, .own-queue, .dock-strip, .tasks, .composer { max-width: 60rem; }
+  .requests, .own-queue, .dock-strip, .dock-disclosure, .composer { max-width: 60rem; }
 }
 @media (min-width: 100rem) {
   body { font-size: 16px; }
   .ledger { max-width: 70rem; }
-  .requests, .own-queue, .dock-strip, .tasks, .composer { max-width: 68rem; }
+  .requests, .own-queue, .dock-strip, .dock-disclosure, .composer { max-width: 68rem; }
 }
 @media (min-width: 130rem) {
   body { font-size: 17px; }
   .ledger { max-width: 76rem; }
-  .requests, .own-queue, .dock-strip, .tasks, .composer { max-width: 74rem; }
+  .requests, .own-queue, .dock-strip, .dock-disclosure, .composer { max-width: 74rem; }
 }
 
 .turn {
@@ -601,6 +601,35 @@ code, pre {
   flex-direction: column;
   align-items: center;
   gap: .55rem;
+}
+/* Historical/session detail collapses to one summary line in the dock. */
+.dock-disclosure {
+  width: 100%;
+  max-width: 44rem;
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: .7rem;
+  box-shadow: var(--shadow);
+}
+.dock-disclosure[hidden] { display: none; }
+.dock-disclosure summary {
+  cursor: pointer;
+  padding: .35rem .9rem;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.dock-disclosure summary[data-warning="true"] { color: var(--failed); }
+.dock-disclosure-list {
+  list-style: none;
+  margin: 0;
+  max-height: 12rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 .requests {
   width: 100%;

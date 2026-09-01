@@ -30,7 +30,7 @@
 (require 'mevedel-collaboration-agent)
 
 (mevedel-deftest mevedel-collaboration--agent-rows
-  (:doc "lists active agents sorted by path and drops settled ones")
+  (:doc "lists agents sorted by path, settled ones with terminal outcomes")
   (let* ((registry
           (list (cons "/root/worker-2"
                       (mevedel-agent-record--create
@@ -47,14 +47,34 @@
                 (cons "/root/worker-3"
                       (mevedel-agent-record--create
                        :path "/root/worker-3" :role 'worker
+                       :activity 'idle
+                       :settled-outcome 'completed))
+                (cons "/root/worker-4"
+                      (mevedel-agent-record--create
+                       :path "/root/worker-4" :role 'worker
+                       :activity 'idle
+                       :settled-outcome 'errored))
+                (cons "/root/worker-5"
+                      (mevedel-agent-record--create
+                       :path "/root/worker-5" :role 'worker
+                       :activity 'idle
+                       :settled-outcome 'interrupted))
+                (cons "/root/worker-6"
+                      (mevedel-agent-record--create
+                       :path "/root/worker-6" :role 'worker
                        :activity 'idle))))
          (session (mevedel-session--create :name "agents"
                                            :agent-registry registry))
          (rows (mevedel-collaboration--agent-rows
                 (list :session session))))
-    (should (equal '("/root/explorer-1" "/root/worker-1" "/root/worker-2")
+    ;; An idle record without a settled outcome is not reported as done.
+    (should (equal '("/root/explorer-1" "/root/worker-1" "/root/worker-2"
+                     "/root/worker-3" "/root/worker-4" "/root/worker-5")
                    (mapcar (lambda (row) (cdr (assoc "path" row))) rows)))
-    (should (equal '("blocked" "waiting" "running")
+    ;; Settled agents keep travelling with their terminal outcome, so
+    ;; the viewer's finished list can reach their retained transcripts.
+    (should (equal '("blocked" "waiting" "running" "done" "errored"
+                     "interrupted")
                    (mapcar (lambda (row) (cdr (assoc "status" row))) rows)))
     (should (equal "explorer" (cdr (assoc "role" (nth 0 rows)))))
     ;; A record without a role sends no role field at all.

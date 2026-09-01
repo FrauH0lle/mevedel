@@ -1193,7 +1193,7 @@
     (should (equal "/root" (plist-get steered :sender)))
     (should (equal "Steer safely." (plist-get steered :payload))))
 
-  :doc "rolls a failed retained dispatch back to durable idle state"
+  :doc "failed retained dispatch preserves the prior settled result"
   (let* ((session (mevedel-agent-control-test--session))
          (buffer (generate-new-buffer " *agent-control-failed-followup*"))
          (record
@@ -1221,7 +1221,9 @@
             session "/root/worker" "Try the next turn."))
           (should (eq 'idle (mevedel-agent-record-activity record)))
           (should-not (mevedel-agent-record-invocation record))
-          (should-not (mevedel-agent-control-settled-result record))
+          (should
+           (equal '(:outcome completed :payload "previous result")
+                  (mevedel-agent-control-settled-result record)))
           (should (= 1 persisted)))
       (kill-buffer buffer)))
 
