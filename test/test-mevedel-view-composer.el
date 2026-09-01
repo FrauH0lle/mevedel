@@ -3881,6 +3881,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                        :path)))
               (with-temp-file file (insert "FILE CONTENT V2\n"))
               (mevedel-tools--handle-steering-inject fsm)
+              ;; Mention contents ride the reminder injector, which
+              ;; runs next in the same WAIT.
+              (mevedel-reminders--handle-inject fsm)
               (should-not (mevedel-session-pending-steering session))
               (should
                (eq 'committed

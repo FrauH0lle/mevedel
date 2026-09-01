@@ -513,10 +513,18 @@ spanning lines")))
                               mevedel-skills--pending-request-context
                               :invoked-skills))))))))
 
+(defun test-mevedel-skills-input--staged-bodies (fsm)
+  "Return and clear reminder bodies staged on FSM."
+  (let* ((info (gptel-fsm-info fsm))
+         (entries (plist-get info :mevedel-reminder-entries)))
+    (setf (gptel-fsm-info fsm)
+          (plist-put info :mevedel-reminder-entries nil))
+    (mapcar (lambda (entry) (plist-get entry :body)) entries)))
+
 (mevedel-deftest mevedel-skills-input-transform-inline-attachments ()
   ,test
   (test)
-  :doc "replaces live mentions with placeholders and injects reminders"
+  :doc "replaces live mentions with placeholders and stages reminders"
   (let* ((session (mevedel-skills-test--make-session))
          (chat (generate-new-buffer " *mevedel-inline-skill-chat*"))
          (fsm (gptel-make-fsm :info (list :buffer chat))))
@@ -539,13 +547,9 @@ spanning lines")))
                        "\\[skill:beta -- attached\\]" text))
               (should (string-match-p (regexp-quote "\"$alpha\"") text))
               (should (string-match-p (regexp-quote "`$beta`") text))
-              (should (string-match-p "Alpha body" text))
-              (should (string-match-p "Beta body" text))
-              (should (string-match-p
-                       "host already attached the skill" text))
-              (should (string-match-p
-                       "must follow it without calling `Skill`" text))
-              (should (string-match-p "<system-reminder>" text)))
+              ;; Bodies ride the staged reminder entries, not the text.
+              (should-not (string-match-p "Alpha body" text))
+              (should-not (string-match-p "<system-reminder>" text)))
             (goto-char (point-min))
             (search-forward "Use [skill:alpha -- attached]")
             (let ((prompt-start (match-beginning 0)))
@@ -555,6 +559,14 @@ spanning lines")))
                         (get-text-property
                          (+ (match-beginning 0) (length "Use "))
                          'gptel))))
+          (let ((bodies (test-mevedel-skills-input--staged-bodies fsm)))
+            (should (= 2 (length bodies)))
+            (should (string-match-p "host already attached the skill"
+                                    (car bodies)))
+            (should (string-match-p "must follow it without calling `Skill`"
+                                    (car bodies)))
+            (should (string-match-p "Alpha body" (car bodies)))
+            (should (string-match-p "Beta body" (cadr bodies))))
           (with-current-buffer chat
             (should-not mevedel-skills-input--pending-inline-attachments)))
       (kill-buffer chat)))
@@ -582,11 +594,11 @@ spanning lines")))
             (insert input)
             (mevedel-skills-input-transform-inline-attachments fsm)
             (should (= 2 (how-many "\\[skill:alpha -- attached\\]"
-                                   (point-min) (point-max))))
-            (should (string-match-p "Body A" (buffer-string)))
-            (should (string-match-p "Body B" (buffer-string)))
-            (should (= 2 (how-many "<system-reminder>"
-                                   (point-min) (point-max))))))
+                                   (point-min) (point-max)))))
+          (let ((bodies (test-mevedel-skills-input--staged-bodies fsm)))
+            (should (= 2 (length bodies)))
+            (should (string-match-p "Body A" (car bodies)))
+            (should (string-match-p "Body B" (cadr bodies)))))
       (kill-buffer chat)))
 
   :doc "coexists with earlier mention expansion reminders"
@@ -615,12 +627,13 @@ spanning lines")))
                        "\\[file:.* -- contents attached above\\]" text))
               (should (string-match-p
                        "\\[skill:alpha -- attached\\]" text))
-              (should (string-match-p "Mention body" text))
-              (should (string-match-p "Alpha body" text))
-              (should (= 2 (how-many "<system-reminder>"
-                                     (point-min) (point-max))))))
+              (should-not (string-match-p "<system-reminder>" text))))
+          (let ((bodies (test-mevedel-skills-input--staged-bodies fsm)))
+            (should (= 2 (length bodies)))
+            (should (string-match-p "Mention body" (car bodies)))
+            (should (string-match-p "Alpha body" (cadr bodies)))))
       (kill-buffer chat)
-      (delete-directory root t))))
+      (delete-directory root t)))
 
   :doc "does not rewrite earlier system-reminder bodies"
   (let* ((session (mevedel-skills-test--make-session))
@@ -643,8 +656,10 @@ spanning lines")))
                        (regexp-quote "Reminder text keeps $alpha literal.")
                        text))
               (should (= 1 (how-many "\\[skill:alpha -- attached\\]"
-                                     (point-min) (point-max))))
-              (should (string-match-p "Alpha body" text)))))
+                                     (point-min) (point-max))))))
+          (should (string-match-p
+                   "Alpha body"
+                   (car (test-mevedel-skills-input--staged-bodies fsm)))))
       (kill-buffer chat)))
 
   :doc "replaces unavailable mentions without injecting instructions"
