@@ -862,17 +862,31 @@ cover, so the permission step's warning about it is captured here."
 
 (mevedel-deftest mevedel-pipeline--step-goal-budget-warning ()
   ,test (test)
-  :doc "appends a model-visible budget warning after the final persisted result"
-  (let (out)
-    (cl-letf (((symbol-function 'mevedel-goal-tool-result-budget-warning)
-               (lambda (_session _fsm) "Wrap up now.")))
-      (mevedel-pipeline--step-goal-budget-warning
-       '(:result "tool output" :session session :fsm fsm)
-       (lambda (context) (setq out context)) #'ignore))
-    (should (string-match-p
-             (regexp-quote
-              "tool output\n\n<system-reminder>\nWrap up now.")
-             (plist-get out :result)))))
+  :doc "queues the budget warning as a turn event and leaves the result alone"
+  (let ((chat-buf (generate-new-buffer " *mevedel-test-budget*"))
+        out)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :id "budget-request")))
+          (cl-letf (((symbol-function
+                      'mevedel-goal-tool-result-budget-warning)
+                     (lambda (_session _fsm) "Wrap up now.")))
+            (mevedel-pipeline--step-goal-budget-warning
+             (list :result "tool output" :session 'session :fsm 'fsm
+                   :buffer chat-buf)
+             (lambda (context) (setq out context)) #'ignore))
+          (should (equal "tool output" (plist-get out :result)))
+          (with-current-buffer chat-buf
+            (should (equal
+                     "Wrap up now."
+                     (plist-get
+                      (cdr (assoc 'goal-budget
+                                  (plist-get mevedel-reminders--turn-events
+                                             :items)))
+                      :body)))))
+      (kill-buffer chat-buf))))
 
 
 ;;
