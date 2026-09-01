@@ -869,55 +869,6 @@ code, pre {
   color: var(--running);
 }
 
-/* The session's task list, collapsed to one summary line until the
-   reader opens it. */
-.tasks {
-  width: 100%;
-  max-width: 44rem;
-  margin: 0;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: .7rem;
-  box-shadow: var(--shadow);
-}
-.tasks[hidden] { display: none; }
-.tasks summary {
-  cursor: pointer;
-  padding: .35rem .9rem;
-  font-size: .72rem;
-  font-weight: 700;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.tasks-list {
-  list-style: none;
-  margin: 0;
-  padding: 0 .9rem .5rem;
-  max-height: 12rem;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: .2rem;
-  font-size: .78rem;
-  line-height: 1.5;
-}
-.task {
-  display: flex;
-  gap: .5rem;
-  align-items: baseline;
-  min-width: 0;
-}
-.task-st { flex-shrink: 0; color: var(--muted); }
-.task.in-progress .task-st { color: var(--running); }
-.task.completed .task-st { color: var(--ok); }
-.task-subject { min-width: 0; overflow-wrap: break-word; }
-.task.completed .task-subject {
-  color: var(--muted);
-  text-decoration: line-through;
-}
-.task-meta { color: var(--muted); white-space: nowrap; }
-
 .own-queue {
   width: 100%;
   max-width: 44rem;

@@ -206,6 +206,7 @@ Chat / view
   mevedel-collaboration-artifact-projection.el ApplyPatch artifact projection
   mevedel-collaboration-artifact.el browser artifact fetch and notifications
   mevedel-collaboration-projection.el canonical browser transcript projection
+  mevedel-collaboration-task.el browser task projection and publication
   mevedel-collaboration-share.el bearer-link and QR presentation surface
   mevedel-collaboration-transport.el sealed relay WebSocket client
   mevedel-view-markdown.el    Markdown links, images, paths, source panels

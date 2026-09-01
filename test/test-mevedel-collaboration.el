@@ -697,64 +697,6 @@
           (should-not controls))
       (kill-buffer data-buffer))))
 
-(mevedel-deftest mevedel-collaboration--task-rows
-  (:doc "projects session tasks with optional owner and dependency fields")
-  (let* ((session (mevedel-session--create
-                   :name "tasks"
-                   :tasks (list (mevedel-task--create
-                                 :id 1 :subject "Trace the grant"
-                                 :status 'completed)
-                                (mevedel-task--create
-                                 :id 2 :subject "Fix propagation"
-                                 :status 'in-progress
-                                 :owner "/root/worker-1"
-                                 :blocked-by '(1)))))
-         (rows (mevedel-collaboration--task-rows (list :session session))))
-    (should (equal '(1 2)
-                   (mapcar (lambda (row) (cdr (assoc "id" row))) rows)))
-    (should (equal '("completed" "in-progress")
-                   (mapcar (lambda (row) (cdr (assoc "status" row))) rows)))
-    (should (equal "Fix propagation" (cdr (assoc "subject" (nth 1 rows)))))
-    (should (equal "/root/worker-1" (cdr (assoc "owner" (nth 1 rows)))))
-    (should (equal [1] (cdr (assoc "blockedBy" (nth 1 rows)))))
-    ;; A task without owner or dependencies sends neither field.
-    (should-not (assoc "owner" (nth 0 rows)))
-    (should-not (assoc "blockedBy" (nth 0 rows)))
-    ;; A room without a session has no task list.
-    (should-not (mevedel-collaboration--task-rows (list :session nil)))))
-
-(mevedel-deftest mevedel-collaboration--publish-tasks
-  (:doc "broadcasts the task list once per change, an emptied list included")
-  (let* ((guests (make-hash-table :test #'eql))
-         (session (mevedel-session--create
-                   :name "tasks"
-                   :tasks (list (mevedel-task--create
-                                 :id 1 :subject "Trace the grant"
-                                 :status 'pending))))
-         (room (list :session session :guests guests :transport 'transport))
-         sent)
-    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
-               (lambda (_transport peer frame)
-                 (push (cons peer frame) sent)
-                 t)))
-      (puthash 1 (list :name "g" :writable nil :ready t) guests)
-      (mevedel-collaboration--publish-tasks room)
-      (let ((frame (cdr (car sent))))
-        (should (equal "tasks" (plist-get frame :t)))
-        (should (= 1 (length (plist-get frame :tasks))))
-        (should (equal "Trace the grant"
-                       (cdr (assoc "subject"
-                                   (aref (plist-get frame :tasks) 0))))))
-      ;; An unchanged list is not repeated.
-      (setq sent nil)
-      (mevedel-collaboration--publish-tasks room)
-      (should-not sent)
-      ;; Clearing the last task broadcasts the empty list, so the
-      ;; guest's block is cleared rather than frozen on stale rows.
-      (setf (mevedel-session-tasks session) nil)
-      (mevedel-collaboration--publish-tasks room)
-      (should (equal [] (plist-get (cdr (car sent)) :tasks))))))
-
 (mevedel-deftest mevedel-view--drain-guest-invocation
   (:doc "dispatches a queued guest invocation and dequeues it"
    :quiet t)

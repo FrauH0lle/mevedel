@@ -118,14 +118,14 @@ Create `/etc/mevedel-relay` as a root-owned mode-0600 file containing
 
 ```bash
 TOKEN=$(head -c 24 /dev/urandom | base64)
-echo "MEVEDEL_HOST_TOKEN=$TOKEN" | sudo tee /etc/mevedel-relay >/dev/null
-sudo chown root:root /etc/mevedel-relay
-sudo chmod 600 /etc/mevedel-relay
+sudo install -o root -g root -m 600 /dev/null /etc/mevedel-relay
+printf 'MEVEDEL_HOST_TOKEN=%s\n' "$TOKEN" | sudo tee /etc/mevedel-relay >/dev/null
 ```
 
 Then set `mevedel-collaboration-relay-url` to `wss://collab.example.net` and
-`mevedel-collaboration-relay-host-token` to the same token (re-read it with
-`sudo cat /etc/mevedel-relay`).
+`mevedel-collaboration-relay-host-token` to the same token. To print only the
+value expected by that option later, run
+`sudo sed -n 's/^MEVEDEL_HOST_TOKEN=//p' /etc/mevedel-relay`.
 
 ### yunohost
 

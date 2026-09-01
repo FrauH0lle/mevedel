@@ -40,8 +40,6 @@
                   "mevedel-collaboration" (room peer guest &optional force))
 (declare-function mevedel-collaboration--status-frame
                   "mevedel-collaboration" (room))
-(declare-function mevedel-collaboration--tasks-frame
-                  "mevedel-collaboration" (room))
 (defvar mevedel-collaboration--attachment-extensions)
 (defvar mevedel-collaboration--duplicate-prompt-window)
 (defvar mevedel-collaboration--max-attachment-bytes)
@@ -69,6 +67,10 @@
 (declare-function mevedel-collaboration--json-string
                   "mevedel-collaboration-projection" (object))
 (defvar mevedel-collaboration--protocol-version)
+
+;; `mevedel-collaboration-task'
+(declare-function mevedel-collaboration--tasks-frame
+                  "mevedel-collaboration-task" (room))
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-control

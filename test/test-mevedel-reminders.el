@@ -439,12 +439,12 @@ this collapses both shapes to the delivered text."
   (should (equal "specialist:read"
                  (mevedel-reminders--entry-label '(specialist . read)))))
 
-(mevedel-deftest mevedel-reminders-reset-fired
+(mevedel-deftest mevedel-reminders-rearm-plan-reference
   (:before-each (mevedel-workspace-clear-registry)
    :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "clears the fired mark for the named type only"
+  :doc "clears only the plan-reference reminder's fired mark"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
          (plan-ref (mevedel-reminder-create
@@ -457,13 +457,11 @@ this collapses both shapes to the delivered text."
           (mevedel-reminder-last-fired other) 3)
     (mevedel-session-add-reminder session plan-ref)
     (mevedel-session-add-reminder session other)
-    (mevedel-reminders-reset-fired session 'plan-reference)
+    (mevedel-reminders-rearm-plan-reference session)
     (should-not (mevedel-reminder-last-fired plan-ref))
     (should (= 3 (mevedel-reminder-last-fired other)))
     ;; A reset one-shot may fire again.
-    (should (mevedel-reminders--should-fire-p plan-ref 4 session)))
-  :doc "ignores a non-session context"
-  (should-not (mevedel-reminders-reset-fired 'not-a-session 'plan-reference)))
+    (should (mevedel-reminders--should-fire-p plan-ref 4 session))))
 
 (mevedel-deftest mevedel-reminders-make-fork-provenance
   ()
@@ -1396,7 +1394,18 @@ this collapses both shapes to the delivered text."
       (should-not (string-match-p "local://plans/current.md" content))
       (should-not (string-match-p (regexp-quote tmp) content))
       (should (string-match-p "# Accepted" content))
-      (should-not (string-match-p "# Current draft" content))))
+      (should-not (string-match-p "# Current draft" content)))
+    ;; An active Goal suppresses this reminder only when it already carries
+    ;; the exact accepted plan reference.
+    (setf (mevedel-session-goal session)
+          (mevedel-goal--create :status 'active))
+    (should (funcall (mevedel-reminder-trigger r) session))
+    (setf (mevedel-goal-plan-reference (mevedel-session-goal session))
+          "local/plans/other.md")
+    (should (funcall (mevedel-reminder-trigger r) session))
+    (setf (mevedel-goal-plan-reference (mevedel-session-goal session))
+          "local/plans/accepted-20260813-120000.md")
+    (should-not (funcall (mevedel-reminder-trigger r) session)))
 
   :doc "waits until after the acceptance turn before firing"
   (let* ((tmp (make-temp-file "mevedel-plan-ref-" t))

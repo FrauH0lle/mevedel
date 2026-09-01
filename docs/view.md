@@ -650,6 +650,17 @@ the roster as chips above the interaction cards and marks a blocked or
 waiting agent, so a session that fans out workers never reads as an
 opaque gap.
 
+The same publication cycle sends the session task list to either link:
+identity, subject, status, optional owner, and unresolved dependency IDs.
+The frame is latched on change and sent directly to each joining guest so an
+unchanged list cannot disappear on reconnect. The viewer keeps it collapsed
+to a done/total summary, orders in-progress work first, and strikes completed
+rows. Task projection is capped at 64 KiB of encoded JSON: it admits
+in-progress tasks first, then pending tasks, then the most recently completed
+tasks. The frame carries total, completed, omitted, and omitted-active counts,
+so a shortened history remains explicit and any omitted active work is
+conspicuous. The transport's larger wire bound remains the final safety check.
+
 Tapping a chip opens that agent's live transcript as a full-screen
 sheet. The viewer polls with `fetch-agent` frames while the sheet is
 open and refetches promptly on a roster change; the host validates the

@@ -166,12 +166,14 @@ owner exactly as on the root path.
 - **Plan-file reference:** the one-shot `plan-reference` reminder
   surfaces bounded contents of the approved plan on later turns when
   it may still be relevant. Main-session compaction resets its fired
-  mark (`mevedel-reminders-reset-fired`), because the summarized
+  mark (`mevedel-reminders-rearm-plan-reference`), because the summarized
   prefix may have carried both its earlier delivery and the
   implementation prompt's full plan text; the reference then re-fires
-  once with the plan address. An active Goal does not need this: its
-  system-prompt context regenerates the binding plan address on every
-  request. Standalone Plan Direct handoff does not use this reminder.
+  once with the plan address. The trigger suppresses it when an active Goal
+  carries that exact accepted-plan reference, because the Goal's system-prompt
+  context regenerates the binding plan address on every request. A Goal with
+  no plan or a different plan does not suppress it. Standalone Plan Direct
+  handoff does not use this reminder.
 - **Accepted-plan verification:** `verification-suggestion` mentions
   approved plan execution verification while `plan-metadata` marks it
   pending; spawning a verifier clears the flag.
