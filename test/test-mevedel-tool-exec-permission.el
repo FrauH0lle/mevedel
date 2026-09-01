@@ -15,6 +15,7 @@
 (require 'mevedel-execution-target)
 (require 'mevedel-permission-mode)
 (require 'mevedel-permission-persistence)
+(require 'mevedel-permission-prompt)
 (require 'mevedel-permission-log)
 (require 'mevedel-permission-queue)
 (require 'mevedel-permission-rules)

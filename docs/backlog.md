@@ -66,26 +66,7 @@ recommends those elements while leaving Codex room to choose the next action.
   weekly automated check is useful. See also "/learn" command
 
 - Consider making mevedel's data buffers hidden
-- Settled: skill instruction bodies stay in the submitted model-input
-  (permanent transcript text) by design, not as deferred work. Ephemeral
-  delivery would make the model lose instructions that govern multi-turn
-  work after one request while the inert `[skill:… -- attached]`
-  placeholder still implies they are in force. Compaction's contract for
-  them matches prompt text: invoked-skill provenance survives in the
-  summary, model-invocable skills are re-fetchable via `Skill`, and a
-  user-only skill that still matters post-compaction is the user's to
-  re-invoke (relevance usually decays with the compacted work).
-- The worktree fork restore report is delivered via the transient
-  pending-reminder FIFO; a restart between fork creation and the child's
-  first request drops the report detail (provenance survives via the
-  fork-provenance reminder). Persist the report in sidecar slots if that
-  edge ever bites.
 - When a file is attached via the "@" it is also granted Read permissions, however these permissions are not passed on to sub-agents which might want to read the file again
-- `test/test-mevedel-tool-exec-permission.el` fails standalone in
-  `mevedel-tool-exec-permission-prompt-eval` with
-  `(void-function mevedel-permission--elide)`: the test file never loads
-  `mevedel-permission-prompt`, so the suite only passes when another test
-  file loads it first. Add the missing require.
 
 ## Entry format
 
