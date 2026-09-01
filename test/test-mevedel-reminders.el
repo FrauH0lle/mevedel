@@ -439,6 +439,53 @@ this collapses both shapes to the delivered text."
   (should (equal "specialist:read"
                  (mevedel-reminders--entry-label '(specialist . read)))))
 
+(mevedel-deftest mevedel-reminders--injection-record
+  ()
+  ,test
+  (test)
+  :doc "captures phase and every entry's type and body"
+  (should (equal '(:type injected-reminders
+                   :phase turn-start
+                   :items ((:type a :body "one") (:type b :body "two")))
+                 (mevedel-reminders--injection-record
+                  '((:type a :body "one") (:type b :body "two"))
+                  'turn-start)))
+  :doc "caps oversized bodies with a truncation note"
+  (let* ((mevedel-reminders--record-body-limit 8)
+         (record (mevedel-reminders--injection-record
+                  '((:type big :body "0123456789")) 'mid-turn))
+         (body (plist-get (car (plist-get record :items)) :body)))
+    (should (equal "01234567\n[... truncated for record]" body))))
+
+(mevedel-deftest mevedel-reminders--write-injection-record
+  ()
+  ,test
+  (test)
+  :doc "writes a hidden audit block at the marker and advances it"
+  (with-temp-buffer
+    (insert "user prompt\n")
+    (let* ((marker (point-marker))
+           (info (list :position marker))
+           (entries '((:type demo :body "REMIND"))))
+      (mevedel-reminders--write-injection-record
+       info (current-buffer) entries 'turn-start)
+      (let ((spans (mevedel-transcript-audit-spans (buffer-string))))
+        (should (= 1 (length spans)))
+        (should (equal '(:type injected-reminders
+                         :phase turn-start
+                         :items ((:type demo :body "REMIND")))
+                       (plist-get (car spans) :record))))
+      ;; Later response insertion at the marker lands after the record.
+      (should (= (marker-position marker) (point-max)))
+      (should-not (string-match-p "<system-reminder>" (buffer-string)))))
+  :doc "skips the record when no live marker exists"
+  (with-temp-buffer
+    (insert "user prompt\n")
+    (mevedel-reminders--write-injection-record
+     (list :position nil) (current-buffer)
+     '((:type demo :body "REMIND")) 'mid-turn)
+    (should (equal "user prompt\n" (buffer-string)))))
+
 (mevedel-deftest mevedel-reminders-stage-entry
   ()
   ,test
@@ -560,7 +607,11 @@ this collapses both shapes to the delivered text."
             (setq-local mevedel--session session)
             (setq-local mevedel--current-request
                         (mevedel-request--create :id "request-1"
-                                                 :session session)))
+                                                 :session session))
+            (insert "actual task\n")
+            (setf (gptel-fsm-info fsm)
+                  (plist-put (gptel-fsm-info fsm)
+                             :position (point-marker))))
           (mevedel-reminders--handle-inject fsm)
           (let ((messages (plist-get data :messages)))
             (should (= 3 (length messages)))
@@ -572,8 +623,24 @@ this collapses both shapes to the delivered text."
               (plist-get (aref messages 1) :content))))
           (should-not (plist-get (gptel-fsm-info fsm)
                                  :mevedel-reminder-entries))
+          ;; The chat buffer records what was injected as one hidden
+          ;; audit block; the blocks themselves never touch it.
+          (with-current-buffer chat-buf
+            (let ((spans (mevedel-transcript-audit-spans (buffer-string))))
+              (should (= 1 (length spans)))
+              (should (equal '(:type injected-reminders
+                               :phase turn-start
+                               :items ((:type one :body "one")
+                                       (:type two :body "two")))
+                             (plist-get (car spans) :record))))
+            (should-not (string-match-p "<system-reminder>"
+                                        (buffer-string))))
           (mevedel-reminders--handle-inject fsm)
-          (should (= 3 (length (plist-get data :messages)))))
+          (should (= 3 (length (plist-get data :messages))))
+          ;; Idempotent for the record too.
+          (with-current-buffer chat-buf
+            (should (= 1 (length (mevedel-transcript-audit-spans
+                                  (buffer-string)))))))
       (kill-buffer chat-buf)))
 
   :doc "keeps consumable state when injection fails"

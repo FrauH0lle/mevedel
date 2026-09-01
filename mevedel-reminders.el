@@ -130,12 +130,24 @@
                   "mevedel-transcript" ())
 (autoload 'mevedel-transcript-prompt-transform-start "mevedel-transcript")
 
+;; `mevedel-transcript-audit'
+(declare-function mevedel--format-hook-audit-record
+                  "mevedel-transcript-audit" (record))
+(autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
+
 ;; `mevedel-utilities'
+(declare-function mevedel--active-response-marker
+                  "mevedel-utilities" (info buffer))
 (declare-function mevedel--plain-data-p "mevedel-utilities" (value))
+(declare-function mevedel--split-open-reasoning-before-user-input
+                  "mevedel-utilities" (info))
 (declare-function mevedel-generate-diff
                   "mevedel-utilities"
                   (original modified filepath &optional labels-real))
+(autoload 'mevedel--active-response-marker "mevedel-utilities")
 (autoload 'mevedel--plain-data-p "mevedel-utilities")
+(autoload 'mevedel--split-open-reasoning-before-user-input
+  "mevedel-utilities")
 (autoload 'mevedel-generate-diff "mevedel-utilities")
 
 ;; `mevedel-workspace'
@@ -594,6 +606,52 @@ The queue is not cleared here: dequeueing is the last of the returned
                    (with-current-buffer buffer
                      (setq mevedel-reminders--turn-events nil)))))))))))))
 
+(defvar mevedel-reminders--record-body-limit 16384
+  "Byte cap per reminder body stored in the hidden injection record.
+Mention expansions can carry whole file contents; the record exists for
+inspection, not archival, so oversized bodies are truncated.")
+
+(defun mevedel-reminders--injection-record (entries phase)
+  "Return the hidden audit record for injected ENTRIES in PHASE.
+PHASE is `turn-start' or `mid-turn'.  Bodies are capped at
+`mevedel-reminders--record-body-limit'."
+  (list :type 'injected-reminders
+        :phase phase
+        :items
+        (mapcar
+         (lambda (entry)
+           (let ((body (plist-get entry :body)))
+             (list :type (plist-get entry :type)
+                   :body (if (> (length body)
+                                mevedel-reminders--record-body-limit)
+                             (concat
+                              (substring
+                               body 0 mevedel-reminders--record-body-limit)
+                              "\n[... truncated for record]")
+                           body))))
+         entries)))
+
+(defun mevedel-reminders--write-injection-record (info buffer entries phase)
+  "Record injected ENTRIES for PHASE as hidden text in BUFFER.
+
+`gptel--inject-prompt' mutates the realized request payload without
+touching the data buffer, so the injected blocks would otherwise leave
+no trace.  The record is a hook-audit side-channel block: invisible,
+never sent to a provider, rendered by the view as a collapsed row.
+INFO is the request's fsm info; insertion happens at its active
+response marker so streamed output continues after the record.  A
+missing marker skips the record rather than corrupting the transcript."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let* ((marker (mevedel--active-response-marker info buffer)))
+        (let ((inhibit-read-only t))
+          (mevedel--split-open-reasoning-before-user-input info)
+          (save-excursion
+            (goto-char marker)
+            (insert (mevedel--format-hook-audit-record
+                     (mevedel-reminders--injection-record entries phase)))
+            (set-marker marker (point))))))))
+
 (defun mevedel-reminders--handle-inject (fsm)
   "Inject staged and same-turn reminders into FSM's request payload.
 
@@ -621,6 +679,9 @@ for the next turn."
                                      entries "\n")))))))
             (gptel--inject-prompt
              backend data message (and initial -1))
+            (with-demoted-errors "mevedel: injection record failed: %S"
+              (mevedel-reminders--write-injection-record
+               info buffer entries (if initial 'turn-start 'mid-turn)))
             (dolist (commit (plist-get events :commits))
               (with-demoted-errors "mevedel: reminder commit failed: %S"
                 (funcall commit)))))

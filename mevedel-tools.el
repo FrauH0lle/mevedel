@@ -43,7 +43,6 @@
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
 
 ;; `gptel'
-(declare-function gptel--display-reasoning-stream "ext:gptel" (text info))
 (defvar gptel-tools)
 
 ;; `gptel-request'
@@ -677,38 +676,6 @@ otherwise queues them on the chat buffer's session."
      (or (plist-get msg :payload) ""))
     (_ (error "Unknown agent mailbox record: %S" (plist-get msg :type)))))
 
-(defun mevedel-tools--live-buffer-marker-p (marker buffer)
-  "Return non-nil when MARKER points into BUFFER."
-  (and (markerp marker)
-       (marker-position marker)
-       (eq (marker-buffer marker) buffer)))
-
-(defun mevedel-tools--active-response-marker (info buffer)
-  "Return INFO's active response insertion marker for BUFFER."
-  (let ((tracking (plist-get info :tracking-marker))
-        (position (plist-get info :position)))
-    (cond
-     ((mevedel-tools--live-buffer-marker-p tracking buffer) tracking)
-     ((mevedel-tools--live-buffer-marker-p position buffer) position))))
-
-(defun mevedel-tools--split-open-reasoning-before-user-input (info)
-  "Close INFO's open reasoning block before injecting user input."
-  (when (eq (plist-get info :reasoning-block) 'in)
-    (let* ((tracking (plist-get info :tracking-marker))
-           (insertion-type
-            (and (markerp tracking)
-                 (marker-insertion-type tracking))))
-      (when (markerp tracking)
-        (set-marker-insertion-type tracking t))
-      (unwind-protect
-          (gptel--display-reasoning-stream t info)
-        (when (markerp tracking)
-          (set-marker-insertion-type tracking insertion-type))))
-    (when-let* ((marker (plist-get info :reasoning-marker)))
-      (set-marker marker nil))
-    (plist-put info :reasoning-marker nil)
-    (plist-put info :reasoning-block nil)))
-
 (defun mevedel-tools--insert-session-injected-prompt
     (session fsm message block)
   "Insert injected MESSAGE for SESSION and FSM into the data buffer.
@@ -730,10 +697,10 @@ sync with what the model actually saw."
       (condition-case err
           (with-current-buffer buf
             (let* ((inhibit-read-only t)
-                   (marker (mevedel-tools--active-response-marker info buf))
+                   (marker (mevedel--active-response-marker info buf))
                    (transcript-block
                     (or (plist-get message :transcript-payload) block)))
-              (mevedel-tools--split-open-reasoning-before-user-input info)
+              (mevedel--split-open-reasoning-before-user-input info)
               (when-let* ((range
                            (mevedel--insert-user-role-block-at-marker
                             transcript-block marker)))
@@ -865,7 +832,7 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
                 (mevedel-session--set-active-dropped-file-grants
                  session restore)))))
         (when-let* ((marker
-                     (mevedel-tools--active-response-marker info buffer)))
+                     (mevedel--active-response-marker info buffer)))
           (plist-put info :mevedel-steering-response-start
                      (copy-marker marker nil)))))))
 
@@ -887,7 +854,7 @@ model-visible communication in conversation history."
                  (zerop (or (mevedel-agent-invocation-turn-count ctx) 0)))))
       (when (and messages data)
         (when agent-p
-          (mevedel-tools--split-open-reasoning-before-user-input info))
+          (mevedel--split-open-reasoning-before-user-input info))
         (cl-loop
          for message in messages
          for index from 0
@@ -902,7 +869,7 @@ model-visible communication in conversation history."
                   :summary (format "message from %s" sender)))
            (mevedel-agent-conversation-insert-user-block
             ctx block
-            (mevedel-tools--active-response-marker
+            (mevedel--active-response-marker
              info (mevedel-agent-invocation-buffer ctx))))
          (unless agent-p
            (mevedel-tools--insert-session-injected-prompt

@@ -12,6 +12,11 @@
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-decision-reason "mevedel-hooks" (decision))
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders--entry-label
+                  "mevedel-reminders" (type))
+(autoload 'mevedel-reminders--entry-label "mevedel-reminders")
+
 ;; `mevedel-structs'
 (defvar mevedel--data-buffer)
 
@@ -187,6 +192,32 @@ When EXPANDED is non-nil, include ordered handler details."
                     records)))))
       (nreverse records))))
 
+(defun mevedel-view--format-injected-reminders-audit (record expanded)
+  "Return grouped system-reminder injection RECORD text.
+When EXPANDED is non-nil, include each reminder's full body."
+  (let* ((items (plist-get record :items))
+         (index 0)
+         (labels (mapconcat
+                  (lambda (item)
+                    (mevedel-reminders--entry-label
+                     (plist-get item :type)))
+                  items ", ")))
+    (concat
+     (format "  ◇ %d system reminder%s (%s)\n"
+             (length items)
+             (if (= 1 (length items)) "" "s")
+             labels)
+     (when expanded
+       (mapconcat
+        (lambda (item)
+          (setq index (1+ index))
+          (concat
+           (format "    %d. %s\n" index
+                   (mevedel-reminders--entry-label (plist-get item :type)))
+           (mevedel-view--indent-hook-audit-text (plist-get item :body))
+           "\n"))
+        items "\n")))))
+
 (defun mevedel-view--format-hook-audit-block (record expanded)
   "Return display text for hook audit RECORD.
 When EXPANDED is non-nil, include record details."
@@ -286,6 +317,8 @@ When EXPANDED is non-nil, include record details."
          (mevedel-view--indent-hook-audit-text
           (plist-get record :updated-result))
          "\n"))))
+    ('injected-reminders
+     (mevedel-view--format-injected-reminders-audit record expanded))
     (_
      (concat
       "  \u25c7 hook audit\n"

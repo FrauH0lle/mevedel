@@ -17,6 +17,7 @@
 (declare-function color-rgb-to-hex "color" (red green blue &optional digits))
 
 ;; `gptel'
+(declare-function gptel--display-reasoning-stream "ext:gptel" (text info))
 (defvar gptel-default-mode)
 
 ;; `mevedel-execution'
@@ -889,6 +890,38 @@ so later response insertion happens after the synthetic user turn."
                    (eq (marker-buffer marker) (current-buffer)))
           (set-marker marker (point)))
         (cons start (point))))))
+
+(defun mevedel--live-buffer-marker-p (marker buffer)
+  "Return non-nil when MARKER points into BUFFER."
+  (and (markerp marker)
+       (marker-position marker)
+       (eq (marker-buffer marker) buffer)))
+
+(defun mevedel--active-response-marker (info buffer)
+  "Return INFO's active response insertion marker for BUFFER."
+  (let ((tracking (plist-get info :tracking-marker))
+        (position (plist-get info :position)))
+    (cond
+     ((mevedel--live-buffer-marker-p tracking buffer) tracking)
+     ((mevedel--live-buffer-marker-p position buffer) position))))
+
+(defun mevedel--split-open-reasoning-before-user-input (info)
+  "Close INFO's open reasoning block before injecting user input."
+  (when (eq (plist-get info :reasoning-block) 'in)
+    (let* ((tracking (plist-get info :tracking-marker))
+           (insertion-type
+            (and (markerp tracking)
+                 (marker-insertion-type tracking))))
+      (when (markerp tracking)
+        (set-marker-insertion-type tracking t))
+      (unwind-protect
+          (gptel--display-reasoning-stream t info)
+        (when (markerp tracking)
+          (set-marker-insertion-type tracking insertion-type))))
+    (when-let* ((marker (plist-get info :reasoning-marker)))
+      (set-marker marker nil))
+    (plist-put info :reasoning-marker nil)
+    (plist-put info :reasoning-block nil)))
 
 (defun mevedel--apply-face-to-match (regex string face)
   "Apply FACE as a text property to the REGEX match in STRING.

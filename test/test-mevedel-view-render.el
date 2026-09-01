@@ -4547,6 +4547,34 @@
     (should (string-match-p "Reason: PONYTAIL:FULL" expanded))
     (should (string-match-p "Handler: Inject project conventions" expanded))))
 
+(mevedel-deftest mevedel-view--format-injected-reminders-audit ()
+  ,test
+  (test)
+  :doc "formats a grouped count row with per-entry labels"
+  (let* ((record '(:type injected-reminders
+                   :phase turn-start
+                   :items ((:type skills-delta :body "roster changed")
+                           (:type (specialist . read) :body "use Xref"))))
+         (collapsed (mevedel-view--format-injected-reminders-audit
+                     record nil))
+         (expanded (mevedel-view--format-injected-reminders-audit
+                    record t)))
+    (should (equal "  ◇ 2 system reminders (skills-delta, specialist:read)\n"
+                   collapsed))
+    (should-not (string-match-p "roster changed" collapsed))
+    (should (< (string-match "1\\. skills-delta" expanded)
+               (string-match "2\\. specialist:read" expanded)))
+    (should (string-match-p "roster changed" expanded))
+    (should (string-match-p "use Xref" expanded)))
+  :doc "uses the singular form for one reminder"
+  (should (string-prefix-p
+           "  ◇ 1 system reminder (date-change)"
+           (mevedel-view--format-injected-reminders-audit
+            '(:type injected-reminders
+              :phase mid-turn
+              :items ((:type date-change :body "today")))
+            nil))))
+
 (mevedel-deftest mevedel-view--insert-rendered-tool/hook-audits ()
   ,test
   (test)
