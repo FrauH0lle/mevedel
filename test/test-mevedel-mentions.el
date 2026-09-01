@@ -1885,6 +1885,19 @@ Returns (buffer . overlay)."
 ;;
 ;;; Transform
 
+(defun test-mevedel-mentions--staged-bodies (fsm &optional commit)
+  "Return and clear reminder bodies staged on FSM.
+When COMMIT is non-nil, run the staged commits first, as the reminder
+injector would once the payload exists."
+  (let* ((info (gptel-fsm-info fsm))
+         (entries (plist-get info :mevedel-reminder-entries))
+         (commits (plist-get info :mevedel-reminder-commits)))
+    (when commit (mapc #'funcall commits))
+    (setf (gptel-fsm-info fsm)
+          (plist-put (plist-put info :mevedel-reminder-entries nil)
+                     :mevedel-reminder-commits nil))
+    (mapcar (lambda (entry) (plist-get entry :body)) entries)))
+
 (mevedel-deftest mevedel-mentions--expand-buffer ()
   ,test
   (test)
@@ -1905,8 +1918,7 @@ Returns (buffer . overlay)."
     (with-temp-buffer
       (insert "Use @asset")
       (setq expansion
-            (mevedel-mentions--expand-buffer
-             session nil (point-min)))
+            (mevedel-mentions--expand-buffer session nil))
       (should (equal "Use [asset -- attached]" (buffer-string))))
     (should (equal '(("/tmp/asset.png" "image/png"))
                    (plist-get expansion :media-contexts)))
@@ -1954,13 +1966,19 @@ Returns (buffer . overlay)."
     (unwind-protect
         (let* ((expansion
                 (mevedel-mentions-expand-user-input input session))
-               (expanded (plist-get expansion :text)))
+               (expanded (plist-get expansion :text))
+               (items (plist-get expansion :reminder-items)))
           (should-not (string-match-p (format "@ref:%d" id) expanded))
           (should (string-match-p
                    (format "\\[ref:%d -- contents attached above\\]" id)
                    expanded))
-          (should (string-match-p "steering reference body" expanded))
-          (should (string-match-p "<system-reminder>" expanded))
+          ;; Contents travel as reminder items for the caller to stage,
+          ;; never as inline text.
+          (should-not (string-match-p "steering reference body" expanded))
+          (should-not (string-match-p "<system-reminder>" expanded))
+          (should (= 1 (length items)))
+          (should (string-match-p "steering reference body"
+                                  (plist-get (car items) :body)))
           (should-not (plist-get expansion :media-contexts))
           (should (plist-get expansion :dedup-updates)))
       (let ((file (buffer-file-name buffer)))
@@ -1979,36 +1997,30 @@ Returns (buffer . overlay)."
    (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "replaces mentions with placeholders and injects reminder block"
+  :doc "replaces mentions with placeholders and stages the reminder"
   (let* ((cell (mevedel-test--make-ref-buffer "hello world\n" "hello"))
          (buf (car cell))
          (ov (cdr cell))
          (id (mevedel--instruction-id ov))
-         (gptel-default-mode 'text-mode))
+         (gptel-default-mode 'text-mode)
+         (chat (generate-new-buffer " *mevedel-test-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
     (unwind-protect
         (with-temp-buffer
           (insert (propertize (format "check @ref:%d please" id)
                               'gptel 'prompt))
-          (mevedel--transform-expand-mentions nil)
+          (mevedel--transform-expand-mentions fsm)
           (let ((content (buffer-string)))
             (should (string-match-p (format "\\[ref:%d -- contents attached above\\]" id) content))
             (should-not (string-match-p (format "@ref:%d" id) content))
-            (should (string-match-p "<system-reminder>" content))
-            (should (string-match-p (format "Reference #%d" id) content)))
-          (goto-char (point-min))
-          (should (search-forward "<system-reminder>" nil t))
-          (let ((start (match-beginning 0)))
-            (search-forward "</system-reminder>")
-            (dolist (prop '(gptel front-sticky))
-              (let ((pos start)
-                    found)
-                (while (and (< pos (point)) (not found))
-                  (when (get-text-property pos prop)
-                    (setq found t))
-                  (setq pos (or (next-single-property-change
-                                 pos prop nil (point))
-                                (point))))
-                (should-not found)))))
+            ;; The contents ride the staged reminder entries, not the
+            ;; prompt text.
+            (should-not (string-match-p "<system-reminder>" content)))
+          (let ((bodies (test-mevedel-mentions--staged-bodies fsm)))
+            (should (= 1 (length bodies)))
+            (should (string-match-p (format "Reference #%d" id)
+                                    (car bodies)))))
+      (kill-buffer chat)
       (let ((file (buffer-file-name buf)))
         (kill-buffer buf)
         (when (and file (file-exists-p file))
@@ -2029,16 +2041,18 @@ Returns (buffer . overlay)."
         (progn
           (with-current-buffer chat
             (setq-local mevedel--session session))
-          ;; Priming call records the hash.
+          ;; Priming call stages the reminder; its delivery commit
+          ;; records the hash.
           (with-temp-buffer
             (insert (propertize (format "check @ref:%d" id) 'gptel 'prompt))
             (mevedel--transform-expand-mentions fsm))
+          (should (test-mevedel-mentions--staged-bodies fsm t))
           ;; Second send with unchanged content should skip the reminder.
           (with-temp-buffer
             (insert (propertize (format "again @ref:%d" id) 'gptel 'prompt))
             (mevedel--transform-expand-mentions fsm)
-            (should (string-match-p (format "\\[ref:%d -- contents attached above\\]" id) (buffer-string)))
-            (should-not (string-match-p "<system-reminder>" (buffer-string)))))
+            (should (string-match-p (format "\\[ref:%d -- contents attached above\\]" id) (buffer-string))))
+          (should-not (test-mevedel-mentions--staged-bodies fsm)))
       (kill-buffer chat)
       (let ((file (buffer-file-name buf)))
         (kill-buffer buf)
@@ -2063,6 +2077,7 @@ Returns (buffer . overlay)."
           (with-temp-buffer
             (insert (propertize (format "first @ref:%d" id) 'gptel 'prompt))
             (mevedel--transform-expand-mentions fsm))
+          (should (test-mevedel-mentions--staged-bodies fsm t))
           ;; Mutate the referenced region so its content hash changes.
           (with-current-buffer buf
             (save-excursion
@@ -2070,8 +2085,8 @@ Returns (buffer . overlay)."
               (insert "X")))
           (with-temp-buffer
             (insert (propertize (format "second @ref:%d" id) 'gptel 'prompt))
-            (mevedel--transform-expand-mentions fsm)
-            (should (string-match-p "<system-reminder>" (buffer-string)))))
+            (mevedel--transform-expand-mentions fsm))
+          (should (test-mevedel-mentions--staged-bodies fsm)))
       (kill-buffer chat)
       (let ((file (buffer-file-name buf)))
         (with-current-buffer buf
@@ -2107,20 +2122,21 @@ Returns (buffer . overlay)."
             (let ((mcp-server-connections connections))
               (with-temp-buffer
                 (insert (propertize input 'gptel 'prompt))
-                (mevedel--transform-expand-mentions fsm)
+                (mevedel--transform-expand-mentions fsm))
+              (let ((bodies (test-mevedel-mentions--staged-bodies fsm t)))
                 (should (string-match-p "first MCP contents"
-                                        (buffer-string))))
+                                        (car bodies))))
               (with-temp-buffer
                 (insert (propertize input 'gptel 'prompt))
-                (mevedel--transform-expand-mentions fsm)
-                (should-not (string-match-p "<system-reminder>"
-                                            (buffer-string))))
+                (mevedel--transform-expand-mentions fsm))
+              (should-not (test-mevedel-mentions--staged-bodies fsm t))
               (setq content "changed MCP contents")
               (with-temp-buffer
                 (insert (propertize input 'gptel 'prompt))
-                (mevedel--transform-expand-mentions fsm)
+                (mevedel--transform-expand-mentions fsm))
+              (let ((bodies (test-mevedel-mentions--staged-bodies fsm)))
                 (should (string-match-p "changed MCP contents"
-                                        (buffer-string)))))))
+                                        (car bodies)))))))
       (kill-buffer chat)))
 
   :doc "unavailable bound MCP resource warns without mutating stored input"
@@ -2169,9 +2185,11 @@ Returns (buffer . overlay)."
             (setq-local mevedel--session session))
           (with-temp-buffer
             (insert (propertize "inspect @ref:{shared}" 'gptel 'prompt))
-            (mevedel--transform-expand-mentions fsm)
-            (should (string-match-p "first query body" (buffer-string)))
-            (should-not (string-match-p "second query body" (buffer-string)))))
+            (mevedel--transform-expand-mentions fsm))
+          (let ((bodies (test-mevedel-mentions--staged-bodies fsm)))
+            (should (string-match-p "first query body" (car bodies)))
+            (should-not (string-match-p "second query body"
+                                        (car bodies)))))
       (kill-buffer chat)))
 
   :doc "unavailable bound reference warns without mutating stored input"
@@ -2303,25 +2321,30 @@ Returns (buffer . overlay)."
    (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "historical replacement length cannot move the latest reminder boundary"
+  :doc "historical replacement leaves the prompt text free of blocks"
   (dolist (placeholder '("[replacement-much-longer]" "x"))
     (let ((mevedel-mention-handlers
            (list
             (list "@old" nil
                   (lambda (_info)
                     (list :placeholder placeholder
-                          :reminder "historical reminder"))))))
-      (with-temp-buffer
-        (insert (propertize "Earlier @old\n" 'gptel 'prompt))
-        (insert (propertize "Assistant reply\n" 'gptel 'response))
-        (insert (propertize "Latest prompt" 'gptel 'prompt))
-        (mevedel--transform-expand-mentions nil)
-        (should
-         (equal
-          (concat "Earlier " placeholder "\nAssistant reply\n"
-                  "<system-reminder>\nhistorical reminder\n"
-                  "</system-reminder>\n\nLatest prompt")
-          (buffer-string))))))
+                          :reminder "historical reminder")))))
+          (chat (generate-new-buffer " *mevedel-test-chat*")))
+      (unwind-protect
+          (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+            (with-temp-buffer
+              (insert (propertize "Earlier @old\n" 'gptel 'prompt))
+              (insert (propertize "Assistant reply\n" 'gptel 'response))
+              (insert (propertize "Latest prompt" 'gptel 'prompt))
+              (mevedel--transform-expand-mentions fsm)
+              (should
+               (equal
+                (concat "Earlier " placeholder "\nAssistant reply\n"
+                        "Latest prompt")
+                (buffer-string))))
+            (should (equal '("historical reminder")
+                           (test-mevedel-mentions--staged-bodies fsm))))
+        (kill-buffer chat))))
 
   :doc "leaves quoted @ref untouched and emits no reminder"
   (let* ((cell (mevedel-test--make-ref-buffer "hello world\n" "hello"))
@@ -2346,17 +2369,20 @@ Returns (buffer . overlay)."
          (buf (car cell))
          (ov (cdr cell))
          (id (mevedel--instruction-id ov))
-         (gptel-default-mode 'text-mode))
+         (gptel-default-mode 'text-mode)
+         (chat (generate-new-buffer " *mevedel-test-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
     (unwind-protect
-        (with-temp-buffer
-          (insert (propertize (format "(see @ref:%d)" id) 'gptel 'prompt))
-          (mevedel--transform-expand-mentions nil)
-          (let ((content (buffer-string)))
+        (progn
+          (with-temp-buffer
+            (insert (propertize (format "(see @ref:%d)" id) 'gptel 'prompt))
+            (mevedel--transform-expand-mentions fsm)
             (should (string-match-p
                      (format "\\[ref:%d -- contents attached above\\]"
                              id)
-                     content))
-            (should (string-match-p "<system-reminder>" content))))
+                     (buffer-string))))
+          (should (test-mevedel-mentions--staged-bodies fsm)))
+      (kill-buffer chat)
       (let ((file (buffer-file-name buf)))
         (kill-buffer buf)
         (when (and file (file-exists-p file))

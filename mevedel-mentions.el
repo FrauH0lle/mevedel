@@ -152,12 +152,16 @@
 (autoload 'mevedel-tool-fs-read-slurp-file-contents "mevedel-tool-fs-read")
 (defvar mevedel-tool-fs-read-media-max-bytes)
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-stage-commit
+                  "mevedel-reminders" (fsm commit))
+(declare-function mevedel-reminders-stage-entry
+                  "mevedel-reminders" (fsm type body &optional commit))
+(autoload 'mevedel-reminders-stage-commit "mevedel-reminders")
+(autoload 'mevedel-reminders-stage-entry "mevedel-reminders")
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-ensure "mevedel-tool-registry" (name))
-
-;; `mevedel-transcript'
-(declare-function mevedel-transcript-prompt-transform-start
-                  "mevedel-transcript" ())
 
 ;; `mevedel-turn'
 (declare-function mevedel-request-push-canceller
@@ -917,17 +921,16 @@ A mention is considered live when both of the following hold:
              (memq (char-syntax (char-before match-beg))
                    '(?\s ?>))))))
 
-(defun mevedel-mentions--expand-buffer
-    (session chat-buffer insertion-point)
+(defun mevedel-mentions--expand-buffer (session chat-buffer)
   "Expand mentions in the current buffer with explicit request context.
-SESSION owns deduplication state.  CHAT-BUFFER provides permission context.
-Insert reminders at INSERTION-POINT.  Return media and deduplication effects
-for the caller to apply explicitly.
+SESSION owns deduplication state.  CHAT-BUFFER provides permission
+context.  Return reminder, media, and deduplication effects for the
+caller to apply explicitly.
 
 Walks the whole prompt buffer, replacing each raw mention with a
 compact placeholder.  For each novel mention (first occurrence in the
-chat, or whose content hash differs from what was last shown), inserts
-a <system-reminder> block immediately before the last user prompt.
+chat, or whose content hash differs from what was last shown), returns
+a `:reminder-items' entry the caller stages for reminder injection.
 Mentions whose key and content hash match what the session's
 `mentions-shown' table already recorded are replaced with the
 placeholder but not re-expanded as reminders.
@@ -1011,23 +1014,12 @@ Dispatches per `mevedel-mention-handlers'."
     (when warnings
       (message "mevedel: %s"
                (mapconcat #'identity (delete-dups (nreverse warnings)) "; ")))
-    (when-let* ((reminder-items
-                 (delq nil
-                       (mapcar (lambda (item)
-                                 (and (plist-get item :reminder)
-                                      item))
-                               new-items))))
-      (goto-char insertion-point)
-      (save-excursion
-        (dolist (item (nreverse reminder-items))
-          (let ((start (point)))
-            (insert "<system-reminder>\n"
-                    (plist-get item :reminder)
-                    "\n</system-reminder>\n\n")
-            (remove-text-properties
-             start (point)
-             '(gptel nil response nil invisible nil front-sticky nil))))))
     (list :media-contexts (nreverse media-contexts)
+          :reminder-items
+          (cl-loop for item in (reverse new-items)
+                   when (plist-get item :reminder)
+                   collect (list :key (plist-get item :key)
+                                 :body (plist-get item :reminder)))
           :dedup-updates
           (cl-loop for item in new-items
                    when (and (plist-get item :key)
@@ -1045,14 +1037,14 @@ Dispatches per `mevedel-mention-handlers'."
 
 (defun mevedel-mentions-expand-user-input (text session)
   "Expand bound mentions in TEXT for SESSION into a structured result.
-Return text, media contexts, and deferred deduplication updates.  The caller
-must explicitly commit the result after accepting every media context."
+Return text, reminder items, media contexts, and deferred deduplication
+updates.  The caller must explicitly stage the reminder items and
+commit the result after accepting every media context."
   (let ((chat-buffer (current-buffer)))
     (with-temp-buffer
       (insert text)
       (let ((expansion
-             (mevedel-mentions--expand-buffer
-              session chat-buffer (point-min))))
+             (mevedel-mentions--expand-buffer session chat-buffer)))
         (plist-put expansion :text (buffer-string))))))
 
 (defun mevedel--transform-expand-mentions (fsm)
@@ -1060,13 +1052,8 @@ must explicitly commit the result after accepting every media context."
   (let* ((chat-buffer (and fsm (plist-get (gptel-fsm-info fsm) :buffer)))
          (session (and chat-buffer (buffer-live-p chat-buffer)
                        (buffer-local-value 'mevedel--session chat-buffer)))
-         (prompt-start
-          (copy-marker (mevedel-transcript-prompt-transform-start)))
          (expansion
-          (unwind-protect
-              (mevedel-mentions--expand-buffer
-               session chat-buffer prompt-start)
-            (set-marker prompt-start nil))))
+          (mevedel-mentions--expand-buffer session chat-buffer)))
     (let ((request (and chat-buffer
                         (buffer-live-p chat-buffer)
                         (buffer-local-value
@@ -1074,7 +1061,17 @@ must explicitly commit the result after accepting every media context."
       (let ((mevedel--current-request request))
         (dolist (context (plist-get expansion :media-contexts))
           (apply #'mevedel-mentions--add-media-context context)))
-      (mevedel-mentions-commit-expansion session expansion))))
+      (when fsm
+        (dolist (item (plist-get expansion :reminder-items))
+          (mevedel-reminders-stage-entry
+           fsm (or (plist-get item :key) 'mention)
+           (plist-get item :body)))
+        ;; Dedup commits only once the payload exists: a request that
+        ;; dies before injection no longer marks content as shown the
+        ;; model never saw.
+        (mevedel-reminders-stage-commit
+         fsm (lambda ()
+               (mevedel-mentions-commit-expansion session expansion)))))))
 
 
 ;;

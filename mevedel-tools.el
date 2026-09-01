@@ -105,6 +105,11 @@
                   "mevedel-mentions" (text session))
 (autoload 'mevedel-mentions-expand-user-input "mevedel-mentions")
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-stage-entry
+                  "mevedel-reminders" (fsm type body &optional commit))
+(autoload 'mevedel-reminders-stage-entry "mevedel-reminders")
+
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-sweep-request
                   "mevedel-permission-queue"
@@ -806,6 +811,12 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
                   (when media-contexts
                     (error "Media steering cannot be delivered"))
                   (gptel--inject-prompt backend data prompt)
+                  ;; Mention reminders ride the reminder injector,
+                  ;; which runs later in this same WAIT.
+                  (dolist (item (plist-get expansion :reminder-items))
+                    (mevedel-reminders-stage-entry
+                     fsm (or (plist-get item :key) 'mention)
+                     (plist-get item :body)))
                   (setq delivered t)
                   (mevedel-session-set-pending-inputs
                    session 'steering
@@ -819,6 +830,8 @@ SKIP-COMPACTION-GATE avoids repeating a completed automatic compaction gate."
                    session fsm entry
                    (or (plist-get entry :transcript-payload)
                        (plist-get entry :input)))
+                  ;; The steering prompt is already in the payload, so
+                  ;; the dedup commit may run directly.
                   (mevedel-mentions-commit-expansion session expansion)
                   (mevedel-skills-commit-invoked-records
                    session
