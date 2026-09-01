@@ -72,10 +72,6 @@
 (declare-function mevedel-model-merge-workloads
                   "mevedel-models" (additions current))
 
-;; `mevedel-reminders'
-(declare-function mevedel-reminders--handle-inject
-                  "mevedel-reminders" (fsm))
-
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
                   "mevedel-session-artifacts" (session))
@@ -691,11 +687,11 @@ HANDLERS is an alist like `gptel-send--handlers'.  Returns a new
 alist with mevedel-specific handlers added:
 
   1.  Same-turn steering delivery (WAIT state handler)
-  1a.  System-reminder delivery (WAIT state handler)
-  1b.  Direct-child roster refresh (WAIT state handler)
-  1c.  Inbound agent-message delivery (WAIT state handler)
-  1d.  Deferred tool injection (WAIT state handler)
-  1e.  ToolScript effective-roster description (WAIT state handler)
+  1a.  Direct-child roster refresh (WAIT state handler)
+  1b.  Inbound agent-message delivery (WAIT state handler)
+  1c.  Deferred tool injection (WAIT state handler)
+  1d.  ToolScript effective-roster description (WAIT state handler)
+  1e.  System-reminder delivery at the final provider-dispatch seam
   2.  Ordered final patch, request callback, and terminal settlement"
   ;; 1. Add the pre-sample WAIT handlers in execution order.
   (let ((wait-entry (assq 'WAIT handlers)))
@@ -703,7 +699,6 @@ alist with mevedel-specific handlers added:
       (setcdr wait-entry
               (append
                (list #'mevedel-tools--handle-steering-inject
-                     #'mevedel-reminders--handle-inject
                      #'mevedel-tools--handle-agent-roster-inject
                      #'mevedel-tools--handle-message-inject
                      #'mevedel-tools--handle-deferred-inject

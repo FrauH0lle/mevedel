@@ -634,7 +634,9 @@ BEFORE is the durable usage before the charge."
     (mevedel-goal--touch goal)))
 
 (defun mevedel-goal-tool-result-budget-warning (session fsm)
-  "Return and record the one-shot 100% tool warning for SESSION's FSM."
+  "Return the one-shot 100% tool warning entry for SESSION's FSM.
+Its commit records delivery only after the turn-event injector reaches
+the request payload."
   (when-let* ((info (gptel-fsm-info fsm))
               (goal (mevedel-session-goal session))
               ((equal (plist-get info :mevedel-goal-accounting-id)
@@ -647,12 +649,20 @@ BEFORE is the durable usage before the charge."
                           (plist-get info :mevedel-goal-budget-warnings))))
               ((mevedel-goal--budget-threshold-crossed-p
                 before after budget 100)))
-    (plist-put info :mevedel-goal-budget-warnings
-               (cons 100 (plist-get info :mevedel-goal-budget-warnings)))
-    (setf (gptel-fsm-info fsm) info)
-    (format
-     "Goal token budget reached (%d/%d tokens currently known). Stop new substantive work and wrap up the current response; do not create a separate wrap-up turn."
-     after budget)))
+    (list
+     :body
+     (format
+      "Goal token budget reached (%d/%d tokens currently known). Stop new substantive work and wrap up the current response; do not create a separate wrap-up turn."
+      after budget)
+     :commit
+     (lambda ()
+       (let ((current (gptel-fsm-info fsm)))
+         (unless (memq 100 (plist-get current :mevedel-goal-budget-warnings))
+           (plist-put current :mevedel-goal-budget-warnings
+                      (cons 100
+                            (plist-get current
+                                       :mevedel-goal-budget-warnings)))
+           (setf (gptel-fsm-info fsm) current)))))))
 
 (defun mevedel-goal--settle-accounting (fsm)
   "Charge FSM and return its session, Goal, and prior usage, or nil."

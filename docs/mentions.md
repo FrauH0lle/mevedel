@@ -5,21 +5,26 @@ Supports `@ref`, `@file`, `@agent`, `@mcp`.
 Expansion runs as a gptel prompt transform (priority -90) via
 `mevedel--transform-expand-mentions`, dispatching through
 `mevedel-mention-handlers`. Each mention becomes a compact
-`[kind:KEY -- STATUS]` placeholder with full content injected as a
-`<system-reminder>` block above the latest user prompt.
+`[kind:KEY -- STATUS]` placeholder in the prompt text; the full content
+is a staged reminder entry (`mevedel-reminders-stage-entry`) that the
+WAIT injector delivers in the synthetic reminder message before the
+user prompt and records in the hidden injection row. Deduplication
+commits ride the deferred reminder commit channel, so a request that
+dies before injection never marks content as shown.
 
 Root `WaitAgent` steering has no new gptel request on which that transform can
 run. At its delivery boundary, `mevedel-mentions-expand-user-input` therefore
-applies the same transformer to the prepared steering text before the
-suspended request re-enters `WAIT`. The original bound text remains in the
-composer, history, or pending-steering entry; only the model-ready copy
-contains placeholders and reminders. Expansion returns media contexts and
-deduplication updates explicitly: ordinary request transforms apply both,
-while WaitAgent steering rejects new media and commits deduplication only when
-the text-only steering entry is accepted.
+applies the same expansion to the prepared steering text before the
+suspended request re-enters `WAIT`; the returned reminder items are staged on
+the same fsm and delivered by the reminder injector later in that WAIT. The
+original bound text remains in the composer, history, or pending-steering
+entry; only the model-ready copy contains placeholders. Expansion returns
+media contexts and deduplication updates explicitly: ordinary request
+transforms apply both, while WaitAgent steering rejects new media and commits
+deduplication only when the text-only steering entry is accepted.
 
 Inline `$skill` attachment scanning lives next to this transform and reuses
-the same placeholder plus `<system-reminder>` output path, but keeps a
+the same placeholder plus staged-reminder output path, but keeps a
 separate parser because `$skill` quote, escape, and Markdown-code rules differ
 from `@` mentions.
 
@@ -164,11 +169,11 @@ flowchart TD
     B --> C[Parse mention kind and key]
     C --> D{Handler accepts?}
     D -- No --> E[Insert rejected placeholder]
-    E --> F[Add explanatory reminder]
+    E --> F[Stage explanatory reminder]
     D -- Yes --> G[Check permission and load content]
     G --> H{Already shown unchanged?}
     H -- Yes --> I[Keep compact placeholder only]
-    H -- No --> J[Inject system-reminder content]
+    H -- No --> J[Stage content reminder entry]
     J --> K[Attach media when supported]
     I --> L[Model-visible prompt]
     K --> L

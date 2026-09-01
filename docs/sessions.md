@@ -1143,10 +1143,11 @@ request. The draft and its referenced grants transfer from Source at
 publication. A Child hook rejection keeps them in the published child for
 revision without sending a request. The Source transcript, sidecar, lock,
 workflow state, and checkout remain live and unchanged. The child keeps the
-Source working directory and restores no files,
-so Conversation Fork also works outside Git. A durable system-reminder
-disclosure tells both the user and model that current files may be newer than
-the conversation point and that file changes are shared with Source.
+Source working directory and restores no files, so Conversation Fork also
+works outside Git. A sparse `fork-provenance` reminder regenerates the source
+session, shared working directory, and current-file caveat from durable child
+state; its hidden injection record gives the user a persistent disclosure
+without making the reminder permanent model history.
 
 Worktree Fork requires Git, its worktree command, and a supported checkout on
 the Source session's execution target. Dependency and repository preflight run
@@ -1155,16 +1156,18 @@ Source checkout's current `HEAD`, restores captured repository-local
 files from the selected turn before the first prompt, and retargets valid
 repository-local snapshot, permission, grant, and mention paths to the child
 checkout. An unavailable individual backup leaves that child file at `HEAD`
-and does not block the fork; the durable disclosure names every such file and
-every malformed copied path record that was dropped. Invalid restoration
+and does not block the fork; a one-shot restore report on the child's pending
+reminder FIFO names every such file and every malformed copied path record
+that was dropped. Invalid restoration
 metadata, an unsafe target, or an unreadable required history store still
 aborts. Uncaptured files retain their `HEAD` contents, uncommitted Source
 changes are not copied, and captured external paths remain shared and
-non-isolated. The disclosure also records the worktree path, branch, base
-commit, restored-file count, and uncaptured-file semantics. A partial
-disclosure renders as an expanded warning by default; collapsing it changes
-only the view, never model context. Failure outside Git never falls back to
-Conversation Fork.
+non-isolated. Sparse fork provenance records the worktree path, branch, base
+commit, and uncaptured-file semantics; the one-shot report carries the
+restored-file count and restoration exceptions. The FIFO is transient, so a
+restart before the first child request can drop the report detail while the
+durable provenance facts remain available for regeneration. Failure outside
+Git never falls back to Conversation Fork.
 
 The common fork projection copies current model, preset, effort, mode,
 permission, skill, reminder, and hook configuration into independent

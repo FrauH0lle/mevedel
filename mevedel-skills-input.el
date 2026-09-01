@@ -50,6 +50,11 @@
                   "mevedel-mentions" (start end placeholder))
 (autoload 'mevedel-mentions-replace-with-placeholder "mevedel-mentions")
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-stage-entry
+                  "mevedel-reminders" (fsm type body &optional commit))
+(autoload 'mevedel-reminders-stage-entry "mevedel-reminders")
+
 ;; `mevedel-resource'
 (declare-function mevedel-resource-encode-component
                   "mevedel-resource" (value))
@@ -114,11 +119,6 @@
                   "mevedel-skills-preparation" (text))
 (autoload 'mevedel-skills-preparation-markdown-code-ranges
   "mevedel-skills-preparation")
-
-;; `mevedel-reminders'
-(declare-function mevedel-reminders-stage-entry
-                  "mevedel-reminders" (fsm type body &optional commit))
-(autoload 'mevedel-reminders-stage-entry "mevedel-reminders")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))

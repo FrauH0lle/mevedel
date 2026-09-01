@@ -167,8 +167,6 @@
                      wait-handlers))
          (message-pos (cl-position #'mevedel-tools--handle-message-inject
                                    wait-handlers))
-         (reminder-pos (cl-position #'mevedel-reminders--handle-inject
-                                    wait-handlers))
          (roster-pos
           (cl-position #'mevedel-tools--handle-agent-roster-inject
                        wait-handlers))
@@ -177,8 +175,8 @@
     (should-not (memq #'gptel--handle-wait wait-handlers))
     (should gate-pos)
     (should (equal (nth (1+ gate-pos) wait-handlers) 'after-wait))
-    (should (< reminder-pos roster-pos message-pos))
-    (dolist (pos (list begin-pos reminder-pos roster-pos message-pos
+    (should-not (memq #'mevedel-reminders--handle-inject wait-handlers))
+    (dolist (pos (list begin-pos roster-pos message-pos
                        deferred-pos))
       (should pos)
       (should (< pos gate-pos))))

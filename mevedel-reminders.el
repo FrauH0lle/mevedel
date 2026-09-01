@@ -46,11 +46,10 @@
 (declare-function mevedel-agent-invocation-deferred-set
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-reminders
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-plan-read-only-request-p "mevedel-agents" ())
+(declare-function mevedel-agent-invocation-reminders
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-runtime-settled-p
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-set-deferred-expired
@@ -60,6 +59,7 @@
 (declare-function mevedel-agent-max-turns "mevedel-agents" (agent) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
+(declare-function mevedel-plan-read-only-request-p "mevedel-agents" ())
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-compact'
@@ -100,11 +100,6 @@
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
 
-;; `mevedel-session-fork'
-(declare-function mevedel-session-fork-provenance-body
-                  "mevedel-session-fork" (session))
-(autoload 'mevedel-session-fork-provenance-body "mevedel-session-fork")
-
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
                   "mevedel-session-artifacts"
@@ -116,6 +111,11 @@
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-read-artifact
   "mevedel-session-artifacts")
+
+;; `mevedel-session-fork'
+(declare-function mevedel-session-fork-provenance-body
+                  "mevedel-session-fork" (session))
+(autoload 'mevedel-session-fork-provenance-body "mevedel-session-fork")
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
@@ -432,10 +432,9 @@ interval it fires once enough turns have passed since the last fire."
   "Return the display label for entry TYPE.
 TYPE is a reminder type symbol or a cons turn-event key such as
 \(specialist . read)."
-  (cond
-   ((consp type) (format "%s:%s" (car type) (cdr type)))
-   ((symbolp type) (symbol-name type))
-   (t (format "%s" type))))
+  (if (consp type)
+      (format "%s:%s" (car type) (cdr type))
+    (format "%s" type)))
 
 (defun mevedel-reminders--collect-from (reminders turn-count ctx)
   "Evaluate REMINDERS at TURN-COUNT and return staged entries and commits.
@@ -629,11 +628,14 @@ PHASE is `turn-start' or `mid-turn'.  Bodies are capped at
          (lambda (entry)
            (let ((body (plist-get entry :body)))
              (list :type (plist-get entry :type)
-                   :body (if (> (length body)
+                   :body (if (> (string-bytes body)
                                 mevedel-reminders--record-body-limit)
                              (concat
-                              (substring
-                               body 0 mevedel-reminders--record-body-limit)
+                              (decode-coding-string
+                               (string-limit
+                                body mevedel-reminders--record-body-limit
+                                nil 'utf-8-unix)
+                               'utf-8-unix)
                               "\n[... truncated for record]")
                            body))))
          entries)))

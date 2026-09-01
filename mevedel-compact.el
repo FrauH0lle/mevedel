@@ -109,8 +109,11 @@
                   "mevedel-goal" (buffer reason))
 
 ;; `mevedel-reminders'
+(declare-function mevedel-reminders--handle-inject
+                  "mevedel-reminders" (fsm))
 (declare-function mevedel-reminders-stage-entry
                   "mevedel-reminders" (fsm type body &optional commit))
+(autoload 'mevedel-reminders--handle-inject "mevedel-reminders")
 (autoload 'mevedel-reminders-stage-entry "mevedel-reminders")
 
 ;; `mevedel-session-persistence'
@@ -153,7 +156,7 @@
 
 
 (defun mevedel--compact-provider-wait (fsm)
-  "Record and dispatch the provider request represented by FSM."
+  "Inject reminders, record, and dispatch FSM's provider request."
   (let* ((info (and fsm (gptel-fsm-info fsm)))
          (chat-buffer (and (listp info) (plist-get info :buffer))))
     (when (and (buffer-live-p chat-buffer)
@@ -177,6 +180,10 @@
                             gptel-reasoning-effort))
            :continuation (and (mevedel--compact-continuation-wait-p fsm)
                               t)))))
+    ;; This is the final dispatch seam for both ordinary and rebuilt
+    ;; continuation payloads.  Committing reminders any earlier lets
+    ;; successful auto-compaction discard their injected message.
+    (mevedel-reminders--handle-inject fsm)
     (gptel--handle-wait fsm)))
 
 
@@ -379,11 +386,10 @@ set already stored on FSM's info plist."
 
 (defun mevedel--compact-target-provider-wait (target fsm)
   "Dispatch FSM after TARGET compaction, including deferred root steering."
-  (if (plist-get target :invocation)
-      (mevedel--compact-provider-wait fsm)
-    (mevedel-tools--handle-steering-inject fsm t)
-    (unless (plist-get (gptel-fsm-info fsm) :mevedel-pending-input-hold)
-      (mevedel--compact-provider-wait fsm))))
+  (unless (plist-get target :invocation)
+    (mevedel-tools--handle-steering-inject fsm t))
+  (unless (plist-get (gptel-fsm-info fsm) :mevedel-pending-input-hold)
+    (mevedel--compact-provider-wait fsm)))
 
 (defun mevedel--compact-agent-terminal-failure (target fsm err)
   "Terminate agent FSM with compaction failure ERR."

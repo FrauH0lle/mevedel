@@ -542,8 +542,11 @@ turn and Fork type. It focuses the existing composer, and cancellation removes
 only the row while preserving the draft. The next accepted child prompt
 publishes a new session. Conversation Fork discloses that current files may be
 newer than its conversation and remain shared; Worktree Fork discloses its
-linked worktree and best-effort historical-file restoration. These disclosures
-are model-visible transcript records. Folding changes only their presentation.
+linked worktree and best-effort historical-file restoration. Provenance is
+delivered as a sparse regenerated system reminder rather than durable
+transcript text; the one-time worktree restore report rides the pending
+reminder FIFO onto the child's first request. Both surface in the view through
+the hidden injection record's grouped reminder row.
 
 At a shared fork point, the assistant header renders a variant button in both
 expanded and folded states. One alternative opens directly; several open a
