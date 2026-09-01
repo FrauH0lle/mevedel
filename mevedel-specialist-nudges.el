@@ -24,8 +24,11 @@
                   "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-reminders'
+(declare-function mevedel-reminders-queue-turn-event
+                  "mevedel-reminders" (buffer key body &optional commit))
 (declare-function mevedel-reminders-specialist-capabilities
                   "mevedel-reminders" (session))
+(autoload 'mevedel-reminders-queue-turn-event "mevedel-reminders")
 (autoload 'mevedel-reminders-specialist-capabilities "mevedel-reminders")
 
 ;; `mevedel-tool-registry'
@@ -337,7 +340,14 @@ content line at all is not classifiable."
     (nreverse nudges)))
 
 (defun mevedel-specialist-nudges-apply (context)
-  "Return CONTEXT with bounded specialist-tool guidance appended."
+  "Queue bounded specialist-tool guidance for CONTEXT's turn.
+
+Returns CONTEXT unchanged.  Guidance is delivered as an ephemeral
+system reminder at the turn's next WAIT instead of being appended to
+the tool result, so advice about the model's next action never becomes
+durable transcript history.  The event body names the originating call
+because the reminder is no longer adjacent to the result it comments
+on."
   (let* ((tool (plist-get context :tool))
          (tool-name (and tool (mevedel-tool-name tool)))
          (args (plist-get context :args))
@@ -356,14 +366,19 @@ content line at all is not classifiable."
          (setq nudges
                (mevedel-specialist-nudges--read-specialist-nudges
                 context args result caps)))))
-    (if nudges
-        (plist-put
-         context :result
-         (concat result
-                 "\n\n<system-reminder>\n"
-                 (mapconcat #'identity nudges "\n")
-                 "\n</system-reminder>"))
-      context)))
+    (when nudges
+      (let ((subject
+             (pcase tool-name
+               ("Grep" (format "your Grep call for pattern %S"
+                               (or (plist-get args :pattern) "")))
+               ("Read" (format "your Read call on %s"
+                               (or (plist-get args :file_path) "a file"))))))
+        (mevedel-reminders-queue-turn-event
+         (plist-get context :buffer)
+         (cons 'specialist (intern (downcase tool-name)))
+         (concat "Regarding " subject ":\n"
+                 (mapconcat #'identity nudges "\n")))))
+    context))
 
 (provide 'mevedel-specialist-nudges)
 ;;; mevedel-specialist-nudges.el ends here
