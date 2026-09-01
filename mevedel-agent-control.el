@@ -232,11 +232,6 @@ unbounded `:payload'.  Active turns deliberately expose no previous result."
           :payload (copy-sequence
                     (mevedel-agent-record-settled-result record)))))
 
-(defun mevedel-agent-control--clear-settled-result (record)
-  "Clear RECORD's settled result before starting another turn."
-  (setf (mevedel-agent-record-settled-result record) nil
-        (mevedel-agent-record-settled-outcome record) nil))
-
 (defun mevedel-agent-control--record-settled-result
     (record outcome payload)
   "Store complete PAYLOAD and OUTCOME as RECORD's settled result.
@@ -1047,7 +1042,6 @@ Return rollback and post-commit delivery closures for INVOCATION."
                   (mevedel-session-agent-turn-capacity session))
           (user-error "Agent tree is at its active-turn capacity"))
         (setf (mevedel-agent-record-activity record) 'starting)
-        (mevedel-agent-control--clear-settled-result record)
         (condition-case err
             (mevedel-agent-control--dispatch-followup
              session record message parent-tool-use-id)

@@ -637,18 +637,24 @@ record too large to travel in a frame of its own is dropped rather than
 sent: the relay refuses an oversized frame by closing the connection, and
 for the host connection it collects the room with it.
 
-Guests of either link strength also receive the live agent roster: the
-canonical path, role, and blocked/waiting/running status of every active
-retained agent, broadcast on change and told to a joining guest directly.
-Only active agents travel -- a settled agent already tells its story
-through the transcript's tool records -- and the roster is read state,
-which is why a view link gets it too. It rides the same coalesced
-publication as the transcript; the view's status render nudges that
-publication so a retained agent working while the root request is idle,
-when no gptel observer fires, still reaches the strip. The viewer renders
-the roster as chips above the interaction cards and marks a blocked or
-waiting agent, so a session that fans out workers never reads as an
-opaque gap.
+Guests of either link strength also receive the retained agent roster:
+the canonical path, role, and status of every active or settled registered agent,
+broadcast on change and told to a joining guest directly. An active
+agent carries its blocked/waiting/running status; a settled one carries
+its terminal outcome (done, errored, or interrupted), because retained
+agents persist in the session and their final reports are worth reading
+after the fact. The roster is read state, which is why a view link gets
+it too. It rides the same coalesced publication as the transcript; the
+view's status render nudges that publication so a retained agent working
+while the root request is idle, when no gptel observer fires, still
+reaches the strip. The viewer splits the roster: active agents render as
+chips above the interaction cards, marking a blocked or waiting agent so
+a session that fans out workers never reads as an opaque gap, while
+settled agents collapse into a "Finished agents" disclosure whose rows
+open the same transcript sheet. A settled agent whose conversation
+buffer is not resident (cold state after a restart) answers a fetch with
+the standard not-available message; a browser poll never hydrates cold
+state.
 
 The same publication cycle sends the session task list to either link:
 identity, subject, status, optional owner, and unresolved dependency IDs.

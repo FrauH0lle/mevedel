@@ -6,10 +6,12 @@
 const assert = require('node:assert/strict');
 const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
 
-const ids = ['agents', 'agent-panel', 'agent-title', 'agent-meta',
+const ids = ['agents', 'agents-done', 'agents-done-summary',
+             'agents-done-list', 'agent-panel', 'agent-title', 'agent-meta',
              'agent-close', 'agent-transcript'];
 const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
 nodes.agents.hidden = true;
+nodes['agents-done'].hidden = true;
 nodes['agent-panel'].hidden = true;
 const document = {
   getElementById: id => nodes[id],
@@ -43,6 +45,8 @@ assert.equal(nodes.agents.hidden, false);
 assert.equal(nodes.agents.children.length, 2);
 assert.match(nodes.agents.children[0].className, /stuck/);
 assert.match(textOf(nodes.agents), /explorer · blocked/);
+// No settled agents yet: the finished disclosure stays hidden.
+assert.equal(nodes['agents-done'].hidden, true);
 
 nodes.agents.children[1].dispatch('click');
 assert.equal(nodes['agent-panel'].hidden, false);
@@ -74,6 +78,35 @@ assert.match(textOf(nodes['agent-transcript']), /No longer available/);
 nodes['agent-close'].dispatch('click');
 assert.equal(nodes['agent-panel'].hidden, true);
 assert.equal(nodes['agent-transcript'].children.length, 0);
+assert.equal(poll, null);
+
+// A settled agent leaves the strip for the finished disclosure, where
+// its row still opens the transcript panel with its terminal outcome.
+controller.show([
+  {path: '/root/worker', role: 'worker', status: 'running'},
+  {path: '/root/blocked', role: 'explorer', status: 'errored'},
+  {path: '/root/settled', role: 'explorer', status: 'done'},
+  {path: '/root/interrupted', role: 'worker', status: 'interrupted'},
+  {path: '/root/unknown', role: 'worker', status: 'unknown'},
+]);
+assert.equal(nodes.agents.hidden, false);
+assert.equal(nodes.agents.children.length, 1);
+assert.equal(nodes['agents-done'].hidden, false);
+assert.equal(textOf(nodes['agents-done-summary']), 'Finished agents · 3');
+assert.equal(nodes['agents-done-list'].children.length, 3);
+assert.match(textOf(nodes['agents-done-list']), /explorer · errored/);
+nodes['agents-done-list'].children[1].children[0].dispatch('click');
+assert.equal(nodes['agent-panel'].hidden, false);
+assert.equal(textOf(nodes['agent-title']), '/root/settled');
+assert.equal(textOf(nodes['agent-meta']), 'explorer · done');
+assert.equal(sent.at(-1).path, '/root/settled');
+// A roster keeping the watched settled agent keeps its outcome meta;
+// an emptied roster clears both surfaces and falls back to "settled".
+controller.show([]);
+assert.equal(nodes.agents.hidden, true);
+assert.equal(nodes['agents-done'].hidden, true);
+assert.equal(textOf(nodes['agent-meta']), 'settled');
+nodes['agent-close'].dispatch('click');
 assert.equal(poll, null);
 
 console.log('viewer agent passed');
