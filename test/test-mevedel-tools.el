@@ -246,7 +246,7 @@
 ;;
 ;;; Same-turn steering
 
-(mevedel-deftest mevedel-tools--split-open-reasoning-before-user-input ()
+(mevedel-deftest mevedel--split-open-reasoning-before-user-input ()
   ,test
   (test)
 
@@ -261,7 +261,7 @@
                   :reasoning-block 'in)))
       (gptel--display-reasoning-stream "thinking" info)
       (let ((old-marker (plist-get info :reasoning-marker)))
-        (mevedel-tools--split-open-reasoning-before-user-input info)
+        (mevedel--split-open-reasoning-before-user-input info)
         (should (string-match-p
                  (regexp-quote "#+end_reasoning")
                  (buffer-string)))
@@ -279,7 +279,7 @@
                   :include-reasoning 'ignore
                   :reasoning-block 'in)))
       (gptel--display-reasoning-stream "thinking" info)
-      (mevedel-tools--split-open-reasoning-before-user-input info)
+      (mevedel--split-open-reasoning-before-user-input info)
       (mevedel--insert-user-role-block-at-marker
        "steer directly" (plist-get info :tracking-marker))
       (gptel-curl--stream-insert-response "answer" info)
@@ -322,7 +322,7 @@
              info)
             (plist-put info :reasoning-marker
                        (copy-marker (plist-get info :tracking-marker) nil))
-            (mevedel-tools--split-open-reasoning-before-user-input info)
+            (mevedel--split-open-reasoning-before-user-input info)
             (mevedel--insert-user-role-block-at-marker
              "batched steer" (plist-get info :tracking-marker))
             (mevedel-gptel-stream-bridge--flush-gptel-stream-insert-batch
