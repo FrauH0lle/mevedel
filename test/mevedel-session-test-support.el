@@ -54,7 +54,8 @@
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-add-session-resource-grant
-                  "mevedel-permissions" (session path access))
+                  "mevedel-permissions"
+                  (session path access &optional recursive))
 
 ;; `mevedel-session-persistence'
 (defvar mevedel-session-persistence--summary-cache)

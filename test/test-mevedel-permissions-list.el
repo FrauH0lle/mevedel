@@ -184,7 +184,25 @@ Return the row's tabulated id."
       (mevedel-permissions-list-test--row "operation")
       (mevedel-test--with-captured-messages nil
         (mevedel-permissions-list-revoke))
-      (should-not tabulated-list-entries))))
+      (should-not tabulated-list-entries)))
+
+  :doc "labels recursive grants and revokes exactly the selected scope"
+  (mevedel-permissions-list-test--with-buffers
+    (let ((exact '(:path "/tmp/tree" :access read))
+          (recursive '(:path "/tmp/tree" :access read :recursive t)))
+      (setf (mevedel-session-resource-grants session)
+            (list exact recursive))
+      (with-current-buffer (mevedel-permissions-list-test--open context)
+        (goto-char (point-min))
+        (while (not (or (eobp)
+                        (when-let* ((entry (tabulated-list-get-entry)))
+                          (string-match-p "(recursive)" (aref entry 3)))))
+          (forward-line 1))
+        (should-not (eobp))
+        (mevedel-test--with-captured-messages nil
+          (mevedel-permissions-list-revoke)))
+      (should (equal (list exact)
+                     (mevedel-session-resource-grants session))))))
 
 (mevedel-deftest mevedel-permissions-list--help-text ()
   ,test

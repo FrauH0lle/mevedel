@@ -66,6 +66,11 @@ recommends those elements while leaving Codex room to choose the next action.
   weekly automated check is useful. See also "/learn" command
 
 - Consider making mevedel's data buffers hidden
+- `test/test-mevedel-tool-exec-permission.el` fails standalone in
+  `mevedel-tool-exec-permission-prompt-eval` with
+  `(void-function mevedel-permission--elide)`: the test file never loads
+  `mevedel-permission-prompt`, so the suite only passes when another test
+  file loads it first. Add the missing require.
 
 
 ## Entry format

@@ -1040,6 +1040,31 @@ for effects despite reusable authority"
                      :additional-permissions
                      (:file-system ((:path ,parent-path :access read)))))))
       (delete-directory parent t)))
+  :doc "a recursive grant on an ancestor covers descendant resources"
+  (let* ((parent (make-temp-file "mevedel-bash-resource-tree-" t))
+         (root (file-name-concat parent "workspace"))
+         (tree (file-name-concat parent "tree"))
+         (leaf (file-name-concat tree "sub" "file"))
+         (default-directory (file-name-as-directory root)))
+    (unwind-protect
+        (progn
+          (make-directory root)
+          (make-directory (file-name-directory leaf) t)
+          (write-region "leaf" nil leaf nil 'silent)
+          (should
+           (equal (list leaf)
+                  (mevedel-bash-policy-missing-resource-paths
+                   (format "cat %s" leaf)
+                   `(:allowed-roots (,root)
+                     :resource-grants ((:path ,tree :access read)))
+                   '(:level use-default))))
+          (should-not
+           (mevedel-bash-policy-missing-resource-paths
+            (format "cat %s" leaf)
+            `(:allowed-roots (,root)
+              :resource-grants ((:path ,tree :access read :recursive t)))
+            '(:level use-default))))
+      (delete-directory parent t)))
   :doc "resolves symlinks before allowed-root and exact-grant checks"
   (let* ((parent (make-temp-file "mevedel-bash-resource-link-" t))
          (root (file-name-concat parent "workspace"))

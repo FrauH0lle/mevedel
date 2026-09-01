@@ -105,7 +105,7 @@ invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
   -- and the codec rejects a record that repeats one.
 - **`mevedel-session`**: per-chat state: workspace, immutable execution target,
   qualified working directory, tasks, touched-files, permission rules/mode,
-  exact resource grants, reminders, persisted per-conversation
+  exact or recursive resource grants, reminders, persisted per-conversation
   workspace-instruction content hashes,
   deferred tool state, mailbox messages, the retained agent registry,
   transient unpublished agent reservations, root activity and tree capacity, mention

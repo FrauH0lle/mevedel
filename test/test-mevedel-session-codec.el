@@ -128,7 +128,13 @@
            '((:path "/tmp/read" :access read)
              (:path "/tmp/future" :access execute)
              (:access write)
-             "not a grant")))))
+             "not a grant"))))
+  :doc "keeps recursive grants and drops non-boolean recursive flags"
+  (should
+   (equal '((:path "/tmp/tree" :access read :recursive t))
+          (mevedel-session-codec--filter-resource-grants
+           '((:path "/tmp/tree" :access read :recursive t)
+             (:path "/tmp/bad" :access read :recursive yes))))))
 
 
 ;;

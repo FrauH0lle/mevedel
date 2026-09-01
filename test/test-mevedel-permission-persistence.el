@@ -461,6 +461,55 @@
              (equal `((:path ,path :access write))
                     (mevedel-permission-persistence-load-resource-grants
                      ws)))))
+      (delete-directory tmp-dir t)))
+  :doc "round-trips recursive grants in authority and rule profiles"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil))
+         (file (mevedel-permission-persistence-file ws)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (pp '(:rules
+                  (("Bash" :pattern "some-command *"
+                    :file-system
+                    ((:path "/usr/share/emacs" :access read :recursive t))
+                    :action allow))
+                  :resource-grants
+                  ((:path "/usr/share/emacs" :access read :recursive t)
+                   (:path "/tmp/exact" :access read :recursive nil)))
+                (current-buffer)))
+          (should
+           (equal
+            '(("Bash" :pattern "some-command *"
+               :file-system
+               ((:path "/usr/share/emacs" :access read :recursive t))
+               :action allow))
+            (mevedel-permission-persistence-load-rules ws)))
+          ;; :recursive nil is canonicalized away.
+          (should
+           (equal '((:path "/usr/share/emacs" :access read :recursive t)
+                    (:path "/tmp/exact" :access read))
+                  (mevedel-permission-persistence-load-resource-grants ws))))
+      (delete-directory tmp-dir t)))
+  :doc "a non-boolean recursive flag makes the store fail closed"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil))
+         (file (mevedel-permission-persistence-file ws)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (pp '(:rules nil
+                  :resource-grants
+                  ((:path "/tmp/read" :access read :recursive yes)))
+                (current-buffer)))
+          (should-not
+           (mevedel-permission-persistence-load-resource-grants ws)))
       (delete-directory tmp-dir t))))
 
 (mevedel-deftest mevedel-permission-validate-persistent-stores ()
@@ -556,6 +605,29 @@
            ws path 'write)
           (should
            (equal `((:path ,path :access write))
+                  (mevedel-permission-persistence-load-resource-grants ws))))
+      (delete-directory tmp-dir t)))
+
+  :doc "recursive grants persist and revoke independently of exact ones"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (path (file-name-concat tmp-dir "tree"))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil)))
+    (unwind-protect
+        (progn
+          (mevedel-permission-persistence-save-resource-grant
+           ws path 'read)
+          (mevedel-permission-persistence-save-resource-grant
+           ws path 'read t)
+          (should
+           (equal `((:path ,path :access read)
+                    (:path ,path :access read :recursive t))
+                  (mevedel-permission-persistence-load-resource-grants ws)))
+          (mevedel-permission-remove-persistent-resource-grant
+           ws path 'read t)
+          (should
+           (equal `((:path ,path :access read))
                   (mevedel-permission-persistence-load-resource-grants ws))))
       (delete-directory tmp-dir t)))
 

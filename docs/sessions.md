@@ -135,7 +135,8 @@ Variables processing. The transcript is generated authoritative storage rather
 than a normal Org editing surface, and model output must not activate project
 or user configuration. The companion view owns presentation. The sidecar holds
 session-wide state that doesn't live in the buffer text: permission rules,
-exact session resource grants, tasks, prompt-index (driving the rewind picker
+exact or recursive session resource grants, tasks, prompt-index (driving the
+rewind picker
 and latest resume preview), `:file-snapshots` (per-turn pre-turn checkpoints of
 tracked files, including absent markers and known capture gaps; post-turn
 copies remain alongside them for historical Fork), workspace identity,
@@ -153,8 +154,8 @@ and values and the durable ToolScript audit checkpoint change the sidecar
 format to `v0.5.4`; older sessions are intentionally rejected rather than
 migrated. The checkpoint contains the ToolScript call and bounded child audit,
 never an interpreter continuation. A Session Fork also copies the source
-session's permission mode, sandbox mode, session permission rules, and exact
-resource grants at the fork point. Parent and child then diverge independently.
+session's permission mode, sandbox mode, session permission rules, and resource
+grants at the fork point. Parent and child then diverge independently.
 Other gptel buffer-local settings are request-time state only; mevedel does not
 persist them as Org properties. An Agent `summary` selection is persisted only
 in the child transcript as a labelled `<task-background>` block before the

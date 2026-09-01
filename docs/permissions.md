@@ -20,20 +20,20 @@ flowchart TD
     E -- Yes --> F{Checker or rules<br/>authorize command?}
     F -- Deny or ask --> Q[Command decision]
     F -- Allow --> G{Path supplied?}
-    E -- No --> N{Protected path without<br/>an exact grant?}
+    E -- No --> N{Protected path without<br/>a covering grant?}
     N -- Yes --> X[Ask for resource authority]
     N -- No --> H{Matching native rule?}
     H -- Deny or ask --> Q
     H -- Allow --> Y
-    H -- None --> J{Allowed root, exact path,<br/>or exact resource grant?}
+    H -- None --> J{Allowed root, exact path,<br/>or resource grant?}
     J -- No --> X
     J -- Yes --> K{Mode authorizes tool?}
     K -- Yes --> Y
     K -- No --> Q
     G -- No --> Y[Allow]
-    G -- Yes --> I{Protected path without<br/>an exact grant?}
+    G -- Yes --> I{Protected path without<br/>a covering grant?}
     I -- Yes --> X[Ask for resource authority]
-    I -- No --> L{Allowed root, exact path,<br/>or exact resource grant?}
+    I -- No --> L{Allowed root, exact path,<br/>or resource grant?}
     L -- Yes --> Y
     L -- No --> X
 ```
@@ -51,7 +51,7 @@ Single decision function `mevedel-check-permission`. Decision chain:
 4. Tool's own `check-permission` slot decides command authority
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
 6. For a path not directly covered by a native path rule, resolve an allowed
-   root, exact allowed path, or exact resource grant
+   root, exact allowed path, or covering resource grant
 7. A protected or outside-root path without that authority → ask
 8. Permission-mode fallback when no earlier policy decides; satisfied resource
    authority does not itself authorize a mutating operation
@@ -67,8 +67,8 @@ the review appears, and explicit allow/ask/deny rules retain their precedence.
 For a tool with a command checker, command authority and filesystem resource
 authority are layered: both must allow. A command rule cannot authorize its
 path, and a resource grant cannot authorize its command. Native `:path` rules
-remain direct tool authorization, but cannot bypass a protected path's exact
-resource grant.
+remain direct tool authorization, but cannot bypass a protected path's
+resource-grant requirement.
 
 Hook integration sits around this chain:
 
@@ -88,7 +88,7 @@ Hook integration sits around this chain:
 
 Permission invocation context is normalized in the decision facade before
 callers enter the decision chain. That context centralizes specifier
-extraction, rule buckets, mode, allowed roots, exact resource grants,
+extraction, rule buckets, mode, allowed roots, resource grants,
 missing-session fallback warnings, and the prompt rule shape used for
 outside-root approvals.
 
@@ -159,7 +159,7 @@ One specifier per rule:
 | `:name`    | free-form name (glob)  | Agent (`role`)                    |
 
 Precedence: specifier rules outrank generic; within a group
-`deny > ask > allow`. Protected paths prompt unless an exact resource grant
+`deny > ask > allow`. Protected paths prompt unless a covering resource grant
 with sufficient access already exists.
 
 `:sandbox-permissions` is an execution-level qualifier, not a request to raise
@@ -178,16 +178,22 @@ Single-segment Bash approvals may use the recognized safe command pattern.
 Compound commands keep generalized operation rules for their segments but
 store the profile against the complete compound command, preventing one
 segment from inheriting another segment's capability.
-Filesystem entries are exact `(:path PATH :access read-or-write)`
+Filesystem entries are `(:path PATH :access read-or-write [:recursive t])`
 requirements. `PATH` is either absolute or home-relative with `~`/`~/`; stored
-home-relative paths expand in the execution target. Project and session stores
+home-relative paths expand in the execution target. Grant paths are literal —
+`*`, `**`, and `?` carry no glob meaning; `:recursive t` extends an entry from
+the exact path to the directory and all its descendants, present and future.
+Project and session stores
 encode exact paths and absolute path rules without a client-specific TRAMP
 prefix, then qualify them through the currently opened matching target. A
 foreign target prefix invalidates the stored authority instead of being
 reinterpreted. Entries become effective only while an equally strong direct
-resource grant still exists. Multiple matching profiles are unioned, with
-write dominating read for the same path. Only session, persistent, and
-defcustom rules can contribute a reusable profile. Invocation- and
+resource grant still exists: a recursive requirement is met only by a
+recursive direct grant containing it, while a recursive direct grant also
+satisfies an exact requirement for any descendant. Multiple matching profiles
+are unioned, with write dominating read for the same path and scope; exact and
+recursive entries on the same path stay distinct. Only session, persistent,
+and defcustom rules can contribute a reusable profile. Invocation- and
 request-scoped delegated rules may still authorize ordinary operations but
 never broaden the child sandbox.
 
@@ -252,8 +258,11 @@ authority. A session grant is stored in the durable session sidecar and
 survives save/resume of that same session; an always grant is stored only in
 the workspace permission file. Neither enters an unrelated session. ApplyPatch
 authority covers reading the same exact path, but read authority does not cover
-writes. These grants do not cover siblings or descendants, add workspace
-roots, or authorize Bash/Eval code. Revoking the grant restores the underlying
+writes. An exact grant does not cover siblings or descendants; a grant carrying
+`:recursive t` covers the directory and everything beneath it, present and
+future, and is labeled `(recursive)` in prompts and the cockpit. Neither kind
+adds workspace roots or authorizes Bash/Eval code. Revoking the grant restores
+the underlying
 workspace/protected-path restriction. Session-side paths use the same
 target-native codec as workspace authority, while another client's global
 rules are recomputed locally on resume. Invocation-only authority is consumed
@@ -524,11 +533,15 @@ hops and empty traversal directories needed to reach that exact target.
 
 A justified additive filesystem request names exact absolute paths and marks
 each as read or write. Ungranted paths prompt in every permission mode;
-invocation, session, and persistent approvals use the same exact resource-grant
-store as native filesystem tools. Reusable approval also records those exact
-requirements in the matching operation profile. A later matching default call
+invocation, session, and persistent approvals use the same resource-grant
+store as native filesystem tools. Reusable approval also records those
+requirements in the matching operation profile. User-authored profile entries
+may carry `:recursive t`, exposing the directory tree through one bind mount
+at the entry's access level; model-facing requests name exact paths only. A
+later matching default call
 reattaches a path only while both the profile and a sufficient direct resource
-grant remain; removing either immediately restores confinement. Approved paths
+grant remain — recursive requirements need a recursive grant containing them —
+and removing either immediately restores confinement. Approved paths
 are rebound at only the requested access level. A grant that contains a
 protected descendant is bound before that descendant is masked; all other
 grants are bound after protected masks are installed. Inaccessible parents
@@ -549,8 +562,9 @@ the model must make a new explicit invocation with the missing capability and
 justification. A started process is never replayed.
 
 Before Bash executes, identified literal resources are resolved against the
-working directory. Resources outside the allowed roots require an exact
-additive grant; bare `.` and `..` operands participate in this check. Command
+working directory. Resources outside the allowed roots require a covering
+additive grant — exact, or recursive over an ancestor directory; bare `.` and
+`..` operands participate in this check. Command
 authorization is resolved first so an explicit command deny retains precedence.
 Provider-shaped empty optional fields, such as disabled network plus empty
 filesystem lists, are treated as omitted rather than as an authority request.
@@ -759,7 +773,7 @@ Sub-agent buffers carry `mevedel--session` set buffer-locally to the
 `mevedel-agent-conversation-open`). The pipeline reads
 `mevedel--session` from the current buffer at tool-dispatch entry, so a
 tool dispatched at any nesting depth observes the root's permission mode,
-direct rules, explicit denies, protected resources, exact grants, and
+direct rules, explicit denies, protected resources, resource grants, and
 confinement policy. Any
 "allow-session" / "deny-session" outcome accepted inside the sub-agent's
 prompt is written via `setf` on the same struct -- so the new rule
@@ -823,4 +837,18 @@ and only npm's cache writes is:
    :action allow))
  :resource-grants
  ((:path "~/.npm" :access write)))
+```
+
+A `:recursive t` entry grants a whole directory tree — here read access to
+the system Emacs installation, both as a direct grant and inside a Bash
+profile that exposes it to the sandboxed child through one read-only bind
+mount:
+
+```elisp
+(:rules
+ (("Bash" :pattern "some-command *"
+   :file-system ((:path "/usr/share/emacs" :access read :recursive t))
+   :action allow))
+ :resource-grants
+ ((:path "/usr/share/emacs" :access read :recursive t)))
 ```

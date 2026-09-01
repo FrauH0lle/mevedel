@@ -95,6 +95,13 @@
       (mevedel-execution-target-native-path target path)
     path))
 
+(defun mevedel-permission--resource-label (entry grant)
+  "Return a display label for resource GRANT in ENTRY's path domain."
+  (format "%s %s%s"
+          (capitalize (symbol-name (plist-get grant :access)))
+          (mevedel-permission--display-path entry (plist-get grant :path))
+          (if (plist-get grant :recursive) " (recursive)" "")))
+
 (defun mevedel-permission--prompt-self-insert ()
   "Insert the typed permission key when no permission prompt is active."
   (when (and (characterp last-command-event)
@@ -189,13 +196,8 @@
            (let* ((choices
                    (mapcar
                     (lambda (grant)
-                      (cons
-                       (format "%s %s"
-                               (capitalize
-                                (symbol-name (plist-get grant :access)))
-                               (mevedel-permission--display-path
-                                entry (plist-get grant :path)))
-                       grant))
+                      (cons (mevedel-permission--resource-label entry grant)
+                            grant))
                     resources))
                   (grant
                    (cdr
@@ -422,11 +424,9 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                  (if (plist-get missing :network) " " "x")))
        (mapconcat
         (lambda (grant)
-          (format "[%s] %s %s"
+          (format "[%s] %s"
                   (if (member grant missing-grants) " " "x")
-                  (capitalize (symbol-name (plist-get grant :access)))
-                  (mevedel-permission--display-path
-                   entry (plist-get grant :path))))
+                  (mevedel-permission--resource-label entry grant)))
         (plist-get requested :file-system)
         "\n")
        (and (plist-get requested :file-system) "\n")
@@ -453,15 +453,13 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
          (mapconcat
           (lambda (grant)
             (format
-             "[%s] %s %s"
+             "[%s] %s"
              (if (member grant (plist-get selection :file-system))
                  "x"
                " ")
-             (capitalize (symbol-name (plist-get grant :access)))
-             (mevedel-permission--display-path
-              entry (plist-get grant :path))))
+             (mevedel-permission--resource-label entry grant)))
           resources "\n")
-         (and resources "\n(p selects an exact path)\n")
+         (and resources "\n(p selects a path)\n")
          "\n")))))
 
 (defun mevedel-permission--prompt-async-attributed

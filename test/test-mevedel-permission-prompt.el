@@ -165,11 +165,52 @@
           (let ((last-command-event ?p))
             (mevedel-permission--prompt-toggle-remember)))
         (should (equal (list grant)
+                       (plist-get (car cell) :file-system))))))
+
+  :doc "recursive grants get a distinct completion label"
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create :name "test"))
+           (exact '(:path "/srv/tree" :access read))
+           (recursive '(:path "/srv/tree" :access read :recursive t))
+           (cell (list '(:operation t)))
+           (entry
+            `(:session ,session
+              :remember-authority-cell ,cell
+              :missing-additional-permissions
+              (:file-system (,exact ,recursive)))))
+      (insert "prompt")
+      (let ((ov (make-overlay (point-min) (point-max))))
+        (overlay-put ov 'mevedel-permission-prompt t)
+        (overlay-put ov 'mevedel-view-interaction-entry entry)
+        (goto-char (point-min))
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (_prompt choices &rest _)
+                     (should (equal '("Read /srv/tree"
+                                      "Read /srv/tree (recursive)")
+                                    (mapcar #'car choices)))
+                     "Read /srv/tree (recursive)"))
+                  ((symbol-function
+                    'mevedel-permission-queue--render-head)
+                   #'ignore))
+          (let ((last-command-event ?p))
+            (mevedel-permission--prompt-toggle-remember)))
+        (should (equal (list recursive)
                        (plist-get (car cell) :file-system)))))))
 
 
 ;;
 ;;; Rendering
+
+(mevedel-deftest mevedel-permission--resource-label ()
+  ,test
+  (test)
+  :doc "formats exact and recursive grant labels"
+  (should (equal "Read /srv/tree"
+                 (mevedel-permission--resource-label
+                  nil '(:path "/srv/tree" :access read))))
+  (should (equal "Write /srv/tree (recursive)"
+                 (mevedel-permission--resource-label
+                  nil '(:path "/srv/tree" :access write :recursive t)))))
 
 (mevedel-deftest mevedel-permission--format-authority-capabilities
   ()
@@ -222,8 +263,20 @@
     (should (string-match-p "\\[ \\] Network with command" text))
     (should (string-match-p "\\[x\\] Write /output" text))
     (should (string-match-p "complete selected profile" text))
-    (should (string-match-p "p selects an exact path" text))
-    (should-not (string-match-p "/ssh:" text))))
+    (should (string-match-p "p selects a path" text))
+    (should-not (string-match-p "/ssh:" text)))
+
+  :doc "labels recursive grant selections"
+  (let* ((session (mevedel-session--create :name "test"))
+         (grant '(:path "/srv/tree" :access read :recursive t))
+         (text
+          (mevedel-permission--format-remember-authority
+           `(:session ,session
+             :remember-authority-cell ((:operation t))
+             :missing-additional-permissions
+             (:file-system (,grant))))))
+    (should (string-match-p
+             (regexp-quote "[ ] Read /srv/tree (recursive)") text))))
 
 (mevedel-deftest mevedel-permission--prompt-body
   ()

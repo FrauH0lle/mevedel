@@ -723,7 +723,7 @@ Precedence: specifier rules outrank generic; within a group `deny > ask >
 allow`. `mevedel-protected-paths` maps globs to `read-only` or `inaccessible`.
 The defaults keep `.git/` readable but immutable and hide `~/.ssh/` and
 `~/.gnupg/` plus common AWS, Azure, Google Cloud, and Kubernetes credential
-directories; exact resource authority is still required even when the
+directories; covering resource authority is still required even when the
 permission mode would otherwise allow an operation.
 
 **Permission modes** (`mevedel-permission-mode`):
@@ -801,13 +801,13 @@ Persistent rules accepted via the prompt's "always" choices are saved to
 Add `:network t` to a Bash or batch-Eval rule to authorize network access
 together with the matching operation. An unqualified operation rule leaves
 network isolated. Authority prompts grant every requested capability to the
-current invocation, while their Command, Network, and exact-path checkboxes
+current invocation, while their Command, Network, and path checkboxes
 independently choose what a session or `Always in this workspace` outcome
 remembers. Session authority survives save/resume; workspace authority is
 shared by that workspace's sessions. Open `u Permissions` from the session
-cockpit for a table of operation rules, network-qualified rules, and exact
-resource grants by scope; `d` revokes the selected row without changing the
-others.
+cockpit for a table of operation rules, network-qualified rules, and exact or
+recursive resource grants by scope; `d` revokes the selected row without
+changing the others.
 
 ### Hooks
 

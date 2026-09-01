@@ -199,7 +199,7 @@ workspace."
   last-task-write-turn ; integer or nil: turn of last task tool write
   touched-files     ; hash-table: filepath -> mevedel-file-interaction
   permission-rules  ; session-scoped permission rules
-  resource-grants   ; session-scoped exact path/access permission plists
+  resource-grants   ; session-scoped exact or recursive path/access grants
   permission-mode   ; current permission mode
   sandbox-mode      ; current child-process confinement policy
   plan-mode         ; non-nil during a sticky Plan conversation

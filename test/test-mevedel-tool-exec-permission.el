@@ -352,7 +352,22 @@ additive child permissions are available only to batch Eval"
        `(:file-system ((:path ,path :access read)))
        `(:network t
                   :file-system ((:path ,path :access write)
-                                (:path "relative" :access read))))))))
+                                (:path "relative" :access read)))))))
+  :doc "keeps exact and recursive grants of the same path distinct"
+  (let ((path (expand-file-name "tree" temporary-file-directory)))
+    (should
+     (equal
+      `(:file-system ((:path ,path :access read)
+                      (:path ,path :access write :recursive t)))
+      (mevedel-tool-exec-permission--merge-additional-profiles
+       `(:file-system ((:path ,path :access read)
+                       (:path ,path :access read :recursive t)))
+       `(:file-system ((:path ,path :access write :recursive t)))))))
+  :doc "drops grants with a non-boolean recursive flag"
+  (let ((path (expand-file-name "tree" temporary-file-directory)))
+    (should-not
+     (mevedel-tool-exec-permission--merge-additional-profiles
+      `(:file-system ((:path ,path :access read :recursive yes)))))))
 
 (mevedel-deftest mevedel-tool-exec-permission--direct-resource-grants ()
   ,test
@@ -392,6 +407,42 @@ additive child permissions are available only to batch Eval"
     (should
      (equal
       `(:network t :file-system ,profile)
+      (mevedel-tool-exec-permission--remembered-additional-profile
+       "Bash" "make report"
+       `(:session ,session :buckets ((:session ,@rules)))))))
+  :doc "an exact direct grant does not satisfy a recursive requirement"
+  (let* ((path "/tmp/mevedel-tree")
+         (rules
+          `(("Bash" :pattern "make:*"
+             :file-system ((:path ,path :access read :recursive t))
+             :action allow)))
+         (session
+          (mevedel-session--create
+           :authority-mode 'pid-lock
+           :name "remembered"
+           :resource-grants `((:path ,path :access read)))))
+    (should-not
+     (mevedel-tool-exec-permission--remembered-additional-profile
+      "Bash" "make report"
+      `(:session ,session :buckets ((:session ,@rules))))))
+  :doc "a recursive direct grant satisfies matching and descendant requirements"
+  (let* ((path "/tmp/mevedel-tree")
+         (grant `(:path ,path :access read :recursive t))
+         (rules
+          `(("Bash" :pattern "make:*"
+             :file-system ((:path ,path :access read :recursive t)
+                           (:path ,(file-name-concat path "sub/file")
+                            :access read))
+             :action allow)))
+         (session
+          (mevedel-session--create
+           :authority-mode 'pid-lock
+           :name "remembered" :resource-grants (list grant))))
+    (should
+     (equal
+      `(:file-system ((:path ,path :access read :recursive t)
+                      (:path ,(file-name-concat path "sub/file")
+                       :access read)))
       (mevedel-tool-exec-permission--remembered-additional-profile
        "Bash" "make report"
        `(:session ,session :buckets ((:session ,@rules)))))))
