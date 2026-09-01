@@ -176,8 +176,13 @@
               (let ((first (string-match "compact context" text)))
                 (should first)
                 (should-not (string-match "compact context" text (1+ first))))
-              (should (string-match-p "<system-reminder>\nRe-read /tmp/old.el"
-                                      text))
+              ;; The file-reference reminder is staged for the WAIT
+              ;; injector rather than written into the prompt text.
+              (should (equal '((:type compact-file-references
+                                :body "Re-read /tmp/old.el"))
+                             (plist-get (gptel-fsm-info fsm)
+                                        :mevedel-reminder-entries)))
+              (should-not (string-match-p "<system-reminder>" text))
               (should-not (string-match-p "Old prompt" text))
               (should (string-match-p "Pending prompt" text))
               (should context-start)
@@ -377,7 +382,7 @@
 (mevedel-deftest mevedel--compact-rebuild-info-data-from-buffer ()
   ,test
   (test)
-  :doc "injects current-request reminder before realizing continuation data"
+  :doc "stages the current-request reminder before realizing continuation data"
   (let ((chat-buf (generate-new-buffer " *mevedel-compact-rebuild*"))
         captured)
     (unwind-protect
@@ -413,9 +418,13 @@
                                       :data 'realized)))))
               (mevedel--compact-rebuild-info-data-from-buffer fsm chat-buf)
               (should (eq (plist-get (gptel-fsm-info fsm) :data) 'realized))
-              (should (string-match-p
-                       "<system-reminder>\nRe-read /tmp/old.el"
-                       captured))
+              ;; Staged for the WAIT injector, never inlined into the
+              ;; rebuilt prompt text.
+              (should (equal '((:type compact-file-references
+                                :body "Re-read /tmp/old.el"))
+                             (plist-get (gptel-fsm-info fsm)
+                                        :mevedel-reminder-entries)))
+              (should-not (string-match-p "<system-reminder>" captured))
               (with-current-buffer chat-buf
                 (should-not mevedel-compact-target-current-request-reminder)))))
       (when (buffer-live-p chat-buf)

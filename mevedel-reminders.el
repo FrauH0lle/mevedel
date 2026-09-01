@@ -664,7 +664,13 @@ for the next turn."
          (buffer (plist-get info :buffer))
          (data (plist-get info :data))
          (initial (plist-get info :mevedel-reminder-entries))
-         (staged-commits (plist-get info :mevedel-reminder-commits)))
+         (staged-commits (plist-get info :mevedel-reminder-commits))
+         ;; Before the request's first WAIT the last message is the
+         ;; user's prompt, so blocks may inject in front of it.  At a
+         ;; later WAIT the last message carries tool results, and a
+         ;; message injected before it would split the tool call from
+         ;; its result; everything must append instead.
+         (turn-start (not (plist-get info :mevedel-reminders-wait-seen))))
     (when (and data (buffer-live-p buffer))
       (let* ((events (mevedel-reminders--stage-turn-events buffer))
              (entries (append initial (plist-get events :entries))))
@@ -680,10 +686,10 @@ for the next turn."
                                         (plist-get entry :body)))
                                      entries "\n")))))))
             (gptel--inject-prompt
-             backend data message (and initial -1))
+             backend data message (and initial turn-start -1))
             (with-demoted-errors "mevedel: injection record failed: %S"
               (mevedel-reminders--write-injection-record
-               info buffer entries (if initial 'turn-start 'mid-turn)))
+               info buffer entries (if turn-start 'turn-start 'mid-turn)))
             (dolist (commit (plist-get events :commits))
               (with-demoted-errors "mevedel: reminder commit failed: %S"
                 (funcall commit)))))
@@ -693,11 +699,12 @@ for the next turn."
         (dolist (commit staged-commits)
           (with-demoted-errors "mevedel: reminder commit failed: %S"
             (funcall commit)))
-        (when (or initial staged-commits)
-          (setf (gptel-fsm-info fsm)
-                (plist-put
-                 (plist-put info :mevedel-reminder-entries nil)
-                 :mevedel-reminder-commits nil)))))))
+        (setf (gptel-fsm-info fsm)
+              (plist-put
+               (plist-put
+                (plist-put info :mevedel-reminder-entries nil)
+                :mevedel-reminder-commits nil)
+               :mevedel-reminders-wait-seen t))))))
 
 (defun mevedel-reminders--transform (fsm)
   "Stage system reminders for separate injection into FSM.
