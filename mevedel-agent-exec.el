@@ -151,6 +151,8 @@
 (defvar mevedel-model-workloads)
 
 ;; `mevedel-reminders'
+(declare-function mevedel-reminders--agent-transform
+                  "mevedel-reminders" (fsm))
 (declare-function mevedel-reminders--handle-inject
                   "mevedel-reminders" (fsm))
 
@@ -514,7 +516,8 @@ Returns the spawned FSM."
           :fsm fsm
           :stream gptel-stream
           :system gptel-system-prompt
-          :transforms (list #'gptel--transform-add-context)))
+          :transforms (list #'gptel--transform-add-context
+                            #'mevedel-reminders--agent-transform)))
       (let* ((req-info (gptel-fsm-info fsm))
              (gptel-cb (plist-get req-info :callback))
              (wrapped
