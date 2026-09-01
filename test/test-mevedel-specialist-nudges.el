@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'mevedel-agents)
+(require 'mevedel-reminders)
 (require 'mevedel-specialist-nudges)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
@@ -14,6 +15,39 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+
+;;
+;;; Helpers
+
+(defun test-mevedel-nudges--apply-and-pop (ctx)
+  "Apply CTX with a live turn owner and return the queued nudge body.
+Nudges are delivered as turn events rather than result text, so each
+call runs in a fresh buffer owning a live request (or CTX's invocation)
+and returns the queued specialist event body, or \"\" when the call
+queued nothing.  CTX's result must stay untouched."
+  (let* ((session (plist-get ctx :session))
+         (result (plist-get ctx :result))
+         (buf (generate-new-buffer " *mevedel-test-nudges*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--session session)
+            (if-let* ((invocation (plist-get ctx :invocation)))
+                (setq-local mevedel--agent-invocation invocation)
+              (setq-local mevedel--current-request
+                          (mevedel-request--create :id "nudge-request"
+                                                   :session session))))
+          (let ((out (mevedel-specialist-nudges-apply
+                      (plist-put ctx :buffer buf))))
+            (should (equal result (plist-get out :result))))
+          (with-current-buffer buf
+            (or (cl-loop for item in (plist-get
+                                      mevedel-reminders--turn-events :items)
+                         when (and (consp (car item))
+                                   (eq (caar item) 'specialist))
+                         return (plist-get (cdr item) :body))
+                "")))
+      (kill-buffer buf))))
 
 ;;
 ;;; Specialist nudges
@@ -33,23 +67,23 @@
 					   :args '(:pattern "thing-name" :type "elisp")
 					   :result "./file.el\n1:thing-name\n"
 					   :session session))
-				(out (mevedel-specialist-nudges-apply ctx)))
-			   (should (string-match-p "XrefReferences" (plist-get out :result)))
-			   (should (string-match-p "available now" (plist-get out :result)))
+				(out (test-mevedel-nudges--apply-and-pop ctx)))
+			   (should (string-match-p "XrefReferences" out))
+			   (should (string-match-p "available now" out))
 			   ;; Same family, same turn: no duplicate nudge.
 			   (setq ctx (plist-put ctx :result "./file.el\n2:thing-name\n"))
-			   (setq out (mevedel-specialist-nudges-apply ctx))
-			   (should-not (string-match-p "XrefReferences" (plist-get out :result)))
+			   (setq out (test-mevedel-nudges--apply-and-pop ctx))
+			   (should-not (string-match-p "XrefReferences" out))
 			   ;; A later turn gets the second allowed nudge; the family
 			   ;; is then capped for the context.
 			   (setf (mevedel-session-turn-count session) 1)
 			   (setq ctx (plist-put ctx :result "./file.el\n3:thing-name\n"))
-			   (setq out (mevedel-specialist-nudges-apply ctx))
-			   (should (string-match-p "XrefReferences" (plist-get out :result)))
+			   (setq out (test-mevedel-nudges--apply-and-pop ctx))
+			   (should (string-match-p "XrefReferences" out))
 			   (setf (mevedel-session-turn-count session) 2)
 			   (setq ctx (plist-put ctx :result "./file.el\n4:thing-name\n"))
-			   (setq out (mevedel-specialist-nudges-apply ctx))
-			   (should-not (string-match-p "XrefReferences" (plist-get out :result))))
+			   (setq out (test-mevedel-nudges--apply-and-pop ctx))
+			   (should-not (string-match-p "XrefReferences" out)))
 
 			 :doc "Grep nudges can update sub-agent invocation state"
 				 (let* ((agent (mevedel-agent--create :name "verifier"))
@@ -64,14 +98,14 @@
 						   :result "./file.el\n1:thing-name\n"
 						   :session session
 						   :invocation invocation))
-					(out (mevedel-specialist-nudges-apply ctx)))
-				   (should (string-match-p "XrefReferences" (plist-get out :result)))
+					(out (test-mevedel-nudges--apply-and-pop ctx)))
+				   (should (string-match-p "XrefReferences" out))
 				   (should (plist-get (mevedel-agent-invocation-specialist-nudge-state
 					       invocation)
 					      :xref))
 				   (setq ctx (plist-put ctx :result "./file.el\n2:thing-name\n"))
-				   (setq out (mevedel-specialist-nudges-apply ctx))
-				   (should-not (string-match-p "XrefReferences" (plist-get out :result))))
+				   (setq out (test-mevedel-nudges--apply-and-pop ctx))
+				   (should-not (string-match-p "XrefReferences" out)))
 
 				 :doc "Grep regex searches are not nudged toward xref"
 			 (let* ((session (mevedel-session--create
@@ -83,8 +117,8 @@
 					   :args '(:pattern "thing.*other" :type "elisp")
 					   :result "./file.el\n1:thing-other\n"
 					   :session session))
-				(out (mevedel-specialist-nudges-apply ctx)))
-			   (should-not (string-match-p "XrefReferences" (plist-get out :result))))
+				(out (test-mevedel-nudges--apply-and-pop ctx)))
+			   (should-not (string-match-p "XrefReferences" out)))
 
 			 :doc "Grep comment searches are not nudged toward xref"
 				 (let* ((session (mevedel-session--create
@@ -102,8 +136,8 @@
 						   ;; path heading, then LINE:text.
 						   :result "./file.el\n1:;; mevedel-thing is gone\n2:;; and more\n"
 						   :session session))
-					(out (mevedel-specialist-nudges-apply ctx)))
-				   (should-not (string-match-p "XrefReferences" (plist-get out :result))))
+					(out (test-mevedel-nudges--apply-and-pop ctx)))
+				   (should-not (string-match-p "XrefReferences" out)))
 
 				:doc "Grep comment hits in a single file are not nudged toward xref"
 				;; With one explicit file argument ripgrep prints no heading, so the
@@ -117,8 +151,8 @@
 				:output_mode "content")
 				:result "1:;; mevedel-thing is gone\n"
 				:session session))
-				(out (mevedel-specialist-nudges-apply ctx)))
-				(should-not (string-match-p "XrefReferences" (plist-get out :result))))
+				(out (test-mevedel-nudges--apply-and-pop ctx)))
+				(should-not (string-match-p "XrefReferences" out)))
 
 				:doc "Grep comment hits with context lines are not nudged toward xref"
 				(let* ((session (mevedel-session--create
@@ -131,8 +165,8 @@
 				;; Context lines use LINE-text, matches LINE:text.
 				:result "./file.el\n12-;; before\n13:;; mevedel-thing\n"
 				:session session))
-				(out (mevedel-specialist-nudges-apply ctx)))
-				(should-not (string-match-p "XrefReferences" (plist-get out :result))))
+				(out (test-mevedel-nudges--apply-and-pop ctx)))
+				(should-not (string-match-p "XrefReferences" out)))
 
 				:doc "Grep code hits are still nudged toward xref"
 				(let* ((session (mevedel-session--create
@@ -144,8 +178,8 @@
 				:output_mode "content")
 				:result "./file.el\n1:(defun mevedel-thing ())\n"
 				:session session))
-				(out (mevedel-specialist-nudges-apply ctx)))
-				(should (string-match-p "XrefReferences" (plist-get out :result))))
+				(out (test-mevedel-nudges--apply-and-pop ctx)))
+				(should (string-match-p "XrefReferences" out)))
 
 				:doc "a path-only Grep result carries no content to classify"
 				;; The default output mode lists paths, which say nothing about
@@ -158,8 +192,8 @@
 				:args '(:pattern "mevedel-thing" :type "elisp")
 				:result "./file.el\n"
 				:session session))
-				(out (mevedel-specialist-nudges-apply ctx)))
-				(should (string-match-p "XrefReferences" (plist-get out :result))))
+				(out (test-mevedel-nudges--apply-and-pop ctx)))
+				(should (string-match-p "XrefReferences" out)))
 
 				 :doc "Grep broad single-token searches are not nudged toward xref"
 				 (let* ((session (mevedel-session--create
@@ -171,8 +205,8 @@
 						   :args '(:pattern "user" :type "elisp")
 						   :result "./user.el\n1:(defvar user-name nil)\n"
 						   :session session))
-					(out (mevedel-specialist-nudges-apply ctx)))
-				 (should-not (string-match-p "XrefReferences" (plist-get out :result))))
+					(out (test-mevedel-nudges--apply-and-pop ctx)))
+				 (should-not (string-match-p "XrefReferences" out)))
 
 				 :doc "Grep broad code globs do not get one-file Imenu guidance"
 					 (let* ((session (mevedel-session--create
@@ -188,9 +222,9 @@
 								     :glob "**/*.el")
 							   :result "./file.el\n1:thing-name\n"
 							   :session session))
-						(out (mevedel-specialist-nudges-apply ctx)))
-					 (should (string-match-p "XrefReferences" (plist-get out :result)))
-					 (should-not (string-match-p "Imenu" (plist-get out :result))))
+						(out (test-mevedel-nudges--apply-and-pop ctx)))
+					 (should (string-match-p "XrefReferences" out))
+					 (should-not (string-match-p "Imenu" out)))
 
 					 :doc "Grep single code files can get Imenu guidance"
 					 (let* ((session (mevedel-session--create
@@ -203,8 +237,8 @@
 								     :path "file.el")
 							   :result "./file.el\n1:thing-name\n"
 							   :session session))
-						(out (mevedel-specialist-nudges-apply ctx)))
-					 (should (string-match-p "Imenu" (plist-get out :result))))
+						(out (test-mevedel-nudges--apply-and-pop ctx)))
+					 (should (string-match-p "Imenu" out)))
 
 					 :doc "Grep structural code searches get Treesitter guidance"
 				 (let* ((session (mevedel-session--create
@@ -216,9 +250,9 @@
 						   :args '(:pattern "defun" :type "elisp")
 						   :result "./file.el\n1:(defun thing () nil)\n"
 						   :session session))
-					(out (mevedel-specialist-nudges-apply ctx)))
-				   (should (string-match-p "Treesitter" (plist-get out :result)))
-				   (should (string-match-p "available now" (plist-get out :result))))
+					(out (test-mevedel-nudges--apply-and-pop ctx)))
+				   (should (string-match-p "Treesitter" out))
+				   (should (string-match-p "available now" out)))
 
 				 :doc "Grep no-match and non-code results are not nudged"
 				 (let* ((session (mevedel-session--create
@@ -236,14 +270,14 @@
 								:path "README.md")
 							:result "./README.md\n1:thing-name\n"
 							:session session))
-					(out (mevedel-specialist-nudges-apply no-match)))
+					(out (test-mevedel-nudges--apply-and-pop no-match)))
 				   (should-not (string-match-p "XrefReferences"
-							       (plist-get out :result)))
-				   (setq out (mevedel-specialist-nudges-apply non-code))
+							       out))
+				   (setq out (test-mevedel-nudges--apply-and-pop non-code))
 				   (should-not (string-match-p "XrefReferences"
-							       (plist-get out :result)))
+							       out))
 				   (should-not (string-match-p "Treesitter"
-							       (plist-get out :result))))
+							       out)))
 
 				 :doc "Read full code file gets Imenu guidance when Imenu is deferred"
 			 (let* ((session (mevedel-session--create
@@ -255,8 +289,8 @@
 					   :args '(:file_path "file.el")
 					   :result "1\t(defun file () nil)"
 					   :session session))
-				(out (mevedel-specialist-nudges-apply ctx)))
-			   (should (string-match-p "Imenu" (plist-get out :result))))
+				(out (test-mevedel-nudges--apply-and-pop ctx)))
+			   (should (string-match-p "Imenu" out)))
 
 			 :doc "Read full code file gets Treesitter guidance when Treesitter is deferred"
 			 (let* ((session (mevedel-session--create
@@ -268,8 +302,8 @@
 					   :args '(:file_path "file.el")
 					   :result "1\t(defun file () nil)"
 					   :session session))
-				(out (mevedel-specialist-nudges-apply ctx)))
-			   (should (string-match-p "Treesitter" (plist-get out :result))))
+				(out (test-mevedel-nudges--apply-and-pop ctx)))
+			   (should (string-match-p "Treesitter" out)))
 
 			 :doc "Read exact ranges are not nudged"
 			 (let* ((session (mevedel-session--create
@@ -284,8 +318,8 @@
 							       :limit 20)
 					   :result "10\t(defun file () nil)"
 					   :session session))
-				(out (mevedel-specialist-nudges-apply ctx)))
-			   (should-not (string-match-p "Imenu" (plist-get out :result))))
+				(out (test-mevedel-nudges--apply-and-pop ctx)))
+			   (should-not (string-match-p "Imenu" out)))
 
 			 :doc "Read intentional whole-file ranges are not nudged"
 				 (let* ((session (mevedel-session--create
@@ -300,9 +334,9 @@
 							     :limit 2600)
 						   :result "1\t(defun file () nil)"
 						   :session session))
-					(out (mevedel-specialist-nudges-apply ctx)))
-				   (should-not (string-match-p "Imenu" (plist-get out :result)))
-				   (should-not (string-match-p "Treesitter" (plist-get out :result))))
+					(out (test-mevedel-nudges--apply-and-pop ctx)))
+				   (should-not (string-match-p "Imenu" out))
+				   (should-not (string-match-p "Treesitter" out)))
 
 				 :doc "Read duplicate, media, and non-code results are not nudged"
 			 (let* ((session (mevedel-session--create
@@ -326,11 +360,11 @@
 						:session session))
 				out)
 			   (dolist (ctx (list duplicate media non-code))
-			     (setq out (mevedel-specialist-nudges-apply ctx))
+			     (setq out (test-mevedel-nudges--apply-and-pop ctx))
 			     (should-not (string-match-p "Imenu"
-							 (plist-get out :result)))
+							 out))
 			     (should-not (string-match-p "Treesitter"
-							 (plist-get out :result)))))
+							 out))))
 
 				 :doc "Read default full range values are nudged"
 				 (let* ((session (mevedel-session--create
@@ -344,8 +378,8 @@
 								     :limit 2000)
 						   :result "1\t(defun file () nil)"
 						   :session session))
-					(out (mevedel-specialist-nudges-apply ctx)))
-				   (should (string-match-p "Imenu" (plist-get out :result))))
+					(out (test-mevedel-nudges--apply-and-pop ctx)))
+				   (should (string-match-p "Imenu" out)))
 
 					 :doc "Read defaulted optional args get specialist nudges"
 					 (let* ((session (mevedel-session--create
@@ -366,10 +400,10 @@
 								     :max_tokens 0)
 							   :result "1\t(defun file () nil)"
 							   :session session))
-						(out (mevedel-specialist-nudges-apply ctx)))
-					 (should (string-match-p "Imenu" (plist-get out :result)))
-					 (should (string-match-p "XrefReferences" (plist-get out :result)))
-					 (should (string-match-p "Treesitter" (plist-get out :result))))
+						(out (test-mevedel-nudges--apply-and-pop ctx)))
+					 (should (string-match-p "Imenu" out))
+					 (should (string-match-p "XrefReferences" out))
+					 (should (string-match-p "Treesitter" out)))
 
   :doc "preserves exact multi-family Grep reminder text and order"
   (let* ((session
@@ -379,35 +413,32 @@
            '((("mevedel" "XrefReferences") . "refs")
              (("mevedel" "XrefDefinitions") . "defs")
              (("mevedel" "Imenu") . "outline"))))
-	         (tool (mevedel-tool--create :name "Grep"))
-	         (result
-	          (mevedel-specialist-nudges-apply
-	           (list :tool tool
-	                 :args '(:pattern "thing-name" :path "file.el")
-	                 :result "./file.el\n1:thing-name\n"
-	                 :session session))))
+         (tool (mevedel-tool--create :name "Grep"))
+         (body
+          (test-mevedel-nudges--apply-and-pop
+           (list :tool tool
+                 :args '(:pattern "thing-name" :path "file.el")
+                 :result "./file.el\n1:thing-name\n"
+                 :session session))))
     (should
      (equal
       (concat
-       "./file.el\n1:thing-name\n\n\n<system-reminder>\n"
+       "Regarding your Grep call for pattern \"thing-name\":\n"
        "For precise code symbol references, prefer `XrefReferences(identifier, file_path)'; for definitions or name discovery, prefer `XrefDefinitions(pattern, file_path)'. If the tool is not callable, use ToolSearch(query=\"xref\", load=true); loaded tools are available now for your next tool call.\n"
-       "For a symbol outline in one known code file, prefer `Imenu(file_path)' over grepping the file for structure. If the tool is not callable, use ToolSearch(query=\"imenu\", load=true); loaded tools are available now for your next tool call.\n"
-       "</system-reminder>")
-	      (plist-get result :result))))
+       "For a symbol outline in one known code file, prefer `Imenu(file_path)' over grepping the file for structure. If the tool is not callable, use ToolSearch(query=\"imenu\", load=true); loaded tools are available now for your next tool call.")
+      body)))
 
   :doc "suppresses media-range Reads even when the path looks like code"
   (let ((session
          (mevedel-session--create
           :name "main"
           :deferred-set '((("mevedel" "Imenu") . "outline")))))
-	    (should
-	     (equal "contents"
-	            (plist-get
-	             (mevedel-specialist-nudges-apply
-	              (list :tool (mevedel-tool--create :name "Read")
-	                    :args '(:file_path "file.el" :max_tokens 100)
-	                    :result "contents" :session session))
-	             :result)))))
+    (should
+     (equal ""
+            (test-mevedel-nudges--apply-and-pop
+             (list :tool (mevedel-tool--create :name "Read")
+                   :args '(:file_path "file.el" :max_tokens 100)
+                   :result "contents" :session session))))))
 
 
 (provide 'test-mevedel-specialist-nudges)
