@@ -1088,13 +1088,17 @@
                            (mevedel-session-forked-from-fork-point-id child)))
             (should (eq 'conversation
                         (plist-get child-sidecar :fork-type)))
+            ;; Provenance is no longer durable transcript text: the
+            ;; sparse fork-provenance reminder regenerates it from the
+            ;; child's slots.
             (with-current-buffer child-buffer
-              (should (string-match-p "Conversation Fork"
-                                      (buffer-string)))
-              (should (string-match-p "Files were not restored"
-                                      (buffer-string)))
+              (should-not (string-match-p "Conversation Fork"
+                                          (buffer-string)))
               (should-not (string-match-p "Future segment prompt"
                                           (buffer-string))))
+            (should (string-match-p "Conversation Fork"
+                                    (mevedel-session-fork-provenance-body
+                                     child)))
             (should (equal "current checkout\n"
                            (mevedel-session-artifacts--file-text
                             source-file)))
@@ -1439,7 +1443,7 @@
       (mevedel-workspace-clear-registry))))
 
 
-(mevedel-deftest mevedel-session-fork--worktree-fork-disclosure ()
+(mevedel-deftest mevedel-session-fork--worktree-restore-report-body ()
   ,test
   (test)
   :doc "names every partial, malformed, and external restoration gap"
@@ -1450,7 +1454,7 @@
           :worktree-branch "worktree/main-fork-1"
           :worktree-base-commit "0123456789abcdef")))
     (let ((text
-           (mevedel-session-fork--worktree-fork-disclosure
+           (mevedel-session-fork--worktree-restore-report-body
             session
             '(:restored 1
               :unrestored ((:path "/child/missing.el"
@@ -1475,7 +1479,7 @@
            :worktree-branch "worktree/fork"
            :worktree-base-commit "0123456789abcdef"))
          (text
-          (mevedel-session-fork--worktree-fork-disclosure
+          (mevedel-session-fork--worktree-restore-report-body
            session
            '(:restored 0
              :unrestored ((:path "/ssh:alias:/srv/repo/missing.el"
@@ -1484,10 +1488,42 @@
                         "/ssh:foreign:/srv/private.el")))))
     (should-not (string-match-p "/ssh:alias:" text))
     (should-not (string-match-p "/ssh:foreign:" text))
-    (should (string-match-p "/srv/repo/.worktrees/fork/" text))
     (should (string-match-p "/srv/repo/missing.el" text))
     (should (string-match-p "/srv/shared.el" text))
     (should (string-match-p "<path outside session target>" text))))
+
+(mevedel-deftest mevedel-session-fork-provenance-body ()
+  ,test
+  (test)
+  :doc "returns nil for a session that is not a fork"
+  (should-not (mevedel-session-fork-provenance-body
+               (mevedel-session--create :name "main")))
+  :doc "describes a conversation fork's shared working directory"
+  (let ((body (mevedel-session-fork-provenance-body
+               (mevedel-session--create
+                :forked-from-session-id "source-id"
+                :fork-type 'conversation
+                :working-directory "/repo/"))))
+    (should (string-prefix-p "Conversation Fork" body))
+    (should (string-match-p "Source session: source-id" body))
+    (should (string-match-p "Working directory: /repo/" body))
+    (should (string-match-p "changes are shared" body)))
+  :doc "describes a worktree fork with stripped remote prefixes"
+  (let* ((target (mevedel-execution-target-create "/ssh:alias:/srv/repo/"))
+         (body (mevedel-session-fork-provenance-body
+                (mevedel-session--create
+                 :execution-target target
+                 :forked-from-session-id "source-id"
+                 :fork-type 'worktree
+                 :worktree-directory "/ssh:alias:/srv/repo/.worktrees/fork/"
+                 :worktree-branch "worktree/fork"
+                 :worktree-base-commit "0123456789abcdef"))))
+    (should (string-prefix-p "Worktree Fork" body))
+    (should-not (string-match-p "/ssh:alias:" body))
+    (should (string-match-p "/srv/repo/.worktrees/fork/" body))
+    (should (string-match-p "Branch: worktree/fork" body))
+    (should (string-match-p "Base commit: 0123456789abcdef" body))
+    (should (string-match-p "Uncaptured files retain" body))))
 
 
 (mevedel-deftest mevedel-session-fork-worktree-fork ()
@@ -1621,17 +1657,23 @@
                        ,(file-name-concat worktree "nested")
                        "/tmp/shared"))
                     mevedel-workspace-additional-roots))
-                  (should (string-match-p "Worktree Fork"
-                                          (buffer-string)))
-                  (should (string-match-p
-                           (regexp-quote worktree)
-                           (buffer-string)))
-                  (should (string-match-p
-                           (regexp-quote base-commit)
-                           (buffer-string)))
-                  (should (string-match-p
-                           "Captured repository files restored: 1"
-                           (buffer-string))))
+                  ;; The disclosure no longer lives in the transcript:
+                  ;; provenance regenerates from slots, and the restore
+                  ;; report waits in the pending reminder FIFO.
+                  (should-not (string-match-p "Worktree Fork"
+                                              (buffer-string))))
+                (let ((provenance
+                       (mevedel-session-fork-provenance-body child)))
+                  (should (string-match-p "Worktree Fork" provenance))
+                  (should (string-match-p (regexp-quote base-commit)
+                                          provenance)))
+                (should (equal 1 (length
+                                  (mevedel-session-pending-reminders
+                                   child))))
+                (should (string-match-p
+                         "Captured repository files restored: 1"
+                         (car (mevedel-session-pending-reminders
+                               child))))
                 (should (equal "dirty Source state\n"
                                (mevedel-session-artifacts--file-text
                                 source-file)))
