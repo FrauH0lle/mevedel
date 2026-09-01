@@ -5,7 +5,8 @@
 ;; Owns the package-version command and shared helpers that do not belong to
 ;; any single mevedel module: colour tinting for overlay styling, tag-query
 ;; prefix/infix conversion, environment-info string assembly for system
-;; prompts, and various text and path manipulation utilities.
+;; prompts, synthetic transcript insertion and response-marker handling, and
+;; various text and path manipulation utilities.
 
 ;;; Code:
 

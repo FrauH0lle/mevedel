@@ -153,8 +153,6 @@
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--agent-transform
                   "mevedel-reminders" (fsm))
-(declare-function mevedel-reminders--handle-inject
-                  "mevedel-reminders" (fsm))
 
 ;; `mevedel-tool-ptc'
 (declare-function mevedel-tool-ptc--handle-description
@@ -312,8 +310,7 @@ the terminal event through the request callback's exactly-once retry gate."
                    info))))))
 
 (defvar mevedel-agent-exec--handlers
-  `((WAIT ,#'mevedel-reminders--handle-inject
-     ,#'mevedel-tools--handle-agent-roster-inject
+  `((WAIT ,#'mevedel-tools--handle-agent-roster-inject
      ,#'mevedel-tools--handle-message-inject
      ,#'mevedel-tools--handle-plan-tool-filter
      ,#'mevedel-tool-ptc--handle-description

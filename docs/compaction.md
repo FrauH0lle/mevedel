@@ -170,9 +170,9 @@ buffer estimate.
 
 The second automatic gate wraps `gptel--handle-wait` in the preset FSM
 handler chain. For a root continuation with pending steering, compaction
-admission is decided before steering mutates the realized payload. Other WAIT
-injectors still run before the final gate: request-begin, reminders, agent
-mailbox messages, and deferred tool injection. The gate then estimates the realized
+admission is decided before steering mutates the realized payload. Request-begin,
+agent mailbox messages, and deferred tool injection still run before the final
+gate. The gate then estimates the realized
 `info :data` payload for continuation WAIT cycles, currently the
 `TRET -> WAIT` path after tool results have been injected. If the
 request is below threshold, it calls the original wait handler normally.
@@ -180,7 +180,10 @@ If it is over threshold and the session is ineligible, it emits the same
 one-shot skip warning as the pre-send gate and lets the continuation
 proceed. If eligible, it leaves steering pending, compacts the active persisted
 segment, rebuilds `info :data`, injects the pending steering into that
-post-compaction provider boundary, and then calls the original wait handler.
+post-compaction provider boundary, and then calls the shared provider wrapper.
+That wrapper injects and commits reminders only after any rebuild, immediately
+before calling the original wait handler, so ephemeral events cannot be
+committed into a payload that compaction later discards.
 
 Continuation compaction supports the active persisted session segment and a
 persisted sub-agent transcript.  Agent compaction is considered only in the

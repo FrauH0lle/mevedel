@@ -577,7 +577,7 @@
   (:doc "warns only for the attributed Goal lineage")
   ,test
   (test)
-  :doc "returns the 100% tool-boundary warning once for provider usage"
+  :doc "commits the 100% tool-boundary warning only after delivery"
   (let* ((session (mevedel-session--create :name "main"))
          (goal (mevedel-goal--create
                 :id "goal-1" :objective "Ship" :status 'active
@@ -589,9 +589,13 @@
                        :mevedel-goal-accounting-id "goal-1"
                        :tokens-full (:input 7 :output 3 :cached 1000)))))
     (setf (mevedel-session-goal session) goal)
-    (should (string-match-p
-             "stop new substantive work"
-             (mevedel-goal-tool-result-budget-warning session fsm)))
+    (let ((warning
+           (mevedel-goal-tool-result-budget-warning session fsm)))
+      (should (string-match-p "Stop new substantive work"
+                              (plist-get warning :body)))
+      (should-not (plist-get (gptel-fsm-info fsm)
+                             :mevedel-goal-budget-warnings))
+      (funcall (plist-get warning :commit)))
     (should-not (mevedel-goal-tool-result-budget-warning session fsm))
     (should (= 90 (mevedel-goal-tokens-used goal))))
 

@@ -81,6 +81,14 @@
 (declare-function mevedel--restore-file-instructions
                   "mevedel-persistence" (file &optional message workspace))
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-stage-commit
+                  "mevedel-reminders" (fsm commit))
+(declare-function mevedel-reminders-stage-entry
+                  "mevedel-reminders" (fsm type body &optional commit))
+(autoload 'mevedel-reminders-stage-commit "mevedel-reminders")
+(autoload 'mevedel-reminders-stage-entry "mevedel-reminders")
+
 ;; `mevedel-resource'
 (declare-function mevedel-resource-encode-component
                   "mevedel-resource" (value))
@@ -151,14 +159,6 @@
 (autoload 'mevedel-tool-fs-read-session-artifact "mevedel-tool-fs-read")
 (autoload 'mevedel-tool-fs-read-slurp-file-contents "mevedel-tool-fs-read")
 (defvar mevedel-tool-fs-read-media-max-bytes)
-
-;; `mevedel-reminders'
-(declare-function mevedel-reminders-stage-commit
-                  "mevedel-reminders" (fsm commit))
-(declare-function mevedel-reminders-stage-entry
-                  "mevedel-reminders" (fsm type body &optional commit))
-(autoload 'mevedel-reminders-stage-commit "mevedel-reminders")
-(autoload 'mevedel-reminders-stage-entry "mevedel-reminders")
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-ensure "mevedel-tool-registry" (name))

@@ -83,9 +83,10 @@ lazily — read them when planning work in the relevant area. The
 - [`docs/hooks.md`](docs/hooks.md) — hook subsystem: prior art,
   lifecycle events, config layers, command/Elisp handlers, pipeline
   integration, trust model, dry-run inspection, logs
-- [`docs/reminders.md`](docs/reminders.md) — system-reminder injection,
-  implemented reminder surface, and candidate reminder backlog grouped
-  by implementation readiness
+- [`docs/reminders.md`](docs/reminders.md) — the two delivery
+  channels (ephemeral by default, position-bound permanence), staging
+  seams, injection contract, hidden injection record, implemented
+  reminder surface
 - [`docs/goals.md`](docs/goals.md) — Goal context, continuation, accounting,
   failures, commands, recovery, and accepted-plan authority
 - [`docs/sessions.md`](docs/sessions.md) — on-disk layout, segment

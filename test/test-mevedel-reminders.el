@@ -469,7 +469,14 @@ this collapses both shapes to the delivered text."
          (record (mevedel-reminders--injection-record
                   '((:type big :body "0123456789")) 'mid-turn))
          (body (plist-get (car (plist-get record :items)) :body)))
-    (should (equal "01234567\n[... truncated for record]" body))))
+    (should (equal "01234567\n[... truncated for record]" body)))
+  :doc "caps UTF-8 bytes without splitting a multibyte character"
+  (let* ((mevedel-reminders--record-body-limit 5)
+         (record (mevedel-reminders--injection-record
+                  '((:type big :body "ab€c")) 'mid-turn))
+         (body (plist-get (car (plist-get record :items)) :body)))
+    (should (equal "ab€\n[... truncated for record]" body))
+    (should (= 5 (string-bytes (car (split-string body "\n")))))))
 
 (mevedel-deftest mevedel-reminders--write-injection-record
   ()
@@ -523,6 +530,18 @@ this collapses both shapes to the delivered text."
     (mevedel-reminders-stage-entry fsm 'noop nil)
     (should-not (plist-get (gptel-fsm-info fsm)
                            :mevedel-reminder-entries))))
+
+(mevedel-deftest mevedel-reminders-stage-commit
+  (:doc "appends only function commits to the FSM info in call order")
+  (let* ((fsm (gptel-make-fsm :info nil))
+         (first (lambda () 'first))
+         (second (lambda () 'second)))
+    (mevedel-reminders-stage-commit fsm first)
+    (mevedel-reminders-stage-commit fsm 'not-a-function)
+    (mevedel-reminders-stage-commit fsm second)
+    (should (equal (list first second)
+                   (plist-get (gptel-fsm-info fsm)
+                              :mevedel-reminder-commits)))))
 
 
 ;;

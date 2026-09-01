@@ -167,11 +167,11 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-session-agent-turn-capacity "mevedel-structs" (cl-x))
-(declare-function mevedel-session-enqueue-pending-reminder
-                  "mevedel-structs" (session body))
 (declare-function mevedel-session-buffer-name "mevedel-structs" (session-name workspace))
 (declare-function mevedel-session-created-at "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
+(declare-function mevedel-session-enqueue-pending-reminder
+                  "mevedel-structs" (session body))
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x))
 (declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x))
 (declare-function mevedel-session-fork-type "mevedel-structs" (cl-x))

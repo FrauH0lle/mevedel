@@ -22,12 +22,13 @@
 (defun test-mevedel-nudges--apply-and-pop (ctx)
   "Apply CTX with a live turn owner and return the queued nudge body.
 Nudges are delivered as turn events rather than result text, so each
-call runs in a fresh buffer owning a live request (or CTX's invocation)
-and returns the queued specialist event body, or \"\" when the call
-queued nothing.  CTX's result must stay untouched."
+call runs in a fresh buffer owning a live request (or CTX's invocation),
+commits the queued event as the injector would, and returns its body or
+\"\" when the call queued nothing.  CTX's result must stay untouched."
   (let* ((session (plist-get ctx :session))
          (result (plist-get ctx :result))
-         (buf (generate-new-buffer " *mevedel-test-nudges*")))
+         (buf (generate-new-buffer " *mevedel-test-nudges*"))
+         (fsm (or (plist-get ctx :fsm) (gptel-make-fsm :info nil))))
     (unwind-protect
         (progn
           (with-current-buffer buf
@@ -38,15 +39,19 @@ queued nothing.  CTX's result must stay untouched."
                           (mevedel-request--create :id "nudge-request"
                                                    :session session))))
           (let ((out (mevedel-specialist-nudges-apply
-                      (plist-put ctx :buffer buf))))
+                      (plist-put (plist-put ctx :buffer buf) :fsm fsm))))
             (should (equal result (plist-get out :result))))
           (with-current-buffer buf
-            (or (cl-loop for item in (plist-get
-                                      mevedel-reminders--turn-events :items)
-                         when (and (consp (car item))
-                                   (eq (caar item) 'specialist))
-                         return (plist-get (cdr item) :body))
-                "")))
+            (if-let* ((item
+                       (cl-find-if
+                        (lambda (entry)
+                          (and (consp (car entry))
+                               (eq (caar entry) 'specialist)))
+                        (plist-get mevedel-reminders--turn-events :items))))
+                (prog1 (plist-get (cdr item) :body)
+                  (when-let* ((commit (plist-get (cdr item) :commit)))
+                    (funcall commit)))
+              "")))
       (kill-buffer buf))))
 
 ;;
@@ -106,6 +111,70 @@ queued nothing.  CTX's result must stay untouched."
 				   (setq ctx (plist-put ctx :result "./file.el\n2:thing-name\n"))
 				   (setq out (test-mevedel-nudges--apply-and-pop ctx))
 				   (should-not (string-match-p "XrefReferences" out)))
+
+  :doc "does not spend a family throttle until the event is delivered"
+  (let* ((session (mevedel-session--create
+                   :name "main"
+                   :deferred-set
+                   '((("mevedel" "XrefReferences") . "refs"))))
+         (buf (generate-new-buffer " *mevedel-test-nudge-commit*"))
+         (fsm (gptel-make-fsm :info nil)))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :id "nudge-commit"
+                                               :session session))
+          (mevedel-specialist-nudges-apply
+           (list :tool (mevedel-tool--create :name "Grep")
+                 :args '(:pattern "thing-name" :type "elisp")
+                 :result "./file.el\n1:thing-name\n"
+                 :session session :buffer buf :fsm fsm))
+          (should-not (mevedel-session-specialist-nudge-state session))
+          (let* ((item (car (plist-get mevedel-reminders--turn-events
+                                       :items)))
+                 (commit (plist-get (cdr item) :commit)))
+            (should (functionp commit))
+            (funcall commit)
+            (should (plist-get
+                     (mevedel-session-specialist-nudge-state session)
+                     :xref))))
+      (kill-buffer buf)))
+
+  :doc "coalescing commits only families in the surviving event body"
+  (let* ((session (mevedel-session--create
+                   :name "main"
+                   :deferred-set
+                   '((("mevedel" "XrefReferences") . "refs")
+                     (("mevedel" "Treesitter") . "syntax"))))
+         (buf (generate-new-buffer " *mevedel-test-nudge-coalesce*"))
+         (fsm (gptel-make-fsm :info nil))
+         (tool (mevedel-tool--create :name "Grep")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :id "nudge-coalesce"
+                                               :session session))
+          (dolist (call '(("thing-name" . "./file.el\n1:thing-name\n")
+                          ("defun" . "./file.el\n1:(defun thing () nil)\n")))
+            (mevedel-specialist-nudges-apply
+             (list :tool tool
+                   :args (list :pattern (car call) :type "elisp")
+                   :result (cdr call)
+                   :session session :buffer buf :fsm fsm)))
+          (let* ((items (plist-get mevedel-reminders--turn-events :items))
+                 (item (car items))
+                 (body (plist-get (cdr item) :body))
+                 (commit (plist-get (cdr item) :commit)))
+            (should (= 1 (length items)))
+            (should-not (string-match-p "XrefReferences" body))
+            (should (string-match-p "Treesitter" body))
+            (funcall commit)
+            (let ((state (mevedel-session-specialist-nudge-state session)))
+              (should-not (plist-get state :xref))
+              (should (plist-get state :treesitter)))))
+      (kill-buffer buf)))
 
 				 :doc "Grep regex searches are not nudged toward xref"
 			 (let* ((session (mevedel-session--create

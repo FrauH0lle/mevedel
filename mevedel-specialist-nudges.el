@@ -9,6 +9,12 @@
 
 (require 'cl-lib)
 (require 'mevedel-structs)
+(eval-when-compile
+  ;; Required for the `gptel-fsm-info' cl-defstruct setter below.
+  (require 'gptel-request))
+
+;; `gptel-request'
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-deferred-injected
@@ -121,18 +127,35 @@
       (plist-get context :session)))
 
 (defun mevedel-specialist-nudges--nudge-allowed-p (context family)
-  "Return non-nil when FAMILY may nudge for CONTEXT, recording use."
+  "Return non-nil when FAMILY may nudge for CONTEXT.
+Reserve allowed use on CONTEXT's request FSM; durable owner state is
+updated only by the queued turn event's delivery commit.  Record the
+family on CONTEXT so a coalesced event commits only its surviving body."
   (if-let* ((ctx (mevedel-specialist-nudges--nudge-context context)))
-      (let* ((session (plist-get context :session))
+      (let* ((fsm (plist-get context :fsm))
+             (info (and fsm (gptel-fsm-info fsm)))
+             (session (plist-get context :session))
              (turn (mevedel-specialist-nudges--ctx-turn-count ctx session))
-             (state (copy-sequence (mevedel-specialist-nudges--ctx-nudge-state ctx)))
+             (state
+              (copy-sequence
+               (or (and info
+                        (plist-get info :mevedel-specialist-nudge-state))
+                   (plist-get context :mevedel-specialist-nudge-state)
+                   (mevedel-specialist-nudges--ctx-nudge-state ctx))))
              (entry (plist-get state family))
              (count (or (plist-get entry :count) 0))
              (last-turn (plist-get entry :turn)))
         (when (and (< count mevedel-specialist-nudges--specialist-nudge-max-per-family)
                    (not (equal last-turn turn)))
           (setq state (plist-put state family (list :count (1+ count) :turn turn)))
-          (mevedel-specialist-nudges--set-ctx-nudge-state ctx state)
+          (if info
+              (setf (gptel-fsm-info fsm)
+                    (plist-put info :mevedel-specialist-nudge-state state))
+            (plist-put context :mevedel-specialist-nudge-state state))
+          (plist-put
+           context :mevedel-specialist-nudge-families
+           (cons family
+                 (plist-get context :mevedel-specialist-nudge-families)))
           t))
     t))
 
@@ -367,17 +390,38 @@ on."
                (mevedel-specialist-nudges--read-specialist-nudges
                 context args result caps)))))
     (when nudges
-      (let ((subject
+      (let* ((subject
              (pcase tool-name
                ("Grep" (format "your Grep call for pattern %S"
                                (or (plist-get args :pattern) "")))
                ("Read" (format "your Read call on %s"
-                               (or (plist-get args :file_path) "a file"))))))
+                               (or (plist-get args :file_path) "a file")))))
+             (ctx (mevedel-specialist-nudges--nudge-context context))
+             (fsm (plist-get context :fsm))
+             (families
+              (plist-get context :mevedel-specialist-nudge-families))
+             (state
+              (copy-sequence
+               (or (and fsm
+                        (plist-get (gptel-fsm-info fsm)
+                                   :mevedel-specialist-nudge-state))
+                   (plist-get context :mevedel-specialist-nudge-state)))))
         (mevedel-reminders-queue-turn-event
          (plist-get context :buffer)
          (cons 'specialist (intern (downcase tool-name)))
          (concat "Regarding " subject ":\n"
-                 (mapconcat #'identity nudges "\n")))))
+                 (mapconcat #'identity nudges "\n"))
+         (and ctx families
+              (lambda ()
+                (let ((delivered
+                       (copy-sequence
+                        (mevedel-specialist-nudges--ctx-nudge-state ctx))))
+                  (dolist (family families)
+                    (setq delivered
+                          (plist-put delivered family
+                                     (plist-get state family))))
+                  (mevedel-specialist-nudges--set-ctx-nudge-state
+                   ctx delivered)))))))
     context))
 
 (provide 'mevedel-specialist-nudges)

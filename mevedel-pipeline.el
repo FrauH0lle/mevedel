@@ -49,11 +49,6 @@
                   "mevedel-goal" (session fsm))
 (autoload 'mevedel-goal-tool-result-budget-warning "mevedel-goal")
 
-;; `mevedel-reminders'
-(declare-function mevedel-reminders-queue-turn-event
-                  "mevedel-reminders" (buffer key body &optional commit))
-(autoload 'mevedel-reminders-queue-turn-event "mevedel-reminders")
-
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-context-audit-records
                   "mevedel-hooks" (decision event type &optional omit-context))
@@ -64,6 +59,11 @@
                          &optional session workspace request invocation))
 (declare-function mevedel-hooks-tool-event-plist
                   "mevedel-hooks" (event context &rest extra))
+
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-queue-turn-event
+                  "mevedel-reminders" (buffer key body &optional commit))
+(autoload 'mevedel-reminders-queue-turn-event "mevedel-reminders")
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-address-like-p "mevedel-resource" (value))
@@ -1530,7 +1530,8 @@ history."
       (when-let* ((warning
                    (mevedel-goal-tool-result-budget-warning session fsm)))
         (mevedel-reminders-queue-turn-event
-         (plist-get context :buffer) 'goal-budget warning)))
+         (plist-get context :buffer) 'goal-budget
+         (plist-get warning :body) (plist-get warning :commit))))
     (funcall next context)))
 
 

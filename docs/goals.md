@@ -74,9 +74,10 @@ substantive work and wrap up. These need no durable reminder ledger because
 settlement compares usage immediately before and after the monotonic charge.
 
 Crossing the limit never aborts an in-flight request or tool. When provider
-usage is already known at a tool-result boundary, the first 100% crossing adds
-one hidden warning asking the model to stop new substantive work and wrap up
-the current response. It does not create a budget-exempt wrap-up turn. At
+usage is already known at a tool-result boundary, the first 100% crossing
+queues one hidden reminder turn event, delivered at the same WAIT as the tool
+result, asking the model to stop new substantive work and wrap up the current
+response. It does not create a budget-exempt wrap-up turn. At
 settlement, an otherwise-active Goal at or above the limit becomes
 `budget-limited`; a `complete` or `blocked` decision from that turn wins.
 

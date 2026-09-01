@@ -25,9 +25,9 @@ flowchart TD
     I --> J[PostToolUse or failure hooks]
     J --> K{Consumer}
     K -- Structured nested call --> L[Canonical status, value, media, identity]
-    K -- Provider --> M[Append repair reminder and specialist nudges]
+    K -- Provider --> M[Append repair reminder, queue specialist nudges]
     M --> N[Persist oversized result]
-    N --> O[Append Goal budget warning when crossed]
+    N --> O[Queue Goal budget warning when crossed]
     O --> P[Attach render-data]
     P --> R[Attach media data]
 ```
@@ -426,8 +426,9 @@ Post-tool hooks run after initial oversized-result persistence and specialist
 nudges, but before final render-data attachment. The specialist-nudge step is a
 thin pipeline delegation to `mevedel-specialist-nudges.el`, which owns all
 `Read`/`Grep` eligibility, family throttling, deferred `ToolSearch` guidance,
-and model-visible reminder text. Post-tool hooks receive both the raw
-handler output and the exact model-visible result. They can replace
+and reminder text; nudges are queued as ephemeral turn events delivered at the
+same WAIT rather than appended to the result. Post-tool hooks receive both the
+raw handler output and the exact model-visible result. They can replace
 feedback or add context, but they cannot undo tool side effects that
 already happened. For capped tools, a second persistence/truncation pass
 runs after post-tool hooks so `updated_result` cannot reintroduce an
@@ -438,11 +439,13 @@ Post-use hooks imply handler execution. A successful handler emits only
 normalized and emits only `PostToolUseFailure`. Validation failures,
 permission failures, and aborted permission interactions emit neither event.
 
-For an attributed root Goal turn, the final model-visible result receives one
-100% budget warning when cumulative provider-reported input plus output usage
-first reaches the Goal limit. This runs after final oversized-result
-persistence, so the warning remains visible even when the original result was
-capped. It is advisory: the current request and tool pipeline continue.
+For an attributed root Goal turn, crossing 100% of the cumulative
+provider-reported input plus output budget queues one ephemeral turn event.
+The reminder injector delivers it at the same WAIT as the tool result, after
+oversized-result persistence, without changing the result or making the
+warning permanent history. Delivery commits the one-shot guard; a failed
+injection leaves settlement free to queue its fallback warning. It is
+advisory: the current request and tool pipeline continue.
 
 ### Hazard: post-handler steps must read from context, not buffer-local
 

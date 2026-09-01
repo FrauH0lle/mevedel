@@ -66,12 +66,23 @@ recommends those elements while leaving Codex room to choose the next action.
   weekly automated check is useful. See also "/learn" command
 
 - Consider making mevedel's data buffers hidden
+- Skills-plan instruction reminders still ride the submitted model-input
+  (permanent transcript text). Migrating them to the ephemeral reminder
+  channel needs a leak-safe seam: the prepared outcome feeds several
+  submission paths, and enqueueing on the session FIFO at prepare time
+  would deliver into an unrelated turn when a prepared submission is
+  cancelled.
+- The worktree fork restore report is delivered via the transient
+  pending-reminder FIFO; a restart between fork creation and the child's
+  first request drops the report detail (provenance survives via the
+  fork-provenance reminder). Persist the report in sidecar slots if that
+  edge ever bites.
+- When a file is attached via the "@" it is also granted Read permissions, however these permissions are not passed on to sub-agents which might want to read the file again
 - `test/test-mevedel-tool-exec-permission.el` fails standalone in
   `mevedel-tool-exec-permission-prompt-eval` with
   `(void-function mevedel-permission--elide)`: the test file never loads
   `mevedel-permission-prompt`, so the suite only passes when another test
   file loads it first. Add the missing require.
-
 
 ## Entry format
 

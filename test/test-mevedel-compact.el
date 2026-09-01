@@ -77,13 +77,13 @@
 
 
 (mevedel-deftest mevedel--compact-provider-wait
-  (:doc "records provider dispatch before forwarding the FSM wait")
+  (:doc "injects reminders and records dispatch before forwarding the FSM wait")
   (let* ((session (mevedel-session--create :name "provider-dispatch"))
          (buffer (generate-new-buffer " *compact-provider-dispatch*"))
          (fsm (gptel-make-fsm
                :info (list :buffer buffer :mevedel-request-id "request-1"
                            :model 'model :reasoning-effort 'high)))
-         captured forwarded)
+         captured forwarded events)
     (unwind-protect
         (progn
           (with-current-buffer buffer (setq-local mevedel--session session))
@@ -91,9 +91,14 @@
                      (lambda (_session event &rest props)
                        (setq captured (cons event props))))
                     ((symbol-function 'gptel--handle-wait)
-                     (lambda (value) (setq forwarded value))))
+                     (lambda (value)
+                       (push 'provider events)
+                       (setq forwarded value)))
+                    ((symbol-function 'mevedel-reminders--handle-inject)
+                     (lambda (_fsm) (push 'reminders events))))
             (mevedel--compact-provider-wait fsm))
           (should (eq fsm forwarded))
+          (should (equal '(reminders provider) (nreverse events)))
           (should (eq 'provider-dispatch (car captured)))
           (should (equal "request-1"
                          (plist-get (cdr captured) :request-id))))
@@ -505,13 +510,13 @@
     (should-not sent))
   :doc "agent compaction dispatches without root steering"
   (let ((fsm (gptel-make-fsm :info nil))
-        sent)
+        events)
     (cl-letf (((symbol-function 'mevedel-tools--handle-steering-inject)
                (lambda (&rest _) (error "Root steering called")))
               ((symbol-function 'mevedel--compact-provider-wait)
-               (lambda (_fsm) (setq sent t))))
+               (lambda (_fsm) (push 'provider events))))
       (mevedel--compact-target-provider-wait '(:invocation agent) fsm))
-    (should sent)))
+    (should (equal '(provider) (nreverse events)))))
 
 (mevedel-deftest mevedel--compact-handle-wait ()
   ,test
