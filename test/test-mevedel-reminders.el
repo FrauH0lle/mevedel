@@ -439,6 +439,32 @@ this collapses both shapes to the delivered text."
   (should (equal "specialist:read"
                  (mevedel-reminders--entry-label '(specialist . read)))))
 
+(mevedel-deftest mevedel-reminders-reset-fired
+  (:before-each (mevedel-workspace-clear-registry)
+   :after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "clears the fired mark for the named type only"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (plan-ref (mevedel-reminder-create
+                    :type 'plan-reference :interval 'one-shot
+                    :trigger (lambda (_) t) :content (lambda (_) "plan")))
+         (other (mevedel-reminder-create
+                 :type 'other :interval 'one-shot
+                 :trigger (lambda (_) t) :content (lambda (_) "other"))))
+    (setf (mevedel-reminder-last-fired plan-ref) 3
+          (mevedel-reminder-last-fired other) 3)
+    (mevedel-session-add-reminder session plan-ref)
+    (mevedel-session-add-reminder session other)
+    (mevedel-reminders-reset-fired session 'plan-reference)
+    (should-not (mevedel-reminder-last-fired plan-ref))
+    (should (= 3 (mevedel-reminder-last-fired other)))
+    ;; A reset one-shot may fire again.
+    (should (mevedel-reminders--should-fire-p plan-ref 4 session)))
+  :doc "ignores a non-session context"
+  (should-not (mevedel-reminders-reset-fired 'not-a-session 'plan-reference)))
+
 (mevedel-deftest mevedel-reminders-make-fork-provenance
   ()
   ,test

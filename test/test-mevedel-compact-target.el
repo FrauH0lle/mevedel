@@ -420,12 +420,14 @@
   (test)
   :doc "delegates rewriting and routes reminders by compaction mode"
   (let ((session 'session)
-        applied queued)
+        applied queued reset)
     (cl-letf (((symbol-function 'mevedel-compact-target--apply)
                (lambda (&rest args) (setq applied args)))
               ((symbol-function
                 'mevedel-compact-target-file-reference-reminder-body)
                (lambda (_session _turns _auto) "remember files"))
+              ((symbol-function 'mevedel-reminders-reset-fired)
+               (lambda (_session type) (push type reset)))
               ((symbol-function 'mevedel-session-enqueue-pending-reminder)
                (lambda (_session reminder) (push reminder queued))))
       (let ((mevedel-compact-target-current-request-reminder nil))
@@ -434,6 +436,9 @@
         (should (equal '("summary" "tail" "pending" nil nil) applied))
         (should (equal "remember files"
                        mevedel-compact-target-current-request-reminder))
+        ;; The one-shot accepted-plan reference may re-fire after its
+        ;; delivering turn was summarized away.
+        (should (equal '(plan-reference) reset))
         (should-not queued)
         (setq mevedel-compact-target-current-request-reminder nil)
         (mevedel-compact-target--main-apply

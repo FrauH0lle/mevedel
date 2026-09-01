@@ -66,12 +66,15 @@ recommends those elements while leaving Codex room to choose the next action.
   weekly automated check is useful. See also "/learn" command
 
 - Consider making mevedel's data buffers hidden
-- Skills-plan instruction reminders still ride the submitted model-input
-  (permanent transcript text). Migrating them to the ephemeral reminder
-  channel needs a leak-safe seam: the prepared outcome feeds several
-  submission paths, and enqueueing on the session FIFO at prepare time
-  would deliver into an unrelated turn when a prepared submission is
-  cancelled.
+- Settled: skill instruction bodies stay in the submitted model-input
+  (permanent transcript text) by design, not as deferred work. Ephemeral
+  delivery would make the model lose instructions that govern multi-turn
+  work after one request while the inert `[skill:… -- attached]`
+  placeholder still implies they are in force. Compaction's contract for
+  them matches prompt text: invoked-skill provenance survives in the
+  summary, model-invocable skills are re-fetchable via `Skill`, and a
+  user-only skill that still matters post-compaction is the user's to
+  re-invoke (relevance usually decays with the compacted work).
 - The worktree fork restore report is delivered via the transient
   pending-reminder FIFO; a restart between fork creation and the child's
   first request drops the report detail (provenance survives via the
