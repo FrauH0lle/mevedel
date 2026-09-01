@@ -40,6 +40,8 @@
                   "mevedel-collaboration" (room peer guest &optional force))
 (declare-function mevedel-collaboration--status-frame
                   "mevedel-collaboration" (room))
+(declare-function mevedel-collaboration--tasks-frame
+                  "mevedel-collaboration" (room))
 (defvar mevedel-collaboration--attachment-extensions)
 (defvar mevedel-collaboration--duplicate-prompt-window)
 (defvar mevedel-collaboration--max-attachment-bytes)
@@ -491,6 +493,10 @@ answer can execute the same path the host key binding would."
         (mevedel-collaboration--transport-send
          (plist-get room :transport) peer
          (mevedel-collaboration--agents-frame room))
+        ;; The task list is latched the same way.
+        (mevedel-collaboration--transport-send
+         (plist-get room :transport) peer
+         (mevedel-collaboration--tasks-frame room))
         (when (and writable mevedel-collaboration-remote-interactions)
           (mevedel-collaboration--send-ui-requests room peer))))))
 

@@ -23,6 +23,9 @@
   const skillChips = document.getElementById('skill-chips');
   const themeButton = document.getElementById('theme-button');
   const modeline = document.getElementById('modeline');
+  const tasksBox = document.getElementById('tasks');
+  const tasksSummary = document.getElementById('tasks-summary');
+  const tasksList = document.getElementById('tasks-list');
   const transportApi = window.mevedelViewerTransport;
   const notificationsApi = window.mevedelViewerNotifications;
   const {base64urlDecode, base64urlEncode, importKey, parseFragment} = transportApi;
@@ -813,6 +816,44 @@
     });
   }
 
+  // The session's task list, one line per task: an in-progress dot, the
+  // subject, and who owns it. Completed tasks stay listed but struck, so
+  // progress is legible at a glance.
+  const TASK_GLYPH = {'pending': '○', 'in-progress': '◐', 'completed': '✓'};
+  const TASK_ORDER = {'in-progress': 0, 'pending': 1, 'completed': 2};
+
+  function showTasks(rows) {
+    if (!tasksBox) return;
+    const tasks = (Array.isArray(rows) ? rows : [])
+      .filter(task => task && typeof task.subject === 'string');
+    tasksBox.hidden = tasks.length === 0;
+    if (tasksList) tasksList.replaceChildren();
+    if (tasks.length === 0) return;
+    const done = tasks.filter(task => task.status === 'completed').length;
+    if (tasksSummary) {
+      tasksSummary.textContent = `Tasks · ${done}/${tasks.length} done`;
+    }
+    if (!tasksList) return;
+    tasks.slice()
+      .sort((a, b) => (TASK_ORDER[a.status] ?? 1) - (TASK_ORDER[b.status] ?? 1))
+      .forEach(task => {
+        const status = TASK_ORDER[task.status] === undefined
+          ? 'pending' : task.status;
+        const item = el('li', `task ${status}`);
+        const glyph = el('span', 'task-st', TASK_GLYPH[status]);
+        glyph.setAttribute('aria-label', status);
+        item.append(glyph);
+        item.append(el('span', 'task-subject', task.subject));
+        const bits = [];
+        if (typeof task.owner === 'string' && task.owner) bits.push(task.owner);
+        if (Array.isArray(task.blockedBy) && task.blockedBy.length) {
+          bits.push(`blocked by #${task.blockedBy.join(' #')}`);
+        }
+        if (bits.length) item.append(el('span', 'task-meta', bits.join(' · ')));
+        tasksList.append(item);
+      });
+  }
+
   // How many follow-ups are waiting, and whether the host has delivery
   // paused -- otherwise a queued prompt on a busy session looks dropped.
   function showQueueState(frame) {
@@ -845,6 +886,7 @@
     agents.close();
     artifacts.close();
     agents.show([]);
+    showTasks([]);
     showQueueState({pending: 0});
     showSkillChips([]);
     setComposerVisible(false);
@@ -870,9 +912,11 @@
       // the own-entry card is rebuilt by the hello reply's echo.
       showQueueState({pending: 0});
       showOwnQueue([]);
-      // The host re-sends the roster right after this hello's status,
-      // so a reconnect starts clean instead of keeping stale chips.
+      // The host re-sends the roster and task list right after this
+      // hello's status, so a reconnect starts clean instead of keeping
+      // stale chips.
       agents.show([]);
+      showTasks([]);
       setConnection('Loading…', 'connected');
     } else if (frame.t === 'snapshot-chunk') {
       if (!state.staging) return;
@@ -903,6 +947,8 @@
       showOwnQueue(Array.isArray(frame.own) ? frame.own : []);
     } else if (frame.t === 'agents') {
       agents.show(Array.isArray(frame.agents) ? frame.agents : []);
+    } else if (frame.t === 'tasks') {
+      showTasks(frame.tasks);
     } else if (frame.t === 'agent') {
       agents.handle(frame);
     } else if (frame.t === 'artifact') {
