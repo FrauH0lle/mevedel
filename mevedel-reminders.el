@@ -100,6 +100,11 @@
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
 
+;; `mevedel-session-fork'
+(declare-function mevedel-session-fork-provenance-body
+                  "mevedel-session-fork" (session))
+(autoload 'mevedel-session-fork-provenance-body "mevedel-session-fork")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
                   "mevedel-session-artifacts"
@@ -966,6 +971,22 @@ your original version of those changes unless the user asks."
                  content)))
    :interval 'one-shot))
 
+(defun mevedel-reminders-make-fork-provenance ()
+  "Create the sparse `fork-provenance' reminder.
+
+Regenerates fork provenance (source session, worktree or shared
+working directory, branch, base commit) from durable session slots.
+Replaces the permanent fork disclosure text older forks carried: the
+provenance is session state, true for the fork's whole life, so it is
+re-sent sparsely instead of costing tokens in every request's history."
+  (mevedel-reminder-create
+   :type 'fork-provenance
+   :interval 20
+   :trigger (lambda (session)
+              (and (mevedel-session-p session)
+                   (mevedel-session-forked-from-session-id session)))
+   :content #'mevedel-session-fork-provenance-body))
+
 (defun mevedel-session-ensure-reminder (session reminder)
   "Add REMINDER to SESSION unless a reminder of the same type exists."
   (unless (memq (mevedel-reminder-type reminder)
@@ -1662,7 +1683,8 @@ reminder names its own type, so the guard needs no second list."
                         #'mevedel-reminders-make-deferred-tools-expired
                         #'mevedel-reminders-make-task-nudge
                         #'mevedel-reminders-make-verification-suggestion
-                        #'mevedel-reminders-make-plan-reference))
+                        #'mevedel-reminders-make-plan-reference
+                        #'mevedel-reminders-make-fork-provenance))
       (let ((reminder (funcall make)))
         (unless (memq (mevedel-reminder-type reminder) existing)
           (mevedel-session-add-reminder session reminder)))))

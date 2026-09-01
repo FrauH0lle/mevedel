@@ -1494,7 +1494,10 @@
                          (buffer-substring-no-properties
                           (line-beginning-position)
                           (line-end-position))))))))
-  :doc "renders partial Worktree Fork disclosure as an expanded warning"
+  :doc "renders a historical fork disclosure as a generic collapsed row"
+  ;; Old transcripts carry durable fork disclosure blocks; new forks
+  ;; deliver provenance as an ephemeral reminder instead, so the block
+  ;; gets no special treatment any more.
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
@@ -1508,32 +1511,18 @@
      'ignore)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "Partial Worktree Fork" text))
-        (should (string-match-p "/repo/missing.el" text)))
       (goto-char (point-min))
-      (search-forward "Partial Worktree Fork")
-      (should (equal "  ! Partial Worktree Fork (4 lines)"
+      (search-forward "System reminder")
+      (should (equal "  ◇ System reminder (4 lines)"
                      (buffer-substring-no-properties
                       (line-beginning-position) (line-end-position))))
       (goto-char (match-beginning 0))
-      (should-not (get-text-property (point) 'mevedel-view-collapsed))
-      (should (eq 'mevedel-view-tool-warning
-                  (get-text-property (point) 'font-lock-face)))
-      (mevedel-view-toggle-section)
+      (should (get-text-property (point) 'mevedel-view-collapsed))
       (should-not
        (string-match-p
         "/repo/missing.el"
         (buffer-substring-no-properties
-         (point-min) mevedel-view--input-marker)))
-      (goto-char (point-min))
-      (search-forward "Partial Worktree Fork")
-      (should (equal "  ! Partial Worktree Fork (4 lines)"
-                     (buffer-substring-no-properties
-                      (line-beginning-position) (line-end-position)))))
-    (with-current-buffer data-buf
-      (should (string-match-p "/repo/missing.el" (buffer-string)))))
+         (point-min) mevedel-view--input-marker)))))
   :doc "keeps generated system reminders separate from real thinking"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Answer first.\n" 'response)

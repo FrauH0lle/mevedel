@@ -2774,29 +2774,17 @@ as generated control markup."
   "Return the non-empty line count for system reminder BODY."
   (length (split-string (or body "") "\n" t "[ \t]+")))
 
-(defun mevedel-view--partial-worktree-fork-reminder-p (body)
-  "Return non-nil when BODY discloses a partial Worktree Fork restore."
-  (and (stringp body)
-       (string-prefix-p "Worktree Fork (partial restoration)" body)))
-
 (defun mevedel-view--system-reminder-summary (data-buf seg-start seg-end)
   "Return collapsed summary for DATA-BUF's SEG-START..SEG-END system reminder."
   (with-current-buffer data-buf
     (let* ((text (buffer-substring-no-properties seg-start seg-end))
            (body (mevedel-view--system-reminder-body-from-text text))
-           (lines (max 1 (mevedel-view--system-reminder-line-count body)))
-           (partial
-            (mevedel-view--partial-worktree-fork-reminder-p body)))
+           (lines (max 1 (mevedel-view--system-reminder-line-count body))))
       (propertize
-       (format (if partial
-                   "  ! Partial Worktree Fork (%d %s)"
-                 "  \u25c7 System reminder (%d %s)")
+       (format "  \u25c7 System reminder (%d %s)"
                lines
                (if (= lines 1) "line" "lines"))
-       'font-lock-face
-       (if partial
-           'mevedel-view-tool-warning
-         'mevedel-view-system-reminder)))))
+       'font-lock-face 'mevedel-view-system-reminder))))
 
 (defun mevedel-view--scaffolding-only-p (data-buf seg-start seg-end)
   "Return non-nil if DATA-BUF region [SEG-START, SEG-END] is org-only glue.
@@ -4773,8 +4761,6 @@ Merges adjacent thinking/reasoning segments into a single summary."
           (with-current-buffer data-buf
             (mevedel-view--system-reminder-body-from-text
              (buffer-substring-no-properties seg-start seg-end))))
-         (partial
-          (mevedel-view--partial-worktree-fork-reminder-p body))
          (summary (mevedel-view--system-reminder-summary
                    data-buf seg-start seg-end)))
     (mevedel-view--insert-activity-rule-after-response)
@@ -4783,8 +4769,7 @@ Merges adjacent thinking/reasoning segments into a single summary."
            :body body
            :body-mode 'markdown-mode
            :vtype 'system-reminder-summary
-           :status (and partial 'warning)
-           :initially-collapsed-p (not partial))
+           :initially-collapsed-p t)
      source)))
 
 (defun mevedel-view--request-summary-line (render-data)

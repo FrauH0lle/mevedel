@@ -439,6 +439,20 @@ this collapses both shapes to the delivered text."
   (should (equal "specialist:read"
                  (mevedel-reminders--entry-label '(specialist . read)))))
 
+(mevedel-deftest mevedel-reminders-make-fork-provenance
+  ()
+  ,test
+  (test)
+  :doc "fires sparsely for forks and never for ordinary sessions"
+  (let ((reminder (mevedel-reminders-make-fork-provenance)))
+    (should (eq 'fork-provenance (mevedel-reminder-type reminder)))
+    (should (equal 20 (mevedel-reminder-interval reminder)))
+    (should-not (funcall (mevedel-reminder-trigger reminder)
+                         (mevedel-session--create :name "main")))
+    (should (funcall (mevedel-reminder-trigger reminder)
+                     (mevedel-session--create
+                      :name "fork" :forked-from-session-id "src")))))
+
 (mevedel-deftest mevedel-reminders--injection-record
   ()
   ,test

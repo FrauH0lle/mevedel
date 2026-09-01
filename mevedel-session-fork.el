@@ -167,6 +167,8 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-session-agent-turn-capacity "mevedel-structs" (cl-x))
+(declare-function mevedel-session-enqueue-pending-reminder
+                  "mevedel-structs" (session body))
 (declare-function mevedel-session-buffer-name "mevedel-structs" (session-name workspace))
 (declare-function mevedel-session-created-at "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
@@ -736,20 +738,35 @@ caches never become fork authority."
         (cl-incf number))
       (format "%s · %s %d" source-name type-name number))))
 
-(defun mevedel-session-fork--conversation-fork-disclosure
-    (session)
-  "Return durable disclosure text for conversation fork SESSION."
-  (format
-   (concat "\n\n<system-reminder>\n"
-           "Conversation Fork\n"
-           "Source session: %s\n"
-           "Working directory: %s\n"
-           "Files were not restored.  This fork uses the current files in "
-           "the Source working directory, so they may be newer than the "
-           "selected conversation point and changes are shared.\n"
-           "</system-reminder>\n")
-   (mevedel-session-forked-from-session-id session)
-   (mevedel-session-working-directory session)))
+(defun mevedel-session-fork-provenance-body (session)
+  "Return SESSION's fork provenance reminder body, or nil for a non-fork.
+Regenerated from durable session slots by the `fork-provenance'
+reminder instead of living as permanent transcript text: the
+provenance is session state, true for the fork's whole life."
+  (when (mevedel-session-forked-from-session-id session)
+    (if (eq (mevedel-session-fork-type session) 'worktree)
+        (format
+         (concat "Worktree Fork\n"
+                 "Source session: %s\n"
+                 "Worktree directory: %s\n"
+                 "Branch: %s\n"
+                 "Base commit: %s\n"
+                 "Uncaptured files retain the base commit's contents. "
+                 "Uncommitted Source changes were not copied.")
+         (mevedel-session-forked-from-session-id session)
+         (mevedel-session-fork--target-native-report-path
+          session (mevedel-session-worktree-directory session))
+         (mevedel-session-worktree-branch session)
+         (mevedel-session-worktree-base-commit session))
+      (format
+       (concat "Conversation Fork\n"
+               "Source session: %s\n"
+               "Working directory: %s\n"
+               "Files were not restored.  This fork uses the current files "
+               "in the Source working directory, so they may be newer than "
+               "the selected conversation point and changes are shared.")
+       (mevedel-session-forked-from-session-id session)
+       (mevedel-session-working-directory session)))))
 
 (defun mevedel-session-fork-retarget-worktree-path (session path)
   "Retarget absolute PATH from SESSION's Source root into its worktree."
@@ -934,33 +951,23 @@ Return descriptions of malformed grants and rules dropped from the child."
           :unrestored (nreverse unrestored)
           :external (nreverse external))))
 
-(defun mevedel-session-fork--worktree-fork-disclosure
+(defun mevedel-session-fork--worktree-restore-report-body
     (session report)
-  "Return durable Worktree Fork disclosure for SESSION and REPORT."
+  "Return the one-shot restore REPORT body for worktree fork SESSION.
+Delivered once through the session's pending reminder FIFO on the
+fork's first request; the durable provenance facts are carried
+separately by `mevedel-session-fork-provenance-body'."
   (let* ((unrestored (plist-get report :unrestored))
          (dropped (plist-get report :dropped))
          (partial (or unrestored dropped)))
     (format
-     (concat "\n\n<system-reminder>\n"
-           "%s\n"
-           "Source session: %s\n"
-           "Worktree directory: %s\n"
-           "Branch: %s\n"
-           "Base commit: %s\n"
-           "Captured repository files restored: %d\n"
-           "%s"
-           "Uncaptured files retain the base commit's contents. "
-           "Uncommitted Source changes were not copied.\n"
-           "%s"
-           "%s"
-           "%s"
-           "</system-reminder>\n")
+     (concat "%s\n"
+             "Captured repository files restored: %d\n"
+             "%s"
+             "%s"
+             "%s"
+             "%s")
      (if partial "Worktree Fork (partial restoration)" "Worktree Fork")
-     (mevedel-session-forked-from-session-id session)
-     (mevedel-session-fork--target-native-report-path
-      session (mevedel-session-worktree-directory session))
-     (mevedel-session-worktree-branch session)
-     (mevedel-session-worktree-base-commit session)
      (plist-get report :restored)
      (if partial
          (concat
@@ -1079,13 +1086,6 @@ child data buffer without mutating the Source buffer, session, or lock."
               (org-mode)))
           (mevedel-session-rewind-load-rewind-target
            session staging-buffer target)
-          (with-current-buffer staging-buffer
-            (goto-char (point-max))
-            (let ((start (point)))
-              (insert
-               (mevedel-session-fork--conversation-fork-disclosure
-                child))
-              (set-text-properties start (point) nil)))
           (mevedel-session-fork--publish-fork
            child buffer staging-buffer parent-save-path staging-path
            new-save-path picked-segment picked-cum-turn additional-roots))
@@ -1185,13 +1185,14 @@ child data buffer without mutating the Source buffer, session, or lock."
                         (org-mode)))
                     (mevedel-session-rewind-load-rewind-target
                      session staging-buffer target)
-                    (with-current-buffer staging-buffer
-                      (goto-char (point-max))
-                      (let ((start (point)))
-                        (insert
-                         (mevedel-session-fork--worktree-fork-disclosure
-                          child report))
-                        (set-text-properties start (point) nil)))
+                    ;; One-shot: the FIFO is transient, so a restart
+                    ;; before the fork's first request drops the
+                    ;; report; the regenerated fork-provenance
+                    ;; reminder still carries the durable facts.
+                    (mevedel-session-enqueue-pending-reminder
+                     child
+                     (mevedel-session-fork--worktree-restore-report-body
+                      child report))
                     (mevedel-session-fork--publish-fork
                      child buffer staging-buffer parent-save-path staging-path
                      new-save-path picked-segment picked-cum-turn
