@@ -49,6 +49,11 @@
                   "mevedel-goal" (session fsm))
 (autoload 'mevedel-goal-tool-result-budget-warning "mevedel-goal")
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-queue-turn-event
+                  "mevedel-reminders" (buffer key body &optional commit))
+(autoload 'mevedel-reminders-queue-turn-event "mevedel-reminders")
+
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-context-audit-records
                   "mevedel-hooks" (decision event type &optional omit-context))
@@ -1512,22 +1517,21 @@ explicit `:updated-result' changes the model-visible tool result."
              (plist-get context :result) context))))
 
 (defun mevedel-pipeline--step-goal-budget-warning (context next _fail)
-  "Append an early Goal budget warning to CONTEXT, then call NEXT."
+  "Queue an early Goal budget warning for CONTEXT's turn, then call NEXT.
+
+The warning reaches the model at the same WAIT as this tool result via
+the turn-event channel, so the in-flight turn can still wrap up without
+an extra request, without the warning becoming permanent transcript
+history."
   (let ((result (plist-get context :result))
         (session (plist-get context :session))
         (fsm (plist-get context :fsm)))
-    (if (and (stringp result) session fsm)
-        (progn
-          (if-let* ((warning
-                     (mevedel-goal-tool-result-budget-warning session fsm)))
-              (funcall
-               next
-               (plist-put
-                context :result
-                (format "%s\n\n<system-reminder>\n%s\n</system-reminder>"
-                        result warning)))
-            (funcall next context)))
-      (funcall next context))))
+    (when (and (stringp result) session fsm)
+      (when-let* ((warning
+                   (mevedel-goal-tool-result-budget-warning session fsm)))
+        (mevedel-reminders-queue-turn-event
+         (plist-get context :buffer) 'goal-budget warning)))
+    (funcall next context)))
 
 
 ;;
