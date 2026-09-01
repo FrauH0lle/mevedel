@@ -82,6 +82,11 @@
 (declare-function mevedel-hooks-take-session-context
                   "mevedel-hooks" (session))
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-reset-fired
+                  "mevedel-reminders" (session type))
+(autoload 'mevedel-reminders-reset-fired "mevedel-reminders")
+
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
                   "mevedel-session-artifacts"
@@ -398,6 +403,11 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
      summary tail-text pending-text hook-audits
      (mevedel-compact-target--execution-row-archive-text target))
     (mevedel-compact-target--commit-execution-row-archive target)
+    ;; The one-shot accepted-plan reference may have been delivered in
+    ;; a turn this compaction just summarized away; resetting its fired
+    ;; mark lets it re-surface the plan address once.  Its trigger
+    ;; still gates on an accepted plan, so this is inert otherwise.
+    (mevedel-reminders-reset-fired session 'plan-reference)
     (let ((reminder
            (mevedel-compact-target-file-reference-reminder-body
             session preserved-tail-turns auto)))
