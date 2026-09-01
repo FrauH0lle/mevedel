@@ -71,6 +71,7 @@ gh release download relay-<short sha> -p 'mevedel-relay-linux-amd64'
 ```bash
 go build -o mevedel-relay .
 ./mevedel-relay -addr 127.0.0.1:7466 \
+  -host-token "$(head -c 24 /dev/urandom | base64)" \
   -vapid-key-file ./mevedel-relay-vapid.pem
 go test ./...
 ```
@@ -113,9 +114,18 @@ WantedBy=multi-user.target
 ```
 
 Create `/etc/mevedel-relay` as a root-owned mode-0600 file containing
-`MEVEDEL_HOST_TOKEN=<random-token>`. Then set
-`mevedel-collaboration-relay-url` to `wss://collab.example.net` and
-`mevedel-collaboration-relay-host-token` to the same token.
+`MEVEDEL_HOST_TOKEN=<random-token>`:
+
+```bash
+TOKEN=$(head -c 24 /dev/urandom | base64)
+echo "MEVEDEL_HOST_TOKEN=$TOKEN" | sudo tee /etc/mevedel-relay >/dev/null
+sudo chown root:root /etc/mevedel-relay
+sudo chmod 600 /etc/mevedel-relay
+```
+
+Then set `mevedel-collaboration-relay-url` to `wss://collab.example.net` and
+`mevedel-collaboration-relay-host-token` to the same token (re-read it with
+`sudo cat /etc/mevedel-relay`).
 
 ### yunohost
 
