@@ -197,7 +197,15 @@
                        (equal "agents" (plist-get (cdr entry) :t)))
                      sent)))
         (should (equal '(1 2) (sort (mapcar #'car agents) #'<)))
-        (should (equal [] (plist-get (cdr (car agents)) :agents)))))))
+        (should (equal [] (plist-get (cdr (car agents)) :agents))))
+      ;; The task list is latched the same way, so both guests are told
+      ;; the current one directly.
+      (let ((tasks (cl-remove-if-not
+                    (lambda (entry)
+                      (equal "tasks" (plist-get (cdr entry) :t)))
+                    sent)))
+        (should (equal '(1 2) (sort (mapcar #'car tasks) #'<)))
+        (should (equal [] (plist-get (cdr (car tasks)) :tasks)))))))
 
 (mevedel-deftest mevedel-collaboration--handle-push-subscription
   (:doc "forwards valid subscriptions and removal only for an authenticated guest")

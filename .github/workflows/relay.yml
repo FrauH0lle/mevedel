@@ -74,5 +74,5 @@ jobs:
             gh release upload "$TAG" dist/mevedel-relay-* dist/SHA256SUMS --clobber
           else
             gh release create "$TAG" dist/mevedel-relay-* dist/SHA256SUMS \
-              --title "relay $TAG" --notes-file dist/NOTES.md
+              --title "$TAG" --notes-file dist/NOTES.md
           fi

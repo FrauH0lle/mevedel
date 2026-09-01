@@ -337,13 +337,15 @@ async function main() {
                'artifacts', 'artifact-panel', 'artifact-title',
                'artifact-meta', 'artifact-tab', 'artifact-download',
                'artifact-close', 'artifact-body',
-               'theme-button', 'modeline'];
+               'theme-button', 'modeline',
+               'tasks', 'tasks-summary', 'tasks-list'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   nodes.composer.hidden = true;
   nodes.filter.hidden = true;
   nodes['notify-button'].hidden = true;
   nodes['own-queue'].hidden = true;
   nodes.agents.hidden = true;
+  nodes.tasks.hidden = true;
   nodes['agent-panel'].hidden = true;
   nodes['agent-transcript'].scrollTop = 0;
   nodes.artifacts.hidden = true;
@@ -913,6 +915,25 @@ async function main() {
   assert.match(textOf(nodes['agent-transcript']), /Looking/);
   nodes['agent-close'].dispatch('click');
   await deliver({t: 'agents', agents: []});
+
+  // The session task list renders as a collapsible summary with one
+  // line per task: in-progress first, completed last and counted.
+  await deliver({t: 'tasks', tasks: [
+    {id: 1, subject: 'Trace the grant', status: 'completed'},
+    {id: 2, subject: 'Fix propagation', status: 'in-progress',
+     owner: '/root/worker-1'},
+    {id: 3, subject: 'Regression test', status: 'pending', blockedBy: [2]},
+  ]});
+  assert.equal(nodes.tasks.hidden, false);
+  assert.match(textOf(nodes['tasks-summary']), /1\/3 done/);
+  assert.equal(nodes['tasks-list'].children.length, 3);
+  assert.match(textOf(nodes['tasks-list'].children[0]), /Fix propagation/);
+  assert.match(textOf(nodes['tasks-list'].children[0]), /\/root\/worker-1/);
+  assert.match(textOf(nodes['tasks-list'].children[1]), /blocked by #2/);
+  assert.match(textOf(nodes['tasks-list'].children[2]), /Trace the grant/);
+  // An emptied list hides the block again.
+  await deliver({t: 'tasks', tasks: []});
+  assert.equal(nodes.tasks.hidden, true);
 
   // Routed artifact frames likewise reach the artifact controller.
   await deliver({t: 'record', record: {

@@ -22,11 +22,13 @@
 .dock-chip:hover { border-color: var(--accent); }
 .dock-chip-meta { color: var(--muted); }
 
-/* Full-screen sheet over the session; Close returns to the room. */
+/* Full-screen sheet over the session; Close returns to the room. It
+   must paint above the dock (z-index 20), which follows it in the DOM
+   and would otherwise float over the panel's transcript. */
 .viewer-panel {
   position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: 30;
   display: flex;
   flex-direction: column;
   background: var(--ground);

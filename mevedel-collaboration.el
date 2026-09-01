@@ -111,6 +111,12 @@
 (declare-function mevedel-session-pending-input-paused
                   "mevedel-structs" (session))
 (declare-function mevedel-session-session-id "mevedel-structs" (session))
+(declare-function mevedel-session-tasks "mevedel-structs" (session))
+(declare-function mevedel-task-blocked-by "mevedel-structs" (task))
+(declare-function mevedel-task-id "mevedel-structs" (task))
+(declare-function mevedel-task-owner "mevedel-structs" (task))
+(declare-function mevedel-task-status "mevedel-structs" (task))
+(declare-function mevedel-task-subject "mevedel-structs" (task))
 
 ;; `mevedel-turn'
 (defvar mevedel--current-request)
@@ -451,7 +457,8 @@ identity.  The id never enters model context or the transcript."
          room (list :t "remove" :ids (vconcat removed))))
       (mevedel-collaboration--publish-queue room)
       (mevedel-collaboration--publish-status room)
-      (mevedel-collaboration--publish-agents room))))
+      (mevedel-collaboration--publish-agents room)
+      (mevedel-collaboration--publish-tasks room))))
 
 (defun mevedel-collaboration--queue-state (room)
   "Return ROOM's guest-visible pending queue state as a plist.
@@ -574,6 +581,33 @@ the Emacs mode line carries."
                  (eq :json-false (plist-get status :busy)))
         (mevedel-collaboration--transport-control
          (plist-get room :transport) (list :t "push"))))))
+
+(defun mevedel-collaboration--task-rows (room)
+  "Return ROOM's guest-visible task rows in session order."
+  (when-let* ((session (plist-get room :session)))
+    (mapcar
+     (lambda (task)
+       (append
+        (list (cons "id" (mevedel-task-id task))
+              (cons "subject" (mevedel-task-subject task))
+              (cons "status" (symbol-name (mevedel-task-status task))))
+        (when-let* ((owner (mevedel-task-owner task)))
+          (list (cons "owner" owner)))
+        (when-let* ((blocked (mevedel-task-blocked-by task)))
+          (list (cons "blockedBy" (vconcat blocked))))))
+     (mevedel-session-tasks session))))
+
+(defun mevedel-collaboration--tasks-frame (room)
+  "Return ROOM's session task-list frame."
+  (list :t "tasks"
+        :tasks (vconcat (mevedel-collaboration--task-rows room))))
+
+(defun mevedel-collaboration--publish-tasks (room)
+  "Broadcast ROOM's task list when it has changed, an emptied one included."
+  (let ((frame (mevedel-collaboration--tasks-frame room)))
+    (unless (equal frame (plist-get room :tasks))
+      (plist-put room :tasks frame)
+      (mevedel-collaboration--broadcast room frame))))
 
 (defun mevedel-collaboration--publish-timer (data-buffer)
   "Run the coalesced publication timer for DATA-BUFFER's room."
