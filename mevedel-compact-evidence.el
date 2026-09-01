@@ -580,21 +580,6 @@ compaction was in flight remain in place."
           (insert-buffer-substring source-buffer))
         (mevedel-transcript-exclude-directive-turns)))))
 
-(defun mevedel-compact-evidence--system-reminder-block (body)
-  "Return BODY wrapped as a model-visible system reminder block."
-  (format "<system-reminder>\n%s\n</system-reminder>" body))
-
-(defun mevedel-compact-evidence-insert-current-request-reminder (body)
-  "Insert reminder BODY before the pending request in the current buffer."
-  (when (and (stringp body) (not (string-empty-p body)))
-    (save-excursion
-      (goto-char (or (mevedel-compact-evidence-find-boundary) (point-min)))
-      (let ((start (point)))
-        (insert "\n" (mevedel-compact-evidence--system-reminder-block body) "\n")
-        (remove-text-properties
-         start (point)
-         '(gptel nil response nil invisible nil front-sticky nil))))))
-
 (defun mevedel-compact-evidence--summary-bounds ()
   "Return plist bounds for the leading summary block, or nil.
 The plist contains `:begin', `:body-begin', `:body-end' and `:end'."

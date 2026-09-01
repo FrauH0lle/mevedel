@@ -80,8 +80,6 @@
                   "mevedel-compact-evidence" (info body-start))
 (declare-function mevedel-compact-evidence-find-boundary
                   "mevedel-compact-evidence" ())
-(declare-function mevedel-compact-evidence-insert-current-request-reminder
-                  "mevedel-compact-evidence" (body))
 (declare-function mevedel-compact-evidence-rebuild-prompt-buffer
                   "mevedel-compact-evidence"
                   (prompt-buffer source-buffer source-pending-text
@@ -109,6 +107,11 @@
 ;; `mevedel-goal'
 (declare-function mevedel-goal-pause-runtime-failure
                   "mevedel-goal" (buffer reason))
+
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-stage-entry
+                  "mevedel-reminders" (fsm type body &optional commit))
+(autoload 'mevedel-reminders-stage-entry "mevedel-reminders")
 
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
@@ -323,9 +326,10 @@ set already stored on FSM's info plist."
                   (let ((mark-active nil))
                     (setq prompt-buffer
                           (gptel--create-prompt-buffer (point))))))
+              (when request-reminder
+                (mevedel-reminders-stage-entry
+                 fsm 'compact-file-references request-reminder))
               (with-current-buffer prompt-buffer
-                (mevedel-compact-evidence-insert-current-request-reminder
-                 request-reminder)
                 (when backend
                   (setq-local gptel-backend backend))
                 (when model
@@ -675,9 +679,8 @@ state machine."
                                               (buffer-local-value
                                                'mevedel-compact-target-current-request-reminder
                                                source-buffer)))
-                                   (with-current-buffer prompt-buffer
-                                     (mevedel-compact-evidence-insert-current-request-reminder
-                                      reminder))
+                                   (mevedel-reminders-stage-entry
+                                    fsm 'compact-file-references reminder)
                                    (with-current-buffer source-buffer
                                      (setq mevedel-compact-target-current-request-reminder
                                            nil))))
