@@ -115,6 +115,11 @@
 (autoload 'mevedel-skills-preparation-markdown-code-ranges
   "mevedel-skills-preparation")
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-stage-entry
+                  "mevedel-reminders" (fsm type body &optional commit))
+(autoload 'mevedel-reminders-stage-entry "mevedel-reminders")
+
 ;; `mevedel-structs'
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
 (defvar mevedel--current-directive-uuid)
@@ -266,7 +271,9 @@ Return attachments that were actually referenced, preserving first use."
     (nreverse used)))
 
 (defun mevedel-skills-input-transform-inline-attachments (fsm)
-  "Expand prepared inline `$skill' attachments into prompt context."
+  "Expand prepared inline `$skill' attachments into prompt context.
+Token replacement stays in the prompt text; the attachment bodies are
+staged as reminder entries for the WAIT injector."
   (when-let* ((chat-buffer (and fsm (plist-get (gptel-fsm-info fsm) :buffer)))
               ((buffer-live-p chat-buffer))
               (attachments
@@ -274,20 +281,15 @@ Return attachments that were actually referenced, preserving first use."
                 'mevedel-skills-input--pending-inline-attachments chat-buffer)))
     (with-current-buffer chat-buffer
       (setq-local mevedel-skills-input--pending-inline-attachments nil))
-    (let* ((start (copy-marker (mevedel-transcript-prompt-transform-start) nil))
-           (used (mevedel-skills-input--replace-inline-attachment-mentions
-                  attachments (marker-position start) (point-max))))
-      (when used
-        (goto-char start)
-        (dolist (attachment used)
-          (unless (plist-get attachment :unavailable)
-            (let ((insert-start (point)))
-              (insert "<system-reminder>\n"
-                      (mevedel-skills-input-attachment-reminder attachment)
-                      "\n</system-reminder>\n\n")
-              (remove-text-properties
-               insert-start (point)
-               '(gptel nil response nil invisible nil front-sticky nil)))))))))
+    (let ((used (mevedel-skills-input--replace-inline-attachment-mentions
+                 attachments
+                 (mevedel-transcript-prompt-transform-start)
+                 (point-max))))
+      (dolist (attachment used)
+        (unless (plist-get attachment :unavailable)
+          (mevedel-reminders-stage-entry
+           fsm 'skill-attachment
+           (mevedel-skills-input-attachment-reminder attachment)))))))
 
 
 ;;

@@ -500,7 +500,9 @@ Return the plugin root directory."
 ;;; View test helpers
 
 (defun mevedel-view-test--dry-run-request-data ()
-  "Return current gptel request data after normal prompt transforms."
+  "Return current gptel request data after normal prompt transforms.
+Runs the reminder injector on the realized request, as the WAIT
+handler chain would, so staged reminder entries reach the data."
   (let ((fsm
          (gptel-request
            nil
@@ -510,6 +512,8 @@ Return the plugin root directory."
            (cons #'mevedel-view--transform-model-input
                  (remove #'mevedel-view--transform-model-input
                          gptel-prompt-transform-functions)))))
+    (when (fboundp 'mevedel-reminders--handle-inject)
+      (mevedel-reminders--handle-inject fsm))
     (format "%S" (plist-get (gptel-fsm-info fsm) :data))))
 
 (defun mevedel-view-test--insert-composer-draft (draft &optional point-offset)

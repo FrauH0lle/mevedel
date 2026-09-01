@@ -17,6 +17,11 @@
                   "mevedel-mention-bindings" (text))
 (autoload 'mevedel-mention-bindings-valid-p "mevedel-mention-bindings")
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-format-block
+                  "mevedel-reminders" (content))
+(autoload 'mevedel-reminders-format-block "mevedel-reminders")
+
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-context "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
@@ -397,11 +402,14 @@ function uses recorded extents and never scans TEXT."
   "Return the complete successful preparation outcome for PLAN and PAIRS."
   (let* ((aggregate (mevedel-skills-plan--aggregate-prepared pairs))
          (command-bodies (plist-get aggregate :command-bodies))
+         ;; These ride the submitted model-input (turn-bound provenance
+         ;; of the prompt content) rather than the ephemeral reminder
+         ;; channel: the outcome is consumed by several submission
+         ;; paths, and a session-FIFO delivery could leak into an
+         ;; unrelated turn when a prepared submission is cancelled.
          (reminder-blocks
-          (mapcar
-           (lambda (reminder)
-             (format "<system-reminder>\n%s\n</system-reminder>" reminder))
-           (plist-get aggregate :instruction-reminders)))
+          (mapcar #'mevedel-reminders-format-block
+                  (plist-get aggregate :instruction-reminders)))
          (main-input
           (if command-bodies
               (mapconcat #'identity command-bodies "\n\n")
