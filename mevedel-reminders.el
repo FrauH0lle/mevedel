@@ -409,8 +409,17 @@ interval it fires once enough turns have passed since the last fire."
   "Wrap CONTENT in a `<system-reminder>' XML block."
   (format "<system-reminder>\n%s\n</system-reminder>" content))
 
+(defun mevedel-reminders--entry-label (type)
+  "Return the display label for entry TYPE.
+TYPE is a reminder type symbol or a cons turn-event key such as
+\(specialist . read)."
+  (cond
+   ((consp type) (format "%s:%s" (car type) (cdr type)))
+   ((symbolp type) (symbol-name type))
+   (t (format "%s" type))))
+
 (defun mevedel-reminders--collect-from (reminders turn-count ctx)
-  "Evaluate REMINDERS at TURN-COUNT and return staged blocks and commits.
+  "Evaluate REMINDERS at TURN-COUNT and return staged entries and commits.
 
 REMINDERS is a list of `mevedel-reminder' structs.  TURN-COUNT is the
 current turn counter used for interval checks.  CTX is the firing
@@ -421,8 +430,9 @@ and an optional `:commit' thunk, the same shape queued turn events use.
 Nothing is consumed here: marking a reminder fired and running any
 content commit are deferred to the returned `:commits', which the
 injector runs once the payload has reached the request.  Returns a plist
-with `:blocks' in reminder order and `:commits'."
-  (let ((blocks nil)
+with `:entries' in reminder order, each (:type TYPE :body BODY), and
+`:commits'."
+  (let ((entries nil)
         (commits nil))
     (dolist (reminder reminders)
       (when (mevedel-reminders--should-fire-p reminder turn-count ctx)
@@ -430,12 +440,13 @@ with `:blocks' in reminder order and `:commits'."
                (body (if (stringp result) result (plist-get result :body)))
                (commit (and (not (stringp result))
                             (plist-get result :commit))))
-          (push (mevedel-reminders-format-block body) blocks)
+          (push (list :type (mevedel-reminder-type reminder) :body body)
+                entries)
           (when commit (push commit commits))
           (push (lambda ()
                   (setf (mevedel-reminder-last-fired reminder) turn-count))
                 commits))))
-    (list :blocks (nreverse blocks)
+    (list :entries (nreverse entries)
           :commits (nreverse commits))))
 
 (defun mevedel-reminders--current-buffer ()
@@ -551,7 +562,7 @@ context reserved for it is offered to the next request instead of lost."
         t))))
 
 (defun mevedel-reminders--stage-turn-events (buffer)
-  "Return live turn-event blocks and commits queued for BUFFER.
+  "Return live turn-event entries and commits queued for BUFFER.
 The queue is not cleared here: dequeueing is the last of the returned
 `:commits', so events survive a request that never reaches injection."
   (when (buffer-live-p buffer)
@@ -564,10 +575,10 @@ The queue is not cleared here: dequeueing is the last of the returned
               nil)
           (let ((items (plist-get mevedel-reminders--turn-events :items)))
             (list
-             :blocks
+             :entries
              (mapcar (lambda (entry)
-                       (mevedel-reminders-format-block
-                        (plist-get (cdr entry) :body)))
+                       (list :type (car entry)
+                             :body (plist-get (cdr entry) :body)))
                      items)
              :commits
              (append
@@ -592,17 +603,22 @@ for the next turn."
   (let* ((info (gptel-fsm-info fsm))
          (buffer (plist-get info :buffer))
          (data (plist-get info :data))
-         (initial (plist-get info :mevedel-reminder-blocks))
+         (initial (plist-get info :mevedel-reminder-entries))
          (staged-commits (plist-get info :mevedel-reminder-commits)))
     (when (and data (buffer-live-p buffer))
       (let* ((events (mevedel-reminders--stage-turn-events buffer))
-             (blocks (append initial (plist-get events :blocks))))
-        (when blocks
+             (entries (append initial (plist-get events :entries))))
+        (when entries
           (let* ((backend (plist-get info :backend))
                  (message
                   (car (gptel--parse-list
                         backend
-                        (list (cons 'prompt (string-join blocks "\n")))))))
+                        (list (cons 'prompt
+                                    (mapconcat
+                                     (lambda (entry)
+                                       (mevedel-reminders-format-block
+                                        (plist-get entry :body)))
+                                     entries "\n")))))))
             (gptel--inject-prompt
              backend data message (and initial -1))
             (dolist (commit (plist-get events :commits))
@@ -610,14 +626,14 @@ for the next turn."
                 (funcall commit)))))
         ;; Staged commits belong to a payload existing at all: hook
         ;; context reached it as prompt text rather than as a block, so
-        ;; gating these on `blocks' would leave it pending forever.
+        ;; gating these on `entries' would leave it pending forever.
         (dolist (commit staged-commits)
           (with-demoted-errors "mevedel: reminder commit failed: %S"
             (funcall commit)))
         (when (or initial staged-commits)
           (setf (gptel-fsm-info fsm)
                 (plist-put
-                 (plist-put info :mevedel-reminder-blocks nil)
+                 (plist-put info :mevedel-reminder-entries nil)
                  :mevedel-reminder-commits nil)))))))
 
 (defun mevedel-reminders--transform (fsm)
@@ -669,12 +685,35 @@ Runs after `mevedel--transform-expand-mentions'."
                         (mevedel-session-turn-count session)
                         session))
                (info (gptel-fsm-info fsm)))
+          ;; Append: transforms at earlier depths (mentions,
+          ;; skills-input) may already have staged entries.
           (setf (gptel-fsm-info fsm)
                 (plist-put
-                 (plist-put info :mevedel-reminder-blocks
-                            (plist-get staged :blocks))
+                 (plist-put info :mevedel-reminder-entries
+                            (append
+                             (plist-get info :mevedel-reminder-entries)
+                             (plist-get staged :entries)))
                  :mevedel-reminder-commits
-                 (append commits (plist-get staged :commits)))))))))
+                 (append (plist-get info :mevedel-reminder-commits)
+                         commits (plist-get staged :commits)))))))))
+
+(defun mevedel-reminders-stage-entry (fsm type body &optional commit)
+  "Stage one system-reminder entry of TYPE with BODY on FSM's request.
+
+The entry joins the synthetic user-role reminder message that
+`mevedel-reminders--handle-inject' injects at the request's next WAIT.
+COMMIT, when non-nil, runs once the payload exists.  Callable from any
+prompt transform and from WAIT-time handlers that run before injection."
+  (when (and (stringp body) (not (string-empty-p body)))
+    (let ((info (gptel-fsm-info fsm)))
+      (setf (gptel-fsm-info fsm)
+            (plist-put
+             (plist-put info :mevedel-reminder-entries
+                        (append (plist-get info :mevedel-reminder-entries)
+                                (list (list :type type :body body))))
+             :mevedel-reminder-commits
+             (append (plist-get info :mevedel-reminder-commits)
+                     (and commit (list commit))))))))
 
 
 ;;
