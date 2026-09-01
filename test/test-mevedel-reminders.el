@@ -581,6 +581,50 @@ this collapses both shapes to the delivered text."
       (kill-buffer chat-buf)
       (kill-buffer prompt-buf))))
 
+(mevedel-deftest mevedel-reminders--agent-transform
+  ()
+  ,test
+  (test)
+  :doc "stages the invocation's reminder roster with the invocation as context"
+  (let* ((seen-ctx nil)
+         (agent-buf (generate-new-buffer " *mevedel-test-agent*"))
+         (inv (mevedel-agent-invocation--create
+               :turn-count 3
+               :reminders
+               (list (mevedel-reminder-create
+                      :type 'agent-demo
+                      :trigger (lambda (_) t)
+                      :content (lambda (ctx)
+                                 (setq seen-ctx ctx)
+                                 "AGENT REMIND")))))
+         (fsm (gptel-make-fsm :info (list :buffer agent-buf))))
+    (unwind-protect
+        (progn
+          (with-current-buffer agent-buf
+            (setq-local mevedel--agent-invocation inv))
+          (mevedel-reminders--agent-transform fsm)
+          (should (eq seen-ctx inv))
+          (should (equal '((:type agent-demo :body "AGENT REMIND"))
+                         (plist-get (gptel-fsm-info fsm)
+                                    :mevedel-reminder-entries)))
+          ;; The fired mark is a deferred commit, exactly as on the
+          ;; session path.
+          (let ((reminder (car (mevedel-agent-invocation-reminders inv))))
+            (should-not (mevedel-reminder-last-fired reminder))
+            (mapc #'funcall (plist-get (gptel-fsm-info fsm)
+                                       :mevedel-reminder-commits))
+            (should (= 3 (mevedel-reminder-last-fired reminder)))))
+      (kill-buffer agent-buf)))
+  :doc "is a no-op for a buffer without an agent invocation"
+  (let* ((buf (generate-new-buffer " *mevedel-test-agent*"))
+         (fsm (gptel-make-fsm :info (list :buffer buf))))
+    (unwind-protect
+        (progn
+          (mevedel-reminders--agent-transform fsm)
+          (should-not (plist-get (gptel-fsm-info fsm)
+                                 :mevedel-reminder-entries)))
+      (kill-buffer buf))))
+
 (mevedel-deftest mevedel-reminders--handle-inject
   (:before-each (mevedel-workspace-clear-registry)
    :after-each (mevedel-workspace-clear-registry))

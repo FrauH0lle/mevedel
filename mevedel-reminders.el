@@ -46,6 +46,8 @@
 (declare-function mevedel-agent-invocation-deferred-set
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-reminders
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-plan-read-only-request-p "mevedel-agents" ())
@@ -757,6 +759,41 @@ Runs after `mevedel--transform-expand-mentions'."
                  :mevedel-reminder-commits
                  (append (plist-get info :mevedel-reminder-commits)
                          commits (plist-get staged :commits)))))))))
+
+(defun mevedel-reminders--agent-transform (fsm)
+  "Stage agent-invocation reminders for separate injection into FSM.
+
+Agent conversation buffers carry no session; their reminder roster
+lives on the invocation struct (max-turns, read-only roles, deferred
+tool roster).  Runs once per agent request in gptel's temporary prompt
+buffer and stages entries exactly like `mevedel-reminders--transform'
+does for sessions, so `mevedel-reminders--handle-inject' delivers and
+records them identically.
+
+FSM is mandatory for the same arity-dispatch reason as
+`mevedel-reminders--transform'."
+  (when-let* ((buffer (plist-get (gptel-fsm-info fsm) :buffer))
+              ((buffer-live-p buffer))
+              (invocation
+               (with-current-buffer buffer
+                 (and (boundp 'mevedel--agent-invocation)
+                      (mevedel-agent-invocation-p mevedel--agent-invocation)
+                      mevedel--agent-invocation))))
+    (let ((mevedel-reminders--current-chat-buffer buffer))
+      (let ((staged (mevedel-reminders--collect-from
+                     (mevedel-agent-invocation-reminders invocation)
+                     (mevedel-agent-invocation-turn-count invocation)
+                     invocation))
+            (info (gptel-fsm-info fsm)))
+        (setf (gptel-fsm-info fsm)
+              (plist-put
+               (plist-put info :mevedel-reminder-entries
+                          (append
+                           (plist-get info :mevedel-reminder-entries)
+                           (plist-get staged :entries)))
+               :mevedel-reminder-commits
+               (append (plist-get info :mevedel-reminder-commits)
+                       (plist-get staged :commits))))))))
 
 (defun mevedel-reminders-stage-entry (fsm type body &optional commit)
   "Stage one system-reminder entry of TYPE with BODY on FSM's request.
