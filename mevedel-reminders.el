@@ -118,6 +118,9 @@
 (autoload 'mevedel-session-fork-provenance-body "mevedel-session-fork")
 
 ;; `mevedel-structs'
+(declare-function mevedel-goal-plan-reference "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 
@@ -974,6 +977,13 @@ your original version of those changes unless the user asks."
                            (> (or (mevedel-session-turn-count session) 0)
                               accepted-turn)))
                      (not (mevedel-session-plan-mode session))
+                     (not
+                      (when-let* ((goal (mevedel-session-goal session))
+                                  ((eq (mevedel-goal-status goal) 'active))
+                                  (reference
+                                   (mevedel-goal-plan-reference goal)))
+                        (equal reference
+                               (mevedel-reminders--plan-path session))))
                      (mevedel-reminders--plan-reference-content session))))
    :content (lambda (session)
               (when-let* ((path (mevedel-reminders--plan-path session))
@@ -1002,16 +1012,12 @@ re-sent sparsely instead of costing tokens in every request's history."
                    (mevedel-session-forked-from-session-id session)))
    :content #'mevedel-session-fork-provenance-body))
 
-(defun mevedel-reminders-reset-fired (session type)
-  "Clear TYPE's fired mark on SESSION so it may fire again.
-For a one-shot reminder whose transcript context was destroyed after
-delivery -- the accepted-plan reference after compaction summarizes the
-implementation prompt away -- resetting the mark lets the trigger
-decide afresh; the trigger still owns whether firing is warranted."
-  (when (mevedel-session-p session)
-    (dolist (reminder (mevedel-session-reminders session))
-      (when (eq (mevedel-reminder-type reminder) type)
-        (setf (mevedel-reminder-last-fired reminder) nil)))))
+(defun mevedel-reminders-rearm-plan-reference (session)
+  "Re-arm SESSION's one-shot accepted-plan reference after compaction."
+  (when-let* ((reminder
+               (cl-find 'plan-reference (mevedel-session-reminders session)
+                        :key #'mevedel-reminder-type)))
+    (setf (mevedel-reminder-last-fired reminder) nil)))
 
 (defun mevedel-session-ensure-reminder (session reminder)
   "Add REMINDER to SESSION unless a reminder of the same type exists."

@@ -83,9 +83,9 @@
                   "mevedel-hooks" (session))
 
 ;; `mevedel-reminders'
-(declare-function mevedel-reminders-reset-fired
-                  "mevedel-reminders" (session type))
-(autoload 'mevedel-reminders-reset-fired "mevedel-reminders")
+(declare-function mevedel-reminders-rearm-plan-reference
+                  "mevedel-reminders" (session))
+(autoload 'mevedel-reminders-rearm-plan-reference "mevedel-reminders")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-artifact-present-p
@@ -407,7 +407,7 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
     ;; a turn this compaction just summarized away; resetting its fired
     ;; mark lets it re-surface the plan address once.  Its trigger
     ;; still gates on an accepted plan, so this is inert otherwise.
-    (mevedel-reminders-reset-fired session 'plan-reference)
+    (mevedel-reminders-rearm-plan-reference session)
     (let ((reminder
            (mevedel-compact-target-file-reference-reminder-body
             session preserved-tail-turns auto)))

@@ -426,8 +426,8 @@
               ((symbol-function
                 'mevedel-compact-target-file-reference-reminder-body)
                (lambda (_session _turns _auto) "remember files"))
-              ((symbol-function 'mevedel-reminders-reset-fired)
-               (lambda (_session type) (push type reset)))
+              ((symbol-function 'mevedel-reminders-rearm-plan-reference)
+               (lambda (_session) (push 'plan-reference reset)))
               ((symbol-function 'mevedel-session-enqueue-pending-reminder)
                (lambda (_session reminder) (push reminder queued))))
       (let ((mevedel-compact-target-current-request-reminder nil))

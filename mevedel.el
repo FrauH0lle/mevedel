@@ -137,6 +137,7 @@
 (require 'mevedel-chat)
 (require 'mevedel-directive-request)
 (require 'mevedel-collaboration-projection)
+(require 'mevedel-collaboration-task)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration)
 (require 'mevedel-worktree)

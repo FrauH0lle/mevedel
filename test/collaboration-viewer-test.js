@@ -499,6 +499,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/renderer.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-artifact.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-agent.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-task.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
 
   // Link grammar: view links carry the bare key, full links append the
@@ -918,22 +919,38 @@ async function main() {
 
   // The session task list renders as a collapsible summary with one
   // line per task: in-progress first, completed last and counted.
-  await deliver({t: 'tasks', tasks: [
-    {id: 1, subject: 'Trace the grant', status: 'completed'},
+  await deliver({t: 'tasks', total: 4, completed: 1, omitted: 1,
+    omittedActive: 0, tasks: [
     {id: 2, subject: 'Fix propagation', status: 'in-progress',
      owner: '/root/worker-1'},
     {id: 3, subject: 'Regression test', status: 'pending', blockedBy: [2]},
+    {id: 1, subject: 'Trace the grant', status: 'completed'},
   ]});
   assert.equal(nodes.tasks.hidden, false);
-  assert.match(textOf(nodes['tasks-summary']), /1\/3 done/);
+  assert.match(textOf(nodes['tasks-summary']), /1\/4 done/);
+  assert.match(textOf(nodes['tasks-summary']), /1 omitted/);
   assert.equal(nodes['tasks-list'].children.length, 3);
   assert.match(textOf(nodes['tasks-list'].children[0]), /Fix propagation/);
   assert.match(textOf(nodes['tasks-list'].children[0]), /\/root\/worker-1/);
   assert.match(textOf(nodes['tasks-list'].children[1]), /blocked by #2/);
   assert.match(textOf(nodes['tasks-list'].children[2]), /Trace the grant/);
-  // An emptied list hides the block again.
-  await deliver({t: 'tasks', tasks: []});
+  // An omitted active task remains conspicuous even with no visible rows.
+  await deliver({t: 'tasks', total: 1, completed: 0, omitted: 1,
+    omittedActive: 1, tasks: []});
+  assert.equal(nodes.tasks.hidden, false);
+  assert.match(textOf(nodes['tasks-summary']), /⚠ 1 active omitted/);
+  assert.equal(nodes['tasks-summary'].dataset.warning, 'true');
+  // A genuinely empty list hides the block again.
+  await deliver({t: 'tasks', total: 0, completed: 0, omitted: 0,
+    omittedActive: 0, tasks: []});
   assert.equal(nodes.tasks.hidden, true);
+  assert.equal(nodes['tasks-summary'].dataset.warning, 'false');
+  // The superseded tasks-only frame is rejected instead of inferred.
+  await deliver({t: 'tasks', tasks: [
+    {id: 1, subject: 'Legacy task', status: 'pending'},
+  ]});
+  assert.equal(nodes.tasks.hidden, true);
+  assert.equal(nodes['tasks-list'].children.length, 0);
 
   // Routed artifact frames likewise reach the artifact controller.
   await deliver({t: 'record', record: {

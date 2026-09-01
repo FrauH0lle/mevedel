@@ -18,7 +18,8 @@ flowchart TD
 The live browser collaboration slice is composed of the
 `mevedel-collaboration.el` room/public-command facade,
 `mevedel-collaboration-guest.el` untrusted guest protocol handler,
-`mevedel-collaboration-projection.el` canonical record projection, and
+`mevedel-collaboration-projection.el` canonical transcript projection,
+`mevedel-collaboration-task.el` task projection/publication, and
 `mevedel-collaboration-transport.el` sealed relay client. The focused
 `mevedel-collaboration-share.el` module presents bearer links and QR codes
 without exposing frame or share-buffer state to the room lifecycle. The host

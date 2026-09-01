@@ -870,6 +870,8 @@
                        (lambda (summary _tail _pending hook-audits &rest _)
                          (setq applied-summary summary
                                applied-hook-audits hook-audits)))
+                      ((symbol-function 'mevedel-reminders-rearm-plan-reference)
+                       #'ignore)
                       ((symbol-function 'message)
                        #'ignore)
                       ((symbol-function 'display-warning)
@@ -1003,6 +1005,8 @@
                        (lambda (&rest _)
                          '(:description "test")))
                       ((symbol-function 'mevedel-compact-target--apply)
+                       #'ignore)
+                      ((symbol-function 'mevedel-reminders-rearm-plan-reference)
                        #'ignore)
                       ((symbol-function 'mevedel-compact-target-file-reference-reminder-body)
                        (lambda (&rest _)

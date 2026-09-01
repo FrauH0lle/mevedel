@@ -66,6 +66,11 @@ recommends those elements while leaving Codex room to choose the next action.
   weekly automated check is useful. See also "/learn" command
 
 - Consider making mevedel's data buffers hidden
+- The worktree fork restore report is delivered via the transient
+  pending-reminder FIFO; a restart between fork creation and the child's
+  first request drops the report detail (provenance survives via the
+  fork-provenance reminder). Persist the report in sidecar slots if that
+  edge ever bites.
 - When a file is attached via the "@" it is also granted Read permissions, however these permissions are not passed on to sub-agents which might want to read the file again
 
 ## Entry format
