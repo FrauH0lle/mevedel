@@ -30,7 +30,7 @@
 ;;    :sandbox-mode best-effort
 ;;    :plan-mode nil
 ;;    :permission-rules ((TOOL-NAME ...) ...)
-;;    :resource-grants ((:path "/abs/path" :access read) ...)
+;;    :resource-grants ((:path "/abs/path" :access read [:recursive t]) ...)
 ;;    :workspace-instruction-hashes (((OWNER PATH) . SHA256) ...)
 ;;    :additional-roots (("name" . "/abs/path") ...)
 ;;    :prompt-index ((SEGMENT-N . ((:turn N :pos POS :preview STR :timestamp STR) ...)) ...)

@@ -46,7 +46,8 @@
 (declare-function mevedel-permission-persistence-load-rules
                   "mevedel-permission-persistence" (workspace))
 (declare-function mevedel-permission-persistence-save-resource-grant
-                  "mevedel-permission-persistence" (workspace path access))
+                  "mevedel-permission-persistence"
+                  (workspace path access &optional recursive))
 (declare-function mevedel-permission-persistence-save-rule
                   "mevedel-permission-persistence"
                   (workspace tool-name action &optional path &rest keys))
@@ -68,7 +69,8 @@
                   "mevedel-permission-rules"
                   (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission-rules-merge-resource-grant
-                  "mevedel-permission-rules" (grants path access))
+                  "mevedel-permission-rules"
+                  (grants path access &optional recursive))
 (declare-function mevedel-permission-rules-path-in-allowed-roots-p
                   "mevedel-permission-rules" (path roots))
 (declare-function mevedel-permission-rules-path-in-exact-allowed-paths-p
@@ -76,9 +78,10 @@
 (declare-function mevedel-permission-rules-path-protected-p
                   "mevedel-permission-rules" (path &optional target))
 (declare-function mevedel-permission-rules-resource-grant
-                  "mevedel-permission-rules" (path access))
+                  "mevedel-permission-rules" (path access &optional recursive))
 (declare-function mevedel-permission-rules-resource-granted-p
-                  "mevedel-permission-rules" (path access grants))
+                  "mevedel-permission-rules"
+                  (path access grants &optional recursive))
 
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-mode-active-p
@@ -540,7 +543,7 @@ The decision chain:
   3. Call the tool checker, when present, to decide command authority
   4. Resolve allow/ask rules innermost-first:
        invocation -> request -> session -> persistent -> defcustom.
-  5. For a path, independently require allowed-root, exact-path, or exact
+  5. For a path, independently require allowed-root, exact-path, or covering
      resource-grant authority; otherwise ask
   6. Apply the mode/default decision
 
@@ -698,7 +701,8 @@ mode, and native-resource tail."
           (and (not skip-resource-boundary-p)
                (mevedel-permission--resource-decision context))))
     (cond
-     ;; Protected resources require exact grants even when a path rule allows.
+     ;; Protected resources require covering grants even when a path rule
+     ;; allows.
      ((and (not skip-resource-boundary-p)
            (plist-get context :protected-path-p)
            (not (plist-get context :resource-granted-p)))
@@ -718,8 +722,8 @@ mode, and native-resource tail."
            ((eq action 'ask)
             (mevedel-permission--decision 'ask 'rule :bucket bucket))))))
      ;; Steps 6-7: missing native resource authority forces a prompt.  An
-     ;; allowed root or exact grant satisfies only the resource half; the mode
-     ;; still decides whether the operation itself is automatic.
+     ;; allowed root or resource grant satisfies only the resource half; the
+     ;; mode still decides whether the operation itself is automatic.
      ((and resource-decision
            (eq (mevedel-permission-decision-raw-outcome resource-decision)
                'ask))
@@ -737,22 +741,26 @@ mode, and native-resource tail."
             (mevedel-permission--decision mode-result 'mode)))))))
 
 
-(defun mevedel-permission-add-session-resource-grant (session path access)
-  "Grant SESSION exact PATH access at READ or WRITE level."
+(defun mevedel-permission-add-session-resource-grant
+    (session path access &optional recursive)
+  "Grant SESSION PATH access at READ or WRITE level.
+RECURSIVE non-nil covers PATH and all descendants."
   (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-assert-mutation-authority session)
-  (let ((grant (mevedel-permission-rules-resource-grant path access)))
+  (let ((grant (mevedel-permission-rules-resource-grant
+                path access recursive)))
     (setf (mevedel-session-resource-grants session)
           (mevedel-permission-rules-merge-resource-grant
-           (mevedel-session-resource-grants session) path access))
+           (mevedel-session-resource-grants session) path access recursive))
     grant))
 
 (defun mevedel-permission-remove-session-resource-grant
-    (session path access)
-  "Revoke SESSION's exact PATH ACCESS resource grant."
+    (session path access &optional recursive)
+  "Revoke SESSION's PATH ACCESS resource grant with RECURSIVE scope."
   (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-assert-mutation-authority session)
-  (let ((grant (mevedel-permission-rules-resource-grant path access)))
+  (let ((grant (mevedel-permission-rules-resource-grant
+                path access recursive)))
     (setf (mevedel-session-resource-grants session)
           (delete grant
                   (copy-sequence
@@ -831,8 +839,8 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
 
 (cl-defun mevedel-permission--apply-prompt-result
     (result tool-name &optional session workspace path
-            &key spec-key spec-value resource-access network
-            file-system sandbox-permissions)
+            &key spec-key spec-value resource-access resource-recursive
+            network file-system sandbox-permissions)
   "Dispatch a permission prompt RESULT to the correct storage.
 
 RESULT is one of:
@@ -846,7 +854,8 @@ TOOL-NAME is the tool being permitted.  SESSION and WORKSPACE are used
 for storage.  Positional PATH scopes the authority to a file path (kept
 for call sites that already pass it).  SPEC-KEY/SPEC-VALUE allow rule
 scoping by any other specifier (`:pattern', `:domain', `:name').
-RESOURCE-ACCESS stores exact path authority separately from rules.
+RESOURCE-ACCESS stores path authority separately from rules;
+RESOURCE-RECURSIVE non-nil extends it to all descendants of PATH.
 NETWORK and FILE-SYSTEM store a capability-qualified operation rule.
 SANDBOX-PERMISSIONS qualifies an already requested execution level."
   (cl-flet ((session-rule (action)
@@ -860,11 +869,11 @@ SANDBOX-PERMISSIONS qualifies an already requested execution level."
             (session-resource-grant ()
               (when (and session path resource-access)
                 (mevedel-permission-add-session-resource-grant
-                 session path resource-access)))
+                 session path resource-access resource-recursive)))
             (persistent-resource-grant ()
               (when (and workspace path resource-access)
                 (mevedel-permission-persistence-save-resource-grant
-                 workspace path resource-access)))
+                 workspace path resource-access resource-recursive)))
             (persistent-rule (action)
               (cond
                (workspace

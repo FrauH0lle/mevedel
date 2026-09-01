@@ -82,7 +82,8 @@
 (declare-function mevedel-permission-rules-qualified-buckets
                   "mevedel-permission-rules" (buckets qualifier value))
 (declare-function mevedel-permission-rules-resource-granted-p
-                  "mevedel-permission-rules" (path access grants))
+                  "mevedel-permission-rules"
+                  (path access grants &optional recursive))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--plan-mode-p

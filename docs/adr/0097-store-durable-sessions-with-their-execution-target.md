@@ -50,8 +50,9 @@ read-pin protocol.
 
 Rebinding through a different client-specific TRAMP spelling uses durable
 workspace identity.  A changed target incarnation remains an unacknowledged
-observation while exact grants are revoked, then a sidecar marker atomically
-publishes the replacement identity with empty exact session authority.  Only a
+observation while resource grants are revoked, then a sidecar marker atomically
+publishes the replacement identity with empty session resource authority.  Only
+a
 successful marker acknowledges the replacement; failure blocks the next
 request for explicit publication recovery.  This accepts remote-write latency,
 unavailability, and immutable-snapshot storage growth in exchange for portable,

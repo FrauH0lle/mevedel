@@ -520,6 +520,51 @@
                  :workspace-root "/project"
                  :resource-grants '((:path "/etc/passwd" :access read)))
                 'allow)))
+  :doc "recursive resource grant allows descendant reads outside workspace"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (mock-tool (mevedel-tool--create :name "Read" :read-only-p t))
+        (grants '((:path "/usr/share/emacs" :access read :recursive t))))
+    (should (eq (mevedel-check-permission
+                 "Read" :tool-struct mock-tool
+                 :path "/usr/share/emacs/31.1/lisp/simple.el" :mode 'ask
+                 :workspace-root "/project"
+                 :resource-grants grants)
+                'allow))
+    (should (eq (mevedel-check-permission
+                 "Read" :tool-struct mock-tool
+                 :path "/usr/share/emacs-old/file" :mode 'ask
+                 :workspace-root "/project"
+                 :resource-grants grants)
+                'ask)))
+  :doc "explicit deny and protected paths stay final over a recursive grant"
+  (let ((mock-tool (mevedel-tool--create :name "Read" :read-only-p t))
+        (grants '((:path "/outside" :access write :recursive t))))
+    (let ((mevedel-permission-rules
+           '(("Read" :path "/outside/**" :action deny)))
+          (mevedel-protected-paths nil))
+      (should (eq (mevedel-check-permission
+                   "Read" :tool-struct mock-tool
+                   :path "/outside/denied.el" :mode 'ask
+                   :workspace-root "/project"
+                   :resource-grants grants)
+                  'deny)))
+    ;; A recursive grant covering a protected path satisfies its gate,
+    ;; exactly as an exact grant on the protected path does today.
+    (let ((mevedel-permission-rules nil)
+          (mevedel-protected-paths '(("/outside/.ssh/**" . inaccessible))))
+      (should (eq (mevedel-check-permission
+                   "Read" :tool-struct mock-tool
+                   :path "/outside/.ssh/config" :mode 'ask
+                   :workspace-root "/project"
+                   :resource-grants nil)
+                  'ask))
+      (should (eq (mevedel-check-permission
+                   "Read" :tool-struct mock-tool
+                   :path "/outside/.ssh/config" :mode 'ask
+                   :workspace-root "/project"
+                   :resource-grants grants)
+                  'allow))))
   :doc "active Goal request grants only exact accepted-plan reads"
   (let* ((mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
@@ -827,6 +872,19 @@
     (mevedel-permission-add-session-resource-grant session path 'write)
     (should
      (equal `((:path ,path :access write))
+            (mevedel-session-resource-grants session))))
+  :doc "recursive grants keep their own identity next to exact ones"
+  (let* ((path (expand-file-name "tree" temporary-file-directory))
+         (session (mevedel-session--create :name "test")))
+    (mevedel-permission-add-session-resource-grant session path 'read)
+    (mevedel-permission-add-session-resource-grant session path 'read t)
+    (should
+     (equal `((:path ,path :access read)
+              (:path ,path :access read :recursive t))
+            (mevedel-session-resource-grants session)))
+    (mevedel-permission-remove-session-resource-grant session path 'read t)
+    (should
+     (equal `((:path ,path :access read))
             (mevedel-session-resource-grants session)))))
 
 

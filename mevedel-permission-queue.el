@@ -55,7 +55,8 @@
                   "mevedel-permission-rules"
                   (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission-rules-resource-granted-p
-                  "mevedel-permission-rules" (path access grants))
+                  "mevedel-permission-rules"
+                  (path access grants &optional recursive))
 (autoload 'mevedel-permission-rules-bucket-decision
   "mevedel-permission-rules")
 (autoload 'mevedel-permission-rules-resource-granted-p
@@ -514,7 +515,7 @@ translated for their kind and are removed from the queue.  Entries that
 still resolve to `ask' stay in place.
 
 Protected-path and deny precedence is handled inside
-`mevedel-check-permission': a protected resource needs an exact grant,
+`mevedel-check-permission': a protected resource needs a covering grant,
 while deny rules remain final."
   (let (kept settled)
     (dolist (entry (mevedel-permission-queue--get session))
@@ -661,7 +662,8 @@ re-evaluation context."
                 (cond
                  ((memq rule-action '(deny ask)) rule-action)
                  ((mevedel-permission-rules-resource-granted-p
-                   path access (plist-get context :resource-grants))
+                   path access (plist-get context :resource-grants)
+                   (plist-get resource :recursive))
                   'allow)
                  (t 'ask))
                 decisions)))

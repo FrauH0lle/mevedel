@@ -387,7 +387,8 @@ zone.
 ## Permission and confinement propagation
 
 Every nested agent shares the root session's permission mode, direct rules,
-explicit denies, protected resources, exact grants, and confinement policy by
+explicit denies, protected resources, resource grants, and confinement policy
+by
 reference. Its Bash and Eval calls therefore follow the same authority state as
 the root. Required decisions and direct interactions are attributed with the
 requester's canonical path and rendered in the root view's shared queues; child

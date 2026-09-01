@@ -3,9 +3,9 @@
 ;;; Commentary:
 
 ;; Tabulated cockpit surface for remembered permission authority.  Session
-;; and workspace operation rules, network-qualified rules, and exact resource
-;; grants appear as selectable rows, and each row can be revoked on its own
-;; without touching the others.
+;; and workspace operation rules, network-qualified rules, and exact or
+;; recursive resource grants appear as selectable rows, and each row can be
+;; revoked on its own without touching the others.
 
 ;;; Code:
 
@@ -37,7 +37,8 @@
 (declare-function mevedel-permission-persistent-authority
                   "mevedel-permission-persistence" (workspace))
 (declare-function mevedel-permission-remove-persistent-resource-grant
-                  "mevedel-permission-persistence" (workspace path access))
+                  "mevedel-permission-persistence"
+                  (workspace path access &optional recursive))
 (declare-function mevedel-permission-remove-persistent-rule
                   "mevedel-permission-persistence" (workspace rule))
 (autoload 'mevedel-permission-persistent-authority
@@ -49,7 +50,8 @@
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-remove-session-resource-grant
-                  "mevedel-permissions" (session path access))
+                  "mevedel-permissions"
+                  (session path access &optional recursive))
 (declare-function mevedel-permission-remove-session-rule
                   "mevedel-permissions" (session rule))
 (autoload 'mevedel-permission-remove-session-resource-grant
@@ -87,15 +89,17 @@
           :value rule)))
 
 (defun mevedel-permissions-list--resource-item (scope grant)
-  "Return the cockpit item for SCOPE exact resource GRANT."
+  "Return the cockpit item for SCOPE resource GRANT."
   (let ((path (plist-get grant :path)))
     (list :scope scope
           :kind 'resource
           :access (plist-get grant :access)
           :subject "path"
-          :spec (if (stringp path)
-                    (abbreviate-file-name path)
-                  (format "%S" path))
+          :spec (concat (if (stringp path)
+                            (abbreviate-file-name path)
+                          (format "%S" path))
+                        (if (plist-get grant :recursive)
+                            " (recursive)" ""))
           :value grant)))
 
 (defun mevedel-permissions-list--collect (context)
@@ -188,12 +192,14 @@
        (mevedel-permission-remove-session-rule session value))
       (`(session . resource)
        (mevedel-permission-remove-session-resource-grant
-        session (plist-get value :path) (plist-get value :access)))
+        session (plist-get value :path) (plist-get value :access)
+        (plist-get value :recursive)))
       (`(workspace . rule)
        (mevedel-permission-remove-persistent-rule workspace value))
       (`(workspace . resource)
        (mevedel-permission-remove-persistent-resource-grant
-        workspace (plist-get value :path) (plist-get value :access))))
+        workspace (plist-get value :path) (plist-get value :access)
+        (plist-get value :recursive))))
     (mevedel-cockpit-surface-refresh)
     (message "mevedel: revoked %s" label)))
 
@@ -240,7 +246,7 @@
          "Rows"
          "operation  Tool authority remembered for a matching operation"
          "network    Operation authority that also carries network access"
-         "resource   Exact path grant remembered for one access mode"
+         "resource   Exact or recursive path grant remembered for one access mode"
          "session    Held by this session only, and saved with it"
          "workspace  Shared by every session in this workspace"
          ""

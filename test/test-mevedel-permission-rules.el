@@ -221,6 +221,16 @@
 ;;
 ;;; Protected paths
 
+(mevedel-deftest mevedel-permission-rules--path-contained-p ()
+  ,test
+  (test)
+  :doc "matches the root and descendants without matching prefixed siblings"
+  (should (mevedel-permission-rules--path-contained-p "/srv/tree" "/srv/tree"))
+  (should (mevedel-permission-rules--path-contained-p
+           "/srv/tree/sub/file" "/srv/tree"))
+  (should-not (mevedel-permission-rules--path-contained-p
+               "/srv/tree-old/file" "/srv/tree")))
+
 (mevedel-deftest mevedel-permission-rules-path-protected-p ()
   ,test
   (test)
@@ -505,6 +515,92 @@
         ("Bash" :pattern "pwd"
                 :sandbox-permissions require-escalated :action allow)))
      :sandbox-permissions 'require-escalated))))
+
+
+;;
+;;; Resource grants
+
+(mevedel-deftest mevedel-permission-rules-resource-grant ()
+  ,test
+  (test)
+  :doc "exact grant shape carries only path and access"
+  (should (equal '(:path "/etc/passwd" :access read)
+                 (mevedel-permission-rules-resource-grant
+                  "/etc/passwd" 'read)))
+  :doc "recursive grant appends the recursive flag"
+  (should (equal '(:path "/usr/share/emacs" :access read :recursive t)
+                 (mevedel-permission-rules-resource-grant
+                  "/usr/share/emacs" 'read t)))
+  :doc "non-boolean recursive value errors"
+  (should-error (mevedel-permission-rules-resource-grant
+                 "/usr/share/emacs" 'read 'yes)))
+
+(mevedel-deftest mevedel-permission-rules-resource-granted-p ()
+  ,test
+  (test)
+  :doc "exact grant matches only its exact path"
+  (let ((grants '((:path "/etc/passwd" :access read))))
+    (should (mevedel-permission-rules-resource-granted-p
+             "/etc/passwd" 'read grants))
+    (should-not (mevedel-permission-rules-resource-granted-p
+                 "/etc" 'read grants))
+    (should-not (mevedel-permission-rules-resource-granted-p
+                 "/etc/passwd2" 'read grants)))
+  :doc "recursive grant matches the directory and descendants"
+  (let ((grants '((:path "/usr/share/emacs" :access read :recursive t))))
+    (should (mevedel-permission-rules-resource-granted-p
+             "/usr/share/emacs" 'read grants))
+    (should (mevedel-permission-rules-resource-granted-p
+             "/usr/share/emacs/31.1/lisp/simple.el" 'read grants)))
+  :doc "similarly prefixed sibling does not match a recursive grant"
+  (should-not (mevedel-permission-rules-resource-granted-p
+               "/usr/share/emacs-old" 'read
+               '((:path "/usr/share/emacs" :access read :recursive t))))
+  :doc "write grant implies read in both scopes"
+  (should (mevedel-permission-rules-resource-granted-p
+           "/srv/out" 'read '((:path "/srv/out" :access write))))
+  (should (mevedel-permission-rules-resource-granted-p
+           "/srv/out/log" 'read
+           '((:path "/srv/out" :access write :recursive t))))
+  :doc "read grant does not imply write"
+  (should-not (mevedel-permission-rules-resource-granted-p
+               "/srv/out/log" 'write
+               '((:path "/srv/out" :access read :recursive t))))
+  :doc "recursive request is never satisfied by an exact grant"
+  (should-not (mevedel-permission-rules-resource-granted-p
+               "/usr/share/emacs" 'read
+               '((:path "/usr/share/emacs" :access read))
+               t))
+  :doc "recursive request is satisfied by a recursive ancestor grant"
+  (should (mevedel-permission-rules-resource-granted-p
+           "/usr/share/emacs/31.1" 'read
+           '((:path "/usr/share" :access read :recursive t))
+           t)))
+
+(mevedel-deftest mevedel-permission-rules-merge-resource-grant ()
+  ,test
+  (test)
+  :doc "write promotes an exact read grant of the same identity"
+  (should (equal '((:path "/srv/out" :access write))
+                 (mevedel-permission-rules-merge-resource-grant
+                  '((:path "/srv/out" :access read)) "/srv/out" 'write)))
+  :doc "same-identity coverage short-circuits"
+  (let ((grants '((:path "/srv/out" :access write :recursive t))))
+    (should (eq grants
+                (mevedel-permission-rules-merge-resource-grant
+                 grants "/srv/out" 'read t))))
+  :doc "exact grant is recorded even under a covering recursive ancestor"
+  (should (equal '((:path "/srv" :access read :recursive t)
+                   (:path "/srv/out" :access read))
+                 (mevedel-permission-rules-merge-resource-grant
+                  '((:path "/srv" :access read :recursive t))
+                  "/srv/out" 'read)))
+  :doc "promotion does not cross between exact and recursive identities"
+  (should (equal '((:path "/srv/out" :access read)
+                   (:path "/srv/out" :access write :recursive t))
+                 (mevedel-permission-rules-merge-resource-grant
+                  '((:path "/srv/out" :access read))
+                  "/srv/out" 'write t))))
 
 (provide 'test-mevedel-permission-rules)
 ;;; test-mevedel-permission-rules.el ends here

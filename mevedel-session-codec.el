@@ -345,14 +345,16 @@ A rule is `(TOOL-NAME &rest PLIST)' with `:action SYMBOL'."
    rules))
 
 (defun mevedel-session-codec--filter-resource-grants (grants)
-  "Keep well-formed exact resource GRANTS.
-A grant is `(:path ABSOLUTE-PATH :access read-or-write)'."
+  "Keep well-formed resource GRANTS.
+A grant is `(:path ABSOLUTE-PATH :access read-or-write)', optionally
+carrying `:recursive t' for directory-tree scope."
   (cl-remove-if-not
    (lambda (grant)
      (and (proper-list-p grant)
           (stringp (plist-get grant :path))
           (file-name-absolute-p (plist-get grant :path))
-          (memq (plist-get grant :access) '(read write))))
+          (memq (plist-get grant :access) '(read write))
+          (memq (plist-get grant :recursive) '(t nil))))
    grants))
 
 

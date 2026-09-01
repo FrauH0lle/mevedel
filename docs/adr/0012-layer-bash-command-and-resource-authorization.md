@@ -5,7 +5,7 @@ identified filesystem resources are authorized.  A user-authoritative command
 allow from the session, workspace-persistent, or global user rule bucket may
 override any conservative classifier category, including dangerous or complex;
 delegated invocation and request rules may not.  No command rule can grant
-access to paths outside allowed roots or exact path grants, while explicit
+access to paths outside allowed roots or resource grants, while explicit
 denies and protected paths remain authoritative.  This preserves informed user
 control without letting skills elevate their own authority, broad command
 patterns become implicit filesystem capabilities, or Bash bypass native
@@ -14,3 +14,9 @@ execution confinement rather than treated as an effect-safety proof: `.git`
 is read-only by default, other protected paths are inaccessible by default,
 and an approved invocation receives only the additive read or write capability
 needed for that path.
+
+Recursive resource grants extend this decision without changing the layering:
+exact-only authority could not represent a directory tree without one grant per
+file, so a grant may now cover its directory and descendants.  Command rules
+still cannot supply that filesystem authority, and exact and recursive grants
+remain distinct revocable scopes.

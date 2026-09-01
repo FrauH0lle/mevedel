@@ -117,12 +117,16 @@
 (declare-function mevedel-permission-rules-find
                   "mevedel-permission-rules"
                   (rules tool-name &rest keys))
+(declare-function mevedel-permission-rules-merge-resource-grant
+                  "mevedel-permission-rules"
+                  (grants path access &optional recursive))
 (declare-function mevedel-permission-rules-network-decision
                   "mevedel-permission-rules" (buckets tool-name pattern))
 (declare-function mevedel-permission-rules-qualified-buckets
                   "mevedel-permission-rules" (buckets qualifier value))
 (declare-function mevedel-permission-rules-resource-granted-p
-                  "mevedel-permission-rules" (path access grants))
+                  "mevedel-permission-rules"
+                  (path access grants &optional recursive))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--apply-prompt-result
@@ -516,7 +520,8 @@ PERMISSION-CONTEXT supplies the session execution target."
           (append (plist-get permission-context :resource-grants)
                   (and session (mevedel-session-resource-grants session)))))
     (mevedel-permission-rules-resource-granted-p
-     (plist-get grant :path) (plist-get grant :access) grants)))
+     (plist-get grant :path) (plist-get grant :access) grants
+     (plist-get grant :recursive))))
 
 (defun mevedel-tool-exec-permission--filesystem-resource-rule-action
     (tool-name grant permission-context)
@@ -528,7 +533,7 @@ PERMISSION-CONTEXT supplies the session execution target."
       (and (memq action '(deny ask)) action))))
 
 (defun mevedel-tool-exec-permission--additional-profile (network grants)
-  "Return an additive authority profile for NETWORK and exact GRANTS."
+  "Return an additive authority profile for NETWORK and GRANTS."
   (let (profile)
     (when network
       (setq profile (plist-put profile :network t)))
@@ -545,19 +550,14 @@ PERMISSION-CONTEXT supplies the session execution target."
       (dolist (grant (plist-get profile :file-system))
         (when (and (stringp (plist-get grant :path))
                    (file-name-absolute-p (plist-get grant :path))
-                   (memq (plist-get grant :access) '(read write)))
-          (let* ((path (expand-file-name (plist-get grant :path)))
-                 (access (plist-get grant :access))
-                 (existing
-                  (cl-find path grants
-                           :key (lambda (item) (plist-get item :path))
-                           :test #'string-equal)))
-            (if existing
-                (when (eq access 'write)
-                  (plist-put existing :access 'write))
-              (setq grants
-                    (append grants
-                            (list (list :path path :access access)))))))))
+                   (memq (plist-get grant :access) '(read write))
+                   (memq (plist-get grant :recursive) '(t nil)))
+          (setq grants
+                (mevedel-permission-rules-merge-resource-grant
+                 grants
+                 (plist-get grant :path)
+                 (plist-get grant :access)
+                 (plist-get grant :recursive))))))
     (mevedel-tool-exec-permission--additional-profile network grants)))
 
 (defun mevedel-tool-exec-permission--direct-resource-grants (permission-context)
@@ -605,7 +605,8 @@ PERMISSION-CONTEXT supplies the session execution target."
           (mevedel-permission-rules-resource-granted-p
            (plist-get candidate :path)
            (plist-get candidate :access)
-           grants))
+           grants
+           (plist-get candidate :recursive)))
         (plist-get
          (mevedel-tool-exec-permission--merge-additional-profiles
           (list :file-system candidates))
@@ -768,7 +769,8 @@ OPERATION-PATTERN is the exact Bash command or Eval expression."
           (mevedel-permission--apply-prompt-result
            outcome tool-name session workspace path
            :spec-key :path :spec-value path
-           :resource-access access))))))
+           :resource-access access
+           :resource-recursive (plist-get grant :recursive)))))))
 
 (defun mevedel-tool-exec-permission--log-additional-authority
     (tool-name state permission-context metadata-p)

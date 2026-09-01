@@ -33,9 +33,10 @@
                   "mevedel-permission-rules"
                   (tool-name action spec-key spec-value &rest keys))
 (declare-function mevedel-permission-rules-merge-resource-grant
-                  "mevedel-permission-rules" (grants path access))
+                  "mevedel-permission-rules"
+                  (grants path access &optional recursive))
 (declare-function mevedel-permission-rules-resource-grant
-                  "mevedel-permission-rules" (path access))
+                  "mevedel-permission-rules" (path access &optional recursive))
 (autoload 'mevedel-permission-rules-build-rule "mevedel-permission-rules")
 (autoload 'mevedel-permission-rules-merge-resource-grant
   "mevedel-permission-rules")
@@ -113,16 +114,19 @@
 
 (defun mevedel-permission--normalize-resource-grant
     (grant &optional path-normalizer)
-  "Return normalized exact resource GRANT, or nil when invalid.
-PATH-NORMALIZER defaults to exact-path normalization."
+  "Return normalized resource GRANT, or nil when invalid.
+PATH-NORMALIZER defaults to exact-path normalization.  An optional
+`:recursive' key must be t or nil; it is preserved only when t."
   (when (and (mevedel-permission--valid-plist-p
-              grant '(:path :access) '(:path :access))
-             (memq (plist-get grant :access) '(read write)))
+              grant '(:path :access :recursive) '(:path :access))
+             (memq (plist-get grant :access) '(read write))
+             (memq (plist-get grant :recursive) '(t nil)))
     (when-let* ((path (funcall
                        (or path-normalizer
                            #'mevedel-permission--normalize-exact-path)
                        (plist-get grant :path))))
-      (list :path path :access (plist-get grant :access)))))
+      (append (list :path path :access (plist-get grant :access))
+              (and (plist-get grant :recursive) '(:recursive t))))))
 
 (defun mevedel-permission--normalize-rule
     (rule &optional exact-path-normalizer path-pattern-normalizer)
@@ -455,7 +459,7 @@ Returns a merged list in `mevedel-permission-rules' format."
                        :rules))))
 
 (defun mevedel-permission-persistence-load-resource-grants (workspace)
-  "Load exact resource grants persisted for WORKSPACE."
+  "Load resource grants persisted for WORKSPACE."
   (plist-get
    (mevedel-permission--read-store-file
     (mevedel-permission-persistence-file workspace)
@@ -463,7 +467,7 @@ Returns a merged list in `mevedel-permission-rules' format."
    :resource-grants))
 
 (defun mevedel-permission-persistent-authority (workspace)
-  "Return WORKSPACE's remembered rules and exact resource grants."
+  "Return WORKSPACE's remembered rules and resource grants."
   (or (mevedel-permission--read-store-file
        (mevedel-permission-persistence-file workspace)
        (mevedel-permission--workspace-target workspace))
@@ -499,26 +503,27 @@ is created if it does not exist."
      file (plist-put store :rules updated) target)))
 
 (defun mevedel-permission-persistence-save-resource-grant
-    (workspace path access)
-  "Persist exact PATH ACCESS for WORKSPACE."
+    (workspace path access &optional recursive)
+  "Persist PATH ACCESS for WORKSPACE.
+RECURSIVE non-nil covers PATH and all descendants."
   (let* ((file (mevedel-permission-persistence-file workspace))
          (target (mevedel-permission--workspace-target workspace))
          (store (mevedel-permission-persistence-editable-store file target))
-         (grant (mevedel-permission-rules-resource-grant path access))
+         (grant (mevedel-permission-rules-resource-grant path access recursive))
          (grants
           (mevedel-permission-rules-merge-resource-grant
-           (plist-get store :resource-grants) path access)))
+           (plist-get store :resource-grants) path access recursive)))
     (mevedel-permission-persistence-write-store
      file (plist-put store :resource-grants grants) target)
     grant))
 
 (defun mevedel-permission-remove-persistent-resource-grant
-    (workspace path access)
-  "Revoke WORKSPACE's exact PATH ACCESS resource grant."
+    (workspace path access &optional recursive)
+  "Revoke WORKSPACE's PATH ACCESS resource grant with RECURSIVE scope."
   (let* ((file (mevedel-permission-persistence-file workspace))
          (target (mevedel-permission--workspace-target workspace))
          (store (mevedel-permission-persistence-editable-store file target))
-         (grant (mevedel-permission-rules-resource-grant path access)))
+         (grant (mevedel-permission-rules-resource-grant path access recursive)))
     (when (file-exists-p file)
       (mevedel-permission-persistence-write-store
        file

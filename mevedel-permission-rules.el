@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Owns permission rule configuration, parsing, matching, precedence buckets,
-;; protected-path policy, and exact resource-grant construction.
+;; protected-path policy, and resource-grant construction.
 
 ;;; Code:
 
@@ -69,10 +69,13 @@ the matching Bash command or Eval expression.  It also authorizes the
 operation; an otherwise identical rule without `:network' leaves network
 isolated.
 
-The optional `:file-system' qualifier records exact child-process grants as
-`((:path ABSOLUTE-PATH :access ACCESS) ...)', where ACCESS is `read' or
-`write'.  A matching direct resource grant must also exist before a path is
-reopened.
+The optional `:file-system' qualifier records child-process grants as
+`((:path ABSOLUTE-PATH :access ACCESS [:recursive t]) ...)', where ACCESS
+is `read' or `write'.  Grant paths are literal; `*', `**', and `?' carry
+no glob meaning there.  `:recursive t' extends a grant from the exact
+path to the directory and everything beneath it.  A matching direct
+resource grant must also exist before a path is reopened; a recursive
+requirement is met only by a recursive direct grant containing it.
 
 The optional :sandbox-permissions qualifier currently accepts
 `require-escalated'.  Such rules participate only in full execution
@@ -116,7 +119,7 @@ Example:
     ("~/.kube/**" . inaccessible))
   "Protected path globs and their child-confinement access modes.
 
-Even `full-auto' mode prompts when a matching path lacks an exact resource
+Even `full-auto' mode prompts when a matching path lacks a covering resource
 grant.  `read-only' keeps matched content visible but immutable;
 `inaccessible' hides it.  This alist is also compiled into the Bubblewrap
   profile for Bash and batch Eval."
@@ -378,11 +381,11 @@ Returns non-nil if the path is protected."
                (mevedel-permission-rules-match-path-p
                 expanded pattern target)))))
 
-(defun mevedel-permission--path-in-workspace-p (path workspace-root)
-  "Return non-nil when PATH is WORKSPACE-ROOT or is contained by it."
-  (when (and path workspace-root)
+(defun mevedel-permission-rules--path-contained-p (path root)
+  "Return non-nil when PATH is ROOT or is contained by it."
+  (when (and path root)
     (let ((abs-path (expand-file-name path))
-          (abs-root (expand-file-name workspace-root)))
+          (abs-root (expand-file-name root)))
       (or (string= (directory-file-name abs-path)
                    (directory-file-name abs-root))
           (string-prefix-p (file-name-as-directory abs-root)
@@ -392,7 +395,7 @@ Returns non-nil if the path is protected."
   "Return non-nil when PATH is contained by any root in ROOTS."
   (when path
     (cl-loop for root in roots
-             thereis (mevedel-permission--path-in-workspace-p path root))))
+             thereis (mevedel-permission-rules--path-contained-p path root))))
 
 (defun mevedel-permission-rules-path-in-exact-allowed-paths-p (path allowed-paths)
   "Return non-nil when PATH exactly matches one of ALLOWED-PATHS."
@@ -401,16 +404,25 @@ Returns non-nil if the path is protected."
       (cl-loop for allowed in allowed-paths
                thereis (string= expanded (expand-file-name allowed))))))
 
-(defun mevedel-permission-rules-resource-granted-p (path access grants)
-  "Return non-nil when GRANTS authorize ACCESS to exact PATH."
+(defun mevedel-permission-rules-resource-granted-p
+    (path access grants &optional recursive)
+  "Return non-nil when GRANTS authorize ACCESS to PATH.
+RECURSIVE non-nil requests authority over PATH and all descendants,
+which only a recursive grant containing PATH provides.  Otherwise an
+exact grant on PATH or a recursive grant containing PATH suffices."
   (when (and path (memq access '(read write)))
     (let ((expanded (expand-file-name path)))
       (cl-loop for grant in grants
                when (proper-list-p grant)
                thereis
                (and (stringp (plist-get grant :path))
-                    (string= expanded
-                             (expand-file-name (plist-get grant :path)))
+                    (if (plist-get grant :recursive)
+                        (mevedel-permission-rules--path-contained-p
+                         expanded (plist-get grant :path))
+                      (and (not recursive)
+                           (string= expanded
+                                    (expand-file-name
+                                     (plist-get grant :path)))))
                     (or (eq (plist-get grant :access) 'write)
                         (eq (plist-get grant :access) access)))))))
 
@@ -527,27 +539,40 @@ defcustom buckets may otherwise authorize or explicitly ask for LEVEL."
 ;;
 ;;; Session rule storage
 
-(defun mevedel-permission-rules-resource-grant (path access)
-  "Return normalized exact PATH ACCESS resource grant."
+(defun mevedel-permission-rules-resource-grant (path access &optional recursive)
+  "Return normalized PATH ACCESS resource grant.
+RECURSIVE non-nil marks the grant as covering PATH and all descendants."
   (unless (and (stringp path) (not (string-empty-p path)))
     (error "Invalid resource path: %S" path))
   (unless (memq access '(read write))
     (error "Invalid resource access: %s" access))
-  (list :path (expand-file-name path) :access access))
+  (unless (memq recursive '(t nil))
+    (error "Invalid resource recursive flag: %S" recursive))
+  (append (list :path (expand-file-name path) :access access)
+          (and recursive '(:recursive t))))
 
-(defun mevedel-permission-rules-merge-resource-grant (grants path access)
-  "Return GRANTS with exact PATH promoted to ACCESS."
-  (let ((grant (mevedel-permission-rules-resource-grant path access)))
-    (if (mevedel-permission-rules-resource-granted-p path access grants)
+(defun mevedel-permission-rules-merge-resource-grant
+    (grants path access &optional recursive)
+  "Return GRANTS with PATH promoted to ACCESS within its RECURSIVE scope.
+Grant identity is the normalized path plus the recursive flag; access
+promotion and deduplication never cross between an exact and a
+recursive grant on the same path."
+  (let* ((grant (mevedel-permission-rules-resource-grant path access recursive))
+         (expanded (plist-get grant :path))
+         (same-identity-p
+          (lambda (item)
+            (and (stringp (plist-get item :path))
+                 (string= expanded (expand-file-name (plist-get item :path)))
+                 (eq (and (plist-get item :recursive) t) (and recursive t))))))
+    (if (cl-find-if (lambda (item)
+                      (and (funcall same-identity-p item)
+                           (or (eq (plist-get item :access) 'write)
+                               (eq (plist-get item :access) access))))
+                    grants)
         grants
       (append
        (if (eq access 'write)
-           (cl-remove
-            (expand-file-name path) grants
-            :key (lambda (item)
-                   (and (stringp (plist-get item :path))
-                        (expand-file-name (plist-get item :path))))
-            :test #'string=)
+           (cl-remove-if same-identity-p grants)
          grants)
        (list grant)))))
 
