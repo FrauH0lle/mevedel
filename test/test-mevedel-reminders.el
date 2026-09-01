@@ -46,7 +46,9 @@ this collapses both shapes to the delivered text."
   "Collect REMINDERS at TURN for CTX, run their commits, return the blocks."
   (let ((staged (mevedel-reminders--collect-from reminders turn ctx)))
     (mapc #'funcall (plist-get staged :commits))
-    (plist-get staged :blocks)))
+    (mapcar (lambda (entry)
+              (mevedel-reminders-format-block (plist-get entry :body)))
+            (plist-get staged :entries))))
 
 (defvar imenu--index-alist)
 (defvar mevedel--agent-invocation)
@@ -397,9 +399,9 @@ this collapses both shapes to the delivered text."
          (r2 (mevedel-reminder-create
               :type 'b :trigger (lambda (_) t) :content (lambda (_) "two")))
          (staged (mevedel-reminders--collect-from (list r1 r2) 4 nil)))
-    (should (equal (list "<system-reminder>\none\n</system-reminder>"
-                         "<system-reminder>\ntwo\n</system-reminder>")
-                   (plist-get staged :blocks)))
+    (should (equal '((:type a :body "one")
+                     (:type b :body "two"))
+                   (plist-get staged :entries)))
     ;; Firing is staged, not applied, until the payload carries it.
     (should-not (mevedel-reminder-last-fired r1))
     (mapc #'funcall (plist-get staged :commits))
@@ -426,6 +428,40 @@ this collapses both shapes to the delivered text."
   (:doc "`mevedel-reminders-format-block' wraps content in XML tags")
   (should (equal "<system-reminder>\nhello\n</system-reminder>"
                  (mevedel-reminders-format-block "hello"))))
+
+(mevedel-deftest mevedel-reminders--entry-label
+  ()
+  ,test
+  (test)
+  :doc "renders a symbol type as its name"
+  (should (equal "skills-delta" (mevedel-reminders--entry-label 'skills-delta)))
+  :doc "renders a cons turn-event key as car:cdr"
+  (should (equal "specialist:read"
+                 (mevedel-reminders--entry-label '(specialist . read)))))
+
+(mevedel-deftest mevedel-reminders-stage-entry
+  ()
+  ,test
+  (test)
+  :doc "appends entries and commits to the FSM info in call order"
+  (let* ((fsm (gptel-make-fsm :info nil))
+         (ran nil))
+    (mevedel-reminders-stage-entry fsm 'first "one")
+    (mevedel-reminders-stage-entry fsm 'second "two"
+                                   (lambda () (setq ran t)))
+    (let ((info (gptel-fsm-info fsm)))
+      (should (equal '((:type first :body "one")
+                       (:type second :body "two"))
+                     (plist-get info :mevedel-reminder-entries)))
+      (should (= 1 (length (plist-get info :mevedel-reminder-commits))))
+      (funcall (car (plist-get info :mevedel-reminder-commits)))
+      (should ran)))
+  :doc "ignores an empty or non-string body"
+  (let ((fsm (gptel-make-fsm :info nil)))
+    (mevedel-reminders-stage-entry fsm 'noop "")
+    (mevedel-reminders-stage-entry fsm 'noop nil)
+    (should-not (plist-get (gptel-fsm-info fsm)
+                           :mevedel-reminder-entries))))
 
 
 ;;
@@ -463,9 +499,9 @@ this collapses both shapes to the delivered text."
               (buffer-string)))
             (should
              (equal
-              '("<system-reminder>\nREMIND\n</system-reminder>")
+              '((:type demo :body "REMIND"))
               (plist-get (gptel-fsm-info fsm)
-                         :mevedel-reminder-blocks)))))
+                         :mevedel-reminder-entries)))))
       (kill-buffer chat-buf)
       (kill-buffer prompt-buf)))
 
@@ -515,9 +551,9 @@ this collapses both shapes to the delivered text."
                       (:role "user" :content "actual task")]))
          (fsm (gptel-make-fsm
                :info (list :buffer chat-buf :backend backend :data data
-                           :mevedel-reminder-blocks
-                           '("<system-reminder>\none\n</system-reminder>"
-                             "<system-reminder>\ntwo\n</system-reminder>")))))
+                           :mevedel-reminder-entries
+                           '((:type one :body "one")
+                             (:type two :body "two"))))))
     (unwind-protect
         (progn
           (with-current-buffer chat-buf
@@ -535,7 +571,7 @@ this collapses both shapes to the delivered text."
               "<system-reminder>\none\n</system-reminder>\n<system-reminder>\ntwo\n</system-reminder>"
               (plist-get (aref messages 1) :content))))
           (should-not (plist-get (gptel-fsm-info fsm)
-                                 :mevedel-reminder-blocks))
+                                 :mevedel-reminder-entries))
           (mevedel-reminders--handle-inject fsm)
           (should (= 3 (length (plist-get data :messages)))))
       (kill-buffer chat-buf)))
@@ -682,7 +718,7 @@ this collapses both shapes to the delivered text."
             ;; block, and its commit must still run.
             (should (string-match-p "HOOK" (buffer-string))))
           (should-not (plist-get (gptel-fsm-info fsm)
-                                 :mevedel-reminder-blocks))
+                                 :mevedel-reminder-entries))
           (mevedel-reminders--handle-inject fsm)
           (should-not (mevedel-session-hook-context-pending session)))
       (kill-buffer chat-buf)
@@ -700,8 +736,8 @@ this collapses both shapes to the delivered text."
                       (:role "user" :parts [(:text "actual task")])]))
          (fsm (gptel-make-fsm
                :info (list :buffer chat-buf :backend backend :data data
-                           :mevedel-reminder-blocks
-                           '("<system-reminder>\ncontext\n</system-reminder>")))))
+                           :mevedel-reminder-entries
+                           '((:type ctx :body "context"))))))
     (unwind-protect
         (progn
           (with-current-buffer chat-buf
