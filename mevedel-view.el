@@ -306,24 +306,43 @@ reads as neither your own prompt nor the assistant."
   "Face for assistant message headers in the view buffer."
   :group 'mevedel)
 
+(defface mevedel-view-muted
+  '((t :inherit shadow))
+  "Quiet but readable: folded content the user may still want to skim.
+The foreground is blended from the active theme by
+`mevedel--derive-theme-faces'; `shadow' is only the fallback for a
+display whose colors cannot be measured.  A separate tier is needed
+because `shadow' is the theme's chrome colour and lands around 2.4:1 on
+a dark theme, under the 3:1 floor, while every other option is a full
+accent."
+  :group 'mevedel)
+
+(mevedel--derive-theme-face
+ 'mevedel-view-muted
+ (lambda (foreground background)
+   (list :foreground (mevedel--muted-color foreground background))))
+
 (defface mevedel-view-tool-summary
   '((t :inherit default))
   "Face for collapsed tool call summaries."
   :group 'mevedel)
 
 (defface mevedel-view-tool-marker
-  '((t :inherit success :weight bold))
+  '((t :inherit success))
   "Face for successful tool summary markers."
   :group 'mevedel)
 
 (defface mevedel-view-tool-name
-  '((t :inherit font-lock-keyword-face :weight bold))
+  '((t :inherit font-lock-keyword-face))
   "Face for tool names in collapsed summaries."
   :group 'mevedel)
 
 (defface mevedel-view-tool-argument
-  '((t :inherit font-lock-string-face))
-  "Face for primary tool arguments in collapsed summaries."
+  '((t :inherit default))
+  "Face for primary tool arguments in collapsed summaries.
+Plain rather than string-coloured: an argument is usually a path, and
+string green already carries the success marker and the added-line count
+on the same row."
   :group 'mevedel)
 
 (defface mevedel-view-tool-metadata
@@ -347,37 +366,37 @@ reads as neither your own prompt nor the assistant."
   :group 'mevedel)
 
 (defface mevedel-view-hook-context
-  '((t :inherit (shadow italic)))
+  '((t :inherit (mevedel-view-muted italic)))
   "Face for hook context indicators in user turns."
   :group 'mevedel)
 
 (defface mevedel-view-hook-audit
-  '((t :inherit (shadow italic)))
+  '((t :inherit (mevedel-view-muted italic)))
   "Face for hook audit indicators in transcript turns."
   :group 'mevedel)
 
 (defface mevedel-view-thinking-summary
-  '((t :inherit (shadow italic)))
+  '((t :inherit (mevedel-view-muted italic)))
   "Face for collapsed thinking/reasoning summaries."
   :group 'mevedel)
 
 (defface mevedel-view-system-reminder
-  '((t :inherit shadow))
+  '((t :inherit mevedel-view-muted))
   "Face for collapsed system reminder summaries."
   :group 'mevedel)
 
 (defface mevedel-view-thinking-marker
-  '((t :inherit (shadow italic)))
+  '((t :inherit (mevedel-view-muted italic)))
   "Face for thinking/reasoning summary markers."
   :group 'mevedel)
 
 (defface mevedel-view-response-summary
-  '((t :inherit shadow))
+  '((t :inherit mevedel-view-muted))
   "Face for collapsed response summaries."
   :group 'mevedel)
 
 (defface mevedel-view-response-marker
-  '((t :inherit font-lock-function-name-face :weight bold))
+  '((t :inherit font-lock-function-name-face))
   "Face for collapsed response summary markers."
   :group 'mevedel)
 
@@ -442,10 +461,12 @@ reads as neither your own prompt nor the assistant."
   :group 'mevedel)
 
 (defface mevedel-view-attribution
-  '((t :inherit (link shadow)))
+  '((t :inherit mevedel-view-muted :underline t))
   "Face for the `from <type>--<idshort>' fragment.
 Click target on handles, mailbox blocks, plan summaries, and
-permission prompts."
+permission prompts.  A muted underline rather than a full link: in
+`:inherit (link shadow)' the earlier entry won every attribute, so the
+`shadow' never rendered and the fragment read as loud as a real link."
   :group 'mevedel)
 
 (defface mevedel-view-mailbox-gutter
@@ -470,7 +491,7 @@ This follows gptel-agent's own active-agent status styling."
   :group 'mevedel)
 
 (defface mevedel-view-handle-blocked
-  '((t :inherit warning))
+  '((t :inherit warning :weight bold))
   "Face for the `[blocked · awaiting …]' handle badge."
   :group 'mevedel)
 
