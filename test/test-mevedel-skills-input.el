@@ -683,6 +683,30 @@ spanning lines")))
                                         (buffer-string)))))
       (kill-buffer chat))))
 
+(mevedel-deftest mevedel-skills-input--format-inline-render-data ()
+  ,test
+  (test)
+  :doc "records the display text, expanded prompt, and attachment names"
+  (let* ((skill (mevedel-skill--create :name "doc"))
+         (data (cdr (mevedel-tool-render-data-extract
+                     (mevedel-skills-input--format-inline-render-data
+                      skill "write it" "Prepared body."
+                      '((:name "artifact" :body "Artifact body")
+                        (:name "artifact-design" :body "Design body")))))))
+    (should (eq 'inline-skill (plist-get data :kind)))
+    (should (equal "$doc write it" (plist-get data :display-text)))
+    (should (equal "Prepared body." (plist-get data :expanded-prompt)))
+    (should (equal '("artifact" "artifact-design")
+                   (plist-get data :attachments))))
+
+  :doc "omits attachment names when the skill has no dependencies"
+  (let* ((skill (mevedel-skill--create :name "doc"))
+         (data (cdr (mevedel-tool-render-data-extract
+                     (mevedel-skills-input--format-inline-render-data
+                      skill "" "Prepared body." nil)))))
+    (should (equal "$doc" (plist-get data :display-text)))
+    (should-not (plist-get data :attachments))))
+
 (mevedel-deftest mevedel-skills-input-dispatch-command (:quiet t)
   ,test
   (test)
@@ -705,7 +729,9 @@ spanning lines")))
         (let ((data (cdr (mevedel-tool-render-data-extract
                           (buffer-string)))))
           (should (equal "Hello world!"
-                         (plist-get data :expanded-prompt)))))))
+                         (plist-get data :expanded-prompt)))
+          (should-not (plist-get data :attachments))))))
+
 
   :doc "a draft shortened during preparation does not break the dispatch"
   ;; Preparation is asynchronous whenever the body injects, and the range to

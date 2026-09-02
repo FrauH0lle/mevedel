@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><!-- SLOT: TITLE - e.g. "Q2 Revenue" --></title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink:       #16181d;
+    --ink-soft:  #646b78;
+    --bg:        #f6f7f9;
+    --card:      #ffffff;
+    --rule:      #e3e6ea;
+    --accent:    #2f6f8f;
+    --good:      #1d7a4d;
+    --bad:       #b1382f;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink:       #e6e8ec;
+      --ink-soft:  #949cab;
+      --bg:        #131519;
+      --card:      #1b1e23;
+      --rule:      #2c3038;
+      --accent:    #6fb2d2;
+      --good:      #4cb98a;
+      --bad:       #e0796f;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  .wrap {
+    max-width: 68rem;
+    margin: 0 auto;
+    padding: 2.5rem 1.25rem 4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  header h1 { font-size: 1.6rem; margin: 0 0 0.25rem; font-weight: 600; }
+  header p  { margin: 0; color: var(--ink-soft); font-size: 0.95rem; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 1.1rem 1.25rem;
+  }
+
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 1rem;
+  }
+
+  .kpi .label {
+    font-size: 0.72rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0 0.4rem;
+  }
+  .kpi .value {
+    font-size: 1.85rem;
+    font-weight: 600;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  .kpi .delta {
+    margin-top: 0.35rem;
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-soft);
+  }
+  /* Direction picks the arrow; `good`/`bad` decide the color, so a fall in
+     latency reads as good news. Without either class the delta stays neutral. */
+  .delta.up::before   { content: "\2191 "; }
+  .delta.down::before { content: "\2193 "; }
+  .delta.good { color: var(--good); }
+  .delta.bad  { color: var(--bad); }
+
+  .section-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0 0 0.9rem;
+  }
+  .section-title .sub {
+    font-weight: 400;
+    color: var(--ink-soft);
+    margin-left: 0.5rem;
+    font-size: 0.85rem;
+  }
+
+  .chart-holder { overflow-x: auto; }
+  svg.chart { display: block; width: 100%; height: auto; }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.1rem;
+    margin-top: 0.75rem;
+    font-size: 0.83rem;
+    color: var(--ink-soft);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+  .legend i {
+    width: 0.7rem; height: 0.7rem; border-radius: 2px;
+    display: inline-block; flex: none;
+  }
+
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+  th, td {
+    text-align: left;
+    padding: 0.55rem 0.85rem 0.55rem 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  th {
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    font-weight: 600;
+  }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:last-child td { border-bottom: none; }
+
+  footer { color: var(--ink-soft); font-size: 0.82rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1><!-- SLOT: TITLE (again, as the visible heading) -->Dashboard title</h1>
+    <p><!-- SLOT: SUBTITLE - the scope and period this covers. -->What this covers, and over what period.</p>
+  </header>
+
+  <!-- SLOT: KPI_TILES - 2 to 5 tiles, one headline number each. Delta classes:
+       up/down picks the arrow, good/bad picks the color. Omit both for a
+       neutral delta, and omit the whole .delta line when there is nothing to
+       compare against. -->
+  <div class="kpi-row">
+    <div class="card kpi">
+      <p class="label">Metric</p>
+      <div class="value">0</div>
+      <div class="delta up good">0% vs prior period</div>
+    </div>
+  </div>
+
+  <section class="card">
+    <p class="section-title">
+      <!-- SLOT: CHART_TITLE -->Chart title<span class="sub"><!-- SLOT: CHART_NOTE - axis caveats, e.g. a truncated y-domain. Delete if none. --></span>
+    </p>
+    <div class="chart-holder">
+      <svg class="chart" id="chart" role="img" aria-label="Chart"></svg>
+    </div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <section class="card">
+    <p class="section-title"><!-- SLOT: BREAKDOWN_TITLE -->Breakdown</p>
+    <div class="table-wrap">
+      <table>
+        <!-- SLOT: BREAKDOWN_ROWS - header cells and one row per record. Add
+             class="num" to both the th and the td of numeric columns. -->
+        <thead><tr><th>Name</th><th class="num">Value</th></tr></thead>
+        <tbody><tr><td>Row</td><td class="num">0</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer><!-- SLOT: FOOTER_NOTE - data source and as-of date, taken from the
+       conversation. Omit rather than invent one. -->Source and as-of date.</footer>
+
+</div>
+
+<script type="application/json" id="chart-spec">
+{
+  "type": "line",
+  "x": { "label": "" },
+  "y": { "label": "", "min": null, "max": null },
+  "series": [
+    { "name": "REPLACE ME", "points": [{ "x": "", "y": 0 }] }
+  ]
+}
+</script>
+
+<script>
+/* Chart renderer. You supply the spec above; this owns the pixels.
+   line/bar read `series[].points[{x,y}]`; donut reads `slices[{name,value}]`.
+   Colors come from the page tokens so both themes stay legible. */
+(() => {
+  'use strict';
+  const svg = document.getElementById('chart');
+  const legend = document.getElementById('legend');
+  const NS = 'http://www.w3.org/2000/svg';
+  const W = 760, H = 300, PAD = { t: 16, r: 16, b: 34, l: 52 };
+
+  let spec;
+  try { spec = JSON.parse(document.getElementById('chart-spec').textContent); }
+  catch (_) { return; }
+  if (!spec) return;
+
+  const css = getComputedStyle(document.documentElement);
+  const token = name => css.getPropertyValue(name).trim();
+  // Series beyond the first step the accent's lightness so a multi-series
+  // chart stays on-palette instead of importing a second hue.
+  const hueFor = i => i === 0 ? token('--accent')
+    : `color-mix(in oklab, ${token('--accent')}, ${token('--ink-soft')} ${i * 28}%)`;
+
+  const el = (name, attrs) => {
+    const node = document.createElementNS(NS, name);
+    for (const k in attrs) node.setAttribute(k, attrs[k]);
+    return node;
+  };
+  const fmt = n => {
+    const abs = Math.abs(n);
+    if (abs >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+    if (abs >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (abs >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+    return String(Math.round(n * 100) / 100);
+  };
+
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  if (spec.type === 'donut') {
+    const slices = (spec.slices || []).filter(s => Number(s.value) > 0);
+    const total = slices.reduce((sum, s) => sum + Number(s.value), 0);
+    if (!total) return;
+    const cx = W / 2, cy = H / 2, rOuter = 110, rInner = 66;
+    let angle = -Math.PI / 2;
+    slices.forEach((slice, i) => {
+      const sweep = (Number(slice.value) / total) * Math.PI * 2;
+      const end = angle + sweep;
+      const pt = (r, a) => `${cx + r * Math.cos(a)} ${cy + r * Math.sin(a)}`;
+      // A single slice covering the whole ring cannot be drawn as one arc
+      // (start and end coincide), so draw it as two stacked rings instead.
+      const large = sweep > Math.PI ? 1 : 0;
+      const d = slices.length === 1
+        ? `M ${cx - rOuter} ${cy} A ${rOuter} ${rOuter} 0 1 1 ${cx + rOuter} ${cy}`
+          + ` A ${rOuter} ${rOuter} 0 1 1 ${cx - rOuter} ${cy} Z`
+          + ` M ${cx - rInner} ${cy} A ${rInner} ${rInner} 0 1 0 ${cx + rInner} ${cy}`
+          + ` A ${rInner} ${rInner} 0 1 0 ${cx - rInner} ${cy} Z`
+        : `M ${pt(rOuter, angle)} A ${rOuter} ${rOuter} 0 ${large} 1 ${pt(rOuter, end)}`
+          + ` L ${pt(rInner, end)} A ${rInner} ${rInner} 0 ${large} 0 ${pt(rInner, angle)} Z`;
+      svg.append(el('path', { d, fill: hueFor(i), 'fill-rule': 'evenodd' }));
+      angle = end;
+    });
+    slices.forEach((slice, i) => {
+      const item = document.createElement('span');
+      const swatch = document.createElement('i');
+      swatch.style.background = hueFor(i);
+      item.append(swatch, `${slice.name} · ${fmt(Number(slice.value))}`);
+      legend.append(item);
+    });
+    return;
+  }
+
+  const series = (spec.series || []).filter(s => (s.points || []).length);
+  if (!series.length) return;
+  const labels = series[0].points.map(p => String(p.x));
+  const values = series.flatMap(s => s.points.map(p => Number(p.y)))
+    .filter(Number.isFinite);
+  if (!values.length) return;
+
+  let lo = spec.y && spec.y.min != null ? Number(spec.y.min)
+    : Math.min(0, ...values);
+  let hi = spec.y && spec.y.max != null ? Number(spec.y.max)
+    : Math.max(...values);
+  if (hi === lo) hi = lo + 1;               // flat series still needs a range
+  const plotW = W - PAD.l - PAD.r, plotH = H - PAD.t - PAD.b;
+  const yFor = v => PAD.t + plotH - ((v - lo) / (hi - lo)) * plotH;
+  // One point has no span to divide, so centre it rather than dividing by zero.
+  const xFor = i => labels.length === 1
+    ? PAD.l + plotW / 2
+    : PAD.l + (i / (labels.length - 1)) * plotW;
+
+  for (let g = 0; g <= 4; g++) {
+    const v = lo + ((hi - lo) * g) / 4, y = yFor(v);
+    svg.append(el('line', {
+      x1: PAD.l, x2: W - PAD.r, y1: y, y2: y,
+      stroke: token('--rule'), 'stroke-width': 1,
+    }));
+    const label = el('text', {
+      x: PAD.l - 8, y: y + 4, 'text-anchor': 'end',
+      'font-size': 11, fill: token('--ink-soft'),
+    });
+    label.textContent = fmt(v);
+    svg.append(label);
+  }
+
+  // Skip x labels rather than let them collide.
+  const every = Math.ceil(labels.length / 8);
+  labels.forEach((name, i) => {
+    if (i % every) return;
+    const label = el('text', {
+      x: xFor(i), y: H - PAD.b + 18, 'text-anchor': 'middle',
+      'font-size': 11, fill: token('--ink-soft'),
+    });
+    label.textContent = name;
+    svg.append(label);
+  });
+
+  if (spec.type === 'bar') {
+    const groupW = plotW / labels.length;
+    const barW = Math.max(2, (groupW * 0.7) / series.length);
+    series.forEach((s, si) => {
+      s.points.forEach((p, i) => {
+        const v = Number(p.y);
+        if (!Number.isFinite(v)) return;
+        const x = PAD.l + i * groupW + groupW * 0.15 + si * barW;
+        const y = yFor(Math.max(v, lo));
+        svg.append(el('rect', {
+          x, y, width: barW, height: Math.max(1, yFor(lo) - y),
+          fill: hueFor(si), rx: 2,
+        }));
+      });
+    });
+  } else {
+    series.forEach((s, si) => {
+      const points = s.points
+        .map((p, i) => Number.isFinite(Number(p.y))
+          ? `${xFor(i)},${yFor(Number(p.y))}` : null)
+        .filter(Boolean).join(' ');
+      svg.append(el('polyline', {
+        points, fill: 'none', stroke: hueFor(si), 'stroke-width': 2,
+        'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+      }));
+      const last = s.points[s.points.length - 1];
+      if (Number.isFinite(Number(last.y))) {
+        svg.append(el('circle', {
+          cx: xFor(s.points.length - 1), cy: yFor(Number(last.y)),
+          r: 3.5, fill: hueFor(si),
+        }));
+      }
+    });
+  }
+
+  if (series.length > 1) {
+    series.forEach((s, i) => {
+      const item = document.createElement('span');
+      const swatch = document.createElement('i');
+      swatch.style.background = hueFor(i);
+      item.append(swatch, s.name || `Series ${i + 1}`);
+      legend.append(item);
+    });
+  }
+})();
+</script>
+</body>
+</html>

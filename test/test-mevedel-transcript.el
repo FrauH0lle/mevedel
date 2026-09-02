@@ -795,6 +795,94 @@
                      (mapcar #'car
                              (mevedel-transcript-segments
                               (point-min) (point-max)))))))
+  :doc "keeps control markers nested in a render-data payload opaque"
+  (with-temp-buffer
+    (org-mode)
+    (insert "prompt\n")
+    (let ((data-start (point)))
+      (insert (mevedel-tool-render-data-format
+               '(:kind inline-skill :display-text "prompt"
+                 :expanded-prompt "<system-reminder>\nattached\n\
+</system-reminder>\n\n#+begin_reasoning\nnested\n#+end_reasoning\n")))
+      (put-text-property data-start (point) 'gptel 'mevedel-render-data))
+    (should (equal '(user render-data)
+                   (mapcar #'car
+                           (mevedel-transcript-segments
+                            (point-min) (point-max))))))
+
+  :doc "keeps control markers quoted inside a container payload opaque"
+  (dolist (case
+           '(("prompt drawer"
+              prompt "Directive text\n" nil
+              ":PROMPT:\nExplain:\n<system-reminder>\nquoted\n\
+</system-reminder>\nthanks\n:END:\n" ignore)
+             ("reasoning block"
+              reasoning "Question\n" nil
+              "#+begin_reasoning\nIt emits:\n<system-reminder>\nquoted\n\
+</system-reminder>\nso...\n#+end_reasoning\n" ignore)
+             ("mailbox body"
+              mailbox "Question\n" nil
+              "<agent-result sender=\"/root/agent_1\" recipient=\"/root\" \
+outcome=\"completed\">\nI saw:\n<system-reminder>\nquoted\n\
+</system-reminder>\ndone\n</agent-result>\n" response)))
+    (with-temp-buffer
+      (org-mode)
+      (mevedel-transcript-test--insert (current-buffer) (nth 2 case)
+                                       (nth 3 case))
+      (mevedel-transcript-test--insert (current-buffer) (nth 4 case)
+                                       (nth 5 case))
+      (should (equal (list 'user (nth 1 case))
+                     (mapcar #'car (mevedel-transcript-segments
+                                    (point-min) (point-max)))))))
+
+  :doc "leaves control markers the model quoted in its response as prose"
+  (dolist (quoted '("<system-reminder>\nbody\n</system-reminder>"
+                    "<hook-context>\n<hook-event name=\"X\">y</hook-event>\n\
+</hook-context>"
+                    ":PROMPT:\nbody\n:END:"))
+    (with-temp-buffer
+      (org-mode)
+      (mevedel-transcript-test--insert (current-buffer) "Question\n" nil)
+      (mevedel-transcript-test--insert
+       (current-buffer)
+       (concat "The format is:\n" quoted "\nand that is all.\n")
+       'response)
+      (should (equal '(user response)
+                     (mapcar #'car (mevedel-transcript-segments
+                                    (point-min) (point-max)))))))
+
+  :doc "still nests a tool call inside its reasoning block"
+  (with-temp-buffer
+    (org-mode)
+    (mevedel-transcript-test--insert (current-buffer) "Prompt\n" nil)
+    (let ((start (point)))
+      (insert "#+begin_reasoning\nBefore tool.\n")
+      (let ((tool-start (point)))
+        (insert "#+begin_tool (Read :file_path \"a.el\")\n"
+                "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
+                "contents\n"
+                "#+end_tool\n")
+        (put-text-property start (point) 'gptel 'ignore)
+        (put-text-property (+ tool-start 46) (- (point) 12)
+                           'gptel '(tool . "call_read")))
+      (insert "After tool.\n#+end_reasoning\n")
+      (put-text-property (point) (point) 'gptel 'ignore))
+    (should (memq 'tool
+                  (mapcar #'car (mevedel-transcript-segments
+                                 (point-min) (point-max))))))
+
+  :doc "still classifies a hook context that follows the user's prompt text"
+  (with-temp-buffer
+    (org-mode)
+    (mevedel-transcript-test--insert
+     (current-buffer)
+     "How far is the moon?\n\n<hook-context>\n\
+<hook-event name=\"SessionStart\">ctx</hook-event>\n</hook-context>\n\n"
+     nil)
+    (should (equal '(user hook-context user)
+                   (mapcar #'car (mevedel-transcript-segments
+                                  (point-min) (point-max))))))
+
   :doc "classifies every persisted transcript control range"
   (with-temp-buffer
     (org-mode)

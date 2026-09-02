@@ -1567,6 +1567,51 @@
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Prepared implementation instructions" text))
         (should (string-match-p "Hook-generated context" text)))))
+  :doc "rows the attached-skill reminders leading an expanded skill prompt"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Use $doc\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-tool-render-data-format
+      '(:kind inline-skill
+        :display-text "Use $doc"
+        :attachments ("artifact" "artifact-design")
+        :expanded-prompt
+        "<system-reminder>\nAttached artifact.\n</system-reminder>\n\n\
+<system-reminder>\nAttached artifact-design.\n</system-reminder>\n\n\
+Prepared document instructions."))
+     'ignore)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p
+                 "2 attached skills (artifact, artifact-design)" text))
+        (should-not (string-match-p "<system-reminder>" text))
+        (should-not (string-match-p "Attached artifact\\." text)))
+      (goto-char (point-min))
+      (search-forward "Prompt")
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        ;; The reminders stay in their own row, not in the prompt drawer.
+        (should (string-match-p "Prepared document instructions" text))
+        (should-not (string-match-p "Attached artifact\\." text)))
+      (goto-char (point-min))
+      (search-forward "attached skills")
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Attached artifact\\." text))
+        (should (string-match-p "Attached artifact-design\\." text)))
+      ;; Collapsing rebuilds the header from the source record.
+      (goto-char (point-min))
+      (search-forward "attached skills")
+      (mevedel-view-toggle-section)
+      (should (string-match-p
+               "2 attached skills (artifact, artifact-design)"
+               (buffer-substring-no-properties
+                (point-min) mevedel-view--input-marker)))))
   :doc "keeps fork reminder and elapsed footers with their assistant turns"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "First prompt.\n\n" nil)
