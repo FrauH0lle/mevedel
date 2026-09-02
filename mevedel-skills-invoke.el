@@ -609,7 +609,8 @@ ROOTS is a list of plists containing :skill, :arguments, :role, and
                        (mevedel-skill-name skill)))
              (unless skip-gates
                (cond
-                ((and (eq origin 'user)
+                ((and root-p
+                      (eq origin 'user)
                       (not (mevedel-skill-user-invocable-p skill)))
                  (reject 'disabled "Skill '%s' is not user-invocable"
                          (mevedel-skill-name skill)))

@@ -132,11 +132,14 @@ Stored inside a `mevedel-file-cache' on the workspace; updated by
 Read/ApplyPatch tool handlers and polled by external-change detection.
 
 PATH is the absolute filesystem path.  CONTENT is the full file
-content as captured at the last read or write.  MTIME is the file's
-modification time at that same moment (as returned by
-`file-attribute-modification-time').  SIZE is the byte length of
-CONTENT, cached to avoid repeated `length' calls during LRU
-accounting.
+content as captured at the last read or write, or nil for a
+fingerprint-only entry: a file over
+`mevedel-file-cache-max-file-bytes' is tracked by its timestamps alone
+so it can still be seen to move without holding the cache budget.
+MTIME is the file's modification time at that same moment (as returned
+by `file-attribute-modification-time').  SIZE is the byte length of
+CONTENT -- zero when CONTENT is omitted -- cached to avoid repeated
+`length' calls during LRU accounting.
 
 CTIME and STAT-SIZE are the inode change time and the size the
 filesystem reported at capture, kept for freshness comparison.  They

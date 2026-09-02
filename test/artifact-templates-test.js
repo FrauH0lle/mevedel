@@ -161,10 +161,14 @@ function run() {
     const {svg} = render({type: 'bar', series: [
       {name: 'A', points: [{x: 'a', y: -5}, {x: 'b', y: 12}]},
     ]});
-    assert.equal(tagsOf(svg, 'rect').length, 2);
-    tagsOf(svg, 'rect').forEach(rect => {
-      assert.ok(Number(rect.attributes.height) >= 1, 'bar has no height');
-    });
+    const bars = tagsOf(svg, 'rect');
+    assert.equal(bars.length, 2);
+    assert.ok(Number(bars[0].attributes.height) > 1,
+              'negative bar collapsed at the domain floor');
+    assert.ok(Number(bars[1].attributes.height) > 1,
+              'positive bar collapsed at the domain ceiling');
+    assert.ok(Number(bars[0].attributes.y) > Number(bars[1].attributes.y),
+              'negative bar does not extend below the zero baseline');
     assertNoBadGeometry(svg, 'bar with negatives');
   }
 

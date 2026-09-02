@@ -25,8 +25,6 @@
                   "mevedel-collaboration" (room peer))
 (declare-function mevedel-collaboration--guest-text
                   "mevedel-collaboration" (value))
-(declare-function mevedel-collaboration--audience-peers-for
-                  "mevedel-collaboration-guest" (room audience))
 (declare-function mevedel-collaboration--publish-status
                   "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--room-data-buffer
@@ -38,6 +36,12 @@
 (declare-function mevedel-collaboration--stop-internal
                   "mevedel-collaboration" (room reason))
 (defvar mevedel-collaboration--duplicate-prompt-window)
+
+;; `mevedel-collaboration-guest'
+(declare-function mevedel-collaboration--audience-peers-for
+                  "mevedel-collaboration-guest" (room audience))
+(declare-function mevedel-collaboration--request-id-p
+                  "mevedel-collaboration-guest" (value))
 
 ;; `mevedel-collaboration-transport'
 (declare-function mevedel-collaboration--transport-send
@@ -99,11 +103,12 @@ refusal protects the command allowlist from becoming an escalation path."
              mode (plist-get guest :name))
     (mevedel-collaboration--publish-status room)))
 
-(defun mevedel-collaboration--new-session-reply (room peer &rest keys)
-  "Send a new-session outcome frame carrying KEYS to PEER in ROOM."
+(defun mevedel-collaboration--new-session-reply
+    (room peer request-id name &rest keys)
+  "Send PEER in ROOM a new-session REQUEST-ID outcome for NAME and KEYS."
   (mevedel-collaboration--transport-send
    (plist-get room :transport) peer
-   (append (list :t "new-session") keys)))
+   (append (list :t "new-session" :reqId request-id :name name) keys)))
 
 (defun mevedel-collaboration--discard-created-session (room buffer)
   "Stop ROOM and discard BUFFER after guest-session creation failed."
@@ -153,12 +158,13 @@ so a new room in the same workspace is one it can already reach; being
 told is the difference between reaching it and knowing it exists.  The
 requester is skipped because its own reply already carried a link."
   (dolist (owner-peer (mevedel-collaboration--audience-peers-for
-                       room '(:owner t)))
+                       room 'owner))
     (unless (eql owner-peer except)
       (mevedel-collaboration--offer-room room owner-peer name link))))
 
-(defun mevedel-collaboration--create-guest-session (room peer guest name prompt)
-  "Create session NAME for GUEST and hand PEER a link into its room.
+(defun mevedel-collaboration--create-guest-session
+    (room peer guest request-id name prompt)
+  "Create session NAME for GUEST and reply to PEER's REQUEST-ID.
 
 The new room shares only ROOM's workspace and working directory.  GUEST
 receives the same authority tier it already holds, and ROOM's other
@@ -171,10 +177,11 @@ discards the partial session and reports failure without stopping ROOM."
     (cond
      ((not (and workspace directory))
       (mevedel-collaboration--new-session-reply
-       room peer :ok :json-false :message "This room has no workspace"))
+       room peer request-id name :ok :json-false
+       :message "This room has no workspace"))
      ((assoc name (mevedel--workspace-sessions workspace))
       (mevedel-collaboration--new-session-reply
-       room peer :ok :json-false
+       room peer request-id name :ok :json-false
        :message (format "A session named %s already exists" name)))
      (t
       (let (buffer new-room failure)
@@ -197,10 +204,10 @@ discards the partial session and reports failure without stopping ROOM."
             (progn
               (mevedel-collaboration--discard-created-session new-room buffer)
               (mevedel-collaboration--new-session-reply
-               room peer :ok :json-false
+               room peer request-id name :ok :json-false
                :message (format "Session could not be created: %s" failure)))
           (if (mevedel-collaboration--new-session-reply
-               room peer :ok t :name name
+               room peer request-id name :ok t
                :link (plist-get new-room
                                 (if (plist-get guest :owner)
                                     :link-owner
@@ -221,8 +228,9 @@ discards the partial session and reports failure without stopping ROOM."
             (mevedel-collaboration--discard-created-session
              new-room buffer))))))))
 
-(defun mevedel-collaboration--ask-host-new-session (room peer guest name prompt)
-  "Ask the host to approve GUEST's request for a session named NAME.
+(defun mevedel-collaboration--ask-host-new-session
+    (room peer guest request-id name prompt)
+  "Ask the host to approve GUEST's REQUEST-ID for a session named NAME.
 
 The prompt reaches Emacs and ROOM's owner-link guests.  An owner may
 create a session outright, so approving someone else's request is no new
@@ -238,7 +246,7 @@ of prompts for the same session, of which every approval after the first
 fails on the name that the first one took."
   (if-let* ((data-buffer (mevedel-collaboration--room-data-buffer room)))
       (with-current-buffer data-buffer
-        (plist-put guest :pending-new-session name)
+        (plist-put guest :pending-new-session (cons request-id name))
         (mevedel--prompt-user-with-overlay
          "New session requested"
          (concat
@@ -257,23 +265,26 @@ fails on the name that the first one took."
              (pcase outcome
                ('approve
                 (mevedel-collaboration--create-guest-session
-                 room peer guest name prompt))
+                 room peer guest request-id name prompt))
                (`(feedback . ,text)
                 (mevedel-collaboration--new-session-reply
-                 room peer :ok :json-false :message text))
+                 room peer request-id name :ok :json-false :message text))
                (_
                 (mevedel-collaboration--new-session-reply
-                 room peer :ok :json-false
+                 room peer request-id name :ok :json-false
                  :message "The host declined this request")))))
          nil
-         '(:owner t)))
+         'owner))
     (mevedel-collaboration--new-session-reply
-     room peer :ok :json-false :message "This room has no session")))
+     room peer request-id name :ok :json-false
+     :message "This room has no session")))
 
 (defun mevedel-collaboration--handle-new-session (room peer frame)
   "Act on writable guest PEER's request in FRAME for a new session."
   (when-let* ((guest (mevedel-collaboration--guest room peer))
               ((plist-get guest :writable))
+              (request-id (plist-get frame :reqId))
+              ((mevedel-collaboration--request-id-p request-id))
               (raw (mevedel-collaboration--guest-text (plist-get frame :name)))
               (name (mevedel-session-artifacts-sanitize
                      (truncate-string-to-width
@@ -281,30 +292,33 @@ fails on the name that the first one took."
               ((string-match-p "[A-Za-z0-9]" name)))
     (let* ((prompt (mevedel-collaboration--guest-text
                     (plist-get frame :prompt)))
-           (key (cons name prompt))
            (waiting (plist-get guest :pending-new-session))
            (last (plist-get guest :last-new-session))
            (now (float-time)))
       (cond
+       ;; A retransmitted request is the same request, not a second
+       ;; decision that should refuse the first one.
+       ((and waiting (eql request-id (car waiting))) nil)
        ;; One question to a person at a time.  A second request cannot
        ;; be answered usefully anyway: approving both fails the later
        ;; one on the name the earlier one took.
        (waiting
         (mevedel-collaboration--new-session-reply
-         room peer :ok :json-false
-         :message (format "Your request for %s is still waiting" waiting)))
+         room peer request-id name :ok :json-false
+         :message (format "Your request for %s is still waiting"
+                          (cdr waiting))))
        ((and last
-             (equal key (car last))
+             (eql request-id (car last))
              (< (- now (cdr last))
                 mevedel-collaboration--duplicate-prompt-window))
         nil)
        (t
-        (plist-put guest :last-new-session (cons key now))
+        (plist-put guest :last-new-session (cons request-id now))
         (if (plist-get guest :owner)
             (mevedel-collaboration--create-guest-session
-             room peer guest name prompt)
+             room peer guest request-id name prompt)
           (mevedel-collaboration--ask-host-new-session
-           room peer guest name prompt)))))))
+           room peer guest request-id name prompt)))))))
 
 (provide 'mevedel-collaboration-owner)
 ;;; mevedel-collaboration-owner.el ends here

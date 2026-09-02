@@ -1,6 +1,7 @@
 ---
 name: artifact-diagramming
 description: How to draw a diagram inside an artifact - when a picture earns its place, and the hand-authored inline SVG mechanics that keep it legible in light and dark. Attached by the artifact skills that carry visuals; read it before drawing rather than invoking it on its own.
+user-invocable: false
 ---
 
 # Diagramming in artifacts

@@ -1214,7 +1214,7 @@ async function main() {
   await waitFor(() => first.sent.length === requestBefore + 1,
                 'sealed new-session request');
   assert.deepEqual(await unseal(key, first.sent[requestBefore]),
-                   {t: 'new-session', name: 'onboarding',
+                   {t: 'new-session', reqId: 1, name: 'onboarding',
                     prompt: 'Design the flow'});
   // Sending closes the sheet and leaves a card in the dock: the approval
   // may land minutes later, and the sheet is not where it should wait.
@@ -1224,7 +1224,7 @@ async function main() {
 
   // A browser will not let a later approval open a tab by itself, so the
   // link arrives as something to tap.
-  await deliver({t: 'new-session', ok: true, name: 'onboarding',
+  await deliver({t: 'new-session', reqId: 1, ok: true, name: 'onboarding',
                  link: `http://127.0.0.1:1/#other.${otherSecret}`});
   const openLink = nodes.invites.children[0].children
     .flatMap(child => child.children || [])
@@ -1237,7 +1237,8 @@ async function main() {
   nodes['new-session-button'].dispatch('click');
   nodes['new-session-name'].value = 'second';
   nodes['new-session'].close('create');
-  await deliver({t: 'new-session', ok: false, message: 'The host declined'});
+  await deliver({t: 'new-session', reqId: 2, ok: false, name: 'second',
+                 message: 'The host declined'});
   assert.equal(nodes.invites.children.length, 2);
   assert.match(textOf(nodes.invites), /onboarding · open/);
   assert.match(textOf(nodes.invites), /second · refused/);

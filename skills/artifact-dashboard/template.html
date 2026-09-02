@@ -320,14 +320,17 @@
   if (spec.type === 'bar') {
     const groupW = plotW / labels.length;
     const barW = Math.max(2, (groupW * 0.7) / series.length);
+    const baseline = Math.max(lo, Math.min(0, hi));
+    const baselineY = yFor(baseline);
     series.forEach((s, si) => {
       s.points.forEach((p, i) => {
         const v = Number(p.y);
         if (!Number.isFinite(v)) return;
         const x = PAD.l + i * groupW + groupW * 0.15 + si * barW;
-        const y = yFor(Math.max(v, lo));
+        const y = yFor(Math.max(lo, Math.min(v, hi)));
         svg.append(el('rect', {
-          x, y, width: barW, height: Math.max(1, yFor(lo) - y),
+          x, y: Math.min(y, baselineY), width: barW,
+          height: Math.max(1, Math.abs(baselineY - y)),
           fill: hueFor(si), rx: 2,
         }));
       });

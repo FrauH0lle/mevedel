@@ -1551,7 +1551,7 @@
      (mevedel-tool-render-data-format
       '(:kind inline-skill
         :display-text "Use $implement"
-        :expanded-prompt
+        :prompt
         "Prepared implementation instructions.\n\nHook-generated context."))
      'ignore)
     (with-current-buffer view-buf
@@ -1575,11 +1575,12 @@
      (mevedel-tool-render-data-format
       '(:kind inline-skill
         :display-text "Use $doc"
-        :attachments ("artifact" "artifact-design")
-        :expanded-prompt
-        "<system-reminder>\nAttached artifact.\n</system-reminder>\n\n\
-<system-reminder>\nAttached artifact-design.\n</system-reminder>\n\n\
-Prepared document instructions."))
+        :attachments
+        ((:name "artifact"
+          :body "Attached artifact.")
+         (:name "artifact-design"
+          :body "Attached artifact-design.\nExample:\n<system-reminder>\nliteral reminder\n</system-reminder>\nAttachment tail."))
+        :prompt "Prepared document instructions."))
      'ignore)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -1596,14 +1597,17 @@ Prepared document instructions."))
                    (point-min) mevedel-view--input-marker)))
         ;; The reminders stay in their own row, not in the prompt drawer.
         (should (string-match-p "Prepared document instructions" text))
-        (should-not (string-match-p "Attached artifact\\." text)))
+        (should-not (string-match-p "Attached artifact\\." text))
+        (should-not (string-match-p "Attachment tail" text)))
       (goto-char (point-min))
       (search-forward "attached skills")
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Attached artifact\\." text))
-        (should (string-match-p "Attached artifact-design\\." text)))
+        (should (string-match-p "Attached artifact-design\\." text))
+        (should (string-match-p "literal reminder" text))
+        (should (string-match-p "Attachment tail" text)))
       ;; Collapsing rebuilds the header from the source record.
       (goto-char (point-min))
       (search-forward "attached skills")

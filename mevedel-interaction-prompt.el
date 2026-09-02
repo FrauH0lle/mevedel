@@ -263,9 +263,10 @@ descriptor and so is never mirrored to a collaboration guest.  Use it
 for a decision no guest may make.
 
 AUDIENCE narrows the guests a mirrored interaction reaches below the
-writable default; see `mevedel-collaboration--audience-peer-p' for the
-keys.  Use it for a decision some guests may make and the guest it is
-about may not."
+writable default.  Nil reaches every writable guest; `owner' reaches
+only owner-link guests."
+  (unless (memq audience '(nil owner))
+    (error "Unknown collaboration audience: %S" audience))
   (let* ((source-buffer (current-buffer))
          (origin (mevedel-current-origin))
          (target-buffer

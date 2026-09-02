@@ -46,7 +46,9 @@
   (test)
   :doc "returns the prompt after leading system reminders"
   (with-temp-buffer
-    (insert "<system-reminder>\nremember\n</system-reminder>\n\n")
+    (insert "<system-reminder>\nremember\n"
+            "<system-reminder>\nliteral\n</system-reminder>\n"
+            "after literal\n</system-reminder>\n\n")
     (let ((prompt-start (point)))
       (insert "User prompt")
       (should (= prompt-start
@@ -802,7 +804,7 @@
     (let ((data-start (point)))
       (insert (mevedel-tool-render-data-format
                '(:kind inline-skill :display-text "prompt"
-                 :expanded-prompt "<system-reminder>\nattached\n\
+                 :prompt "<system-reminder>\nattached\n\
 </system-reminder>\n\n#+begin_reasoning\nnested\n#+end_reasoning\n")))
       (put-text-property data-start (point) 'gptel 'mevedel-render-data))
     (should (equal '(user render-data)
@@ -834,6 +836,21 @@ outcome=\"completed\">\nI saw:\n<system-reminder>\nquoted\n\
       (should (equal (list 'user (nth 1 case))
                      (mapcar #'car (mevedel-transcript-segments
                                     (point-min) (point-max)))))))
+
+  :doc "keeps a complete literal reminder nested in one generated reminder"
+  (with-temp-buffer
+    (org-mode)
+    (insert "<system-reminder>\nouter start\n"
+            "<system-reminder>\nliteral\n</system-reminder>\n"
+            "outer end\n</system-reminder>\n")
+    (put-text-property (point-min) (point-max) 'gptel 'ignore)
+    (let ((segments (mevedel-transcript-segments
+                     (point-min) (point-max))))
+      (should (equal '(reminder) (mapcar #'car segments)))
+      (should (string-match-p
+               "outer end"
+               (buffer-substring-no-properties
+                (cadr (car segments)) (caddr (car segments)))))))
 
   :doc "leaves control markers the model quoted in its response as prose"
   (dolist (quoted '("<system-reminder>\nbody\n</system-reminder>"
@@ -910,13 +927,17 @@ outcome=\"completed\">\nI saw:\n<system-reminder>\nquoted\n\
         (should (memq type types)))))
 
   :doc "leaves incomplete live control text as ordinary transcript text"
-  (with-temp-buffer
-    (org-mode)
-    (insert "#+begin_reasoning\npartial")
-    (should (equal '(user)
-                   (mapcar #'car
-                           (mevedel-transcript-segments
-                            (point-min) (point-max))))))
+  (dolist (text '("#+begin_reasoning\npartial"
+                  "<system-reminder>\n"
+                  "<system-reminder>\nouter\n<system-reminder>\nliteral\n\
+</system-reminder>\n"))
+    (with-temp-buffer
+      (org-mode)
+      (insert text)
+      (should (equal '(user)
+                     (mapcar #'car
+                             (mevedel-transcript-segments
+                              (point-min) (point-max)))))))
   :doc "skips leading metadata and classifies transcript spans"
   (with-temp-buffer
     (insert ":PROPERTIES:\n:foo: bar\n:END:\n")

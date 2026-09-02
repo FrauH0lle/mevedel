@@ -878,7 +878,7 @@ hooks:
         (kill-buffer root-buffer))
       (delete-directory root t)))
 
-  :doc "rejects cross-root argument conflicts and model-disabled descendants before effects"
+  :doc "allows user-hidden children but rejects conflicts and model-disabled children before effects"
   (let* ((mevedel-skills-check-for-modifications nil)
          (root (make-temp-file "mevedel-skill-graph-reject-" t))
          (dir (file-name-concat root ".mevedel" "skills"))
@@ -893,7 +893,9 @@ hooks:
         (progn
           (mevedel-skills-test--write-skill
            dir "child"
-           "name: child\ndescription: Child\ndisable-model-invocation: true\n"
+           (concat "name: child\ndescription: Child\n"
+                   "user-invocable: false\n"
+                   "disable-model-invocation: true\n")
            "Child")
           (mevedel-skills-test--write-skill
            dir "one" "name: one\ndescription: One\n" "!$child -- ONE")
@@ -904,6 +906,9 @@ hooks:
                 (mevedel-skills-scan root '(".mevedel/skills") workspace))
           (let ((one (mevedel-session-get-skill session "one"))
                 (two (mevedel-session-get-skill session "two")))
+            (should-not
+             (mevedel-skill-user-invocable-p
+              (mevedel-session-get-skill session "child")))
             (with-temp-buffer
               (setq-local mevedel--session session)
               (cl-letf (((symbol-function

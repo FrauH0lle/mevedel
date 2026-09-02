@@ -198,13 +198,12 @@ temporary prompt buffer.")
     (format "$%s" name)))
 
 (defun mevedel-skills-input--format-inline-render-data
-    (skill arguments expanded-prompt attachments)
+    (skill arguments prompt attachments)
   "Return hidden render-data for an expanded inline user SKILL.
 
-ARGUMENTS is the raw user argument string.  EXPANDED-PROMPT is the exact
-prepared prompt replacing the invocation.  ATTACHMENTS are the prepared
-required-attachment plists whose reminders lead EXPANDED-PROMPT; their
-names label the view's collapsed attachment row.
+ARGUMENTS is the raw user argument string.  PROMPT is the prepared root skill
+body.  ATTACHMENTS are the prepared required-attachment plists whose names and
+formatted bodies supply the view's collapsed attachment row.
 
 The block is ignored by gptel and consumed by `mevedel-view' so the
 data buffer keeps the expanded prompt while the view can show the
@@ -216,20 +215,23 @@ original `$skill' invocation compactly."
                      :display-text
                      (mevedel-skills-input--inline-display-text
                       name arguments)
-                     :expanded-prompt expanded-prompt
+                     :prompt prompt
                      :attachments
                      (mapcar (lambda (attachment)
-                               (plist-get attachment :name))
+                               (list :name (plist-get attachment :name)
+                                     :body
+                                     (mevedel-skills-format-attachment
+                                      attachment)))
                              attachments)))
          (block (mevedel-tool-render-data-format data)))
     block))
 
 (defun mevedel-skills-input--insert-inline-user-skill-render-data
-    (skill arguments expanded-prompt attachments)
-  "Insert hidden render data for SKILL, ARGUMENTS, and EXPANDED-PROMPT.
+    (skill arguments prompt attachments)
+  "Insert hidden render data for SKILL, ARGUMENTS, and PROMPT.
 ATTACHMENTS are the prepared required-attachment plists."
   (insert (mevedel-skills-input--format-inline-render-data
-           skill arguments expanded-prompt attachments)))
+           skill arguments prompt attachments)))
 
 (defun mevedel-skills-input--format-inline-attachment-render-data (attachments)
   "Return hidden render-data for inline skill ATTACHMENTS."
@@ -744,13 +746,15 @@ insert their result when the retained agent finishes."
         (delete-region delete-start region-end)
         (unless after-prefix
           (mevedel-skills-input-ensure-fresh-line))
-        (let ((body (or (and (plist-get outcome :body)
-                             (mevedel-skills-format-model-input outcome))
-                        (format "Skill '%s' produced no body."
-                                (mevedel-skill-name skill)))))
+        (let* ((prompt (or (plist-get outcome :body)
+                           (format "Skill '%s' produced no body."
+                                   (mevedel-skill-name skill))))
+               (body (if (plist-get outcome :body)
+                         (mevedel-skills-format-model-input outcome)
+                       prompt)))
           (insert body)
           (mevedel-skills-input--insert-inline-user-skill-render-data
-           skill (plist-get outcome :arguments) body
+           skill (plist-get outcome :arguments) prompt
            (plist-get outcome :required-attachments)))
         (when continue-fn
           (funcall continue-fn))

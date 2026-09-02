@@ -280,7 +280,7 @@
 (declare-function mevedel-skills-plan-prepare "mevedel-skills-plan"
 		  (plan callback &optional cancelled-p))
 (declare-function mevedel-skills-plan-render-data
-		  "mevedel-skills-plan" (plan expanded-prompt))
+		  "mevedel-skills-plan" (plan prepared))
 (declare-function mevedel-skills-plan-user-input "mevedel-skills-plan"
 		  (text session))
 (autoload 'mevedel-skills-plan-user-input "mevedel-skills-plan")
@@ -1841,7 +1841,7 @@ HOOK-AUDITS are the accepted `UserPromptSubmit' result."
           :hook-audits
           (append (plist-get prepared :hook-audits) hook-audits)
           :request-context (plist-get prepared :request-context)
-          :render-data (mevedel-skills-plan-render-data plan hook-input)
+          :render-data (mevedel-skills-plan-render-data plan prepared)
           :fork-outcome
           (and (mevedel-skill-invocation-plan-fork-p plan)
                (mevedel-view--prepared-fork-outcome prepared)))))

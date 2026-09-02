@@ -229,6 +229,34 @@ owner exactly as on the root path.
   `mevedel-hooks-record-session-reminder` as turn events; additional
   hook context still rides the prompt text as `<hook-context>`.
 
+### What the edited-file reminder watches
+
+The `edited-file` reminder reports every file in the workspace file cache
+whose content moved outside mevedel's tools. Two boundaries keep that from
+turning into per-turn noise and per-turn cost.
+
+mevedel's own session bookkeeping never enters the cache. A session
+directory holds append-only logs, transcript segments, and sidecars that
+mevedel rewrites every turn, so caching one would report mevedel's own
+writes back as external edits for the rest of the session, and let a
+multi-megabyte telemetry log evict every cache entry describing real work.
+Sibling sessions under the same sessions root are excluded too — reading a
+second live session's files churns identically — each confirmed by its
+sidecar rather than assumed from its location. The `artifacts` subtree stays
+watched: those are authored deliverables, and an outside edit to one is worth
+reporting. The interaction record is still written for an excluded path, so
+Edit's read-before-write gate is unaffected.
+
+Content is bounded twice. A file the filesystem reports as larger than
+`mevedel-file-cache-max-file-bytes` is cached as a fingerprint — timestamps
+and reported size, no content — so it is still seen to move but claims none
+of the `mevedel-file-cache-max-bytes` budget. Content past
+`mevedel-reminders-edited-file-max-diff-bytes` is not diffed at all:
+`mevedel-generate-diff` spools both sides to temporary files and forks
+`diff`, which is not worth paying every turn for the
+`mevedel-reminders-edited-file-max-diff-lines` lines that survive. Both cases
+report the change and its size and tell the model to re-read the file.
+
 ### PDF and large-attachment guidance
 
 Large PDFs read without a `pages` selector receive an appended

@@ -151,7 +151,7 @@ persisted enablement when supplied."
 (mevedel-deftest mevedel-skills-plan--aggregate-prepared ()
   ,test
   (test)
-  :doc "aggregates command policy and instruction reminders in entry order"
+  :doc "aggregates command policy and instruction attachments in entry order"
   (let* ((command (mevedel-skill-plan-entry--create
                    :name "alpha" :role 'command))
          (instruction (mevedel-skill-plan-entry--create
@@ -179,7 +179,10 @@ persisted enablement when supplied."
     (should (equal '(permission) (plist-get aggregate :permission-rules)))
     (should (equal '("Read" "Grep") (plist-get aggregate :ptc-primitives)))
     (should (equal '(hook) (plist-get aggregate :hook-rules)))
-    (should (= 1 (length (plist-get aggregate :instruction-reminders)))))
+    (should (equal '("beta")
+                   (mapcar
+                    (lambda (attachment) (plist-get attachment :name))
+                    (plist-get aggregate :instruction-attachments)))))
 
   :doc "intersects restrictions from stacked command skills"
   (let ((first (mevedel-skill-plan-entry--create :name "a" :role 'command))
@@ -547,7 +550,14 @@ persisted enablement when supplied."
     (should (string-match-p (regexp-quote "$hook-literal")
                             (plist-get result :model-input)))
     (should (= 3 (length (plist-get result :hook-audits))))
-    (should (= 3 (length (plist-get result :prepared-entries)))))
+    (should (= 3 (length (plist-get result :prepared-entries))))
+    (should (equal
+             "alpha{inspect [skill:delta -- attached] and [skill:alpha -- attached]} $hook-literal\n\nbeta{inspect [skill:delta -- attached] and [skill:alpha -- attached]} $hook-literal"
+             (plist-get result :render-prompt)))
+    (should (equal '("delta")
+                   (mapcar
+                    (lambda (attachment) (plist-get attachment :name))
+                    (plist-get result :render-attachments)))))
 
   :doc "one command retains model and effort while command source wins dedupe"
   (let* ((mevedel-skills-check-for-modifications nil)
@@ -627,7 +637,14 @@ persisted enablement when supplied."
     (should (string-match-p (regexp-quote "$nested")
                             (plist-get result :model-input)))
     (should (string-match-p (regexp-quote "$body-literal")
-                            (plist-get result :model-input))))
+                            (plist-get result :model-input)))
+    (should (equal
+             "Use [skill:alpha -- attached] and [skill:alpha -- attached]; keep $body-literal"
+             (plist-get result :render-prompt)))
+    (should (equal '("alpha")
+                   (mapcar
+                    (lambda (attachment) (plist-get attachment :name))
+                    (plist-get result :render-attachments)))))
 
   :doc "invalid skill and preset policy is ignored by stacks and instructions"
   (let* ((mevedel-skills-check-for-modifications nil)
@@ -758,18 +775,25 @@ persisted enablement when supplied."
 (mevedel-deftest mevedel-skills-plan-render-data ()
   ,test
   (test)
-  :doc "uses the existing hidden render envelope with exact original text"
+  :doc "uses the hidden render envelope with structured prompt data"
   (let* ((text (propertize "$alpha original" 'mevedel-mention-binding
                            '(:kind skill)))
-         (expanded "Prepared model prompt with hook context")
+         (prepared '(:render-prompt "Prepared root"
+                     :render-attachments
+                     ((:name "child" :body "Child body"))))
          (plan (mevedel-skill-invocation-plan--create
                 :text text))
-         (block (mevedel-skills-plan-render-data plan expanded))
+         (block (mevedel-skills-plan-render-data plan prepared))
          (data (cdr (mevedel-tool-render-data-extract block))))
     (should (eq 'mevedel-render-data (get-text-property 0 'gptel block)))
     (should (eq 'inline-skill (plist-get data :kind)))
     (should (equal text (plist-get data :display-text)))
-    (should (equal expanded (plist-get data :expanded-prompt)))))
+    (should (equal "Prepared root" (plist-get data :prompt)))
+    (should (equal "child"
+                   (plist-get (car (plist-get data :attachments)) :name)))
+    (should (string-match-p
+             "Child body"
+             (plist-get (car (plist-get data :attachments)) :body)))))
 
 (mevedel-deftest mevedel-skills-plan-prepare-recursive ()
   ,test

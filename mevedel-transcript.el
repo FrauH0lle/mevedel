@@ -68,11 +68,10 @@ refresh).  Skip past it so the rendered view starts at real content."
   "Return first position after leading system-reminder blocks."
   (save-excursion
     (goto-char (point-min))
-    (while (looking-at "<system-reminder>\n")
-      (if (search-forward "\n</system-reminder>" nil t)
-          (when (looking-at "\n\n")
-            (forward-char 2))
-        (goto-char (point-max))))
+    (while-let ((range (mevedel-transcript--system-reminder-range-at-point
+                        (point-max))))
+      (goto-char (nth 3 range))
+      (skip-chars-forward " \t\r\n"))
     (point)))
 
 (defun mevedel-transcript-prompt-transform-start ()
@@ -327,6 +326,50 @@ beginning of the buffer."
             (goto-char next)))))
     (nreverse ranges)))
 
+(defun mevedel-transcript--system-reminder-range-at-point (limit)
+  "Return complete system-reminder bounds at point before LIMIT.
+The result is `(START BODY-START BODY-END END)'.  Literal complete reminders
+nested inside the outer body do not close it early."
+  (when (looking-at "^\\(?:\\*+ \\)?<system-reminder>[ \t]*$")
+    (let ((origin (point))
+          (start (match-beginning 0))
+          (body-start (progn (forward-line 1) (point)))
+          (depth 1)
+          body-end
+          block-end)
+      (while (and (> depth 0)
+                  (re-search-forward
+                   "^\\(?:\\(?:\\*+ \\)?<system-reminder>[ \t]*\\|</system-reminder>[ \t]*\\)\\(?:\n\\|\\'\\)"
+                   limit t))
+        (if (save-excursion
+              (goto-char (match-beginning 0))
+              (looking-at "\\(?:\\*+ \\)?<system-reminder>"))
+            (cl-incf depth)
+          (cl-decf depth)
+          (when (zerop depth)
+            (setq body-end (match-beginning 0)
+                  block-end (match-end 0)))))
+      (if block-end
+          (list start body-start body-end block-end)
+        (goto-char origin)
+        nil))))
+
+(defun mevedel-transcript--system-reminder-ranges (start end)
+  "Return complete nesting-aware system-reminder ranges in START..END."
+  (let (ranges)
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward
+              "^\\(?:\\*+ \\)?<system-reminder>[ \t]*$" end t)
+        (goto-char (match-beginning 0))
+        (if-let* ((range
+                   (mevedel-transcript--system-reminder-range-at-point end)))
+            (progn
+              (push (list 'reminder (car range) (nth 3 range)) ranges)
+              (goto-char (nth 3 range)))
+          (forward-char 1))))
+    (nreverse ranges)))
+
 (defun mevedel-transcript--mailbox-ranges (start end)
   "Return complete mailbox ranges in START..END."
   (let (ranges)
@@ -485,9 +528,7 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
            'reasoning "^#\\+begin_reasoning\\b" "^#\\+end_reasoning[^\n]*\n?"
            start end)
           (mevedel-transcript--mailbox-ranges start end)
-          (mevedel-transcript--delimited-ranges
-           'reminder "^\\(?:\\*+ \\)?<system-reminder>[ \t]*$"
-           "^</system-reminder>[ \t]*\n?" start end)
+          (mevedel-transcript--system-reminder-ranges start end)
           (mevedel-transcript--delimited-ranges
            'hook-context "^<hook-context>[ \t]*$"
            "^</hook-context>[ \t]*\n?" start end)

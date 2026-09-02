@@ -284,7 +284,12 @@ not proof, since restoring timestamps, a backwards clock, and
 coarse-grained filesystem stamps all leave it standing, while a change time
 cannot be set from userland and so moves anyway. A rewrite that restores
 all three is the remaining blind spot, and closing that would mean reading
-every cached file on every poll.
+every cached file on every poll. A file over
+`mevedel-file-cache-max-file-bytes` is cached as a fingerprint with no
+content, and mevedel's own session directories are refused outright
+(`mevedel-session-file-cache-excluded-p`) apart from their `artifacts`
+subtree; see [`docs/reminders.md`](reminders.md) for what the resulting
+`edited-file` reminder reports.
 
 `mevedel-execution-target.el` binds each session to one local or TRAMP target,
 owns qualified/native path conversion, and probes target readiness.  Required

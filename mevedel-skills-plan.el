@@ -347,7 +347,7 @@ function uses recorded extents and never scans TEXT."
                 'command))
           pairs))
         command-bodies
-        instruction-reminders
+        instruction-attachments
         permission-rules
         (ptc-primitives :unrestricted)
         hook-rules
@@ -366,8 +366,7 @@ function uses recorded extents and never scans TEXT."
                   (or (plist-get attachment :arguments) ""))))
             (unless (gethash key seen-attachments)
               (puthash key t seen-attachments)
-              (push (mevedel-skills-format-attachment attachment)
-                    instruction-reminders))))
+              (push attachment instruction-attachments))))
         (if (eq (mevedel-skill-plan-entry-role entry) 'command)
             (progn
               (push (or (plist-get outcome :body) "") command-bodies)
@@ -399,11 +398,10 @@ function uses recorded extents and never scans TEXT."
                         (or (plist-get outcome :arguments) ""))))
             (unless (gethash key seen-attachments)
               (puthash key t seen-attachments)
-              (push (mevedel-skills-format-attachment attachment)
-                    instruction-reminders))))))
+              (push attachment instruction-attachments))))))
     (list :command-count command-count
           :command-bodies (nreverse command-bodies)
-          :instruction-reminders (nreverse instruction-reminders)
+          :instruction-attachments (nreverse instruction-attachments)
           :permission-rules permission-rules
           :ptc-primitives ptc-primitives
           :hook-rules hook-rules
@@ -419,8 +417,11 @@ function uses recorded extents and never scans TEXT."
          ;; paths, and a session-FIFO delivery could leak into an
          ;; unrelated turn when a prepared submission is cancelled.
          (reminder-blocks
-          (mapcar #'mevedel-reminders-format-block
-                  (plist-get aggregate :instruction-reminders)))
+          (mapcar
+           (lambda (attachment)
+             (mevedel-reminders-format-block
+              (mevedel-skills-format-attachment attachment)))
+           (plist-get aggregate :instruction-attachments)))
          (main-input
           (if command-bodies
               (mapconcat #'identity command-bodies "\n\n")
@@ -449,6 +450,8 @@ function uses recorded extents and never scans TEXT."
     (list :status 'ok
           :prepared-entries pairs
           :model-input model-input
+          :render-prompt main-input
+          :render-attachments (plist-get aggregate :instruction-attachments)
           :warnings
           (mapcar #'mevedel-skill-plan-occurrence-message
                   (cl-remove-if-not
@@ -523,12 +526,18 @@ transaction fails or is cancelled, later callbacks have no effect."
          #'prepared
          :origin 'user :cancelled-p cancelled-p)))))
 
-(defun mevedel-skills-plan-render-data (plan expanded-prompt)
-  "Return hidden render data for PLAN and exact EXPANDED-PROMPT."
+(defun mevedel-skills-plan-render-data (plan prepared)
+  "Return hidden render data for PLAN and its PREPARED outcome."
   (mevedel-tool-render-data-format
    (list :kind 'inline-skill
          :display-text (mevedel-skill-invocation-plan-text plan)
-         :expanded-prompt expanded-prompt)))
+         :prompt (plist-get prepared :render-prompt)
+         :attachments
+         (mapcar
+          (lambda (attachment)
+            (list :name (plist-get attachment :name)
+                  :body (mevedel-skills-format-attachment attachment)))
+          (plist-get prepared :render-attachments)))))
 
 (provide 'mevedel-skills-plan)
 ;;; mevedel-skills-plan.el ends here
