@@ -4,13 +4,10 @@
 (() => {
   const GLYPH = {'pending': '○', 'in-progress': '◐', 'completed': '✓'};
 
-  function create({el}) {
-    const box = document.getElementById('tasks');
-    const summary = document.getElementById('tasks-summary');
+  function create({el, summarize}) {
     const list = document.getElementById('tasks-list');
 
     function show(frame) {
-      if (!box) return;
       const valid = frame && frame.t === 'tasks'
         && Array.isArray(frame.tasks)
         && [frame.total, frame.completed, frame.omitted, frame.omittedActive]
@@ -28,12 +25,8 @@
             || (Array.isArray(task.blockedBy)
               && task.blockedBy.every(Number.isInteger))));
       if (!valid) {
-        box.hidden = true;
         if (list) list.replaceChildren();
-        if (summary) {
-          summary.textContent = '';
-          summary.dataset.warning = 'false';
-        }
+        if (summarize) summarize('tasks', '', false);
         return;
       }
       const tasks = frame.tasks;
@@ -41,16 +34,17 @@
       const completed = frame.completed;
       const omitted = frame.omitted;
       const omittedActive = frame.omittedActive;
-      box.hidden = total === 0;
       if (list) list.replaceChildren();
-      if (summary) summary.dataset.warning = omittedActive ? 'true' : 'false';
-      if (total === 0) return;
-      if (summary) {
-        let text = `Tasks · ${completed}/${total} done`;
-        if (omitted) text += ` · ${omitted} omitted`;
-        if (omittedActive) text += ` · ⚠ ${omittedActive} active omitted`;
-        summary.textContent = text;
+      if (summarize) {
+        let text = '';
+        if (total) {
+          text = `${completed}/${total} tasks`;
+          if (omitted) text += ` · ${omitted} omitted`;
+          if (omittedActive) text += ` · ⚠ ${omittedActive} active omitted`;
+        }
+        summarize('tasks', text, omittedActive > 0);
       }
+      if (total === 0) return;
       if (!list) return;
       tasks.forEach(task => {
         const status = task.status;

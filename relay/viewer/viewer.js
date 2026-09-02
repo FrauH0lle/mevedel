@@ -6,6 +6,7 @@
   const connection = document.getElementById('connection');
   const notice = document.getElementById('notice');
   const liveButton = document.getElementById('live-button');
+  const dock = document.querySelector('.dock');
   const composer = document.getElementById('composer');
   const composerInput = document.getElementById('composer-input');
   const queueState = document.getElementById('queue-state');
@@ -23,6 +24,8 @@
   const skillChips = document.getElementById('skill-chips');
   const themeButton = document.getElementById('theme-button');
   const modeline = document.getElementById('modeline');
+  const sessionBox = document.getElementById('session-box');
+  const sessionSummary = document.getElementById('session-summary');
   const transportApi = window.mevedelViewerTransport;
   const notificationsApi = window.mevedelViewerNotifications;
   const {base64urlDecode, base64urlEncode, importKey, parseFragment} = transportApi;
@@ -103,13 +106,30 @@
     }, 4000);
   }
 
+  // Sub-agents and tasks are two reporters on one dock line: each owns a
+  // fragment of the summary and its own section inside the disclosure,
+  // and the box shows for as long as either has something to report.
+  const summaryParts = {agents: '', tasks: ''};
+  const summaryWarnings = {agents: false, tasks: false};
+  function summarizeSession(key, text, warning) {
+    summaryParts[key] = text || '';
+    summaryWarnings[key] = warning === true;
+    const bits = [summaryParts.agents, summaryParts.tasks].filter(Boolean);
+    if (sessionBox) sessionBox.hidden = bits.length === 0;
+    if (!sessionSummary) return;
+    sessionSummary.textContent = ['Session', ...bits].join(' · ');
+    sessionSummary.dataset.warning =
+      (summaryWarnings.agents || summaryWarnings.tasks) ? 'true' : 'false';
+  }
+
   const artifacts = window.mevedelArtifactView.create({
     send, el, flash: flashNotice,
   });
   const agents = window.mevedelAgentView.create({
     send, el, directiveLabel, openArtifact: artifacts.open,
+    summarize: summarizeSession,
   });
-  const tasks = window.mevedelTaskView.create({el});
+  const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
 
   function setLiveButton(visible) {
     liveButton.hidden = !visible;
@@ -117,6 +137,21 @@
 
   function updateLiveAffordance() {
     setLiveButton(!atLiveEdge());
+    updateReadingMode();
+  }
+
+  // Scrolled well back from the live edge, the guest is reading, not
+  // typing, and on a phone the full dock costs half the viewport: the
+  // status rows fold away until they tap the composer or return to live.
+  // Folding shortens the page, so the fold threshold has to clear a
+  // dock's worth of scroll -- otherwise folding lands the guest back at
+  // the live edge, which unfolds, which scrolls them off it again.
+  function updateReadingMode() {
+    const distance = document.documentElement.scrollHeight - window.scrollY
+      - window.innerHeight;
+    const folded = document.body.hasAttribute('data-reading');
+    const next = folded ? distance >= 40 : distance > dock.offsetHeight + 80;
+    if (next !== folded) document.body.toggleAttribute('data-reading', next);
   }
 
   /* -- Status strip -------------------------------------------------- */
@@ -1036,6 +1071,7 @@
   liveButton.addEventListener('click', () => {
     scrollToLive();
     setLiveButton(false);
+    document.body.removeAttribute('data-reading');
   });
   window.addEventListener('scroll', updateLiveAffordance, {passive: true});
   const rawFragment = notificationsApi.resolveShare(parseFragment);
