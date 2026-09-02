@@ -46,7 +46,17 @@ hook run `font-lock-set-defaults\=' before `treesit-major-mode-setup\='."
           (mevedel-view--with-render-temp-buffer
             (emacs-lisp-mode))
           (should-not called))
-      (remove-hook 'emacs-lisp-mode-hook hook))))
+      (remove-hook 'emacs-lisp-mode-hook hook)))
+
+  :doc "leaves `hack-local-variables-hook' unbound for mode setup"
+  ;; Nothing here visits a file, so the hook never runs, while `sh-mode' and
+  ;; friends register on it buffer-locally from their mode body.  Binding it
+  ;; made every such call print "Making hack-local-variables-hook
+  ;; buffer-local while locally let-bound!" into the messages log.
+  (let ((hack-local-variables-hook '(mevedel-view-test--sentinel)))
+    (mevedel-view--with-render-temp-buffer
+      (should (equal hack-local-variables-hook
+                     '(mevedel-view-test--sentinel))))))
 
 (mevedel-deftest mevedel-view--fontify-as ()
   ,test

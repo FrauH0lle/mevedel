@@ -33,9 +33,15 @@ mode in a fresh buffer."
   ;; Modes chatter while they set themselves up (`sh-mode' announces its
   ;; indentation setup, `python-mode' guesses its offset).  Rendering must
   ;; not push that into the echo area.
+  ;;
+  ;; `hack-local-variables-hook' is deliberately not bound here.  No body
+  ;; visits a file, so the hook never runs, while several mode bodies
+  ;; (`sh-mode', `bash-ts-mode', `sql-mode') register on it buffer-locally.
+  ;; Binding it made every one of those calls print "Making
+  ;; hack-local-variables-hook buffer-local while locally let-bound!", which
+  ;; on a transcript full of shell blocks is thousands of lines of noise.
   `(let ((change-major-mode-after-body-hook nil)
          (after-change-major-mode-hook nil)
-         (hack-local-variables-hook nil)
          (enable-local-variables nil)
          (font-lock-mode-hook nil)
          (inhibit-message t)
