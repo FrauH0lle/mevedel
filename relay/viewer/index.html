@@ -74,6 +74,7 @@
       <nav id="artifacts" class="dock-strip" aria-label="Session artifacts" hidden></nav>
       <div id="requests" class="requests" aria-label="Pending interactions"></div>
       <div id="own-queue" class="own-queue" aria-label="Your queued prompts" hidden></div>
+      <div id="invites" class="own-queue" aria-label="Rooms you can join" hidden></div>
       <p id="notice" class="notice" role="status" hidden></p>
       <form id="composer" class="composer" hidden>
         <p id="queue-state" class="queue-state" role="status" hidden></p>
@@ -106,12 +107,12 @@
       <dialog id="new-session" class="sheet" aria-labelledby="new-session-title">
         <form id="new-session-form" method="dialog" class="sheet-form">
           <h2 id="new-session-title" class="sheet-title">New session</h2>
-          <p id="new-session-lede" class="sheet-lede">A separate room for
+          <p id="new-session-lede" class="sheet-note">A separate room for
           separate work. This room, and everyone in it, stays exactly where
           it is.</p>
           <label class="sheet-label" for="new-session-name">Name</label>
           <input id="new-session-name" class="sheet-input" maxlength="48"
-                 required placeholder="onboarding-flow">
+                 required placeholder="letters, digits, - and _">
           <label class="sheet-label" for="new-session-prompt">First prompt
             <span class="sheet-hint">optional — it runs on creation</span>
           </label>
@@ -124,17 +125,38 @@
                     type="submit">Request</button>
           </menu>
         </form>
-        <div id="new-session-result" class="sheet-form" hidden>
-          <h2 class="sheet-title">New session</h2>
-          <p id="new-session-message" class="sheet-lede"></p>
-          <a id="new-session-link" class="btn sheet-open" target="_blank"
-             rel="noopener" hidden>Open new room ↗</a>
-          <menu class="sheet-actions">
-            <button id="new-session-done" class="btn quiet"
-                    type="button">Back to this room</button>
-          </menu>
-        </div>
       </dialog>
+      <dialog id="rooms" class="sheet" aria-labelledby="rooms-title">
+        <form method="dialog" class="sheet-form">
+          <h2 id="rooms-title" class="sheet-title">Rooms</h2>
+          <p class="sheet-note">Rooms this browser was given a link to, at
+          your level of access here. Kept until you forget them; they die
+          with the host&rsquo;s share regardless.</p>
+          <div id="rooms-list" class="invite-tiers"></div>
+          <menu class="sheet-actions">
+            <button value="close" class="btn quiet" type="submit">Done</button>
+          </menu>
+        </form>
+      </dialog>
+      <dialog id="invite" class="sheet" aria-labelledby="invite-title">
+        <form method="dialog" class="sheet-form">
+          <h2 id="invite-title" class="sheet-title">Invite to this room</h2>
+          <p class="sheet-note">Each link is a bearer credential. You can
+          hand out your own level of access or less, never more.</p>
+          <div id="invite-tiers" class="invite-tiers"></div>
+          <menu class="sheet-actions">
+            <button value="close" class="btn quiet" type="submit">Done</button>
+          </menu>
+        </form>
+      </dialog>
+      <div class="dock-actions">
+        <button id="rooms-button" class="btn quiet" type="button" hidden
+                title="Other rooms this browser can get back to"
+                aria-label="Rooms">Rooms</button>
+        <button id="invite-button" class="btn quiet" type="button" hidden
+                title="Copy a link to this room"
+                aria-label="Invite to this room">Invite</button>
+      </div>
       <p id="modeline" class="modeline" role="status">
         <span id="connection" class="conn">Connecting…</span>
       </p>
@@ -149,7 +171,10 @@
         relay sees ciphertext. Enabling notifications stores the link in
         this browser so an installed app can reconnect. It is cleared after
         this viewer observes the room end or gives up reconnecting; otherwise
-        it may remain until this link is opened again or site data is cleared.</p>
+        it may remain until this link is opened again or site data is cleared.
+        Links to rooms you requested or were offered are kept in this browser
+        too, so a reload does not lose them; Rooms lists them and Forget
+        removes one, and they die with the host&rsquo;s share regardless.</p>
       </details>
     </div>
     <script src="/transport.js" defer></script>

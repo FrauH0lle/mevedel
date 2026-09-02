@@ -25,6 +25,8 @@
                   "mevedel-collaboration" (room peer))
 (declare-function mevedel-collaboration--guest-text
                   "mevedel-collaboration" (value))
+(declare-function mevedel-collaboration--audience-peers-for
+                  "mevedel-collaboration-guest" (room audience))
 (declare-function mevedel-collaboration--publish-status
                   "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--room-data-buffer
@@ -45,7 +47,7 @@
 (declare-function mevedel--prompt-user-with-overlay
                   "mevedel-interaction-prompt"
                   (title content question help-echo-text callback
-                         &optional host-only))
+                         &optional host-only audience))
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view-enqueue-external-follow-up
@@ -133,11 +135,34 @@ refusal protects the command allowlist from becoming an escalation path."
                     (kill-buffer-query-functions nil))
                 (ignore-errors (kill-buffer candidate))))))))))
 
+(defun mevedel-collaboration--offer-room (room peer name link)
+  "Tell PEER in ROOM that it may join the room NAME at LINK.
+
+Unlike a reply, this answers no request of PEER's own, so it travels as
+its own frame: pairing it with a request the receiver did not make is
+how one guest's approval lands on another guest's pending card."
+  (mevedel-collaboration--transport-send
+   (plist-get room :transport) peer
+   (list :t "room" :name name :link link)))
+
+(defun mevedel-collaboration--offer-room-to-owners (room except name link)
+  "Offer the room NAME at LINK to ROOM's owner guests other than EXCEPT.
+
+An owner may create a session outright and may approve someone else's,
+so a new room in the same workspace is one it can already reach; being
+told is the difference between reaching it and knowing it exists.  The
+requester is skipped because its own reply already carried a link."
+  (dolist (owner-peer (mevedel-collaboration--audience-peers-for
+                       room '(:owner t)))
+    (unless (eql owner-peer except)
+      (mevedel-collaboration--offer-room room owner-peer name link))))
+
 (defun mevedel-collaboration--create-guest-session (room peer guest name prompt)
   "Create session NAME for GUEST and hand PEER a link into its room.
 
 The new room shares only ROOM's workspace and working directory.  GUEST
-receives the same authority tier it already holds.  PROMPT, when given,
+receives the same authority tier it already holds, and ROOM's other
+owner guests are offered an owner link to it.  PROMPT, when given,
 is queued only after the new room starts; a failed start or enqueue
 discards the partial session and reports failure without stopping ROOM."
   (let* ((session (plist-get room :session))
@@ -181,6 +206,11 @@ discards the partial session and reports failure without stopping ROOM."
                                     :link-owner
                                   :link-full)))
               (progn
+                ;; Offering is incidental too: an owner that cannot be
+                ;; told still has a room the requester can reach.
+                (ignore-errors
+                  (mevedel-collaboration--offer-room-to-owners
+                   room peer name (plist-get new-room :link-owner)))
                 ;; Presentation is incidental to the protocol transaction: a
                 ;; display failure must not revoke the room whose link was sent.
                 (ignore-errors (mevedel--display-chat-buffer buffer))
@@ -194,10 +224,21 @@ discards the partial session and reports failure without stopping ROOM."
 (defun mevedel-collaboration--ask-host-new-session (room peer guest name prompt)
   "Ask the host to approve GUEST's request for a session named NAME.
 
-The prompt is host-only.  Its callback acts only while the original ROOM
-and authenticated GUEST still own DATA-BUFFER and PEER."
+The prompt reaches Emacs and ROOM's owner-link guests.  An owner may
+create a session outright, so approving someone else's request is no new
+authority; and only a non-owner ever gets here, because an owner's own
+request never becomes a question.  Restricting the audience to owners
+therefore already excludes the requester, whatever browser it shares
+with an owner.  The callback acts only while the original ROOM and
+authenticated GUEST still own DATA-BUFFER and PEER.
+
+GUEST is latched for the wait: a person answers this, and a guest that
+can stack requests while nobody is at the keyboard hands the host a pile
+of prompts for the same session, of which every approval after the first
+fails on the name that the first one took."
   (if-let* ((data-buffer (mevedel-collaboration--room-data-buffer room)))
       (with-current-buffer data-buffer
+        (plist-put guest :pending-new-session name)
         (mevedel--prompt-user-with-overlay
          "New session requested"
          (concat
@@ -205,12 +246,14 @@ and authenticated GUEST still own DATA-BUFFER and PEER."
           (format "Name:   %s\n" name)
           (format "Prompt: %s\n"
                   (or prompt "(none -- the session starts empty)")))
-         (format "Create session \"%s\" and send this guest a link?" name)
+         (format "Create session \"%s\" for %s?"
+                 name (plist-get guest :name))
          nil
          (lambda (outcome)
            (when (and (eq room (mevedel-collaboration--room-for-buffer
                                 data-buffer))
                       (eq guest (mevedel-collaboration--guest room peer)))
+             (plist-put guest :pending-new-session nil)
              (pcase outcome
                ('approve
                 (mevedel-collaboration--create-guest-session
@@ -222,7 +265,8 @@ and authenticated GUEST still own DATA-BUFFER and PEER."
                 (mevedel-collaboration--new-session-reply
                  room peer :ok :json-false
                  :message "The host declined this request")))))
-         t))
+         nil
+         '(:owner t)))
     (mevedel-collaboration--new-session-reply
      room peer :ok :json-false :message "This room has no session")))
 
@@ -238,18 +282,29 @@ and authenticated GUEST still own DATA-BUFFER and PEER."
     (let* ((prompt (mevedel-collaboration--guest-text
                     (plist-get frame :prompt)))
            (key (cons name prompt))
+           (waiting (plist-get guest :pending-new-session))
            (last (plist-get guest :last-new-session))
            (now (float-time)))
-      (unless (and last
-                   (equal key (car last))
-                   (< (- now (cdr last))
-                      mevedel-collaboration--duplicate-prompt-window))
+      (cond
+       ;; One question to a person at a time.  A second request cannot
+       ;; be answered usefully anyway: approving both fails the later
+       ;; one on the name the earlier one took.
+       (waiting
+        (mevedel-collaboration--new-session-reply
+         room peer :ok :json-false
+         :message (format "Your request for %s is still waiting" waiting)))
+       ((and last
+             (equal key (car last))
+             (< (- now (cdr last))
+                mevedel-collaboration--duplicate-prompt-window))
+        nil)
+       (t
         (plist-put guest :last-new-session (cons key now))
         (if (plist-get guest :owner)
             (mevedel-collaboration--create-guest-session
              room peer guest name prompt)
           (mevedel-collaboration--ask-host-new-session
-           room peer guest name prompt))))))
+           room peer guest name prompt)))))))
 
 (provide 'mevedel-collaboration-owner)
 ;;; mevedel-collaboration-owner.el ends here

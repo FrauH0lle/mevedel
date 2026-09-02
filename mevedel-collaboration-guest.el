@@ -309,6 +309,31 @@ output to the answering guest.")
              (plist-get room :guests))
     (nreverse peers)))
 
+(defun mevedel-collaboration--audience-peer-p (room peer audience)
+  "Return non-nil when PEER in ROOM belongs to AUDIENCE.
+
+AUDIENCE narrows an interaction below the writable default.  `:owner\='
+restricts it to owner-link guests.  A nil AUDIENCE is every writable
+guest, the ordinary case."
+  (let ((guest (mevedel-collaboration--guest room peer)))
+    (and guest
+         (or (null (plist-get audience :owner))
+             (plist-get guest :owner)))))
+
+(defun mevedel-collaboration--audience-peers-for (room audience)
+  "Return ROOM's writable peers that belong to AUDIENCE."
+  (if (null audience)
+      (mevedel-collaboration--writable-peers room)
+    (seq-filter (lambda (peer)
+                  (mevedel-collaboration--audience-peer-p
+                   room peer audience))
+                (mevedel-collaboration--writable-peers room))))
+
+(defun mevedel-collaboration--audience-peers (room overlay)
+  "Return ROOM's peers that may see OVERLAY's interaction."
+  (mevedel-collaboration--audience-peers-for
+   room (plist-get (overlay-get overlay 'mevedel--remote) :audience)))
+
 (defun mevedel-collaboration--ui-request-frame (request-id overlay)
   "Return the ui-request frame for OVERLAY under REQUEST-ID."
   (let ((remote (overlay-get overlay 'mevedel--remote)))
@@ -361,7 +386,7 @@ guest sees one card updated in place instead of an accumulating pile."
              (request-id
               (or existing-id
                   (cl-incf mevedel-collaboration--ui-request-counter)))
-             (peers (mevedel-collaboration--writable-peers room)))
+             (peers (mevedel-collaboration--audience-peers room overlay)))
         (puthash request-id overlay requests)
         (let ((frame (mevedel-collaboration--ui-request-frame
                       request-id overlay)))
@@ -369,7 +394,17 @@ guest sees one card updated in place instead of an accumulating pile."
             (mevedel-collaboration--transport-send
              (plist-get room :transport) peer frame)))
         (unless existing-id
-          (mevedel-collaboration--push-writable-guests room))))))
+          ;; Waking a guest for a decision it is not shown is noise, so
+          ;; the push follows the same audience the frame did.
+          (if (plist-get remote :audience)
+              (mevedel-collaboration--push-guests
+               room (delq nil
+                          (mapcar (lambda (peer)
+                                    (plist-get
+                                     (mevedel-collaboration--guest room peer)
+                                     :guest-id))
+                                  peers)))
+            (mevedel-collaboration--push-writable-guests room)))))))
 
 (defun mevedel-collaboration--on-prompt-settled (overlay)
   "Dismiss OVERLAY's ui-request from every guest surface.
@@ -389,15 +424,23 @@ knows where it lived."
        requests))))
 
 (defun mevedel-collaboration--send-ui-requests (room peer)
-  "Send ROOM's active ui-requests to writable guest PEER."
+  "Send ROOM's active ui-requests to writable guest PEER.
+
+A narrowed interaction is withheld here as well as on creation: a guest
+must not collect a decision it may not see by reconnecting."
   (let ((requests (plist-get room :ui-requests))
         ids)
     (maphash (lambda (request-id _overlay) (push request-id ids)) requests)
     (dolist (request-id (sort ids #'<))
-      (mevedel-collaboration--transport-send
-       (plist-get room :transport) peer
-       (mevedel-collaboration--ui-request-frame
-        request-id (gethash request-id requests))))))
+      (let* ((overlay (gethash request-id requests))
+             (audience (plist-get (overlay-get overlay 'mevedel--remote)
+                                  :audience)))
+        (when (or (null audience)
+                  (mevedel-collaboration--audience-peer-p
+                   room peer audience))
+          (mevedel-collaboration--transport-send
+           (plist-get room :transport) peer
+           (mevedel-collaboration--ui-request-frame request-id overlay)))))))
 
 (defun mevedel-collaboration--handle-ui-response (room peer frame)
   "Settle the ui-request answered by writable guest PEER through FRAME.
@@ -412,7 +455,14 @@ answer can execute the same path the host key binding would."
                (plist-get guest :writable)
                mevedel-collaboration-remote-interactions
                (integerp request-id))
-      (when-let* ((overlay (gethash request-id (plist-get room :ui-requests))))
+      (when-let* ((overlay (gethash request-id (plist-get room :ui-requests)))
+                  ;; Seeing a narrowed interaction and answering it are
+                  ;; the same authority, so the audience is rechecked
+                  ;; here: a request id is guessable, the audience is not.
+                  ((mevedel-collaboration--audience-peer-p
+                    room peer
+                    (plist-get (overlay-get overlay 'mevedel--remote)
+                               :audience))))
         (let* ((remote (overlay-get overlay 'mevedel--remote))
                (options (plist-get remote :options))
                (feedback (plist-get frame :feedback))

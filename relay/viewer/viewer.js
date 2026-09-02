@@ -133,7 +133,8 @@
     summarize: summarizeSession,
   });
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
-  const sessions = window.mevedelSessionView.create({state, send, el});
+  const sessions = window.mevedelSessionView.create(
+    {state, send, el, encode: base64urlEncode, decode: base64urlDecode});
 
   function setLiveButton(visible) {
     liveButton.hidden = !visible;
@@ -893,6 +894,7 @@
     showQueueState({pending: 0});
     showSkillChips([]);
     setComposerVisible(false);
+    sessions.setInviteVisible(false);
     refreshFilter();
     renderModeline();
     setConnection(connectionText, 'ended');
@@ -984,6 +986,8 @@
         ok: frame.ok === true, message: frame.message,
         link: frame.link, name: frame.name,
       });
+    } else if (frame.t === 'room') {
+      sessions.offerRoom({name: frame.name, link: frame.link});
     } else if (frame.t === 'bye') {
       showTerminal('Session ended', 'The shared session has ended.');
     } else if (frame.t === 'error') {
@@ -1099,6 +1103,9 @@
   } else {
     state.fragment = rawFragment;
     state.owner = Boolean(credentials.ownerToken);
+    // Handing on access is derived from the secret this page holds, so
+    // the controls need it before the socket is even open.
+    sessions.useCredentials(credentials);
     // Keep an existing opt-in's persisted share pointing at the room
     // most recently opened.
     if (notifications.enabled()) notifications.persistShare();

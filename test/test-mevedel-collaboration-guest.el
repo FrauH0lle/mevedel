@@ -214,6 +214,52 @@
         (should (equal [] (plist-get (cdr (car tasks)) :tasks)))))))
 
 
+(mevedel-deftest mevedel-collaboration--audience-peer-p
+  (:doc "narrows a mirrored interaction to owner-link guests")
+  (let* ((guests (make-hash-table :test #'eql))
+         (room (list :transport 'transport :guests guests)))
+    (puthash 1 (list :name "Owner" :writable t :owner t
+                     :guest-id "owner-id") guests)
+    (puthash 2 (list :name "Writer" :writable t :guest-id "writer-id") guests)
+    ;; No audience is every writable guest, the ordinary case.
+    (should (mevedel-collaboration--audience-peer-p room 2 nil))
+    (should (mevedel-collaboration--audience-peer-p room 1 nil))
+    (let ((audience '(:owner t)))
+      (should (mevedel-collaboration--audience-peer-p room 1 audience))
+      (should-not (mevedel-collaboration--audience-peer-p room 2 audience))
+      ;; Two tabs of one browser share a guest id, so a narrowed
+      ;; interaction must turn on the link a peer holds, not on who it
+      ;; is: the owner tab sees it while the writer tab does not.
+      (puthash 3 (list :name "Owner tab" :writable t :owner t
+                       :guest-id "writer-id") guests)
+      (should (mevedel-collaboration--audience-peer-p room 3 audience))
+      ;; An unknown peer is nobody.
+      (should-not (mevedel-collaboration--audience-peer-p room 42 audience)))))
+
+(mevedel-deftest mevedel-collaboration--audience-peers
+  (:doc "filters the writable peers by the overlay's declared audience")
+  (let* ((guests (make-hash-table :test #'eql))
+         (room (list :transport 'transport :guests guests)))
+    (puthash 1 (list :name "Owner" :writable t :owner t
+                     :guest-id "owner-id") guests)
+    (puthash 2 (list :name "Writer" :writable t :guest-id "writer-id") guests)
+    (puthash 3 (list :name "Reader" :guest-id "reader-id") guests)
+    (with-temp-buffer
+      (let ((overlay (make-overlay (point-min) (point-min))))
+        ;; A plain interaction reaches every writable guest.
+        (overlay-put overlay 'mevedel--remote '(:body "x"))
+        (should (equal '(1 2)
+                       (sort (mevedel-collaboration--audience-peers
+                              room overlay)
+                             #'<)))
+        (overlay-put overlay 'mevedel--remote
+                     '(:body "x" :audience (:owner t)))
+        (should (equal '(1) (mevedel-collaboration--audience-peers
+                             room overlay)))
+        ;; Nobody left is a decision only Emacs can take, not an error.
+        (remhash 1 guests)
+        (should-not (mevedel-collaboration--audience-peers room overlay))))))
+
 (mevedel-deftest mevedel-collaboration--handle-push-subscription
   (:doc "forwards valid subscriptions and removal only for an authenticated guest")
   (let* ((guests (make-hash-table :test #'eql))

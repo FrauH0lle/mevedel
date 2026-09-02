@@ -249,7 +249,8 @@ FACE is inherited by the top and bottom rule lines."
      "\n")))
 
 (defun mevedel--prompt-user-with-overlay
-    (title content question help-echo-text callback &optional host-only)
+    (title content question help-echo-text callback &optional host-only
+           audience)
   "Display a confirmation overlay and settle CALLBACK exactly once.
 
 CALLBACK receives `approve', `deny', `(feedback . TEXT)', or
@@ -259,7 +260,12 @@ optional hover text.
 
 With HOST-ONLY non-nil the overlay carries no `mevedel--remote'
 descriptor and so is never mirrored to a collaboration guest.  Use it
-for a decision a guest must not be able to make about itself."
+for a decision no guest may make.
+
+AUDIENCE narrows the guests a mirrored interaction reaches below the
+writable default; see `mevedel-collaboration--audience-peer-p' for the
+keys.  Use it for a decision some guests may make and the guest it is
+about may not."
   (let* ((source-buffer (current-buffer))
          (origin (mevedel-current-origin))
          (target-buffer
@@ -321,11 +327,14 @@ for a decision a guest must not be able to make about itself."
       (overlay-put overlay 'mevedel--callback callback)
       (unless host-only
         (overlay-put overlay 'mevedel--remote
-                     (list :body (substring-no-properties
-                                  (format "%s\n\n%s\n\n%s"
-                                          title content question))
-                           :options '((approve . "Approve") (deny . "Deny"))
-                           :feedback t)))
+                     (append
+                      (list :body (substring-no-properties
+                                   (format "%s\n\n%s\n\n%s"
+                                           title content question))
+                            :options '((approve . "Approve")
+                                       (deny . "Deny"))
+                            :feedback t)
+                      (when audience (list :audience audience)))))
       (cl-pushnew overlay mevedel--prompt-overlays :test #'eq)
       (mevedel--prompt--register-canceller source-buffer overlay)
       (mevedel--prompt-announce overlay))
