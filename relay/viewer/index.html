@@ -61,16 +61,16 @@
         <button id="live-button" class="live-button" type="button" hidden
                 title="Jump back to the newest turn">Return to live</button>
       </div>
-      <nav id="agents" class="dock-strip" aria-label="Live sub-agents" hidden></nav>
-      <details id="agents-done" class="dock-disclosure" aria-label="Finished agents" hidden>
-        <summary id="agents-done-summary">Finished agents</summary>
-        <ul id="agents-done-list" class="dock-disclosure-list agents-done-list"></ul>
+      <details id="session-box" class="dock-disclosure" hidden
+               aria-label="Sub-agents and tasks">
+        <summary id="session-summary">Session</summary>
+        <div class="dock-disclosure-body">
+          <nav id="agents" class="dock-strip" aria-label="Live sub-agents" hidden></nav>
+          <ul id="agents-done-list" class="dock-disclosure-list agents-done-list"></ul>
+          <ul id="tasks-list" class="dock-disclosure-list tasks-list"></ul>
+        </div>
       </details>
       <nav id="artifacts" class="dock-strip" aria-label="Session artifacts" hidden></nav>
-      <details id="tasks" class="dock-disclosure" aria-label="Session task list" hidden>
-        <summary id="tasks-summary">Tasks</summary>
-        <ul id="tasks-list" class="dock-disclosure-list tasks-list"></ul>
-      </details>
       <div id="requests" class="requests" aria-label="Pending interactions"></div>
       <div id="own-queue" class="own-queue" aria-label="Your queued prompts" hidden></div>
       <p id="notice" class="notice" role="status" hidden></p>

@@ -338,15 +338,19 @@ async function main() {
                'artifact-meta', 'artifact-tab', 'artifact-download',
                'artifact-close', 'artifact-body',
                'theme-button', 'modeline',
-               'tasks', 'tasks-summary', 'tasks-list',
-               'agents-done', 'agents-done-summary', 'agents-done-list'];
+               'session-box', 'session-summary',
+               'tasks-list', 'agents-done-list'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
+  // The dock is addressed by class, not id, and its height is what the
+  // reading-mode fold threshold is measured against.
+  const dockNode = new Element('div');
+  dockNode.offsetHeight = 10;
   nodes.composer.hidden = true;
   nodes.filter.hidden = true;
   nodes['notify-button'].hidden = true;
   nodes['own-queue'].hidden = true;
   nodes.agents.hidden = true;
-  nodes.tasks.hidden = true;
+  nodes['session-box'].hidden = true;
   nodes['agent-panel'].hidden = true;
   nodes['agent-transcript'].scrollTop = 0;
   nodes.artifacts.hidden = true;
@@ -427,6 +431,20 @@ async function main() {
     listeners: {},
     addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback); },
     getElementById(id) { return nodes[id]; },
+    querySelector(selector) {
+      return selector === '.dock' ? dockNode : null;
+    },
+    body: {
+      attributes: {},
+      hasAttribute(name) { return name in this.attributes; },
+      removeAttribute(name) { delete this.attributes[name]; },
+      toggleAttribute(name, force) {
+        const on = force === undefined ? !(name in this.attributes) : !!force;
+        if (on) this.attributes[name] = '';
+        else delete this.attributes[name];
+        return on;
+      },
+    },
     createElement(tag) {
       const element = new Element(tag);
       if (tag === 'canvas') {
@@ -532,6 +550,35 @@ async function main() {
   nodes['theme-button'].dispatch('click');
   assert.equal(document.documentElement.attributes['data-theme'], undefined);
   assert.equal(storage.get('mevedel-theme'), 'system');
+
+  // Reading mode: scrolled well back from the live edge the dock folds
+  // its status rows away, and it unfolds at the edge again. The fold
+  // threshold clears a dock's worth of scroll, so folding -- which
+  // shortens the page -- cannot itself land the guest back at the edge.
+  const scroll = () => (window.listeners.scroll || []).forEach(cb => cb());
+  assert.equal('data-reading' in document.body.attributes, false);
+  document.documentElement.scrollHeight = 300;
+  scroll();
+  assert.equal(nodes['live-button'].hidden, false);
+  assert.equal('data-reading' in document.body.attributes, true);
+  // Within a dock's height of the edge the fold would be self-undoing,
+  // so it stays folded until the guest is actually back at the edge.
+  window.scrollY = 190;
+  scroll();
+  assert.equal('data-reading' in document.body.attributes, true);
+  window.scrollY = 275;
+  scroll();
+  assert.equal('data-reading' in document.body.attributes, false);
+  // Returning to live unfolds without waiting for a scroll event.
+  window.scrollY = 0;
+  scroll();
+  assert.equal('data-reading' in document.body.attributes, true);
+  nodes['live-button'].dispatch('click');
+  assert.equal(nodes['live-button'].hidden, true);
+  assert.equal('data-reading' in document.body.attributes, false);
+  document.documentElement.scrollHeight = 100;
+  window.scrollY = 0;
+  scroll();
 
   // The key never survives in the URL, and the guest dials the room.
   assert.equal(window.replaced, '/index.html');
@@ -900,14 +947,17 @@ async function main() {
 
   // Routed agent frames cross the sealed transport into the controller,
   // whose detailed behavior has a focused test. A settled row lands in
-  // the finished-agents disclosure instead of the strip.
+  // the finished-agents list instead of the live strip, and both counts
+  // ride on the one session summary line.
   await deliver({t: 'agents', agents: [
     {path: '/root/worker-1', role: 'worker', status: 'running'},
     {path: '/root/settled-1', role: 'explorer', status: 'done'},
   ]});
   assert.equal(nodes.agents.children.length, 1);
-  assert.equal(nodes['agents-done'].hidden, false);
-  assert.match(textOf(nodes['agents-done-summary']), /Finished agents · 1/);
+  assert.equal(nodes['agents-done-list'].children.length, 1);
+  assert.equal(nodes['session-box'].hidden, false);
+  assert.equal(textOf(nodes['session-summary']),
+               'Session · 1 agent · 1 finished');
   const agentFetchBefore = first.sent.length;
   nodes.agents.children[0].dispatch('click');
   await waitFor(() => first.sent.length === agentFetchBefore + 1,
@@ -922,7 +972,7 @@ async function main() {
   assert.match(textOf(nodes['agent-transcript']), /Looking/);
   nodes['agent-close'].dispatch('click');
   await deliver({t: 'agents', agents: []});
-  assert.equal(nodes['agents-done'].hidden, true);
+  assert.equal(nodes['session-box'].hidden, true);
 
   // The session task list renders as a collapsible summary with one
   // line per task: in-progress first, completed last and counted.
@@ -933,9 +983,9 @@ async function main() {
     {id: 3, subject: 'Regression test', status: 'pending', blockedBy: [2]},
     {id: 1, subject: 'Trace the grant', status: 'completed'},
   ]});
-  assert.equal(nodes.tasks.hidden, false);
-  assert.match(textOf(nodes['tasks-summary']), /1\/4 done/);
-  assert.match(textOf(nodes['tasks-summary']), /1 omitted/);
+  assert.equal(nodes['session-box'].hidden, false);
+  assert.match(textOf(nodes['session-summary']), /1\/4 tasks/);
+  assert.match(textOf(nodes['session-summary']), /1 omitted/);
   assert.equal(nodes['tasks-list'].children.length, 3);
   assert.match(textOf(nodes['tasks-list'].children[0]), /Fix propagation/);
   assert.match(textOf(nodes['tasks-list'].children[0]), /\/root\/worker-1/);
@@ -944,19 +994,35 @@ async function main() {
   // An omitted active task remains conspicuous even with no visible rows.
   await deliver({t: 'tasks', total: 1, completed: 0, omitted: 1,
     omittedActive: 1, tasks: []});
-  assert.equal(nodes.tasks.hidden, false);
-  assert.match(textOf(nodes['tasks-summary']), /⚠ 1 active omitted/);
-  assert.equal(nodes['tasks-summary'].dataset.warning, 'true');
+  assert.equal(nodes['session-box'].hidden, false);
+  assert.match(textOf(nodes['session-summary']), /⚠ 1 active omitted/);
+  assert.equal(nodes['session-summary'].dataset.warning, 'true');
+  // Agents and tasks report side by side on that one line, and either
+  // reporter alone can raise the warning.
+  await deliver({t: 'agents', agents: [
+    {path: '/root/worker-1', role: 'worker', status: 'blocked'},
+  ]});
+  assert.equal(textOf(nodes['session-summary']),
+               'Session · 1 agent · 0/1 tasks · 1 omitted · ⚠ 1 active omitted');
+  await deliver({t: 'tasks', total: 1, completed: 0, omitted: 0,
+    omittedActive: 0, tasks: [
+    {id: 1, subject: 'Still going', status: 'pending'},
+  ]});
+  assert.equal(textOf(nodes['session-summary']),
+               'Session · 1 agent · 0/1 tasks');
+  assert.equal(nodes['session-summary'].dataset.warning, 'true');
+  await deliver({t: 'agents', agents: []});
+  assert.equal(nodes['session-summary'].dataset.warning, 'false');
   // A genuinely empty list hides the block again.
   await deliver({t: 'tasks', total: 0, completed: 0, omitted: 0,
     omittedActive: 0, tasks: []});
-  assert.equal(nodes.tasks.hidden, true);
-  assert.equal(nodes['tasks-summary'].dataset.warning, 'false');
+  assert.equal(nodes['session-box'].hidden, true);
+  assert.equal(nodes['session-summary'].dataset.warning, 'false');
   // The superseded tasks-only frame is rejected instead of inferred.
   await deliver({t: 'tasks', tasks: [
     {id: 1, subject: 'Legacy task', status: 'pending'},
   ]});
-  assert.equal(nodes.tasks.hidden, true);
+  assert.equal(nodes['session-box'].hidden, true);
   assert.equal(nodes['tasks-list'].children.length, 0);
 
   // Routed artifact frames likewise reach the artifact controller.

@@ -621,15 +621,33 @@ code, pre {
   letter-spacing: .08em;
   text-transform: uppercase;
   color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .dock-disclosure summary[data-warning="true"] { color: var(--failed); }
 .dock-disclosure-list {
   list-style: none;
   margin: 0;
-  max-height: 12rem;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
+}
+/* Live agents, settled agents and tasks all report through one
+   disclosure, so the scroll cap belongs to the body they share rather
+   than to each list, and a rule separates the sections that are
+   otherwise two kinds of plain row. */
+.dock-disclosure-body {
+  max-height: 15rem;
+  overflow-y: auto;
+}
+.dock-disclosure-body > .dock-strip { padding: .1rem .5rem .45rem; }
+/* One hairline per populated section, so the summary, the live chips,
+   the settled rows and the task rows read as parts rather than as one
+   undifferentiated run of rows. Specific enough to add padding the
+   sections' own shorthands would otherwise reset. */
+.dock-disclosure .dock-disclosure-body > *:not([hidden]):not(:empty) {
+  border-top: 1px solid var(--line);
+  padding-top: .4rem;
 }
 .requests {
   width: 100%;
@@ -797,6 +815,44 @@ code, pre {
   }
   .dock { padding-left: .6rem; padding-right: .6rem; }
   .composer-name { max-width: 100%; }
+}
+
+/* ── Reading mode ───────────────────────────────────────────────────── */
+/* A guest who has scrolled back from the live edge is reading, and on a
+   phone the whole dock -- agent strips, task list, sharing notice, the
+   composer's second row -- costs half the viewport.  Everything that
+   reports state rather than accepting input folds away, leaving a
+   one-line composer with Interrupt; tapping the field or returning to
+   live brings it all back.  Pending interactions and the notice never
+   fold: they are what the dock is waiting on the guest for. */
+@media (max-width: 520px), (max-height: 480px) {
+  body[data-reading] .dock:not(:focus-within) {
+    padding-top: .9rem;
+  }
+  body[data-reading] .dock:not(:focus-within) :is(#session-box, #artifacts,
+    #own-queue, .disclosure, .skill-chips, .composer-scope, .attachments,
+    .queue-state, .composer-name, #attach-button, #send-button,
+    .composer-spacer) {
+    display: none;
+  }
+  body[data-reading] .dock:not(:focus-within) .composer {
+    flex-direction: row;
+    align-items: center;
+    padding: .35rem .5rem;
+  }
+  body[data-reading] .dock:not(:focus-within) .composer textarea {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    height: 1.8rem;
+    resize: none;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  body[data-reading] .dock:not(:focus-within) .composer-row {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
 }
 
 .question {

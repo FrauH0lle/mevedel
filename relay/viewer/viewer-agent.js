@@ -4,15 +4,13 @@
 (() => {
   const POLL_MS = 2500;
 
-  // Active agents stay visible; finished agents keep their retained
-  // transcripts behind the disclosure.
+  // Active and finished agents share the session disclosure: the counts
+  // ride on its summary line, the rosters sit inside it.
   const ACTIVE = new Set(['running', 'blocked', 'waiting']);
   const FINISHED = new Set(['done', 'errored', 'interrupted']);
 
-  function create({send, el, directiveLabel, openArtifact}) {
+  function create({send, el, directiveLabel, openArtifact, summarize}) {
     const nav = document.getElementById('agents');
-    const doneBox = document.getElementById('agents-done');
-    const doneSummary = document.getElementById('agents-done-summary');
     const doneList = document.getElementById('agents-done-list');
     const panel = document.getElementById('agent-panel');
     const title = document.getElementById('agent-title');
@@ -110,28 +108,33 @@
         chip.addEventListener('click', () => open(row));
         nav.append(chip);
       });
-      // Settled agents keep their retained transcripts reachable, one
-      // quiet line of dock height until the reader opens the list.
-      if (doneBox) {
-        doneBox.hidden = done.length === 0;
-        if (doneSummary) {
-          doneSummary.textContent = `Finished agents · ${done.length}`;
+      // Settled agents keep their retained transcripts reachable, at no
+      // dock height at all until the reader opens the disclosure.
+      if (doneList) {
+        doneList.replaceChildren();
+        done.forEach(row => {
+          const item = el('li');
+          const button = el('button', 'done-row');
+          button.type = 'button';
+          button.title = `Read ${row.path}'s transcript`;
+          button.append(el('span', 'agent-dot'));
+          button.append(el('span', 'done-path', row.path));
+          button.append(el('span', 'done-meta', meta(row)));
+          button.addEventListener('click', () => open(row));
+          item.append(button);
+          doneList.append(item);
+        });
+      }
+      // An agent that is not running needs the host before it can go on,
+      // so the collapsed summary carries that warning.
+      if (summarize) {
+        const bits = [];
+        if (active.length) {
+          bits.push(`${active.length} agent${active.length === 1 ? '' : 's'}`);
         }
-        if (doneList) {
-          doneList.replaceChildren();
-          done.forEach(row => {
-            const item = el('li');
-            const button = el('button', 'done-row');
-            button.type = 'button';
-            button.title = `Read ${row.path}'s transcript`;
-            button.append(el('span', 'agent-dot'));
-            button.append(el('span', 'done-path', row.path));
-            button.append(el('span', 'done-meta', meta(row)));
-            button.addEventListener('click', () => open(row));
-            item.append(button);
-            doneList.append(item);
-          });
-        }
+        if (done.length) bits.push(`${done.length} finished`);
+        summarize('agents', bits.join(' · '),
+                  active.some(row => row.status !== 'running'));
       }
       if (view.path) {
         const watched = valid.find(row => row.path === view.path) || null;
