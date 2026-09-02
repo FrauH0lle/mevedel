@@ -40,6 +40,7 @@
     // takes a room out of it. Conflating them made Dismiss quietly
     // destroy the link it looked like it was only hiding.
     let notices = [];
+    let requestSequence = 0;
     let secret = null;
     let roomId = null;
 
@@ -158,19 +159,19 @@
     }
 
     function submitRequest() {
-      const name = nameInput.value.trim();
-      if (!name) return;
-      send({t: 'new-session', name, prompt: promptInput.value.trim()});
-      notices.push({name, status: 'waiting'});
+      const name = nameInput.value.trim().replace(/[^A-Za-z0-9_-]/g, '_');
+      if (!/[A-Za-z0-9]/.test(name)) return;
+      const reqId = ++requestSequence;
+      send({t: 'new-session', reqId, name, prompt: promptInput.value.trim()});
+      notices.push({reqId, name, status: 'waiting'});
       nameInput.value = '';
       promptInput.value = '';
       render();
     }
 
-    // One request is outstanding at a time -- the host refuses a second
-    // -- so an outcome belongs to the oldest one still waiting.
-    function showResult({ok, message, link, name}) {
-      const notice = notices.find(candidate => candidate.status === 'waiting');
+    function showResult({reqId, ok, message, link, name}) {
+      const notice = notices.find(candidate => candidate.status === 'waiting'
+                                  && candidate.reqId === reqId);
       const parts = ok ? splitLink(link) : null;
       const settled = {
         name: name || (notice && notice.name) || 'session',

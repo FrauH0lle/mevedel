@@ -29,8 +29,9 @@
                (lambda (transport peer frame)
                  (setq sent (list transport peer frame)))))
       (mevedel-collaboration--new-session-reply
-       '(:transport relay) 7 :ok t :link "link")
-      (should (equal '(relay 7 (:t "new-session" :ok t :link "link"))
+       '(:transport relay) 7 42 "flow" :ok t :link "link")
+      (should (equal '(relay 7 (:t "new-session" :reqId 42 :name "flow"
+                                  :ok t :link "link"))
                      sent)))))
 
 (mevedel-deftest mevedel-collaboration--discard-created-session
@@ -149,50 +150,63 @@
     (puthash 2 (list :name "Writer" :writable t :ready t) guests)
     (puthash 3 (list :name "Reader" :ready t) guests)
     (cl-letf (((symbol-function 'mevedel-collaboration--create-guest-session)
-               (lambda (_room _peer _guest name prompt)
+               (lambda (_room _peer _guest _request-id name prompt)
                  (push (cons name prompt) created)))
               ((symbol-function 'mevedel-collaboration--ask-host-new-session)
-               (lambda (_room _peer _guest name prompt)
+               (lambda (_room _peer _guest _request-id name prompt)
                  (push (cons name prompt) asked))))
       (mevedel-collaboration--handle-new-session
-       room 1 '(:name "onboarding" :prompt "Design the flow"))
+       room 1 '(:reqId 1 :name "onboarding" :prompt "Design the flow"))
       (should (equal '(("onboarding" . "Design the flow")) created))
       (mevedel-collaboration--handle-new-session
-       room 2 '(:name "auth work" :prompt ""))
+       room 2 '(:reqId 2 :name "auth work" :prompt ""))
       ;; The name is sanitized the way a session name typed in Emacs is,
       ;; because it becomes a directory; an empty prompt is no prompt.
       (should (equal '(("auth_work" . nil)) asked))
       ;; A read-only guest cannot ask at all.
-      (mevedel-collaboration--handle-new-session room 3 '(:name "sneaky"))
+      (mevedel-collaboration--handle-new-session
+       room 3 '(:reqId 3 :name "sneaky"))
       (should (= 1 (length asked)))
       ;; Creating a session is not idempotent, so a double-fired submit
       ;; must not make two of them.
-      (mevedel-collaboration--handle-new-session room 1 '(:name "again"))
+      (mevedel-collaboration--handle-new-session
+       room 1 '(:reqId 4 :name "again"))
       (should (= 2 (length created)))
-      (mevedel-collaboration--handle-new-session room 1 '(:name "again"))
+      (mevedel-collaboration--handle-new-session
+       room 1 '(:reqId 4 :name "again"))
       (should (= 2 (length created)))
       ;; Neither a missing name nor one that sanitizes to punctuation is
       ;; a session name.
       (remhash 1 guests)
       (puthash 1 (list :name "Owner" :writable t :owner t :ready t) guests)
-      (mevedel-collaboration--handle-new-session room 1 '(:name "   "))
-      (mevedel-collaboration--handle-new-session room 1 '(:name "///"))
-      (mevedel-collaboration--handle-new-session room 1 '(:prompt "no name"))
+      (mevedel-collaboration--handle-new-session
+       room 1 '(:reqId 5 :name "   "))
+      (mevedel-collaboration--handle-new-session
+       room 1 '(:reqId 6 :name "///"))
+      (mevedel-collaboration--handle-new-session
+       room 1 '(:reqId 7 :prompt "no name"))
+      (mevedel-collaboration--handle-new-session
+       room 1 '(:reqId "8" :name "invalid request id"))
       (should (= 2 (length created)))
       ;; A request already waiting on a person blocks the next one, whose
       ;; approval would only fail on the name the first one took.
       (let (sent)
         (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                    (lambda (_transport _peer frame) (push frame sent))))
-          (plist-put (gethash 2 guests) :pending-new-session "auth_work")
-          (mevedel-collaboration--handle-new-session room 2 '(:name "other"))
+          (plist-put (gethash 2 guests) :pending-new-session
+                     '(8 . "auth_work"))
+          (mevedel-collaboration--handle-new-session
+           room 2 '(:reqId 9 :name "other work"))
           (should (= 1 (length asked)))
           (should (eq :json-false (plist-get (car sent) :ok)))
+          (should (equal "other_work" (plist-get (car sent) :name)))
+          (should (= 9 (plist-get (car sent) :reqId)))
           (should (string-match-p "auth_work"
                                   (plist-get (car sent) :message)))
           ;; It unblocks once that one is answered.
           (plist-put (gethash 2 guests) :pending-new-session nil)
-          (mevedel-collaboration--handle-new-session room 2 '(:name "other"))
+          (mevedel-collaboration--handle-new-session
+           room 2 '(:reqId 10 :name "other work"))
           (should (= 2 (length asked))))))))
 
 (mevedel-deftest mevedel-collaboration--ask-host-new-session
@@ -219,17 +233,19 @@
                                       :host-only host-only
                                       :audience audience))
                  'overlay)))
-      (mevedel-collaboration--ask-host-new-session room 7 guest "flow" "go")
+      (mevedel-collaboration--ask-host-new-session
+       room 7 guest 42 "flow" "go")
       ;; An owner may create a session outright, so approving someone
       ;; else's request is no new authority.  Only a non-owner ever gets
       ;; here, so restricting to owners already excludes the requester --
       ;; including when it is another tab of the owner's own browser,
       ;; which shares its stable guest identity.
       (should-not (plist-get captured :host-only))
-      (should (equal '(:owner t) (plist-get captured :audience)))
+      (should (eq 'owner (plist-get captured :audience)))
       ;; Declining tells the guest, and creates nothing.
       (funcall (plist-get captured :callback) 'deny)
       (should (equal "new-session" (plist-get (cdr (car sent)) :t)))
+      (should (= 42 (plist-get (cdr (car sent)) :reqId)))
       (should (eq :json-false (plist-get (cdr (car sent)) :ok)))
       ;; Feedback becomes the reason the guest is shown.
       (funcall (plist-get captured :callback) '(feedback . "not now"))
@@ -296,21 +312,21 @@
       (mevedel-test--with-captured-messages nil
         (setq existing '(("taken" . nil)))
         (mevedel-collaboration--create-guest-session
-         room 1 '(:name "Writer" :writable t) "taken" "go")
+         room 1 '(:name "Writer" :writable t) 1 "taken" "go")
         (should (eq :json-false (plist-get (car sent) :ok)))
         (should-not enqueued)
         ;; A full-control requester gets a full-control link back:
         ;; asking for a session is never a way to gain authority.
         (setq existing nil sent nil)
         (mevedel-collaboration--create-guest-session
-         room 1 '(:name "Writer" :writable t) "fresh" "go")
+         room 1 '(:name "Writer" :writable t) 2 "fresh" "go")
         (should (equal "full-link" (plist-get (car sent) :link)))
         ;; The approved prompt goes straight into the pending queue,
         ;; which drains on idle -- nothing further to press.
         (should (equal '("go") enqueued))
         (setq sent nil enqueued nil)
         (mevedel-collaboration--create-guest-session
-         room 1 '(:name "Owner" :writable t :owner t) "fresh" nil)
+         room 1 '(:name "Owner" :writable t :owner t) 3 "fresh" nil)
         (should (equal "owner-link" (plist-get (car sent) :link)))
         (should (eq t (plist-get (car sent) :ok)))
         (should-not enqueued)
@@ -320,7 +336,7 @@
         (cl-letf (((symbol-function 'mevedel--display-chat-buffer)
                    (lambda (&rest _) (error "Broken display"))))
           (mevedel-collaboration--create-guest-session
-           room 1 '(:name "Owner" :writable t :owner t) "display" nil))
+           room 1 '(:name "Owner" :writable t :owner t) 4 "display" nil))
         (should (eq t (plist-get (car sent) :ok)))
         (should-not stopped)
         ;; A room with no delivered bearer link is not a successful
@@ -332,7 +348,7 @@
                     ((symbol-function 'mevedel-collaboration--transport-send)
                      (lambda (&rest _) nil)))
             (mevedel-collaboration--create-guest-session
-             room 1 '(:name "Writer" :writable t) "disconnected" nil))
+             room 1 '(:name "Writer" :writable t) 5 "disconnected" nil))
           (should-not (buffer-live-p created-buffer))
           (should (equal (list new-room) stopped)))
         ;; Failure to queue an approved prompt rolls back both the room
@@ -344,7 +360,7 @@
                     ((symbol-function 'mevedel-view-enqueue-external-follow-up)
                      (lambda (&rest _) nil)))
             (mevedel-collaboration--create-guest-session
-             room 1 '(:name "Writer" :writable t) "broken" "go"))
+             room 1 '(:name "Writer" :writable t) 6 "broken" "go"))
           (should-not (buffer-live-p created-buffer))
           (should (equal (list new-room) stopped))
           (should (eq :json-false (plist-get (car sent) :ok)))

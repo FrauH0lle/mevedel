@@ -468,22 +468,17 @@ paths:
       (should (string-match-p "Self-contained, always" artifact-body))
       (should (string-match-p "mevedel-session-artifacts-artifacts-dir"
                               artifact-body)))
-    ;; The artifact family inherits through required attachments: each
-    ;; leaf declares its bases, and every descendant stays model-invocable
-    ;; so a model-origin root resolves the whole graph.
+    ;; The artifact family inherits through required attachments: each leaf
+    ;; declares its bases, and every descendant stays model-invocable so a
+    ;; model-origin root resolves the whole graph.  Attachment-only bases stay
+    ;; out of direct user completion without blocking a user-origin leaf.
     (dolist (base '("artifact-design" "artifact-diagramming"))
       (let ((skill (cl-find base skills
                             :key #'mevedel-skill-name :test #'equal)))
         (should skill)
         (should (eq 'bundled (mevedel-skill-source skill)))
-        ;; The invocability gate applies to every node in the graph, so
-        ;; a base must stay invocable from both origins: a model-origin
-        ;; root rejects a non-model-invocable descendant, and a
-        ;; user-origin root rejects a non-user-invocable one.  Hiding a
-        ;; base from `$' completion breaks every leaf for the user while
-        ;; leaving the model's path working.
         (should (mevedel-skill-model-invocable-p skill))
-        (should (mevedel-skill-user-invocable-p skill))
+        (should-not (mevedel-skill-user-invocable-p skill))
         (should-not (mevedel-skill-dependencies skill))))
     (pcase-dolist (`(,name . ,deps)
                    '(("artifact-doc"        "artifact" "artifact-design")

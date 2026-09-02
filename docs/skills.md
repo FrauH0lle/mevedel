@@ -372,6 +372,9 @@ Current fields include:
 - `paths`
 - `hooks` (skill-scoped hooks active during invocation)
 
+`user-invocable` defaults to true; `disable-model-invocation` defaults to
+false.
+
 Command hooks retain their skill resource origin.  Project skill hooks are
 omitted until `mevedel-hooks-trust-project` records the exact workspace, path,
 and `SKILL.md` content hash; editing the manifest invalidates that consent for
@@ -448,19 +451,15 @@ graph instead of executing the same skill twice with conflicting inputs. Every
 authored declaration still leaves its placeholder in its immediate parent body,
 including a duplicate whose contribution was already prepared.
 
-The root invocation origin propagates unchanged through the graph, and the
-invocability gate applies to every node rather than only the root. A
-model-origin root therefore requires every descendant to be model-invocable, so
-a parent cannot launder model access to a user-only child; symmetrically, a
-user-origin root requires every descendant to be user-invocable. A base skill
-attached purely as instruction context must stay invocable from both origins:
-marking it `user-invocable: nil` to keep it out of `$` completion rejects the
-whole graph for user invocation while leaving model invocation working, which
-presents as an intermittent failure rather than a configuration error. What a
-user-origin root may attach is a child with `disable-model-invocation: true`,
-since that flag gates the model origin only. Each child's injections run
-with only that child's preparation permissions; parent and sibling permissions
-do not flow into it.
+The root invocation origin propagates unchanged through the graph. A
+model-origin root requires the root and every descendant to be model-invocable,
+so a parent cannot launder model access to a user-only child. A user-origin root
+must be user-invocable, but its descendants need not be: `user-invocable: false`
+keeps an attachment-only skill out of direct `$` completion without blocking a
+user-invoked parent. Conversely, `disable-model-invocation: true` on any node
+rejects the complete model-origin graph but does not affect user-origin
+invocation. Each child's injections run with only that child's preparation
+permissions; parent and sibling permissions do not flow into it.
 
 Required children are instructions only. They ignore their own command or fork
 policy, agent, model, effort, hooks, and request permissions. User instruction

@@ -983,7 +983,7 @@
       renderModeline();
     } else if (frame.t === 'new-session') {
       sessions.showResult({
-        ok: frame.ok === true, message: frame.message,
+        reqId: frame.reqId, ok: frame.ok === true, message: frame.message,
         link: frame.link, name: frame.name,
       });
     } else if (frame.t === 'room') {

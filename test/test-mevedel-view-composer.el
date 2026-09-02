@@ -2253,11 +2253,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (plist-get outcome :request-context))
         (let* ((block (plist-get outcome :render-data))
                (data (cdr (mevedel-tool-render-data-extract block))))
-          (should (equal (plist-get prepared :model-input)
-                         (plist-get data :expanded-prompt)))
-          (should-not (string-match-p
-                       "hook context"
-                       (plist-get data :expanded-prompt))))
+          (should (equal "Use [skill:alpha -- attached]"
+                         (plist-get data :prompt)))
+          (should (equal "alpha"
+                         (plist-get
+                          (car (plist-get data :attachments)) :name))))
         (should (equal '((:type prompt-rewrite))
                        (plist-get outcome :hook-audits)))
         (should-not (plist-get outcome :fork-outcome))))))

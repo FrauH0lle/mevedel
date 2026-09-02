@@ -3418,7 +3418,7 @@
                   :arguments "Say hi!"
                   :display-text
                   "$emacs-context-snapshot\nSay hi!"
-                  :expanded-prompt
+                  :prompt
                   "*** You are helping with this user request:\n\nSay hi!\n")))
         (put-text-property start (point) 'gptel 'ignore)))
     (with-current-buffer view-buf
@@ -3450,7 +3450,7 @@
                :name "green-loop"
                :arguments "current changes"
                :display-text "$green-loop current changes"
-               :expanded-prompt
+               :prompt
                "*** # Green Loop\n\nRun the loop.\n\nARGUMENTS: current changes")))
      nil)
     (with-current-buffer view-buf
@@ -3517,7 +3517,7 @@
                   :arguments "commits a b"
                   :display-text
                   "$green-loop\ncommits a b"
-                  :expanded-prompt
+                  :prompt
                   "*** Skill prompt body\n\nVisible model prompt.\n")))
         (put-text-property start (point) 'gptel 'ignore)))
     (with-current-buffer view-buf

@@ -99,7 +99,7 @@
 (declare-function mevedel--prompt-user-with-overlay
                   "mevedel-interaction-prompt"
                   (title content question help-echo-text callback
-                         &optional host-only))
+                         &optional host-only audience))
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view-enqueue-external-follow-up
@@ -312,13 +312,15 @@ output to the answering guest.")
 (defun mevedel-collaboration--audience-peer-p (room peer audience)
   "Return non-nil when PEER in ROOM belongs to AUDIENCE.
 
-AUDIENCE narrows an interaction below the writable default.  `:owner\='
+AUDIENCE narrows an interaction below the writable default.  `owner'
 restricts it to owner-link guests.  A nil AUDIENCE is every writable
 guest, the ordinary case."
   (let ((guest (mevedel-collaboration--guest room peer)))
     (and guest
-         (or (null (plist-get audience :owner))
-             (plist-get guest :owner)))))
+         (pcase audience
+           ('nil t)
+           ('owner (plist-get guest :owner))
+           (_ nil)))))
 
 (defun mevedel-collaboration--audience-peers-for (room audience)
   "Return ROOM's writable peers that belong to AUDIENCE."

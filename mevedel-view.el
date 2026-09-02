@@ -20,6 +20,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-execution)
+(require 'mevedel-theme-faces)
 (require 'mevedel-tool-task)
 (require 'mevedel-transcript)
 (require 'mevedel-transport)

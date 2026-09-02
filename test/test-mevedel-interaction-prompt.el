@@ -258,6 +258,13 @@
       (should (member '(first . approve) received))
       (should-not mevedel--prompt-overlays))))
 
+(mevedel-deftest mevedel--prompt-user-with-overlay
+  (:doc "rejects audience values outside the closed collaboration contract")
+  (should-error
+   (mevedel--prompt-user-with-overlay
+    "Title" "Content" "Question?" nil #'ignore nil 'writer)
+   :type 'error))
+
 (mevedel-deftest mevedel--prompt-buffer-kill
   (:doc "killing the prompt buffer settles pending overlays with aborted")
   (let* (received

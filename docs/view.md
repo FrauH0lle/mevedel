@@ -165,11 +165,12 @@ grouping and projection and `mevedel-view-disclosure.el` owns source-backed
 fold state and actions. Transcript span classification, tool block recovery,
 and mailbox, reminder, hook-context, render-data, prompt, and ignored-range recognition live in
 `mevedel-transcript.el` so persistence and compaction use the same structural
-view of the buffer. Container payloads are opaque to that scan: a render-data
-block quotes a whole prepared prompt, reasoning and mailbox bodies are model-
-and agent-authored, and a prompt drawer holds the user's directive, so a
-control marker starting inside one stays data and never splits the enclosing
-span. Tool ranges and render-data / hook-audit ranges are exempt because they
+view of the buffer. Container payloads are opaque to that scan: an inline-skill
+render-data block carries the prepared root prompt and attachment names and
+bodies, reasoning and mailbox bodies are model- and agent-authored, and a prompt
+drawer holds the user's directive, so a control marker starting inside one
+stays data and never splits the enclosing span. Tool ranges and render-data /
+hook-audit ranges are exempt because they
 carry their own proof -- validation against the raw tool property runs or a
 trust hash -- and backends really do nest a tool call inside a reasoning block.
 Independently, no generated control block ever lands inside gptel's streamed
@@ -676,10 +677,11 @@ re-checks the token on every owner frame.
 
 ### Narrowed interactions
 
-A mirrored interaction reaches every writable guest by default. A
-`:audience` on its `mevedel--remote` descriptor narrows that; `:owner`
-restricts it to owner-link guests. Both the creation broadcast and the
-replay a joining guest receives apply the filter, and so does the
+A mirrored interaction reaches every writable guest by default. The closed
+`:audience` contract on its `mevedel--remote` descriptor is either nil for
+that default or the symbol `owner` to restrict it to owner-link guests. Both
+the creation broadcast and the replay a joining guest receives apply the
+filter, and so does the
 response handler -- seeing a narrowed interaction and answering it are
 the same authority, and a request id is guessable while an audience is
 not. The push that wakes a sleeping browser follows the same audience,
@@ -721,7 +723,9 @@ One request waits at a time. A person answers these, and a guest able to
 stack them while nobody is at the keyboard hands the host a pile of prompts
 for one session, of which every approval after the first fails on the name
 the first one took; the second request is refused with the name still
-waiting. The outcome does not live in the sheet that asked for it either --
+waiting. Every outcome repeats the viewer's request id and canonical sanitized
+name, so it settles the request that caused it even when names collide. The
+outcome does not live in the sheet that asked for it either --
 approval can land minutes later, and a second request must not erase the
 first one's link -- so requested sessions render as their own dock cards,
 each carrying its link and a dismiss.

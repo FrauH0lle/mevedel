@@ -149,8 +149,12 @@ It does not ask the model to call `Skill(name=...)`. The transcript keeps the
 user's original prompt text, while the model-visible prompt replaces recognized
 inline mentions with compact placeholders such as
 `[skill:to-prd -- attached]`. Inline attachment-style invocations persist the
-original user text plus render metadata naming the attached skills; transformed
-placeholders and hidden reminder bodies are request-time only. Inline
+original user text plus render metadata containing the prepared root body and
+attached-skill names and bodies. Leading command expansion also leaves its
+provider-facing prompt, including required-attachment reminder wrappers, in the
+canonical user run; the view uses the structured metadata instead of reparsing
+those wrappers. Transformed inline-attachment placeholders are request-time
+only. Inline
 attachment-style invocation treats even a `context: fork` skill as a non-forking
 instruction. Only a leading fork command dispatches a child. Unknown `/foo`
 remains a strict unknown-command error
@@ -162,9 +166,20 @@ narrow exception to the rule that skill bodies are not recursively interpreted.
 The declaration attaches the dependency as context; it does not execute the
 skill, invoke a tool, or dispatch an agent. Dependencies resolve and validate as
 one graph, prepare dependency first in authored sibling order, and preserve the
-root's user or model origin so a model-origin parent cannot reach a model-disabled
-descendant. Required children contribute instructions only and do not activate
-their command/fork behavior, agent, model, effort, hooks, or request permissions.
+root's user or model origin. A model-origin graph requires every node to permit
+model invocation, so a parent cannot reach a model-disabled descendant. A
+user-origin graph requires only its root to be user-invocable; a dependency may
+be attachment-only and hidden from direct user invocation. Required children
+contribute instructions only and do not activate their command/fork behavior,
+agent, model, effort, hooks, or request permissions.
+
+Amendment: inline command render metadata now stores the prepared root body and
+each required attachment as structured data. The previous single flattened
+prompt made wrapper recovery ambiguous when an authored attachment itself
+contained a literal `<system-reminder>` example: the inner closing tag could be
+mistaken for the generated outer close and split the transcript. Structured
+metadata keeps presentation independent of provider wire syntax, while the
+canonical transcript scanner balances nested reminder delimiters.
 
 The exception depends on literal source provenance rather than text alone.
 Escaped and Markdown-code forms, plus markers introduced by argument

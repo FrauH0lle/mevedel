@@ -117,7 +117,7 @@
             ;; must not collect a decision it may not see by rejoining.
             (setq sent nil)
             (overlay-put overlay 'mevedel--remote
-                         '(:body "Approve?" :audience (:owner t)))
+                         '(:body "Approve?" :audience owner))
             (mevedel-collaboration--send-ui-requests room 1)
             (should-not sent)
             (puthash 8 (list :name "owner" :writable t :owner t :ready t)
@@ -170,7 +170,7 @@
           ;; though a request id is easy to guess.
           (overlay-put overlay 'mevedel--remote
                        (append (overlay-get overlay 'mevedel--remote)
-                               (list :audience '(:owner t))))
+                               (list :audience 'owner)))
           (mevedel-collaboration--handle-ui-response
            room 1 (list :reqId 41 :option 0))
           (should-not settled)

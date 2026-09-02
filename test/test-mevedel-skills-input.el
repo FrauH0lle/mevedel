@@ -686,18 +686,24 @@ spanning lines")))
 (mevedel-deftest mevedel-skills-input--format-inline-render-data ()
   ,test
   (test)
-  :doc "records the display text, expanded prompt, and attachment names"
+  :doc "records the display text, root prompt, and structured attachments"
   (let* ((skill (mevedel-skill--create :name "doc"))
+         (attachments
+          '((:name "artifact" :body "Artifact body")
+            (:name "artifact-design" :body "Design body")))
          (data (cdr (mevedel-tool-render-data-extract
                      (mevedel-skills-input--format-inline-render-data
-                      skill "write it" "Prepared body."
-                      '((:name "artifact" :body "Artifact body")
-                        (:name "artifact-design" :body "Design body")))))))
+                      skill "write it" "Prepared body." attachments)))))
     (should (eq 'inline-skill (plist-get data :kind)))
     (should (equal "$doc write it" (plist-get data :display-text)))
-    (should (equal "Prepared body." (plist-get data :expanded-prompt)))
-    (should (equal '("artifact" "artifact-design")
-                   (plist-get data :attachments))))
+    (should (equal "Prepared body." (plist-get data :prompt)))
+    (should
+     (equal
+      (mapcar (lambda (attachment)
+                (list :name (plist-get attachment :name)
+                      :body (mevedel-skills-format-attachment attachment)))
+              attachments)
+      (plist-get data :attachments))))
 
   :doc "omits attachment names when the skill has no dependencies"
   (let* ((skill (mevedel-skill--create :name "doc"))
@@ -706,6 +712,32 @@ spanning lines")))
                       skill "" "Prepared body." nil)))))
     (should (equal "$doc" (plist-get data :display-text)))
     (should-not (plist-get data :attachments))))
+
+(mevedel-deftest mevedel-skills-input--handle-user-skill-outcome ()
+  ,test
+  (test)
+  :doc "keeps the provider prompt flat while recording nested reminder text structurally"
+  (let* ((skill (mevedel-skill--create :name "doc"))
+         (attachment
+          '(:name "artifact-design"
+            :body "Example:\n<system-reminder>\nliteral\n</system-reminder>\nTail."))
+         (outcome (list :status 'ok :kind 'inline :body "Root prompt."
+                        :arguments "write it"
+                        :required-attachments (list attachment)))
+         (provider-prompt (mevedel-skills-format-model-input outcome)))
+    (with-temp-buffer
+      (insert "$doc write it")
+      (mevedel-skills-input--handle-user-skill-outcome
+       skill outcome (point-min) (point-max) nil nil)
+      (should (equal provider-prompt
+                     (mevedel-tool-render-data-strip (buffer-string))))
+      (let ((data (cdr (mevedel-tool-render-data-extract (buffer-string)))))
+        (should (equal "Root prompt." (plist-get data :prompt)))
+        (should
+         (equal
+          (list (list :name "artifact-design"
+                      :body (mevedel-skills-format-attachment attachment)))
+          (plist-get data :attachments)))))))
 
 (mevedel-deftest mevedel-skills-input-dispatch-command (:quiet t)
   ,test
@@ -729,7 +761,7 @@ spanning lines")))
         (let ((data (cdr (mevedel-tool-render-data-extract
                           (buffer-string)))))
           (should (equal "Hello world!"
-                         (plist-get data :expanded-prompt)))
+                         (plist-get data :prompt)))
           (should-not (plist-get data :attachments))))))
 
 

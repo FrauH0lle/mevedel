@@ -183,6 +183,8 @@
 		  "mevedel-transcript" (pos))
 (declare-function mevedel-transcript--skip-leading-summary-block
 		  "mevedel-transcript" (pos))
+(declare-function mevedel-transcript--system-reminder-range-at-point
+		  "mevedel-transcript" (limit))
 (declare-function mevedel-transcript--tool-block-bounds-for-run
 		  "mevedel-transcript"
 		  (seg-start seg-end &optional limit))
@@ -2752,15 +2754,12 @@ as generated control markup."
     (with-temp-buffer
       (insert (string-trim text))
       (goto-char (point-min))
-      (when (looking-at "<system-reminder>")
-        (let ((body-start (match-end 0)))
-          (goto-char body-start)
-          (when (search-forward "</system-reminder>" nil t)
-            (let ((body-end (match-beginning 0)))
-              (skip-chars-forward " \t\r\n")
-              (when (= (point) (point-max))
-                (string-trim
-                 (buffer-substring-no-properties body-start body-end))))))))))
+      (when-let* ((range
+                   (mevedel-transcript--system-reminder-range-at-point
+                    (point-max)))
+                  ((= (nth 3 range) (point-max))))
+        (string-trim
+         (buffer-substring-no-properties (nth 1 range) (nth 2 range)))))))
 
 (defun mevedel-view--strip-system-reminder-blocks (text)
   "Return TEXT without generated `<system-reminder>' blocks."
@@ -2776,29 +2775,6 @@ as generated control markup."
           (goto-char (point-max)))))
     (buffer-string)))
 
-(defun mevedel-view--split-leading-system-reminders (text)
-  "Split leading `<system-reminder>' blocks off TEXT.
-Return a cons of the reminder bodies, in order, and the remaining text.
-An unterminated block is left in the remainder as ordinary text."
-  (with-temp-buffer
-    (insert (or text ""))
-    (goto-char (point-min))
-    (let (bodies)
-      (while (looking-at "<system-reminder>[ \t]*\n")
-        (let ((body-start (match-end 0)))
-          (goto-char body-start)
-          (if (re-search-forward "^</system-reminder>[ \t]*\n?" nil t)
-              (progn
-                (push (string-trim
-                       (buffer-substring-no-properties
-                        body-start (match-beginning 0)))
-                      bodies)
-                (skip-chars-forward " \t\r\n")
-                (delete-region (point-min) (point))
-                (goto-char (point-min)))
-            (goto-char (point-max)))))
-      (cons (nreverse bodies) (buffer-string)))))
-
 (defun mevedel-view--system-reminder-line-count (body)
   "Return the non-empty line count for system reminder BODY."
   (length (split-string (or body "") "\n" t "[ \t]+")))
@@ -2806,10 +2782,10 @@ An unterminated block is left in the remainder as ordinary text."
 (defun mevedel-view--inline-skill-attachments-summary (text)
   "Return the attached-skill row header for inline-skill TEXT, or nil."
   (when-let* ((data (mevedel-view--inline-skill-render-data-from-text text))
-              (bodies (car (mevedel-view--split-leading-system-reminders
-                            (or (plist-get data :expanded-prompt) "")))))
+              (attachments (plist-get data :attachments)))
     (mevedel-view--attached-skills-summary
-     (plist-get data :attachments) (length bodies))))
+     (mapcar (lambda (attachment) (plist-get attachment :name)) attachments)
+     (length attachments))))
 
 (defun mevedel-view--system-reminder-summary (data-buf seg-start seg-end)
   "Return collapsed summary for DATA-BUF's SEG-START..SEG-END system reminder."
@@ -3813,23 +3789,19 @@ Empty string when the turn contains only whitespace or markers."
 (autoload 'mevedel-view--linkify-paths-in-range "mevedel-view-markdown")
 
 (defun mevedel-view--inline-skill-prompt-summary-body (text)
-  "Return collapsed prompt body for inline-skill TEXT, or nil.
-Attached-skill system reminders lead the expanded prompt and get their
-own control row, so they are peeled off here."
+  "Return collapsed prompt body for inline-skill TEXT, or nil."
   (when-let* ((data (mevedel-view--inline-skill-render-data-from-text text))
-              (body (plist-get data :expanded-prompt))
-              (rest (string-trim
-                     (cdr (mevedel-view--split-leading-system-reminders
-                           body))))
-              ((not (string-empty-p rest))))
-    rest))
+              (body (plist-get data :prompt))
+              (body (string-trim body))
+              ((not (string-empty-p body))))
+    body))
 
 (defun mevedel-view--inline-skill-reminder-body (text)
   "Return the attached-skill reminder body of inline-skill TEXT, or nil."
   (when-let* ((data (mevedel-view--inline-skill-render-data-from-text text))
-              (bodies (car (mevedel-view--split-leading-system-reminders
-                            (or (plist-get data :expanded-prompt) "")))))
-    (mapconcat #'identity bodies "\n\n")))
+              (attachments (plist-get data :attachments)))
+    (mapconcat (lambda (attachment) (plist-get attachment :body))
+               attachments "\n\n")))
 
 (defun mevedel-view--hook-context-unescape (text)
   "Unescape XML entities in hook context TEXT."
@@ -4632,20 +4604,22 @@ coordinates yet -- folds and expands the same way as a rendered turn."
          (mevedel-view-disclosure-source-range
           data-buf (plist-get drawer :start) (plist-get drawer :end))))
       (when (and inline-skill inline-source-seg)
-        (let* ((split (mevedel-view--split-leading-system-reminders
-                       (or (plist-get inline-skill :expanded-prompt) "")))
-               (reminders (car split))
-               (body (string-trim (cdr split)))
+        (let* ((attachments (plist-get inline-skill :attachments))
+               (body (string-trim (or (plist-get inline-skill :prompt) "")))
                (source (plist-get inline-skill :source)))
-          (when reminders
+          (when attachments
             ;; A fresh source cons per row: sections are delimited by
             ;; `mevedel-view-source' identity, so two rows sharing one
             ;; object would fold as a single section.
             (mevedel-view--insert-rendered-tool
              (list :header (mevedel-view--attached-skills-summary
-                            (plist-get inline-skill :attachments)
-                            (length reminders))
-                   :body (mapconcat #'identity reminders "\n\n")
+                            (mapcar (lambda (attachment)
+                                      (plist-get attachment :name))
+                                    attachments)
+                            (length attachments))
+                   :body (mapconcat (lambda (attachment)
+                                      (plist-get attachment :body))
+                                    attachments "\n\n")
                    :body-mode 'markdown-mode
                    :vtype 'system-reminder-summary
                    :initially-collapsed-p t)

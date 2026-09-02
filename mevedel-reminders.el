@@ -1206,6 +1206,27 @@ payloads bounded when large rewrites or reformats occur."
   :type 'integer
   :group 'mevedel)
 
+(defcustom mevedel-reminders-edited-file-max-diff-bytes (* 256 1024)
+  "Largest content size the `edited-file' reminder will diff.
+
+`mevedel-generate-diff' spools both sides to temporary files and forks
+`diff', so a large file costs that write and that fork on every turn it
+changes -- to produce at most
+`mevedel-reminders-edited-file-max-diff-lines' lines.  Past this size
+the change is reported without a diff instead."
+  :type 'integer
+  :group 'mevedel)
+
+(defun mevedel-reminders--format-omitted-diff-change (path size)
+  "Return the reminder line for a change to PATH reported without a diff.
+SIZE is the file's size on disk, when known."
+  (format "MODIFIED: %s (%s, no diff available -- re-read the file to \
+see the changes)"
+          path
+          (if (integerp size)
+              (file-size-human-readable size)
+            "too large to diff")))
+
 (defun mevedel-reminders--truncate-diff (diff max-lines)
   "Return DIFF truncated to MAX-LINES lines, appending an ellipsis marker."
   (let ((lines (split-string diff "\n")))
@@ -1224,6 +1245,19 @@ MAX-DIFF-LINES caps the unified diff size."
         (new (plist-get change :new)))
     (pcase status
       ('deleted (format "DELETED: %s" path))
+      ;; A fingerprint cache entry never held the content, and diffing
+      ;; content this large would cost more per turn than the forty
+      ;; lines it survives as.  Either way the model is told what moved
+      ;; and how to see it.
+      ((guard (plist-get change :content-omitted))
+       (mevedel-reminders--format-omitted-diff-change
+        path (plist-get change :stat-size)))
+      ((guard (or (> (length (or old ""))
+                     mevedel-reminders-edited-file-max-diff-bytes)
+                  (> (length (or new ""))
+                     mevedel-reminders-edited-file-max-diff-bytes)))
+       (mevedel-reminders--format-omitted-diff-change
+        path (length (or new ""))))
       ('modified
        (concat (format "MODIFIED: %s\n" path)
                (mevedel-reminders--truncate-diff
@@ -1236,8 +1270,8 @@ The argument `CHANGES' supplies the edited files.
 MAX-DIFF-LINES caps each file's diff size."
   (concat "Files you previously read or edited have been modified \
 outside of your tools since you last saw them. Review the changes \
-before making further edits; re-read any file whose diff is \
-truncated.\n\n"
+before making further edits; re-read any file whose diff is truncated \
+or unavailable.\n\n"
           (mapconcat (lambda (change)
                        (mevedel-reminders--format-edited-file-change
                         change max-diff-lines))
@@ -1253,9 +1287,16 @@ well.  Each firing updates the workspace cache so the same change is
 not reported on later turns.
 
 MAX-DIFF-LINES caps the per-file diff size (default
-`mevedel-reminders-edited-file-max-diff-lines').  The reminder fires
-every turn there are changes to report; external edits are important
-enough to surface immediately rather than throttle."
+`mevedel-reminders-edited-file-max-diff-lines').  Content past
+`mevedel-reminders-edited-file-max-diff-bytes', and a file the cache
+holds as a fingerprint only, are reported without a diff rather than
+spooling megabytes through `diff' for forty surviving lines.  The
+reminder fires every turn there are changes to report; external edits
+are important enough to surface immediately rather than throttle.
+
+mevedel's own session bookkeeping never reaches this reminder: the
+workspace file cache refuses those paths (see
+`mevedel-session-file-cache-excluded-p')."
   (let ((max-diff-lines (or max-diff-lines
                             mevedel-reminders-edited-file-max-diff-lines))
         ;; Shared between trigger and content so a single firing only

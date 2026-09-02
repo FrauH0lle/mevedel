@@ -1670,6 +1670,55 @@ this collapses both shapes to the delivered text."
             (should (string-match-p "more lines truncated" content))))
       (delete-directory tmp-root t)))
 
+  :doc "reports a fingerprint-only cache entry without a diff"
+  (let* ((tmp-root (file-name-as-directory (make-temp-file "mevedel-ef-" t)))
+         (file (expand-file-name "big.log" tmp-root))
+         (ws (mevedel-workspace-get-or-create
+              'project tmp-root tmp-root "ef"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-edited-file))
+         (mevedel-file-cache-max-file-bytes 1024))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert (make-string 4096 ?x)))
+          (mevedel-file-cache-put
+           (mevedel-workspace-file-cache ws)
+           (mevedel-file-state-from-file file))
+          (let ((future (time-add (current-time) 2)))
+            (with-temp-file file (insert (make-string 8192 ?y)))
+            (set-file-times file future))
+          (should (mevedel-reminders--should-fire-p r 0 session))
+          (let ((content (test-mevedel-reminders--content r session)))
+            (should (string-match-p "MODIFIED:" content))
+            (should (string-match-p "no diff available" content))
+            ;; Neither side of the change was ever read, so no file body
+            ;; can have reached the reminder.
+            (should-not (string-match-p "xxxx" content))
+            (should-not (string-match-p "yyyy" content))))
+      (delete-directory tmp-root t)))
+
+  :doc "reports without a diff once content passes the diff byte cap"
+  (let* ((tmp-root (file-name-as-directory (make-temp-file "mevedel-ef-" t)))
+         (file (expand-file-name "wide.txt" tmp-root))
+         (ws (mevedel-workspace-get-or-create
+              'project tmp-root tmp-root "ef"))
+         (session (mevedel-session-create "main" ws))
+         (r (mevedel-reminders-make-edited-file))
+         (mevedel-reminders-edited-file-max-diff-bytes 512))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "hello\n"))
+          (mevedel-file-cache-put
+           (mevedel-workspace-file-cache ws)
+           (mevedel-file-state-from-file file))
+          (let ((future (time-add (current-time) 2)))
+            (with-temp-file file (insert (make-string 4096 ?z)))
+            (set-file-times file future))
+          (let ((content (test-mevedel-reminders--content r session)))
+            (should (string-match-p "no diff available" content))
+            (should-not (string-match-p "zzzz" content))))
+      (delete-directory tmp-root t)))
+
   :doc "memoizes detect-external-changes across trigger and content"
   (let* ((tmp-root (file-name-as-directory (make-temp-file "mevedel-ef-" t)))
          (file (expand-file-name "foo.txt" tmp-root))

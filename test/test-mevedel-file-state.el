@@ -68,6 +68,22 @@
           (should (mevedel-file-state-p state))
           (should (equal "" (mevedel-file-state-content state)))
           (should (= 0 (mevedel-file-state-size state))))
+      (delete-file tmp)))
+
+  :doc "captures an oversized file as a fingerprint without its content"
+  (let ((tmp (make-temp-file "mevedel-fs-big-" nil ".log"
+                             (make-string 4096 ?x))))
+    (unwind-protect
+        (let* ((mevedel-file-cache-max-file-bytes 1024)
+               (state (mevedel-file-state-from-file tmp)))
+          (should (mevedel-file-state-p state))
+          (should (null (mevedel-file-state-content state)))
+          ;; No content means no claim on the cache byte budget, but the
+          ;; fingerprint still describes the file on disk.
+          (should (= 0 (mevedel-file-state-size state)))
+          (should (= 4096 (mevedel-file-state-stat-size state)))
+          (should (mevedel-file-state-mtime state))
+          (should (mevedel-file-state-ctime state)))
       (delete-file tmp))))
 
 
@@ -287,6 +303,24 @@
             (should (eq 'modified (plist-get (car changes) :status)))))
       (delete-file tmp)))
 
+  :doc "reports a fingerprint entry without reading the file back"
+  (let* ((cache (mevedel-test-file-cache-create))
+         (tmp (make-temp-file "mevedel-ec-big-" nil ".log"
+                              (make-string 4096 ?x))))
+    (unwind-protect
+        (let ((mevedel-file-cache-max-file-bytes 1024))
+          (mevedel-file-cache-put cache (mevedel-file-state-from-file tmp))
+          (should (null (mevedel-file-cache-detect-external-changes cache)))
+          (write-region (make-string 8192 ?y) nil tmp nil 'silent)
+          (let ((change (car (mevedel-file-cache-detect-external-changes
+                              cache))))
+            (should (eq 'modified (plist-get change :status)))
+            (should (plist-get change :content-omitted))
+            (should (null (plist-get change :old)))
+            (should (null (plist-get change :new)))
+            (should (= 8192 (plist-get change :stat-size)))))
+      (delete-file tmp)))
+
   :doc "detects a rewrite whose mtime went backwards"
   (let* ((cache (mevedel-test-file-cache-create))
          (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))
@@ -418,6 +452,49 @@
 ;;
 ;;; Session recording
 
+(mevedel-deftest mevedel-session-file-cache-excluded-p
+  ()
+  ,test
+  (test)
+  :doc "excludes session bookkeeping, keeps artifacts and ordinary files"
+  (let* ((root (make-temp-file "mevedel-excl-" t))
+         (sessions (file-name-concat root ".mevedel" "sessions"))
+         (own (file-name-concat sessions "main-2026-09-02T14-03-19ca"))
+         (sibling (file-name-concat sessions "other-2026-09-02T18-37-6662"))
+         (neighbour (file-name-concat sessions "not-a-session"))
+         (ws (mevedel-workspace--create
+              :type 'file :id "excl" :root root :name "test"))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws :save-path own)))
+    (unwind-protect
+        (progn
+          (dolist (dir (list own sibling neighbour))
+            (make-directory (file-name-concat dir "artifacts") t))
+          ;; A session directory is recognized by its sidecar, so the
+          ;; plain neighbour stays watched.
+          (dolist (dir (list own sibling))
+            (write-region "(:schema-version 1)" nil
+                          (mevedel-session-artifacts-sidecar-path dir)
+                          nil 'silent))
+          (dolist (path (list (file-name-concat own "telemetry-log.el")
+                              (file-name-concat own "segment-0001.chat.org")
+                              (file-name-concat own "file-history" "abc")
+                              (file-name-concat sibling "telemetry-log.el")))
+            (should (mevedel-session-file-cache-excluded-p session path)))
+          (dolist (path (list (file-name-concat own "artifacts" "page.html")
+                              (file-name-concat sibling "artifacts" "a.html")
+                              (file-name-concat neighbour "telemetry-log.el")
+                              (file-name-concat root ".mevedel"
+                                                "permissions.el")
+                              (file-name-concat root "mevedel-view.el")))
+            (should-not (mevedel-session-file-cache-excluded-p session path))))
+      (delete-directory root t)))
+
+  :doc "excludes nothing when the session has no save path"
+  (let ((session (mevedel-session--create :name "main")))
+    (should-not (mevedel-session-file-cache-excluded-p
+                 session "/tmp/anything.el"))))
+
 (mevedel-deftest mevedel-session-record-file-access
   ()
   ,test
@@ -466,6 +543,33 @@
             (should (= 1 (mevedel-file-interaction-read-turn entry)))
             (should (= 4 (mevedel-file-interaction-modified-turn entry)))))
       (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "records the interaction but never caches session bookkeeping"
+  ;; mevedel rewrites its own logs and segments every turn.  Caching one
+  ;; would report those writes back as external edits for the rest of the
+  ;; session and let a multi-megabyte log evict every real entry.
+  (let* ((root (make-temp-file "mevedel-ia-own-" t))
+         (own (file-name-concat root ".mevedel" "sessions" "main-1"))
+         (log (file-name-concat own "telemetry-log.el"))
+         (ws (mevedel-workspace--create
+              :type 'file :id "record-access-own" :root root :name "test"
+              :file-cache (mevedel-test-file-cache-create)))
+         (session (mevedel-session--create
+                   :name "main" :workspace ws :save-path own
+                   :touched-files (make-hash-table :test #'equal)
+                   :turn-count 2)))
+    (unwind-protect
+        (progn
+          (make-directory own t)
+          (write-region "(:event request-queued)" nil log nil 'silent)
+          (mevedel-session-record-file-access session log 'read)
+          ;; The interaction entry still exists: Edit's read-before-write
+          ;; gate reads it, and refusing to record would break editing.
+          (should (gethash (expand-file-name log)
+                           (mevedel-session-touched-files session)))
+          (should-not (mevedel-file-cache-get
+                       (mevedel-workspace-file-cache ws) log)))
+      (delete-directory root t)))
 
   :doc "records interaction even when session has no workspace"
   (let* ((session (mevedel-session--create

@@ -189,10 +189,27 @@ const ownerSeed = [{room: 'other', name: 'flow', secret: secretOf(2, 64)}];
   nodes['new-session-name'].value = 'flow';
   nodes['new-session-prompt'].value = '';
   nodes['new-session'].close('create');
-  controller.showResult({ok: false, message: 'The host declined'});
+  controller.showResult({reqId: 1, ok: false, name: 'flow',
+                         message: 'The host declined'});
   assert.deepEqual(cards(nodes), ['flow · refused']);
   assert.deepEqual(rooms(nodes), []);
   assert.equal(store.get('mevedel-rooms'), undefined);
+}
+
+// A second request refused while the first waits settles its own notice.
+{
+  const {controller, nodes, sent} = build(48);
+  nodes['new-session-button'].dispatch('click');
+  nodes['new-session-name'].value = 'same name';
+  nodes['new-session-prompt'].value = '';
+  nodes['new-session'].close('create');
+  nodes['new-session-name'].value = 'same_name';
+  nodes['new-session'].close('create');
+  assert.equal(sent[1].name, 'same_name');
+  controller.showResult({reqId: 2, ok: false, name: 'same_name',
+                         message: 'Another request is still waiting'});
+  assert.deepEqual(cards(nodes),
+                   ['same_name · waiting for the host', 'same_name · refused']);
 }
 
 console.log('viewer session controller passed');

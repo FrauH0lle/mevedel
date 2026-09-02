@@ -20,6 +20,16 @@
 
 (require 'mevedel-structs)
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-artifacts-dir
+                  "mevedel-session-artifacts" (save-path))
+(declare-function mevedel-session-artifacts-sidecar-path
+                  "mevedel-session-artifacts" (save-path))
+(autoload 'mevedel-session-artifacts-artifacts-dir
+  "mevedel-session-artifacts")
+(autoload 'mevedel-session-artifacts-sidecar-path
+  "mevedel-session-artifacts")
+
 ;; `mevedel-turn'
 (declare-function mevedel-current-turn "mevedel-turn" (session))
 (autoload 'mevedel-current-turn "mevedel-turn")
@@ -45,6 +55,18 @@ cause the cache to drop all other entries; that is intentional."
   :type 'integer
   :group 'mevedel)
 
+(defcustom mevedel-file-cache-max-file-bytes (* 1024 1024)
+  "Largest file whose content a workspace file cache stores.
+
+A file over this size is cached as a fingerprint only: modification
+time, change time, and reported size, with no content.  External change
+detection still notices it move and still reports it, just without a
+diff.  Keeps one multi-megabyte log or generated file from consuming the
+whole `mevedel-file-cache-max-bytes' budget and evicting every entry
+that describes real work."
+  :type 'integer
+  :group 'mevedel)
+
 
 ;;
 ;;; File state factory
@@ -54,21 +76,27 @@ cause the cache to drop all other entries; that is intentional."
 
 Returns nil when PATH does not exist or cannot be read.  CONTENT is
 captured via `insert-file-contents-literally' so encoding rewrites do
-not distort byte counts."
+not distort byte counts.  A file the filesystem reports as larger than
+`mevedel-file-cache-max-file-bytes' is captured as a fingerprint: the
+timestamps and reported size without CONTENT, so it can still be seen
+to move without holding megabytes of the cache budget."
   (let ((expanded (expand-file-name path)))
     (when (file-readable-p expanded)
       (let* ((attrs (file-attributes expanded))
              (mtime (and attrs (file-attribute-modification-time attrs)))
              (ctime (and attrs (file-attribute-status-change-time attrs)))
              (stat-size (and attrs (file-attribute-size attrs)))
-             (content (with-temp-buffer
-                        (insert-file-contents-literally expanded)
-                        (buffer-string))))
+             (content (unless (and (integerp stat-size)
+                                   (> stat-size
+                                      mevedel-file-cache-max-file-bytes))
+                        (with-temp-buffer
+                          (insert-file-contents-literally expanded)
+                          (buffer-string)))))
         (mevedel-file-state--create
          :path expanded
          :content content
          :mtime mtime
-         :size (length content)
+         :size (length (or content ""))
          :ctime ctime
          :stat-size stat-size)))))
 
@@ -180,8 +208,11 @@ been deleted.
 Each entry is a plist with these keys:
   :path    - absolute path
   :status  - `modified' or `deleted'
-  :old     - cached content string (may be empty)
+  :old     - cached content string (may be empty), nil when omitted
   :new     - current on-disk content string, or nil when deleted
+  :content-omitted - t when the entry is a fingerprint, so no diff
+                     is available for this change
+  :stat-size - present with `:content-omitted', the size on disk
 
 Does not mutate CACHE; pair with
 `mevedel-file-cache-consume-external-changes' after reporting so
@@ -206,16 +237,27 @@ changes are not re-reported."
              ;; together still reads as unchanged; that needs a content
              ;; compare, which costs a full read of every cached file.
              (unless (mevedel-file-state-current-p state attrs)
-               (let ((new-content (with-temp-buffer
-                                    (insert-file-contents-literally path)
-                                    (buffer-string))))
-                 (unless (equal new-content
-                                (mevedel-file-state-content state))
+               (if (null (mevedel-file-state-content state))
+                   ;; Fingerprint entry: the move is real, but reading
+                   ;; the file back to diff it is the cost this kind of
+                   ;; entry exists to avoid.
                    (push (list :path path
                                :status 'modified
-                               :old (mevedel-file-state-content state)
-                               :new new-content)
-                         changes)))))))))
+                               :old nil
+                               :new nil
+                               :content-omitted t
+                               :stat-size (file-attribute-size attrs))
+                         changes)
+                 (let ((new-content (with-temp-buffer
+                                      (insert-file-contents-literally path)
+                                      (buffer-string))))
+                   (unless (equal new-content
+                                  (mevedel-file-state-content state))
+                     (push (list :path path
+                                 :status 'modified
+                                 :old (mevedel-file-state-content state)
+                                 :new new-content)
+                           changes))))))))))
      (mevedel-file-cache-table cache))
     (nreverse changes)))
 
@@ -262,6 +304,46 @@ the range arguments and are stored to support read deduplication."
     (puthash key entry table)
     entry))
 
+(defun mevedel-session--session-directory-for (session path)
+  "Return the mevedel session directory containing PATH, or nil.
+
+SESSION's own save path is the first candidate.  Sibling directories
+under the same sessions root are candidates too, because reading a
+second live session's files churns exactly like reading this one's --
+each is confirmed by its sidecar rather than assumed, so an ordinary
+directory that merely neighbours a session is not swept in.  That probe
+only runs for a path already under the root and outside SESSION's own
+directory, so the common case stays a string comparison."
+  (when-let* ((save-path (mevedel-session-save-path session))
+              (own (expand-file-name save-path))
+              (file (expand-file-name path)))
+    (if (string-prefix-p (file-name-as-directory own) file)
+        own
+      (let ((root (file-name-directory (directory-file-name own))))
+        (when (string-prefix-p root file)
+          (when-let* ((rest (substring file (length root)))
+                      (slash (string-search "/" rest))
+                      (dir (substring file 0 (+ (length root) slash)))
+                      ((file-exists-p
+                        (mevedel-session-artifacts-sidecar-path dir))))
+            dir))))))
+
+(defun mevedel-session-file-cache-excluded-p (session path)
+  "Return non-nil when PATH is mevedel's own bookkeeping for SESSION.
+
+A session directory holds append-only logs, transcript segments, and
+sidecars that mevedel rewrites every turn.  Caching one would report
+mevedel's own writes back to the model as external edits every turn for
+the life of the session, and let a multi-megabyte telemetry log evict
+every cache entry describing real work.  The `artifacts' subtree is
+exempt: those are authored deliverables, and an outside edit to one is
+worth reporting."
+  (when-let* ((dir (mevedel-session--session-directory-for session path)))
+    (not (string-prefix-p
+          (file-name-as-directory
+           (mevedel-session-artifacts-artifacts-dir dir))
+          (expand-file-name path)))))
+
 (defun mevedel-session-record-file-access (session path kind
                                                     &optional offset limit)
   "Record SESSION's tool interaction with PATH of KIND.
@@ -270,10 +352,12 @@ Also refreshes the workspace file cache entry for PATH so external
 change detection can diff against the freshly captured content.  KIND
 is either `read' or `modify'.  For `read' calls, OFFSET and LIMIT are
 the range arguments and are stored on the interaction entry.  Silently
-skips the cache update when the session has no workspace or PATH
-cannot be read; the interaction entry is always updated.  Returns the
-updated `mevedel-file-interaction'."
-  (when-let* ((ws (mevedel-session-workspace session))
+skips the cache update when the session has no workspace, when PATH
+cannot be read, or when PATH is mevedel's own session bookkeeping
+\(see `mevedel-session-file-cache-excluded-p'); the interaction entry
+is always updated.  Returns the updated `mevedel-file-interaction'."
+  (when-let* (((not (mevedel-session-file-cache-excluded-p session path)))
+              (ws (mevedel-session-workspace session))
               (cache (mevedel-workspace-file-cache ws))
               (state (mevedel-file-state-from-file path)))
     (mevedel-file-cache-put cache state))

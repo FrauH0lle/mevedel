@@ -224,7 +224,7 @@
     ;; No audience is every writable guest, the ordinary case.
     (should (mevedel-collaboration--audience-peer-p room 2 nil))
     (should (mevedel-collaboration--audience-peer-p room 1 nil))
-    (let ((audience '(:owner t)))
+    (let ((audience 'owner))
       (should (mevedel-collaboration--audience-peer-p room 1 audience))
       (should-not (mevedel-collaboration--audience-peer-p room 2 audience))
       ;; Two tabs of one browser share a guest id, so a narrowed
@@ -234,7 +234,9 @@
                        :guest-id "writer-id") guests)
       (should (mevedel-collaboration--audience-peer-p room 3 audience))
       ;; An unknown peer is nobody.
-      (should-not (mevedel-collaboration--audience-peer-p room 42 audience)))))
+      (should-not (mevedel-collaboration--audience-peer-p room 42 audience)))
+    ;; Unknown audience values fail closed.
+    (should-not (mevedel-collaboration--audience-peer-p room 1 'writer))))
 
 (mevedel-deftest mevedel-collaboration--audience-peers
   (:doc "filters the writable peers by the overlay's declared audience")
@@ -253,7 +255,7 @@
                               room overlay)
                              #'<)))
         (overlay-put overlay 'mevedel--remote
-                     '(:body "x" :audience (:owner t)))
+                     '(:body "x" :audience owner))
         (should (equal '(1) (mevedel-collaboration--audience-peers
                              room overlay)))
         ;; Nobody left is a decision only Emacs can take, not an error.

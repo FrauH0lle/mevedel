@@ -18,6 +18,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-theme-faces)
 (require 'mevedel-utilities)
 (require 'text-property-search)
 
