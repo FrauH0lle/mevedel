@@ -152,44 +152,6 @@ become implemented, obsolete, or unjustified.
   inside compacted spans vanish with the spans; tail-preserved turns keep
   theirs. Cosmetic and historical only.
 
-## Skills
-
-### Add required skill attachments inside skill bodies
-
-- **Source:** `mevedel-skills-core.el`, `mevedel-skills-invoke.el`,
-  `mevedel-skills-plan.el`; skill-composition discussion on 2026-08-10.
-- **What's owed:** Add an authored `!$skill` marker that guarantees the named
-  skill is prepared and attached as instruction context rather than relying on
-  the model to call `Skill`. Reuse the existing `[skill:NAME -- attached]`
-  placeholder and hidden attachment reminder. A user-origin parent may attach
-  a user-invocable child even when the child has
-  `disable-model-invocation: true`; a model-origin parent may not launder that
-  authority, and a required model-disabled dependency therefore makes the
-  parent effectively model-disabled. Unsatisfied, disabled, unauthorized, or
-  cyclic dependencies fail atomically before dispatch. Resolve dependencies
-  eagerly when the session skill set refreshes, then reload bound bodies at
-  invocation. Resolve qualified names exactly; resolve unqualified names from
-  the parent's skill root or plugin first, then only from a unique global raw
-  name. Dormant path-scoped dependencies attach one-shot without becoming
-  active. Keep inline `!$skill` argument-free; allow the full-line form
-  `!$skill -- RAW ARGUMENTS`, where everything after `--` through end of line
-  is the child argument string. Deduplicate identical source/argument pairs
-  and reject conflicting arguments for one source.
-- **Why deferred:** The feature was intentionally paused before settling the
-  trust grammar: escaping and Markdown/quote handling, whether only literal
-  author-written markers may activate recursively, and how generated text,
-  hooks, permissions, audit data, and UI inspection interact with attachment
-  dependencies still need design.
-- **Status check:** Skill bodies and generated output are currently never
-  rescanned as user skill mentions. A wrapper can ask the model to invoke
-  model-visible children, as `grill-with-docs` does, but cannot reach a child
-  protected by `disable-model-invocation: true`.
-- **Blast radius:** Skill discovery and hot reload, effective roster
-  visibility, invocation preparation, attachment staging, source binding,
-  invocation records and replay, skill inspection UI, permissions/hooks, and
-  parser/security tests. A loose origin or generated-text rule could let a
-  model or untrusted input bypass a user-only skill restriction.
-
 ## Request lifecycle
 
 ### Prevent system sleep during active requests

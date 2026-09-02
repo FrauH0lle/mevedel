@@ -771,6 +771,9 @@ passed to the skill.  ROLE is `command' or `instruction'.  ORIGIN is
 `user', `model', or `internal'.  AGENT-PATH is the canonical conversation
 that invoked it.  TURN is the session turn-count when the skill was invoked.
 SOURCE-PATH is the absolute path of the SKILL.md that was loaded.
+REQUIRED-BY-SOURCE-PATH is the requiring parent's source path for an attached
+dependency, or nil for an invoked root.  DEPENDENCY-DEPTH is zero for a root
+and increases for each required attachment edge.
 PREPARED-BODY is the post-substitution, post-shell-expansion body string --
 stored verbatim so compaction can summarize the skill's actual contribution
 to the conversation without re-reading SKILL.md (which may have changed)."
@@ -781,6 +784,8 @@ to the conversation without re-reading SKILL.md (which may have changed)."
   agent-path
   turn
   source-path
+  required-by-source-path
+  dependency-depth
   prepared-body)
 
 

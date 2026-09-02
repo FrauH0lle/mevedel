@@ -3259,17 +3259,33 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         ("beta" "inline" "BETA"))
     (let ((fail-beta t)
           calls sent first-binding second-binding)
-      (cl-letf (((symbol-function 'mevedel-skills-prepare)
-                 (lambda (skill _arguments callback &rest _)
-                   (push (mevedel-skill-name skill) calls)
-                   (funcall callback
-                            (if (and fail-beta
-                                     (equal "beta"
-                                            (mevedel-skill-name skill)))
-                                '(:status error :reason blocked
-                                  :message "blocked")
-                              '(:status ok :kind instruction :body "ALPHA"
-                                :request-context (:invoked-skills nil))))))
+      (cl-letf (((symbol-function 'mevedel-skills-prepare-many)
+                 (lambda (roots callback &rest _)
+                   (setq calls
+                         (append calls
+                                 (mapcar
+                                  (lambda (root)
+                                    (mevedel-skill-name
+                                     (plist-get root :skill)))
+                                  roots)))
+                   (funcall
+                    callback
+                    (if (and fail-beta
+                             (cl-find "beta" roots
+                                      :key (lambda (root)
+                                             (mevedel-skill-name
+                                              (plist-get root :skill)))
+                                      :test #'equal))
+                        '(:status error :reason blocked :message "blocked")
+                      (list
+                       :status 'ok
+                       :outcomes
+                       (mapcar
+                        (lambda (_root)
+                          '(:status ok :kind instruction :body "ALPHA"
+                            :request-context (:invoked-skills nil)))
+                        roots)
+                       :invoked-skills nil)))))
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
         (with-current-buffer view-buf
@@ -3314,14 +3330,21 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      :server "docs" :uri "file:///guide"))))
            (expected (mapcar #'cadr specs))
            (fail t))
-      (cl-letf (((symbol-function 'mevedel-skills-prepare)
-                 (lambda (_skill _arguments callback &rest _)
-                   (funcall callback
-                            (if fail
-                                '(:status error :reason blocked
-                                  :message "blocked")
-                              '(:status ok :kind instruction :body "ALPHA"
-                                :request-context (:invoked-skills nil))))))
+      (cl-letf (((symbol-function 'mevedel-skills-prepare-many)
+                 (lambda (roots callback &rest _)
+                   (funcall
+                    callback
+                    (if fail
+                        '(:status error :reason blocked :message "blocked")
+                      (list
+                       :status 'ok
+                       :outcomes
+                       (mapcar
+                        (lambda (_root)
+                          '(:status ok :kind instruction :body "ALPHA"
+                            :request-context (:invoked-skills nil)))
+                        roots)
+                       :invoked-skills nil)))))
                 ((symbol-function
                   'mevedel-view--schedule-late-follow-up-drain)
                  #'ignore)
@@ -3452,8 +3475,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (settlements 0)
             (hooks 0)
             (dispatches 0))
-        (cl-letf (((symbol-function 'mevedel-skills-prepare)
-                   (lambda (_skill _arguments callback &rest _)
+        (cl-letf (((symbol-function 'mevedel-skills-prepare-many)
+                   (lambda (_roots callback &rest _)
                      (setq late-callback callback)))
                   ((symbol-function 'mevedel-view--handle-prepared-plan)
                    (lambda (submission prepared)
@@ -3474,11 +3497,17 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (kill-buffer (if (eq killed-buffer 'view) view-buf data-buf))
           (should (plist-get token :cancelled))
           (funcall late-callback
-                   '(:status ok :body "late"
-                     :request-context (:invoked-skills nil)))
+                   '(:status ok
+                     :outcomes
+                     ((:status ok :kind instruction :body "late"
+                       :request-context (:invoked-skills nil)))
+                     :invoked-skills nil))
           (funcall late-callback
-                   '(:status ok :body "later"
-                     :request-context (:invoked-skills nil)))
+                   '(:status ok
+                     :outcomes
+                     ((:status ok :kind instruction :body "later"
+                       :request-context (:invoked-skills nil)))
+                     :invoked-skills nil))
           (should (= 1 settlements))
           (should (= 0 hooks))
           (should (= 0 dispatches)))))))

@@ -484,33 +484,47 @@ persisted enablement when supplied."
          calls
          result)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-skills-prepare)
-                   (lambda (skill arguments callback &rest keys)
-                     (let* ((name (mevedel-skill-name skill))
-                            (role (plist-get keys :role))
-                            (record (list name role)))
-                       (setq calls
-                             (append
-                              calls
-                              (list (list name arguments role
-                                          (plist-get keys
-                                                     :policy-owner-p)))))
-                       (funcall
-                        callback
-                        (list :status 'ok
-                              :body (format "%s{%s} $hook-literal"
-                                            name arguments)
-                              :hook-audits (list (concat "audit-" name))
-                              :request-context
-                              (list :permission-rules
-                                    (and (eq role 'command)
-                                         (list (concat "rule-" name)))
-                                    :hook-rules
-                                    (and (eq role 'command)
-                                         (list (concat "hook-" name)))
-                                    :model (concat "model-" name)
-                                    :effort (concat "effort-" name)
-                                    :invoked-skills (list record))))))))
+        (cl-letf (((symbol-function 'mevedel-skills-prepare-many)
+                   (lambda (roots callback &rest _)
+                     (let (outcomes records audits)
+                       (dolist (root roots)
+                         (let* ((skill (plist-get root :skill))
+                                (arguments (plist-get root :arguments))
+                                (name (mevedel-skill-name skill))
+                                (role (plist-get root :role))
+                                (record (list name role)))
+                           (setq calls
+                                 (append calls
+                                         (list
+                                          (list name arguments role
+                                                (plist-get
+                                                 root :policy-owner-p)))))
+                           (push record records)
+                           (push (concat "audit-" name) audits)
+                           (push
+                            (list :status 'ok
+                                  :skill skill
+                                  :arguments arguments
+                                  :body (format "%s{%s} $hook-literal"
+                                                name arguments)
+                                  :hook-audits (list (concat "audit-" name))
+                                  :request-context
+                                  (list :permission-rules
+                                        (and (eq role 'command)
+                                             (list (concat "rule-" name)))
+                                        :hook-rules
+                                        (and (eq role 'command)
+                                             (list (concat "hook-" name)))
+                                        :model (concat "model-" name)
+                                        :effort (concat "effort-" name)
+                                        :invoked-skills (list record)))
+                            outcomes)))
+                       (funcall callback
+                                (list :status 'ok
+                                      :outcomes (nreverse outcomes)
+                                      :invoked-skills
+                                      (nreverse records)
+                                      :hook-audits (nreverse audits)))))))
           (mevedel-skills-plan-prepare plan (lambda (value) (setq result value))))
       (delete-directory root t))
     (should (equal '("alpha" "beta" "delta") (mapcar #'car calls)))
@@ -551,15 +565,23 @@ persisted enablement when supplied."
          owner
          result)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-skills-prepare)
-                   (lambda (skill arguments callback &rest keys)
-                     (push (mevedel-skill-name skill) calls)
-                     (setq owner (plist-get keys :policy-owner-p))
-                     (funcall callback
-                              (list :status 'ok :body arguments
-                                    :request-context
-                                    '(:model selected :effort high
-                                      :invoked-skills (record)))))))
+        (cl-letf (((symbol-function 'mevedel-skills-prepare-many)
+                   (lambda (roots callback &rest _)
+                     (let* ((root (car roots))
+                            (skill (plist-get root :skill))
+                            (arguments (plist-get root :arguments)))
+                       (push (mevedel-skill-name skill) calls)
+                       (setq owner (plist-get root :policy-owner-p))
+                       (funcall callback
+                                (list :status 'ok :invoked-skills '(record)
+                                      :outcomes
+                                      (list
+                                       (list :status 'ok :skill skill
+                                             :arguments arguments
+                                             :body arguments
+                                             :request-context
+                                             '(:model selected :effort high
+                                               :invoked-skills (record))))))))))
           (mevedel-skills-plan-prepare plan (lambda (value) (setq result value))))
       (delete-directory root t))
     (should (equal '("alpha") calls))
@@ -581,14 +603,21 @@ persisted enablement when supplied."
          owner
          result)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-skills-prepare)
-                   (lambda (_skill arguments callback &rest keys)
-                     (should (equal "" arguments))
-                     (setq owner (plist-get keys :policy-owner-p))
-                     (funcall callback
-                              '(:status ok :body "Body says $nested"
-                                :request-context
-                                (:invoked-skills (record)))))))
+        (cl-letf (((symbol-function 'mevedel-skills-prepare-many)
+                   (lambda (roots callback &rest _)
+                     (let ((root (car roots)))
+                       (should (equal "" (plist-get root :arguments)))
+                       (setq owner (plist-get root :policy-owner-p))
+                       (funcall callback
+                                (list :status 'ok :invoked-skills '(record)
+                                      :outcomes
+                                      (list
+                                       (list :status 'ok
+                                             :skill (plist-get root :skill)
+                                             :arguments ""
+                                             :body "Body says $nested"
+                                             :request-context
+                                             '(:invoked-skills (record))))))))))
           (mevedel-skills-plan-prepare plan (lambda (value) (setq result value))))
       (delete-directory root t))
     (should-not owner)
@@ -682,16 +711,19 @@ persisted enablement when supplied."
          calls
          result)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-skills-prepare)
-                   (lambda (skill _arguments callback &rest _)
-                     (let ((name (mevedel-skill-name skill)))
-                       (push name calls)
-                       (funcall callback
-                                (if (equal name "beta")
-                                    '(:status error :reason failed
-                                      :message "beta failed")
-                                  '(:status ok :body "ok"
-                                    :request-context nil)))))))
+        (cl-letf (((symbol-function 'mevedel-skills-prepare-many)
+                   (lambda (roots callback &rest _)
+                     (catch 'failed
+                       (dolist (root roots)
+                         (let ((name
+                                (mevedel-skill-name
+                                 (plist-get root :skill))))
+                           (push name calls)
+                           (when (equal name "beta")
+                             (funcall callback
+                                      '(:status error :reason failed
+                                        :message "beta failed" :name "beta"))
+                             (throw 'failed nil))))))))
           (mevedel-skills-plan-prepare plan (lambda (value) (setq result value))))
       (delete-directory root t))
     (should (equal '("beta" "alpha") calls))
@@ -710,8 +742,8 @@ persisted enablement when supplied."
          prepares
          results)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-skills-prepare)
-                   (lambda (_skill _arguments callback &rest _)
+        (cl-letf (((symbol-function 'mevedel-skills-prepare-many)
+                   (lambda (_roots callback &rest _)
                      (setq prepares (1+ (or prepares 0))
                            pending callback))))
           (mevedel-skills-plan-prepare
@@ -741,6 +773,74 @@ persisted enablement when supplied."
     (should (eq 'inline-skill (plist-get data :kind)))
     (should (equal text (plist-get data :display-text)))
     (should (equal expanded (plist-get data :expanded-prompt)))))
+
+(mevedel-deftest mevedel-skills-plan-prepare-recursive ()
+  ,test
+  (test)
+  :doc "rejects cross-root required-argument conflicts before expansion"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skill-plan-graph-" t))
+         (dir (file-name-concat root ".mevedel" "skills"))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "plan-graph" workspace root))
+         expanded
+         result)
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "child" "name: child\ndescription: Child\n" "Child")
+          (mevedel-skills-test--write-skill
+           dir "one" "name: one\ndescription: One\n" "!$child -- ONE")
+          (mevedel-skills-test--write-skill
+           dir "two" "name: two\ndescription: Two\n" "!$child -- TWO")
+          (setf (mevedel-session-skills session)
+                (mevedel-skills-scan root '(".mevedel/skills") workspace))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (cl-letf (((symbol-function
+                        'mevedel-skills-preparation-expand-body)
+                       (lambda (&rest _) (setq expanded t))))
+              (mevedel-skills-plan-prepare
+               (mevedel-skills-plan-user-input "$one $two inspect" session)
+               (lambda (value) (setq result value)))))
+          (should (eq 'dependency-conflict (plist-get result :reason)))
+          (should-not expanded))
+      (delete-directory root t)))
+
+  :doc "aggregates required instruction context before placeholderized prose"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skill-plan-attach-" t))
+         (dir (file-name-concat root ".mevedel" "skills"))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "plan-attach" workspace root))
+         result)
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "child" "name: child\ndescription: Child\n" "Child contract")
+          (mevedel-skills-test--write-skill
+           dir "parent" "name: parent\ndescription: Parent\n"
+           "Parent contract\n!$child")
+          (setf (mevedel-session-skills session)
+                (mevedel-skills-scan root '(".mevedel/skills") workspace))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (mevedel-skills-plan-prepare
+             (mevedel-skills-plan-user-input "Use $parent here" session)
+             (lambda (value) (setq result value))))
+          (should (eq 'ok (plist-get result :status)))
+          (let ((input (plist-get result :model-input))
+                (records (plist-get (plist-get result :request-context)
+                                    :invoked-skills)))
+            (should (< (string-match-p "Child contract" input)
+                       (string-match-p "Parent contract" input)))
+            (should (string-match-p
+                     (regexp-quote "Use [skill:parent -- attached] here")
+                     input))
+            (should (equal '("child" "parent")
+                           (mapcar #'mevedel-skill-invocation-record-name
+                                   records)))))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-skills-plan)
 ;;; test-mevedel-skills-plan.el ends here

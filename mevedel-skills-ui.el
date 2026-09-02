@@ -542,20 +542,47 @@ Routes through the lifecycle-aware permission transition path."
     (mevedel-skills--skill-source-label skill)
     (or (mevedel-skill-description skill) ""))))
 
-(defun mevedel-skills--skill-detail-text (skill &optional _context)
+(defun mevedel-skills--skill-detail-text (skill &optional context)
   "Return detail text for SKILL."
-  (concat
-   (format
-    "Skill %s [%s]\nSource: %s\nDescription: %s"
-    (mevedel-skill-name skill)
-    (mevedel-skills--skill-status-label skill)
-    (mevedel-skills--skill-source-label skill)
-    (or (mevedel-skill-description skill) ""))
-   (if-let* ((file (mevedel-skill-source-file skill)))
-       (format "\nFile: %s" file)
-     "")
-   (when-let* ((warnings (mevedel-skill-warnings skill)))
-     (concat "\nWarnings:\n- " (string-join warnings "\n- ")))))
+  (let ((session (and context (mevedel-cockpit-context-session context))))
+    (concat
+     (format
+      "Skill %s [%s]\nSource: %s\nDescription: %s"
+      (mevedel-skill-name skill)
+      (mevedel-skills--skill-status-label skill)
+      (mevedel-skills--skill-source-label skill)
+      (or (mevedel-skill-description skill) ""))
+     (if-let* ((file (mevedel-skill-source-file skill)))
+         (format "\nFile: %s" file)
+       "")
+     (when-let* ((dependencies (mevedel-skill-dependencies skill)))
+       (concat
+        "\nRequired skills:\n"
+        (mapconcat
+         (lambda (dependency)
+           (let* ((source-key (mevedel-skill-dependency-source-key dependency))
+                  (child
+                   (and session source-key
+                        (cl-find source-key (mevedel-session-skills session)
+                                 :key (lambda (candidate)
+                                        (mevedel-skills-source-key
+                                         (mevedel-skill-source-file candidate)))
+                                 :test #'equal))))
+             (format "- %s%s%s"
+                     (mevedel-skill-dependency-name dependency)
+                     (if source-key (format " -> %s" source-key) "")
+                     (if (and child (not (mevedel-skill-active-p child)))
+                         " [dormant]"
+                       ""))))
+         dependencies "\n")))
+     (when-let* ((diagnostics (mevedel-skill-dependency-diagnostics skill)))
+       (concat "\nDependency errors:\n- "
+               (string-join diagnostics "\n- ")))
+     (when (and (mevedel-skill-model-invocable-p skill)
+                (not (mevedel-skill-effective-model-invocable-p skill)))
+       "\nModel invocation: disabled by a required skill")
+     (when-let* ((warnings (mevedel-skill-warnings skill)))
+       (concat "\nWarnings:\n- " (string-join warnings "\n- "))))))
 
 (defun mevedel-skills-list--workspace-label (&optional context)
   "Return CONTEXT's skills cockpit workspace root label."

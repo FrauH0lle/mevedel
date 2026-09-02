@@ -85,34 +85,46 @@
 (declare-function mevedel-skill-source-file "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-user-invocable-p
                   "mevedel-skills-core" (cl-x) t)
-(declare-function mevedel-skills-skill-enabled-p
-                  "mevedel-skills-core" (skill))
 (declare-function mevedel-skills-install
                   "mevedel-skills-core" (session &optional buffer))
+(declare-function mevedel-skills-skill-enabled-p
+                  "mevedel-skills-core" (skill))
+(declare-function mevedel-skills-source-key
+                  "mevedel-skills-core" (source-file))
 (autoload 'mevedel-session-get-skill "mevedel-skills-core")
 (autoload 'mevedel-session-get-skill-by-source "mevedel-skills-core")
 (autoload 'mevedel-skill-name "mevedel-skills-core")
 (autoload 'mevedel-skill-p "mevedel-skills-core")
 (autoload 'mevedel-skill-source-file "mevedel-skills-core")
 (autoload 'mevedel-skill-user-invocable-p "mevedel-skills-core")
-(autoload 'mevedel-skills-skill-enabled-p "mevedel-skills-core")
 (autoload 'mevedel-skills-install "mevedel-skills-core")
+(autoload 'mevedel-skills-skill-enabled-p "mevedel-skills-core")
+(autoload 'mevedel-skills-source-key "mevedel-skills-core")
 
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills-activate-context
                   "mevedel-skills-invoke" (origin &rest keys))
 (declare-function mevedel-skills-clear-pending-context
                   "mevedel-skills-invoke" ())
+(declare-function mevedel-skills-format-attachment
+                  "mevedel-skills-invoke" (attachment))
+(declare-function mevedel-skills-format-model-input
+                  "mevedel-skills-invoke" (prepared))
 (declare-function mevedel-skills-invoke
                   "mevedel-skills-invoke"
                   (skill arguments callback &rest keys))
 (declare-function mevedel-skills-prepare
                   "mevedel-skills-invoke"
                   (skill arguments callback &rest keys))
+(declare-function mevedel-skills-prepare-many
+                  "mevedel-skills-invoke" (roots callback &rest keys))
 (autoload 'mevedel-skills-activate-context "mevedel-skills-invoke")
 (autoload 'mevedel-skills-clear-pending-context "mevedel-skills-invoke")
+(autoload 'mevedel-skills-format-attachment "mevedel-skills-invoke")
+(autoload 'mevedel-skills-format-model-input "mevedel-skills-invoke")
 (autoload 'mevedel-skills-invoke "mevedel-skills-invoke")
 (autoload 'mevedel-skills-prepare "mevedel-skills-invoke")
+(autoload 'mevedel-skills-prepare-many "mevedel-skills-invoke")
 
 ;; `mevedel-skills-preparation'
 (declare-function mevedel-skills-preparation-markdown-code-ranges
@@ -223,9 +235,7 @@ original `$skill' invocation compactly."
 
 (defun mevedel-skills-input-attachment-reminder (attachment)
   "Return system-reminder body for prepared inline skill ATTACHMENT."
-  (format "The host already attached the skill `$%s` for this request. You must follow it without calling `Skill`.\n\n%s"
-          (plist-get attachment :name)
-          (or (plist-get attachment :body) "")))
+  (mevedel-skills-format-attachment attachment))
 
 (defun mevedel-skills-input--replace-inline-attachment-mentions
     (attachments start end)
@@ -234,7 +244,7 @@ Return attachments that were actually referenced, preserving first use."
   (let* ((text (buffer-substring start end))
          (by-name (make-hash-table :test #'equal))
          (by-source (make-hash-table :test #'equal))
-         (seen (make-hash-table :test #'eq))
+         (seen (make-hash-table :test #'equal))
          replacements
          used)
     (dolist (attachment attachments)
@@ -261,9 +271,14 @@ Return attachments that were actually referenced, preserving first use."
                                 "unavailable"
                               "attached")))
               replacements)
-        (unless (gethash attachment seen)
-          (puthash attachment t seen)
-          (push attachment used))))
+        (dolist (item (append (plist-get attachment :required-attachments)
+                              (list attachment)))
+          (let ((key (cons (or (plist-get item :source-file)
+                               (plist-get item :name))
+                           (or (plist-get item :arguments) ""))))
+            (unless (gethash key seen)
+              (puthash key t seen)
+              (push item used))))))
     (dolist (replacement (sort replacements
                                (lambda (a b) (> (car a) (car b)))))
       (mevedel-mentions-replace-with-placeholder
@@ -726,7 +741,8 @@ insert their result when the retained agent finishes."
         (delete-region delete-start region-end)
         (unless after-prefix
           (mevedel-skills-input-ensure-fresh-line))
-        (let ((body (or (plist-get outcome :body)
+        (let ((body (or (and (plist-get outcome :body)
+                             (mevedel-skills-format-model-input outcome))
                         (format "Skill '%s' produced no body."
                                 (mevedel-skill-name skill)))))
           (insert body)
@@ -828,49 +844,59 @@ Returns:
             'skill))))))
 
 (defun mevedel-skills-input--prepare-inline-attachments
-    (mentions callback &optional prepared)
+    (mentions callback &optional _prepared)
   "Prepare inline skill MENTIONS, then call CALLBACK.
-CALLBACK receives (:status ok :attachments LIST) or an error plist.
-PREPARED is the accumulator used for sequential async preparation."
-  (if (null mentions)
-      (funcall callback
-               (list :status 'ok :attachments (nreverse prepared)))
-    (let* ((mention (car mentions))
-           (skill (plist-get mention :skill))
-           (name (plist-get mention :name)))
-      (if (plist-get mention :unavailable)
-          (mevedel-skills-input--prepare-inline-attachments
-           (cdr mentions) callback (cons mention prepared))
-        (mevedel-skills-prepare
-         skill ""
-         (lambda (outcome)
-           (pcase (plist-get outcome :status)
-             ('ok
-              (if (eq (plist-get outcome :kind) 'instruction)
-                  (mevedel-skills-input--prepare-inline-attachments
-                   (cdr mentions) callback
-                   (cons (list :name name
+CALLBACK receives (:status ok :attachments LIST) or an error plist."
+  (let ((available (cl-remove-if (lambda (mention)
+                                   (plist-get mention :unavailable))
+                                 mentions)))
+    (if (null available)
+        (funcall callback (list :status 'ok :attachments mentions))
+      (mevedel-skills-prepare-many
+       (mapcar (lambda (mention)
+                 (list :skill (plist-get mention :skill)
+                       :arguments "" :role 'instruction
+                       :policy-owner-p nil))
+               available)
+       (lambda (aggregate)
+         (if (not (eq (plist-get aggregate :status) 'ok))
+             (funcall callback aggregate)
+           (let ((outcomes (plist-get aggregate :outcomes))
+                 (records (plist-get aggregate :invoked-skills))
+                 (seen (make-hash-table :test #'equal))
+                 attachments)
+             (dolist (mention mentions)
+               (if (plist-get mention :unavailable)
+                   (push mention attachments)
+                 (let* ((outcome (pop outcomes))
+                        (root
+                         (list :name (plist-get mention :name)
                                :start (plist-get mention :start)
                                :end (plist-get mention :end)
-                               :source-file
-                               (plist-get mention :source-file)
-                               :skill skill
+                               :source-file (plist-get mention :source-file)
+                               :skill (plist-get mention :skill)
                                :arguments ""
                                :body (plist-get outcome :body)
-                               :invoked-skills
-                               (plist-get
-                                (plist-get outcome :request-context)
-                                :invoked-skills))
-                         prepared))
-                (funcall callback
-                         (list :status 'error
-                               :reason 'unsupported-context
-                               :message
-                               (format "Skill $%s cannot be attached inline."
-                                       name)))))
-             (_
-              (funcall callback outcome))))
-         :role 'instruction :origin 'user :policy-owner-p nil)))))
+                               :required-attachments
+                               (plist-get outcome :required-attachments))))
+                   (dolist (attachment
+                            (append (plist-get outcome :required-attachments)
+                                    (list root)))
+                     (let ((key
+                            (cons
+                             (or (mevedel-skills-source-key
+                                  (plist-get attachment :source-file))
+                                 (plist-get attachment :skill))
+                             (or (plist-get attachment :arguments) ""))))
+                       (unless (gethash key seen)
+                         (puthash key t seen)
+                         (push attachment attachments)))))))
+             (setq attachments (nreverse attachments))
+             (when attachments
+               (setf (plist-get (car attachments) :invoked-skills) records))
+             (funcall callback
+                      (list :status 'ok :attachments attachments)))))
+       :origin 'user))))
 
 (defun mevedel-skills-input--prepare-inline-attachments-for-text
     (text session callback &optional allow-root)

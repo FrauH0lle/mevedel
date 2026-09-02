@@ -166,6 +166,42 @@ argument-hint: \"[path]\"
           (should (= 1 reads)))
       (delete-directory root t)))
 
+  :doc "captures discovery roots and resolves authored dependencies on scan"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-skills-dependency-scan-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           root "child" "description: Child\n" "Child body")
+          (mevedel-skills-test--write-skill
+           root "parent" "description: Parent\n"
+           "Before !$child.\n!$child -- raw args\nAfter")
+          (let* ((skills (mevedel-skills-scan nil (list root)))
+                 (parent (cl-find "parent" skills
+                                  :key #'mevedel-skill-name :test #'equal))
+                 (child (cl-find "child" skills
+                                 :key #'mevedel-skill-name :test #'equal))
+                 (dependencies (mevedel-skill-dependencies parent)))
+            (should (equal (file-name-as-directory (expand-file-name root))
+                           (mevedel-skill-discovery-root parent)))
+            (should (equal '("child" "child")
+                           (mapcar #'mevedel-skill-dependency-name
+                                   dependencies)))
+            (should (equal '(nil "raw args")
+                           (mapcar #'mevedel-skill-dependency-argument-template
+                                   dependencies)))
+            (should
+             (cl-every
+              (lambda (dependency)
+                (equal (mevedel-skills-source-key
+                        (mevedel-skill-source-file child))
+                       (mevedel-skill-dependency-source-key dependency)))
+              dependencies))
+            (should-not (mevedel-skill-dependency-diagnostics parent))
+            (should (mevedel-skill-effective-model-invocable-p parent))
+            (should-not (mevedel-skill-body parent))))
+      (delete-directory root t)))
+
   :doc "preserves model and effort metadata normalized from YAML"
   (let* ((mevedel-skills-include-bundled nil)
          (dir (make-temp-file "mevedel-skills-policy-" t)))
@@ -1251,6 +1287,161 @@ display-name: Friendly Label
     (should (equal '("mevedel:review" "bundled:review")
                    (mapcar #'mevedel-skill-name skills)))))
 
+(mevedel-deftest mevedel-skills--resolve-dependencies ()
+  ,test
+  (test)
+
+  :doc "prefers same-root and same-plugin targets before global raw names"
+  (cl-labels
+      ((dependency (name)
+         (mevedel-skill-dependency--create :name name))
+       (skill (name raw root dependencies &optional plugin)
+         (mevedel-skill--create
+          :name name :raw-name raw :plugin-name plugin
+          :source-file (file-name-concat root (concat name ".md"))
+          :discovery-root root :dependencies dependencies
+          :model-invocable-p t :enabled-p t)))
+    (let* ((root-a "/tmp/mevedel-dependency-root-a/")
+           (root-b "/tmp/mevedel-dependency-root-b/")
+           (root-c "/tmp/mevedel-dependency-root-c/")
+           (same-root-dependency (dependency "child"))
+           (plugin-dependency (dependency "child"))
+           (qualified-dependency (dependency "other:child"))
+           (unique-dependency (dependency "unique"))
+           (same-root-parent
+            (skill "parent" "parent" root-a (list same-root-dependency)))
+           (local-child (skill "local:child" "child" root-a nil))
+           (other-child (skill "other:child" "child" root-b nil "other"))
+           (plugin-parent
+            (skill "demo:parent" "parent" root-c
+                   (list plugin-dependency) "demo"))
+           (plugin-child
+            (skill "demo:child" "child" root-c nil "demo"))
+           (qualified-parent
+            (skill "qualified" "qualified" root-c
+                   (list qualified-dependency)))
+           (unique-parent
+            (skill "unique-parent" "unique-parent" root-c
+                   (list unique-dependency)))
+           (unique-child (skill "unique" "unique" root-b nil))
+           (skills (list same-root-parent local-child other-child
+                         plugin-parent plugin-child qualified-parent
+                         unique-parent unique-child)))
+      (mevedel-skills--resolve-dependencies skills)
+      (should
+       (equal (mevedel-skills-source-key
+               (mevedel-skill-source-file local-child))
+              (mevedel-skill-dependency-source-key same-root-dependency)))
+      (should
+       (equal (mevedel-skills-source-key
+               (mevedel-skill-source-file plugin-child))
+              (mevedel-skill-dependency-source-key plugin-dependency)))
+      (should
+       (equal (mevedel-skills-source-key
+               (mevedel-skill-source-file other-child))
+              (mevedel-skill-dependency-source-key qualified-dependency)))
+      (should
+       (equal (mevedel-skills-source-key
+               (mevedel-skill-source-file unique-child))
+              (mevedel-skill-dependency-source-key unique-dependency)))))
+
+  :doc "records deterministic ambiguity and never falls back from qualification"
+  (cl-labels
+      ((dependency (name)
+         (mevedel-skill-dependency--create :name name))
+       (skill (name raw root dependencies)
+         (mevedel-skill--create
+          :name name :raw-name raw
+          :source-file (file-name-concat root (concat name ".md"))
+          :discovery-root root :dependencies dependencies
+          :model-invocable-p t :enabled-p t)))
+    (let* ((ambiguous-dependency (dependency "child"))
+           (missing-qualified (dependency "missing:target"))
+           (ambiguous-parent
+            (skill "ambiguous" "ambiguous" "/tmp/dependency-parent/"
+                   (list ambiguous-dependency)))
+           (qualified-parent
+            (skill "qualified" "qualified" "/tmp/dependency-parent/"
+                   (list missing-qualified)))
+           (first (skill "a:child" "child" "/tmp/dependency-a/" nil))
+           (second (skill "z:child" "child" "/tmp/dependency-z/" nil))
+           (fallback (skill "other:target" "target"
+                            "/tmp/dependency-target/" nil)))
+      (mevedel-skills--resolve-dependencies
+       (list ambiguous-parent qualified-parent first second fallback))
+      (should-not (mevedel-skill-dependency-source-key ambiguous-dependency))
+      (should
+       (equal '("Required skill 'child' is ambiguous: a:child, z:child")
+              (mevedel-skill-dependency-diagnostics ambiguous-parent)))
+      (should-not (mevedel-skill-dependency-source-key missing-qualified))
+      (should
+       (equal '("Required skill 'missing:target' was not found")
+              (mevedel-skill-dependency-diagnostics qualified-parent)))
+      (should-not
+       (mevedel-skill-effective-model-invocable-p ambiguous-parent))))
+
+  :doc "detects self, direct, and transitive cycles with readable chains"
+  (cl-labels
+      ((dependency (name)
+         (mevedel-skill-dependency--create :name name))
+       (skill (name dependencies)
+         (mevedel-skill--create
+          :name name :raw-name name
+          :source-file (concat "/tmp/dependency-cycle-" name ".md")
+          :discovery-root "/tmp/" :dependencies dependencies
+          :model-invocable-p t :enabled-p t)))
+    (let* ((self (skill "self" (list (dependency "self"))))
+           (a (skill "a" (list (dependency "b"))))
+           (b (skill "b" (list (dependency "a"))))
+           (x (skill "x" (list (dependency "y"))))
+           (y (skill "y" (list (dependency "z"))))
+           (z (skill "z" (list (dependency "y")))))
+      (mevedel-skills--resolve-dependencies (list self a b x y z))
+      (should
+       (member "Required skill dependency cycle: self -> self"
+               (mevedel-skill-dependency-diagnostics self)))
+      (dolist (skill (list a b))
+        (should
+         (member "Required skill dependency cycle: a -> b -> a"
+                 (mevedel-skill-dependency-diagnostics skill))))
+      (dolist (skill (list x y z))
+        (should
+         (member "Required skill dependency cycle: y -> z -> y"
+                 (mevedel-skill-dependency-diagnostics skill)))
+        (should-not
+         (mevedel-skill-effective-model-invocable-p skill)))))
+
+  :doc "model gates and disabled descendants propagate without activation"
+  (cl-labels
+      ((dependency (name)
+         (mevedel-skill-dependency--create :name name))
+       (skill (name dependencies)
+         (mevedel-skill--create
+          :name name :raw-name name
+          :source-file (concat "/tmp/dependency-effective-" name ".md")
+          :discovery-root "/tmp/" :dependencies dependencies
+          :model-invocable-p t :enabled-p t)))
+    (let* ((model-child (skill "model-child" nil))
+           (dormant (skill "dormant" nil))
+           (middle (skill "middle" (list (dependency "model-child"))))
+           (root (skill "root" (list (dependency "middle")
+                                     (dependency "dormant"))))
+           (disabled (skill "disabled" nil))
+           (disabled-parent
+            (skill "disabled-parent" (list (dependency "disabled")))))
+      (setf (mevedel-skill-model-invocable-p model-child) nil)
+      (setf (mevedel-skill-active-p dormant) nil)
+      (setf (mevedel-skill-enabled-p disabled) nil)
+      (mevedel-skills--resolve-dependencies
+       (list root middle model-child dormant disabled-parent disabled))
+      (should-not (mevedel-skill-effective-model-invocable-p model-child))
+      (should-not (mevedel-skill-effective-model-invocable-p middle))
+      (should-not (mevedel-skill-effective-model-invocable-p root))
+      (should-not (mevedel-skill-active-p dormant))
+      (should (mevedel-skill-effective-model-invocable-p disabled))
+      (should-not
+       (mevedel-skill-effective-model-invocable-p disabled-parent)))))
+
 
 ;;
 ;;; Phase 1 helpers (validators, parsers)
@@ -1553,6 +1744,25 @@ description: Review changed code
           (mevedel-skills-set-enabled first t)
           (should (mevedel-skills-skill-enabled-p second)))
       (kill-buffer buffer)))
+
+  :doc "recomputes transitive model eligibility after enablement changes"
+  (let ((mevedel-skills-include-bundled nil))
+    (mevedel-skills-test--write-skill
+     user-dir "child" "description: Child\n" "Child body")
+    (mevedel-skills-test--write-skill
+     user-dir "parent" "description: Parent\n" "!$child")
+    (let* ((skills (mevedel-skills-scan nil (list user-dir) workspace))
+           (session (mevedel-session--create
+                     :workspace workspace :skills skills))
+           (parent (cl-find "parent" skills
+                            :key #'mevedel-skill-name :test #'equal))
+           (child (cl-find "child" skills
+                           :key #'mevedel-skill-name :test #'equal)))
+      (should (mevedel-skill-effective-model-invocable-p parent))
+      (mevedel-skills-set-enabled child nil session)
+      (should-not (mevedel-skill-effective-model-invocable-p parent))
+      (mevedel-skills-set-enabled child t session)
+      (should (mevedel-skill-effective-model-invocable-p parent))))
 
   :doc "keeps the same external skill isolated between workspaces"
   (let* ((mevedel-skills-include-bundled nil)

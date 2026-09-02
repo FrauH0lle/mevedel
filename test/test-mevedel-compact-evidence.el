@@ -836,9 +836,11 @@
                 :prepared-body "Body 1"))
          (rec2 (mevedel-skill-invocation-record--create
                 :name "review-spec" :args nil
-                :role 'command :origin 'model
+                :role 'instruction :origin 'model
                 :agent-path "/root/reviewer" :turn 7
                 :source-path "/skills/review-spec/SKILL.md"
+                :required-by-source-path "/skills/parent/SKILL.md"
+                :dependency-depth 2
                 :prepared-body "Body 2")))
     (setf (mevedel-session-invoked-skills session) (list rec1 rec2))
     (setf (mevedel-session-turn-count session) 9)
@@ -848,8 +850,11 @@
       (should (string-match-p "role: command, origin: user" (car items)))
       (should (string-match-p "turn: 3" (car items)))
       (should (string-match-p "\\$review-spec" (cadr items)))
-      (should (string-match-p "role: command, origin: model"
-                              (cadr items))))
+      (should (string-match-p "role: instruction, origin: model"
+                              (cadr items)))
+      (should (string-match-p
+               "required-by: /skills/parent/SKILL.md, depth: 2"
+               (cadr items))))
     (let ((items (mevedel-compact-evidence--skill-provenance session 3)))
       (should (= 1 (length items)))
       (should (string-match-p "\\$grill-me" (car items))))

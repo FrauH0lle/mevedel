@@ -28,6 +28,13 @@ the same placeholder plus staged-reminder output path, but keeps a
 separate parser because `$skill` quote, escape, and Markdown-code rules differ
 from `@` mentions.
 
+Authored `!$skill` required-attachment declarations are different again. They
+are recognized only from literal author-origin text in a `SKILL.md` during skill
+preparation, not by the user-prompt mention scanner. They declare instruction
+attachments rather than user invocations, tool calls, or delegation. Escaped
+or Markdown-code forms and markers introduced by substitution, injections,
+hooks, prepared bodies, or model output remain inert.
+
 Resource addresses are a separate tool-target syntax. A mention performs an
 attachment, invocation, or delegation operation; a resource address names
 content for an existing filesystem-shaped tool. When both identify a file,
@@ -37,7 +44,8 @@ locator, but they do not share side effects.
 The session-owned `local://` namespace, including `local://plans/...`, is
 shared by the parent and retained agents for durable plans, notes, findings,
 contracts, and handoffs. It remains a tool target; `@file` and `@mcp` attach,
-`$skill` invokes, and `@agent` delegates. Standalone/sticky Plan mode permits
+user `$skill` invokes or attaches, authored `!$skill` requires instruction
+context, and `@agent` delegates. Standalone/sticky Plan mode permits
 all-local `ApplyPatch` there, while an ordinary, non-local, or bare endpoint is
 denied before the namespace can be materialized. Directive Planning has a
 separate strictly read-only boundary and does not allow `ApplyPatch`, including

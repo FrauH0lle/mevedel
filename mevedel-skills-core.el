@@ -68,6 +68,12 @@
 (autoload 'mevedel-session-artifacts-publish-text
   "mevedel-session-artifacts")
 
+;; `mevedel-skills-preparation'
+(declare-function mevedel-skills-preparation-parse-dependencies
+                  "mevedel-skills-preparation" (text))
+(autoload 'mevedel-skills-preparation-parse-dependencies
+  "mevedel-skills-preparation")
+
 ;; `mevedel-structs'
 (defvar mevedel--session)
 
@@ -127,6 +133,18 @@ the same name take precedence.")
 ;;
 ;;; Skill struct
 
+(cl-defstruct
+    (mevedel-skill-dependency
+     (:constructor mevedel-skill-dependency--create))
+  "One authored required-skill declaration.
+
+NAME is the name written after `!$'.  ARGUMENT-TEMPLATE is the optional
+raw full-line suffix.  SOURCE-KEY is the resolved child's canonical source
+identity, or nil when resolution failed."
+  (name nil :read-only t)
+  (argument-template nil :read-only t)
+  source-key)
+
 (cl-defstruct (mevedel-skill (:constructor mevedel-skill--create))
   "A single skill loaded from a SKILL.md file.
 
@@ -146,7 +164,8 @@ is the listing line shown to the model; falls back to the first non-empty
 paragraph/header of the body when frontmatter omits `description'.  BODY
 is the skill prompt text; populated lazily on first
 invocation.  SOURCE-FILE and SOURCE-DIR point at the SKILL.md and
-its containing directory.  SOURCE is a symbol tagging the origin
+its containing directory.  DISCOVERY-ROOT is the configured root under
+which the skill was found.  SOURCE is a symbol tagging the origin
 scope/type \\=(`user', `project', `managed', `plugin', `bundled').
 SOURCE-FAMILY is `mevedel', `agents', or nil and distinguishes ordinary
 resource roots without changing SOURCE's existing scope meaning.
@@ -165,6 +184,10 @@ parsed `arguments' frontmatter as a list of names with numeric-only
 entries filtered out.  PATH-PATTERNS contains globs that trigger
 conditional activation.  HOOKS is the normalized frontmatter `hooks'
 value.
+DEPENDENCIES holds authored required-skill descriptors with refresh-time
+source bindings.  DEPENDENCY-DIAGNOSTICS holds missing, ambiguous, or cyclic
+graph errors.  EFFECTIVE-MODEL-INVOCABLE-P incorporates the direct model gate
+and every enabled required descendant's effective gate.
 WARNINGS holds configuration diagnostics exposed by skill inspection.
 WORKSPACE owns persisted enablement for this session-scoped skill.
 ENABLED-P caches that workspace policy from the latest scan or mutation.
@@ -178,6 +201,7 @@ skills."
   body
   source-file
   source-dir
+  (discovery-root nil :read-only t)
   source
   source-family
   (user-invocable-p t)
@@ -193,6 +217,9 @@ skills."
   argument-names
   path-patterns
   hooks
+  dependencies
+  dependency-diagnostics
+  (effective-model-invocable-p t)
   warnings
   (workspace nil :read-only t)
   (enabled-p t)
@@ -300,6 +327,137 @@ skills."
         (mevedel-skill-source-file skill)
         (mevedel-skill-workspace skill))))
 
+(defun mevedel-skills--resolve-dependencies (skills)
+  "Resolve and validate required-skill metadata across SKILLS.
+Mutate current structs with canonical source bindings, deterministic
+diagnostics, and transitive model eligibility, then return SKILLS."
+  (let ((by-source (make-hash-table :test #'equal)))
+    (dolist (skill skills)
+      (when-let* ((source-key
+                   (mevedel-skills-source-key
+                    (mevedel-skill-source-file skill))))
+        (puthash source-key skill by-source))
+      (setf (mevedel-skill-dependency-diagnostics skill) nil)
+      (dolist (dependency (mevedel-skill-dependencies skill))
+        (setf (mevedel-skill-dependency-source-key dependency) nil)))
+    (cl-labels
+        ((add-diagnostic
+          (skill message)
+          (unless (member message (mevedel-skill-dependency-diagnostics skill))
+            (setf (mevedel-skill-dependency-diagnostics skill)
+                  (append (mevedel-skill-dependency-diagnostics skill)
+                          (list message)))))
+         (matching
+          (predicate)
+          (cl-remove-if-not predicate skills))
+         (target
+          (dependency)
+          (when-let* ((source-key
+                       (mevedel-skill-dependency-source-key dependency)))
+            (gethash source-key by-source)))
+         (bind
+          (skill dependency)
+          (let* ((name (mevedel-skill-dependency-name dependency))
+                 (qualified-p (string-search ":" name))
+                 (candidates
+                  (if qualified-p
+                      (matching (lambda (candidate)
+                                  (equal name (mevedel-skill-name candidate))))
+                    (or
+                     (matching
+                      (if-let* ((plugin (mevedel-skill-plugin-name skill)))
+                          (lambda (candidate)
+                            (and (equal plugin
+                                        (mevedel-skill-plugin-name candidate))
+                                 (equal name
+                                        (mevedel-skill-raw-name candidate))))
+                        (lambda (candidate)
+                          (and (equal (mevedel-skill-discovery-root skill)
+                                      (mevedel-skill-discovery-root candidate))
+                               (equal name
+                                      (mevedel-skill-raw-name candidate))))))
+                     (matching
+                      (lambda (candidate)
+                        (equal name
+                               (mevedel-skill-raw-name candidate))))))))
+            (cond
+             ((= 1 (length candidates))
+              (setf (mevedel-skill-dependency-source-key dependency)
+                    (mevedel-skills-source-key
+                     (mevedel-skill-source-file (car candidates)))))
+             ((null candidates)
+              (add-diagnostic
+               skill (format "Required skill '%s' was not found" name)))
+             (t
+              (add-diagnostic
+               skill
+               (format "Required skill '%s' is ambiguous: %s"
+                       name
+                       (mapconcat #'identity
+                                  (sort (mapcar #'mevedel-skill-name candidates)
+                                        #'string<)
+                                  ", "))))))))
+      (dolist (skill skills)
+        (dolist (dependency (mevedel-skill-dependencies skill))
+          (bind skill dependency)))
+      (let ((states (make-hash-table :test #'eq)))
+        (cl-labels
+            ((visit
+              (skill path)
+              (puthash skill 'visiting states)
+              (dolist (dependency (mevedel-skill-dependencies skill))
+                (when-let* ((child (target dependency)))
+                  (pcase (gethash child states)
+                    ('visiting
+                     (let* ((members (memq child path))
+                            (cycle (append members (list child)))
+                            (message
+                             (format
+                              "Required skill dependency cycle: %s"
+                              (mapconcat #'mevedel-skill-name cycle " -> "))))
+                       (dolist (member members)
+                         (add-diagnostic member message))))
+                    ('done nil)
+                    (_ (visit child (append path (list child)))))))
+              (puthash skill 'done states)))
+          (dolist (skill skills)
+            (unless (gethash skill states)
+              (visit skill (list skill))))))
+      (let ((changed t))
+        (while changed
+          (setq changed nil)
+          (dolist (skill skills)
+            (dolist (dependency (mevedel-skill-dependencies skill))
+              (when-let* ((child (target dependency)))
+                (dolist (message
+                         (mevedel-skill-dependency-diagnostics child))
+                  (unless (member message
+                                  (mevedel-skill-dependency-diagnostics skill))
+                    (add-diagnostic skill message)
+                    (setq changed t))))))))
+      (let ((effective (make-hash-table :test #'eq)))
+        (cl-labels
+            ((eligible-p
+              (skill)
+              (let ((cached (gethash skill effective 'missing)))
+                (if (not (eq cached 'missing)) cached
+                  (let ((value
+                         (and
+                          (mevedel-skill-model-invocable-p skill)
+                          (null (mevedel-skill-dependency-diagnostics skill))
+                          (cl-every
+                           (lambda (dependency)
+                             (when-let* ((child (target dependency)))
+                               (and (mevedel-skill-enabled-p child)
+                                    (eligible-p child))))
+                           (mevedel-skill-dependencies skill)))))
+                    (puthash skill value effective)
+                    value)))))
+          (dolist (skill skills)
+            (setf (mevedel-skill-effective-model-invocable-p skill)
+                  (eligible-p skill)))))
+      skills)))
+
 (defun mevedel-skills-set-enabled (skill enabled &optional session)
   "Persist file-backed SKILL as ENABLED through optional live SESSION."
   (unless (mevedel-skill-p skill)
@@ -324,12 +482,20 @@ skills."
       ;; A workspace may have several live sessions, each with its own skill
       ;; structs.  Keep those cached copies consistent with the state just
       ;; committed instead of waiting for an unrelated source-file rescan.
-      (dolist (buffer (buffer-list))
-        (when-let* ((session (buffer-local-value 'mevedel--session buffer))
-                    ((eq workspace (mevedel-session-workspace session))))
-          (dolist (candidate (mevedel-session-skills session))
+      (let ((sessions (and session (list session))))
+        (dolist (buffer (buffer-list))
+          (when-let* ((candidate-session
+                       (buffer-local-value 'mevedel--session buffer))
+                      ((eq workspace
+                           (mevedel-session-workspace candidate-session))))
+            (push candidate-session sessions)))
+        (dolist (candidate-session
+                 (cl-delete-duplicates sessions :test #'eq))
+          (dolist (candidate (mevedel-session-skills candidate-session))
             (when (equal key (mevedel-skills--state-key candidate))
-              (setf (mevedel-skill-enabled-p candidate) enabled))))))))
+              (setf (mevedel-skill-enabled-p candidate) enabled)))
+          (mevedel-skills--resolve-dependencies
+           (mevedel-session-skills candidate-session)))))))
 
 (defun mevedel-skills-skill-enabled-p (skill)
   "Return non-nil when SKILL is not user-disabled."
@@ -552,7 +718,8 @@ YAML parsing fails."
 
 (defun mevedel-skills--from-plist
     (name plist source-file source
-          &optional source-family project-hooks-trusted-p plugin-name workspace)
+          &optional source-family project-hooks-trusted-p plugin-name workspace
+          discovery-root)
   "Build a `mevedel-skill' from NAME and PLIST parsed from SOURCE-FILE.
 SOURCE is the origin tag symbol.  SOURCE-FAMILY is `mevedel', `agents',
 or nil.  PROJECT-HOOKS-TRUSTED-P authorizes executable hooks from a
@@ -560,7 +727,8 @@ project manifest.  NAME is the resolved invocation identifier (already
 validated by the caller).  Description fallback from the body is the
 caller's responsibility -- anything in PLIST's `:description' wins over
 the fallback.  PLUGIN-NAME records plugin ownership when SOURCE is
-  `plugin'.  WORKSPACE owns persisted enablement."
+  `plugin'.  WORKSPACE owns persisted enablement.  DISCOVERY-ROOT is the
+configured root under which SOURCE-FILE was found."
   (let* ((description (plist-get plist :description))
          (display-name (plist-get plist :display-name))
          (disable-model (plist-get plist :disable-model-invocation))
@@ -575,6 +743,10 @@ the fallback.  PLUGIN-NAME records plugin ownership when SOURCE is
          (paths (plist-get plist :paths))
          (shell (plist-get plist :shell))
          (declared-hooks (plist-get plist :hooks))
+         (dependency-data
+          (and-let* ((body (plist-get plist :system)))
+            (plist-get (mevedel-skills-preparation-parse-dependencies body)
+                       :dependencies)))
          (hooks (and (or (not (eq source 'project))
                          project-hooks-trusted-p)
                      declared-hooks))
@@ -598,6 +770,7 @@ the fallback.  PLUGIN-NAME records plugin ownership when SOURCE is
      :description (and (stringp description) description)
      :source-file source-file
      :source-dir (file-name-directory source-file)
+     :discovery-root discovery-root
      :source source
      :source-family source-family
      :user-invocable-p (mevedel-skills--coerce-bool user-invocable t)
@@ -625,6 +798,13 @@ the fallback.  PLUGIN-NAME records plugin ownership when SOURCE is
         (if (eq source 'project) 'project-file
           (if (eq source 'plugin) 'plugin 'user-file))
         source-file (file-name-directory source-file)))
+     :dependencies
+     (mapcar
+      (lambda (dependency)
+        (mevedel-skill-dependency--create
+         :name (plist-get dependency :name)
+         :argument-template (plist-get dependency :argument-template)))
+      dependency-data)
      :warnings warnings
      :workspace workspace
      :active-p (null paths))))
@@ -719,7 +899,7 @@ relative and WORKSPACE-ROOT is nil."
     skill))
 
 (defun mevedel-skills--build-skill
-    (skill-file source &optional source-family workspace plugin-name)
+    (skill-file source &optional source-family workspace plugin-name discovery-root)
   "Build a `mevedel-skill' for SKILL-FILE with SOURCE origin tag.
 SOURCE-FAMILY distinguishes `.mevedel' and `.agents' resource roots.
 Performs name resolution (frontmatter `:name' > directory name) and
@@ -755,7 +935,8 @@ description fallback from the body when frontmatter omits `description'."
               (setq plist (plist-put plist :description fallback))))
           (mevedel-skills--from-plist
            raw-name plist skill-file source source-family
-           (plist-get snapshot :trusted-p) plugin-name workspace)))))))
+           (plist-get snapshot :trusted-p) plugin-name workspace
+           discovery-root)))))))
 
 (defun mevedel-skills--scan-dir
     (dir source &optional source-family workspace plugin-name)
@@ -771,7 +952,8 @@ does not abort the whole scan."
                            dir "\\`SKILL\\.md\\'" nil nil nil))
         (let ((skill (condition-case err
                          (mevedel-skills--build-skill
-                          skill-file source source-family workspace plugin-name)
+                          skill-file source source-family workspace plugin-name
+                          (file-name-as-directory (expand-file-name dir)))
                        (error
                         (mevedel--warn-once
                          (list 'skill-load-failed skill-file)
@@ -913,9 +1095,10 @@ explicit scans for tests and internal callers."
           (dolist (skill (mevedel-skills--scan-resolved-dir
                           (car resolved) (cdr resolved) workspace))
             (push skill result)))))
-    (mevedel-skills--apply-enable-state
-     (mevedel-skills--qualify-conflicting-names (nreverse result))
-     workspace)))
+    (mevedel-skills--resolve-dependencies
+     (mevedel-skills--apply-enable-state
+      (mevedel-skills--qualify-conflicting-names (nreverse result))
+      workspace))))
 
 
 ;;
