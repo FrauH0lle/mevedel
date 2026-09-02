@@ -1057,7 +1057,30 @@ spanning lines")))
                  :name "clean" :description "Clean"
                  :source 'project))
          (details (mevedel-skills--skill-detail-text skill)))
-    (should-not (string-match-p "Warnings:" details))))
+    (should-not (string-match-p "Warnings:" details)))
+
+  :doc "shows resolved, dormant, invalid, and transitively disabled dependencies"
+  (let* ((child-file "/tmp/child/SKILL.md")
+         (child (mevedel-skill--create
+                 :name "child" :source-file child-file :active-p nil))
+         (dependency
+          (mevedel-skill-dependency--create
+           :name "child"
+           :source-key (mevedel-skills-source-key child-file)))
+         (parent (mevedel-skill--create
+                  :name "parent" :dependencies (list dependency)
+                  :dependency-diagnostics '("Required skill is invalid")
+                  :model-invocable-p t
+                  :effective-model-invocable-p nil))
+         (session (mevedel-skills-test--make-session "details"))
+         details)
+    (setf (mevedel-session-skills session) (list parent child))
+    (setq details
+          (mevedel-skills--skill-detail-text parent (list :session session)))
+    (should (string-match-p "Required skills:" details))
+    (should (string-match-p "child.*\[dormant\]" details))
+    (should (string-match-p "Dependency errors:" details))
+    (should (string-match-p "disabled by a required skill" details))))
 
 (mevedel-deftest mevedel-skills-list--workspace-label ()
   ,test
@@ -1388,12 +1411,15 @@ spanning lines")))
 
   :doc "manually typed raw skills bind their canonical source before send"
   (let* ((session (mevedel-skills-test--make-session))
-         (source (make-temp-file "mevedel-raw-skill-" nil ".md"))
+         (root (make-temp-file "mevedel-raw-skill-" t))
+         (source (file-name-concat root "SKILL.md"))
          (skill (mevedel-skill--create
                  :name "alpha" :body "ALPHA" :source-file source))
          binding)
     (unwind-protect
         (progn
+          (with-temp-file source
+            (insert "---\nname: alpha\ndescription: Alpha\n---\n\nALPHA\n"))
           (setf (mevedel-session-skills session) (list skill))
           (mevedel-skills-test--with-chat-buffer session
             (insert "### use $alpha")
@@ -1409,7 +1435,7 @@ spanning lines")))
                           (match-beginning 0)
                           'mevedel-mention-binding))))))
             (should (equal source (plist-get binding :source-file)))))
-      (delete-file source)))
+      (delete-directory root t)))
 
   :doc "manually typed raw direct references bind their UUID before send"
   (let* ((root (make-temp-file "mevedel-raw-ref-" t))

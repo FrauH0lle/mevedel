@@ -200,9 +200,11 @@ owner exactly as on the root path.
   rejection notices are staged entries (typed by mention key).
   Deduplication commits only once the payload exists, so a cancelled
   request never marks content as shown.
-- **Skill attachments:** inline `$skill` attachment bodies are staged
-  entries of type `skill-attachment`; the `$name` token replacement
-  stays in the prompt text.
+- **Skill attachments:** inline user `$skill` bodies and recursively required
+  authored `!$skill` bodies reuse staged entries of type `skill-attachment`.
+  Required contributions are flattened dependency first into the same pending
+  collection; no new reminder type or late hidden reminder path is used. The
+  corresponding attachment placeholder stays in the prompt or parent body.
 - **Compact file-reference:** manual compaction enqueues pending-FIFO
   reminders for file references whose contents were not retained; auto
   compaction stages a `compact-file-references` entry on the in-flight

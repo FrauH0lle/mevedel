@@ -767,6 +767,282 @@ hooks:
     (should (eq 'ok (plist-get outcome :status)))
     (should (equal "value=3" (plist-get outcome :body)))))
 
+(mevedel-deftest mevedel-skills-prepare-many ()
+  ,test
+  (test)
+  :doc "preflights, deduplicates, and prepares dependency-first with isolated rules"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skill-graph-" t))
+         (dir (file-name-concat root ".mevedel" "skills"))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (root-buffer (generate-new-buffer " *mevedel-skill-graph-root*"))
+         session
+         refresh-buffer
+         expanded
+         outcome)
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "child" "name: child\ndescription: Child\n"
+           "Child($ARGUMENTS)")
+          (mevedel-skills-test--write-skill
+           dir "first" "name: first\ndescription: First\n"
+           "First $0\n!$child -- $0")
+          (mevedel-skills-test--write-skill
+           dir "second" "name: second\ndescription: Second\n"
+           "Second\n!$child -- VALUE")
+          (setq session (mevedel-session-create "graph" workspace root))
+          (mevedel-session-set-root-buffer session root-buffer)
+          (setf (mevedel-session-skills session)
+                (mevedel-skills-scan root '(".mevedel/skills") workspace))
+          (let ((child (mevedel-session-get-skill session "child"))
+                (first (mevedel-session-get-skill session "first"))
+                (second (mevedel-session-get-skill session "second")))
+            (setf (mevedel-skill-allowed-tool-rules child) '(child-rule)
+                  (mevedel-skill-allowed-tool-rules first) '(first-rule)
+                  (mevedel-skill-allowed-tool-rules second) '(second-rule))
+            (with-temp-buffer
+              (setq-local mevedel--session session)
+              (setq-local mevedel--agent-invocation
+                          (mevedel-agent-invocation--create
+                           :path "/root/reviewer"
+                           :skill-permission-rules '(ambient-rule)))
+              (cl-letf (((symbol-function 'mevedel-skills-ensure-fresh)
+                         (lambda (buffer _session)
+                           (setq refresh-buffer buffer)))
+                        ((symbol-function
+                          'mevedel-skills-preparation-expand-body)
+                         (lambda (body callback skill &rest _)
+                           (setq expanded
+                                 (append
+                                  expanded
+                                  (list
+                                   (list (mevedel-skill-name skill) body
+                                         (mevedel-request-skill-permission-rules
+                                          mevedel--current-request)
+                                         mevedel--agent-invocation))))
+                           (funcall callback (list :status 'ok :body body))))
+                        ((symbol-function 'mevedel-skills--run-expansion-hook)
+                         (lambda (skill _arguments prompt _origin _session callback)
+                           (funcall callback prompt
+                                    (list :additional-context
+                                          (list
+                                           (concat (mevedel-skill-name skill)
+                                                   "-context")))))))
+                (mevedel-skills-prepare-many
+                 (list (list :skill first :arguments "VALUE"
+                             :role 'command :policy-owner-p nil)
+                       (list :skill second :arguments ""
+                             :role 'command :policy-owner-p nil))
+                 (lambda (value) (setq outcome value))
+                 :origin 'user))))
+          (should (eq root-buffer refresh-buffer))
+          (should (equal '("child" "first" "second")
+                         (mapcar #'car expanded)))
+          (should (equal "Child(VALUE)" (cadar expanded)))
+          (should (equal '((child-rule) (first-rule) (second-rule))
+                         (mapcar #'caddr expanded)))
+          (should-not (cl-some #'cadddr expanded))
+          (should (equal '("child" "first" "second")
+                         (mapcar #'mevedel-skill-invocation-record-name
+                                 (plist-get outcome :invoked-skills))))
+          (should (equal '("first" "second")
+                         (mapcar
+                          (lambda (prepared)
+                            (mevedel-skill-name (plist-get prepared :skill)))
+                          (plist-get outcome :outcomes))))
+          (let* ((first-outcome (car (plist-get outcome :outcomes)))
+                 (context (plist-get first-outcome :request-context))
+                 (input (mevedel-skills-format-model-input first-outcome))
+                 (hook-context (plist-get first-outcome :hook-context)))
+            (should (equal '(first-rule)
+                           (plist-get context :permission-rules)))
+            (should (equal '("child" "first")
+                           (mapcar #'mevedel-skill-invocation-record-name
+                                   (plist-get context :invoked-skills))))
+            (should (< (string-search "child-context" hook-context)
+                       (string-search "first-context" hook-context)))
+            (should (string-match-p "Child(VALUE)" input))
+            (should (string-match-p "First VALUE" input))
+            (should (string-match-p
+                     (regexp-quote "[skill:child -- attached]") input)))
+          (let* ((hook-context (plist-get outcome :hook-context))
+                 (child-position (string-search "child-context" hook-context)))
+            (should (< child-position
+                       (string-search "first-context" hook-context)))
+            (should (< (string-search "first-context" hook-context)
+                       (string-search "second-context" hook-context)))
+            (should-not (string-search "child-context" hook-context
+                                       (1+ child-position)))))
+      (when (buffer-live-p root-buffer)
+        (kill-buffer root-buffer))
+      (delete-directory root t)))
+
+  :doc "rejects cross-root argument conflicts and model-disabled descendants before effects"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skill-graph-reject-" t))
+         (dir (file-name-concat root ".mevedel" "skills"))
+         (workspace (mevedel-skills-test--make-workspace root))
+         session
+         expanded
+         conflict
+         model-rejection
+         runtime-failure
+         user-outcome)
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "child"
+           "name: child\ndescription: Child\ndisable-model-invocation: true\n"
+           "Child")
+          (mevedel-skills-test--write-skill
+           dir "one" "name: one\ndescription: One\n" "!$child -- ONE")
+          (mevedel-skills-test--write-skill
+           dir "two" "name: two\ndescription: Two\n" "!$child -- TWO")
+          (setq session (mevedel-session-create "graph" workspace root))
+          (setf (mevedel-session-skills session)
+                (mevedel-skills-scan root '(".mevedel/skills") workspace))
+          (let ((one (mevedel-session-get-skill session "one"))
+                (two (mevedel-session-get-skill session "two")))
+            (with-temp-buffer
+              (setq-local mevedel--session session)
+              (cl-letf (((symbol-function
+                          'mevedel-skills-preparation-expand-body)
+                         (lambda (&rest _) (setq expanded t))))
+                (mevedel-skills-prepare-many
+                 (list (list :skill one :arguments "" :role 'command)
+                       (list :skill two :arguments "" :role 'command))
+                 (lambda (value) (setq conflict value))
+                 :origin 'user)
+                (should (eq 'dependency-conflict
+                            (plist-get conflict :reason)))
+                (should-not expanded)
+                (mevedel-skills-prepare
+                 one "" (lambda (value) (setq model-rejection value))
+                 :role 'command :origin 'model)
+                (should (eq 'disabled
+                            (plist-get model-rejection :reason)))
+                (should-not expanded))
+              (mevedel-skills-prepare
+               one "" (lambda (value) (setq user-outcome value))
+               :role 'command :origin 'user)
+              (should (eq 'ok (plist-get user-outcome :status)))
+              (cl-letf (((symbol-function
+                          'mevedel-skills-preparation-expand-body)
+                         (lambda (body callback skill &rest _)
+                           (funcall callback
+                                    (if (equal (mevedel-skill-name skill) "child")
+                                        '(:status error :reason injection-failed
+                                          :message "child failed")
+                                      (list :status 'ok :body body))))))
+                (mevedel-skills-prepare-many
+                 (list (list :skill one :arguments ""
+                             :role 'command :policy-owner-p nil))
+                 (lambda (value) (setq runtime-failure value))
+                 :origin 'user))
+              (should (eq 'injection-failed
+                          (plist-get runtime-failure :reason)))
+              (should (equal "child" (plist-get runtime-failure :name))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-skills-recursive-delivery ()
+  ,test
+  (test)
+  :doc "model inline and direct fork consumers receive complete required input"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skill-delivery-" t))
+         (dir (file-name-concat root ".mevedel" "skills"))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "delivery" workspace root))
+         model-result
+         fork-prompt
+         fork-result)
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "child" "name: child\ndescription: Child\n" "Child contract")
+          (mevedel-skills-test--write-skill
+           dir "inline" "name: inline\ndescription: Inline\n"
+           "Inline root\n!$child")
+          (mevedel-skills-test--write-skill
+           dir "fork"
+           "name: fork\ndescription: Fork\ncontext: fork\n"
+           "Fork root\n!$child")
+          (setf (mevedel-session-skills session)
+                (mevedel-skills-scan root '(".mevedel/skills") workspace))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (mevedel-skills--invoke-handler
+             (lambda (value) (setq model-result (plist-get value :result)))
+             '(:name "inline"))
+            (cl-letf (((symbol-function
+                        'mevedel-skills-dispatch-prepared-fork)
+                       (lambda (_prepared callback &rest keys)
+                         (setq fork-prompt (plist-get keys :prompt))
+                         (funcall callback '(:status ok :kind fork)))))
+              (mevedel-skills--invoke-fork-direct
+               (mevedel-session-get-skill session "fork") ""
+               (lambda (value) (setq fork-result value))
+               :origin 'user)))
+          (dolist (text (list model-result fork-prompt))
+            (should (string-match-p "Child contract" text))
+            (should (string-match-p
+                     (if (eq text model-result) "Inline root" "Fork root")
+                     text)))
+          (should (eq 'ok (plist-get fork-result :status))))
+      (delete-directory root t)))
+
+  :doc "dependency markers generated during expansion remain inert"
+  (let* ((skill (mevedel-skill--create
+                 :name "generated" :body "!el`ignored`"))
+         outcome)
+    (cl-letf (((symbol-function 'mevedel-skills-preparation-expand-body)
+               (lambda (_body callback &rest _)
+                 (funcall callback '(:status ok :body "!$not-a-dependency")))))
+      (mevedel-skills-prepare
+       skill "" (lambda (value) (setq outcome value))
+       :role 'command :origin 'user))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should-not (plist-get outcome :required-attachments))
+    (should (equal "!$not-a-dependency" (plist-get outcome :body))))
+
+  :doc "model-required children remain attached to the active request"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skill-idempotent-" t))
+         (dir (file-name-concat root ".mevedel" "skills"))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "idempotent" workspace root))
+         (request (mevedel-request--create :session session))
+         parent-outcome
+         child-outcome)
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "child" "name: child\ndescription: Child\n" "Child")
+          (mevedel-skills-test--write-skill
+           dir "parent" "name: parent\ndescription: Parent\n"
+           "!$child\nParent")
+          (setf (mevedel-session-skills session)
+                (mevedel-skills-scan root '(".mevedel/skills") workspace))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request request)
+            (mevedel-skills-invoke
+             (mevedel-session-get-skill session "parent") ""
+             (lambda (value) (setq parent-outcome value))
+             :origin 'model)
+            (mevedel-skills-invoke
+             (mevedel-session-get-skill session "child") ""
+             (lambda (value) (setq child-outcome value))
+             :origin 'model))
+          (should (eq 'ok (plist-get parent-outcome :status)))
+          (should (eq 'already-attached (plist-get child-outcome :kind)))
+          (should
+           (equal '("child" "parent")
+                  (mapcar #'mevedel-skill-invocation-record-name
+                          (mevedel-request-attached-skill-records request)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-skills-invoke (:quiet t)
   ,test
   (test)

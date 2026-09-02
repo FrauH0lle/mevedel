@@ -902,6 +902,68 @@ spanning lines")))
                        (mevedel-tool-render-data-strip
                         (buffer-string))))))))
 
+(mevedel-deftest mevedel-skills-input--prepare-inline-attachments ()
+  ,test
+  (test)
+  :doc "flattens required children before their user instruction attachment"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skill-input-graph-" t))
+         (dir (file-name-concat root ".mevedel" "skills"))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "input-graph" workspace root))
+         result)
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "child" "name: child\ndescription: Child\n" "Child body")
+          (mevedel-skills-test--write-skill
+           dir "parent" "name: parent\ndescription: Parent\n"
+           "Parent body\n!$child")
+          (setf (mevedel-session-skills session)
+                (mevedel-skills-scan root '(".mevedel/skills") workspace))
+          (let ((parent (mevedel-session-get-skill session "parent")))
+            (with-temp-buffer
+              (setq-local mevedel--session session)
+              (mevedel-skills-input--prepare-inline-attachments
+               (list (list :name "parent" :start 0 :end 7
+                           :source-file (mevedel-skill-source-file parent)
+                           :skill parent))
+               (lambda (value) (setq result value)))))
+          (should (eq 'ok (plist-get result :status)))
+          (let ((attachments (plist-get result :attachments)))
+            (should (equal '("child" "parent")
+                           (mapcar (lambda (item) (plist-get item :name))
+                                   attachments)))
+            (should (equal '("child" "parent")
+                           (mapcar
+                            #'mevedel-skill-invocation-record-name
+                            (plist-get (car attachments) :invoked-skills))))))
+      (delete-directory root t)))
+
+  :doc "leading user commands insert complete required model input"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skill-command-graph-" t))
+         (dir (file-name-concat root ".mevedel" "skills"))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "command-graph" workspace root)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "child" "name: child\ndescription: Child\n" "Child contract")
+          (mevedel-skills-test--write-skill
+           dir "parent" "name: parent\ndescription: Parent\n"
+           "Parent command\n!$child")
+          (setf (mevedel-session-skills session)
+                (mevedel-skills-scan root '(".mevedel/skills") workspace))
+          (mevedel-skills-test--with-chat-buffer session
+            (let ((mevedel-slash-commands nil))
+              (insert "### $parent")
+              (goto-char (point-max))
+              (should (eq 'skill (mevedel-skills-input-dispatch-command)))
+              (let ((text (mevedel-tool-render-data-strip (buffer-string))))
+                (should (string-match-p "Child contract" text))
+                (should (string-match-p "Parent command" text))))))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-skills-input)
 ;;; test-mevedel-skills-input.el ends here

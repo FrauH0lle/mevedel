@@ -575,10 +575,12 @@ original elisp-injection marker used in diagnostics."
         (setq search (match-end 0))))
     close-end))
 
-(defun mevedel-skills-preparation--markdown-code-fence-ranges (text)
+(defun mevedel-skills-preparation--markdown-code-fence-ranges
+    (text &optional include-injections-p)
   "Return ordinary Markdown code-fence ranges in TEXT.
 Body-injection fences are deliberately excluded so they remain
-active skill syntax."
+active skill syntax.  When INCLUDE-INJECTIONS-P is non-nil, include
+body-injection fences too."
   (let ((ranges nil)
         (pos 0)
         (len (length text)))
@@ -598,7 +600,9 @@ active skill syntax."
                                "\\(\n\\|\\'\\)"))
              (close-end (mevedel-skills-preparation--markdown-authored-fence-close-end
                          text close-re body-start)))
-        (if (mevedel-skills-preparation--markdown-injection-fence-opener-p line marker)
+        (if (and (not include-injections-p)
+                 (mevedel-skills-preparation--markdown-injection-fence-opener-p
+                  line marker))
             (setq pos (or close-end len))
           (if close-end
               (progn
@@ -638,8 +642,10 @@ exclusive end of the current line."
             (setq search close-end))))
       span-end)))
 
-(defun mevedel-skills-preparation--markdown-inline-code-ranges (text fence-ranges)
-  "Return Markdown inline code-span ranges in TEXT outside FENCE-RANGES."
+(defun mevedel-skills-preparation--markdown-inline-code-ranges
+    (text fence-ranges &optional include-injections-p)
+  "Return Markdown inline code-span ranges in TEXT outside FENCE-RANGES.
+When INCLUDE-INJECTIONS-P is non-nil, body-injection spans count as code."
   (let ((ranges nil)
         (line-start 0)
         (len (length text)))
@@ -656,10 +662,11 @@ exclusive end of the current line."
                   (mevedel-skills-preparation--ranges-overlap-p
                    fence-ranges run-start run-end))
               (setq pos run-end))
-             ((if-let* ((injection-end
-                         (mevedel-skills-preparation--injection-inline-span-end
-                          text run-start line-end)))
-                  (setq pos injection-end)))
+             ((and (not include-injections-p)
+                   (if-let* ((injection-end
+                              (mevedel-skills-preparation--injection-inline-span-end
+                               text run-start line-end)))
+                       (setq pos injection-end))))
              ((and (string-match (regexp-quote run) text run-end)
                    (<= (match-end 0) line-end))
               (push (cons run-start (match-end 0)) ranges)
@@ -669,13 +676,113 @@ exclusive end of the current line."
         (setq line-start (if (< line-end len) (1+ line-end) len))))
     (nreverse ranges)))
 
-(defun mevedel-skills-preparation-markdown-code-ranges (text)
-  "Return Markdown code ranges in TEXT that should not run as injections."
-  (let* ((fence-ranges (mevedel-skills-preparation--markdown-code-fence-ranges text))
+(defun mevedel-skills-preparation-markdown-code-ranges
+    (text &optional include-injections-p)
+  "Return Markdown code ranges in TEXT.
+By default body-injection syntax is excluded.  When INCLUDE-INJECTIONS-P
+is non-nil, include body-injection fences and inline spans too."
+  (let* ((fence-ranges
+          (mevedel-skills-preparation--markdown-code-fence-ranges
+           text include-injections-p))
          (inline-ranges (mevedel-skills-preparation--markdown-inline-code-ranges
-                         text fence-ranges)))
+                         text fence-ranges include-injections-p)))
     (sort (append fence-ranges inline-ranges)
           (lambda (a b) (< (car a) (car b))))))
+
+(defconst mevedel-skills-preparation--dependency-name-regexp
+  "[a-z0-9-]+\\(?::[a-z0-9-]+\\)?"
+  "Regexp matching an authored required-skill name.")
+
+(defun mevedel-skills-preparation--dependency-name-char-p (ch)
+  "Return non-nil when CH could continue a required-skill name."
+  (and ch
+       (or (and (>= ch ?a) (<= ch ?z))
+           (and (>= ch ?A) (<= ch ?Z))
+           (and (>= ch ?0) (<= ch ?9))
+           (memq ch '(?- ?: ?_)))))
+
+(defun mevedel-skills-preparation--dependency-escaped-p (text position)
+  "Return non-nil when authored backslashes escape TEXT at POSITION."
+  (let ((pos (1- position))
+        (count 0))
+    (while (and (>= pos 0)
+                (eq (aref text pos) ?\\)
+                (mevedel-skills-preparation--author-ranges-p
+                 text pos (1+ pos)))
+      (cl-incf count)
+      (cl-decf pos))
+    (not (zerop (% count 2)))))
+
+(defun mevedel-skills-preparation-parse-dependencies (text)
+  "Parse and replace authored required-skill declarations in TEXT.
+
+Return a plist with `:body' and source-ordered `:dependencies'.  Each
+dependency is a plist with `:name', `:argument-template', `:start', and
+`:end'.  Inline `!$NAME' declarations are argument-free.  A declaration
+that occupies a full line may use `!$NAME -- RAW ARGUMENTS'; its raw suffix
+is retained as the argument template.  Active declarations are replaced by
+`[skill:NAME -- attached]' placeholders.
+
+Escaped declarations, Markdown code examples, body-injection code, and
+marker structure carrying non-author provenance are inert."
+  (let ((regexp (concat "!\\$\\("
+                        mevedel-skills-preparation--dependency-name-regexp
+                        "\\)"))
+        (code-ranges
+         (mevedel-skills-preparation-markdown-code-ranges text t))
+        (position 0)
+        dependencies)
+    (while (string-match regexp text position)
+      (let* ((start (match-beginning 0))
+             (marker-end (match-end 0))
+             (name (match-string 1 text))
+             (next (and (< marker-end (length text))
+                        (aref text marker-end)))
+             (line-start (1+ (or (cl-position ?\n text
+                                             :end start :from-end t)
+                                  -1)))
+             (line-end (or (cl-position ?\n text :start marker-end)
+                           (length text)))
+             (prefix (substring text line-start start))
+             (suffix (substring text marker-end line-end))
+             argument-start
+             end)
+        (when (and (not (mevedel-skills-preparation--dependency-name-char-p
+                         next))
+                   (mevedel-skills-preparation--author-ranges-p
+                    text start marker-end)
+                   (not (mevedel-skills-preparation--dependency-escaped-p
+                         text start))
+                   (not (mevedel-skills-preparation--ranges-overlap-p
+                         code-ranges start marker-end)))
+          (when (and (string-match-p "\\`[ \t]*\\'" prefix)
+                     (string-match "\\`[ \t]+--[ \t]*" suffix)
+                     (mevedel-skills-preparation--author-ranges-p
+                      text
+                      (if (> line-start 0) (1- line-start) line-start)
+                      start
+                      marker-end
+                      (+ marker-end (match-end 0))))
+            (setq argument-start (+ marker-end (match-end 0))
+                  end line-end))
+          (setq end (or end marker-end))
+          (push (list :name name
+                      :argument-template
+                      (and argument-start (substring text argument-start end))
+                      :start start
+                      :end end)
+                dependencies))
+        (setq position (max (1+ start) marker-end))))
+    (setq dependencies (nreverse dependencies))
+    (let ((body text))
+      (dolist (dependency (reverse (copy-sequence dependencies)))
+        (let ((start (plist-get dependency :start))
+              (end (plist-get dependency :end))
+              (name (plist-get dependency :name)))
+          (setq body (concat (substring body 0 start)
+                             (format "[skill:%s -- attached]" name)
+                             (substring body end)))))
+      (list :body body :dependencies dependencies))))
 
 (defun mevedel-skills-preparation--injection-match (text)
   "Return the next body-injection match in TEXT.

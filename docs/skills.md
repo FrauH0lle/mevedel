@@ -384,6 +384,56 @@ Instruction preparation always receives empty
 arguments and ignores `context`, model, effort, agent, and declared skill
 hooks. Its allowed-tool rules exist only while preparing body injections.
 
+### Required skill attachments
+
+A `SKILL.md` author can require other skills as instruction context with a
+literal authored declaration. Inline `!$NAME` is argument-free. A full line of
+the form `!$NAME -- RAW ARGUMENTS` passes everything after `--` as the child's
+argument template. That template goes through the normal parent argument
+substitution, but the substituted text retains non-author provenance. Each
+authored declaration occurrence becomes `[skill:NAME -- attached]` in its
+parent body. `!$skill` declares an attachment; it does not execute a skill, call
+a tool, or spawn an agent.
+
+Only declarations originating literally in the source `SKILL.md` are active.
+Escaped forms, Markdown code spans and fences, and markers introduced by
+argument substitution, injections, hooks, prepared bodies, child or model
+output remain inert. This provenance rule is the narrow exception to the rule
+that skill bodies and generated text are not recursively interpreted as skill
+syntax.
+
+Qualified dependency names resolve exactly by visible name. An unqualified
+name prefers the parent skill's plugin or discovery root; otherwise it must have
+one unique global raw-name match. A dormant path-scoped child attaches for that
+invocation without becoming active. Missing, disabled, unauthorized, ambiguous,
+or cyclic dependencies reject the graph.
+
+Dependencies recurse depth first and dependency first, preserving authored
+sibling order; the root contribution comes last. Preparation, attachment, and
+invocation records use that order and deduplicate by canonical source plus exact
+arguments. Every authored declaration still leaves its placeholder in its
+immediate parent body, including a duplicate whose contribution was already
+prepared.
+
+The root invocation origin propagates unchanged through the graph. A
+user-origin root may attach a child with `disable-model-invocation: true`. A
+model-origin root requires every descendant to be model-invocable, so a parent
+cannot launder model access to a user-only child. Each child's injections run
+with only that child's preparation permissions; parent and sibling permissions
+do not flow into it.
+
+Required children are instructions only. They ignore their own command or fork
+policy, agent, model, effort, hooks, and request permissions. User instruction
+attachments flatten dependencies and parent into the existing pending
+`skill-attachment` collection. User commands and fork prompts, and model-side
+inline results, receive the complete dependency contribution. A model-side fork
+still returns the eventual fork result.
+
+Graph validation and request or child dispatch are atomic: a failed dependency
+does not send a partial model request or child. Preparation itself can have
+irreversible effects, however; completed Bash or live Elisp injections cannot
+be rolled back if a later dependency fails.
+
 Accepted Plan implementation uses this same planner. The approval's `s`
 selector stores exact canonical sources and emits argument-free instruction
 mentions in the generated implementation prompt. Live `$skill` mentions in
@@ -435,9 +485,11 @@ placeholders, and instruction reminders exist, `UserPromptSubmit` runs once on
 the complete inert prompt. Hook output is never rescanned for skill syntax; a
 hook may add a prefix or suffix but cannot rewrite away any prepared
 contribution, and it cancels planned work only by blocking the whole
-submission. Skill bodies,
-prepared output, model output, child prompts and results, and model-supplied
-arguments are likewise never interpreted as new user `$skill` mentions.
+submission. Skill bodies are not generally rescanned as user mentions; only
+literal author-origin `!$skill` declarations use the required-attachment scan
+described above. Prepared output, model output, child prompts and results, and
+model-supplied arguments never introduce new dependencies or user `$skill`
+mentions.
 
 A plan with exactly one leading inline command lets that command select the
 model and effort of the request that the composer has not yet realized. This

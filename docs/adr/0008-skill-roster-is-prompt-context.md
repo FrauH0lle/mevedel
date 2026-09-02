@@ -156,6 +156,25 @@ instruction. Only a leading fork command dispatches a child. Unknown `/foo`
 remains a strict unknown-command error
 because slash is reserved for local commands.
 
+Amendment: a skill author may declare recursive required instruction
+attachments with literal `!$skill` syntax in `SKILL.md`. This is a deliberate,
+narrow exception to the rule that skill bodies are not recursively interpreted.
+The declaration attaches the dependency as context; it does not execute the
+skill, invoke a tool, or dispatch an agent. Dependencies resolve and validate as
+one graph, prepare dependency first in authored sibling order, and preserve the
+root's user or model origin so a model-origin parent cannot reach a model-disabled
+descendant. Required children contribute instructions only and do not activate
+their command/fork behavior, agent, model, effort, hooks, or request permissions.
+
+The exception depends on literal source provenance rather than text alone.
+Escaped and Markdown-code forms, plus markers introduced by argument
+substitution, injections, hooks, prepared bodies, child prompts or results, and
+model output remain inert. Without that provenance boundary, generated or
+untrusted text could turn into executable dependency structure and bypass the
+model-invocation gate. Full-line dependency arguments may use ordinary parent
+argument substitution, but the substituted result remains non-author text for
+the same reason.
+
 Amendment: Tutor mode was removed. It required the user to summon it before
 knowing they needed teaching, then refused to answer what was asked, so the
 chat buffer answered the same questions better without it. Its pedagogical

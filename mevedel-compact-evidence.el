@@ -50,6 +50,10 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-origin
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-dependency-depth
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-required-by-source-path
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-role
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-turn
@@ -350,7 +354,7 @@ When AGENT-PATH is non-nil, include only invocations from that conversation."
                        (max 0 (or preserved-tail-turns 0)))))
         (mapcar
          (lambda (rec)
-           (format "$%s%s (role: %s, origin: %s, turn: %s)"
+           (format "$%s%s (role: %s, origin: %s, turn: %s%s)"
                    (mevedel-skill-invocation-record-name rec)
                    (let ((args (mevedel-skill-invocation-record-args rec)))
                      (if (and args (not (string-empty-p args)))
@@ -358,7 +362,16 @@ When AGENT-PATH is non-nil, include only invocations from that conversation."
                        ""))
                    (or (mevedel-skill-invocation-record-role rec) "?")
                    (or (mevedel-skill-invocation-record-origin rec) "?")
-                   (or (mevedel-skill-invocation-record-turn rec) "?")))
+                   (or (mevedel-skill-invocation-record-turn rec) "?")
+                   (if-let* ((parent
+                              (mevedel-skill-invocation-record-required-by-source-path
+                               rec)))
+                       (format ", required-by: %s, depth: %s"
+                               parent
+                               (or (mevedel-skill-invocation-record-dependency-depth
+                                    rec)
+                                   "?"))
+                     "")))
          (seq-filter
           (lambda (rec)
             (and (<= (or (mevedel-skill-invocation-record-turn rec) 0)

@@ -37,22 +37,21 @@
 (autoload 'mevedel-skills-source-key "mevedel-skills-core")
 
 ;; `mevedel-skills-input'
-(declare-function mevedel-skills-input-attachment-reminder
-                  "mevedel-skills-input" (attachment))
 (declare-function mevedel-skills-input-resolve-mention
                   "mevedel-skills-input"
                   (text session start end name))
 (declare-function mevedel-skills-input-scan-tokens
                   "mevedel-skills-input" (text resolver &optional allow-root))
-(autoload 'mevedel-skills-input-attachment-reminder "mevedel-skills-input")
 (autoload 'mevedel-skills-input-resolve-mention "mevedel-skills-input")
 (autoload 'mevedel-skills-input-scan-tokens "mevedel-skills-input")
 
 ;; `mevedel-skills-invoke'
-(declare-function mevedel-skills-prepare
-                  "mevedel-skills-invoke"
-                  (skill arguments callback &rest keys))
-(autoload 'mevedel-skills-prepare "mevedel-skills-invoke")
+(declare-function mevedel-skills-format-attachment
+                  "mevedel-skills-invoke" (attachment))
+(declare-function mevedel-skills-prepare-many
+                  "mevedel-skills-invoke" (roots callback &rest keys))
+(autoload 'mevedel-skills-format-attachment "mevedel-skills-invoke")
+(autoload 'mevedel-skills-prepare-many "mevedel-skills-invoke")
 
 ;; `mevedel-tool-render-data'
 (declare-function mevedel-tool-render-data-format
@@ -355,6 +354,7 @@ function uses recorded extents and never scans TEXT."
         invoked-skills
         hook-contexts
         hook-audits
+        (seen-attachments (make-hash-table :test #'equal))
         single-command-context)
     (dolist (pair pairs)
       (let* ((entry (plist-get pair :entry))
@@ -368,6 +368,17 @@ function uses recorded extents and never scans TEXT."
                            (list (plist-get outcome :hook-context))))
               hook-audits
               (append hook-audits (plist-get outcome :hook-audits)))
+        (dolist (attachment (plist-get outcome :required-attachments))
+          (let ((key
+                 (cons
+                  (or (mevedel-skills-source-key
+                       (plist-get attachment :source-file))
+                      (plist-get attachment :skill))
+                  (or (plist-get attachment :arguments) ""))))
+            (unless (gethash key seen-attachments)
+              (puthash key t seen-attachments)
+              (push (mevedel-skills-format-attachment attachment)
+                    instruction-reminders))))
         (if (eq (mevedel-skill-plan-entry-role entry) 'command)
             (progn
               (push (or (plist-get outcome :body) "") command-bodies)
@@ -382,11 +393,25 @@ function uses recorded extents and never scans TEXT."
                     (append hook-rules (plist-get context :hook-rules)))
               (when (= command-count 1)
                 (setq single-command-context context)))
-          (push
-           (mevedel-skills-input-attachment-reminder
-            (list :name (mevedel-skill-plan-entry-name entry)
-                  :body (or (plist-get outcome :body) "")))
-           instruction-reminders))))
+          (let* ((skill (mevedel-skill-plan-entry-skill entry))
+                 (attachment
+                  (list :name (mevedel-skill-plan-entry-name entry)
+                        :body (or (plist-get outcome :body) "")
+                        :arguments (or (plist-get outcome :arguments) "")
+                        :source-file (and skill
+                                          (mevedel-skill-source-file skill))
+                        :skill skill))
+                 (key
+                  (cons (or (and skill
+                                 (mevedel-skills-source-key
+                                  (mevedel-skill-source-file skill)))
+                            skill
+                            (mevedel-skill-plan-entry-name entry))
+                        (or (plist-get outcome :arguments) ""))))
+            (unless (gethash key seen-attachments)
+              (puthash key t seen-attachments)
+              (push (mevedel-skills-format-attachment attachment)
+                    instruction-reminders))))))
     (list :command-count command-count
           :command-bodies (nreverse command-bodies)
           :instruction-reminders (nreverse instruction-reminders)
@@ -398,7 +423,7 @@ function uses recorded extents and never scans TEXT."
           :hook-audits hook-audits
           :single-command-context single-command-context)))
 
-(defun mevedel-skills-plan--prepared-outcome (plan pairs)
+(defun mevedel-skills-plan--prepared-outcome (plan pairs &optional records)
   "Return the complete successful preparation outcome for PLAN and PAIRS."
   (let* ((aggregate (mevedel-skills-plan--aggregate-prepared pairs))
          (command-bodies (plist-get aggregate :command-bodies))
@@ -425,7 +450,8 @@ function uses recorded extents and never scans TEXT."
           (list :permission-rules (plist-get aggregate :permission-rules)
                 :ptc-primitives (plist-get aggregate :ptc-primitives)
                 :hook-rules (plist-get aggregate :hook-rules)
-                :invoked-skills (plist-get aggregate :invoked-skills))))
+                :invoked-skills (or records
+                                    (plist-get aggregate :invoked-skills)))))
     (when (= (plist-get aggregate :command-count) 1)
       (let ((command-context
              (plist-get aggregate :single-command-context)))
@@ -474,7 +500,6 @@ transaction fails or is cancelled, later callbacks have no effect."
               (mevedel-skill-invocation-plan-occurrences plan)
               (mevedel-skill-invocation-plan-arguments-start plan))
            ""))
-        prepared
         settled)
     (cl-labels
         ((cancelled ()
@@ -486,40 +511,39 @@ transaction fails or is cancelled, later callbacks have no effect."
          (cancel ()
            (finish '(:status error :reason cancelled
                      :message "Skill plan preparation was cancelled")))
-         (prepare-next ()
-           (cond
-            ((cancelled) (cancel))
-            ((null entries)
-             (finish
-              (mevedel-skills-plan--prepared-outcome
-               plan (nreverse prepared))))
-            (t
-             (let* ((entry (pop entries))
-                    (role (mevedel-skill-plan-entry-role entry))
-                    (arguments (if (eq role 'command)
-                                   command-arguments
-                                 "")))
-               (mevedel-skills-prepare
-                (mevedel-skill-plan-entry-skill entry)
-                arguments
-                (lambda (outcome)
-                  (unless settled
-                    (cond
-                     ((cancelled) (cancel))
-                     ((not (eq (plist-get outcome :status) 'ok))
-                      (finish
-                       (append outcome
-                               (list :entry entry
-                                     :name
-                                     (mevedel-skill-plan-entry-name entry)))))
-                     (t
-                      (push (list :entry entry :outcome outcome) prepared)
-                      (prepare-next)))))
-                :role role
-                :origin 'user
-                :policy-owner-p (and (eq role 'command)
-                                     (= command-count 1))))))))
-      (prepare-next))))
+         (prepared (aggregate)
+           (unless settled
+             (cond
+              ((cancelled) (cancel))
+              ((not (eq (plist-get aggregate :status) 'ok))
+               (finish aggregate))
+              (t
+               (let ((outcome
+                      (mevedel-skills-plan--prepared-outcome
+                       plan
+                       (cl-mapcar (lambda (entry outcome)
+                                    (list :entry entry :outcome outcome))
+                                  entries (plist-get aggregate :outcomes))
+                       (plist-get aggregate :invoked-skills))))
+                 (setf (plist-get outcome :hook-context)
+                       (plist-get aggregate :hook-context)
+                       (plist-get outcome :hook-audits)
+                       (plist-get aggregate :hook-audits))
+                 (finish outcome)))))))
+      (if (cancelled)
+          (cancel)
+        (mevedel-skills-prepare-many
+         (mapcar
+          (lambda (entry)
+            (let ((role (mevedel-skill-plan-entry-role entry)))
+              (list :skill (mevedel-skill-plan-entry-skill entry)
+                    :arguments (if (eq role 'command) command-arguments "")
+                    :role role
+                    :policy-owner-p (and (eq role 'command)
+                                         (= command-count 1)))))
+          entries)
+         #'prepared
+         :origin 'user :cancelled-p cancelled-p)))))
 
 (defun mevedel-skills-plan-render-data (plan expanded-prompt)
   "Return hidden render data for PLAN and exact EXPANDED-PROMPT."

@@ -270,6 +270,76 @@ ARGUMENTS: hello"
                     "id=${CLAUDE_SESSION_ID} effort=${MEVEDEL_EFFORT}"
                     "hello" session skill)))))
 
+(mevedel-deftest mevedel-skills-preparation-parse-dependencies ()
+  ,test
+  (test)
+
+  :doc "parses inline, full-line, multiple, and qualified declarations"
+  (let* ((parsed
+          (mevedel-skills-preparation-parse-dependencies
+           "Use !$child and !$plugin:review.\n!$templated -- raw args\nDone"))
+         (dependencies (plist-get parsed :dependencies)))
+    (should (equal '("child" "plugin:review" "templated")
+                   (mapcar (lambda (dependency)
+                             (plist-get dependency :name))
+                           dependencies)))
+    (should (equal '(nil nil "raw args")
+                   (mapcar (lambda (dependency)
+                             (plist-get dependency :argument-template))
+                           dependencies)))
+    (should
+     (equal
+      (concat "Use [skill:child -- attached] and "
+              "[skill:plugin:review -- attached].\n"
+              "[skill:templated -- attached]\nDone")
+      (plist-get parsed :body))))
+
+  :doc "keeps escaped and Markdown or injection code examples inert"
+  (let* ((text
+          (concat "\\!$escaped `!$inline`\n"
+                  "```md\n!$fenced\n```\n"
+                  "!`echo !$shell`\n"
+                  "```!\necho !$fenced-shell\n```\n"
+                  "!$live"))
+         (parsed (mevedel-skills-preparation-parse-dependencies text)))
+    (should (equal '("live")
+                   (mapcar (lambda (dependency)
+                             (plist-get dependency :name))
+                           (plist-get parsed :dependencies))))
+    (should (equal (concat (substring text 0 (- (length text) 6))
+                           "[skill:live -- attached]")
+                   (plist-get parsed :body))))
+
+  :doc "substitution-generated declarations remain inert argument data"
+  (let* ((skill (mevedel-skill--create :name "parent"))
+         (body (mevedel-skills-preparation-substitute
+                "generated=$ARGUMENTS\n!$child -- $ARGUMENTS"
+                "!$generated -- unsafe" nil skill))
+         (parsed (mevedel-skills-preparation-parse-dependencies body))
+         (dependency (car (plist-get parsed :dependencies)))
+         (template (plist-get dependency :argument-template)))
+    (should (equal "child" (plist-get dependency :name)))
+    (should (equal "!$generated -- unsafe" template))
+    (should (mevedel-skills-preparation--non-author-range-p
+             template 0 (length template)))
+    (should
+     (equal
+      (concat "generated=!$generated -- unsafe\n"
+              "[skill:child -- attached]")
+      (substring-no-properties (plist-get parsed :body)))))
+
+  :doc "generated line boundaries cannot activate full-line arguments"
+  (let* ((skill (mevedel-skill--create :name "parent"))
+         (body (mevedel-skills-preparation-substitute
+                "prefix$ARGUMENTS!$child -- authored" "\n" nil skill))
+         (parsed (mevedel-skills-preparation-parse-dependencies body))
+         (dependency (car (plist-get parsed :dependencies))))
+    (should (equal "child" (plist-get dependency :name)))
+    (should-not (plist-get dependency :argument-template))
+    (should
+     (equal "prefix\n[skill:child -- attached] -- authored"
+            (substring-no-properties (plist-get parsed :body))))))
+
 (defmacro mevedel-skills-test--with-bash-allowed (&rest body)
   "Run BODY with the Bash permission check forced to allow.
 Tests need a deterministic permit so they can assert on the

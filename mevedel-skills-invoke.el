@@ -88,14 +88,23 @@
 (declare-function mevedel-model-skill-policy-fields
                   "mevedel-models" (skill-name model effort))
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-format-block
+                  "mevedel-reminders" (content))
+(autoload 'mevedel-reminders-format-block "mevedel-reminders")
+
 ;; `mevedel-skills-preparation'
 (declare-function mevedel-skills-preparation-expand-body
                   "mevedel-skills-preparation"
                   (text callback &optional skill session))
+(declare-function mevedel-skills-preparation-parse-dependencies
+                  "mevedel-skills-preparation" (text))
 (declare-function mevedel-skills-preparation-substitute
                   "mevedel-skills-preparation"
                   (text arguments session skill))
 (autoload 'mevedel-skills-preparation-expand-body
+  "mevedel-skills-preparation")
+(autoload 'mevedel-skills-preparation-parse-dependencies
   "mevedel-skills-preparation")
 (autoload 'mevedel-skills-preparation-substitute
   "mevedel-skills-preparation")
@@ -337,6 +346,24 @@ DISPLAY-CALLBACK receives the lifecycle event when non-nil."
      `(:event done :skill ,skill-name))
     (funcall callback outcome)))
 
+(defun mevedel-skills-format-attachment (attachment)
+  "Return the model instruction body for prepared skill ATTACHMENT."
+  (format "The host already attached the skill `$%s` for this request. You must follow it without calling `Skill`.\n\n%s"
+          (plist-get attachment :name)
+          (or (plist-get attachment :body) "")))
+
+(defun mevedel-skills-format-model-input (prepared)
+  "Return PREPARED's complete dependency attachments and root body."
+  (mapconcat
+   #'identity
+   (append
+    (mapcar (lambda (attachment)
+              (mevedel-reminders-format-block
+               (mevedel-skills-format-attachment attachment)))
+            (plist-get prepared :required-attachments))
+    (list (or (plist-get prepared :body) "")))
+   "\n\n"))
+
 (defun mevedel-skills--prompt-rewrite-audit-record (original decision)
   "Return a `UserPromptExpansion' rewrite audit record, or nil."
   (when-let* ((updated (plist-get decision :updated-input))
@@ -429,12 +456,16 @@ compaction/replay."
                ptc-primitives)))
       ;; Record on the session.
       (when invoked-skill
+        (when req
+          (setf (mevedel-request-attached-skill-records req)
+                (append (mevedel-request-attached-skill-records req)
+                        (list invoked-skill))))
         (when-let* ((session (and (boundp 'mevedel--session) mevedel--session)))
           (mevedel-skills-commit-invoked-records
            session (list invoked-skill))))))))
 
 (cl-defun mevedel-skills--invoke-inline
-    (skill arguments callback &key origin display-callback)
+    (skill arguments callback &key origin display-callback skip-gates)
   "Prepare and commit inline SKILL with ARGUMENTS from ORIGIN.
 CALLBACK receives the normalized outcome.  DISPLAY-CALLBACK receives
 lifecycle events from the canonical preparation pipeline."
@@ -452,13 +483,16 @@ lifecycle events from the canonical preparation pipeline."
           :ptc-primitives
           (if (eq origin 'model)
               :unrestricted
-            (plist-get context :ptc-primitives))
-          :invoked-skill (car (plist-get context :invoked-skills)))))
+            (plist-get context :ptc-primitives)))
+         (dolist (record (plist-get context :invoked-skills))
+           (mevedel-skills-activate-context
+            origin :invoked-skill record))))
      (funcall callback outcome))
    :role 'command
    :origin origin
    :policy-owner-p (not (eq origin 'model))
-   :display-callback display-callback))
+   :display-callback display-callback
+   :skip-gates skip-gates))
 
 (defun mevedel-skills--preparation-rejection (skill role origin)
   "Return a structured preflight rejection for SKILL, ROLE, and ORIGIN."
@@ -516,6 +550,213 @@ inline command that does not own policy records only the ignored field names."
                 (mevedel-skill-model skill)
                 (mevedel-skill-effort skill))))))
 
+(defun mevedel-skills--dependency-skill (session source-key)
+  "Return SESSION's skill bound to exact SOURCE-KEY."
+  (cl-find source-key (and session (mevedel-session-skills session))
+           :key (lambda (skill)
+                  (mevedel-skills-source-key
+                   (mevedel-skill-source-file skill)))
+           :test #'equal))
+
+(defun mevedel-skills--graph-error (reason message)
+  "Return a structured graph preflight error with REASON and MESSAGE."
+  (list :status 'error :reason reason :message message))
+
+(cl-defun mevedel-skills--preparation-plan
+    (roots origin &key skip-gates)
+  "Return a fully validated dependency preparation plan for ROOTS.
+ROOTS is a list of plists containing :skill, :arguments, :role, and
+:policy-owner-p.  No body injection or hook runs during this function."
+  (let* ((roots (mapcar (lambda (root)
+                          (append root (list :node nil :policy nil)))
+                        roots))
+         (session (and (boundp 'mevedel--session) mevedel--session))
+         (nodes (make-hash-table :test #'equal))
+         (arguments-by-source (make-hash-table :test #'equal))
+         (states (make-hash-table :test #'equal))
+         order
+         root-nodes)
+    (when session
+      (mevedel-skills-ensure-fresh
+       (or (and (buffer-live-p (mevedel-session-root-buffer session))
+                (mevedel-session-root-buffer session))
+           (current-buffer))
+       session))
+    (catch 'invalid
+      (cl-labels
+          ((reject (reason format-string &rest args)
+             (throw 'invalid
+                    (mevedel-skills--graph-error
+                     reason (apply #'format format-string args))))
+           (bind-root (skill)
+             (if-let* ((source (mevedel-skill-source-file skill)))
+                 (or (mevedel-skills--dependency-skill
+                      session (mevedel-skills-source-key source))
+                     (and (null (and session
+                                     (mevedel-session-skills session)))
+                          skill)
+                     (reject 'dependency-source
+                             "Skill '%s' is no longer bound to %s"
+                             (mevedel-skill-name skill) source))
+               skill))
+           (validate (skill root-p)
+             (unless (mevedel-skill-p skill)
+               (reject 'unknown-skill "Invalid skill struct"))
+             (when-let* ((diagnostics
+                          (mevedel-skill-dependency-diagnostics skill)))
+               (reject 'dependency-invalid "%s"
+                       (mapconcat #'identity diagnostics "; ")))
+             (unless (or skip-gates
+                         (mevedel-skills-skill-enabled-p skill))
+               (reject 'disabled "Skill '%s' is disabled"
+                       (mevedel-skill-name skill)))
+             (unless skip-gates
+               (cond
+                ((and (eq origin 'user)
+                      (not (mevedel-skill-user-invocable-p skill)))
+                 (reject 'disabled "Skill '%s' is not user-invocable"
+                         (mevedel-skill-name skill)))
+                ((and (eq origin 'model)
+                      (not (mevedel-skill-model-invocable-p skill)))
+                 (reject 'disabled "Skill '%s' is not model-invocable"
+                         (mevedel-skill-name skill)))))
+             (when (and root-p
+                        (not (memq origin '(user model internal))))
+               (reject 'invalid-origin "Invalid skill invocation origin: %S"
+                       origin)))
+           (visit (skill arguments path required-by-source-path depth)
+             (validate skill nil)
+             (let* ((arguments (or arguments ""))
+                    (source-key
+                     (or (mevedel-skills-source-key
+                          (mevedel-skill-source-file skill))
+                         skill))
+                    (prior-arguments
+                     (gethash source-key arguments-by-source 'missing))
+                    (key (cons source-key arguments)))
+               (when (and (not (eq prior-arguments 'missing))
+                          (not (equal prior-arguments arguments)))
+                 (reject 'dependency-conflict
+                         "Skill '%s' is required with conflicting arguments"
+                         (mevedel-skill-name skill)))
+               (puthash source-key arguments arguments-by-source)
+               (pcase (gethash key states)
+                 ('visiting
+                  (reject 'dependency-cycle
+                          "Required skill dependency cycle: %s"
+                          (mapconcat #'identity
+                                     (append path
+                                             (list (mevedel-skill-name skill)))
+                                     " -> ")))
+                 ('done (gethash key nodes))
+                 (_
+                  (puthash key 'visiting states)
+                  (when-let* ((file (mevedel-skill-source-file skill))
+                              ((not (file-readable-p file))))
+                    (reject 'dependency-source
+                            "Skill '%s' source is not readable: %s"
+                            (mevedel-skill-name skill) file))
+                  (let* ((body
+                          (progn
+                            (when (mevedel-skill-source-file skill)
+                              (setf (mevedel-skill-body skill) nil))
+                            (mevedel-skill-load-body skill)))
+                         (substituted
+                          (and body
+                               (condition-case err
+                                   (mevedel-skills-preparation-substitute
+                                    (copy-sequence body) arguments session skill)
+                                 (error
+                                  (reject 'resource-target "%s"
+                                          (error-message-string err))))))
+                         (parsed
+                          (and substituted
+                               (mevedel-skills-preparation-parse-dependencies
+                                substituted)))
+                         (runtime-dependencies
+                          (plist-get parsed :dependencies))
+                         (bindings (mevedel-skill-dependencies skill))
+                         (node (list :skill skill :arguments arguments
+                                     :body (plist-get parsed :body)
+                                     :required-by-source-path
+                                     required-by-source-path
+                                     :dependency-depth depth
+                                     :dependencies nil :root nil :outcome nil))
+                         children)
+                    (unless body
+                      (reject 'load-failure
+                              "Skill %s could not be loaded: %s"
+                              (mevedel-skill-name skill)
+                              (or (mevedel-skill-source-file skill)
+                                  "unknown source")))
+                    (unless (= (length runtime-dependencies)
+                               (length bindings))
+                      (reject 'dependency-source
+                              "Skill '%s' dependency bindings are stale"
+                              (mevedel-skill-name skill)))
+                    (puthash key node nodes)
+                    (cl-mapc
+                     (lambda (dependency binding)
+                       (unless (equal (plist-get dependency :name)
+                                      (mevedel-skill-dependency-name binding))
+                         (reject 'dependency-source
+                                 "Skill '%s' dependency bindings are stale"
+                                 (mevedel-skill-name skill)))
+                       (let* ((child-source
+                               (mevedel-skill-dependency-source-key binding))
+                              (child
+                               (mevedel-skills--dependency-skill
+                                session child-source)))
+                         (unless child
+                           (reject 'dependency-source
+                                   "Required skill '%s' is no longer bound"
+                                   (mevedel-skill-dependency-name binding)))
+                         (push
+                          (visit child
+                                 (or (plist-get dependency
+                                                :argument-template)
+                                     "")
+                                 (append path
+                                         (list (mevedel-skill-name skill)))
+                                 (mevedel-skill-source-file skill)
+                                 (1+ depth))
+                          children)))
+                     runtime-dependencies bindings)
+                    (setf (plist-get node :dependencies) (nreverse children))
+                    (puthash key 'done states)
+                    (push node order)
+                    node))))))
+        (dolist (root roots)
+          (let* ((skill (bind-root (plist-get root :skill)))
+                 (role (plist-get root :role))
+                 (rejection
+                  (mevedel-skills--preparation-rejection skill role origin)))
+            (when rejection
+              (reject (plist-get rejection :reason) "%s"
+                      (plist-get rejection :message)))
+            (validate skill t)
+            (let ((policy
+                   (mevedel-skills--preparation-policy
+                    skill origin
+                    (and (eq role 'command)
+                         (plist-get root :policy-owner-p)))))
+              (unless (eq (plist-get policy :status) 'ok)
+                (throw 'invalid policy))
+              (let ((node (visit skill
+                                 (if (eq role 'instruction)
+                                     ""
+                                   (or (plist-get root :arguments) ""))
+                                 nil nil 0)))
+                (setf (plist-get root :skill) skill
+                      (plist-get root :node) node
+                      (plist-get root :policy) policy)
+                (when (or (eq role 'command)
+                          (null (plist-get node :root)))
+                  (setf (plist-get node :root) root))
+                (push node root-nodes)))))
+        (list :status 'ok :roots roots :root-nodes (nreverse root-nodes)
+              :nodes (nreverse order))))))
+
 (defun mevedel-skills--preparation-settler
     (session rules hooks callback)
   "Install a temporary preparation request and return its settlement closure.
@@ -525,6 +766,11 @@ its outcome exactly once."
         (origin (mevedel-current-origin))
         (previous-request (and (boundp 'mevedel--current-request)
                                mevedel--current-request))
+        (invocation-local-p
+         (local-variable-p 'mevedel--agent-invocation))
+        (previous-invocation
+         (and (boundp 'mevedel--agent-invocation)
+              mevedel--agent-invocation))
         settled)
     (setq-local mevedel--current-request
                 (mevedel-request--create
@@ -533,12 +779,16 @@ its outcome exactly once."
                  :file-snapshots (make-hash-table :test #'equal)
                  :skill-permission-rules rules
                  :hook-rules hooks))
+    (setq-local mevedel--agent-invocation nil)
     (lambda (outcome)
       (unless settled
         (setq settled t)
         (when (buffer-live-p origin-buffer)
           (with-current-buffer origin-buffer
-            (setq-local mevedel--current-request previous-request)))
+            (setq-local mevedel--current-request previous-request)
+            (if invocation-local-p
+                (setq-local mevedel--agent-invocation previous-invocation)
+              (kill-local-variable 'mevedel--agent-invocation))))
         (funcall callback outcome)))))
 
 (defun mevedel-skills--preparation-success-outcome
@@ -565,6 +815,9 @@ sanitized `UserPromptExpansion' hook decision."
                   "/root"))
            :turn (and session (mevedel-session-turn-count session))
            :source-path (mevedel-skill-source-file skill)
+           :required-by-source-path
+           (plist-get metadata :required-by-source-path)
+           :dependency-depth (plist-get metadata :dependency-depth)
            :prepared-body expanded))
          (context
           (if command-p
@@ -590,101 +843,227 @@ sanitized `UserPromptExpansion' hook decision."
           :ignored-policy-fields (plist-get metadata :ignored-policy-fields)
           :request-context context)))
 
+(defun mevedel-skills--prepare-single
+    (node origin callback)
+  "Prepare preflighted NODE from ORIGIN, then call CALLBACK."
+  (let* ((root (plist-get node :root))
+         (skill (plist-get node :skill))
+         (skill-name (mevedel-skill-name skill))
+         (arguments (plist-get node :arguments))
+         (body (plist-get node :body))
+         (role (or (plist-get root :role) 'instruction))
+         (policy (or (plist-get root :policy) '(:status ok)))
+         (display-callback (plist-get root :display-callback))
+         (session (and (boundp 'mevedel--session) mevedel--session))
+         (command-p (eq role 'command))
+         (rules (mevedel-skill-allowed-tool-rules skill))
+         (hooks (and command-p (mevedel-skill-hooks skill)))
+         (metadata
+          (list :skill skill :arguments arguments :role role
+                :origin origin :session session :rules rules
+                :hooks hooks
+                :required-by-source-path
+                (plist-get node :required-by-source-path)
+                :dependency-depth (plist-get node :dependency-depth)
+                :model (plist-get policy :model)
+                :effort (plist-get policy :effort)
+                :ignored-policy-fields (plist-get policy :ignored-fields)))
+         (finish (mevedel-skills--preparation-settler
+                  session rules hooks callback)))
+    (cl-labels
+        ((fail (reason message)
+           (mevedel-skills--display-event
+            display-callback
+            `(:event error :skill ,skill-name :reason ,reason :message ,message))
+           (funcall finish
+                    (list :status 'error :reason reason :message message)))
+         (complete (original expanded decision)
+           (setq decision
+                 (mevedel-hooks-sanitize-final-decision
+                  'UserPromptExpansion decision))
+           (if (and (plist-member decision :continue)
+                    (not (plist-get decision :continue)))
+               (fail 'hook-blocked
+                     (or (plist-get decision :stop-reason)
+                         "UserPromptExpansion hook stopped skill"))
+             (mevedel-skills--display-event
+              display-callback `(:event done :skill ,skill-name))
+             (funcall finish
+                      (mevedel-skills--preparation-success-outcome
+                       metadata original expanded decision)))))
+      (mevedel-skills-preparation-expand-body
+       body
+       (lambda (injection-outcome)
+         (if (eq (plist-get injection-outcome :status) 'ok)
+             (mevedel-skills--run-expansion-hook
+              skill arguments (plist-get injection-outcome :body)
+              origin session
+              (lambda (expanded decision)
+                (complete (plist-get injection-outcome :body)
+                          expanded decision)))
+           (fail (plist-get injection-outcome :reason)
+                 (plist-get injection-outcome :message))))
+       skill session))))
+
+(defun mevedel-skills--node-reachable-p (candidate root)
+  "Return non-nil when CANDIDATE is ROOT or one of its dependencies."
+  (or (eq candidate root)
+      (cl-some (lambda (child)
+                 (mevedel-skills--node-reachable-p candidate child))
+               (plist-get root :dependencies))))
+
+(defun mevedel-skills--prepared-attachment (outcome)
+  "Return the instruction attachment represented by prepared OUTCOME."
+  (let ((skill (plist-get outcome :skill)))
+    (list :name (mevedel-skill-name skill)
+          :body (plist-get outcome :body)
+          :arguments (plist-get outcome :arguments)
+          :source-file (mevedel-skill-source-file skill)
+          :skill skill)))
+
+(cl-defun mevedel-skills-prepare-many
+    (roots callback &key origin skip-gates cancelled-p)
+  "Preflight and sequentially prepare ROOTS as one dependency graph.
+Each ROOT is a plist with :skill, :arguments, :role, :policy-owner-p, and an
+optional :display-callback.  CALLBACK receives one atomic aggregate outcome."
+  (let ((plan (mevedel-skills--preparation-plan
+               roots origin :skip-gates skip-gates)))
+    (if (not (eq (plist-get plan :status) 'ok))
+        (progn
+          (when-let* ((root (car roots)))
+            (mevedel-skills--display-event
+             (plist-get root :display-callback)
+             `(:event error
+                      :skill ,(and (mevedel-skill-p (plist-get root :skill))
+                                   (mevedel-skill-name
+                                    (plist-get root :skill)))
+                      :reason ,(plist-get plan :reason)
+                      :message ,(plist-get plan :message))))
+          (funcall callback plan))
+      (let ((remaining (copy-sequence (plist-get plan :nodes)))
+            prepared
+            settled)
+        (cl-labels
+            ((finish (outcome)
+               (unless settled
+                 (setq settled t)
+                 (funcall callback outcome)))
+             (next ()
+               (if (and cancelled-p (funcall cancelled-p))
+                   (finish '(:status error :reason cancelled
+                                      :message "Skill preparation was cancelled"))
+                 (if-let* ((node (pop remaining)))
+                   (mevedel-skills--prepare-single
+                    node origin
+                    (lambda (outcome)
+                      (if (and cancelled-p (funcall cancelled-p))
+                          (finish '(:status error :reason cancelled
+                                             :message "Skill preparation was cancelled"))
+                        (if (not (eq (plist-get outcome :status) 'ok))
+                          (finish
+                           (plist-put
+                            (copy-sequence outcome) :name
+                            (mevedel-skill-name (plist-get node :skill))))
+                          (setf (plist-get node :outcome) outcome)
+                          (push outcome prepared)
+                          (next)))))
+                   (let* ((prepared (nreverse prepared))
+                        (records
+                         (mapcar
+                          (lambda (outcome)
+                            (car (plist-get
+                                  (plist-get outcome :request-context)
+                                  :invoked-skills)))
+                          prepared))
+                        (hook-contexts
+                         (delq nil
+                               (mapcar (lambda (outcome)
+                                         (plist-get outcome :hook-context))
+                                       prepared)))
+                        (hook-audits
+                         (mapcan (lambda (outcome)
+                                   (copy-sequence
+                                    (plist-get outcome :hook-audits)))
+                                 prepared))
+                        outcomes)
+                   (dolist (root (plist-get plan :roots))
+                     (let* ((root-node (plist-get root :node))
+                            (outcome (copy-tree (plist-get root-node :outcome)))
+                            (closure
+                             (cl-remove-if-not
+                              (lambda (node)
+                                (mevedel-skills--node-reachable-p
+                                 node root-node))
+                              (plist-get plan :nodes)))
+                            (root-records
+                             (mapcar
+                              (lambda (node)
+                                (car
+                                 (plist-get
+                                  (plist-get
+                                   (plist-get node :outcome) :request-context)
+                                  :invoked-skills)))
+                              closure))
+                            (attachments
+                             (mapcar
+                              (lambda (node)
+                                (mevedel-skills--prepared-attachment
+                                 (plist-get node :outcome)))
+                              (cl-remove root-node closure :test #'eq)))
+                            (contexts
+                             (delq nil
+                                   (mapcar
+                                    (lambda (node)
+                                      (plist-get (plist-get node :outcome)
+                                                 :hook-context))
+                                    (cl-remove root-node closure :test #'eq))))
+                            (audits
+                             (mapcan
+                              (lambda (node)
+                                (copy-sequence
+                                 (plist-get (plist-get node :outcome)
+                                            :hook-audits)))
+                              closure))
+                            (context (plist-get outcome :request-context))
+                            (root-hook-context
+                             (plist-get outcome :hook-context)))
+                       (setf (plist-get context :invoked-skills) root-records
+                             (plist-get outcome :required-attachments)
+                             attachments
+                             (plist-get outcome :hook-context)
+                             (when-let* ((all-contexts
+                                          (append contexts
+                                                  (and root-hook-context
+                                                       (list root-hook-context)))))
+                               (mapconcat #'identity all-contexts "\n\n"))
+                             (plist-get outcome :hook-audits)
+                             (or audits (plist-get outcome :hook-audits)))
+                       (push outcome outcomes)))
+                   (finish (list :status 'ok
+                                 :outcomes (nreverse outcomes)
+                                 :invoked-skills records
+                                 :hook-context
+                                 (and hook-contexts
+                                      (mapconcat #'identity hook-contexts "\n\n"))
+                                 :hook-audits hook-audits)))))))
+          (next))))))
+
 (cl-defun mevedel-skills-prepare
     (skill arguments callback
-           &key role origin policy-owner-p display-callback)
-  "Prepare SKILL for ROLE and ORIGIN without dispatching or committing policy.
-ROLE is `command' or `instruction'.  ORIGIN is `user', `model', or
-`internal'.  CALLBACK receives the normal outcome plist.  Instruction
-preparation forces empty arguments and ignores command-only policy metadata.
-Allowed-tool rules apply only to the temporary preparation request."
-  (if-let* ((rejection (mevedel-skills--preparation-rejection
-                        skill role origin)))
-      (mevedel-skills--invoke-error
-       skill (plist-get rejection :reason) (plist-get rejection :message)
-       callback display-callback)
-    (let* ((skill-name (mevedel-skill-name skill))
-           (arguments (if (eq role 'instruction) "" (or arguments "")))
-           (session (and (boundp 'mevedel--session) mevedel--session))
-           (policy (mevedel-skills--preparation-policy
-                    skill origin (and (eq role 'command) policy-owner-p)))
-           (body (and (eq (plist-get policy :status) 'ok)
-                      (mevedel-skill-load-body skill))))
-      (cond
-       ((not (eq (plist-get policy :status) 'ok))
-        (mevedel-skills--invoke-error
-         skill (plist-get policy :reason) (plist-get policy :message)
-         callback display-callback))
-       ((null body)
-        (mevedel-skills--invoke-error
-         skill 'load-failure
-         (format "Skill %s could not be loaded: %s"
-                 skill-name
-                 (or (mevedel-skill-source-file skill) "unknown source"))
-         callback display-callback))
-       (t
-        (let* ((substitution-error nil)
-               (substituted
-                (condition-case err
-                    (mevedel-skills-preparation-substitute
-                     body arguments session skill)
-                  (mevedel-execution-target-error
-                   (setq substitution-error (error-message-string err))
-                   nil)))
-               (command-p (eq role 'command))
-               (rules (mevedel-skill-allowed-tool-rules skill))
-               (hooks (and command-p (mevedel-skill-hooks skill)))
-               (metadata
-                (list :skill skill :arguments arguments :role role
-                      :origin origin :session session :rules rules
-                      :hooks hooks
-                      :model (plist-get policy :model)
-                      :effort (plist-get policy :effort)
-                      :ignored-policy-fields
-                      (plist-get policy :ignored-fields)))
-               (finish (mevedel-skills--preparation-settler
-                        session rules hooks callback)))
-          (if substitution-error
-              (mevedel-skills--invoke-error
-               skill 'resource-target substitution-error
-               finish display-callback)
-            (cl-labels
-              ((fail (reason message)
-                 (mevedel-skills--display-event
-                  display-callback
-                  `(:event error :skill ,skill-name
-                           :reason ,reason :message ,message))
-                 (funcall finish
-                          (list :status 'error :reason reason
-                                :message message)))
-               (complete (original expanded decision)
-                 (setq decision
-                       (mevedel-hooks-sanitize-final-decision
-                        'UserPromptExpansion decision))
-                 (if (and (plist-member decision :continue)
-                          (not (plist-get decision :continue)))
-                     (fail 'hook-blocked
-                           (or (plist-get decision :stop-reason)
-                               "UserPromptExpansion hook stopped skill"))
-                   (mevedel-skills--display-event
-                    display-callback `(:event done :skill ,skill-name))
-                   (funcall
-                    finish
-                    (mevedel-skills--preparation-success-outcome
-                     metadata original expanded decision)))))
-            (mevedel-skills-preparation-expand-body
-             substituted
-             (lambda (injection-outcome)
-               (if (eq (plist-get injection-outcome :status) 'ok)
-                   (mevedel-skills--run-expansion-hook
-                    skill arguments (plist-get injection-outcome :body)
-                    origin session
-                    (lambda (expanded decision)
-                      (complete (plist-get injection-outcome :body)
-                                expanded decision)))
-                 (fail (plist-get injection-outcome :reason)
-                       (plist-get injection-outcome :message))))
-             skill session)))))))))
+           &key role origin policy-owner-p display-callback skip-gates)
+  "Prepare SKILL and its dependencies without dispatching policy.
+ROLE is `command' or `instruction'.  Required children prepare first and
+contribute only instruction context."
+  (mevedel-skills-prepare-many
+   (list (list :skill skill :arguments arguments :role role
+               :policy-owner-p policy-owner-p
+               :display-callback display-callback))
+   (lambda (outcome)
+     (funcall callback
+              (if (eq (plist-get outcome :status) 'ok)
+                  (car (plist-get outcome :outcomes))
+                outcome)))
+   :origin origin :skip-gates skip-gates))
 
 (defun mevedel-skills--build-parent-inherited-agent (skill)
   "Build a synthetic `mevedel-agent' for SKILL with no `agent' field.
@@ -865,7 +1244,7 @@ DISPLAY-CALLBACK retain the normal fork dispatch meanings."
 
 (cl-defun mevedel-skills--invoke-fork-direct
     (skill arguments callback &key origin display-callback
-           additional-context description on-invocation)
+           additional-context description on-invocation skip-gates)
   "Prepare and asynchronously dispatch fork SKILL with ARGUMENTS.
 
 ORIGIN identifies the invocation source.  ADDITIONAL-CONTEXT is appended to
@@ -876,7 +1255,7 @@ CALLBACK retain the public invocation lifecycle semantics."
    (lambda (prepared)
      (if (not (eq (plist-get prepared :status) 'ok))
          (funcall callback prepared)
-       (let ((prompt (plist-get prepared :body)))
+       (let ((prompt (mevedel-skills-format-model-input prepared)))
          (when (and (stringp additional-context)
                     (not (string-empty-p additional-context)))
            (setq prompt (concat prompt "\n\n" additional-context)))
@@ -889,7 +1268,8 @@ CALLBACK retain the public invocation lifecycle semantics."
    :role 'command
    :origin origin
    :policy-owner-p t
-   :display-callback display-callback))
+   :display-callback display-callback
+   :skip-gates skip-gates))
 
 (cl-defun mevedel-skills-invoke
     (skill arguments callback &key origin display-callback
@@ -969,7 +1349,7 @@ asynchronous agent and calls CALLBACK when that turn settles."
        (list :status 'ok
              :kind 'already-attached
              :body (format
-                    "Skill '$%s' is already attached by the user for this request."
+                    "Skill '$%s' is already attached for this request."
                     skill-name))
        callback display-callback))
      ;; User-disabled skill gating.
@@ -1003,14 +1383,16 @@ asynchronous agent and calls CALLBACK when that turn settles."
         ('inline
          (mevedel-skills--invoke-inline
           skill arguments callback
-          :origin origin :display-callback display-callback))
+          :origin origin :display-callback display-callback
+          :skip-gates skip-gates))
         ('fork
          (mevedel-skills--invoke-fork-direct
           skill arguments callback
           :origin origin :display-callback display-callback
           :additional-context additional-context
           :description description
-          :on-invocation on-invocation))
+          :on-invocation on-invocation
+          :skip-gates skip-gates))
         (other
          (mevedel-skills--invoke-error
           skill 'unknown-skill
@@ -1095,7 +1477,8 @@ returns the body; error returns a `Error: ' prefixed message."
          (pcase (plist-get outcome :status)
            ('ok
             (funcall return
-                     (or (plist-get outcome :body)
+                     (or (and (plist-get outcome :body)
+                              (mevedel-skills-format-model-input outcome))
                          (plist-get outcome :result)
                          (format "Skill '%s' produced no body." name))
                      (plist-get outcome :ignored-policy-fields)))
@@ -1113,6 +1496,7 @@ returns the body; error returns a `Error: ' prefixed message."
   "Return non-nil when SKILL may be shown to the model.
 When ACTIVE-ONLY is non-nil, dormant path-scoped skills are excluded."
   (and (mevedel-skill-model-invocable-p skill)
+       (mevedel-skill-effective-model-invocable-p skill)
        (mevedel-skills-skill-enabled-p skill)
        (or (not active-only)
            (mevedel-skill-active-p skill))))
