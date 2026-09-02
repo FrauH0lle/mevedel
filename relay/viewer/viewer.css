@@ -817,44 +817,6 @@ code, pre {
   .composer-name { max-width: 100%; }
 }
 
-/* ── Reading mode ───────────────────────────────────────────────────── */
-/* A guest who has scrolled back from the live edge is reading, and on a
-   phone the whole dock -- agent strips, task list, sharing notice, the
-   composer's second row -- costs half the viewport.  Everything that
-   reports state rather than accepting input folds away, leaving a
-   one-line composer with Interrupt; tapping the field or returning to
-   live brings it all back.  Pending interactions and the notice never
-   fold: they are what the dock is waiting on the guest for. */
-@media (max-width: 520px), (max-height: 480px) {
-  body[data-reading] .dock:not(:focus-within) {
-    padding-top: .9rem;
-  }
-  body[data-reading] .dock:not(:focus-within) :is(#session-box, #artifacts,
-    #own-queue, .disclosure, .skill-chips, .composer-scope, .attachments,
-    .queue-state, .composer-name, #attach-button, #send-button,
-    .composer-spacer) {
-    display: none;
-  }
-  body[data-reading] .dock:not(:focus-within) .composer {
-    flex-direction: row;
-    align-items: center;
-    padding: .35rem .5rem;
-  }
-  body[data-reading] .dock:not(:focus-within) .composer textarea {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    height: 1.8rem;
-    resize: none;
-    white-space: nowrap;
-    overflow: hidden;
-  }
-  body[data-reading] .dock:not(:focus-within) .composer-row {
-    flex: 0 0 auto;
-    flex-wrap: nowrap;
-  }
-}
-
 .question {
   border-top: 1px solid var(--line);
   padding: .45rem .9rem .2rem;

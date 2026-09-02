@@ -30,16 +30,22 @@ above the session with the same weight."
   "Room whose bearer links this share buffer presents.")
 
 (defvar-local mevedel-collaboration--share-which 'view
-  "Which link's QR the share buffer shows: `view' or `full'.")
+  "Which link's QR the share buffer shows: `view', `full', or `owner'.")
+
+(defconst mevedel-collaboration--share-tiers
+  '((view  . :link-view)
+    (full  . :link-full)
+    (owner . :link-owner))
+  "Bearer tiers in ascending authority, mapped to their room link slot.")
 
 (defun mevedel-collaboration--share-content (room which)
   "Return the share buffer text for ROOM showing WHICH link's QR.
 
-WHICH is `view' or `full'.  One QR at a time, the view link by
-default: two codes side by side is how a colleague scans the wrong one
+WHICH is `view', `full', or `owner'.  One QR at a time, the view link
+by default: codes side by side is how a colleague scans the wrong one
 and walks away with write authority."
-  (let* ((full (eq which 'full))
-         (link (plist-get room (if full :link-full :link-view)))
+  (let* ((link (plist-get room (alist-get
+                                which mevedel-collaboration--share-tiers)))
          ;; The QR is the convenience; the link beneath it is the
          ;; payload.  An encoder that is missing or signals must cost
          ;; the code, never the share.
@@ -55,11 +61,18 @@ and walks away with write authority."
     (concat
      (propertize (format "Share: %s\n" (plist-get room :session-label))
                  'face 'bold)
-     (if full
-         (propertize
-          "FULL CONTROL link — grants prompting, interrupting, answering\n"
-          'face 'error)
-       (propertize "View link — read-only\n" 'face 'success))
+     (pcase which
+       ('owner
+        (propertize
+         (concat "OWNER link — full control, and additionally the two\n"
+                 "authorities that otherwise need you at the keyboard:\n"
+                 "changing permission mode and creating a session.\n")
+         'face 'error))
+       ('full
+        (propertize
+         "FULL CONTROL link — grants prompting, interrupting, answering\n"
+         'face 'error))
+       (_ (propertize "View link — read-only\n" 'face 'success)))
      "\n"
      ;; Scaled so a phone camera resolves the half-block modules from a
      ;; normal viewing distance.
@@ -68,10 +81,18 @@ and walks away with write authority."
      link
      "\n\n"
      (propertize
-      (concat "TAB show " (if full "view" "full control") " QR"
-              "  ·  c copy view  ·  f copy full  ·  q close\n"
+      (concat "TAB show "
+              (symbol-name (mevedel-collaboration--share-next-tier which))
+              " QR"
+              "  ·  c copy view  ·  f copy full  ·  o copy owner"
+              "  ·  q close\n"
               "Links are bearer credentials; treat them like secrets.")
       'face 'shadow))))
+
+(defun mevedel-collaboration--share-next-tier (which)
+  "Return the tier shown after WHICH when cycling the share buffer."
+  (let ((tiers (mapcar #'car mevedel-collaboration--share-tiers)))
+    (or (cadr (memq which tiers)) (car tiers))))
 
 (defun mevedel-collaboration--share-render ()
   "Repaint the current share buffer from its room and selection."
@@ -83,10 +104,11 @@ and walks away with write authority."
     (goto-char (point-min))))
 
 (defun mevedel-collaboration-share-toggle ()
-  "Show the other bearer link's QR."
+  "Show the next bearer link's QR."
   (interactive)
   (setq mevedel-collaboration--share-which
-        (if (eq mevedel-collaboration--share-which 'full) 'view 'full))
+        (mevedel-collaboration--share-next-tier
+         mevedel-collaboration--share-which))
   (mevedel-collaboration--share-render))
 
 (defun mevedel-collaboration-share-copy-view ()
@@ -100,6 +122,12 @@ and walks away with write authority."
   (interactive)
   (kill-new (plist-get mevedel-collaboration--share-room :link-full))
   (message "mevedel: full-control link copied"))
+
+(defun mevedel-collaboration-share-copy-owner ()
+  "Copy the owner link to the kill ring."
+  (interactive)
+  (kill-new (plist-get mevedel-collaboration--share-room :link-owner))
+  (message "mevedel: owner link copied"))
 
 (defun mevedel-collaboration-share-quit ()
   "Close the share surface."
@@ -118,6 +146,7 @@ and walks away with write authority."
   "<tab>" #'mevedel-collaboration-share-toggle
   "c" #'mevedel-collaboration-share-copy-view
   "f" #'mevedel-collaboration-share-copy-full
+  "o" #'mevedel-collaboration-share-copy-owner
   "q" #'mevedel-collaboration-share-quit)
 
 (defun mevedel-collaboration--fit-share-frame (frame parent)

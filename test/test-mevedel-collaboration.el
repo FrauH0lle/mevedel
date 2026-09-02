@@ -790,7 +790,7 @@
 ;;; Room lifecycle
 
 (mevedel-deftest mevedel-collaboration--start
-  (:doc "builds the room and both bearer links without scheduling expiry")
+  (:doc "builds the room and all three bearer links without scheduling expiry")
   (with-temp-buffer
     (let ((mevedel-collaboration-relay-url "ws://127.0.0.1:1")
           (mevedel-collaboration-relay-host-token "test-token")
@@ -819,21 +819,28 @@
                        (plist-get room :link-view)))
               (should (string-prefix-p
                        (format "http://127.0.0.1:1/#%s." room-id)
-                       (plist-get room :link-full))))
-            ;; The full secret embeds the write token after the room key.
-            (let* ((view-secret (car (last (split-string
-                                            (plist-get room :link-view)
-                                            "\\."))))
-                   (full-secret (car (last (split-string
-                                            (plist-get room :link-full)
-                                            "\\.")))))
-              (should (equal (mevedel-collaboration--base64url-decode
-                              view-secret)
-                             (plist-get room :key)))
-              (should (equal (mevedel-collaboration--base64url-decode
-                              full-secret)
-                             (concat (plist-get room :key)
-                                     (plist-get room :write-token)))))
+                       (plist-get room :link-full)))
+              (should (string-prefix-p
+                       (format "http://127.0.0.1:1/#%s." room-id)
+                       (plist-get room :link-owner))))
+            ;; Each tier's secret is the previous one plus its own token,
+            ;; which is what lets the viewer tell them apart by length.
+            (let* ((secret
+                    (lambda (slot)
+                      (mevedel-collaboration--base64url-decode
+                       (car (last (split-string (plist-get room slot)
+                                                "\\."))))))
+                   (key (plist-get room :key)))
+              (should (equal (funcall secret :link-view) key))
+              (should (equal (funcall secret :link-full)
+                             (concat key (plist-get room :write-token))))
+              (should (equal (funcall secret :link-owner)
+                             (concat key (plist-get room :write-token)
+                                     (plist-get room :owner-token))))
+              (should (= (length (funcall secret :link-owner)) 64))
+              ;; A distinct token, not a repeat of the write one.
+              (should-not (equal (plist-get room :owner-token)
+                                 (plist-get room :write-token))))
             (should-not scheduled)
             ;; Restarting for the same session reuses the room.
             (should (eq room (mevedel-collaboration--start

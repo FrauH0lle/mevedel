@@ -1,6 +1,7 @@
 # Project live collaboration from host-authoritative state
 
 Status: accepted (amended 2026-08-29, twice; 2026-08-30; 2026-08-31;
+2026-09-02;
 room lifetime superseded by ADR 0114)
 
 Live collaboration keeps the original Emacs process authoritative and exposes
@@ -17,6 +18,24 @@ rejects deriving collaboration from durable publications because those serve
 cold resume rather than a live running host. Reachability and any future
 relay remain transport layers around the same projection and do not acquire
 host authority.
+
+## Amendment: owner bearer authority and guest-requested sessions (2026-09-02)
+
+The former two-tier bearer model did not support controlling a session from
+the owner's own phone: changing permission mode still required returning to
+Emacs, and starting separate work required sharing a session created at the
+host keyboard. A third owner link now appends a distinct token to the full-link
+credentials. Its bearer may change the current permission mode and create an
+isolated session in the same workspace. A full-link guest may request the same
+session creation through a host-only approval prompt; a view-link guest may do
+neither.
+
+What moved the decision was daily remote-control use, not a broader browser
+trust claim. The owner token grants only these two typed frames. Session
+creation returns a fresh link at the requester's existing authority tier and
+does not share the parent room's guests or credentials. Save, rewind, fork,
+publication, execution-target selection, and other durable session operations
+remain unavailable from every browser link.
 
 The repository-owned spike covers the loopback listener, packaged viewer,
 WebSocket authentication and lifecycle, exact origin policy, bounded output,

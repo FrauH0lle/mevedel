@@ -56,8 +56,16 @@
       (should (equal "room:full" (buffer-string)))
       (should (= (point-min) (point))))))
 
+(mevedel-deftest mevedel-collaboration--share-next-tier
+  (:doc "cycles all bearer tiers and falls back to the safest tier")
+  (progn
+    (should (eq 'full (mevedel-collaboration--share-next-tier 'view)))
+    (should (eq 'owner (mevedel-collaboration--share-next-tier 'full)))
+    (should (eq 'view (mevedel-collaboration--share-next-tier 'owner)))
+    (should (eq 'view (mevedel-collaboration--share-next-tier 'unknown)))))
+
 (mevedel-deftest mevedel-collaboration-share-toggle
-  (:doc "switches between view and full links and redraws")
+  (:doc "cycles the three bearer tiers in ascending authority and redraws")
   (let ((mevedel-collaboration--share-which 'view)
         rendered)
     (cl-letf (((symbol-function 'mevedel-collaboration--share-render)
@@ -66,7 +74,19 @@
       (should (eq 'full mevedel-collaboration--share-which))
       (should rendered)
       (mevedel-collaboration-share-toggle)
+      (should (eq 'owner mevedel-collaboration--share-which))
+      ;; Wrapping lands on the safest tier, never on the strongest.
+      (mevedel-collaboration-share-toggle)
       (should (eq 'view mevedel-collaboration--share-which)))))
+
+(mevedel-deftest mevedel-collaboration-share-copy-owner
+  (:doc "copies the owner bearer link")
+  (let ((mevedel-collaboration--share-room '(:link-owner "owner-link"))
+        copied)
+    (cl-letf (((symbol-function 'kill-new) (lambda (text) (setq copied text)))
+              ((symbol-function 'message) #'ignore))
+      (mevedel-collaboration-share-copy-owner))
+    (should (equal "owner-link" copied))))
 
 (mevedel-deftest mevedel-collaboration-share-copy-view
   (:doc "copies the view-only bearer link")

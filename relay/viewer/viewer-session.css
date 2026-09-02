@@ -1,0 +1,123 @@
+/* Session-specific viewer controls and compact reading state. */
+
+@media (max-width: 520px), (max-height: 480px) {
+  body[data-reading] .dock:not(:focus-within) { padding-top: .9rem; }
+  body[data-reading] .dock:not(:focus-within) :is(#session-box, #artifacts,
+    #own-queue, .disclosure, .skill-chips, .composer-scope, .attachments,
+    .queue-state, .composer-name, #attach-button, #send-button,
+    .composer-spacer) {
+    display: none;
+  }
+  body[data-reading] .dock:not(:focus-within) .composer {
+    flex-direction: row;
+    align-items: center;
+    padding: .35rem .5rem;
+  }
+  body[data-reading] .dock:not(:focus-within) .composer textarea {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    height: 1.8rem;
+    resize: none;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  body[data-reading] .dock:not(:focus-within) .composer-row {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
+}
+
+.modeline .mode-picker {
+  font: inherit;
+  color: inherit;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
+.modeline .mode-picker:hover,
+.modeline .mode-picker:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sheet {
+  width: min(460px, calc(100vw - 32px));
+  padding: 0;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.sheet::backdrop {
+  background: rgba(12, 20, 18, 0.46);
+  backdrop-filter: blur(2px);
+}
+
+.sheet-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px;
+}
+
+.sheet-title {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: -0.02em;
+}
+
+.sheet-lede {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sheet-label {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sheet-hint {
+  margin-left: 6px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.sheet-input {
+  font: inherit;
+  width: 100%;
+  padding: 9px 10px;
+  color: var(--ink);
+  background: var(--ground);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.sheet-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.sheet-area { resize: vertical; }
+
+.sheet-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+}
+
+.sheet-open {
+  margin-top: 8px;
+  text-align: center;
+  text-decoration: none;
+}

@@ -18,6 +18,7 @@ flowchart TD
 The live browser collaboration slice is composed of the
 `mevedel-collaboration.el` room/public-command facade,
 `mevedel-collaboration-guest.el` untrusted guest protocol handler,
+`mevedel-collaboration-owner.el` owner-link authority handler,
 `mevedel-collaboration-projection.el` canonical transcript projection,
 `mevedel-collaboration-task.el` task projection/publication, and
 `mevedel-collaboration-transport.el` sealed relay client. The focused
@@ -30,7 +31,10 @@ URL fragments. A notification-enabled viewer retains that bearer in browser
 local storage and registers a browser Web Push endpoint so an installed PWA
 can wake and reconnect. Push requests have empty bodies; only routing metadata
 is visible to the relay and browser push service. A full link additionally
-carries a write token granting prompting and interrupting. Public-facing
+carries a write token granting prompting and interrupting; an owner link
+appends a further owner token granting the two authorities that otherwise
+require the host at the keyboard -- changing the permission mode and
+creating a session. Public-facing
 relays may require `-host-token`; the host then sends the
 matching `mevedel-collaboration-relay-host-token` in a handshake header to
 create a room. Tokenless mode keeps localhost and test deployments simple.

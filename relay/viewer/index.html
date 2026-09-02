@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="light dark">
     <title>mevedel live session</title>
     <link rel="stylesheet" href="/viewer.css">
+    <link rel="stylesheet" href="/viewer-session.css">
     <link rel="stylesheet" href="/viewer-panel.css">
     <link rel="stylesheet" href="/viewer-agent.css">
     <link rel="stylesheet" href="/viewer-artifact.css">
@@ -92,6 +93,9 @@
           <button id="attach-button" class="btn quiet" type="button"
                   title="Attach files — images, PDFs, logs and patches"
                   aria-label="Attach files">📎</button>
+          <button id="new-session-button" class="btn quiet" type="button" hidden
+                  title="Start a separate session — this room stays open"
+                  aria-label="New session">＋ Session</button>
           <span class="composer-spacer"></span>
           <button id="stop-button" class="btn danger" type="button"
                   title="Stop the running turn in Emacs">Interrupt</button>
@@ -99,14 +103,48 @@
                   title="Queue this for the session">Send</button>
         </div>
       </form>
+      <dialog id="new-session" class="sheet" aria-labelledby="new-session-title">
+        <form id="new-session-form" method="dialog" class="sheet-form">
+          <h2 id="new-session-title" class="sheet-title">New session</h2>
+          <p id="new-session-lede" class="sheet-lede">A separate room for
+          separate work. This room, and everyone in it, stays exactly where
+          it is.</p>
+          <label class="sheet-label" for="new-session-name">Name</label>
+          <input id="new-session-name" class="sheet-input" maxlength="48"
+                 required placeholder="onboarding-flow">
+          <label class="sheet-label" for="new-session-prompt">First prompt
+            <span class="sheet-hint">optional — it runs on creation</span>
+          </label>
+          <textarea id="new-session-prompt" class="sheet-input sheet-area"
+                    rows="4" placeholder="What should this session do?"></textarea>
+          <menu class="sheet-actions">
+            <button value="cancel" class="btn quiet" type="submit"
+                    formnovalidate>Cancel</button>
+            <button id="new-session-create" value="create" class="btn"
+                    type="submit">Request</button>
+          </menu>
+        </form>
+        <div id="new-session-result" class="sheet-form" hidden>
+          <h2 class="sheet-title">New session</h2>
+          <p id="new-session-message" class="sheet-lede"></p>
+          <a id="new-session-link" class="btn sheet-open" target="_blank"
+             rel="noopener" hidden>Open new room ↗</a>
+          <menu class="sheet-actions">
+            <button id="new-session-done" class="btn quiet"
+                    type="button">Back to this room</button>
+          </menu>
+        </div>
+      </dialog>
       <p id="modeline" class="modeline" role="status">
         <span id="connection" class="conn">Connecting…</span>
       </p>
       <details class="disclosure" aria-label="Sharing and security notice">
         <summary>This link is a bearer credential — treat it like a secret.</summary>
         <p>Anyone who has it can read the visible prompts, responses, paths,
-        and tool results, which may contain secrets, and a full-control link
-        can also prompt, interrupt, and answer pending interactions. Frames
+        and tool results, which may contain secrets; a full-control link
+        can also prompt, interrupt, and answer pending interactions; and an
+        owner link can additionally change the permission mode and create
+        sessions. Frames
         are sealed end to end with a key that lives only in the link; the
         relay sees ciphertext. Enabling notifications stores the link in
         this browser so an installed app can reconnect. It is cleared after
@@ -120,6 +158,7 @@
     <script src="/viewer-artifact.js" defer></script>
     <script src="/viewer-agent.js" defer></script>
     <script src="/viewer-task.js" defer></script>
+    <script src="/viewer-session.js" defer></script>
     <script src="/viewer.js" defer></script>
   </body>
 </html>

@@ -54,6 +54,15 @@ class Element {
     if (!event.type) event.type = type;
     for (const callback of this.listeners[type] || []) callback(event);
   }
+  focus() { this.focused = true; }
+  // <dialog> is the whole modal, so the stub carries its three moving
+  // parts: open state, a return value, and the close event.
+  showModal() { this.open = true; }
+  close(value) {
+    this.open = false;
+    if (value !== undefined) this.returnValue = value;
+    this.dispatch('close');
+  }
 }
 
 // A File stand-in: the viewer only reads name, type, size, and bytes.
@@ -322,9 +331,15 @@ async function main() {
   const writeToken = crypto.getRandomValues(new Uint8Array(16));
   const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false,
                                             ['encrypt', 'decrypt']);
+  const ownerToken = crypto.getRandomValues(new Uint8Array(16));
   const roomId = 'roomroomroomroom';
   const fullSecret = base64url(Buffer.concat([Buffer.from(keyBytes),
                                               Buffer.from(writeToken)]));
+  // The scenario runs on the strongest tier, so the owner-only controls
+  // are exercised rather than merely declared.
+  const ownerSecret = base64url(Buffer.concat([Buffer.from(keyBytes),
+                                               Buffer.from(writeToken),
+                                               Buffer.from(ownerToken)]));
 
   const ids = ['transcript', 'connection', 'notice', 'live-button',
                'composer', 'composer-input', 'composer-name',
@@ -339,7 +354,13 @@ async function main() {
                'artifact-close', 'artifact-body',
                'theme-button', 'modeline',
                'session-box', 'session-summary',
-               'tasks-list', 'agents-done-list'];
+               'tasks-list', 'agents-done-list',
+               'new-session-button', 'new-session', 'new-session-form',
+               'new-session-result', 'new-session-name',
+               'new-session-prompt',
+               'new-session-message', 'new-session-link',
+               'new-session-done', 'new-session-create',
+               'new-session-lede'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   // The dock is addressed by class, not id, and its height is what the
   // reading-mode fold threshold is measured against.
@@ -407,8 +428,8 @@ async function main() {
   }
   const window = {
     location: {
-      href: `http://127.0.0.1:1/index.html#${roomId}.${fullSecret}`,
-      hash: `#${roomId}.${fullSecret}`,
+      href: `http://127.0.0.1:1/index.html#${roomId}.${ownerSecret}`,
+      hash: `#${roomId}.${ownerSecret}`,
       pathname: '/index.html', search: '', protocol: 'http:',
     },
     history: {replaceState(_state, _title, path) { window.replaced = path; }},
@@ -493,7 +514,7 @@ async function main() {
         register: async (path, options) => {
           assert.equal(path, '/service-worker.js');
           assert.equal(options.scope,
-                       `/pwa/${roomId}.${fullSecret}/`);
+                       `/pwa/${roomId}.${ownerSecret}/`);
           return serviceWorkerRegistration;
         },
         getRegistration: async () => serviceWorkerRegistration,
@@ -519,6 +540,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-artifact.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-agent.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-task.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-session.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
 
   // Link grammar: view links carry the bare key, full links append the
@@ -532,6 +554,13 @@ async function main() {
   const full = api.parseFragment(`#${roomId}.${fullSecret}`);
   assert.equal(full.keyBytes.length, 32);
   assert.equal(full.writeToken.length, 16);
+  // Each tier is a prefix of the next, so length alone separates them --
+  // and a full link stops short of owner authority.
+  assert.equal(full.ownerToken, null);
+  const owner = api.parseFragment(`#${roomId}.${ownerSecret}`);
+  assert.equal(owner.keyBytes.length, 32);
+  assert.equal(owner.writeToken.length, 16);
+  assert.equal(owner.ownerToken.length, 16);
   assert.equal(api.parseFragment('#short.abc'), null);
   assert.equal(api.parseFragment(`#${roomId}.${base64url(new Uint8Array(31))}`), null);
   assert.equal(api.parseFragment('#nodotsecret'), null);
@@ -594,6 +623,7 @@ async function main() {
   assert.equal(hello.t, 'hello');
   assert.equal(hello.proto, 2);
   assert.equal(hello.writeToken, base64url(writeToken));
+  assert.equal(hello.ownerToken, base64url(ownerToken));
   assert.equal(typeof hello.name, 'string');
   // The stable per-browser guest id rides every hello, so the host can
   // match this guest's own queued entries across reconnects.
@@ -616,6 +646,9 @@ async function main() {
                  commands: [{name: 'plan', kind: 'command', hint: '[prompt]'},
                             {name: 'review', kind: 'skill', hint: '[target]'}]});
   assert.equal(nodes.composer.hidden, false);
+  // Asking for a session needs write authority, nothing more; the owner
+  // token only decides whether asking is granted or put to the host.
+  assert.equal(nodes['new-session-button'].hidden, false);
   // The roster renders with each namespace's own sigil.
   assert.equal(nodes['skill-chips'].hidden, false);
   assert.equal(nodes['skill-chips'].children.length, 2);
@@ -1107,7 +1140,7 @@ async function main() {
   // Opting into notifications is the install use-case, so the share
   // credentials persist for the installed app to relaunch with.
   await waitFor(() => storage.has('mevedel-last-share'), 'persisted share');
-  assert.equal(storage.get('mevedel-last-share'), `${roomId}.${fullSecret}`);
+  assert.equal(storage.get('mevedel-last-share'), `${roomId}.${ownerSecret}`);
   await waitFor(() => first.sent.length === pushBefore + 1,
                 'sealed push subscription');
   assert.deepEqual(await unseal(key, first.sent[pushBefore]),
@@ -1137,6 +1170,64 @@ async function main() {
   await deliver({t: 'status', busy: true, model: 'deepseek-v4-flash',
                  mode: 'edits'});
   assert.doesNotMatch(textOf(nodes.modeline), /plan/);
+
+  // Owner link: the permission mode becomes a picker in the strip, and
+  // the strip keeps reporting the mode the session is actually in until
+  // the host's status frame says otherwise.
+  const picker = nodes.modeline.children.find(
+    child => child.className === 'ml mode-picker');
+  assert.ok(picker, 'owner mode picker');
+  assert.equal(picker.value, 'edits');
+  const modeBefore = first.sent.length;
+  picker.value = 'full-auto';
+  picker.dispatch('change');
+  assert.equal(picker.value, 'edits');
+  await waitFor(() => first.sent.length === modeBefore + 1, 'sealed set-mode');
+  assert.deepEqual(await unseal(key, first.sent[modeBefore]),
+                   {t: 'set-mode', mode: 'full-auto'});
+
+  // Owner link: requesting a separate session. The sheet collects the
+  // name and optional prompt; the request travels as its own frame.
+  nodes['new-session-button'].dispatch('click');
+  assert.equal(nodes['new-session'].open, true);
+  // This link is an owner link, so the sheet promises creation rather
+  // than a request that waits on a person.
+  assert.equal(nodes['new-session-create'].textContent, 'Create');
+  assert.match(nodes['new-session-lede'].textContent, /separate room/);
+  assert.equal(nodes['new-session-form'].hidden, false);
+  assert.equal(nodes['new-session-name'].focused, true);
+  nodes['new-session-name'].value = 'onboarding';
+  nodes['new-session-prompt'].value = 'Design the flow';
+  const requestBefore = first.sent.length;
+  nodes['new-session'].close('create');
+  await waitFor(() => first.sent.length === requestBefore + 1,
+                'sealed new-session request');
+  assert.deepEqual(await unseal(key, first.sent[requestBefore]),
+                   {t: 'new-session', name: 'onboarding',
+                    prompt: 'Design the flow'});
+  // Sending swaps the sheet to its waiting state rather than closing it.
+  assert.equal(nodes['new-session'].open, true);
+  assert.equal(nodes['new-session-result'].hidden, false);
+  assert.match(nodes['new-session-message'].textContent, /Creating/);
+  assert.equal(nodes['new-session-link'].hidden, true);
+
+  // A browser will not let a later approval open a tab by itself, so the
+  // link arrives as something to tap.
+  await deliver({t: 'new-session', ok: true, name: 'onboarding',
+                 link: 'http://127.0.0.1:1/#other.secret'});
+  assert.equal(nodes['new-session-link'].hidden, false);
+  assert.equal(nodes['new-session-link'].href,
+               'http://127.0.0.1:1/#other.secret');
+  await deliver({t: 'new-session', ok: false, message: 'The host declined'});
+  assert.equal(nodes['new-session-link'].hidden, true);
+  assert.match(nodes['new-session-message'].textContent, /host declined/);
+  nodes['new-session-done'].dispatch('click');
+  assert.equal(nodes['new-session'].open, false);
+  // Cancelling never sends anything.
+  const cancelBefore = first.sent.length;
+  nodes['new-session-button'].dispatch('click');
+  nodes['new-session'].close('cancel');
+  assert.equal(first.sent.length, cancelBefore);
   // Being away is not only a backgrounded tab: a guest looking at Emacs
   // on another monitor has this tab visible but unfocused.
   document.hidden = false;
@@ -1346,6 +1437,7 @@ async function main() {
   releaseBitmap();
   await staleAttachment;
   assert.equal(nodes.composer.hidden, true);
+  assert.equal(nodes['new-session-button'].hidden, true);
   assert.equal(sockets[1].readyState, 3);
   assert.equal(nodes.requests.children.length, 0);
   assert.equal(nodes['own-queue'].hidden, true);

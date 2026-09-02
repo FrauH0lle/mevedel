@@ -405,8 +405,10 @@ func TestHealthzAndViewer(t *testing.T) {
 	for _, path := range []string{
 		"/manifest.json", "/icon.svg", "/icon.png", "/notifications.js",
 		"/renderer.js", "/transport.js", "/viewer-agent.js",
-		"/viewer-artifact.js", "/viewer-task.js", "/viewer-panel.css",
-		"/viewer-agent.css", "/viewer-artifact.css", "/viewer-task.css",
+		"/viewer-artifact.js", "/viewer-task.js", "/viewer-session.js",
+		"/viewer-panel.css",
+		"/viewer-agent.css", "/viewer-artifact.css", "/viewer-session.css",
+		"/viewer-task.css",
 		"/service-worker.js",
 	} {
 		resp, err = http.Get(srv.URL + path)

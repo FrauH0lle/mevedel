@@ -179,13 +179,7 @@ persisted enablement when supplied."
     (should (equal '(permission) (plist-get aggregate :permission-rules)))
     (should (equal '("Read" "Grep") (plist-get aggregate :ptc-primitives)))
     (should (equal '(hook) (plist-get aggregate :hook-rules)))
-    (should (equal '(command-record instruction-record)
-                   (plist-get aggregate :invoked-skills)))
-    (should (equal '("command-context" "instruction-context")
-                   (plist-get aggregate :hook-contexts)))
-    (should (= 1 (length (plist-get aggregate :instruction-reminders))))
-    (should (equal '(command-audit instruction-audit)
-                   (plist-get aggregate :hook-audits)))))
+    (should (= 1 (length (plist-get aggregate :instruction-reminders)))))
 
   :doc "intersects restrictions from stacked command skills"
   (let ((first (mevedel-skill-plan-entry--create :name "a" :role 'command))
@@ -201,7 +195,7 @@ persisted enablement when supplied."
                (list :entry second :outcome
                      '(:body "b" :request-context
                        (:ptc-primitives ("Grep" "Bash"))))))
-             :ptc-primitives))))
+             :ptc-primitives)))))
 
 (mevedel-deftest mevedel-skills-plan--prepared-outcome ()
   ,test
@@ -220,7 +214,10 @@ persisted enablement when supplied."
                  '(:body "instruction body"
                    :hook-context "expansion context"
                    :request-context (:invoked-skills (record))))))
-         (outcome (mevedel-skills-plan--prepared-outcome plan pairs)))
+         (outcome (mevedel-skills-plan--prepared-outcome
+                   plan pairs
+                   '(:invoked-skills (record)
+                     :hook-context "expansion context"))))
     (should (eq 'ok (plist-get outcome :status)))
     (should (string-match-p (regexp-quote "[skill:alpha -- attached]")
                             (plist-get outcome :model-input)))

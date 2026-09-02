@@ -22,8 +22,9 @@
     return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
 
-  // A link is "<roomId>.<secret>": secret is the 32-byte room key (view
-  // link) or key followed by the 16-byte write token (full link).
+  // A link is "<roomId>.<secret>", each tier a prefix of the next: the
+  // 32-byte room key alone (view link), followed by the 16-byte write
+  // token (full link), followed by the 16-byte owner token (owner link).
   function parseFragment(fragment) {
     const value = String(fragment || '').replace(/^#/, '');
     const separator = value.indexOf('.');
@@ -32,9 +33,16 @@
     if (!/^[A-Za-z0-9_-]{10,64}$/.test(roomId)) return null;
     const secret = base64urlDecode(value.slice(separator + 1));
     if (!secret) return null;
-    if (secret.length === 32) return {roomId, keyBytes: secret, writeToken: null};
+    if (secret.length === 32) {
+      return {roomId, keyBytes: secret, writeToken: null, ownerToken: null};
+    }
     if (secret.length === 48) {
-      return {roomId, keyBytes: secret.slice(0, 32), writeToken: secret.slice(32)};
+      return {roomId, keyBytes: secret.slice(0, 32),
+              writeToken: secret.slice(32), ownerToken: null};
+    }
+    if (secret.length === 64) {
+      return {roomId, keyBytes: secret.slice(0, 32),
+              writeToken: secret.slice(32, 48), ownerToken: secret.slice(48)};
     }
     return null;
   }

@@ -17,10 +17,13 @@
 (require 'cl-lib)
 (require 'gptel)
 (require 'mevedel-agent-control)
+(require 'mevedel-collaboration-agent)
 (require 'mevedel-collaboration-projection)
+(require 'mevedel-collaboration-task)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
+(require 'mevedel-collaboration-owner)
 (require 'mevedel-pending-inputs)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-session-artifacts)
@@ -151,8 +154,10 @@
   (:doc "rejects a protocol mismatch and classifies write-token possession")
   (let* ((guests (make-hash-table :test #'eql))
          (token (mevedel-collaboration--random-bytes 16))
+         (owner-token (mevedel-collaboration--random-bytes 16))
          (room (list :transport 'transport :guests guests
-                     :write-token token :records nil
+                     :write-token token :owner-token owner-token
+                     :records nil
                      :ui-requests (make-hash-table :test #'eql)))
          sent)
     (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
@@ -183,6 +188,7 @@
         (should (equal "phone-guest-id" (plist-get writer :guest-id)))
         (should-not (plist-get viewer :guest-id))
         (should-not (plist-get viewer :writable))
+        (should-not (plist-get writer :owner))
         (should (equal "Laptop <evil>" (plist-get viewer :name))))
       (let ((welcomes (cl-remove-if-not
                        (lambda (entry)
@@ -206,6 +212,7 @@
                     sent)))
         (should (equal '(1 2) (sort (mapcar #'car tasks) #'<)))
         (should (equal [] (plist-get (cdr (car tasks)) :tasks)))))))
+
 
 (mevedel-deftest mevedel-collaboration--handle-push-subscription
   (:doc "forwards valid subscriptions and removal only for an authenticated guest")

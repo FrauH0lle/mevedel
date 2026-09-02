@@ -97,17 +97,18 @@
 (declare-function mevedel-skills-preparation-expand-body
                   "mevedel-skills-preparation"
                   (text callback &optional skill session))
-(declare-function mevedel-skills-preparation-parse-dependencies
-                  "mevedel-skills-preparation" (text))
 (declare-function mevedel-skills-preparation-substitute
                   "mevedel-skills-preparation"
                   (text arguments session skill))
 (autoload 'mevedel-skills-preparation-expand-body
   "mevedel-skills-preparation")
-(autoload 'mevedel-skills-preparation-parse-dependencies
-  "mevedel-skills-preparation")
 (autoload 'mevedel-skills-preparation-substitute
   "mevedel-skills-preparation")
+
+;; `mevedel-skills-syntax'
+(declare-function mevedel-skills-syntax-parse-dependencies
+                  "mevedel-skills-syntax" (text))
+(autoload 'mevedel-skills-syntax-parse-dependencies "mevedel-skills-syntax")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-attached-skill-records
@@ -558,10 +559,6 @@ inline command that does not own policy records only the ignored field names."
                    (mevedel-skill-source-file skill)))
            :test #'equal))
 
-(defun mevedel-skills--graph-error (reason message)
-  "Return a structured graph preflight error with REASON and MESSAGE."
-  (list :status 'error :reason reason :message message))
-
 (cl-defun mevedel-skills--preparation-plan
     (roots origin &key skip-gates)
   "Return a fully validated dependency preparation plan for ROOTS.
@@ -586,8 +583,8 @@ ROOTS is a list of plists containing :skill, :arguments, :role, and
       (cl-labels
           ((reject (reason format-string &rest args)
              (throw 'invalid
-                    (mevedel-skills--graph-error
-                     reason (apply #'format format-string args))))
+                    (list :status 'error :reason reason
+                          :message (apply #'format format-string args))))
            (bind-root (skill)
              (if-let* ((source (mevedel-skill-source-file skill)))
                  (or (mevedel-skills--dependency-skill
@@ -671,7 +668,7 @@ ROOTS is a list of plists containing :skill, :arguments, :role, and
                                           (error-message-string err))))))
                          (parsed
                           (and substituted
-                               (mevedel-skills-preparation-parse-dependencies
+                               (mevedel-skills-syntax-parse-dependencies
                                 substituted)))
                          (runtime-dependencies
                           (plist-get parsed :dependencies))
@@ -912,15 +909,6 @@ sanitized `UserPromptExpansion' hook decision."
                  (mevedel-skills--node-reachable-p candidate child))
                (plist-get root :dependencies))))
 
-(defun mevedel-skills--prepared-attachment (outcome)
-  "Return the instruction attachment represented by prepared OUTCOME."
-  (let ((skill (plist-get outcome :skill)))
-    (list :name (mevedel-skill-name skill)
-          :body (plist-get outcome :body)
-          :arguments (plist-get outcome :arguments)
-          :source-file (mevedel-skill-source-file skill)
-          :skill skill)))
-
 (cl-defun mevedel-skills-prepare-many
     (roots callback &key origin skip-gates cancelled-p)
   "Preflight and sequentially prepare ROOTS as one dependency graph.
@@ -1007,8 +995,15 @@ optional :display-callback.  CALLBACK receives one atomic aggregate outcome."
                             (attachments
                              (mapcar
                               (lambda (node)
-                                (mevedel-skills--prepared-attachment
-                                 (plist-get node :outcome)))
+                                (let* ((outcome (plist-get node :outcome))
+                                       (skill (plist-get outcome :skill)))
+                                  (list
+                                   :name (mevedel-skill-name skill)
+                                   :body (plist-get outcome :body)
+                                   :arguments (plist-get outcome :arguments)
+                                   :source-file
+                                   (mevedel-skill-source-file skill)
+                                   :skill skill)))
                               (cl-remove root-node closure :test #'eq)))
                             (contexts
                              (delq nil

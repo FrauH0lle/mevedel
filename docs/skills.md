@@ -5,7 +5,8 @@ Skills are reusable prompt packages loaded from `SKILL.md` files.
 session installation, path-scoped activation state, and hot reload.
 `mevedel-tool-skills.el` registers the model-visible Skill tool schemas.
 `mevedel-skills-preparation.el` owns argument substitution and body injection
-execution. `mevedel-skills-invoke.el` owns request-scoped context, preparation
+execution. `mevedel-skills-syntax.el` owns shared authored Markdown and
+required-skill syntax. `mevedel-skills-invoke.el` owns request-scoped context, preparation
 policy, invocation, fork dispatch, and model-tool behavior.
 `mevedel-skills-input.el` owns user token binding, raw `gptel-send` dispatch,
 inline attachment projection, and direct fork response insertion.
@@ -411,9 +412,10 @@ or cyclic dependencies reject the graph.
 Dependencies recurse depth first and dependency first, preserving authored
 sibling order; the root contribution comes last. Preparation, attachment, and
 invocation records use that order and deduplicate by canonical source plus exact
-arguments. Every authored declaration still leaves its placeholder in its
-immediate parent body, including a duplicate whose contribution was already
-prepared.
+arguments. Reaching one canonical source with different arguments rejects the
+graph instead of executing the same skill twice with conflicting inputs. Every
+authored declaration still leaves its placeholder in its immediate parent body,
+including a duplicate whose contribution was already prepared.
 
 The root invocation origin propagates unchanged through the graph. A
 user-origin root may attach a child with `disable-model-invocation: true`. A
