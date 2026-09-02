@@ -2032,5 +2032,64 @@ description: Yell
             (should (equal '("enabled") names))))
       (delete-directory user-dir t))))
 
+(mevedel-deftest mevedel-skills-format-attachment
+  (:doc "formats one prepared attachment as a mandatory instruction")
+  (let ((text (mevedel-skills-format-attachment
+               '(:name "review" :body "Check it"))))
+    (should (string-match-p "`\\$review`" text))
+    (should (string-suffix-p "Check it" text))))
+
+(mevedel-deftest mevedel-skills-format-model-input
+  (:doc "puts formatted dependency attachments before the root body")
+  (let ((text (mevedel-skills-format-model-input
+               '(:required-attachments ((:name "child" :body "Child"))
+                 :body "Root"))))
+    (should (< (string-search "Child" text) (string-search "Root" text)))))
+
+(mevedel-deftest mevedel-skills--dependency-skill
+  (:doc "finds a session skill by canonical source key")
+  (let* ((skill (mevedel-skill--create :source-file "/tmp/skill/SKILL.md"))
+         (session (mevedel-session--create :skills (list skill))))
+    (should (eq skill
+                (mevedel-skills--dependency-skill
+                 session (mevedel-skills-source-key
+                          "/tmp/skill/SKILL.md"))))
+    (should-not (mevedel-skills--dependency-skill session "file:/missing"))))
+
+(mevedel-deftest mevedel-skills--preparation-plan
+  (:doc "returns a validated node plan before any preparation effect")
+  (let* ((skill (mevedel-skill--create :name "one" :body "body"))
+         (plan (mevedel-skills--preparation-plan
+                (list (list :skill skill :arguments ""
+                            :role 'instruction :policy-owner-p nil))
+                'user :skip-gates t)))
+    (should (eq 'ok (plist-get plan :status)))
+    (should (eq skill (plist-get (car (plist-get plan :nodes)) :skill)))))
+
+(mevedel-deftest mevedel-skills--prepare-single
+  (:doc "expands and settles one preflighted node")
+  (let* ((skill (mevedel-skill--create :name "one"))
+         (node (list :skill skill :body "body" :arguments ""
+                     :root '(:role instruction) :dependency-depth 0))
+         outcome)
+    (cl-letf (((symbol-function 'mevedel-skills-preparation-expand-body)
+               (lambda (body callback &rest _)
+                 (funcall callback (list :status 'ok :body body))))
+              ((symbol-function 'mevedel-skills--run-expansion-hook)
+               (lambda (_skill _arguments prompt _origin _session callback)
+                 (funcall callback prompt nil))))
+      (mevedel-skills--prepare-single
+       node 'user (lambda (value) (setq outcome value))))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal "body" (plist-get outcome :body)))))
+
+(mevedel-deftest mevedel-skills--node-reachable-p
+  (:doc "finds identity through a nested dependency tree")
+  (let* ((leaf (list :name 'leaf))
+         (child (list :dependencies (list leaf)))
+         (root (list :dependencies (list child))))
+    (should (mevedel-skills--node-reachable-p leaf root))
+    (should-not (mevedel-skills--node-reachable-p (list :name 'other) root))))
+
 (provide 'test-mevedel-skills-invoke)
 ;;; test-mevedel-skills-invoke.el ends here

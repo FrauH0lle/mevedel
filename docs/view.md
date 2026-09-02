@@ -610,7 +610,7 @@ normal managed-zone path, preserving composer text, point, and windows.
 
 `/collab` starts a room for the current session, dialing the relay at
 `mevedel-collaboration-relay-url` as a WebSocket client, and
-reports two bearer links (the full-control link is copied to the kill ring).
+reports its bearer links (the full-control link is copied to the kill ring).
 `/collab status` reports the room, relay connectivity, and guest names
 without printing any secret, and `/collab stop` ends that session's room.
 Sessions may be shared concurrently; each has an independent room, key,
@@ -624,7 +624,56 @@ is content-blind: every frame is sealed with AES-256-GCM under a room key
 that travels only in the links' URL fragments. A view link carries the bare
 key and grants live read access. A full link appends a 16-byte write token;
 its holder can additionally queue prompts and interrupt the running request.
-Authority follows possession of the link.
+An owner link appends a further 16-byte owner token. Authority follows
+possession of the link, and each tier is a prefix of the next, so the
+secret's length alone tells the viewer which one it holds.
+
+### The owner link
+
+The owner link exists for the case the other two do not cover: the host is
+not at the keyboard and something needs granting. It is full control plus
+exactly two authorities, both delivered as their own typed frames rather
+than through the command allowlist:
+
+- `set-mode` changes the session permission mode, including to `full-auto`.
+  The `mode` slash command stays in
+  `mevedel-collaboration-unsafe-guest-commands` for every guest: that
+  refusal protects the allowlist from becoming an escalation path, and says
+  nothing about a credential the host handed out for this purpose. The
+  viewer renders the mode as a native picker in the status strip, and the
+  strip keeps showing the mode the session is actually in until the host's
+  status frame confirms the change.
+- `new-session` creates a session. The request itself needs only write
+  authority -- every full-control guest gets the button -- and the owner
+  token decides what happens next: an owner link is granted it outright,
+  any other full-control guest has the request put to the host as a
+  host-only interaction. That interaction carries no `mevedel--remote`
+  descriptor, so it never reaches a guest surface and a requester cannot
+  approve its own request. The sheet says which of the two it is doing
+  before the guest presses anything.
+
+Owner authority is never granted alone: the owner link contains the write
+token, so a peer claiming the owner token without it is a forgery and is
+refused. The viewer's own knowledge of its tier is cosmetic; the host
+re-checks the token on every owner frame.
+
+### Guest-requested sessions
+
+A guest supplies a name and an optional first prompt; the workspace and
+working directory come from the room's own session, never from the guest.
+The name is sanitized the way a session name typed in Emacs is, because it
+becomes a directory, and a name that already exists is refused rather than
+silently handing back a link into the session that has it.
+
+The new session gets its own room, and the requester is handed the tier it
+already holds -- an owner requester an owner link, a full-control requester
+a full-control one -- so asking for a session can never be a way to gain
+authority. The first prompt enters the new session's pending-input queue,
+which drains on idle: the host read that text when approving, so submitting
+it is what the approval was for. Because a browser will not let an approval
+that arrives later open a tab by itself, the link arrives in the request
+sheet as something to tap. Creating a session is not idempotent, so a repeat
+request inside the duplicate-prompt window is dropped.
 
 The browser is an observer of the canonical data buffer plus, for full
 links, a remote input source. It receives visible user and assistant text

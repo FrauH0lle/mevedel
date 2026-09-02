@@ -46,11 +46,11 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-args
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-dependency-depth
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-name
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-origin
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-skill-invocation-record-dependency-depth
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-required-by-source-path
                   "mevedel-structs" (cl-x) t)

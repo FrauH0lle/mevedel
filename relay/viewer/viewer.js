@@ -53,6 +53,10 @@
     paused: false,
     guestName: null,
     pushSubscribed: false,
+    // Whether this link carried the owner token.  Cosmetic only: the
+    // host re-checks the token on every owner frame, so a page that
+    // sets this by hand gains nothing but buttons that get refused.
+    owner: false,
   };
 
   let transport = null;
@@ -115,8 +119,7 @@
     summaryParts[key] = text || '';
     summaryWarnings[key] = warning === true;
     const bits = [summaryParts.agents, summaryParts.tasks].filter(Boolean);
-    if (sessionBox) sessionBox.hidden = bits.length === 0;
-    if (!sessionSummary) return;
+    sessionBox.hidden = bits.length === 0;
     sessionSummary.textContent = ['Session', ...bits].join(' · ');
     sessionSummary.dataset.warning =
       (summaryWarnings.agents || summaryWarnings.tasks) ? 'true' : 'false';
@@ -130,6 +133,7 @@
     summarize: summarizeSession,
   });
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
+  const sessions = window.mevedelSessionView.create({state, send, el});
 
   function setLiveButton(visible) {
     liveButton.hidden = !visible;
@@ -165,7 +169,8 @@
       if (text) modeline.append(el('span', className || 'ml', text));
     };
     add(state.model);
-    add(state.mode);
+    if (state.owner && state.mode) modeline.append(sessions.modePicker());
+    else add(state.mode);
     // Plan is a mode a guest can enter from a chip, so it has to be
     // visible afterwards -- otherwise the session silently behaves
     // differently than the transcript suggests.
@@ -761,6 +766,9 @@
 
   function setComposerVisible(visible) {
     if (composer) composer.hidden = !visible;
+    // Any writable guest may ask for a session; an owner link is what
+    // decides whether asking is granted outright or put to the host.
+    sessions.setVisible(visible);
   }
 
   // The welcome's host-curated roster is the whole discovery surface.
@@ -971,6 +979,11 @@
       if (typeof frame.mode === 'string') state.mode = frame.mode;
       state.plan = frame.plan === true;
       renderModeline();
+    } else if (frame.t === 'new-session') {
+      sessions.showResult({
+        ok: frame.ok === true, message: frame.message,
+        link: frame.link, name: frame.name,
+      });
     } else if (frame.t === 'bye') {
       showTerminal('Session ended', 'The shared session has ended.');
     } else if (frame.t === 'error') {
@@ -1085,6 +1098,7 @@
     showNotice('This page needs HTTPS (or localhost) to unseal the session.');
   } else {
     state.fragment = rawFragment;
+    state.owner = Boolean(credentials.ownerToken);
     // Keep an existing opt-in's persisted share pointing at the room
     // most recently opened.
     if (notifications.enabled()) notifications.persistShare();
@@ -1102,6 +1116,9 @@
                          guestId: guestId()};
           if (credentials.writeToken) {
             hello.writeToken = base64urlEncode(credentials.writeToken);
+          }
+          if (credentials.ownerToken) {
+            hello.ownerToken = base64urlEncode(credentials.ownerToken);
           }
           return hello;
         },

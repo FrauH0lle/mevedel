@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-skills-syntax)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
 (require 'mevedel-utilities)
@@ -67,12 +68,6 @@
                   (session path content &optional coding))
 (autoload 'mevedel-session-artifacts-publish-text
   "mevedel-session-artifacts")
-
-;; `mevedel-skills-preparation'
-(declare-function mevedel-skills-preparation-parse-dependencies
-                  "mevedel-skills-preparation" (text))
-(autoload 'mevedel-skills-preparation-parse-dependencies
-  "mevedel-skills-preparation")
 
 ;; `mevedel-structs'
 (defvar mevedel--session)
@@ -745,7 +740,7 @@ configured root under which SOURCE-FILE was found."
          (declared-hooks (plist-get plist :hooks))
          (dependency-data
           (and-let* ((body (plist-get plist :system)))
-            (plist-get (mevedel-skills-preparation-parse-dependencies body)
+            (plist-get (mevedel-skills-syntax-parse-dependencies body)
                        :dependencies)))
          (hooks (and (or (not (eq source 'project))
                          project-hooks-trusted-p)

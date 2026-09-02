@@ -126,11 +126,11 @@
 (autoload 'mevedel-skills-prepare "mevedel-skills-invoke")
 (autoload 'mevedel-skills-prepare-many "mevedel-skills-invoke")
 
-;; `mevedel-skills-preparation'
-(declare-function mevedel-skills-preparation-markdown-code-ranges
-                  "mevedel-skills-preparation" (text))
-(autoload 'mevedel-skills-preparation-markdown-code-ranges
-  "mevedel-skills-preparation")
+;; `mevedel-skills-syntax'
+(declare-function mevedel-skills-syntax-markdown-code-ranges
+                  "mevedel-skills-syntax" (text))
+(autoload 'mevedel-skills-syntax-markdown-code-ranges
+  "mevedel-skills-syntax")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-id "mevedel-structs" (cl-x))
@@ -233,10 +233,6 @@ original `$skill' invocation compactly."
                              attachments))))
     (mevedel-tool-render-data-format data)))
 
-(defun mevedel-skills-input-attachment-reminder (attachment)
-  "Return system-reminder body for prepared inline skill ATTACHMENT."
-  (mevedel-skills-format-attachment attachment))
-
 (defun mevedel-skills-input--replace-inline-attachment-mentions
     (attachments start end)
   "Replace prompt mentions for prepared ATTACHMENTS between START and END.
@@ -304,7 +300,7 @@ staged as reminder entries for the WAIT injector."
         (unless (plist-get attachment :unavailable)
           (mevedel-reminders-stage-entry
            fsm 'skill-attachment
-           (mevedel-skills-input-attachment-reminder attachment)))))))
+           (mevedel-skills-format-attachment attachment)))))))
 
 
 ;;
@@ -445,7 +441,7 @@ When ALLOW-ROOT is nil, exclude the leading root skill invocation."
 Each token has `:start', `:end', `:name', and `:value'.  When
 ALLOW-ROOT is non-nil, include the leading root invocation."
   (let ((first-nonspace (or (string-match-p "\\S-" text) -1))
-        (code-ranges (mevedel-skills-preparation-markdown-code-ranges text))
+        (code-ranges (mevedel-skills-syntax-markdown-code-ranges text))
         tokens)
     (dolist (occurrence
              (mevedel-mention-bindings-skill-token-occurrences text))
@@ -843,8 +839,7 @@ Returns:
             ;; returns; the caller only needs to know a skill took the send.
             'skill))))))
 
-(defun mevedel-skills-input--prepare-inline-attachments
-    (mentions callback &optional _prepared)
+(defun mevedel-skills-input--prepare-inline-attachments (mentions callback)
   "Prepare inline skill MENTIONS, then call CALLBACK.
 CALLBACK receives (:status ok :attachments LIST) or an error plist."
   (let ((available (cl-remove-if (lambda (mention)

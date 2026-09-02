@@ -351,23 +351,12 @@ function uses recorded extents and never scans TEXT."
         permission-rules
         (ptc-primitives :unrestricted)
         hook-rules
-        invoked-skills
-        hook-contexts
-        hook-audits
         (seen-attachments (make-hash-table :test #'equal))
         single-command-context)
     (dolist (pair pairs)
       (let* ((entry (plist-get pair :entry))
              (outcome (plist-get pair :outcome))
              (context (plist-get outcome :request-context)))
-        (setq invoked-skills
-              (append invoked-skills (plist-get context :invoked-skills))
-              hook-contexts
-              (append hook-contexts
-                      (and (plist-get outcome :hook-context)
-                           (list (plist-get outcome :hook-context))))
-              hook-audits
-              (append hook-audits (plist-get outcome :hook-audits)))
         (dolist (attachment (plist-get outcome :required-attachments))
           (let ((key
                  (cons
@@ -418,13 +407,10 @@ function uses recorded extents and never scans TEXT."
           :permission-rules permission-rules
           :ptc-primitives ptc-primitives
           :hook-rules hook-rules
-          :invoked-skills invoked-skills
-          :hook-contexts hook-contexts
-          :hook-audits hook-audits
           :single-command-context single-command-context)))
 
-(defun mevedel-skills-plan--prepared-outcome (plan pairs &optional records)
-  "Return the complete successful preparation outcome for PLAN and PAIRS."
+(defun mevedel-skills-plan--prepared-outcome (plan pairs prepared)
+  "Return the complete outcome for PLAN and PAIRS using PREPARED metadata."
   (let* ((aggregate (mevedel-skills-plan--aggregate-prepared pairs))
          (command-bodies (plist-get aggregate :command-bodies))
          ;; These ride the submitted model-input (turn-bound provenance
@@ -450,8 +436,7 @@ function uses recorded extents and never scans TEXT."
           (list :permission-rules (plist-get aggregate :permission-rules)
                 :ptc-primitives (plist-get aggregate :ptc-primitives)
                 :hook-rules (plist-get aggregate :hook-rules)
-                :invoked-skills (or records
-                                    (plist-get aggregate :invoked-skills)))))
+                :invoked-skills (plist-get prepared :invoked-skills))))
     (when (= (plist-get aggregate :command-count) 1)
       (let ((command-context
              (plist-get aggregate :single-command-context)))
@@ -472,10 +457,8 @@ function uses recorded extents and never scans TEXT."
                          'unavailable))
                    (mevedel-skill-invocation-plan-occurrences plan)))
           :request-context request-context
-          :hook-context
-          (when-let* ((contexts (plist-get aggregate :hook-contexts)))
-            (mapconcat #'identity contexts "\n\n"))
-          :hook-audits (plist-get aggregate :hook-audits))))
+          :hook-context (plist-get prepared :hook-context)
+          :hook-audits (plist-get prepared :hook-audits))))
 
 (defun mevedel-skills-plan-prepare (plan callback &optional cancelled-p)
   "Prepare PLAN sequentially, then call CALLBACK with one complete outcome.
@@ -518,18 +501,13 @@ transaction fails or is cancelled, later callbacks have no effect."
               ((not (eq (plist-get aggregate :status) 'ok))
                (finish aggregate))
               (t
-               (let ((outcome
-                      (mevedel-skills-plan--prepared-outcome
-                       plan
-                       (cl-mapcar (lambda (entry outcome)
-                                    (list :entry entry :outcome outcome))
-                                  entries (plist-get aggregate :outcomes))
-                       (plist-get aggregate :invoked-skills))))
-                 (setf (plist-get outcome :hook-context)
-                       (plist-get aggregate :hook-context)
-                       (plist-get outcome :hook-audits)
-                       (plist-get aggregate :hook-audits))
-                 (finish outcome)))))))
+               (finish
+                (mevedel-skills-plan--prepared-outcome
+                 plan
+                 (cl-mapcar (lambda (entry outcome)
+                              (list :entry entry :outcome outcome))
+                            entries (plist-get aggregate :outcomes))
+                 aggregate)))))))
       (if (cancelled)
           (cancel)
         (mevedel-skills-prepare-many

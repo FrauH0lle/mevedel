@@ -9,11 +9,15 @@
 ;; module.
 ;;
 ;; The host dials a self-hosted relay and never listens.  A share creates
-;; one room with two bearer links: the view link carries the bare room key
-;; and grants live read access; the full link appends a write token and
-;; additionally grants prompting (through the ordinary pending-input queue)
-;; and interrupting.  Everything that manipulates durable session state
-;; stays host-only regardless of link strength.
+;; one room with three bearer links, each a prefix of the next: the view
+;; link carries the bare room key and grants live read access; the full
+;; link appends a write token and additionally grants prompting (through
+;; the ordinary pending-input queue) and interrupting; the owner link
+;; appends an owner token and additionally grants the two authorities a
+;; host would otherwise have to be at the keyboard for -- changing the
+;; permission mode and creating a session.  Everything else that
+;; manipulates durable session state stays host-only regardless of link
+;; strength.
 
 ;;; Code:
 
@@ -232,6 +236,16 @@ nothing about one room reaches another room's guests.")
   (when session
     (cl-find session (mevedel-collaboration--room-list)
              :key (lambda (room) (plist-get room :session)))))
+
+(defun mevedel-collaboration--guest-text (value)
+  "Return VALUE trimmed when it is text this host may act on, else nil.
+A guest is untrusted, and every string one sends -- a prompt, a
+questionnaire answer, interaction feedback -- reaches model-visible
+context and the transcript the same way, so one budget covers them all."
+  (and (stringp value)
+       (<= (string-bytes value) mevedel-collaboration--max-prompt-bytes)
+       (let ((trimmed (string-trim value)))
+         (and (not (string-empty-p trimmed)) trimmed))))
 
 (defun mevedel-collaboration-notify-queue-changed (session)
   "Re-publish SESSION\='s queue to its guests after a queue change.
@@ -669,6 +683,7 @@ returning the live room."
                          (mevedel-collaboration--random-bytes 16)))
                (key (mevedel-collaboration--random-bytes 32))
                (write-token (mevedel-collaboration--random-bytes 16))
+               (owner-token (mevedel-collaboration--random-bytes 16))
                (records (mevedel-collaboration--canonical-records
                          data-buffer)))
     (unless (require 'websocket nil t)
@@ -700,6 +715,7 @@ returning the live room."
                         :room-id room-id
                         :key key
                         :write-token write-token
+                        :owner-token owner-token
                         :link-view
                         (format "%s/#%s.%s" web-origin room-id
                                 (mevedel-collaboration--base64url key))
@@ -707,6 +723,10 @@ returning the live room."
                         (format "%s/#%s.%s" web-origin room-id
                                 (mevedel-collaboration--base64url
                                  (concat key write-token)))
+                        :link-owner
+                        (format "%s/#%s.%s" web-origin room-id
+                                (mevedel-collaboration--base64url
+                                 (concat key write-token owner-token)))
                         :records records
                         :queue nil
                         :pending-tools nil

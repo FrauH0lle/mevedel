@@ -938,6 +938,22 @@
     (should (equal '(:type "compaction_error" :message "boom")
                    (plist-get (gptel-fsm-info fsm) :error)))))
 
+(mevedel-deftest mevedel--compact-terminate-request
+  (:doc "records structured failure and enters gptel's terminal error state")
+  (let ((fsm (gptel-make-fsm :info (list :buffer nil)))
+        status transition)
+    (cl-letf (((symbol-function 'gptel--fsm-transition)
+               (lambda (_fsm state) (setq transition state)))
+              ((symbol-function 'gptel--update-status)
+               (lambda (text &optional _face) (setq status text))))
+      (mevedel--compact-terminate-request fsm " Failed" 'boom))
+    (should (equal " Failed" status))
+    (should (eq 'ERRS transition))
+    (should (equal "Compaction failed: boom"
+                   (plist-get (gptel-fsm-info fsm) :status)))
+    (should (equal '(:type "compaction_error" :message "boom")
+                   (plist-get (gptel-fsm-info fsm) :error)))))
+
 (mevedel-deftest mevedel--compact-main-failure ()
   ,test
   (test)

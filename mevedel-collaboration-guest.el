@@ -18,9 +18,13 @@
                   "mevedel-collaboration" (string))
 (declare-function mevedel-collaboration--guest
                   "mevedel-collaboration" (room peer))
+(declare-function mevedel-collaboration--guest-text
+                  "mevedel-collaboration" (value))
 (declare-function mevedel-collaboration--observer-failure
                   "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--publish-queue
+                  "mevedel-collaboration" (room))
+(declare-function mevedel-collaboration--publish-status
                   "mevedel-collaboration" (room))
 (declare-function mevedel-collaboration--queue-position
                   "mevedel-collaboration" (room entry))
@@ -59,6 +63,16 @@
 (declare-function mevedel-collaboration--handle-artifact-get
                   "mevedel-collaboration-artifact" (room peer frame))
 
+;; `mevedel-collaboration-owner'
+(declare-function mevedel-collaboration--handle-new-session
+                  "mevedel-collaboration-owner" (room peer frame))
+(declare-function mevedel-collaboration--handle-set-mode
+                  "mevedel-collaboration-owner" (room peer frame))
+(autoload 'mevedel-collaboration--handle-new-session
+  "mevedel-collaboration-owner")
+(autoload 'mevedel-collaboration--handle-set-mode
+  "mevedel-collaboration-owner")
+
 ;; `mevedel-collaboration-projection'
 (declare-function mevedel-collaboration--canonical-records
                   "mevedel-collaboration-projection" (data-buffer))
@@ -82,6 +96,10 @@
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--settle
                   "mevedel-interaction-prompt" (overlay outcome))
+(declare-function mevedel--prompt-user-with-overlay
+                  "mevedel-interaction-prompt"
+                  (title content question help-echo-text callback
+                         &optional host-only))
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view-enqueue-external-follow-up
@@ -106,7 +124,13 @@
 (declare-function mevedel-session-set-pending-inputs
                   "mevedel-structs" (session category entries))
 (declare-function mevedel-session-workspace "mevedel-structs" (session))
+(declare-function mevedel-session-working-directory
+                  "mevedel-structs" (session))
 (declare-function mevedel-workspace-directives "mevedel-structs" (workspace))
+
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-sanitize
+                  "mevedel-session-artifacts" (name))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--abort-data-buffer
@@ -375,16 +399,6 @@ knows where it lived."
        (mevedel-collaboration--ui-request-frame
         request-id (gethash request-id requests))))))
 
-(defun mevedel-collaboration--guest-text (value)
-  "Return VALUE trimmed when it is text this host may act on, else nil.
-A guest is untrusted, and every string one sends -- a prompt, a
-questionnaire answer, interaction feedback -- reaches model-visible
-context and the transcript the same way, so one budget covers them all."
-  (and (stringp value)
-       (<= (string-bytes value) mevedel-collaboration--max-prompt-bytes)
-       (let ((trimmed (string-trim value)))
-         (and (not (string-empty-p trimmed)) trimmed))))
-
 (defun mevedel-collaboration--handle-ui-response (room peer frame)
   "Settle the ui-request answered by writable guest PEER through FRAME.
 
@@ -478,7 +492,15 @@ answer can execute the same path the host key binding would."
                        (plist-get frame :writeToken)))
              (writable (and claimed
                             (equal claimed (plist-get room :write-token))))
-             (guest (list :name name :writable writable :ready t
+             (claimed-owner (mevedel-collaboration--base64url-decode
+                             (plist-get frame :ownerToken)))
+             ;; Owner authority is never granted on its own: the owner
+             ;; link contains the write token, so a peer claiming one
+             ;; without the other is a forgery attempt, not a tier.
+             (owner (and writable claimed-owner
+                         (equal claimed-owner (plist-get room :owner-token))))
+             (guest (list :name name :writable writable :owner owner
+                          :ready t
                           :guest-id (mevedel-collaboration--sanitize-guest-id
                                      (plist-get frame :guestId)))))
         (puthash peer guest (plist-get room :guests))
@@ -825,7 +847,11 @@ handling stops the room instead of leaking into the session."
            (mevedel-collaboration--handle-artifact-get room peer frame))
           ("retract" (mevedel-collaboration--handle-retract room peer frame))
           ("ui-response"
-           (mevedel-collaboration--handle-ui-response room peer frame)))
+           (mevedel-collaboration--handle-ui-response room peer frame))
+          ("set-mode"
+           (mevedel-collaboration--handle-set-mode room peer frame))
+          ("new-session"
+           (mevedel-collaboration--handle-new-session room peer frame)))
       (error (mevedel-collaboration--observer-failure room)))))
 
 (defun mevedel-collaboration--on-control (data-buffer event peer)

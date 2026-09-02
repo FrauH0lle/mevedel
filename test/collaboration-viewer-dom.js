@@ -34,6 +34,15 @@ class Element {
     (this.listeners[type] || []).forEach(callback => callback(event));
   }
   click() { this.clicked = true; }
+  focus() { this.focused = true; }
+  // <dialog> is the whole modal, so the stub carries its three moving
+  // parts: open state, a return value, and the close event.
+  showModal() { this.open = true; }
+  close(value) {
+    this.open = false;
+    if (value !== undefined) this.returnValue = value;
+    this.dispatch('close');
+  }
 }
 
 function element(document, tag, className, text) {
