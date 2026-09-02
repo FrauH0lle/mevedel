@@ -47,13 +47,12 @@ stranger's room carries only their own ciphertext. Set the matching
 header rather than a query parameter, because reverse proxies log query
 strings.
 
-The relay holds only live connections and their Web Push endpoints plus a
-lazy max-room-age sweep (`-max-room-age`, default 24h) as a backstop against
-a crashed host; the policy TTL lives in Emacs
-(`mevedel-collaboration-share-ttl`). Push delivery accepts only bounded HTTPS
-endpoints and refuses private or otherwise non-public destination addresses.
-The Emacs host retains endpoint routing metadata while the room is live and
-replays it after a relay transport reconnect.
+The relay holds only live connections and their Web Push endpoints. A host
+disconnect garbage-collects its room immediately; WebSocket keepalive detects
+dead peers. Push delivery accepts only bounded HTTPS endpoints and refuses
+private or otherwise non-public destination addresses. The Emacs host retains
+endpoint routing metadata while the room is live and replays it after a relay
+transport reconnect.
 
 ## Releases
 

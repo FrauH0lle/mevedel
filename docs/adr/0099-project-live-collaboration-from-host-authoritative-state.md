@@ -1,6 +1,7 @@
 # Project live collaboration from host-authoritative state
 
-Status: accepted (amended 2026-08-29, twice; 2026-08-30; 2026-08-31)
+Status: accepted (amended 2026-08-29, twice; 2026-08-30; 2026-08-31;
+room lifetime superseded by ADR 0114)
 
 Live collaboration keeps the original Emacs process authoritative and exposes
 only an allowlisted semantic projection of its canonical session state. A
@@ -87,11 +88,11 @@ model's own question list, not from the guest. The
 host-user-on-their-own-phone case makes a session that cannot be steered
 until the user returns to Emacs strictly worse than one they can prompt and
 stop remotely, and the authority boundary is explicit: possession of the
-full link is the credential, bounded by per-share random rooms and a
-host-enforced TTL. Execution still happens only on the host, view links
-carry no input authority, and lease transfer, save, rewind, fork,
-publication, and execution-target selection remain impossible from the
-browser regardless of link strength.
+full link is the credential, bounded by per-share random rooms and the
+explicit host share lifecycle described by ADR 0114. Execution still happens
+only on the host, view links carry no input authority, and lease transfer,
+save, rewind, fork, publication, and execution-target selection remain
+impossible from the browser regardless of link strength.
 
 The spike evidence above described the loopback listener and remains
 historically accurate for that transport; it does not describe the relay
@@ -180,7 +181,7 @@ reach.
 The landing note accepted one room per Emacs process as a limitation and
 reserved an additive `session-list`/`switch-session` extension. The
 limitation fell -- the singleton became a registry keyed by the owning data
-buffer, and each shared session now has its own key, bearer links, TTL, and
+buffer, and each shared session now has its own key, bearer links, and
 guest set -- but the reserved extension is rejected rather than deferred:
 one bearer link that grants every shared session is a strictly worse
 credential than one link per session, and "switching" on a guest device is
@@ -199,9 +200,9 @@ ordinary Home Screen lifecycle.
 The viewer clears the stored bearer when it observes the room ending or its
 bounded reconnect window expires. If the viewer is never opened again, site
 data may retain the link beyond the room's lifetime; room collection and the
-host TTL still make that bearer unusable against a live share. The disclosure
-states this persistence explicitly. The relay remains content-blind because it
-still receives ciphertext rather than the key.
+explicit host share lifecycle still makes that bearer unusable after teardown.
+The disclosure states this persistence explicitly. The relay remains
+content-blind because it still receives ciphertext rather than the key.
 
 ## Amendment: content-blind background Web Push (2026-08-31)
 
@@ -281,8 +282,7 @@ self-contained rule is enforced, not merely requested. "Open in tab"
 opens a same-origin shell synchronously from the click with the bytes
 already in hand, containing only the same sandboxed frame. Guests
 author artifacts through the model only; there is no upload path.
-An artifact's public lifetime remains the room's: the existing share
-TTL and relay max-room-age already cover it, so no artifact-specific
+An artifact's public lifetime remains the room's, so no artifact-specific
 retention exists.
 
 Portable session publication now includes recursive regular files below
