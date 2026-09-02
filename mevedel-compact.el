@@ -278,8 +278,25 @@ With prefix argument AGGRESSIVE, compact without preserving a recent
        :aggressive aggressive
        :instructions instructions))))
 
-(defun mevedel--compact-auto-failure (chat-buffer err)
-  "Surface automatic compaction failure ERR for CHAT-BUFFER."
+(defun mevedel--compact-terminate-request (fsm status err)
+  "Move FSM to its error state after compaction failure ERR.
+
+STATUS is the gptel status shown before the terminal transition.  gptel
+settles a turn from its terminal states, so a compaction that refuses to
+send the request has to move the machine there itself.  Left in WAIT the
+turn never settles: the view goes on reporting a running request, the
+Stop hooks and the autosave never run, and queued pending inputs wait on
+a request that will never reach them."
+  (when-let* ((info (and fsm (gptel-fsm-info fsm))))
+    (gptel--update-status status 'error)
+    (plist-put info :status (format "Compaction failed: %s" err))
+    (plist-put info :error
+               (list :type "compaction_error" :message (format "%s" err)))
+    (setf (gptel-fsm-info fsm) info)
+    (gptel--fsm-transition fsm 'ERRS)))
+
+(defun mevedel--compact-auto-failure (fsm chat-buffer err)
+  "Surface automatic compaction failure ERR for CHAT-BUFFER and end FSM."
   (when (buffer-live-p chat-buffer)
     (with-current-buffer chat-buffer
       (when (>= mevedel-compact-run-failure-count 3)
@@ -292,14 +309,13 @@ With prefix argument AGGRESSIVE, compact without preserving a recent
           "Auto-compaction failed; request not sent: %s")
         err)
        :warning)
-      (when (fboundp 'gptel--update-status)
-        (gptel--update-status " Compaction failed" 'error))
       (when-let* ((vb mevedel--view-buffer)
                   (_ (buffer-live-p vb)))
         (with-current-buffer vb
           (if (fboundp 'mevedel-view--stop-request-progress)
               (mevedel-view--stop-request-progress)
-            (mevedel-view--stop-spinner)))))))
+            (mevedel-view--stop-spinner))))
+      (mevedel--compact-terminate-request fsm " Compaction failed" err))))
 
 (defun mevedel--compact-continuation-wait-p (fsm)
   "Return non-nil when FSM is entering WAIT for a tool continuation."
@@ -400,18 +416,14 @@ set already stored on FSM's info plist."
     (when (mevedel-agent-invocation-p invocation)
       (mevedel-agent-conversation-record-activity
        invocation '(:type status :summary "error")))
-    (gptel--update-status " Agent failed" 'error)
-    (plist-put info :status (format "Compaction failed: %s" err))
-    (plist-put info :error
-               (list :type "compaction_error" :message (format "%s" err)))
-    (gptel--fsm-transition fsm 'ERRS)))
+    (mevedel--compact-terminate-request fsm " Agent failed" err)))
 
-(defun mevedel--compact-main-failure (target _fsm err)
-  "Surface automatic main TARGET compaction failure ERR."
+(defun mevedel--compact-main-failure (target fsm err)
+  "Surface automatic main TARGET compaction failure ERR and end FSM."
   (let ((buffer (plist-get target :buffer)))
     (mevedel-goal-pause-runtime-failure
      buffer (format "Compaction failed: %s" err))
-    (mevedel--compact-auto-failure buffer err)))
+    (mevedel--compact-auto-failure fsm buffer err)))
 
 (defun mevedel--compact-handle-target-wait
     (fsm target admission &optional pending-start)
@@ -627,7 +639,7 @@ state machine."
                 (if (not pending-start)
                     (if (plist-get admission :target-pressure)
                         (mevedel--compact-auto-failure
-                         source-buffer
+                         fsm source-buffer
                          "No compactable history remains at target pressure")
                       (continue-with-snapshot))
                   (let ((source-pending-text
@@ -652,7 +664,8 @@ state machine."
                             ((eq err :skip)
                              (continue-with-snapshot))
                             (err
-                             (mevedel--compact-auto-failure source-buffer err))
+                             (mevedel--compact-auto-failure
+                              fsm source-buffer err))
                             (t
                              (let (context-tail-end)
                                (when (and (buffer-live-p prompt-buffer)

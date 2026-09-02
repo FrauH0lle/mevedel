@@ -227,7 +227,7 @@
                        (lambda (&optional _tokens)
                          '(:summary-policy nil :target-pressure t)))
                       ((symbol-function 'mevedel--compact-auto-failure)
-                       (lambda (_buffer err) (setq failure err))))
+                       (lambda (_fsm _buffer err) (setq failure err))))
               (with-current-buffer prompt-buf
                 (mevedel--compact-transform-auto
                  (lambda () (cl-incf continued)) fsm))))
@@ -836,7 +836,7 @@
                      (lambda (&optional _tokens)
                        '(:summary-policy nil :target-pressure t)))
                     ((symbol-function 'mevedel--compact-auto-failure)
-                     (lambda (_buffer err) (setq failure err))))
+                     (lambda (_fsm _buffer err) (setq failure err))))
             (mevedel--compact-handle-wait fsm))
           (should (= sent 0))
           (should (string-match-p "No compactable history" failure)))
@@ -943,19 +943,59 @@
   (test)
   :doc "routes target failure through main automatic failure reporting"
   (let ((buffer (generate-new-buffer " *mevedel-compact-failure*"))
+        (fsm (gptel-make-fsm :info (list :buffer nil)))
         captured paused)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--compact-auto-failure)
-                   (lambda (actual-buffer err)
-                     (setq captured (list actual-buffer err))))
+                   (lambda (actual-fsm actual-buffer err)
+                     (setq captured (list actual-fsm actual-buffer err))))
                   ((symbol-function 'mevedel-goal-pause-runtime-failure)
                    (lambda (actual-buffer reason)
                      (setq paused (list actual-buffer reason)))))
           (mevedel--compact-main-failure
-           (list :buffer buffer) nil "boom")
-          (should (equal (list buffer "boom") captured))
+           (list :buffer buffer) fsm "boom")
+          (should (equal (list fsm buffer "boom") captured))
           (should (equal (list buffer "Compaction failed: boom") paused)))
       (kill-buffer buffer))))
+
+(mevedel-deftest mevedel--compact-auto-failure ()
+  ,test
+  (test)
+
+  :doc "warns and moves the refused request to its terminal state"
+  ;; A compaction that refuses to send owns the machine it refused for.
+  ;; Left in WAIT the turn never settles, so the view keeps reporting a
+  ;; running request and queued pending inputs wait on a request that will
+  ;; never reach them.
+  (let ((buffer (generate-new-buffer " *mevedel-compact-auto-failure*"))
+        warning status transition)
+    (unwind-protect
+        (let ((fsm (gptel-make-fsm :info (list :buffer buffer))))
+          (cl-letf (((symbol-function 'gptel--fsm-transition)
+                     (lambda (_fsm state) (setq transition state)))
+                    ((symbol-function 'gptel--update-status)
+                     (lambda (text &optional _face) (setq status text)))
+                    ((symbol-function 'display-warning)
+                     (lambda (_type text &rest _) (setq warning text))))
+            (mevedel--compact-auto-failure fsm buffer "boom"))
+          (should (string-match-p "request not sent: boom" warning))
+          (should (equal " Compaction failed" status))
+          (should (eq 'ERRS transition))
+          (should (equal "Compaction failed: boom"
+                         (plist-get (gptel-fsm-info fsm) :status)))
+          (should (equal '(:type "compaction_error" :message "boom")
+                         (plist-get (gptel-fsm-info fsm) :error))))
+      (kill-buffer buffer)))
+
+  :doc "reports and settles nothing for a dead chat buffer"
+  (let ((buffer (generate-new-buffer " *mevedel-compact-auto-failure*"))
+        (transition 'none))
+    (kill-buffer buffer)
+    (cl-letf (((symbol-function 'gptel--fsm-transition)
+               (lambda (_fsm state) (setq transition state))))
+      (mevedel--compact-auto-failure
+       (gptel-make-fsm :info (list :buffer nil)) buffer "boom"))
+    (should (eq 'none transition))))
 
 (mevedel-deftest mevedel--compact-handle-target-wait ()
   ,test
