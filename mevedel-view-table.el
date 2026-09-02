@@ -18,6 +18,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-utilities)
 (require 'text-property-search)
 
 ;; `mevedel-view-markdown'
@@ -40,11 +41,29 @@
   "Face for rendered Markdown table borders."
   :group 'mevedel)
 
-(defface mevedel-view-table-zebra
-  '((((background light)) :background "grey95")
-    (((background dark)) :background "grey13"))
-  "Face for alternating rendered Markdown table data rows."
+(defcustom mevedel-view-table-zebra-intensity 0.09
+  "How far the table stripe is blended from the background to the foreground.
+Unlike a muted foreground this can be a constant: the blend direction
+flips with the theme, so one value lands between 1.08:1 and 1.34:1
+against the background on every theme measured, light or dark."
+  :type 'float
   :group 'mevedel)
+
+(defface mevedel-view-table-zebra
+  '((t :extend t))
+  "Face for alternating rendered Markdown table data rows.
+The background is blended from the active theme by
+`mevedel--derive-theme-faces'; a fixed grey is either invisible against
+a near-black theme or wrong for a light one.  `:extend' keeps the stripe
+running to the window edge instead of stopping at the last cell."
+  :group 'mevedel)
+
+(mevedel--derive-theme-face
+ 'mevedel-view-table-zebra
+ (lambda (foreground background)
+   (list :background
+         (mevedel--tint background foreground
+                        mevedel-view-table-zebra-intensity))))
 
 (defconst mevedel-view-table--max-width-fraction 0.9
   "Fraction of the usable window width a rendered table may occupy.")
