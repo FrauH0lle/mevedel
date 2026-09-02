@@ -494,7 +494,9 @@ reconstructed into a child conversation."
   "Return tail start before LIMIT, or LIMIT when AGGRESSIVE.
 The tail starts after the response preceding the preserved recent turns.
 If keeping `mevedel-compact-evidence-tail-turns' turns would exceed
-`mevedel-compact-evidence-tail-budget', older preserved turns are dropped.
+`mevedel-compact-evidence-tail-budget', older preserved turns are dropped,
+down to none: a single agentic turn can outgrow the budget on its own, and
+preserving it verbatim would leave nothing for compaction to reclaim.
 BODY-START defaults to the main-session body start."
   (if aggressive
       limit
@@ -516,7 +518,10 @@ BODY-START defaults to the main-session body start."
                         body-start
                       (nth (- count n) starts))))))
         (setq start (start-for turns))
-        (while (and (> turns 1)
+        ;; ponytail: whole-turn granularity, so a lone oversized turn loses
+        ;; its tail entirely; cut at a segment boundary inside the turn if
+        ;; keeping the most recent tool calls verbatim turns out to matter.
+        (while (and (> turns 0)
                     (> (- limit start) budget-chars))
           (cl-decf turns)
           (setq start (start-for turns))))

@@ -468,28 +468,45 @@
             (mevedel-model-reserve-tokens 20)
             (gptel-model nil)
             (mevedel-compact-evidence-tail-turns 2)
-            (mevedel-compact-evidence-tail-budget 0.01))
+            (mevedel-compact-evidence-tail-budget 0.2))
         (should (= (mevedel-compact-evidence-tail-start (point-max) nil)
                    after-a2)))))
 
-  :doc "drops older turn even when session has only target turn count"
+  :doc "drops every preserved turn when even one exceeds the tail budget"
   (with-temp-buffer
     (insert "u1\n")
     (let ((a1-start (point)))
       (insert (make-string 40 ?a) "\n")
       (put-text-property a1-start (point) 'gptel 'response))
-    (let ((after-a1 (point)))
-      (insert "u2\n")
-      (let ((a2-start (point)))
-        (insert (make-string 40 ?b) "\n")
-        (put-text-property a2-start (point) 'gptel 'response))
-      (let ((mevedel-model-context-limit 100)
-            (mevedel-model-reserve-tokens 20)
-            (gptel-model nil)
-            (mevedel-compact-evidence-tail-turns 2)
-            (mevedel-compact-evidence-tail-budget 0.01))
-        (should (= (mevedel-compact-evidence-tail-start (point-max) nil)
-                   after-a1)))))
+    (insert "u2\n")
+    (let ((a2-start (point)))
+      (insert (make-string 40 ?b) "\n")
+      (put-text-property a2-start (point) 'gptel 'response))
+    (let ((mevedel-model-context-limit 100)
+          (mevedel-model-reserve-tokens 20)
+          (gptel-model nil)
+          (mevedel-compact-evidence-tail-turns 2)
+          (mevedel-compact-evidence-tail-budget 0.01))
+      (should (= (mevedel-compact-evidence-tail-start (point-max) nil)
+                 (point-max)))))
+
+  :doc "compacts a lone oversized turn instead of preserving all of it"
+  ;; A long agentic turn is one turn no matter how many tool calls it makes.
+  ;; Preserving it verbatim left auto-compaction with an empty history
+  ;; region and failed the request with "No compactable history remains at
+  ;; target pressure".
+  (with-temp-buffer
+    (insert "u1\n")
+    (let ((a1-start (point)))
+      (insert (make-string 400 ?a) "\n")
+      (put-text-property a1-start (point) 'gptel 'response))
+    (let ((mevedel-model-context-limit 100)
+          (mevedel-model-reserve-tokens 20)
+          (gptel-model nil)
+          (mevedel-compact-evidence-tail-turns 2)
+          (mevedel-compact-evidence-tail-budget 0.01))
+      (should (= (mevedel-compact-evidence-tail-start (point-max) nil)
+                 (point-max)))))
 
   :doc "keeps tool-using response chunks inside the same turn"
   (with-temp-buffer
