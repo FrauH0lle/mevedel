@@ -377,6 +377,13 @@ both constraints:
 - budget: `mevedel-compact-evidence-tail-budget` of usable context, default
   0.25.
 
+The budget is a hard maximum, so preserved turns are dropped until the tail
+fits -- including the last one. A single agentic turn is one turn no matter
+how many tool calls it makes, and one that outgrows the budget on its own is
+compacted rather than preserved: preserving it would leave the summarizer an
+empty history region and fail the request with "No compactable history
+remains at target pressure".
+
 Response boundaries and preserved-tail turn starts are derived from
 `mevedel-transcript-segments`. A turn start is the first real
 user prompt line after an assistant response, excluding gptel-owned
