@@ -514,9 +514,11 @@ resolve but at least can."
 
 (defun mevedel-tool-task--format-one (task &optional owner-prefix tasks)
   "Format TASK as a single display line (propertized).
-OWNER-PREFIX is a display label rendered dim ahead of the task text,
-or nil for the main session and for rows already sitting under an
-owner header.  TASKS is the session task list, used to describe
+OWNER-PREFIX is a display label rendered ahead of the task text, or
+nil for the main session and for rows already sitting under an owner
+header.  The label carries the row's own face so it names the owner
+without dimming it, except behind the dim separator that joins it to
+the task text.  TASKS is the session task list, used to describe
 blockers."
   (let* ((status (mevedel-task-status task))
          (id (mevedel-task-id task))
@@ -541,7 +543,12 @@ blockers."
             (mevedel-tool-task--propertize-row-part
              (format "#%d " id) face)
             (when owner-prefix
-              (mevedel-tool-task--dim (concat owner-prefix " · ")))
+              (concat (mevedel-tool-task--propertize-row-part
+                       owner-prefix
+                       (if (eq status 'completed)
+                           face
+                         'font-lock-constant-face))
+                      (mevedel-tool-task--dim " · ")))
             (mevedel-tool-task--propertize-row-part text face)
             (mevedel-tool-task--blocked-suffix task tasks))))
 
@@ -627,8 +634,8 @@ the tasks a truncation drops."
                                                  max-lines)
   "Return the task panel body for SESSION.
 Open tasks are ordered once by `mevedel-tool-task--sort-active-tasks'.
-An owner holding a single open task renders inline behind a dim owner
-prefix; an owner holding several renders under one dim header placed
+An owner holding a single open task renders inline behind an owner
+prefix; an owner holding several renders under one header placed
 at that owner's best-ordered task, which keeps its rows adjacent and
 so bends the global order for the rest of the group.  The main session
 renders without a prefix and never takes a header, and its status note
@@ -672,8 +679,9 @@ MAX-LINES caps the rendered body without changing task storage."
            ((gethash owner grouped))
            (t
             (puthash owner t grouped)
-            (push (list (mevedel-tool-task--dim
-                         (mevedel-tool-task--owner-display-label owner))
+            (push (list (mevedel-tool-task--propertize-row-part
+                         (mevedel-tool-task--owner-display-label owner)
+                         'font-lock-constant-face)
                         0 0)
                   rows)
             (when-let* ((row (note-row owner)))
