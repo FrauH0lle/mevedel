@@ -614,9 +614,10 @@ reports two bearer links (the full-control link is copied to the kill ring).
 `/collab status` reports the room, relay connectivity, and guest names
 without printing any secret, and `/collab stop` ends that session's room.
 Sessions may be shared concurrently; each has an independent room, key,
-guest set, and TTL. Killing the owning data buffer, ending its session,
-exiting Emacs, or the `mevedel-collaboration-share-ttl` timer tears its room
-down. The share surface is a singleton QR panel for the selected room.
+and guest set. Killing the owning data buffer, ending its session, explicitly
+stopping the share, or exiting Emacs tears its room down. Otherwise the room
+remains available for the host share's lifetime, including when no guest is
+connected. The share surface is a singleton QR panel for the selected room.
 
 The relay (the Go binary in `relay/`, which also serves the static viewer)
 is content-blind: every frame is sealed with AES-256-GCM under a room key
@@ -739,7 +740,7 @@ reconnect, so background delivery survives an ordinary host network blip.
 Notification opt-in retains the bearer link in browser local storage so a
 suspended PWA can reconnect. The viewer clears it and unsubscribes after
 observing room termination or exhausting reconnects; otherwise browser site
-data can outlive the room, although an expired room id and key no longer
+data can outlive the room, although an ended room id and key no longer
 authorize a live share.
 
 The host reconnects to the relay with bounded backoff after a network blip;

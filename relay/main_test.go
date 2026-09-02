@@ -37,7 +37,7 @@ func startRelay(t *testing.T) (*relay, *httptest.Server) {
 	if err != nil {
 		t.Fatalf("new push sender: %v", err)
 	}
-	rl := newRelay(24*time.Hour, testHostToken, push)
+	rl := newRelay(testHostToken, push)
 	srv := httptest.NewServer(rl.mux())
 	t.Cleanup(srv.Close)
 	return rl, srv
@@ -65,7 +65,7 @@ func TestHostTokenModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new push sender: %v", err)
 	}
-	rl := newRelay(24*time.Hour, "s3cret", push)
+	rl := newRelay("s3cret", push)
 	srv := httptest.NewServer(rl.mux())
 	t.Cleanup(srv.Close)
 
@@ -100,7 +100,7 @@ func TestHostTokenModes(t *testing.T) {
 	expectText(t, host, `{"t":"peer-joined","peer":1}`)
 	guest.CloseNow()
 
-	openRelay := newRelay(24*time.Hour, "", push)
+	openRelay := newRelay("", push)
 	openServer := httptest.NewServer(openRelay.mux())
 	t.Cleanup(openServer.Close)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -379,19 +379,6 @@ func TestPathValidation(t *testing.T) {
 			t.Errorf("GET %s: status %d, want 404", url, resp.StatusCode)
 		}
 	}
-}
-
-func TestExpiredRoomSweep(t *testing.T) {
-	rl, srv := startRelay(t)
-	host := dial(t, srv, testRoom, "host")
-	defer host.CloseNow()
-	guest := dial(t, srv, testRoom, "guest")
-	expectText(t, host, `{"t":"peer-joined","peer":1}`)
-	// Everything is older than a cutoff in the future.
-	rl.closeExpired(time.Now().Add(time.Hour))
-	expectText(t, guest, `{"t":"room-closed"}`)
-	expectClose(t, guest, closeRoomClosed)
-	waitEmpty(t, rl)
 }
 
 func TestHealthzAndViewer(t *testing.T) {

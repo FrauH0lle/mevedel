@@ -17,6 +17,7 @@
 (require 'gptel)
 (require 'mevedel-agent-control)
 (require 'mevedel-collaboration-projection)
+(require 'mevedel-collaboration-task)
 (require 'mevedel-collaboration-transport)
 (require 'mevedel-collaboration)
 (require 'mevedel-collaboration-guest)
@@ -789,20 +790,23 @@
 ;;; Room lifecycle
 
 (mevedel-deftest mevedel-collaboration--start
-  (:doc "builds the room, both bearer links, and the TTL timer")
+  (:doc "builds the room and both bearer links without scheduling expiry")
   (with-temp-buffer
     (let ((mevedel-collaboration-relay-url "ws://127.0.0.1:1")
           (mevedel-collaboration-relay-host-token "test-token")
-          (mevedel-collaboration-share-ttl 60)
           (mevedel-collaboration--rooms (make-hash-table :test #'eq))
           (session (mevedel-session--create :name "share"))
-          dialed room)
+          dialed scheduled room)
       (unwind-protect
           (progn
             (cl-letf (((symbol-function 'mevedel-collaboration--transport-open)
                        (lambda (url _key &rest _) (setq dialed url) 'transport))
                       ((symbol-function 'mevedel-collaboration--canonical-records)
-                       (lambda (_) nil)))
+                       (lambda (_) nil))
+                      ((symbol-function 'run-at-time)
+                       (lambda (&rest args)
+                         (push args scheduled)
+                         'timer)))
               (setq room (mevedel-collaboration--start session
                                                         (current-buffer))))
             (should (string-match
@@ -830,12 +834,10 @@
                               full-secret)
                              (concat (plist-get room :key)
                                      (plist-get room :write-token)))))
-            (should (timerp (plist-get room :ttl-timer)))
+            (should-not scheduled)
             ;; Restarting for the same session reuses the room.
             (should (eq room (mevedel-collaboration--start
                               session (current-buffer)))))
-        (when-let* ((timer (plist-get room :ttl-timer)))
-          (cancel-timer timer))
         (remove-hook 'kill-emacs-hook
                      #'mevedel-collaboration--stop-for-emacs)
         (remove-hook 'mevedel-interaction-prompt-created-hook
@@ -849,7 +851,6 @@
         (data-b (generate-new-buffer " *collab-multi-b*"))
         (mevedel-collaboration-relay-url "ws://127.0.0.1:1")
         (mevedel-collaboration-relay-host-token "test-token")
-        (mevedel-collaboration-share-ttl nil)
         (mevedel-collaboration--rooms (make-hash-table :test #'eq))
         (session-a (mevedel-session--create :name "a"))
         (session-b (mevedel-session--create :name "b"))
@@ -906,8 +907,7 @@
            (room (list :transport 'transport
                        :data-buffer (current-buffer)
                        :guests guests
-                       :publish-timer 'publish-timer
-                       :ttl-timer 'ttl-timer)))
+                       :publish-timer 'publish-timer)))
       (puthash 1 (list :name "g") guests)
       (let ((mevedel-collaboration--rooms
              (mevedel-test-room-registry room)))
@@ -924,26 +924,20 @@
               (lambda (_transport) (setq transport-stopped t))))
           (mevedel-collaboration--stop-internal room 'user-stop))
         (should-not (mevedel-collaboration--room-list)))
-      (should (equal '(publish-timer ttl-timer) (nreverse cancelled)))
+      (should (equal '(publish-timer) cancelled))
       (should (equal "bye" (plist-get (cdr (car sent)) :t)))
       (should transport-stopped))))
 
-(mevedel-deftest mevedel-collaboration--lifecycle-hooks
-  (:doc "stops on data-buffer, session, TTL, and Emacs lifecycle teardown")
+(mevedel-deftest mevedel-collaboration--stop-for-buffer
+  (:doc "stops the room when its owning data buffer is killed")
   (with-temp-buffer
     (let* ((room (list :data-buffer (current-buffer)))
            (mevedel-collaboration--rooms (mevedel-test-room-registry room))
-           reasons)
+           stopped)
       (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
-                 (lambda (_room reason) (push reason reasons)))
-                ((symbol-function 'message) (lambda (&rest _) nil)))
+                 (lambda (_room reason) (setq stopped reason))))
         (mevedel-collaboration--stop-for-buffer)
-        (mevedel-collaboration--stop-for-session)
-        (mevedel-collaboration--stop-for-ttl (current-buffer))
-        (mevedel-collaboration--stop-for-emacs))
-      (should (equal '(emacs-exit ttl-expired data-buffer-killed
-                                  data-buffer-killed)
-                     reasons)))))
+        (should (eq 'data-buffer-killed stopped))))))
 
 (mevedel-deftest mevedel-collaboration--stop-for-session
   (:doc "stops the room when its owning data buffer ends the session")
@@ -955,5 +949,18 @@
                  (lambda (_room reason) (setq stopped reason))))
         (mevedel-collaboration--stop-for-session)
         (should (eq 'data-buffer-killed stopped))))))
+
+(mevedel-deftest mevedel-collaboration--stop-for-emacs
+  (:doc "stops every room when Emacs exits")
+  (with-temp-buffer
+    (let* ((room (list :data-buffer (current-buffer)))
+           (mevedel-collaboration--rooms (mevedel-test-room-registry room))
+           stopped)
+      (cl-letf (((symbol-function 'mevedel-collaboration--stop-internal)
+                 (lambda (seen-room reason)
+                   (setq stopped (cons seen-room reason)))))
+        (mevedel-collaboration--stop-for-emacs)
+        (should (eq room (car stopped)))
+        (should (eq 'emacs-exit (cdr stopped)))))))
 
 ;;; test-mevedel-collaboration.el ends here

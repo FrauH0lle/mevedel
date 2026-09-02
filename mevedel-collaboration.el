@@ -145,16 +145,6 @@ query parameter because reverse proxies log query strings."
                  (string :tag "Token"))
   :group 'mevedel)
 
-(defcustom mevedel-collaboration-share-ttl 3600
-  "Seconds after which an active share stops itself, or nil for no limit.
-
-The room and both bearer links die with the share, so forgotten links
-do not stay live.  The relay's max-room-age is only a backstop against
-a crashed host; this timer is the policy."
-  :type '(choice (const :tag "Until stopped" nil)
-                 (integer :tag "Seconds"))
-  :group 'mevedel)
-
 (defcustom mevedel-collaboration-guest-skills nil
   "Command and skill names a full-link guest may invoke as buttons.
 
@@ -225,8 +215,8 @@ event (double click, stale viewer), not a second question.")
 
 (defvar mevedel-collaboration--rooms (make-hash-table :test #'eq)
   "Live collaboration rooms, keyed by their owning data buffer.
-Each shared session has its own room, key, bearer links, TTL, and
-guest set; nothing about one room reaches another room's guests.")
+Each shared session has its own room, key, bearer links, and guest set;
+nothing about one room reaches another room's guests.")
 
 
 ;;
@@ -611,7 +601,7 @@ request or prompt transaction."
 ;;; Room lifecycle
 
 (defun mevedel-collaboration--stop-internal (room &optional reason)
-  "Stop ROOM and all associated processes and timers."
+  "Stop ROOM and its associated transport and publish timer."
   (when (and room
              (eq room (mevedel-collaboration--room-for-buffer
                        (plist-get room :data-buffer))))
@@ -635,9 +625,8 @@ request or prompt transaction."
                        #'mevedel-collaboration--safe-pre-tool)
           (remove-hook 'gptel-post-tool-call-functions
                        #'mevedel-collaboration--safe-post-tool))))
-    (dolist (key '(:publish-timer :ttl-timer))
-      (when-let* ((timer (plist-get room key)))
-        (cancel-timer timer)))
+    (when-let* ((timer (plist-get room :publish-timer)))
+      (cancel-timer timer))
     (when-let* ((transport (plist-get room :transport)))
       (unless (eq reason 'emacs-exit)
         (condition-case nil
@@ -663,13 +652,6 @@ request or prompt transaction."
   "Stop every share before Emacs exits."
   (dolist (room (mevedel-collaboration--room-list))
     (mevedel-collaboration--stop-internal room 'emacs-exit)))
-
-(defun mevedel-collaboration--stop-for-ttl (data-buffer)
-  "Stop DATA-BUFFER's share when its TTL expires."
-  (when-let* ((room (mevedel-collaboration--room-for-buffer data-buffer)))
-    (mevedel-collaboration--stop-internal room 'ttl-expired)
-    (message "mevedel: collaboration share expired for %s"
-             (plist-get room :session-label))))
 
 (cl-defun mevedel-collaboration--start (session data-buffer)
   "Start a room for SESSION and DATA-BUFFER and return the room.
@@ -733,12 +715,7 @@ returning the live room."
                         :guests (make-hash-table :test #'eql)
                         :push-guests (make-hash-table :test #'equal)
                         :ui-requests (make-hash-table :test #'eql)
-                        :publish-timer nil
-                        :ttl-timer
-                        (when mevedel-collaboration-share-ttl
-                          (run-at-time mevedel-collaboration-share-ttl nil
-                                       #'mevedel-collaboration--stop-for-ttl
-                                       data-buffer)))
+                        :publish-timer nil)
                   mevedel-collaboration--rooms)
             (with-current-buffer data-buffer
               (add-hook 'kill-buffer-hook

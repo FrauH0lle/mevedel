@@ -76,14 +76,12 @@ type room struct {
 	guests        map[uint32]*websocket.Conn
 	subscriptions map[string]pushSubscription
 	nextPeer      uint32
-	created       time.Time
 }
 
 type relay struct {
 	// ponytail: one global lock; per-room locks if guest counts ever matter.
-	mu         sync.Mutex
-	rooms      map[string]*room
-	maxRoomAge time.Duration
+	mu    sync.Mutex
+	rooms map[string]*room
 	// hostToken, when non-empty, is required in the X-Mevedel-Host-Token
 	// header of a role=host upgrade. Guests stay tokenless: their authority
 	// is the bearer link, and their room carries only its host's ciphertext.
@@ -91,12 +89,11 @@ type relay struct {
 	push      pushSender
 }
 
-func newRelay(maxRoomAge time.Duration, hostToken string, push pushSender) *relay {
+func newRelay(hostToken string, push pushSender) *relay {
 	return &relay{
-		rooms:      make(map[string]*room),
-		maxRoomAge: maxRoomAge,
-		hostToken:  hostToken,
-		push:       push,
+		rooms:     make(map[string]*room),
+		hostToken: hostToken,
+		push:      push,
 	}
 }
 
@@ -198,7 +195,7 @@ func (rl *relay) runHost(id string, c *websocket.Conn) {
 	}
 	rm := &room{
 		host: c, guests: make(map[uint32]*websocket.Conn),
-		subscriptions: make(map[string]pushSubscription), nextPeer: 1, created: time.Now(),
+		subscriptions: make(map[string]pushSubscription), nextPeer: 1,
 	}
 	rl.rooms[id] = rm
 	rl.mu.Unlock()
@@ -303,34 +300,8 @@ func (rl *relay) closeRoom(id string, rm *room) {
 	}
 }
 
-// closeExpired closes the host socket of every room created before CUTOFF;
-// the host read loop then runs the ordinary room teardown. This is the
-// backstop against a crashed host whose TCP connection never died cleanly --
-// the policy TTL lives host-side.
-func (rl *relay) closeExpired(cutoff time.Time) {
-	rl.mu.Lock()
-	var hosts []*websocket.Conn
-	for _, rm := range rl.rooms {
-		if rm.created.Before(cutoff) {
-			hosts = append(hosts, rm.host)
-		}
-	}
-	rl.mu.Unlock()
-	for _, h := range hosts {
-		h.Close(websocket.StatusGoingAway, "room expired")
-	}
-}
-
-func (rl *relay) sweepLoop() {
-	for range time.Tick(time.Minute) {
-		rl.closeExpired(time.Now().Add(-rl.maxRoomAge))
-	}
-}
-
 func main() {
 	addr := flag.String("addr", "127.0.0.1:7466", "listen address")
-	maxRoomAge := flag.Duration("max-room-age", 24*time.Hour,
-		"backstop: close rooms older than this")
 	hostToken := flag.String("host-token", "",
 		"optional "+hostTokenHeader+" token for room creation")
 	vapidKeyFile := flag.String("vapid-key-file", "mevedel-relay-vapid.pem",
@@ -340,8 +311,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load Web Push key: %v", err)
 	}
-	rl := newRelay(*maxRoomAge, *hostToken, push)
-	go rl.sweepLoop()
+	rl := newRelay(*hostToken, push)
 	log.Printf("mevedel relay listening on %s", *addr)
 	srv := &http.Server{
 		Addr:              *addr,
