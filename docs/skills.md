@@ -133,6 +133,37 @@ Bundled skills currently include:
   rationale, and external-reference findings use the existing memory types.
 - `remember` — user-invocable persistent-memory review and cleanup
   proposal helper.
+- `artifact` — user-invocable base skill for session artifacts. Owns the
+  artifacts directory lookup and the self-contained/size rules every artifact
+  must obey; the other artifact skills attach it rather than restating them.
+- `artifact-design` — design fundamentals for artifact HTML: palette,
+  typography from system stacks, both themes, layout, and copy. Attached by the
+  artifact leaf skills rather than invoked directly.
+- `artifact-diagramming` — when a diagram earns its place, and the
+  hand-authored inline SVG mechanics that keep it legible in both themes.
+  Attached by the artifact skills that carry visuals.
+- `artifact-doc` — user-invocable document artifact: a typeset memo, proposal,
+  plan, spec, or meeting-notes page.
+- `artifact-dashboard` — user-invocable dashboard artifact: KPI tiles, a chart
+  drawn by a bundled spec-driven renderer, and a breakdown table.
+- `artifact-data-table` — user-invocable data-table artifact: a sortable,
+  filterable table over a JSON dataset embedded in the page.
+- `artifact-explainer` — user-invocable explainer artifact: a numbered-step or
+  sectioned walkthrough pairing prose with a visual at each stage.
+
+The four leaf skills each build from a `template.html` beside their `SKILL.md`,
+reached through `${MEVEDEL_SKILL_DIR}`, and attach `artifact` plus
+`artifact-design`; `artifact-explainer` additionally attaches
+`artifact-diagramming`. Together they are the worked example of the
+required-attachment contract in bundled skills: the bases carry the rules once
+and every leaf inherits them. Because a model-origin root requires every
+descendant to be model-invocable, none of the bases may take
+`disable-model-invocation`.
+
+The dashboard and data-table templates carry inline renderers whose degenerate
+cases are covered by `test/artifact-templates-test.js` (`node
+test/artifact-templates-test.js`); like the viewer's JavaScript tests, it is
+not part of the ERT run.
 
 `remember` is intentionally report-only: it reviews configured memory
 roots, topic files, and applicable workspace configuration, then
@@ -417,10 +448,17 @@ graph instead of executing the same skill twice with conflicting inputs. Every
 authored declaration still leaves its placeholder in its immediate parent body,
 including a duplicate whose contribution was already prepared.
 
-The root invocation origin propagates unchanged through the graph. A
-user-origin root may attach a child with `disable-model-invocation: true`. A
-model-origin root requires every descendant to be model-invocable, so a parent
-cannot launder model access to a user-only child. Each child's injections run
+The root invocation origin propagates unchanged through the graph, and the
+invocability gate applies to every node rather than only the root. A
+model-origin root therefore requires every descendant to be model-invocable, so
+a parent cannot launder model access to a user-only child; symmetrically, a
+user-origin root requires every descendant to be user-invocable. A base skill
+attached purely as instruction context must stay invocable from both origins:
+marking it `user-invocable: nil` to keep it out of `$` completion rejects the
+whole graph for user invocation while leaving model invocation working, which
+presents as an intermittent failure rather than a configuration error. What a
+user-origin root may attach is a child with `disable-model-invocation: true`,
+since that flag gates the model origin only. Each child's injections run
 with only that child's preparation permissions; parent and sibling permissions
 do not flow into it.
 
@@ -513,7 +551,10 @@ queue restores that context to the session.
 
 The transcript and input history keep the exact original user text. An ignored
 render-data block connects that text to the prepared model prompt without
-exposing the control metadata to the model. `$skill` preparation may block chat
+exposing the control metadata to the model. It also records the names of the
+required attachments whose `<system-reminder>` blocks lead that prompt, so the
+view rows them as a collapsed attached-skills disclosure and keeps the prompt
+drawer to the prepared body. `$skill` preparation may block chat
 input while asynchronous injections run, and an awaited fork keeps its owning
 workflow open until its child settles. Cancellation or buffer death invalidates
 the preparation token so late callbacks cannot dispatch.

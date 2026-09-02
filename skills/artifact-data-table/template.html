@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><!-- SLOT: TITLE - e.g. "Product catalog" --></title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink:      #16181d;
+    --ink-soft: #646b78;
+    --bg:       #f6f7f9;
+    --card:     #ffffff;
+    --stripe:   #fafbfc;
+    --rule:     #e3e6ea;
+    --accent:   #2f6f8f;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink:      #e6e8ec;
+      --ink-soft: #949cab;
+      --bg:       #131519;
+      --card:     #1b1e23;
+      --stripe:   #1f232a;
+      --rule:     #2c3038;
+      --accent:   #6fb2d2;
+    }
+  }
+
+  @media print {
+    :root {
+      --ink: #000; --ink-soft: #444; --bg: #fff; --card: #fff;
+      --stripe: #fff; --rule: #bbb; --accent: #000;
+    }
+    .dt-controls { display: none; }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+  }
+
+  .wrap { max-width: 72rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+
+  h1 { font-size: 1.5rem; margin: 0 0 0.25rem; font-weight: 600; }
+  .scope { margin: 0 0 1.5rem; color: var(--ink-soft); font-size: 0.95rem; }
+
+  .dt-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  #dt-filter {
+    flex: 1 1 16rem;
+    padding: 0.5rem 0.7rem;
+    font: inherit;
+    color: var(--ink);
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+  }
+  #dt-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  #dt-count { color: var(--ink-soft); font-size: 0.85rem; white-space: nowrap; }
+
+  .table-wrap {
+    overflow-x: auto;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+  }
+
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.9rem;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+
+  th {
+    position: sticky;
+    top: 0;
+    background: var(--card);
+    font-size: 0.72rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+  }
+  th:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  th.sorted { color: var(--accent); }
+  th .arrow { opacity: 0; margin-left: 0.3rem; }
+  th.sorted .arrow { opacity: 1; }
+
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.empty { color: var(--ink-soft); }
+
+  tbody tr:nth-child(even) { background: var(--stripe); }
+  tbody tr:last-child td { border-bottom: none; }
+
+  .dt-none { padding: 2rem; text-align: center; color: var(--ink-soft); }
+
+  footer { margin-top: 1.25rem; color: var(--ink-soft); font-size: 0.82rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1><!-- SLOT: TITLE (again, as the visible heading) -->Table title</h1>
+  <p class="scope"><!-- SLOT: SCOPE - what this dataset covers and as of when. -->What this covers, and as of when.</p>
+
+  <div class="dt-controls">
+    <input id="dt-filter" type="search" placeholder="Filter rows" aria-label="Filter rows">
+    <span id="dt-count"></span>
+  </div>
+
+  <div class="table-wrap">
+    <table id="dt">
+      <thead><tr></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <footer><!-- SLOT: FOOTER_NOTE - data source, as-of date, and anything cut
+       from the dataset. Omit rather than invent one. -->Source and as-of date.</footer>
+
+</div>
+
+<!-- SLOT: COLUMNS - one entry per column. `type` is "text" or "num"; a "num"
+     column right-aligns and sorts numerically. -->
+<script type="application/json" id="dt-columns">
+[
+  { "key": "name",  "label": "Name",  "type": "text" },
+  { "key": "value", "label": "Value", "type": "num" }
+]
+</script>
+
+<!-- SLOT: ROWS - the full dataset, one object per row keyed by the column
+     keys above. See the data rules in the skill: numbers unformatted, missing
+     values null, dates ISO-8601. -->
+<script type="application/json" id="dt-rows">
+[
+  { "name": "REPLACE ME", "value": 0 }
+]
+</script>
+
+<script>
+/* Sort/filter renderer. Data lives in the two JSON blocks above; this owns
+   row emission, so sorting and filtering stay correct. */
+(() => {
+  'use strict';
+  const table = document.getElementById('dt');
+  const filter = document.getElementById('dt-filter');
+  const count = document.getElementById('dt-count');
+  if (!table) return;
+
+  const parse = id => {
+    const node = document.getElementById(id);
+    if (!node) return null;
+    try { return JSON.parse(node.textContent); } catch (_) { return null; }
+  };
+
+  const columns = parse('dt-columns');
+  const rows = parse('dt-rows');
+  if (!Array.isArray(columns) || !Array.isArray(rows)) return;
+
+  const head = table.querySelector('thead tr');
+  const body = table.querySelector('tbody');
+  let sortKey = null, sortDir = 1;
+
+  const isMissing = v =>
+    v == null || (typeof v === 'string' && v.trim() === '');
+  const numeric = v => (typeof v === 'number' && Number.isFinite(v)) ? v : null;
+
+  const show = (value, column) => {
+    if (isMissing(value)) return '';
+    if (column.type === 'num') {
+      const n = numeric(value);
+      // A non-number in a num column is shown as authored rather than
+      // silently coerced; it just misses formatting and sorts last.
+      if (n === null) return String(value);
+      return n.toLocaleString(undefined, {maximumFractionDigits: 6});
+    }
+    return String(value);
+  };
+
+  columns.forEach(column => {
+    const th = document.createElement('th');
+    if (column.type === 'num') th.className = 'num';
+    th.tabIndex = 0;
+    th.setAttribute('role', 'button');
+    th.textContent = column.label == null ? column.key : String(column.label);
+    const arrow = document.createElement('span');
+    arrow.className = 'arrow';
+    arrow.textContent = '↑';
+    th.append(arrow);
+    const sort = () => {
+      sortDir = sortKey === column.key ? -sortDir : 1;
+      sortKey = column.key;
+      draw();
+    };
+    th.addEventListener('click', sort);
+    th.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        sort();
+      }
+    });
+    head.append(th);
+  });
+
+  function compare(a, b) {
+    const column = columns.find(c => c.key === sortKey);
+    const x = a[sortKey], y = b[sortKey];
+    // Missing values sort last in both directions: they are absent, not
+    // extreme, so flipping the arrow should not parade them to the top.
+    const xGone = isMissing(x), yGone = isMissing(y);
+    if (xGone && yGone) return 0;
+    if (xGone) return 1;
+    if (yGone) return -1;
+    if (column && column.type === 'num') {
+      const nx = numeric(x), ny = numeric(y);
+      if (nx === null && ny === null) return 0;
+      if (nx === null) return 1;
+      if (ny === null) return -1;
+      return (nx - ny) * sortDir;
+    }
+    return String(x).localeCompare(String(y), undefined, {numeric: true})
+      * sortDir;
+  }
+
+  function matches(row, needle) {
+    if (!needle) return true;
+    return columns.some(column => {
+      if (column.type === 'num') return false;
+      const value = row[column.key];
+      return !isMissing(value)
+        && String(value).toLowerCase().includes(needle);
+    });
+  }
+
+  function draw() {
+    const needle = (filter && filter.value || '').trim().toLowerCase();
+    const visible = rows.filter(row => matches(row, needle));
+    if (sortKey) visible.sort(compare);
+
+    body.replaceChildren();
+    if (!visible.length) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.className = 'dt-none';
+      td.colSpan = columns.length;
+      td.textContent = 'No rows match.';
+      tr.append(td);
+      body.append(tr);
+    } else {
+      const frag = document.createDocumentFragment();
+      visible.forEach(row => {
+        const tr = document.createElement('tr');
+        columns.forEach(column => {
+          const td = document.createElement('td');
+          const text = show(row[column.key], column);
+          if (column.type === 'num') td.className = 'num';
+          if (!text) td.className = (td.className + ' empty').trim();
+          td.textContent = text;
+          tr.append(td);
+        });
+        frag.append(tr);
+      });
+      body.append(frag);
+    }
+
+    head.querySelectorAll('th').forEach((th, i) => {
+      const active = columns[i] && columns[i].key === sortKey;
+      th.classList.toggle('sorted', active);
+      const arrow = th.querySelector('.arrow');
+      if (arrow) arrow.textContent = sortDir > 0 ? '↑' : '↓';
+    });
+
+    if (count) {
+      count.textContent = visible.length === rows.length
+        ? `${rows.length} rows`
+        : `${visible.length} of ${rows.length} rows`;
+    }
+  }
+
+  if (filter) filter.addEventListener('input', draw);
+  draw();
+})();
+</script>
+</body>
+</html>

@@ -366,6 +366,13 @@ beginning of the buffer."
     ('reasoning 20)
     (_ 10)))
 
+(defun mevedel-transcript--base-segment-type (start base-segments)
+  "Return the type of the raw property run in BASE-SEGMENTS holding START."
+  (car-safe
+   (cl-find-if
+    (lambda (seg) (and (<= (cadr seg) start) (< start (caddr seg))))
+    base-segments)))
+
 (defun mevedel-transcript--control-prefix-p (range base-segments accepted)
   "Return non-nil when RANGE follows only ACCEPTED control structure.
 BASE-SEGMENTS delimit the containing raw property run."
@@ -377,7 +384,12 @@ BASE-SEGMENTS delimit the containing raw property run."
          (cursor (and base (cadr base)))
          ok)
     (setq ok (numberp cursor))
-    (when (and base (not (eq (car base) 'user)))
+    ;; Generated control blocks reach the transcript in their own
+    ;; `ignore' run (or unpropertized, once normalized), never inside
+    ;; gptel's streamed `response' run.  So a response run gets the same
+    ;; head-of-run proof user prose gets: markup the model merely quoted
+    ;; stays prose instead of collapsing into a control row.
+    (when (and base (not (memq (car base) '(user response))))
       (setq cursor start))
     (dolist (prior (sort (copy-sequence accepted)
                          (lambda (a b) (< (cadr a) (cadr b)))))
@@ -446,6 +458,23 @@ blocks that still carry stale tool properties."
             (goto-char (1+ block-start))))))
     (nreverse ranges)))
 
+(defconst mevedel-transcript--opaque-payload-types
+  '(render-data reasoning mailbox prompt)
+  "Control ranges whose payload is authored text rather than structure.
+A control marker that starts inside one of these is quoted content, so
+`mevedel-transcript--structural-ranges' refuses to carve it out.  Tool
+blocks are left out because they already win by overlay priority and
+legitimately neighbour their own render-data.")
+
+(defconst mevedel-transcript--self-proving-types
+  '(tool render-data ignored)
+  "Control ranges carrying their own proof of being generated.
+A tool range is validated against the raw `gptel' tool property runs,
+and render-data and hook-audit ranges against their trust hash, so these
+stay valid inside a container payload: backends really do nest a tool
+call inside a reasoning block, and a tool block really does carry its
+own render-data.")
+
 (defun mevedel-transcript--structural-ranges (start end base-segments)
   "Return canonical control ranges in START..END.
 BASE-SEGMENTS are raw `gptel' property runs used to validate persisted
@@ -490,15 +519,28 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
             (append ranges tool-ranges
                     (mevedel-transcript--unparseable-tool-ranges
                      start end base-segments tool-ranges))))
-    (let (accepted)
+    (let (accepted payloads)
       (dolist (range (sort ranges (lambda (a b) (< (cadr a) (cadr b)))))
         (let ((audit-p
                (and (eq (car range) 'ignored)
                     (save-excursion
                       (goto-char (cadr range))
                       (looking-at-p "<!-- mevedel-hook-audit -->"))))
-              (render-p (eq (car range) 'render-data)))
-          (when (or (and (not (memq (car range) '(mailbox reminder)))
+              (render-p (eq (car range) 'render-data))
+              ;; Generated control blocks reach the transcript in their
+              ;; own run, never inside gptel's streamed `response' run,
+              ;; so markup found there is prose the model quoted.  Tool
+              ;; blocks are exempt: they are already validated against
+              ;; the raw tool property runs.
+              (quoted-in-response-p
+               (and (eq (mevedel-transcript--base-segment-type
+                         (cadr range) base-segments)
+                        'response)
+                    (not (eq (car range) 'tool))
+                    (not (mevedel-transcript--control-prefix-p
+                          range base-segments accepted)))))
+          (when (or (and (not quoted-in-response-p)
+                         (not (memq (car range) '(mailbox reminder)))
                          (not audit-p)
                          (not render-p))
                     (and audit-p
@@ -523,7 +565,25 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
                        (not render-p)
                        (mevedel-transcript--control-prefix-p
                         range base-segments accepted)))
-            (push range accepted))))
+            ;; Container payloads carry authored text: a render-data
+            ;; block quotes a whole prepared prompt, reasoning and
+            ;; mailbox bodies are model- and agent-authored, and a
+            ;; prompt drawer holds the user's directive.  A marker
+            ;; starting inside one is quoted data, not transcript
+            ;; structure.  Ranges are visited in start order and a
+            ;; container never starts after its own contents, so the
+            ;; enclosing payload is already recorded here.
+            (unless (and (not (memq (car range)
+                                    mevedel-transcript--self-proving-types))
+                         (cl-find-if
+                          (lambda (span)
+                            (and (> (cadr range) (car span))
+                                 (< (cadr range) (cdr span))))
+                          payloads))
+              (when (memq (car range)
+                          mevedel-transcript--opaque-payload-types)
+                (push (cons (cadr range) (caddr range)) payloads))
+              (push range accepted)))))
       (setq ranges (nreverse accepted)))
     (sort ranges
           (lambda (a b)

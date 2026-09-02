@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><!-- SLOT: TITLE - the document's name alone, short and distinctive --></title>
+<style>
+  /* Light palette. Retune these values for the document's subject; every
+     token below is also redefined in the dark and print scopes, so change
+     all three or the value snaps back. */
+  :root {
+    color-scheme: light dark;
+    --ink:        #1b1a17;
+    --ink-muted:  #5d594f;
+    --ground:     #fbfaf7;
+    --surface:    #ffffff;
+    --rule:       #e2ded3;
+    --accent:     #7a4b2a;
+    --accent-soft:#f2e9e0;
+    --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+    --sans: Optima, Candara, "Noto Sans", source-sans-pro, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink:        #ece7dc;
+      --ink-muted:  #a29b8c;
+      --ground:     #161513;
+      --surface:    #1e1c19;
+      --rule:       #33302a;
+      --accent:     #d99a6c;
+      --accent-soft:#2b2320;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    /* Explicit: the frame's own ground is not ours to inherit. */
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.65;
+  }
+
+  .page {
+    max-width: 42rem;
+    margin: 0 auto;
+    padding: 4rem 1.5rem 6rem;
+  }
+
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 0.75rem;
+  }
+
+  h1 {
+    font-size: clamp(1.9rem, 5vw, 2.6rem);
+    line-height: 1.15;
+    text-wrap: balance;
+    margin: 0 0 1rem;
+    font-weight: 600;
+  }
+
+  .purpose {
+    font-size: 1.1rem;
+    color: var(--ink-muted);
+    margin: 0 0 2.5rem;
+    padding-bottom: 2.5rem;
+    border-bottom: 1px solid var(--rule);
+    text-wrap: pretty;
+  }
+
+  h2 {
+    font-size: 1.3rem;
+    margin: 2.75rem 0 0.75rem;
+    font-weight: 600;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-size: 0.95rem;
+    letter-spacing: 0.02em;
+    margin: 1.75rem 0 0.5rem;
+  }
+
+  p, li { text-wrap: pretty; }
+  p { margin: 0 0 1rem; }
+  ul, ol { margin: 0 0 1rem; padding-left: 1.35rem; }
+  li { margin-bottom: 0.4rem; }
+
+  a { color: var(--accent); text-underline-offset: 0.15em; }
+
+  blockquote {
+    margin: 1.75rem 0;
+    padding: 1rem 1.25rem;
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 4px 4px 0;
+    font-size: 0.97rem;
+  }
+  blockquote p:last-child { margin-bottom: 0; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.87em;
+    background: var(--accent-soft);
+    padding: 0.12em 0.35em;
+    border-radius: 3px;
+  }
+
+  pre {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1rem;
+    overflow-x: auto;
+    line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; }
+
+  /* Tables scroll inside their own container so the page never does. */
+  .table-wrap { overflow-x: auto; margin: 1.5rem 0; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-family: var(--sans);
+    font-size: 0.92rem;
+    font-variant-numeric: tabular-nums;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.55rem 0.9rem 0.55rem 0;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th {
+    font-weight: 600;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+  }
+
+  .open-questions {
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--rule);
+  }
+  .owner {
+    font-family: var(--sans);
+    font-size: 0.78rem;
+    color: var(--ink-muted);
+    white-space: nowrap;
+  }
+
+  @media print {
+    :root {
+      --ink: #000; --ink-muted: #444; --ground: #fff;
+      --surface: #fff; --rule: #bbb; --accent: #000; --accent-soft: #f2f2f2;
+    }
+    body { font-size: 11pt; }
+    .page { max-width: none; padding: 0; }
+    h2, h3 { break-after: avoid; }
+    blockquote, pre, .table-wrap { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<main class="page">
+
+  <p class="eyebrow"><!-- SLOT: KIND - what this document is: Memo, Proposal, Spec, Meeting notes. Delete this line if it adds nothing. -->Memo</p>
+
+  <h1><!-- SLOT: TITLE_H1 - the same name as TITLE -->Document title</h1>
+
+  <p class="purpose"><!-- SLOT: PURPOSE - one sentence: what this document is for, and what the reader should do with it. -->One sentence stating what this document is for and what the reader should do with it.</p>
+
+  <!-- SLOT: BODY - the document itself. h2 sections a reader can scan, short
+       paragraphs, lists where structure helps, and a blockquote for the one
+       callout a skimmer must not miss. Cut any scaffolding below that this
+       document does not need. -->
+  <h2>First section</h2>
+  <p>Short paragraphs a reader can scan.</p>
+
+  <blockquote>
+    <p>The one thing a skimmer must not miss.</p>
+  </blockquote>
+
+  <h2>Second section</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Column</th><th>Column</th></tr></thead>
+      <tbody><tr><td>Value</td><td>Value</td></tr></tbody>
+    </table>
+  </div>
+
+  <section class="open-questions">
+    <h2>Open questions</h2>
+    <!-- SLOT: OPEN_QUESTIONS - every unresolved item with a named owner.
+         Delete the whole section when there are none. -->
+    <ul>
+      <li>An unresolved question. <span class="owner">— Owner</span></li>
+    </ul>
+  </section>
+
+</main>
+</body>
+</html>

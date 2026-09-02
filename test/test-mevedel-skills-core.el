@@ -467,7 +467,48 @@ paths:
       (should (equal '("Eval") (mevedel-skill-allowed-tools artifact)))
       (should (string-match-p "Self-contained, always" artifact-body))
       (should (string-match-p "mevedel-session-artifacts-artifacts-dir"
-                              artifact-body))))
+                              artifact-body)))
+    ;; The artifact family inherits through required attachments: each
+    ;; leaf declares its bases, and every descendant stays model-invocable
+    ;; so a model-origin root resolves the whole graph.
+    (dolist (base '("artifact-design" "artifact-diagramming"))
+      (let ((skill (cl-find base skills
+                            :key #'mevedel-skill-name :test #'equal)))
+        (should skill)
+        (should (eq 'bundled (mevedel-skill-source skill)))
+        ;; The invocability gate applies to every node in the graph, so
+        ;; a base must stay invocable from both origins: a model-origin
+        ;; root rejects a non-model-invocable descendant, and a
+        ;; user-origin root rejects a non-user-invocable one.  Hiding a
+        ;; base from `$' completion breaks every leaf for the user while
+        ;; leaving the model's path working.
+        (should (mevedel-skill-model-invocable-p skill))
+        (should (mevedel-skill-user-invocable-p skill))
+        (should-not (mevedel-skill-dependencies skill))))
+    (pcase-dolist (`(,name . ,deps)
+                   '(("artifact-doc"        "artifact" "artifact-design")
+                     ("artifact-dashboard"  "artifact" "artifact-design")
+                     ("artifact-data-table" "artifact" "artifact-design")
+                     ("artifact-explainer"  "artifact" "artifact-design"
+                      "artifact-diagramming")))
+      (let* ((leaf (cl-find name skills
+                            :key #'mevedel-skill-name :test #'equal))
+             (leaf-body (and leaf (mevedel-skill-load-body leaf))))
+        (should leaf)
+        (should (eq 'bundled (mevedel-skill-source leaf)))
+        (should (mevedel-skill-user-invocable-p leaf))
+        (should (mevedel-skill-model-invocable-p leaf))
+        (should (mevedel-skill-effective-model-invocable-p leaf))
+        (should-not (mevedel-skill-dependency-diagnostics leaf))
+        (should (equal deps
+                       (mapcar #'mevedel-skill-dependency-name
+                               (mevedel-skill-dependencies leaf))))
+        ;; Every leaf reads its template through ${MEVEDEL_SKILL_DIR}, so
+        ;; the file has to sit beside the SKILL.md that names it.
+        (should (string-match-p "MEVEDEL_SKILL_DIR" leaf-body))
+        (should (file-exists-p
+                 (file-name-concat (mevedel-skill-source-dir leaf)
+                                   "template.html"))))))
 
   :doc "bundled skills are suppressed when include-bundled is nil"
   (let* ((mevedel-skills-include-bundled nil)

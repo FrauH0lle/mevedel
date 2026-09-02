@@ -165,8 +165,18 @@ grouping and projection and `mevedel-view-disclosure.el` owns source-backed
 fold state and actions. Transcript span classification, tool block recovery,
 and mailbox, reminder, hook-context, render-data, prompt, and ignored-range recognition live in
 `mevedel-transcript.el` so persistence and compaction use the same structural
-view of the buffer. Hidden audit record grammar and
-attachment spans live in `mevedel-transcript-audit.el`; the view consumes
+view of the buffer. Container payloads are opaque to that scan: a render-data
+block quotes a whole prepared prompt, reasoning and mailbox bodies are model-
+and agent-authored, and a prompt drawer holds the user's directive, so a
+control marker starting inside one stays data and never splits the enclosing
+span. Tool ranges and render-data / hook-audit ranges are exempt because they
+carry their own proof -- validation against the raw tool property runs or a
+trust hash -- and backends really do nest a tool call inside a reasoning block.
+Independently, no generated control block ever lands inside gptel's streamed
+`response` run, so markup found there is prose the model quoted and renders as
+prose. What remains unguarded is markup that opens a run: a response or user
+prompt whose very first line is `<system-reminder>` still reads as structure.
+Hidden audit record grammar and attachment spans live in `mevedel-transcript-audit.el`; the view consumes
 those spans without reparsing the wire format.
 
 Streaming chunks, tool boundaries, and explicit rerender requests share one
@@ -202,6 +212,14 @@ echo folds identically before the turn has data-buffer coordinates; only
 the source-backed fold keeps its state across full rerenders. Prompts
 containing org block markers stay unfolded so their block decorations
 remain visible.
+
+An expanded inline `$skill` prompt keeps the invocation as the visible user
+text and discloses the prepared prompt in a collapsed `Prompt` row. The
+required-attachment system reminders leading that prompt get their own
+collapsed row above it, labelled from the render-data record's attachment
+names (`2 attached skills (artifact, artifact-design)`), so the prompt drawer
+holds the prepared body alone and no `<system-reminder>` markup renders as
+prose.
 
 Runs of more than `mevedel-view-tool-group-collapse-threshold` (default 3)
 plain tool rows fold into one grouped activity row such as
@@ -646,16 +664,50 @@ than through the command allowlist:
 - `new-session` creates a session. The request itself needs only write
   authority -- every full-control guest gets the button -- and the owner
   token decides what happens next: an owner link is granted it outright,
-  any other full-control guest has the request put to the host as a
-  host-only interaction. That interaction carries no `mevedel--remote`
-  descriptor, so it never reaches a guest surface and a requester cannot
-  approve its own request. The sheet says which of the two it is doing
-  before the guest presses anything.
+  any other full-control guest has the request put to Emacs and to the
+  room's owner-link guests. Approving someone else's request is no new
+  authority for an owner, who can create a session outright. The sheet
+  says which of the two it is doing before the guest presses anything.
 
 Owner authority is never granted alone: the owner link contains the write
 token, so a peer claiming the owner token without it is a forgery and is
 refused. The viewer's own knowledge of its tier is cosmetic; the host
 re-checks the token on every owner frame.
+
+### Narrowed interactions
+
+A mirrored interaction reaches every writable guest by default. A
+`:audience` on its `mevedel--remote` descriptor narrows that; `:owner`
+restricts it to owner-link guests. Both the creation broadcast and the
+replay a joining guest receives apply the filter, and so does the
+response handler -- seeing a narrowed interaction and answering it are
+the same authority, and a request id is guessable while an audience is
+not. The push that wakes a sleeping browser follows the same audience,
+because waking someone for a decision they are not shown is noise.
+
+An audience turns on the link a peer holds, never on who is holding it.
+Guest identity is per browser, not per tab: a person with the writer
+link open beside the owner link is one guest id in two tabs, and an
+audience keyed on identity would blank the owner tab for a request the
+writer tab made. Keying on the link is also sufficient here, because
+only a non-owner request ever becomes a question -- an owner's is
+granted outright -- so restricting to owners already excludes the
+requester. An audience that matches nobody is not an error: it is a
+decision only Emacs can take.
+
+### Handing on a link
+
+Because each tier's secret is a prefix of the next, a viewer can derive
+every tier at or below its own by truncating the secret it already holds:
+an owner can offer all three links, a full-control guest two, a view guest
+one, and no one can express a link stronger than their own. Inviting
+therefore involves neither the host nor the relay -- the Invite sheet
+builds the links in the page and copies them. That is also why the tiers
+are a prefix chain rather than three unrelated tokens.
+
+The control sits in the dock rather than in the composer row: a
+read-only guest never sees the composer and has its own link to hand on.
+It does go away when the room ends, because the link goes with it.
 
 ### Guest-requested sessions
 
@@ -664,6 +716,45 @@ working directory come from the room's own session, never from the guest.
 The name is sanitized the way a session name typed in Emacs is, because it
 becomes a directory, and a name that already exists is refused rather than
 silently handing back a link into the session that has it.
+
+One request waits at a time. A person answers these, and a guest able to
+stack them while nobody is at the keyboard hands the host a pile of prompts
+for one session, of which every approval after the first fails on the name
+the first one took; the second request is refused with the name still
+waiting. The outcome does not live in the sheet that asked for it either --
+approval can land minutes later, and a second request must not erase the
+first one's link -- so requested sessions render as their own dock cards,
+each carrying its link and a dismiss.
+
+The room reaches more than the requester. Its other owner-link guests are
+offered an owner link to it in a `room` frame -- its own frame rather than
+a reply, because pairing it with a request the receiver did not make is how
+one guest's approval lands on another guest's pending card. An owner can
+already reach a session it approved; being told is the difference between
+reaching it and knowing it exists. Offers and replies land in one dock
+strip as notices, and every reachable one is kept in browser storage per
+relay origin and listed in the Rooms sheet beside Invite.
+
+The two surfaces answer different questions. A notice says what just
+happened -- approved, refused, someone handed you a room -- and Dismiss
+dismisses the news. The Rooms sheet answers which rooms this browser can
+get back to, and only Forget takes one out of it. Conflating them made
+Dismiss quietly destroy the link it looked like it was only hiding, and
+made a reload replay stale approvals as if they were fresh. A refusal is
+never stored: it is news and nothing else. Rooms die with the host's
+share regardless of what the browser remembers.
+
+A room is stored by its id and secret rather than as a whole link,
+because one origin can hold several tiers at once: two tabs of one
+browser on the full and owner links share that store. The browser keeps
+the strongest secret it was handed, and a tab presents that room capped
+to its own tier -- truncation again, the same prefix property the Invite
+sheet uses. Without the cap an owner tab's offer becomes a full tab's way
+into that room, which is how a full-control guest was briefly able to
+open a session as its owner. Storing whole links also gave one browser
+two cards for one room and let each tab's save clobber the other's, so
+writes merge by room id instead of replacing the list. The room a tab is
+currently in is kept but not listed: it is not somewhere to go.
 
 The new session gets its own room, and the requester is handed the tier it
 already holds -- an owner requester an owner link, a full-control requester
