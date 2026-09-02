@@ -332,6 +332,11 @@ async function main() {
   const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false,
                                             ['encrypt', 'decrypt']);
   const ownerToken = crypto.getRandomValues(new Uint8Array(16));
+  // Links the host hands back for other rooms; the viewer keeps their
+  // room id and secret rather than the URL it was given.
+  const otherSecret = base64url(crypto.getRandomValues(new Uint8Array(48)));
+  const thirdSecret = base64url(crypto.getRandomValues(new Uint8Array(64)));
+  const here = 'http://127.0.0.1:1/index.html';
   const roomId = 'roomroomroomroom';
   const fullSecret = base64url(Buffer.concat([Buffer.from(keyBytes),
                                               Buffer.from(writeToken)]));
@@ -358,9 +363,8 @@ async function main() {
                'new-session-button', 'new-session', 'new-session-form',
                'new-session-result', 'new-session-name',
                'new-session-prompt',
-               'new-session-message', 'new-session-link',
-               'new-session-done', 'new-session-create',
-               'new-session-lede'];
+               'new-session-create', 'new-session-lede',
+               'invites', 'invite-button', 'invite', 'invite-tiers'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   // The dock is addressed by class, not id, and its height is what the
   // reading-mode fold threshold is measured against.
@@ -414,6 +418,8 @@ async function main() {
   // Web Notification stand-in: permission flows and constructed
   // notifications are observable, nothing is displayed.
   const shownNotifications = [];
+  // What the last Copy button put on the clipboard.
+  let copied = null;
   class FakeNotification {
     constructor(title, options = {}) {
       this.title = title;
@@ -431,6 +437,7 @@ async function main() {
       href: `http://127.0.0.1:1/index.html#${roomId}.${ownerSecret}`,
       hash: `#${roomId}.${ownerSecret}`,
       pathname: '/index.html', search: '', protocol: 'http:',
+      origin: 'http://127.0.0.1:1',
     },
     history: {replaceState(_state, _title, path) { window.replaced = path; }},
     innerHeight: 20,
@@ -510,6 +517,7 @@ async function main() {
       });
     },
     navigator: {
+      clipboard: {writeText: async text => { copied = text; }},
       serviceWorker: {
         register: async (path, options) => {
           assert.equal(path, '/service-worker.js');
@@ -649,6 +657,9 @@ async function main() {
   // Asking for a session needs write authority, nothing more; the owner
   // token only decides whether asking is granted or put to the host.
   assert.equal(nodes['new-session-button'].hidden, false);
+  // Inviting does not: it lives outside the composer, because a
+  // read-only guest never sees the composer and has a link to hand on.
+  assert.equal(nodes['invite-button'].hidden, false);
   // The roster renders with each namespace's own sigil.
   assert.equal(nodes['skill-chips'].hidden, false);
   assert.equal(nodes['skill-chips'].children.length, 2);
@@ -1205,24 +1216,79 @@ async function main() {
   assert.deepEqual(await unseal(key, first.sent[requestBefore]),
                    {t: 'new-session', name: 'onboarding',
                     prompt: 'Design the flow'});
-  // Sending swaps the sheet to its waiting state rather than closing it.
-  assert.equal(nodes['new-session'].open, true);
-  assert.equal(nodes['new-session-result'].hidden, false);
-  assert.match(nodes['new-session-message'].textContent, /Creating/);
-  assert.equal(nodes['new-session-link'].hidden, true);
+  // Sending closes the sheet and leaves a card in the dock: the approval
+  // may land minutes later, and the sheet is not where it should wait.
+  assert.equal(nodes['new-session'].open, false);
+  assert.equal(nodes.invites.hidden, false);
+  assert.match(textOf(nodes.invites), /onboarding · waiting for the host/);
 
   // A browser will not let a later approval open a tab by itself, so the
   // link arrives as something to tap.
   await deliver({t: 'new-session', ok: true, name: 'onboarding',
-                 link: 'http://127.0.0.1:1/#other.secret'});
-  assert.equal(nodes['new-session-link'].hidden, false);
-  assert.equal(nodes['new-session-link'].href,
-               'http://127.0.0.1:1/#other.secret');
+                 link: `http://127.0.0.1:1/#other.${otherSecret}`});
+  const openLink = nodes.invites.children[0].children
+    .flatMap(child => child.children || [])
+    .find(child => child.className === 'btn invite-open');
+  assert.ok(openLink, 'open link');
+  assert.equal(openLink.href, `${here}#other.${otherSecret}`);
+
+  // A second request stacks rather than overwriting the first, so an
+  // approved link is not lost to a later refusal.
+  nodes['new-session-button'].dispatch('click');
+  nodes['new-session-name'].value = 'second';
+  nodes['new-session'].close('create');
   await deliver({t: 'new-session', ok: false, message: 'The host declined'});
-  assert.equal(nodes['new-session-link'].hidden, true);
-  assert.match(nodes['new-session-message'].textContent, /host declined/);
-  nodes['new-session-done'].dispatch('click');
-  assert.equal(nodes['new-session'].open, false);
+  assert.equal(nodes.invites.children.length, 2);
+  assert.match(textOf(nodes.invites), /onboarding · open/);
+  assert.match(textOf(nodes.invites), /second · refused/);
+  assert.match(textOf(nodes.invites), /The host declined/);
+
+  // A room offered rather than asked for -- someone else's request that
+  // an owner approved -- joins the same strip, and is kept in the
+  // browser so a reload is not how a room becomes unreachable.
+  await deliver({t: 'room', name: 'handed-over',
+                 link: `http://127.0.0.1:1/#third.${thirdSecret}`});
+  assert.equal(nodes.invites.children.length, 3);
+  assert.match(textOf(nodes.invites), /handed-over · open/);
+  assert.deepEqual(JSON.parse(storage.get('mevedel-rooms')),
+                   [{room: 'other', name: 'onboarding', secret: otherSecret},
+                    {room: 'third', name: 'handed-over',
+                     secret: thirdSecret}]);
+  // The same room twice is one room: a reconnect re-offering it must not
+  // stack a second card.
+  await deliver({t: 'room', name: 'handed-over',
+                 link: `http://127.0.0.1:1/#third.${thirdSecret}`});
+  assert.equal(nodes.invites.children.length, 3);
+  // Dismiss drops the news and nothing else: the two rooms that were
+  // stored are still stored. Only Forget, in the Rooms sheet, removes
+  // one -- see collaboration-viewer-session-test.js.
+  const refused = nodes.invites.children[1];
+  refused.children[refused.children.length - 1].children[0].dispatch('click');
+  assert.equal(nodes.invites.children.length, 2);
+  assert.equal(JSON.parse(storage.get('mevedel-rooms')).length, 2);
+
+  // Inviting hands on this room's own link, at the holder's tier or any
+  // below it -- an owner link can offer all three, and never a fourth.
+  nodes['invite-button'].dispatch('click');
+  assert.equal(nodes.invite.open, true);
+  const tiers = nodes['invite-tiers'].children;
+  assert.deepEqual(tiers.map(row => textOf(row.children[0])),
+                   ['view', 'full', 'owner']);
+  const copies = [];
+  for (const row of tiers) {
+    copied = null;
+    row.children[2].dispatch('click');
+    await waitFor(() => copied !== null, 'copied link');
+    copies.push(copied);
+  }
+  assert.deepEqual(copies.map(link => api.parseFragment(
+    link.slice(link.indexOf('#')))).map(parsed => [
+      Boolean(parsed.writeToken), Boolean(parsed.ownerToken)]),
+                   [[false, false], [true, false], [true, true]]);
+  // The room key is the same room, not a new one.
+  assert.ok(copies.every(link => link.includes(`#${roomId}.`)));
+  nodes.invite.close('close');
+
   // Cancelling never sends anything.
   const cancelBefore = first.sent.length;
   nodes['new-session-button'].dispatch('click');
@@ -1438,6 +1504,8 @@ async function main() {
   await staleAttachment;
   assert.equal(nodes.composer.hidden, true);
   assert.equal(nodes['new-session-button'].hidden, true);
+  // An ended room's link is dead, so offering to pass it on would lie.
+  assert.equal(nodes['invite-button'].hidden, true);
   assert.equal(sockets[1].readyState, 3);
   assert.equal(nodes.requests.children.length, 0);
   assert.equal(nodes['own-queue'].hidden, true);

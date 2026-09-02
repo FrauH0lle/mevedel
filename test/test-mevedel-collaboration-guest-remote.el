@@ -112,7 +112,18 @@
             (setq sent nil)
             (mevedel-collaboration--send-ui-requests room 7)
             (should (equal (plist-get frame :reqId)
-                           (plist-get (cdr (car sent)) :reqId))))
+                           (plist-get (cdr (car sent)) :reqId)))
+            ;; A narrowed one is withheld on reconnect as well: a guest
+            ;; must not collect a decision it may not see by rejoining.
+            (setq sent nil)
+            (overlay-put overlay 'mevedel--remote
+                         '(:body "Approve?" :audience (:owner t)))
+            (mevedel-collaboration--send-ui-requests room 1)
+            (should-not sent)
+            (puthash 8 (list :name "owner" :writable t :owner t :ready t)
+                     guests)
+            (mevedel-collaboration--send-ui-requests room 8)
+            (should (= 1 (length sent))))
           ;; The defcustom gates the whole surface.
           (let ((mevedel-collaboration-remote-interactions nil))
             (setq sent nil)
@@ -154,6 +165,21 @@
           (mevedel-collaboration--handle-ui-response
            room 1 (list :reqId 999 :option 0))
           (should-not settled)
+          ;; Seeing a narrowed interaction and answering it are the same
+          ;; authority: a guest outside the audience is refused even
+          ;; though a request id is easy to guess.
+          (overlay-put overlay 'mevedel--remote
+                       (append (overlay-get overlay 'mevedel--remote)
+                               (list :audience '(:owner t))))
+          (mevedel-collaboration--handle-ui-response
+           room 1 (list :reqId 41 :option 0))
+          (should-not settled)
+          (overlay-put overlay 'mevedel--remote
+                       (list :options
+                             (list '(allow-once . "Allow once")
+                                   (cons (lambda () (setq accepted t))
+                                         "Accept"))
+                             :feedback t))
           ;; A symbol option settles through the shared settle.
           (mevedel-collaboration--handle-ui-response
            room 1 (list :reqId 41 :option 0))

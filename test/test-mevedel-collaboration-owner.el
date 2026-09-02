@@ -178,14 +178,29 @@
       (mevedel-collaboration--handle-new-session room 1 '(:name "   "))
       (mevedel-collaboration--handle-new-session room 1 '(:name "///"))
       (mevedel-collaboration--handle-new-session room 1 '(:prompt "no name"))
-      (should (= 2 (length created))))))
+      (should (= 2 (length created)))
+      ;; A request already waiting on a person blocks the next one, whose
+      ;; approval would only fail on the name the first one took.
+      (let (sent)
+        (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+                   (lambda (_transport _peer frame) (push frame sent))))
+          (plist-put (gethash 2 guests) :pending-new-session "auth_work")
+          (mevedel-collaboration--handle-new-session room 2 '(:name "other"))
+          (should (= 1 (length asked)))
+          (should (eq :json-false (plist-get (car sent) :ok)))
+          (should (string-match-p "auth_work"
+                                  (plist-get (car sent) :message)))
+          ;; It unblocks once that one is answered.
+          (plist-put (gethash 2 guests) :pending-new-session nil)
+          (mevedel-collaboration--handle-new-session room 2 '(:name "other"))
+          (should (= 2 (length asked))))))))
 
 (mevedel-deftest mevedel-collaboration--ask-host-new-session
-  (:doc "asks the host with a prompt no guest can see or answer")
+  (:doc "asks the host and owners, never the guest the request is about")
   (let* ((guests (make-hash-table :test #'eql))
          (room (list :transport 'transport :data-buffer (current-buffer)
                      :guests guests))
-         (guest (list :name "Writer" :writable t))
+         (guest (list :name "Writer" :writable t :guest-id "writer-id"))
          (current-room room)
          captured sent)
     (puthash 7 guest guests)
@@ -199,14 +214,19 @@
                (lambda (&rest args) (push (cons 'created args) sent)))
               ((symbol-function 'mevedel--prompt-user-with-overlay)
                (lambda (_title _content _question _echo callback &optional
-                               host-only)
+                               host-only audience)
                  (setq captured (list :callback callback
-                                      :host-only host-only))
+                                      :host-only host-only
+                                      :audience audience))
                  'overlay)))
       (mevedel-collaboration--ask-host-new-session room 7 guest "flow" "go")
-      ;; The requester must not be able to approve its own request, so
-      ;; the prompt never reaches a guest surface.
-      (should (plist-get captured :host-only))
+      ;; An owner may create a session outright, so approving someone
+      ;; else's request is no new authority.  Only a non-owner ever gets
+      ;; here, so restricting to owners already excludes the requester --
+      ;; including when it is another tab of the owner's own browser,
+      ;; which shares its stable guest identity.
+      (should-not (plist-get captured :host-only))
+      (should (equal '(:owner t) (plist-get captured :audience)))
       ;; Declining tells the guest, and creates nothing.
       (funcall (plist-get captured :callback) 'deny)
       (should (equal "new-session" (plist-get (cdr (car sent)) :t)))
@@ -228,6 +248,28 @@
       (funcall (plist-get captured :callback) 'approve)
       (should (eq 'created (car (car sent))))
       (should (equal '("flow" "go") (last (cdr (car sent)) 2))))))
+
+(mevedel-deftest mevedel-collaboration--offer-room-to-owners
+  (:doc "offers a created room to the other owners, never to the requester")
+  (let* ((guests (make-hash-table :test #'eql))
+         (room (list :transport 'transport :guests guests))
+         sent)
+    (puthash 1 (list :name "Requester" :writable t :owner t) guests)
+    (puthash 2 (list :name "Other owner" :writable t :owner t) guests)
+    (puthash 3 (list :name "Writer" :writable t) guests)
+    (puthash 4 (list :name "Reader") guests)
+    (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
+               (lambda (_transport peer frame) (push (cons peer frame) sent))))
+      (mevedel-collaboration--offer-room-to-owners
+       room 1 "flow" "owner-link"))
+    ;; Only the other owner: the requester's own reply carried a link,
+    ;; and a writer has no business being handed an owner link.
+    (should (equal '(2) (mapcar #'car sent)))
+    (let ((frame (cdr (car sent))))
+      ;; Its own frame, because it answers no request the receiver made.
+      (should (equal "room" (plist-get frame :t)))
+      (should (equal "flow" (plist-get frame :name)))
+      (should (equal "owner-link" (plist-get frame :link))))))
 
 (mevedel-deftest mevedel-collaboration--create-guest-session
   (:doc "creates atomically, rejects collisions, and preserves guest tier")

@@ -31,10 +31,10 @@
 .modeline .mode-picker {
   font: inherit;
   color: inherit;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 1px 6px;
+  padding: 0 .4rem;
   cursor: pointer;
 }
 
@@ -44,61 +44,66 @@
   color: var(--accent);
 }
 
+/* The sheets wear the panel idiom rather than inventing a second one:
+   the same monospace accent title, muted note, hairline, and rem sizes
+   the rest of the dock uses. */
 .sheet {
-  width: min(460px, calc(100vw - 32px));
+  width: min(30rem, calc(100vw - 2rem));
   padding: 0;
   color: var(--ink);
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border: 1px solid var(--line);
+  border-radius: .7rem;
   box-shadow: var(--shadow);
 }
 
 .sheet::backdrop {
-  background: rgba(12, 20, 18, 0.46);
+  background: color-mix(in srgb, #0C1412 46%, transparent);
   backdrop-filter: blur(2px);
 }
 
 .sheet-form {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 18px;
+  gap: .35rem;
+  padding: 1.1rem;
 }
 
 .sheet-title {
   margin: 0;
-  font-size: 16px;
-  letter-spacing: -0.02em;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .85rem;
+  font-weight: 700;
+  color: var(--accent);
 }
 
-.sheet-lede {
-  margin: 0 0 6px;
+.sheet-note {
+  margin: 0 0 .5rem;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: .8rem;
 }
 
 .sheet-label {
-  margin-top: 6px;
-  font-size: 12px;
-  font-weight: 600;
+  margin-top: .5rem;
+  font-size: .74rem;
+  font-weight: 700;
 }
 
 .sheet-hint {
-  margin-left: 6px;
+  margin-left: .4rem;
   color: var(--muted);
   font-weight: 400;
 }
 
 .sheet-input {
   font: inherit;
+  font-size: .8rem;
   width: 100%;
-  padding: 9px 10px;
+  padding: .45rem .6rem;
   color: var(--ink);
   background: var(--ground);
-  border: 1px solid var(--border);
-  border-radius: 9px;
+  border: 1px solid var(--line);
+  border-radius: .5rem;
 }
 
 .sheet-input:focus {
@@ -111,13 +116,59 @@
 .sheet-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin: 14px 0 0;
+  gap: .5rem;
+  margin: .9rem 0 0;
   padding: 0;
 }
 
-.sheet-open {
-  margin-top: 8px;
-  text-align: center;
-  text-decoration: none;
+/* Inviting is not composing: a read-only guest never sees the composer
+   and still has its own link to hand on, so the control sits in the
+   dock rather than in the composer row. */
+.dock-actions {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  max-width: 44rem;
 }
+
+.dock-actions:not(:has(button:not([hidden]))) { display: none; }
+
+/* One row per tier the holder may hand on -- never one above it. */
+.invite-tiers {
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+}
+
+.invite-tier {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .45rem .6rem;
+  background: var(--ground);
+  border: 1px solid var(--line);
+  border-radius: .5rem;
+}
+
+.invite-tier .invite-name {
+  font-size: .78rem;
+  font-weight: 700;
+}
+
+.invite-tier .invite-what {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: .72rem;
+  color: var(--muted);
+}
+
+/* A requested session outlives the sheet that asked for it, so several
+   can stack in the dock instead of overwriting one another. */
+.invite-entry .invite-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  padding: 0 .9rem .5rem;
+}
+
+.invite-entry .invite-open { text-decoration: none; }
