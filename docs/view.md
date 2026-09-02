@@ -211,12 +211,16 @@ expanded group reuses the compound-tool nested-row machinery: each tool call
 and substantive reasoning occurrence is a `tool-child` row in chronological
 order with its own collapse state, and collapsing the group takes its rows
 with it. Rows that demand individual presentation — agent handles, compound
-tools, rows carrying hook audits or a sandbox warning, rows their renderer
-wants expanded or compact, and coalesced rows — never fold into a group; they
-split the run around themselves. A `note`-class sandbox line folds like any
-other row: nested rows do not carry the summary, so the note is dropped rather
-than repeated one level in. A group containing a failed call keeps its warning
-marker but starts collapsed.
+tools, rows carrying hook audits, rows their renderer wants expanded or
+compact, and coalesced rows — never fold into a group; they split the run
+around themselves. A sandbox disclosure does not split a run: the nested row
+carries the summary, so the line stays readable one level in. A group
+containing a failed call, or a call whose sandbox disclosure is a `warning`,
+keeps its warning marker but starts collapsed; a `note`-class disclosure
+leaves the group unmarked. Expanding a group rebuilds its rows from the
+folded run alone: `mevedel-transcript-segments` expands its end bound to the
+containing property run, so the segment beginning where the run ended is
+dropped instead of being summarized as one more reasoning occurrence.
 
 After an interactive ApplyPatch review settles, the applied patch row opens
 expanded on a preview of its first two changes with an `… N more changes`
@@ -872,13 +876,25 @@ Revisit source-backed transcript fragments only as a separate design after a
 concrete performance or correctness problem is identified.
 
 When an owning tool or agent turn used materially non-default child access,
-its source-backed row includes a durable `! Sandbox:` line directly below the
+its source-backed row includes a durable `Sandbox:` line directly below the
 normal header in collapsed, expanded, and compact-event forms. Additional
 writes, network access, unrestricted or unavailable confinement, host `/proc`,
 refusals, and no-start outcomes use short plain-language descriptions.
 Default Bubblewrap/workspace-write/isolated/fresh-proc execution and additional
-read-only mounts remain silent. The line is reconstructed from hidden
-transcript render-data rather than view-only state.
+read-only mounts remain silent.
+
+The line's class decides how loudly it reads.
+`mevedel-execution-telemetry-sandbox-summary-class` returns `warning` only
+when something the model asked for did not run — a refusal, or a child that
+never started — and that line takes the `!` marker and
+`mevedel-view-tool-warning`. Every other disclosure is a `note`: a boundary
+wider than the strictest default is the boundary the session was configured or
+granted, so network access, an additional write path, an escalation, or an
+unavailable sandbox record what ran without claiming a fault. Notes take the
+`◇` marker and `mevedel-view-tool-metadata`.
+
+The line is reconstructed from hidden transcript render-data rather than
+view-only state.
 
 High-level zone markers still define layout order in `mevedel-view.el`.
 `mevedel-view-interaction.el` turns the interaction marker into managed

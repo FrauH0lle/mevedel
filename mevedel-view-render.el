@@ -2007,10 +2007,11 @@ Return nil when HEADER is not a `Tool: argument' style line."
 
 (defun mevedel-view--sandbox-summary-line (summary)
   "Return the durable disclosure line for material sandbox SUMMARY.
-A `warning' class states something went wrong on this call.  A `note'
-class restates the session's standing confinement configuration, which
-already warned once when it was first hit, so it renders in the quiet
-metadata face instead of shouting on every row."
+A `warning' class states that something the model asked for did not run.
+A `note' class records the boundary the call actually ran with, which is
+the boundary the session was configured or granted -- nothing went wrong,
+so it takes the quiet marker and metadata face instead of shouting on
+every row."
   (when-let* ((class
                (and summary
                     (mevedel-execution-telemetry-sandbox-summary-class
@@ -2018,7 +2019,8 @@ metadata face instead of shouting on every row."
               (face (if (eq class 'note)
                         'mevedel-view-tool-metadata
                       'mevedel-view-tool-warning)))
-    (let* ((attempts (or (plist-get summary :attempt-count) 0))
+    (let* ((notep (eq class 'note))
+           (attempts (or (plist-get summary :attempt-count) 0))
            (started (or (plist-get summary :started-count) 0))
            (refused (or (plist-get summary :refused-count) 0))
            (writes (or (plist-get summary :additional-write-count) 0))
@@ -2067,7 +2069,7 @@ metadata face instead of shouting on every row."
                 details))
         (setq details (nreverse details)))
       (mevedel-view--operation-line
-       "!"
+       (if notep "\u25c7" "!")
        face
        "Sandbox:"
        (string-join details " · ")
@@ -2230,7 +2232,8 @@ the block.
 
 A nested compound call keeps its own `:child-calls', so expanding it
 inside a block or an activity group shows the calls it ran rather than
-the text it returned."
+the text it returned.  A row's sandbox disclosure travels with it, so
+folding a run into a group does not lose the boundary it ran with."
   (let* ((name (plist-get child :tool))
          (args (plist-get child :args))
          (result (plist-get child :result))
@@ -2256,6 +2259,9 @@ the text it returned."
         (setq rendering (plist-put rendering (car cell) (cdr cell))))
       (when failed
         (setq rendering (plist-put rendering :status 'error)))
+      (when-let* ((summary (plist-get render-data :sandbox-summary)))
+        (setq rendering
+              (plist-put rendering :sandbox-summary (copy-tree summary))))
       (when-let* ((media (plist-get child :media)))
         (setq rendering
               (plist-put rendering :body
@@ -5260,9 +5266,10 @@ resurrect rows the renderer suppressed."
   "Return the grouped rendering for activity ENTRIES in DATA-BUF, or nil.
 The result reuses the compound-tool row machinery: each tool or reasoning
 occurrence is a `:child-calls' entry with its own disclosure state.  A run
-with any failed call carries a warning marker but still renders collapsed:
-the marker says something went wrong, and the reader opens the group when
-they want to know what."
+with any failed call, or any call whose sandbox disclosure is a warning,
+carries a warning marker but still renders collapsed: the marker says
+something went wrong, and the reader opens the group when they want to
+know what."
   (let* ((children
           (let ((index 0)
                 out)
@@ -5273,7 +5280,11 @@ they want to know what."
               (cl-incf index))))
          (failed-p
           (cl-some (lambda (child)
-                     (not (eq (plist-get child :status) 'success)))
+                     (or (not (eq (plist-get child :status) 'success))
+                         (eq (mevedel-execution-telemetry-sandbox-summary-class
+                              (plist-get (plist-get child :render-data)
+                                         :sandbox-summary))
+                             'warning)))
                    children)))
     (when children
       (list :header (mevedel-view--tool-group-header children)
@@ -5285,35 +5296,38 @@ they want to know what."
 
 (defun mevedel-view--tool-group-rendering-from-source
     (data-buf start end)
-  "Rebuild a grouped activity rendering for DATA-BUF START..END."
+  "Rebuild a grouped activity rendering for DATA-BUF START..END.
+`mevedel-transcript-segments' expands its END to the containing property
+run, so re-segmenting a folded run also returns the segment that begins
+where the run ended.  That row was never part of the group: keeping it
+summarizes the following response, mailbox, or prompt as one more
+reasoning occurrence."
   (let ((entries
          (with-current-buffer data-buf
            (save-restriction
              (widen)
              (mevedel-view--tool-activity-entries
-              (mevedel-transcript-segments start end) data-buf)))))
+              (cl-remove-if (lambda (seg) (>= (cadr seg) end))
+                            (mevedel-transcript-segments start end))
+              data-buf)))))
     (mevedel-view--tool-group-rendering entries data-buf)))
 
 (defun mevedel-view--tool-group-entry-p (entry)
   "Return non-nil when ENTRY may fold into a grouped activity row.
 Rows that demand individual presentation stay out: agent handles and
 other non-tool vtypes, compound tools with their own nested rows, rows
-carrying hook audits or a sandbox warning, rows their renderer wants
-expanded or compact, coalesced rows, and renderer fallbacks.
+carrying hook audits, rows their renderer wants expanded or compact,
+coalesced rows, and renderer fallbacks.
 
-A `note'-class sandbox summary folds like any other row.  It restates
-the session's standing confinement configuration, which already warned
-once on its own, and a nested row does not carry the summary -- so the
-note is dropped rather than repeated one fold deeper."
+A sandbox disclosure does not keep a row out.  The nested row carries
+the summary, so the boundary stays readable one fold deeper, and a
+`warning'-class one marks the group the way a failed call does."
   (let ((rendering (plist-get entry :rendering)))
     (and rendering
          (= (plist-get entry :count) 1)
          (eq (or (plist-get rendering :vtype) 'tool-summary) 'tool-summary)
          (null (plist-get rendering :child-calls))
          (null (plist-get rendering :hook-audits))
-         (memq (mevedel-execution-telemetry-sandbox-summary-class
-                (plist-get rendering :sandbox-summary))
-               '(nil note))
          (not (plist-get rendering :force-expanded-p))
          (not (and (plist-member rendering :expandable-p)
                    (not (plist-get rendering :expandable-p))))

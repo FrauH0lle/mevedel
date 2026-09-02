@@ -280,7 +280,7 @@
   ()
   ,test
   (test)
-  :doc "classifies only material sandbox deviations as warnings"
+  :doc "leaves the default boundary and read-only mounts unclassified"
   (let ((default
          '(:attempt-count 1 :started-count 1 :refused-count 0
            :sandbox bubblewrap :filesystem workspace-write
@@ -289,41 +289,39 @@
     (should-not (mevedel-execution-telemetry-sandbox-summary-class default))
     (should-not
      (mevedel-execution-telemetry-sandbox-summary-class
-      (plist-put (copy-sequence default) :additional-read-count 1)))
-    (should
-     (eq 'warning
-         (mevedel-execution-telemetry-sandbox-summary-class
-          (plist-put (copy-sequence default) :started-count 0)))))
-  :doc "notes an unconfined run whose only deviation is the sandbox itself"
-  (let ((unconfined
+      (plist-put (copy-sequence default) :additional-read-count 1))))
+  :doc "warns only when a child was refused or never started"
+  (let ((default
          '(:attempt-count 2 :started-count 2 :refused-count 0
-           :sandbox unavailable :filesystem unrestricted
-           :network unrestricted :proc nil
+           :sandbox bubblewrap :filesystem workspace-write
+           :network isolated :proc fresh
            :additional-read-count 0 :additional-write-count 0)))
     (should
-     (eq 'note
-         (mevedel-execution-telemetry-sandbox-summary-class unconfined)))
-    (should
-     (eq 'note
+     (eq 'warning
          (mevedel-execution-telemetry-sandbox-summary-class
-          (plist-put (copy-sequence unconfined) :sandbox 'off))))
+          (plist-put (copy-sequence default) :started-count 1))))
     (should
      (eq 'warning
          (mevedel-execution-telemetry-sandbox-summary-class
-          (plist-put (copy-sequence unconfined) :started-count 1))))
-    (should
-     (eq 'warning
-         (mevedel-execution-telemetry-sandbox-summary-class
-          (plist-put (copy-sequence unconfined) :refused-count 1))))
-    (should
-     (eq 'warning
-         (mevedel-execution-telemetry-sandbox-summary-class
-          (plist-put (copy-sequence unconfined)
-                     :additional-write-count 1))))
-    (should
-     (eq 'warning
-         (mevedel-execution-telemetry-sandbox-summary-class
-          (plist-put (copy-sequence unconfined) :sandbox 'escalated))))))
+          (plist-put (copy-sequence default) :refused-count 1)))))
+  :doc "notes a wider boundary the session was configured or granted"
+  (let ((granted
+         '(:attempt-count 2 :started-count 2 :refused-count 0
+           :sandbox bubblewrap :filesystem workspace-write
+           :network isolated :proc fresh
+           :additional-read-count 0 :additional-write-count 0)))
+    (dolist (deviation '((:additional-write-count 1)
+                         (:network unrestricted)
+                         (:filesystem unrestricted)
+                         (:proc host)
+                         (:sandbox escalated)
+                         (:sandbox unavailable)
+                         (:sandbox off)))
+      (should
+       (eq 'note
+           (mevedel-execution-telemetry-sandbox-summary-class
+            (plist-put (copy-sequence granted)
+                       (car deviation) (cadr deviation))))))))
 
 (provide 'test-mevedel-execution-telemetry)
 ;;; test-mevedel-execution-telemetry.el ends here

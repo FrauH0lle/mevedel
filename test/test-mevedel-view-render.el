@@ -4178,7 +4178,7 @@
             (append
              '(:attempt-count 1 :started-count 1 :refused-count 0)
              (car case)))))
-      (should (string-match-p "! Sandbox:" line))
+      (should (string-match-p "◇ Sandbox:" line))
       (should (string-match-p (regexp-quote (cdr case)) line))))
   :doc "keeps material access visible beside a partial refusal"
   (let ((line
@@ -4210,7 +4210,7 @@
             :additional-read-count 0 :additional-write-count 0))))
     (should (string-match-p "1 child did not start" line))
     (should-not (string-match-p "nil" line)))
-  :doc "renders a standing unconfined run as a note, not a warning"
+  :doc "renders a granted boundary as a quiet note, not a warning"
   (dolist (sandbox '(unavailable off))
     (let ((line
            (mevedel-view--sandbox-summary-line
@@ -4218,18 +4218,29 @@
                   :sandbox sandbox :filesystem 'unrestricted
                   :network 'unrestricted :proc nil
                   :additional-read-count 0 :additional-write-count 0))))
-      (should (string-match-p "! Sandbox:" line))
+      (should (string-match-p "◇ Sandbox:" line))
       (should (string-match-p "ran without confinement" line))
       (should (eq 'mevedel-view-tool-metadata
-                  (get-text-property (string-match "!" line)
+                  (get-text-property (string-match "◇" line)
                                      'font-lock-face line)))))
-  :doc "keeps a material deviation in the warning face"
+  :doc "notes network and additional write access granted as configured"
+  (let ((line
+         (mevedel-view--sandbox-summary-line
+          '(:attempt-count 1 :started-count 1 :refused-count 0
+            :sandbox bubblewrap :filesystem workspace-write
+            :network unrestricted :proc fresh
+            :additional-read-count 0 :additional-write-count 1))))
+    (should (eq 'mevedel-view-tool-metadata
+                (get-text-property (string-match "◇" line)
+                                   'font-lock-face line))))
+  :doc "keeps a child that never started in the warning face"
   (let ((line
          (mevedel-view--sandbox-summary-line
           '(:attempt-count 2 :started-count 1 :refused-count 0
             :sandbox unavailable :filesystem unrestricted
             :network unrestricted :proc nil
             :additional-read-count 0 :additional-write-count 0))))
+    (should (string-match-p "! Sandbox:" line))
     (should (eq 'mevedel-view-tool-warning
                 (get-text-property (string-match "!" line)
                                    'font-lock-face line)))))
@@ -4350,7 +4361,83 @@
             :result "image"
             :media ((:mime "image/png" :kind image :path "shot.png"))))))
     (should (string-match-p "Media:.*shot\\.png"
-                            (plist-get rendering :body)))))
+                            (plist-get rendering :body))))
+
+  :doc "carries the row's sandbox disclosure one fold deeper"
+  (let ((rendering
+         (mevedel-view--child-call-rendering
+          '(:id "ptc/1" :tool "Bash" :status success
+            :args (:command "ls")
+            :result "out"
+            :render-data
+            (:sandbox-summary
+             (:attempt-count 1 :started-count 1 :refused-count 0
+              :sandbox bubblewrap :filesystem workspace-write
+              :network unrestricted :proc fresh
+              :additional-read-count 0 :additional-write-count 1))))))
+    (should (string-match-p
+             "◇ Sandbox:.*network access allowed"
+             (mevedel-view--rendering-header-block rendering)))))
+
+(mevedel-deftest mevedel-view--tool-group-rendering-from-source ()
+  ,test
+  (test)
+  :doc "rebuilds only the folded run, not the response that follows it"
+  (mevedel-view-test--with-buffers
+    (dotimes (i 4)
+      (mevedel-view-test--insert-data
+       data-buf
+       (format "\n(:name \"Read\" :args (:file_path \"/tmp/f%d\"))\n\nbody\n" i)
+       (cons 'tool (format "call_%d" i))))
+    (let (run-start run-end)
+      (with-current-buffer data-buf
+        (setq run-start (point-min))
+        (setq run-end (point-max)))
+      (mevedel-view-test--insert-data data-buf "Following response.\n" 'response)
+      (let ((children
+             (plist-get
+              (mevedel-view--tool-group-rendering-from-source
+               data-buf run-start run-end)
+              :child-calls)))
+        (should (= 4 (length children)))
+        (should-not (cl-some (lambda (child)
+                               (eq (plist-get child :kind) 'reasoning))
+                             children))))))
+
+(mevedel-deftest mevedel-view--tool-group-rendering ()
+  ,test
+  (test)
+  :doc "a note-class sandbox disclosure leaves the group unmarked"
+  (should-not
+   (plist-get
+    (mevedel-view--tool-group-rendering
+     '((:kind tool
+        :group-child
+        (:tool "Bash" :status success
+         :render-data
+         (:sandbox-summary
+          (:attempt-count 1 :started-count 1 :refused-count 0
+           :sandbox bubblewrap :filesystem workspace-write
+           :network unrestricted :proc fresh
+           :additional-read-count 0 :additional-write-count 1)))))
+     (current-buffer))
+    :status))
+  :doc "a warning-class sandbox disclosure marks the group"
+  (should
+   (eq 'warning
+       (plist-get
+        (mevedel-view--tool-group-rendering
+         '((:kind tool
+            :group-child
+            (:tool "Bash" :status success
+             :render-data
+             (:sandbox-summary
+              (:attempt-count 2 :started-count 1 :refused-count 1
+               :sandbox refused :filesystem unavailable
+               :network unavailable :proc nil
+               :additional-read-count 0 :additional-write-count 0)))))
+         (current-buffer))
+        :status))))
 
 (mevedel-deftest mevedel-view--insert-child-calls ()
   ,test
@@ -6322,7 +6409,6 @@
              (:header "h" :vtype agent-handle)
              (:header "h" :child-calls ((:id "1")))
              (:header "h" :hook-audits ((:type x)))
-             (:header "h" :sandbox-summary (:sandbox refused))
              (:header "h" :force-expanded-p t)
              (:header "h" :expandable-p nil)
              (:header "h" :initially-collapsed-p nil)))
@@ -6331,17 +6417,24 @@
   :doc "coalesced rows are not groupable"
   (should-not (mevedel-view--tool-group-entry-p
                '(:count 2 :rendering (:header "h"))))
-  :doc "a note-class sandbox summary does not split the run"
-  (should (mevedel-view--tool-group-entry-p
-           '(:count 1
-             :rendering
-             (:header "Bash: ls"
-              :sandbox-summary
-              (:attempt-count 1 :started-count 1 :refused-count 0
-               :sandbox unavailable :filesystem unrestricted
-               :network unrestricted :proc nil
-               :additional-read-count 0
-               :additional-write-count 0))))))
+  :doc "no sandbox disclosure splits the run"
+  (dolist (summary
+           '((:attempt-count 1 :started-count 1 :refused-count 0
+              :sandbox unavailable :filesystem unrestricted
+              :network unrestricted :proc nil
+              :additional-read-count 0 :additional-write-count 0)
+             (:attempt-count 1 :started-count 1 :refused-count 0
+              :sandbox bubblewrap :filesystem workspace-write
+              :network unrestricted :proc fresh
+              :additional-read-count 0 :additional-write-count 1)
+             (:attempt-count 1 :started-count 0 :refused-count 1
+              :sandbox refused :filesystem unavailable
+              :network unavailable :proc nil
+              :additional-read-count 0 :additional-write-count 0)))
+    (should (mevedel-view--tool-group-entry-p
+             (list :count 1
+                   :rendering
+                   (list :header "Bash: ls" :sandbox-summary summary))))))
 
 (mevedel-deftest mevedel-view--insert-tool-group ()
   ,test

@@ -223,12 +223,12 @@ requested command started, and REFUSED-P records a policy refusal."
 (defun mevedel-execution-telemetry-sandbox-summary-class (summary)
   "Return SUMMARY's disclosure class, or nil for the default boundary.
 
-`warning' marks a material deviation the reader has not already been told
-about.  `note' marks the standing consequence of the session's own
-confinement configuration: every child ran unconfined because the sandbox
-is unavailable under `best-effort' or switched off outright.  That state
-warns once per session when it is first hit, so repeating it per call is
-noise -- the note records it without claiming anything new went wrong."
+`warning' marks a call where something the model asked for did not run: a
+child was refused, or one never started.  Everything else noteworthy is a
+`note' -- a wider boundary than the strictest default is what the session
+was configured or granted to run with, so network access, an additional
+write path, an escalation, or an unavailable sandbox record the boundary
+without claiming anything went wrong."
   (and summary
        (let ((attempts (or (plist-get summary :attempt-count) 0))
              (sandbox (plist-get summary :sandbox)))
@@ -240,15 +240,10 @@ noise -- the note records it without claiming anything new went wrong."
                  (not (eq (plist-get summary :filesystem) 'workspace-write))
                  (not (eq (plist-get summary :network) 'isolated))
                  (eq (plist-get summary :proc) 'host))
-           ;; An unconfined run is only a note when nothing else deviated:
-           ;; every attempt started, none was refused, and no additional
-           ;; write access was granted on top.
-           (if (and (memq sandbox '(unavailable off))
-                    (zerop (or (plist-get summary :additional-write-count) 0))
-                    (zerop (or (plist-get summary :refused-count) 0))
-                    (= (or (plist-get summary :started-count) 0) attempts))
-               'note
-             'warning)))))
+           (if (or (> (or (plist-get summary :refused-count) 0) 0)
+                   (< (or (plist-get summary :started-count) 0) attempts))
+               'warning
+             'note)))))
 
 (defun mevedel-execution-telemetry--eask-command-p (command)
   "Return non-nil when COMMAND invokes Eask directly or through npx."
