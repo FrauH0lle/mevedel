@@ -1401,22 +1401,33 @@ asynchronous agent and calls CALLBACK when that turn settles."
 ;;; Skill tool handler
 
 (defun mevedel-skills--render-skill-tool (name args result render-data)
-  "Return rendering plist for NAME, ARGS, and RESULT from the Skill tool."
+  "Return rendering plist for NAME, ARGS, and RESULT from the Skill tool.
+
+Required-attachment reminders lead RESULT so the model reads its
+dependencies before the skill body.  The row shows the skill's own body
+and names the attachments in the header, so no reminder markup reaches
+the reader as prose."
   (when (stringp result)
     (let* ((skill-name (or (plist-get args :name) "?"))
-           (lines (length (split-string result "\n" t)))
+           (body (or (plist-get render-data :prompt) result))
+           (attachments (plist-get render-data :attachments))
+           (lines (length (split-string body "\n" t)))
            (fields (plist-get render-data :ignored-policy-fields))
            (ignored-fields
-            (and (eq (plist-get render-data :kind) 'skill-policy-warning)
+            (and (eq (plist-get render-data :kind) 'skill-invocation)
                  (member fields '((model) (effort) (model effort)))
                  fields))
            (ignored-names (mapconcat #'symbol-name ignored-fields ", "))
            (ignored-description (mapconcat #'symbol-name ignored-fields " and ")))
-      (list :header (format "%s: %s (%d %s%s)"
+      (list :header (format "%s: %s (%d %s%s%s)"
                             (or name "Skill")
                             skill-name
                             lines
                             (if (= lines 1) "line" "lines")
+                            (if attachments
+                                (format "; attached %s"
+                                        (mapconcat #'identity attachments ", "))
+                              "")
                             (if ignored-fields
                                 (format "; ignored %s" ignored-names)
                               ""))
@@ -1429,8 +1440,8 @@ asynchronous agent and calls CALLBACK when that turn settles."
                         "to give the skill its own request.\n\n%s")
                        ignored-description
                        (if (cdr ignored-fields) "overrides were" "override was")
-                       result)
-                    result)
+                       body)
+                    body)
             :body-mode 'markdown-mode
             :status (cond
                      ((string-prefix-p "Error:" result) 'error)
@@ -1450,15 +1461,29 @@ returns the body; error returns a `Error: ' prefixed message."
          (arguments (plist-get args :arguments))
          (session (and (boundp 'mevedel--session) mevedel--session))
          (skill (and session (mevedel-session-get-skill session name)))
-         (return (lambda (result &optional ignored-fields)
-                   (funcall callback
-                            (if ignored-fields
-                                (list :result result
-                                      :render-data
-                                      (list :kind 'skill-policy-warning
-                                            :ignored-policy-fields
-                                            ignored-fields))
-                              (list :result result))))))
+         (return
+          (lambda (result &optional outcome)
+            ;; OUTCOME is present only for a successful invocation.  An
+            ;; inline body whose required attachments lead RESULT travels
+            ;; beside it as `:prompt', so the row shows the skill alone
+            ;; and no reminder markup reaches the reader as prose.
+            (let* ((attachments
+                    (and (plist-get outcome :body)
+                         (mapcar (lambda (attachment)
+                                   (plist-get attachment :name))
+                                 (plist-get outcome :required-attachments))))
+                   (ignored (plist-get outcome :ignored-policy-fields))
+                   (render-data
+                    (when (or attachments ignored)
+                      (list :kind 'skill-invocation
+                            :prompt (and attachments
+                                         (plist-get outcome :body))
+                            :attachments attachments
+                            :ignored-policy-fields ignored))))
+              (funcall callback
+                       (if render-data
+                           (list :result result :render-data render-data)
+                         (list :result result)))))))
     (cond
      ((not (stringp name))
       (funcall return "Error: Skill name is required."))
@@ -1477,7 +1502,7 @@ returns the body; error returns a `Error: ' prefixed message."
                               (mevedel-skills-format-model-input outcome))
                          (plist-get outcome :result)
                          (format "Skill '%s' produced no body." name))
-                     (plist-get outcome :ignored-policy-fields)))
+                     outcome))
            ('error
             (funcall return
                      (format "Error: %s"

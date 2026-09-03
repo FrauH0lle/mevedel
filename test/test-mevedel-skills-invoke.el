@@ -1595,7 +1595,7 @@ hooks:
   (let ((rendering
          (mevedel-skills--render-skill-tool
           "Skill" '(:name "review") "Prepared body"
-          '(:kind skill-policy-warning
+          '(:kind skill-invocation
                   :ignored-policy-fields (model effort)))))
     (should (eq 'warning (plist-get rendering :status)))
     (should (string-match-p "ignored model, effort"
@@ -1607,7 +1607,7 @@ hooks:
   (let ((rendering
          (mevedel-skills--render-skill-tool
           "Skill" '(:name "review") "Prepared body"
-          '(:kind skill-policy-warning
+          '(:kind skill-invocation
                   :ignored-policy-fields (effort)))))
     (should (string-match-p "ignored effort" (plist-get rendering :header)))
     (should-not (string-match-p "ignored model" (plist-get rendering :header))))
@@ -1618,7 +1618,19 @@ hooks:
           "Skill" '(:name "review") "Prepared body" nil)))
     (should-not (plist-get rendering :status))
     (should (equal "Prepared body" (plist-get rendering :body)))
-    (should-not (string-match-p "ignored" (plist-get rendering :header)))))
+    (should-not (string-match-p "ignored" (plist-get rendering :header))))
+
+  :doc "attachment reminders leave the body and name themselves in the header"
+  (let ((rendering
+         (mevedel-skills--render-skill-tool
+          "Skill" '(:name "root")
+          (concat "<system-reminder>\nAttached child\n</system-reminder>"
+                  "\n\nRoot body")
+          '(:kind skill-invocation :prompt "Root body"
+                  :attachments ("child" "grandchild")))))
+    (should (equal "Root body" (plist-get rendering :body)))
+    (should (string-match-p "(1 line; attached child, grandchild)"
+                            (plist-get rendering :header)))))
 
 (mevedel-deftest mevedel-skills--invoke-handler ()
   ,test
@@ -1699,6 +1711,39 @@ description: Yell
     (should-not (string-match-p "BODY MUST NOT BE RETURNED" received))
     (should (equal (list record) (mevedel-session-invoked-skills session))))
 
+  :doc "required attachments lead the result and travel beside it"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skill-attach-" t))
+         (dir (file-name-concat root ".mevedel" "skills"))
+         (workspace (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "attach" workspace root))
+         envelope)
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "child" "name: child\ndescription: Child\n" "Child contract")
+          (mevedel-skills-test--write-skill
+           dir "root" "name: root\ndescription: Root\n" "Root body\n!$child")
+          (setf (mevedel-session-skills session)
+                (mevedel-skills-scan root '(".mevedel/skills") workspace))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (mevedel-skills--invoke-handler
+             (lambda (value) (setq envelope value))
+             '(:name "root")))
+          (let ((result (plist-get envelope :result))
+                (render-data (plist-get envelope :render-data)))
+            (should (string-match-p "<system-reminder>" result))
+            (should (string-match-p "Child contract" result))
+            (should (equal '("child") (plist-get render-data :attachments)))
+            (should (string-match-p "Root body"
+                                    (plist-get render-data :prompt)))
+            (should-not (string-match-p "<system-reminder>"
+                                        (plist-get render-data :prompt)))
+            (should-not (string-match-p "Child contract"
+                                        (plist-get render-data :prompt)))))
+      (delete-directory root t)))
+
   :doc "model-side inline policy is view-only render-data"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
@@ -1712,7 +1757,8 @@ description: Yell
        (lambda (value) (setq envelope value))
        '(:name "costly")))
     (should (equal "Prepared body" (plist-get envelope :result)))
-    (should (equal '(:kind skill-policy-warning
+    (should (equal '(:kind skill-invocation
+                           :prompt nil :attachments nil
                            :ignored-policy-fields (model effort))
                    (plist-get envelope :render-data))))
 
@@ -1741,7 +1787,8 @@ description: Yell
             (funcall (mevedel-tool-renderer tool)
                      "Skill" '(:name "costly") visible render-data)))
       (should (equal "Prepared body" visible))
-      (should (equal '(:kind skill-policy-warning
+      (should (equal '(:kind skill-invocation
+                             :prompt nil :attachments nil
                              :ignored-policy-fields (model effort))
                      render-data))
       (should (eq 'warning (plist-get rendering :status)))

@@ -710,11 +710,16 @@ effort values cannot make an instruction, command stack, or model-side inline
 call fail.
 
 A model-side inline call still returns the prepared skill body unchanged to
-the model. When frontmatter or the `$skill-name` workload declared a model
-and/or effort field, the Skill tool row in the view receives warning status and
-names only the ignored fields; its expanded detail recommends `context: fork`.
-That warning is render data and is never prepended to the tool result. No
-warning is shown when neither field exists.
+the model, with the required-attachment `<system-reminder>` blocks leading it
+so dependencies are read first. The same render-data side channel carries the
+bare body and the attachment names, so the Skill tool row shows the skill's own
+body and names its dependencies in the header
+(`Skill: artifact-doc (75 lines; attached artifact, artifact-design)`) instead
+of rendering the reminder markup as prose. When frontmatter or the
+`$skill-name` workload declared a model and/or effort field, that row receives
+warning status and names only the ignored fields; its expanded detail
+recommends `context: fork`. That warning is render data and is never prepended
+to the tool result. No warning is shown when neither field exists.
 
 An `agent` field selects the child type only for `context: fork`. Combining
 `agent` with `context: inline` records one configuration warning shown by skill
