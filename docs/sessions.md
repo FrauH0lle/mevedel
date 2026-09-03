@@ -313,7 +313,13 @@ client reclaims its own expired lease without a prompt, because renewal cannot
 run inside blocking target I/O and confirming a takeover from oneself is
 meaningless; the exclusive creation of the next generation still refuses the
 reclaim when another client claimed the lease meanwhile.  Taking over another
-client's expired lease still requires explicit confirmation.
+client's expired lease still requires explicit confirmation.  The renewal
+heartbeat performs that reclaim itself: a machine that suspends longer than
+the lease duration stops its timer but not the target clock, so it wakes with
+its own record already expired and nobody else claiming it.  Reporting a lost
+lease there would cancel the heartbeat for a condition the next mutation
+heals anyway, so renewal retakes the record instead and the session keeps its
+authority across standby.
 
 ### Portable project durability publication
 

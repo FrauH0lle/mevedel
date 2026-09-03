@@ -1366,6 +1366,43 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t))))
 
+  :doc "a standby past the lease TTL reclaims this client's own record"
+  (let* ((host "renew-standby-host")
+         (local-root (file-name-as-directory
+                      (make-temp-file "mevedel-remote-standby-" t)))
+         (session-dir-local
+          (file-name-as-directory (file-name-concat local-root "session")))
+         (session-dir
+          (format "/mevedelmock:%s:%s/" host session-dir-local))
+         (session (test-mevedel-session-durability--remote-session
+                   host local-root))
+         (mevedel-session-durability--client-id (make-string 64 ?b))
+         (now 0.0))
+    (make-directory session-dir-local t)
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp (list host)
+          (test-mevedel-session-durability--accept-storage session)
+          (setf (mevedel-session-save-path session) session-dir)
+          (cl-letf (((symbol-function 'mevedel-session-durability--target-time)
+                     (lambda (&optional _) now)))
+            (should (mevedel-session-persistence-lock-acquire
+                     session-dir "*standby*" session))
+            (let ((generation
+                   (plist-get (mevedel-session-lease session) :generation)))
+              ;; The machine slept: the renewal timer never fired, the target
+              ;; clock moved past the record's expiry anyway.
+              (setq now (+ mevedel-session-lease-seconds 30.0))
+              (should (mevedel-session-durability-lease-renew session))
+              (should (eq 'owned
+                          (plist-get (mevedel-session-lease session) :state)))
+              (should (> (plist-get (mevedel-session-lease session)
+                                    :generation)
+                         generation))
+              (should (mevedel-session-durability-lease-owned-p session))))
+          (mevedel-session-persistence-lock-release session-dir session))
+      (when (file-directory-p local-root)
+        (delete-directory local-root t))))
+
   :doc "a renewal under a bound transaction clock assumes instead of observing"
   (let* ((host "renew-assume-host")
          (local-root (file-name-as-directory
