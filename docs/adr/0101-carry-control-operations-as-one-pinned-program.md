@@ -115,3 +115,16 @@ artifact or generation, which are the rare ones.
 Reading a program's diagnostics now depends on its trailing record arriving.  A
 program killed before its exit trap runs has none, and the failure is reported
 from the raw output buffer instead.
+
+Amended: enumerating a workspace did not follow this decision.  The session
+picker's listing called the one-operation wrappers per candidate and spent 491
+target processes on 66 directories -- a profile put that at 2.4 seconds of a
+local startup, and each of those processes is an SSH round trip on a remote
+workspace.  The probes and the lease listings now travel as one program each,
+and both are shared with the reads they feed, which brought the same listing to
+87 processes and 0.82 seconds.  What moved this was the measurement, not a
+change of principle: the budget was already stated here and the listing simply
+did not keep to it.  Two seams carry the sharing, because a batched observation
+is only reusable by the caller that took it -- the durable transaction's
+pid-lock memo, which the listing seeds, and the existing already-observed
+listing argument, which it passes down through the publication read.

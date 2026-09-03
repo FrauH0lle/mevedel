@@ -291,6 +291,16 @@ an absent transfer mailbox holds no requests, so a polling observer performs no
 target mutation. Publication proves lease ownership immediately before every
 artifact write and once after the last one; each of those proofs is one round
 trip.
+Enumerating a workspace's sessions obeys the same budget. Every candidate
+directory's control artifacts are probed in one program and every lease
+directory is listed in one more, and both observations are then shared with
+the reads they feed: a candidate proved free of a PID lock is recorded in the
+durable transaction that spans the listing, so the assertions each publication
+read repeats cost nothing, and each listing is handed to that read in place of
+its own listing round trip. What remains scales with sessions rather than with
+probes -- one lease-record read and one manifest read each -- so a workspace
+holding dozens of candidate directories spends dozens of round trips instead
+of hundreds.
 Portable lease expiry and transfer deadlines use the target filesystem clock at
 whole-second resolution, so clients with skewed wall clocks cannot change one
 another's authority and lease durations are configured in whole seconds.  A
