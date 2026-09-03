@@ -24,6 +24,17 @@ and uses WebSocket keepalive to detect dead peers. The former maximum-age
 sweep only forced a reconnect: the Emacs host automatically recreated the
 same room, so the sweep neither bounded share lifetime nor revoked its bearer.
 
+Keepalive has to run in both directions for the reconnect this lifecycle
+relies on. websocket.el answers a relay ping inside its own filter and never
+surfaces one, so the host cannot observe the relay's pings stopping: a
+suspended machine woke with a socket its kernel still called open and a room
+the relay had already collected, and the bearer link stayed dead until the
+session happened to send something. The host therefore writes its own ping on
+the same interval. The relay's side is closed by then, the peer answers with
+a reset, and the redial re-creates the room -- which is what makes "temporary
+network loss does not end the share" true of a suspend and not only of a blip
+the host was awake for.
+
 The accepted cost is that a bearer remains valid for the entire host share,
 even across periods with no guests. Explicitly stopping the share is the
 revocation operation. Artifacts inherit the same room lifetime and need no

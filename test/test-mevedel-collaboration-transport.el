@@ -55,7 +55,9 @@ STATE is a plist placed in a cons cell so handlers can mutate it."
      (let ((path (mevedel-test--relay-path (websocket-conn ws))))
        (cond
         ((and path (string-match "\\?role=host\\'" path))
-         (setcar state (plist-put (car state) :host ws)))
+         (if (plist-get (car state) :host)
+             (websocket-close ws)
+           (setcar state (plist-put (car state) :host ws))))
         ((and path (string-match "\\?role=guest\\'" path))
          (let* ((plist (car state))
                 (peer (or (plist-get plist :next-peer) 1))
@@ -424,5 +426,56 @@ relay's room plist."
        (ignore-errors (websocket-server-close server))
        ;; Stopping cancels any retry so no timer leaks.
        (should-not (plist-get transport :reconnect-timer))))))
+
+(mevedel-deftest mevedel-collaboration--transport-keepalive
+  ()
+  ,test
+  (test)
+  :doc "a keepalive ping carries a payload so websocket.el masks it"
+  (let ((transport (list :state 'open :ws 'ws))
+        sent)
+    (cl-letf (((symbol-function 'websocket-openp) (lambda (_ws) t))
+              ((symbol-function 'websocket-send)
+               (lambda (_ws frame) (setq sent frame))))
+      (mevedel-collaboration--transport-keepalive transport))
+    (should (eq 'ping (websocket-frame-opcode sent)))
+    (should (= 128
+               (logand 128
+                       (aref (websocket-encode-frame sent t) 1)))))
+
+  :doc "a failing write redials and a stale close leaves the replacement open"
+  (mevedel-test--with-stub-relay (state port server)
+    (let* ((states nil)
+           (transport
+            (mevedel-collaboration--transport-open
+             (format "ws://127.0.0.1:%d/r/roomroomroomroom?role=host" port)
+             (make-string 32 5)
+             :on-state (lambda (new) (push new states)))))
+      (unwind-protect
+          (progn
+            (should (mevedel-test--pump
+                     (lambda ()
+                       (mevedel-collaboration--transport-open-p transport))))
+            (should (timerp (plist-get transport :keepalive-timer)))
+            (let* ((old (plist-get transport :ws))
+                   (stale-close (websocket-on-close old)))
+              ;; A suspended machine wakes with this exact state: the process
+              ;; still reads open, and only the write finds the reset.
+              (cl-letf (((symbol-function 'websocket-send)
+                         (lambda (&rest _) (signal 'error (list "reset")))))
+                (mevedel-collaboration--transport-keepalive transport))
+              (should-not (websocket-openp old))
+              (should (memq 'down states))
+              (should (timerp (plist-get transport :reconnect-timer)))
+              (should (mevedel-test--pump
+                       (lambda ()
+                         (mevedel-collaboration--transport-open-p transport))))
+              (let ((replacement (plist-get transport :ws)))
+                (funcall stale-close old)
+                (should (eq replacement (plist-get transport :ws)))
+                (should (mevedel-collaboration--transport-open-p transport)))))
+        (mevedel-collaboration--transport-stop transport)
+        (should-not (plist-get transport :keepalive-timer))))))
+
 
 ;;; test-mevedel-collaboration-transport.el ends here

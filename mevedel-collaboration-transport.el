@@ -13,7 +13,9 @@
 ;;
 ;; This module knows nothing about rooms, guests, or the projection: it
 ;; delivers decoded frames and control events to callbacks and reconnects
-;; with bounded backoff when the relay connection drops.
+;; with bounded backoff when the relay connection drops.  It pings the relay
+;; on its own interval so a connection that died while this machine slept
+;; reports itself instead of looking open forever.
 
 ;;; Code:
 
@@ -29,6 +31,7 @@
 (declare-function make-websocket-frame "websocket"
                   (&rest args))
 (declare-function websocket-close "websocket" (websocket))
+(declare-function websocket-conn "websocket" (cl-x) t)
 (declare-function websocket-frame-opcode "websocket" (cl-x) t)
 (declare-function websocket-frame-payload "websocket" (cl-x) t)
 (declare-function websocket-frame-text "websocket" (frame))
@@ -142,6 +145,7 @@ shapes the projection already produces, which `json-encode' accepts."
 
 (defconst mevedel-collaboration--backoff-initial 1)
 (defconst mevedel-collaboration--backoff-max 30)
+(defconst mevedel-collaboration--keepalive-seconds 30)
 
 (defun mevedel-collaboration--transport-open (url key &rest callbacks)
   "Open a reconnecting sealed transport to the relay room at URL.
@@ -172,9 +176,42 @@ dropped silently."
                          :reconnect-timer nil
                          :on-frame (plist-get callbacks :on-frame)
                          :on-control (plist-get callbacks :on-control)
-                         :on-state (plist-get callbacks :on-state))))
+                         :on-state (plist-get callbacks :on-state)
+                         :keepalive-timer nil)))
     (mevedel-collaboration--transport-dial transport)
+    (plist-put transport :keepalive-timer
+               (run-at-time mevedel-collaboration--keepalive-seconds
+                            mevedel-collaboration--keepalive-seconds
+                            #'mevedel-collaboration--transport-keepalive
+                            transport))
     transport))
+
+(defun mevedel-collaboration--transport-keepalive (transport)
+  "Write a ping to TRANSPORT so a dead relay connection reports itself.
+
+The relay pings every 30 seconds and collects the room when a ping times
+out, but websocket.el answers a ping inside its own filter and never
+surfaces one: a host cannot notice the relay's pings stopping.  A machine
+that suspends therefore wakes with a socket its kernel still calls open, a
+room the relay collected while it slept, and no reason to redial -- the
+share link stays dead until something happens to be sent.  Writing is what
+ends it: the relay closed its side, so the peer answers with a reset, the
+process sentinel closes the websocket, and the redial re-creates the room.
+
+The ping carries a payload because websocket.el encodes a payload-less one
+unmasked, which is exactly the frame a server must refuse.
+
+The reset is what makes this prompt, so a relay that has become entirely
+unreachable -- packets dropped rather than refused -- is still only noticed
+when the kernel gives up retransmitting.  Detecting that would need a pong
+deadline, which websocket.el cannot report without patching it."
+  (when (mevedel-collaboration--transport-open-p transport)
+    (let ((ws (plist-get transport :ws)))
+      (condition-case nil
+          (websocket-send ws
+                          (make-websocket-frame
+                           :opcode 'ping :payload "m" :completep t))
+        (error (mevedel-collaboration--transport-down transport ws))))))
 
 (defun mevedel-collaboration--transport-notify (transport state)
   "Report STATE through TRANSPORT's `:on-state' callback, if any."
@@ -200,15 +237,15 @@ dropped silently."
         (lambda (_ws frame)
           (mevedel-collaboration--transport-receive transport frame))
         :on-close
-        (lambda (_ws)
-          (mevedel-collaboration--transport-down transport))
+        (lambda (ws)
+          (mevedel-collaboration--transport-down transport ws))
         :on-error
         (lambda (_ws _type _error)
           ;; Callback errors must not leak into websocket.el's filter;
           ;; a broken connection surfaces through on-close.
           nil)))
     ;; A synchronous dial failure (DNS, refused) retries like a drop.
-    (error (mevedel-collaboration--transport-down transport))))
+    (error (mevedel-collaboration--transport-down transport nil))))
 
 (defun mevedel-collaboration--transport-receive (transport frame)
   "Decode websocket FRAME for TRANSPORT and dispatch it."
@@ -232,11 +269,15 @@ dropped silently."
            (funcall callback event (plist-get control :peer)))))
     (error nil)))
 
-(defun mevedel-collaboration--transport-down (transport)
-  "Handle a dropped or failed connection for TRANSPORT."
-  (unless (memq (plist-get transport :state) '(stopped down))
+(defun mevedel-collaboration--transport-down (transport ws)
+  "Handle TRANSPORT's dropped or failed WS connection.
+WS is nil when dialing failed before a connection was created."
+  (when (and (not (memq (plist-get transport :state) '(stopped down)))
+             (eq ws (plist-get transport :ws)))
     (plist-put transport :ws nil)
     (plist-put transport :state 'down)
+    (when ws
+      (ignore-errors (delete-process (websocket-conn ws))))
     (mevedel-collaboration--transport-notify transport 'down)
     (let ((backoff (plist-get transport :backoff)))
       (plist-put transport :backoff
@@ -286,7 +327,8 @@ the relay collects the room, ending the session for every guest."
                          encoded))
               :completep t))
             t))
-      (websocket-closed (mevedel-collaboration--transport-down transport)
+      (websocket-closed (mevedel-collaboration--transport-down
+                         transport (plist-get transport :ws))
                         nil)
       (error nil))))
 
@@ -302,16 +344,18 @@ Return non-nil when the bounded JSON object was written."
                     mevedel-collaboration--max-control-bytes)
             (websocket-send-text (plist-get transport :ws) encoded)
             t))
-      (websocket-closed (mevedel-collaboration--transport-down transport)
+      (websocket-closed (mevedel-collaboration--transport-down
+                         transport (plist-get transport :ws))
                         nil)
       (error nil))))
 
 (defun mevedel-collaboration--transport-stop (transport)
   "Stop TRANSPORT: cancel retries and close the connection."
   (plist-put transport :state 'stopped)
-  (when-let* ((timer (plist-get transport :reconnect-timer)))
-    (cancel-timer timer)
-    (plist-put transport :reconnect-timer nil))
+  (dolist (key '(:reconnect-timer :keepalive-timer))
+    (when-let* ((timer (plist-get transport key)))
+      (cancel-timer timer)
+      (plist-put transport key nil)))
   (when-let* ((ws (plist-get transport :ws)))
     (plist-put transport :ws nil)
     (condition-case nil
