@@ -53,6 +53,7 @@
 
 (require 'mevedel-session-artifacts)
 (require 'mevedel-session-codec)
+(require 'mevedel-session-durability)
 
 (eval-when-compile
   (require 'cl-lib)
@@ -199,6 +200,7 @@
 (declare-function mevedel-session-control-fs-path-exists-p "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-physical-path "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-run-program "mevedel-session-control-fs" (operations))
 (declare-function mevedel-session-control-fs-write-file "mevedel-session-control-fs" (path content))
 (autoload 'mevedel-session-control-fs-path-exists-p
   "mevedel-session-control-fs")
@@ -259,7 +261,7 @@
 (declare-function mevedel-session-publication-logical-path-p "mevedel-session-publication" (path))
 (declare-function mevedel-session-publication-prune-committed "mevedel-session-publication" (session artifacts))
 (declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit))
-(declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir))
+(declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir &optional head names))
 (declare-function mevedel-session-publication-uncommitted-artifact "mevedel-session-publication" (session logical))
 (autoload 'mevedel-session-publication-collect-generations
   "mevedel-session-publication")
@@ -1938,6 +1940,66 @@ Enumerating a workspace costs several target round trips per session,
 so decorative consumers reuse the newest live listing instead of
 paying that on every redraw.  Every live enumeration refreshes it.")
 
+(defun mevedel-session-persistence--control-artifacts (entries)
+  "Return ENTRIES that carry a session control artifact, in one program.
+
+Each candidate is probed for the three artifacts that make a directory a
+session -- the obsolete PID lock, the portable lease, and the sidecar --
+and every probe of every candidate travels in a single target program.
+Probing them one at a time is one target process each, which is what made
+enumerating a workspace cost hundreds of round trips.
+
+A candidate proved free of a PID lock is recorded through
+`mevedel-session-durability-note-no-pid-lock', so the assertions the
+publication read repeats per entry reuse this program's proof instead of
+paying for their own.  Directories that do carry one are left alone: their
+own assertion reports them at its call site, where one bad entry fails
+that entry rather than the whole enumeration."
+  (let* ((names '(".lock" ".lease" "session.meta.el"))
+         (results
+          (mevedel-session-control-fs-run-program
+           (cl-loop for entry in entries
+                    append
+                    (mapcar (lambda (name)
+                              (list :op 'path-exists-p
+                                    :path (file-name-concat entry name)
+                                    :optional t))
+                            names))))
+         found)
+    (dolist (entry entries (nreverse found))
+      ;; Results arrive in the order the operations were emitted: one per
+      ;; name, in `names' order, per entry.
+      (let* ((lock (eq 'ok (plist-get (pop results) :status)))
+             (lease (eq 'ok (plist-get (pop results) :status)))
+             (sidecar (eq 'ok (plist-get (pop results) :status))))
+        (unless lock
+          (mevedel-session-durability-note-no-pid-lock entry))
+        (when (or lock lease sidecar)
+          (push entry found))))))
+
+(defun mevedel-session-persistence--lease-listings (entries)
+  "Return an alist of ENTRIES to their observed lease-directory listings.
+
+Every candidate's lease directory is listed in one target program.
+`mevedel-session-durability--generation-paths' accepts such an observation
+in place of its own round trip, so the publication read below spends no
+listing of its own; an empty or absent directory is recorded as `none',
+which that helper distinguishes from no observation at all.  An entry whose
+listing failed is left out, and lists for itself."
+  (let ((results
+         (mevedel-session-control-fs-run-program
+          (mapcar (lambda (entry)
+                    (list :op 'list-directory
+                          :path (file-name-concat entry ".lease")
+                          :optional t))
+                  entries)))
+        alist)
+    (dolist (entry entries (nreverse alist))
+      (let* ((result (pop results))
+             (status (plist-get result :status)))
+        (when (memq status '(ok absent))
+          (push (cons entry (or (plist-get result :value) 'none)) alist))))))
+
 (defun mevedel-session-persistence-list-sessions (workspace &optional cached)
   "Return a list of `(:save-path :summary)' plists for WORKSPACE's sessions.
 
@@ -1961,41 +2023,52 @@ decides authority or names sessions to the user enumerates live."
                  workspace))
                (portable-p (eq authority-mode 'portable))
                (results nil))
-    (when (file-directory-p sessions-dir)
-      (dolist (entry
-               (directory-files
-                sessions-dir t
-                "\\`\\(?:[^.]\\|\\.mevedel-save-as-\\)"))
-        (when (file-directory-p entry)
-          ;; Mixed control artifacts are an authority violation, not a
-          ;; malformed optional session to hide from the picker.
-          (when (or (mevedel-session-control-fs-path-exists-p
-                     (file-name-concat entry ".lock"))
-                    (mevedel-session-control-fs-path-exists-p
-                     (file-name-concat entry ".lease"))
-                    (mevedel-session-control-fs-path-exists-p
-                     (file-name-concat entry "session.meta.el")))
-            (mevedel-session-codec-authority-mode-for-path
-             entry nil authority-mode))
-          (condition-case nil
-              (let* ((publication
-                      (when portable-p
-                        (mevedel-session-publication-read entry)))
-                     (sidecar
-                      (if portable-p
-                          (plist-get publication :sidecar)
-                        (file-name-concat entry "session.meta.el")))
-                     (summary
-                      (and sidecar
-                           (mevedel-session-persistence--read-summary sidecar))))
-                (when summary
-                  (let ((item
-                         (list :save-path (file-name-as-directory entry)
-                               :summary summary)))
-                    (when publication
-                      (setq item (plist-put item :publication publication)))
-                    (push item results))))
-            (error nil)))))
+          ;; One enumeration is one transaction: the PID-lock proofs and the
+          ;; target clock reading that every entry's publication read
+          ;; repeats are paid once for the whole listing.
+          (mevedel-session-durability-with-transaction
+            (when (file-directory-p sessions-dir)
+              (let* ((entries
+                      (seq-filter
+                       #'file-directory-p
+                       (directory-files
+                        sessions-dir t
+                        "\\`\\(?:[^.]\\|\\.mevedel-save-as-\\)")))
+                     (controlled
+                      (and entries
+                           (mevedel-session-persistence--control-artifacts
+                            entries)))
+                     (listings
+                      (and entries portable-p
+                           (mevedel-session-persistence--lease-listings
+                            entries))))
+                (dolist (entry entries)
+                  (when (member entry controlled)
+                    (mevedel-session-codec-authority-mode-for-path
+                     entry nil authority-mode))
+                  (condition-case nil
+                      (let* ((publication
+                              (when portable-p
+                                (mevedel-session-publication-read
+                                 entry nil (cdr (assoc entry listings)))))
+                             (sidecar
+                              (if portable-p
+                                  (plist-get publication :sidecar)
+                                (file-name-concat entry "session.meta.el")))
+                             (summary
+                              (and sidecar
+                                   (mevedel-session-persistence--read-summary
+                                    sidecar))))
+                        (when summary
+                          (let ((item
+                                 (list :save-path
+                                       (file-name-as-directory entry)
+                                       :summary summary)))
+                            (when publication
+                              (setq item (plist-put item :publication
+                                                    publication)))
+                            (push item results))))
+                    (error nil))))))
           (setq results
                 (sort results
                       (lambda (a b)

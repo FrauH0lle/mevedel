@@ -70,7 +70,7 @@
                   "mevedel-session-durability"
                   (session-dir &optional session))
 (declare-function mevedel-session-durability-publication-head
-                  "mevedel-session-durability" (session-dir))
+                  "mevedel-session-durability" (session-dir &optional names))
 (autoload 'mevedel-session-durability-lease-acquire
   "mevedel-session-durability")
 (autoload 'mevedel-session-durability-lease-release
@@ -90,7 +90,8 @@
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-read
-                  "mevedel-session-publication" (session-dir))
+                  "mevedel-session-publication"
+                  (session-dir &optional head names))
 (autoload 'mevedel-session-publication-read "mevedel-session-publication")
 
 ;; `mevedel-session-rewind'

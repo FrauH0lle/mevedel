@@ -64,7 +64,7 @@
 (declare-function mevedel-session-durability-lease-renew
                   "mevedel-session-durability" (session))
 (declare-function mevedel-session-durability-publication-head
-                  "mevedel-session-durability" (session-dir))
+                  "mevedel-session-durability" (session-dir &optional names))
 (defvar mevedel-session-durability--asserted-directories)
 (defvar mevedel-session-durability--transaction-clock)
 
@@ -424,11 +424,15 @@ a payload."
     manifest))
 
 (defun mevedel-session-publication--read-publication-raw
-    (session-dir &optional head)
-  "Read and validate SESSION-DIR's raw manifest at HEAD or its lease head."
+    (session-dir &optional head names)
+  "Read and validate SESSION-DIR's raw manifest at HEAD or its lease head.
+
+NAMES is an already-observed listing of SESSION-DIR's lease directory,
+passed through to `mevedel-session-durability-publication-head'."
   (let* ((remote-file-name-inhibit-cache t)
          (head (or head
-                   (mevedel-session-durability-publication-head session-dir))))
+                   (mevedel-session-durability-publication-head
+                    session-dir names))))
     (when head
       (unless (mevedel-session-publication-valid-head-p head)
         (error "Invalid session publication head: %s" head))
@@ -793,12 +797,17 @@ deleted."
       :warning)
      nil)))
 
-(defun mevedel-session-publication-read (session-dir &optional head)
+(defun mevedel-session-publication-read (session-dir &optional head names)
   "Return SESSION-DIR's captured immutable publication, or nil.
 
 HEAD reads that published generation instead of the session's current
 lease head; every published head remains immutable, so an older one reads
 exactly as it was committed.
+
+NAMES, when non-nil, is a listing of SESSION-DIR's lease directory the
+caller already observed, and spares this read the list round trip.  Only a
+caller that took the observation for this read may supply it; enumerating a
+workspace takes all of them in one program.
 
 Manifest structure and control paths are validated uncached.  Only the
 sidecar bytes are verified eagerly; consumers verify other artifact hashes
@@ -807,7 +816,7 @@ when they read those artifacts."
          (_ (mevedel-session-durability--assert-no-pid-lock session-dir))
          (publication
           (mevedel-session-publication--read-publication-raw
-           session-dir head))
+           session-dir head names))
          (captured
           (mevedel-session-publication--capture-publication
            session-dir publication)))

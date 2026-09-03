@@ -152,7 +152,7 @@
                   "mevedel-session-publication" (session-dir head))
 (declare-function mevedel-session-publication-logical-path-p "mevedel-session-publication" (path))
 (declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit))
-(declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir &optional head))
+(declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir &optional head names))
 (declare-function mevedel-session-publication-settled-summary-p
                   "mevedel-session-publication" (summary))
 (autoload 'mevedel-session-publication-discard-rolled-back

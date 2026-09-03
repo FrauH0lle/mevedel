@@ -294,6 +294,22 @@ the variables are in."
       (push session-dir
             (car mevedel-session-durability--asserted-directories)))))
 
+(defun mevedel-session-durability-note-no-pid-lock (session-dir)
+  "Record SESSION-DIR as already proved free of a PID lock.
+
+A caller that probes many candidates at once -- enumerating a workspace
+probes every one of them in a single program -- seeds its proofs here, so
+the per-entry assertions inside
+`mevedel-session-durability-with-transaction' cost no further round trip.
+Outside such a scope there is nowhere to record the proof and this does
+nothing, which leaves the assertion proving it against the target."
+  (when mevedel-session-durability--asserted-directories
+    (let ((physical (mevedel-session-control-fs-physical-path session-dir)))
+      (unless (member physical
+                      (car mevedel-session-durability--asserted-directories))
+        (push physical
+              (car mevedel-session-durability--asserted-directories))))))
+
 (defun mevedel-session-durability--read-plist (path)
   "Return the plist stored at PATH, or nil when PATH is absent or unreadable.
 
@@ -683,15 +699,20 @@ every comparison, and an infinity never expires."
            (mevedel-session-publication-valid-head-p
             (plist-get lease :publication-head)))))
 
-(defun mevedel-session-durability-publication-head (session-dir)
+(defun mevedel-session-durability-publication-head (session-dir &optional names)
   "Return SESSION-DIR's validated relative publication head, or nil.
+
+NAMES, when non-nil, is a listing of SESSION-DIR's lease directory already
+observed by the caller, and replaces the list round trip exactly as it does
+for `mevedel-session-durability--lease-head'.  Only a caller that took the
+observation for this read may supply it.
 
 This read-only operation bypasses remote file caches and does not acquire or
 otherwise mutate the session lease."
   (let* ((remote-file-name-inhibit-cache t)
          (_ (mevedel-session-durability--assert-no-pid-lock session-dir))
          (directory (mevedel-session-durability--lease-path session-dir))
-         (lease (mevedel-session-durability--lease-head directory)))
+         (lease (mevedel-session-durability--lease-head directory names)))
     (cond
      ((null lease) nil)
      ((mevedel-session-durability--valid-lease-p lease)

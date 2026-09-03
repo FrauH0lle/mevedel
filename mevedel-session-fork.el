@@ -131,7 +131,7 @@
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-discard-rolled-back "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit))
-(declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir))
+(declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir &optional head names))
 (autoload 'mevedel-session-publication-discard-rolled-back
   "mevedel-session-publication")
 (autoload 'mevedel-session-publication-publish "mevedel-session-publication")

@@ -67,7 +67,8 @@
                   "mevedel-session-publication"
                   (session artifacts &optional require-commit))
 (declare-function mevedel-session-publication-read
-                  "mevedel-session-publication" (session-dir))
+                  "mevedel-session-publication"
+                  (session-dir &optional head names))
 
 ;; `mevedel-session-rewind'
 (declare-function mevedel-session-rewind-materialize-publication

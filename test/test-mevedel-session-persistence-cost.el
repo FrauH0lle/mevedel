@@ -162,6 +162,92 @@
         (delete-directory local-root t))
       (mevedel-workspace-clear-registry))))
 
+(defun test-mevedel-session-persistence-cost--probe-programs (thunk)
+  "Call THUNK and return (PROBES . TOTAL) counted in target programs.
+PROBES counts the programs whose operations only look at the session
+directories -- the existence probes and the lease listings."
+  (let ((probes 0)
+        (total 0)
+        (program (symbol-function 'mevedel-session-control-fs-run-program)))
+    (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+               (lambda (operations &rest arguments)
+                 (cl-incf total)
+                 (when (memq (plist-get (car operations) :op)
+                             '(path-exists-p list-directory))
+                   (cl-incf probes))
+                 (apply program operations arguments))))
+      (funcall thunk))
+    (cons probes total)))
+
+(mevedel-deftest mevedel-session-persistence-list-sessions/cost ()
+  ,test
+  (test)
+  :doc "enumerating a workspace probes and lists in a constant number of programs"
+  (let* ((tempdir (file-name-as-directory
+                   (make-temp-file "mevedel-list-cost-" t)))
+         (workspace (progn
+                      (mevedel-workspace-clear-registry)
+                      (mevedel-workspace-get-or-create
+                       'project "list-cost-id" tempdir
+                       (file-name-nondirectory
+                        (directory-file-name tempdir)))))
+         (buffers nil)
+         (sessions nil))
+    (unwind-protect
+        (progn
+          (mevedel-workspace-identity-ensure tempdir)
+          (dolist (name '("one" "two" "three" "four"))
+            (let* ((session (mevedel-session-create name workspace))
+                   (buffer (generate-new-buffer
+                            (format " *list-cost-%s*" name))))
+              (push session sessions)
+              (push buffer buffers)
+              (with-current-buffer buffer
+                (org-mode)
+                (setq-local mevedel--session session)
+                (insert "*** Prompt\n")
+                (mevedel-session-artifacts-save session buffer))))
+          (let ((four (test-mevedel-session-persistence-cost--probe-programs
+                       (lambda ()
+                         (should (= 4 (length
+                                       (mevedel-session-persistence-list-sessions
+                                        workspace))))))))
+            ;; Every candidate is probed in one program and every lease
+            ;; directory listed in one more, so four sessions cost two.
+            (should (= 2 (car four)))
+            ;; Retire half the sessions and enumerate again.
+            (dolist (name '("three" "four"))
+              (delete-directory
+               (file-name-concat
+                (mevedel-session-artifacts-sessions-dir workspace)
+                (car (seq-filter
+                      (lambda (entry) (string-prefix-p name entry))
+                      (directory-files
+                       (mevedel-session-artifacts-sessions-dir workspace)
+                       nil "\\`[^.]"))))
+               t))
+            (let ((two (test-mevedel-session-persistence-cost--probe-programs
+                        (lambda ()
+                          (should (= 2 (length
+                                        (mevedel-session-persistence-list-sessions
+                                         workspace))))))))
+              ;; Halving the sessions does not change that constant, which is
+              ;; what a per-entry probe or listing would break.
+              (should (= 2 (car two)))
+              ;; The rest is the record and manifest each session owns, so
+              ;; the total falls but only by the per-session remainder.
+              (should (< (cdr two) (cdr four)))
+              (should (<= (/ (float (- (cdr four) (cdr two))) 2) 4.0)))))
+      (dolist (session sessions)
+        (ignore-errors (mevedel-session-durability--cancel-renewal session)))
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (when (file-directory-p tempdir)
+        (delete-directory tempdir t))
+      (mevedel-workspace-clear-registry))))
+
 (provide 'test-mevedel-session-persistence-cost)
 
 ;;; test-mevedel-session-persistence-cost.el ends here

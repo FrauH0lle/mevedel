@@ -64,6 +64,11 @@
 (autoload 'mevedel-session-control-fs-read-file "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-write-file "mevedel-session-control-fs")
 
+;; `mevedel-session-durability'
+(declare-function mevedel-session-durability--assert-no-pid-lock "mevedel-session-durability" (session-dir))
+(autoload 'mevedel-session-durability--assert-no-pid-lock
+  "mevedel-session-durability")
+
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
 (declare-function mevedel-goal--create "mevedel-structs" (&rest slots))
@@ -245,9 +250,11 @@ an error rather than an implicit PID-lock fallback."
     ;; a mixed directory.  Probe just the artifact that would contradict it.
     (when decided
       (pcase mode
+        ;; The same proof the durability transaction memoizes, stated
+        ;; there once: enumerating a workspace reaches this for every
+        ;; session, and inside a transaction the probe is already paid.
         ('portable
-         (when (mevedel-session-control-fs-path-exists-p lock)
-           (error "Portable session has a PID lock: %s" session-dir)))
+         (mevedel-session-durability--assert-no-pid-lock session-dir))
         ('pid-lock
          (when (mevedel-session-control-fs-path-exists-p lease)
            (error "PID-lock session has a portable lease: %s" session-dir)))))
