@@ -8,57 +8,6 @@ Use the inbox for ideas that have not been investigated yet. Promote an
 item to a detailed entry when its scope and current status are understood.
 Remove items when they are implemented, obsolete, or no longer valuable.
 
-/goal Resolve every ticket in `.scratch/plan-and-goal-redesign/issues/` on the
-current branch. Use $implement once for the complete ticket set, treating
-individual tickets as milestones rather than separate skill invocations. Process
-tickets in dependency order. Follow `AGENTS.md`, including the no-backwards-
-compatibility policy.
-
-For each ticket, satisfy its acceptance criteria, make the smallest root-cause
-change, update affected callers/tests/docs, run focused verification, and commit
-the completed ticket. Do not run the full review suite between ordinary tickets.
-
-After all tickets are implemented, perform one cumulative review cycle over the
-complete starting-commit-to-HEAD diff:
-
-1. Complete $implement ’s required code review and resolve its actionable
-   findings.
-2. Run $ponytail:ponytail-review , apply justified simplifications, then run
-   $thermo-nuclear-code-quality-review on the resulting leaner implementation.
-3. Consolidate duplicate findings and fix all correctness/spec failures and
-   high-confidence maintainability blockers in one pass.
-4. Rerun only a reviewer whose unresolved findings remain or whose review domain
-was materially affected by the fixes. Recheck those findings specifically; do
-not restart all four reviews automatically.
-5. Do not iterate on subjective or non-blocking preferences indefinitely. Record
-   any rejected finding with a concise rationale.
-
-After review fixes, clean stale bytecode, compile without warnings, and run the
-full test suite once.
-
-Complete the Goal only when every ticket’s acceptance criteria are satisfied,
-all required commits exist, final compilation and tests pass, and no actionable
-review blocker remains. If progress is genuinely blocked, stop with the affected
-ticket, attempted approaches, concrete evidence, and the exact input or external
-change needed.
-
-This changes reviews from an inner loop to an outer quality gate: roughly four
-reviews total instead of four multiplied by ticket count. Running Ponytail
-before the thermo-nuclear audit also prevents the expensive structural reviewer
-from analyzing code that will be deleted.
-
-The important wording is “actionable blocker,” not “all reviewers green.” The
-thermo-nuclear review is intentionally aspirational and can keep proposing
-improvements forever; literal greenness is not a stable completion condition.
-
-For especially risky tickets—new architectural boundaries, cross-module state
-changes, or a file crossing 1,000 lines—add an exceptional mid-stream thermo
-review. Otherwise, defer it. This preserves the official Goal pattern:
-measurable outcome, verification surface, constraints, boundaries, iteration
-policy, and blocked stop condition. OpenAI’s Goal-mode guide
-(https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex#how-to-write-a-goal)
-recommends those elements while leaving Codex room to choose the next action.
-
 ## Inbox
 
 - Add a memory-verification slash command or skill that consolidates project
@@ -66,12 +15,6 @@ recommends those elements while leaving Codex room to choose the next action.
   weekly automated check is useful. See also "/learn" command
 
 - Consider making mevedel's data buffers hidden
-- The worktree fork restore report is delivered via the transient
-  pending-reminder FIFO; a restart between fork creation and the child's
-  first request drops the report detail (provenance survives via the
-  fork-provenance reminder). Persist the report in sidecar slots if that
-  edge ever bites.
-- When a file is attached via the "@" it is also granted Read permissions, however these permissions are not passed on to sub-agents which might want to read the file again
 
 ## Entry format
 
@@ -97,60 +40,6 @@ become implemented, obsolete, or unjustified.
 - **Blast radius:** Silent omission looks like data loss and can leave
   unbounded workspace state without giving users enough information to decide
   whether it is disposable.
-
-## Remote workspaces and collaboration
-
-### Revisit the browser viewer
-
-- **Source:** Post-review discussion on 2026-08-18; revisited 2026-08-29
-  once daily phone usage made the deferrals observable rather than
-  hypothetical. Directive-scoped guest prompts, guest-visible queue
-  state, and general file attachment landed then. The overhaul later the
-  same day landed skills-as-buttons (the allowlist design this entry
-  prescribed), notifications, the directive tab strip, own-queue
-  entries with retract, questionnaire dismiss, the QR share frame, and
-  one room per session; see
-  `docs/adr/0099-project-live-collaboration-from-host-authoritative-state.md`.
-- **Original filenames for guest attachments.** Saved names are
-  host-generated (`guest-<stamp>-<n>.<ext>`), so a model reading a guest
-  log sees no clue what it was called. Carrying the guest's name would
-  need sanitizing a guest-supplied string that becomes a write path;
-  deferred because the guest can say what the file is in the prompt.
-- **Chunked attachment upload.** The whole attachment set caps at
-  1.25 MiB decoded so the sealed prompt frame clears the relay's 2 MiB
-  read limit alongside a maximum-length prompt. Logs and patches fit;
-  if that ever bites, chunking across frames is the upgrade path.
-- **Guest agent control.** The live agent roster and transcript viewing
-  both landed on 2026-08-31: guests of either link strength see the
-  canonical path, role, and blocked/waiting/running status of every
-  active retained agent as chips, and tapping one opens its transcript
-  as a polled, digest-latched, throttled `fetch-agent`/`agent` frame
-  exchange over the same canonical projection that scrubs the root
-  transcript (see `docs/view.md`). Control (chat, interrupt, kill)
-  stays in Emacs deliberately; if a control is ever wanted, it is
-  interrupt-only and rides the ui-request one-shot discipline, not a
-  new authority class.
-- **Guest /btw.** Deferred with an explicit acceptance bar: build it
-  only when a need is observed that is simultaneously private (not
-  visible to host and other guests), ephemeral (not part of the durable
-  session), immediate (cannot wait behind the running turn), and
-  unscoped (not about any directive). Directive-scoped discuss prompts
-  cover everything short of that conjunction. If built, it is full-link
-  only, read-only tools, per-peer delivery -- host `/btw` carries Bash
-  and ApplyPatch and must never be handed to a bearer link as-is.
-### Collaboration limitations accepted at landing
-
-- **Source:** Post-landing gap review of the browser-relay feature on
-  2026-08-18. Recorded so real usage can promote any of them; none blocks
-  current use. Two were promoted and closed on 2026-08-29 (relay host
-  authentication and directive-scoped guest prompts); the same day's
-  overhaul closed two more (one room per Emacs process fell to
-  per-session rooms, and remote questionnaire cancel became a plain
-  dismiss once the Ask overhaul made cancellation settle only the
-  questionnaire rather than abort the request).
-- **Compaction drops historical guest badges.** Attribution audit records
-  inside compacted spans vanish with the spans; tail-preserved turns keep
-  theirs. Cosmetic and historical only.
 
 ## Request lifecycle
 
