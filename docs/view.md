@@ -222,6 +222,12 @@ names (`2 attached skills (artifact, artifact-design)`), so the prompt drawer
 holds the prepared body alone and no `<system-reminder>` markup renders as
 prose.
 
+A `Skill` tool row does the same for a model-side invocation. A tool segment
+carries its own proof of structure, so the reminder scan does not descend into
+it and reminders welded into a tool result would render as prose. The Skill
+tool's render data therefore carries the bare skill body and the attachment
+names, and the row shows that body under a header naming the dependencies.
+
 Runs of more than `mevedel-view-tool-group-collapse-threshold` (default 3)
 plain tool rows fold into one grouped activity row such as
 `Searched 5 patterns, read 1 file, ran 5 commands, thought 8 times`; tools
