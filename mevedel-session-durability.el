@@ -1182,6 +1182,23 @@ lease head through the commit."
      session '(publishing) 'publishing
      mevedel-session-publication-lease-seconds head t expected)))
 
+(defun mevedel-session-durability--reclaim-own-lease (session)
+  "Retake SESSION's own expired lease, returning non-nil on success.
+
+Only a record this client wrote and never released is reclaimed.  A lease
+another client holds, or one this client released on purpose, is genuinely
+lost and stays that way."
+  (let ((lease (mevedel-session-lease session)))
+    (and (eq 'lost (plist-get lease :state))
+         (not (plist-get lease :release-pending))
+         (equal mevedel-session-durability--client-id
+                (plist-get lease :client-id))
+         (memq (plist-get lease :status) '(claiming active))
+         (mevedel-session-durability-lease-acquire
+          (mevedel-session-save-path session)
+          (plist-get lease :buffer)
+          session))))
+
 (defun mevedel-session-durability-lease-renew (session)
   "Renew SESSION's unexpired owned lease, returning non-nil on success.
 
@@ -1193,13 +1210,23 @@ target I/O while another TRAMP operation is in progress, or while a
 publication owns the bounded window, and reports the state it already knows.
 The next tick renews once the transport is free.  After serialization exits,
 renewal also normalizes this client's live `publishing\=' generation back to
-`active\='."
+`active\='.
+
+A suspended machine stops the timer but not the clock, so a standby longer
+than `mevedel-session-lease-seconds' wakes up with this client's own record
+already expired and nobody else claiming it.  Renewal reclaims it instead of
+reporting a lost lease: taking over from oneself is prompt-free, the
+generation compare-and-set still refuses the reclaim if another client won
+meanwhile, and binding `lost\=' here would cancel the heartbeat for a
+condition that the next mutation heals anyway."
   (if (or (mevedel-session-publication-active-p session)
           (mevedel-transport-busy-p (mevedel-session-save-path session)))
       (eq 'owned (plist-get (mevedel-session-lease session) :state))
     (condition-case err
-        (mevedel-session-durability--update-owned-lease
-         session '(active publishing) 'active mevedel-session-lease-seconds)
+        (or (mevedel-session-durability--update-owned-lease
+             session '(active publishing) 'active
+             mevedel-session-lease-seconds)
+            (mevedel-session-durability--reclaim-own-lease session))
       (error
        (mevedel-session-durability--bind-lease
         session (mevedel-session-lease session) 'lost)
