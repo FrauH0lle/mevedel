@@ -1565,6 +1565,87 @@ More.")))
   (should (null (mevedel-skills--first-paragraph nil))))
 
 
+(mevedel-deftest mevedel-skills--parse-frontmatter ()
+  ,test
+  (test)
+  :doc "frontmatter and body are parsed from the file"
+  (let ((dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (let* ((file (mevedel-skills-test--write-skill
+                      dir "simplify" "name: simplify
+description: Review changed code
+" "Body text.\n"))
+               (plist (mevedel-skills--parse-frontmatter file)))
+          (should (equal "simplify" (plist-get plist :name)))
+          (should (equal "Review changed code" (plist-get plist :description)))
+          (should (equal "Body text.\n" (plist-get plist :system))))
+      (delete-directory dir t)))
+
+  :doc "an unchanged file reuses its parse instead of running the YAML reader"
+  (let ((dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (let* ((file (mevedel-skills-test--write-skill
+                      dir "simplify" "name: simplify
+description: Review changed code
+" "Body text.\n"))
+               (parses 0))
+          ;; Parse once uncounted so the YAML reader is loaded before it is
+          ;; replaced, then count what a second and third parse cost.
+          (should (mevedel-skills--parse-frontmatter file))
+          (let ((reader (symbol-function 'yaml-parse-string)))
+            (cl-letf (((symbol-function 'yaml-parse-string)
+                       (lambda (&rest arguments)
+                         (cl-incf parses)
+                         (apply reader arguments))))
+              (should (equal "simplify"
+                             (plist-get (mevedel-skills--parse-frontmatter file)
+                                        :name)))
+              (should (= 0 parses))
+              ;; An edited file no longer matches its fingerprint.
+              (mevedel-skills-test--write-skill
+               dir "simplify" "name: simplify
+description: Something else entirely
+" "Body text.\n")
+              (should (equal "Something else entirely"
+                             (plist-get (mevedel-skills--parse-frontmatter file)
+                                        :description)))
+              (should (= 1 parses)))))
+      (delete-directory dir t)))
+
+  :doc "the reused plist is copied, so a caller may modify its result"
+  (let ((dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (let* ((file (mevedel-skills-test--write-skill
+                      dir "simplify" "name: simplify
+description: Review changed code
+" "Body text.\n"))
+               (first (mevedel-skills--parse-frontmatter file)))
+          (setq first (plist-put first :description "clobbered"))
+          (should (equal "clobbered" (plist-get first :description)))
+          (should (equal "Review changed code"
+                         (plist-get (mevedel-skills--parse-frontmatter file)
+                                    :description))))
+      (delete-directory dir t)))
+
+  :doc "supplied content is parsed instead of the file and is not cached"
+  (let ((dir (make-temp-file "mevedel-skills-test-" t)))
+    (unwind-protect
+        (let ((file (mevedel-skills-test--write-skill
+                     dir "simplify" "name: simplify
+description: On disk
+" "Body text.\n")))
+          (should (equal "In memory"
+                         (plist-get
+                          (mevedel-skills--parse-frontmatter
+                           file "---\nname: simplify\ndescription: In memory\n---\n")
+                          :description)))
+          ;; The file, not the content just parsed, still answers for itself.
+          (should (equal "On disk"
+                         (plist-get (mevedel-skills--parse-frontmatter file)
+                                    :description))))
+      (delete-directory dir t))))
+
+
 ;;
 ;;; Lazy body loading
 
@@ -2638,6 +2719,8 @@ paths:
           (puthash (mevedel-skills--mtime-cache-key buf file)
                    (current-time)
                    mevedel-skills--mtime-cache)
+          (puthash file '(fingerprint . parsed)
+                   mevedel-skills--frontmatter-cache)
           (mevedel-skills-uninstall-hot-reload)
           (should-not (memq #'mevedel-skills--before-save-hook
                             before-save-hook))
@@ -2645,6 +2728,8 @@ paths:
           (should (= 0 (hash-table-count mevedel-skills--dir-buffers)))
           (should (= 0 (hash-table-count mevedel-skills--dirty-buffers)))
           (should (= 0 (hash-table-count mevedel-skills--mtime-cache)))
+          (should (= 0 (hash-table-count
+                        mevedel-skills--frontmatter-cache)))
           (should (= 0 (hash-table-count
                         mevedel-skills--remote-watch-states)))
           (with-current-buffer buf
