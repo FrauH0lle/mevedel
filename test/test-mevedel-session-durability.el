@@ -1310,6 +1310,27 @@
       (when (file-directory-p local-root)
         (delete-directory local-root t)))))
 
+(mevedel-deftest mevedel-session-durability-note-no-pid-lock ()
+  ,test
+  (test)
+  :doc "outside a transaction there is no memo to seed"
+  (let ((mevedel-session-durability--asserted-directories nil))
+    (mevedel-session-durability-note-no-pid-lock temporary-file-directory)
+    (should-not mevedel-session-durability--asserted-directories))
+
+  :doc "inside a transaction the physical directory is recorded once"
+  (let* ((dir (make-temp-file "mevedel-note-no-lock-" t))
+         (physical (mevedel-session-control-fs-physical-path dir))
+         (mevedel-session-durability--asserted-directories (list nil)))
+    (unwind-protect
+        (progn
+          (mevedel-session-durability-note-no-pid-lock dir)
+          (mevedel-session-durability-note-no-pid-lock dir)
+          (should (equal (list physical)
+                         (car mevedel-session-durability--asserted-directories))))
+      (delete-directory dir t))))
+
+
 (mevedel-deftest mevedel-session-durability-lease-renew ()
   ,test
   (test)

@@ -670,7 +670,42 @@ For `/path/to/grill-me/SKILL.md' returns `grill-me'."
   (file-name-nondirectory
    (directory-file-name (file-name-directory skill-file))))
 
+(defvar mevedel-skills--frontmatter-cache
+  (make-hash-table :test #'equal)
+  "Parsed SKILL.md frontmatter keyed by file path and file fingerprint.")
+
 (defun mevedel-skills--parse-frontmatter (skill-file &optional content)
+  "Parse SKILL-FILE's YAML frontmatter and body from CONTENT.
+
+When CONTENT is nil, read SKILL-FILE once and reuse the previous parse
+while the file fingerprint is unchanged.  Installing a session's skills
+parses every discovered SKILL.md, and the YAML reader is by far the most
+expensive step in that scan.  CONTENT is parsed uncached: a caller holding
+those bytes read them for a reason of its own, and the file fingerprint
+does not identify them.
+
+The cached plist is copied out, so a caller may `plist-put' into its
+result without reaching the entry behind it."
+  (if content
+      (mevedel-skills--parse-frontmatter-1 skill-file content)
+    (let* ((path (expand-file-name skill-file))
+           (attributes (file-attributes path))
+           (fingerprint
+            (and attributes
+                 (list (file-attribute-file-identifier attributes)
+                       (file-attribute-modification-time attributes)
+                       (file-attribute-size attributes))))
+           (cached (and fingerprint
+                        (gethash path mevedel-skills--frontmatter-cache))))
+      (if (and cached (equal fingerprint (car cached)))
+          (copy-sequence (cdr cached))
+        (let ((plist (mevedel-skills--parse-frontmatter-1 skill-file nil)))
+          (when fingerprint
+            (puthash path (cons fingerprint plist)
+                     mevedel-skills--frontmatter-cache))
+          (copy-sequence plist))))))
+
+(defun mevedel-skills--parse-frontmatter-1 (skill-file content)
   "Parse SKILL-FILE's YAML frontmatter and body from CONTENT.
 When CONTENT is nil, read SKILL-FILE once.  Preserve `:name' so callers
 can decide whether to honor it or use the directory name.  Frontmatter
@@ -1665,6 +1700,7 @@ restarting Emacs."
            mevedel-skills--dir-buffers)
   (clrhash mevedel-skills--dir-buffers)
   (clrhash mevedel-skills--dirty-buffers)
+  (clrhash mevedel-skills--frontmatter-cache)
   (clrhash mevedel-skills--mtime-cache)
   (clrhash mevedel-skills--remote-watch-states))
 

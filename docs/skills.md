@@ -67,6 +67,17 @@ Recursive discovery does not follow directory symlinks.  A linked skill tree
 must be configured as its own explicit root; repository links cannot escape a
 configured root or create an ancestor cycle during scanning.
 
+Parsed frontmatter is kept per SKILL.md and reused while the file's
+identifier, modification time and size are unchanged. Installing a session's
+skills parses every discovered file, and the pure-Lisp YAML reader dominated
+that scan -- a profile of a startup with thirty-eight skills put it at 0.8
+seconds and a third of the whole command's allocation. Reuse is keyed on the
+file rather than remembered per scan, so hot reload is unaffected: an edited
+SKILL.md no longer matches its fingerprint and is parsed again. Frontmatter
+parsed from content a caller supplies, which is how a project skill reaches
+the parser through its hook snapshot, is not reused -- the file fingerprint
+does not identify those bytes.
+
 Plugin skills are discovered from enabled `.codex-plugin/plugin.json`
 manifests. A manifest `skills` path is resolved relative to the plugin
 root and scanned with source `plugin`. User-facing plugin skill names

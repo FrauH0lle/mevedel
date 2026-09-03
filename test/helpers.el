@@ -328,7 +328,9 @@ target is gone, which is slow, noisy, and order dependent."
     (clrhash mevedel-workspace--generated-state-ignored))
   ;; The Markdown fontifier keeps one buffer alive across calls by design.
   (when (fboundp 'mevedel-view--release-markdown-fontify-buffer)
-    (mevedel-view--release-markdown-fontify-buffer)))
+    (mevedel-view--release-markdown-fontify-buffer))
+  (when (boundp 'mevedel-skills--frontmatter-cache)
+    (clrhash mevedel-skills--frontmatter-cache)))
 
 (defun mevedel-test--assert-worktree-controls-unchanged (before)
   "Signal when a test changes worktree-root session artifacts.

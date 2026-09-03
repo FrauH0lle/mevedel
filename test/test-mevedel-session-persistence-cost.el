@@ -246,7 +246,9 @@ directories -- the existence probes and the lease listings."
           (kill-buffer buffer)))
       (when (file-directory-p tempdir)
         (delete-directory tempdir t))
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)
+      (clrhash mevedel-session-persistence--list-sessions-cache)
+      (clrhash mevedel-session-persistence--summary-cache))))
 
 (provide 'test-mevedel-session-persistence-cost)
 

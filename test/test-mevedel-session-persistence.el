@@ -2943,6 +2943,27 @@
       (mevedel-workspace-clear-registry))))
 
 
+(mevedel-deftest mevedel-session-persistence--control-artifacts ()
+  ,test
+  (test)
+  :doc "a failed optional probe is not treated as proof of absence"
+  (let* ((root (make-temp-file "mevedel-control-artifacts-" t))
+         (entry (file-name-concat root "session"))
+         (lock (file-name-concat entry ".lock"))
+         (mevedel-session-durability--asserted-directories (list nil)))
+    (unwind-protect
+        (progn
+          (make-directory entry)
+          (make-symbolic-link "missing" lock)
+          (should-error
+           (mevedel-session-persistence--control-artifacts (list entry))
+           :type 'file-error)
+          (should-not
+           (member (mevedel-session-control-fs-physical-path entry)
+                   (car mevedel-session-durability--asserted-directories))))
+      (delete-directory root t))))
+
+
 (mevedel-deftest mevedel-session-persistence-list-sessions (:quiet t)
   ,test
   (test)

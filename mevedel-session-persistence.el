@@ -199,6 +199,7 @@
 ;; `mevedel-session-control-fs'
 (declare-function mevedel-session-control-fs-path-exists-p "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-physical-path "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-program-value "mevedel-session-control-fs" (result))
 (declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-run-program "mevedel-session-control-fs" (operations))
 (declare-function mevedel-session-control-fs-write-file "mevedel-session-control-fs" (path content))
@@ -1953,8 +1954,7 @@ A candidate proved free of a PID lock is recorded through
 `mevedel-session-durability-note-no-pid-lock', so the assertions the
 publication read repeats per entry reuse this program's proof instead of
 paying for their own.  Directories that do carry one are left alone: their
-own assertion reports them at its call site, where one bad entry fails
-that entry rather than the whole enumeration."
+own assertion reports the authority violation at its canonical call site."
   (let* ((names '(".lock" ".lease" "session.meta.el"))
          (results
           (mevedel-session-control-fs-run-program
@@ -1969,12 +1969,17 @@ that entry rather than the whole enumeration."
     (dolist (entry entries (nreverse found))
       ;; Results arrive in the order the operations were emitted: one per
       ;; name, in `names' order, per entry.
-      (let* ((lock (eq 'ok (plist-get (pop results) :status)))
-             (lease (eq 'ok (plist-get (pop results) :status)))
-             (sidecar (eq 'ok (plist-get (pop results) :status))))
-        (unless lock
+      (let* ((entry-results
+              (list (pop results) (pop results) (pop results)))
+             (statuses (mapcar (lambda (result)
+                                 (plist-get result :status))
+                               entry-results)))
+        (dolist (result entry-results)
+          (unless (memq (plist-get result :status) '(ok absent))
+            (mevedel-session-control-fs-program-value result)))
+        (when (eq 'absent (car statuses))
           (mevedel-session-durability-note-no-pid-lock entry))
-        (when (or lock lease sidecar)
+        (when (memq 'ok statuses)
           (push entry found))))))
 
 (defun mevedel-session-persistence--lease-listings (entries)
