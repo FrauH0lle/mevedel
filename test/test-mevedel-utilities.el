@@ -168,6 +168,33 @@
     (should-not (mevedel--timer-pending-p nil))
     (should-not (mevedel--timer-pending-p 'scheduled))))
 
+(mevedel-deftest mevedel--invalid-message-char-p ()
+  ,test
+  (test)
+
+  :doc "recognizes characters that are not Unicode scalar values"
+  (should-not (mevedel--invalid-message-char-p ?a))
+  (should-not (mevedel--invalid-message-char-p #x10ffff))
+  (should (mevedel--invalid-message-char-p
+           (aref (test-mevedel-utilities--raw-bytes #x80) 0)))
+  (should (mevedel--invalid-message-char-p #xd800))
+  (should (mevedel--invalid-message-char-p #xdfff))
+  (should (mevedel--invalid-message-char-p #x110000)))
+
+(mevedel-deftest mevedel--escape-invalid-message-chars ()
+  ,test
+  (test)
+
+  :doc "escapes each invalid character as its uppercase UTF-8 bytes"
+  (should
+   (equal
+    "a\\x80\\xED\\xA0\\x80\\xF4\\x90\\x80\\x80z"
+    (mevedel--escape-invalid-message-chars
+     (concat "a"
+             (test-mevedel-utilities--raw-bytes #x80)
+             (string #xd800 #x110000)
+             "z")))))
+
 (mevedel-deftest mevedel--normalize-message-text ()
   ,test
   (test)
@@ -194,7 +221,22 @@
                       " byte"))
          (normalized (mevedel--normalize-message-text raw)))
     (should (equal "bad \\xFF byte" normalized))
-    (should-not (test-mevedel-utilities--raw-byte-string-p normalized))))
+    (should-not (test-mevedel-utilities--raw-byte-string-p normalized)))
+
+  :doc "escapes UTF-8 decoded beyond Unicode's maximum"
+  (let* ((text (decode-coding-string
+                (unibyte-string #xf4 #x90 #x80 #x80) 'utf-8-unix t))
+         (normalized (mevedel--normalize-message-text text)))
+    (should (equal "\\xF4\\x90\\x80\\x80" normalized))
+    (should (json-serialize normalized)))
+
+  :doc "escapes surrogate code points"
+  (dolist (case '((#xd800 . "\\xED\\xA0\\x80")
+                  (#xdfff . "\\xED\\xBF\\xBF")))
+    (let ((normalized (mevedel--normalize-message-text
+                       (string (car case)))))
+      (should (equal (cdr case) normalized))
+      (should (json-serialize normalized)))))
 
 (mevedel-deftest mevedel--path-alias-helpers ()
   ,test

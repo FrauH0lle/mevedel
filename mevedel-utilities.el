@@ -564,18 +564,30 @@ never worth failing a tool call over."
   "Return non-nil when CHAR is an Emacs raw byte character."
   (eq (char-charset char) 'eight-bit))
 
-(defun mevedel--escape-raw-byte-chars (text)
-  "Return TEXT with raw byte characters rendered as printable hex escapes."
+(defun mevedel--invalid-message-char-p (char)
+  "Return non-nil when CHAR is not a Unicode scalar value."
+  (or (mevedel--raw-byte-char-p char)
+      (<= #xd800 char #xdfff)
+      (> char #x10ffff)))
+
+(defun mevedel--escape-invalid-message-chars (text)
+  "Return TEXT with non-Unicode characters rendered as hex byte escapes."
   (let ((start 0)
         (index 0)
         parts)
     (while (< index (length text))
-      (if (mevedel--raw-byte-char-p (aref text index))
+      (if (mevedel--invalid-message-char-p (aref text index))
           (progn
             (when (< start index)
               (push (substring text start index) parts))
-            (push (format "\\x%02X" (logand (aref text index) #xff))
-                  parts)
+            (let ((char (aref text index)))
+              (push
+               (if (mevedel--raw-byte-char-p char)
+                   (format "\\x%02X" (logand char #xff))
+                 (mapconcat
+                  (lambda (byte) (format "\\x%02X" byte))
+                  (encode-coding-string (string char) 'utf-8-unix t) ""))
+               parts))
             (setq index (1+ index)
                   start index))
         (setq index (1+ index))))
@@ -636,36 +648,36 @@ alignment, e.g. the right-aligned line numbers Read prepends."
   "Return TEXT with raw UTF-8 byte sequences decoded for display/storage.
 
 This repairs strings where valid UTF-8 bytes reached Emacs as raw
-`eight-bit' characters, which cannot be written as `utf-8-unix'.  Any
-remaining invalid raw bytes are kept visible as `\\xNN' escapes.  Normal
-ASCII and Unicode text, including text properties on unaffected ranges,
-is preserved."
+`eight-bit' characters.  Invalid bytes, surrogate code points, and characters
+beyond Unicode's maximum are kept visible as `\\xNN' byte escapes.  Normal
+ASCII and Unicode text, including text properties on unaffected ranges, is
+preserved."
   (if (or (not (stringp text))
-          (not (cl-some #'mevedel--raw-byte-char-p text)))
+          (not (cl-some #'mevedel--invalid-message-char-p text)))
       text
-    (let ((start 0)
-          (index 0)
-          parts)
-      (while (< index (length text))
-        (if (mevedel--raw-byte-char-p (aref text index))
-            (let ((raw-start index))
-              (when (< start index)
-                (push (substring text start index) parts))
-              (while (and (< index (length text))
-                          (mevedel--raw-byte-char-p (aref text index)))
-                (setq index (1+ index)))
-              (push
-               (mevedel--escape-raw-byte-chars
+    (mevedel--escape-invalid-message-chars
+     (let ((start 0)
+           (index 0)
+           parts)
+       (while (< index (length text))
+         (if (mevedel--raw-byte-char-p (aref text index))
+             (let ((raw-start index))
+               (when (< start index)
+                 (push (substring text start index) parts))
+               (while (and (< index (length text))
+                           (mevedel--raw-byte-char-p (aref text index)))
+                 (setq index (1+ index)))
+               (push
                 (decode-coding-string
                  (encode-coding-string
                   (substring text raw-start index) 'raw-text)
-                 'utf-8-unix t))
-               parts)
-              (setq start index))
-          (setq index (1+ index))))
-      (when (< start index)
-        (push (substring text start index) parts))
-      (apply #'concat (nreverse parts)))))
+                 'utf-8-unix t)
+                parts)
+               (setq start index))
+           (setq index (1+ index))))
+       (when (< start index)
+         (push (substring text start index) parts))
+       (apply #'concat (nreverse parts))))))
 
 (defun mevedel--color-name-to-rgb (color-name)
   "Return RGB components for COLOR-NAME.
