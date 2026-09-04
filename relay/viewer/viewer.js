@@ -22,6 +22,8 @@
   const composerScope = document.getElementById('composer-scope');
   const ownQueue = document.getElementById('own-queue');
   const skillChips = document.getElementById('skill-chips');
+  const commandsBox = document.getElementById('commands-box');
+  const commandsSummary = document.getElementById('commands-summary');
   const themeButton = document.getElementById('theme-button');
   const modeline = document.getElementById('modeline');
   const sessionBox = document.getElementById('session-box');
@@ -110,23 +112,27 @@
     }, 4000);
   }
 
-  // Sub-agents and tasks are two reporters on one dock line: each owns a
-  // fragment of the summary and its own section inside the disclosure,
-  // and the box shows for as long as either has something to report.
-  const summaryParts = {agents: '', tasks: ''};
-  const summaryWarnings = {agents: false, tasks: false};
+  // The dock's one menu. Commands, sub-agents, tasks, artifacts and room
+  // actions each own a fragment of its summary line and a section inside
+  // the disclosure, and the box shows for as long as any has something
+  // to offer. Key order is display order.
+  const summaryParts = {commands: '', agents: '', tasks: '', artifacts: '', room: ''};
+  const summaryWarnings = {};
   function summarizeSession(key, text, warning) {
     summaryParts[key] = text || '';
     summaryWarnings[key] = warning === true;
-    const bits = [summaryParts.agents, summaryParts.tasks].filter(Boolean);
+    const bits = Object.values(summaryParts).filter(Boolean);
     sessionBox.hidden = bits.length === 0;
     sessionSummary.textContent = ['Session', ...bits].join(' · ');
     sessionSummary.dataset.warning =
-      (summaryWarnings.agents || summaryWarnings.tasks) ? 'true' : 'false';
+      Object.values(summaryWarnings).some(Boolean) ? 'true' : 'false';
+  }
+  function plural(count, noun) {
+    return `${count} ${noun}${count === 1 ? '' : 's'}`;
   }
 
   const artifacts = window.mevedelArtifactView.create({
-    send, el, flash: flashNotice,
+    send, el, flash: flashNotice, summarize: summarizeSession,
   });
   const agents = window.mevedelAgentView.create({
     send, el, directiveLabel, openArtifact: artifacts.open,
@@ -134,7 +140,8 @@
   });
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
   const sessions = window.mevedelSessionView.create(
-    {state, send, el, encode: base64urlEncode, decode: base64urlDecode});
+    {state, send, el, encode: base64urlEncode, decode: base64urlDecode,
+     summarize: summarizeSession});
 
   function setLiveButton(visible) {
     liveButton.hidden = !visible;
@@ -772,18 +779,19 @@
     sessions.setVisible(visible);
   }
 
-  // The welcome's host-curated roster is the whole discovery surface.
-  // Tapping a chip arms the invocation and focuses the composer rather
-  // than sending: most commands and skills take arguments, and an
-  // immediate send gives no chance to supply them. The armed name
-  // travels as its own frame field, so composer text is never parsed
-  // for a sigil.
+  // The welcome's host-curated roster is the whole discovery surface,
+  // offered inside the Session menu. Tapping a chip arms the
+  // invocation, closes the menu and focuses the composer rather than
+  // sending: most commands and skills take arguments, and an immediate
+  // send gives no chance to supply them. The armed name travels as its
+  // own frame field, so composer text is never parsed for a sigil.
   function sigilFor(kind) {
     return kind === 'skill' ? '$' : '/';
   }
 
   function setArmedInvocation(entry) {
     state.armed = entry || null;
+    if (entry && sessionBox) sessionBox.open = false;
     if (composerScope) renderComposerScope();
     if (composerInput) {
       composerInput.placeholder = entry
@@ -799,7 +807,10 @@
   function renderSkillChips() {
     if (!skillChips) return;
     skillChips.replaceChildren();
-    skillChips.hidden = state.roster.length === 0;
+    if (commandsBox) commandsBox.hidden = state.roster.length === 0;
+    if (commandsSummary) {
+      commandsSummary.textContent = plural(state.roster.length, 'command');
+    }
     state.roster.forEach(entry => {
       const armed = state.armed && state.armed.name === entry.name;
       const chip = el('button', `skill-chip${armed ? ' armed' : ''}`,
@@ -827,6 +838,8 @@
       }));
     state.armed = null;
     renderSkillChips();
+    summarizeSession('commands',
+      state.roster.length ? plural(state.roster.length, 'command') : '');
   }
 
   // The guest's own pending prompts, echoed back per-peer by the host:
@@ -883,6 +896,8 @@
     if (transport) transport.end();
     state.connected = false;
     notifications.forget();
+    try { sessionStorage.removeItem('mevedel-tab-share'); }
+    catch (_error) { /* storage unavailable */ }
     notifications.render();
     clearAttachments();
     clearRequests();
@@ -1103,6 +1118,8 @@
   } else {
     state.fragment = rawFragment;
     state.owner = Boolean(credentials.ownerToken);
+    try { sessionStorage.setItem('mevedel-tab-share', rawFragment); }
+    catch (_error) { /* storage unavailable */ }
     // Handing on access is derived from the secret this page holds, so
     // the controls need it before the socket is even open.
     sessions.useCredentials(credentials);

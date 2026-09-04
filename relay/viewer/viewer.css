@@ -641,6 +641,12 @@ code, pre {
   overflow-y: auto;
 }
 .dock-disclosure-body > .dock-strip { padding: .1rem .5rem .45rem; }
+.dock-disclosure-body > .dock-actions { padding: .4rem .5rem .45rem; }
+/* Long lists fold into a submenu: the same summary styling as the menu,
+   closed until asked, so the menu stays a menu at 50 commands. */
+.dock-submenu[hidden] { display: none; }
+.dock-submenu > .dock-strip { padding: .1rem .5rem .45rem; }
+.dock-submenu > .skill-chips { margin: 0; flex-wrap: wrap; }
 /* One hairline per populated section, so the summary, the live chips,
    the settled rows and the task rows read as parts rather than as one
    undifferentiated run of rows. Specific enough to add padding the

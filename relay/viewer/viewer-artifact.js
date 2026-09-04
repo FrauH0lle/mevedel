@@ -8,8 +8,10 @@
     + 'img-src data: blob:; media-src data: blob:; font-src data:; '
     + 'script-src \'unsafe-inline\'">';
 
-  function create({send, el, flash}) {
+  function create({send, el, flash, summarize}) {
     const nav = document.getElementById('artifacts');
+    const box = document.getElementById('artifacts-box');
+    const boxSummary = document.getElementById('artifacts-summary');
     const panel = document.getElementById('artifact-panel');
     const title = document.getElementById('artifact-title');
     const metaEl = document.getElementById('artifact-meta');
@@ -176,7 +178,10 @@
         if (record.artifact) byName.set(record.artifact, record);
       });
       nav.replaceChildren();
-      nav.hidden = byName.size === 0;
+      const label = `${byName.size} artifact${byName.size === 1 ? '' : 's'}`;
+      if (box) box.hidden = byName.size === 0;
+      if (boxSummary) boxSummary.textContent = label;
+      if (summarize) summarize('artifacts', byName.size ? label : '');
       byName.forEach(record => {
         const missing = record.missing === true;
         const chip = el('button', `dock-chip${missing ? ' stuck' : ''}`);

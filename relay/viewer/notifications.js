@@ -233,12 +233,20 @@
           && window.matchMedia('(display-mode: standalone)').matches);
   }
 
+  // The URL wins, then the share this tab was already in, then the one
+  // a notification opt-in persisted. The tab store is what lets a
+  // plain reload survive: the fragment is wiped from the URL on connect,
+  // and sessionStorage is per tab, dies with it, and never enters
+  // history, so it keeps the reason for the wipe.
   function resolveShare(parse) {
     const fromUrl = String(window.location.hash || '').replace(/^#/, '');
+    let tab = '';
     let stored = '';
+    try { tab = sessionStorage.getItem('mevedel-tab-share') || ''; }
+    catch (_error) { /* storage unavailable */ }
     try { stored = localStorage.getItem('mevedel-last-share') || ''; }
     catch (_error) { /* storage unavailable */ }
-    for (const candidate of [fromUrl, stored]) {
+    for (const candidate of [fromUrl, tab, stored]) {
       if (parse(`#${candidate}`)) return candidate;
     }
     if (!installed() || typeof window.prompt !== 'function') return '';

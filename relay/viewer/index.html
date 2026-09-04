@@ -63,22 +63,39 @@
                 title="Jump back to the newest turn">Return to live</button>
       </div>
       <details id="session-box" class="dock-disclosure" hidden
-               aria-label="Sub-agents and tasks">
+               aria-label="Session menu: commands, sub-agents, tasks, artifacts, rooms">
         <summary id="session-summary">Session</summary>
         <div class="dock-disclosure-body">
+          <details id="commands-box" class="dock-submenu" hidden>
+            <summary id="commands-summary">Commands</summary>
+            <nav id="skill-chips" class="dock-strip skill-chips" aria-label="Host-allowed commands"></nav>
+          </details>
           <nav id="agents" class="dock-strip" aria-label="Live sub-agents" hidden></nav>
           <ul id="agents-done-list" class="dock-disclosure-list agents-done-list"></ul>
           <ul id="tasks-list" class="dock-disclosure-list tasks-list"></ul>
+          <details id="artifacts-box" class="dock-submenu" hidden>
+            <summary id="artifacts-summary">Artifacts</summary>
+            <nav id="artifacts" class="dock-strip" aria-label="Session artifacts"></nav>
+          </details>
+          <div class="dock-actions">
+            <button id="new-session-button" class="btn quiet" type="button" hidden
+                    title="Start a separate session — this room stays open"
+                    aria-label="New session">＋ Session</button>
+            <button id="rooms-button" class="btn quiet" type="button" hidden
+                    title="Other rooms this browser can get back to"
+                    aria-label="Rooms">Rooms</button>
+            <button id="invite-button" class="btn quiet" type="button" hidden
+                    title="Copy a link to this room"
+                    aria-label="Invite to this room">Invite</button>
+          </div>
         </div>
       </details>
-      <nav id="artifacts" class="dock-strip" aria-label="Session artifacts" hidden></nav>
       <div id="requests" class="requests" aria-label="Pending interactions"></div>
       <div id="own-queue" class="own-queue" aria-label="Your queued prompts" hidden></div>
       <div id="invites" class="own-queue" aria-label="Rooms you can join" hidden></div>
       <p id="notice" class="notice" role="status" hidden></p>
       <form id="composer" class="composer" hidden>
         <p id="queue-state" class="queue-state" role="status" hidden></p>
-        <nav id="skill-chips" class="skill-chips" aria-label="Host-allowed commands" hidden></nav>
         <p id="composer-scope" class="composer-scope" hidden></p>
         <textarea id="composer-input" class="composer-input" rows="2"
                   placeholder="Queue a follow-up for the session…"
@@ -94,9 +111,6 @@
           <button id="attach-button" class="btn quiet" type="button"
                   title="Attach files — images, PDFs, logs and patches"
                   aria-label="Attach files">📎</button>
-          <button id="new-session-button" class="btn quiet" type="button" hidden
-                  title="Start a separate session — this room stays open"
-                  aria-label="New session">＋ Session</button>
           <span class="composer-spacer"></span>
           <button id="stop-button" class="btn danger" type="button"
                   title="Stop the running turn in Emacs">Interrupt</button>
@@ -149,14 +163,6 @@
           </menu>
         </form>
       </dialog>
-      <div class="dock-actions">
-        <button id="rooms-button" class="btn quiet" type="button" hidden
-                title="Other rooms this browser can get back to"
-                aria-label="Rooms">Rooms</button>
-        <button id="invite-button" class="btn quiet" type="button" hidden
-                title="Copy a link to this room"
-                aria-label="Invite to this room">Invite</button>
-      </div>
       <p id="modeline" class="modeline" role="status">
         <span id="connection" class="conn">Connecting…</span>
       </p>
@@ -168,7 +174,9 @@
         owner link can additionally change the permission mode and create
         sessions. Frames
         are sealed end to end with a key that lives only in the link; the
-        relay sees ciphertext. Enabling notifications stores the link in
+        relay sees ciphertext. This tab keeps the link for as long as it is
+        open, so a reload lands back in the room; closing the tab forgets
+        it. Enabling notifications stores the link in
         this browser so an installed app can reconnect. It is cleared after
         this viewer observes the room end or gives up reconnecting; otherwise
         it may remain until this link is opened again or site data is cleared.

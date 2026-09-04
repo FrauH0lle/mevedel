@@ -713,9 +713,26 @@ therefore involves neither the host nor the relay -- the Invite sheet
 builds the links in the page and copies them. That is also why the tiers
 are a prefix chain rather than three unrelated tokens.
 
-The control sits in the dock rather than in the composer row: a
-read-only guest never sees the composer and has its own link to hand on.
-It does go away when the room ends, because the link goes with it.
+The Invite and Rooms buttons sit in the dock's Session menu rather than
+in the composer row: a read-only guest never sees the composer and has
+its own link to hand on. Invite does go away when the room ends, because
+the link goes with it.
+
+### The Session menu
+
+The dock has one collapsible menu, the `Session` disclosure, and every
+non-transcript surface the viewer offers lives in it: the host-admitted
+command and skill chips, live sub-agent chips, finished agents, the task
+list, artifact chips, and the New Session, Rooms, and Invite buttons. Its
+summary line lists what is inside as counts (`Session · 4 commands · 2
+agents · 3/5 tasks · 1 artifact · invite`) and the box hides when every
+section is empty. Commands and artifacts fold into closed submenus of
+their own, because an owner link with `t` sees every skill on the host
+and a flat list would push the agents and tasks out of view. Each section reports its own fragment through one `summarize`
+seam keyed by section, so a module adds itself to the menu without
+knowing about the others. Tapping a command chip arms the invocation,
+closes the menu, and focuses the composer, whose scope line keeps showing
+what is armed.
 
 ### Guest-requested sessions
 
@@ -802,11 +819,11 @@ after the fact. The roster is read state, which is why a view link gets
 it too. It rides the same coalesced publication as the transcript; the
 view's status render nudges that publication so a retained agent working
 while the root request is idle, when no gptel observer fires, still
-reaches the strip. The viewer splits the roster: active agents render as
-chips above the interaction cards, marking a blocked or waiting agent so
-a session that fans out workers never reads as an opaque gap, while
-settled agents collapse into a "Finished agents" disclosure whose rows
-open the same transcript sheet. A settled agent whose conversation
+reaches the strip. The viewer splits the roster inside the Session menu:
+active agents render as chips, marking a blocked or waiting agent so a
+session that fans out workers never reads as an opaque gap, while settled
+agents collapse into a "Finished agents" disclosure whose rows open the
+same transcript sheet. A settled agent whose conversation
 buffer is not resident (cold state after a restart) answers a fetch with
 the standard not-available message; a browser poll never hydrates cold
 state.
@@ -856,10 +873,25 @@ from Emacs or any guest, settles everywhere.
 transfer, save, rewind, fork, publication, and execution-target changes are
 impossible from the browser regardless of link strength.
 
-A full-link welcome also publishes the host-curated
-`mevedel-collaboration-guest-skills` roster. The guest may queue one of those
-commands or skills with arguments through a typed invocation frame; free text
-remains skill-inert, and the host revalidates the name on receipt and delivery.
+A writable guest's welcome also publishes the invocation roster its link
+tier is admitted to. `mevedel-collaboration-guest-skills` is an alist keyed
+by `full` and `owner` whose values follow the `global-minor-mode` mode-list
+shape: `t`, `nil`, or a list of names, `(not NAME...)`, `t`, and `nil` read
+left to right until one decides, with an implicit `nil` at the end. An owner
+link without its own entry inherits the `full` entry; the default admits an
+owner link to everything and a full link to nothing. The candidate universe
+is every local slash command plus every user-invocable skill, a bare name
+resolving to the command first, and
+`mevedel-collaboration-unsafe-guest-commands` wins over any admission: it
+holds the commands that escalate, mutate durable state, manage the share, or
+only report to the host's display (`tokens`, `ps`, `tools`, `worktree`
+included), none of which can do anything useful for a guest. The guest may
+queue an admitted command or skill with arguments through a typed invocation
+frame; free text remains skill-inert, and the host revalidates the name
+against the tier the entry was queued under on receipt and again at
+delivery. `/review` and `/verify` sent without an argument are queued as
+`uncommitted`, because their argument-less form is a minibuffer picker on
+the host, and their chip hint lists the accepted target forms.
 The viewer supports installable-PWA presentation, host-synchronized theme,
 and opt-in system notifications for attention-worthy session changes. On
 platforms with the Push API, opt-in registers a service worker and a
@@ -878,6 +910,21 @@ another. A notification click opens the owning room with its credentials in
 the URL fragment. A freshly installed Home Screen app with no shared browser
 storage asks the user to paste the full share link and extracts that fragment
 locally without submitting it.
+
+The credentials are stripped from the URL and history before the socket
+opens, so a plain reload would otherwise land on a bare relay URL. The
+viewer therefore keeps the share it is in under `sessionStorage`, per tab
+and gone with the tab, which never enters history and so keeps the reason
+for the wipe: F5, or navigating away and back, rejoins the room for as
+long as the tab and the room live. On boot the URL fragment wins, then the
+tab's share, then the notification opt-in's persisted last share. That
+last store is refreshed only for a room whose notifications are on, so
+before the tab store existed a reload in a newer room dialed the stale
+old one. The relay answers an unknown room with close code 4004, which the
+transport now treats as terminal: the viewer shows "Room closed" at once
+and drops the stale stored share, instead of retrying for three minutes.
+Code 4001 (room closed by the host) stays retryable, because a host blip
+comes back.
 
 An actively focused viewer reports itself active and receives no Web Push.
 When a push-enabled viewer moves away, it receives Web Push whether its page
@@ -924,8 +971,9 @@ none, and a mixed code/artifact patch retains its ordinary tool row.
 File stats are memoized against per-publish-tick target round trips and
 invalidated when ApplyPatch settles. A deleted artifact still
 projects, marked missing, so it reads as deleted rather than as a gap
-in the log. The viewer also derives a strip of chips (last record per
-name wins) so reopening one never means scrolling the log.
+in the log. The viewer also derives a strip of chips in the Session menu
+(last record per name wins) so reopening one never means scrolling the
+log.
 
 Bytes travel only on demand: opening a card sends `artifact-get` with
 the record id -- resolution is by identity against the root records or agent
