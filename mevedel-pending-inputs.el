@@ -374,7 +374,8 @@ mis-attributed.")
                :help-echo "Open Pending Inputs cockpit"))))))
 
 (cl-defun mevedel-view-enqueue-external-follow-up
-    (data-buffer text &key guest-name guest-id paths directive-id invoke)
+    (data-buffer text &key guest-name guest-id paths directive-id invoke
+                 guest-role)
   "Queue TEXT as a follow-up that originated outside this Emacs.
 
 DATA-BUFFER owns the session.  GUEST-NAME attributes the entry to a
@@ -388,10 +389,11 @@ discussion; the caller has already checked that the directive exists.
 Skill tokens in TEXT stay literal at submission: external free text
 carries prompting authority only, never skill invocation.  The one
 exception is INVOKE, a command or skill name the caller has already
-validated against its own allowlist: TEXT is then that invocation's
-arguments, dispatched through `mevedel-view-run-invocation' at
-delivery and rechecked against the same allowlist first.  Return the
-queued entry, or nil without a live session view."
+validated against its own allowlist for the guest's link tier
+GUEST-ROLE: TEXT is then that invocation's arguments, dispatched
+through `mevedel-view-run-invocation' at delivery and rechecked
+against the same allowlist and tier first.  Return the queued entry,
+or nil without a live session view."
   (when-let* (((buffer-live-p data-buffer))
               (view-buffer (buffer-local-value 'mevedel--view-buffer
                                                data-buffer))
@@ -412,6 +414,7 @@ queued entry, or nil without a live session view."
                             :guest-id guest-id
                             :guest-paths paths
                             :guest-invoke invoke
+                            :guest-role guest-role
                             ;; An invocation is dispatched by name at
                             ;; delivery; its arguments stay inert text.
                             :inert-skills t
@@ -622,17 +625,19 @@ longer accepts the prepared input."
 ;;; Automatic delivery
 
 (defun mevedel-view--drop-disallowed-guest-skills (session)
-  "Drop SESSION's queued guest invocations the allowlist no longer names.
+  "Drop SESSION's queued guest invocations the allowlist no longer admits.
 A guest invocation is validated when its frame arrives and again here
-at delivery, so shrinking `mevedel-collaboration-guest-skills' or
-adding a name to the unsafe list takes effect for entries already
-waiting.  Return the remaining queue."
+at delivery, against the link tier the entry was queued under, so
+shrinking `mevedel-collaboration-guest-skills' or adding a name to the
+unsafe list takes effect for entries already waiting.  Return the
+remaining queue."
   (let ((entries (mevedel-session-pending-follow-ups session))
         dropped)
     (dolist (entry entries)
       (when-let* ((name (plist-get entry :guest-invoke))
                   ((not (and (fboundp 'mevedel-collaboration--guest-invocable-p)
-                             (mevedel-collaboration--guest-invocable-p name)))))
+                             (mevedel-collaboration--guest-invocable-p
+                              name (plist-get entry :guest-role))))))
         (push entry dropped)))
     (when dropped
       (mevedel-pending-inputs--set-queues

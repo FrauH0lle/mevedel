@@ -127,14 +127,15 @@
       (should (eq t (plist-get chunk :final)))
       (should (= 1 (length (plist-get chunk :records)))))
     ;; The invocation roster rides the welcome for writable guests only.
-    (let ((mevedel-collaboration-guest-skills '("plan")))
+    (let ((mevedel-collaboration-guest-skills '((full "plan"))))
       (setq sent nil)
       (cl-letf (((symbol-function 'mevedel-collaboration--transport-send)
                  (lambda (_transport peer frame)
                    (push (cons peer frame) sent)
                    t))
                 ((symbol-function 'mevedel-collaboration--guest-roster)
-                 (lambda (_room) '((("name" . "plan") ("kind" . "command"))))))
+                 (lambda (_room _guest)
+                   '((("name" . "plan") ("kind" . "command"))))))
         (mevedel-collaboration--send-snapshot room 7)
         (should (equal "plan"
                        (cdr (assoc "name"
@@ -694,16 +695,45 @@
           (should-not (mevedel-collaboration--save-guest-attachments nil)))
       (delete-directory dir t))))
 
+(mevedel-deftest mevedel-collaboration--policy-admits-p
+  (:doc "reads a mode-list policy left to right with an implicit nil")
+  (progn
+  (should (mevedel-collaboration--policy-admits-p t "plan"))
+  (should-not (mevedel-collaboration--policy-admits-p nil "plan"))
+  (should (mevedel-collaboration--policy-admits-p '("plan" "goal") "goal"))
+  (should-not (mevedel-collaboration--policy-admits-p '("plan" "goal") "stop"))
+  ;; `(not ...)' refuses before a later t admits the rest.
+  (let ((policy '((not "learn" "remember") t)))
+    (should (mevedel-collaboration--policy-admits-p policy "plan"))
+    (should-not (mevedel-collaboration--policy-admits-p policy "learn")))
+  ;; The first deciding element wins, whichever way it decides.
+  (should (mevedel-collaboration--policy-admits-p '("learn" (not "learn")) "learn"))
+  (should-not (mevedel-collaboration--policy-admits-p '(nil "plan") "plan"))
+  (should (mevedel-collaboration--policy-admits-p '(t) "anything"))))
+
 (mevedel-deftest mevedel-collaboration--guest-invocable-p
-  (:doc "accepts allowlisted names and refuses unsafe ones outright")
-  (let ((mevedel-collaboration-guest-skills '("plan" "review" "mode")))
-    (should (mevedel-collaboration--guest-invocable-p "plan"))
-    (should (mevedel-collaboration--guest-invocable-p "review"))
+  (:doc "admits by link tier and refuses unsafe names outright")
+  (progn
+  (let ((mevedel-collaboration-guest-skills
+         '((full "plan" "review" "mode") (owner . t))))
+    (should (mevedel-collaboration--guest-invocable-p "plan" 'full))
+    (should (mevedel-collaboration--guest-invocable-p "review" 'full))
     ;; Listed but unsafe: `mode' reaches full-auto, so the deny-set wins
-    ;; over a mistaken allowlist entry.
-    (should-not (mevedel-collaboration--guest-invocable-p "mode"))
-    (should-not (mevedel-collaboration--guest-invocable-p "compact"))
-    (should-not (mevedel-collaboration--guest-invocable-p nil))))
+    ;; over a mistaken allowlist entry, for the owner too.
+    (should-not (mevedel-collaboration--guest-invocable-p "mode" 'full))
+    (should-not (mevedel-collaboration--guest-invocable-p "mode" 'owner))
+    (should-not (mevedel-collaboration--guest-invocable-p "compact" 'full))
+    (should (mevedel-collaboration--guest-invocable-p "compact" 'owner))
+    ;; A viewer has no tier and is admitted to nothing.
+    (should-not (mevedel-collaboration--guest-invocable-p "plan" nil))
+    (should-not (mevedel-collaboration--guest-invocable-p nil 'owner)))
+  ;; An owner without an entry inherits the full-link policy.
+  (let ((mevedel-collaboration-guest-skills '((full "plan"))))
+    (should (mevedel-collaboration--guest-invocable-p "plan" 'owner))
+    (should-not (mevedel-collaboration--guest-invocable-p "goal" 'owner)))
+  ;; Nothing configured at all admits nobody.
+  (let ((mevedel-collaboration-guest-skills nil))
+    (should-not (mevedel-collaboration--guest-invocable-p "plan" 'owner)))))
 
 (mevedel-deftest mevedel-collaboration--handle-prompt--invoke
   (:doc "queues an allowlisted invocation by name and refuses anything else")
@@ -711,12 +741,16 @@
     (let* ((guests (make-hash-table :test #'eql))
            (room (list :data-buffer (current-buffer) :guests guests
                        :transport 'transport :session 'session))
-           (mevedel-collaboration-guest-skills '("plan" "mode"))
+           (mevedel-collaboration-guest-skills
+            '((full "plan" "mode") (owner "plan" "review" "compact")))
            enqueued sent)
       (puthash 1 (list :name "Phone" :writable t :ready t
                        :guest-id "phone-guest-id")
                guests)
       (puthash 2 (list :name "Viewer" :writable nil :ready t) guests)
+      (puthash 3 (list :name "Boss" :writable t :owner t :ready t
+                       :guest-id "owner-guest-id")
+               guests)
       (setq-local mevedel--view-buffer (current-buffer))
       (cl-letf (((symbol-function 'mevedel-view-enqueue-external-follow-up)
                  (lambda (_data-buffer text &rest keys)
@@ -745,9 +779,27 @@
          room 1 (list :invoke "plan" :text "add a retry cap"))
         (should (equal "add a retry cap" (car enqueued)))
         (should (equal "plan" (plist-get (cdr enqueued) :invoke)))
+        (should (eq 'full (plist-get (cdr enqueued) :guest-role)))
         (should (equal "phone-guest-id"
                        (plist-get (cdr enqueued) :guest-id)))
         (should (equal '(1 . (:t "queued" :id 9 :position 1)) (car sent)))
+        ;; The owner tier admits what the full tier does not, and the
+        ;; entry remembers the tier it was queued under.
+        (setq enqueued nil)
+        (mevedel-collaboration--handle-prompt
+         room 3 (list :invoke "compact" :text ""))
+        (should (equal "compact" (plist-get (cdr enqueued) :invoke)))
+        (should (eq 'owner (plist-get (cdr enqueued) :guest-role)))
+        ;; A bare `/review' would open the host's target picker, so it is
+        ;; queued with the default target instead.
+        (setq enqueued nil)
+        (mevedel-collaboration--handle-prompt
+         room 3 (list :invoke "review" :text ""))
+        (should (equal "uncommitted" (car enqueued)))
+        (setq enqueued nil)
+        (mevedel-collaboration--handle-prompt
+         room 3 (list :invoke "review" :text "branch:main"))
+        (should (equal "branch:main" (car enqueued)))
         ;; A bare invocation carries no arguments at all.
         (setq enqueued nil)
         (mevedel-collaboration--handle-prompt
@@ -760,22 +812,24 @@
         (should-not enqueued)))))
 
 (mevedel-deftest mevedel-collaboration--guest-roster
-  (:doc "describes each allowlisted name with its namespace and hint")
+  (:doc "describes each admitted name with its namespace and hint")
   (mevedel-view-test--with-buffers
     (let* ((session (mevedel-session--create :name "roster"))
            (room (list :data-buffer data-buf :session session))
-           ;; `remember' is a skill and only a skill; `review' is
-           ;; installed into the command alist at runtime by its own
-           ;; module, so it would resolve as a command here.
+           (full (list :name "Phone" :writable t))
+           (owner (list :name "Boss" :writable t :owner t))
+           (mevedel-slash-commands
+            '(("plan" . ignore) ("mode" . ignore) ("compact" . ignore)))
            (mevedel-collaboration-guest-skills
-            '("plan" "remember" "mode" "nonexistent")))
+            '((full "plan" "remember" "mode" "nonexistent")
+              (owner (not "compact") t))))
       (with-current-buffer data-buf
         (setq-local mevedel--view-buffer view-buf))
       (cl-letf (((symbol-function 'mevedel-skills-user-visible-skills)
                  (lambda (&rest _)
                    (list (mevedel-skill--create
                           :name "remember" :argument-hint "[focus]")))))
-        (let ((roster (mevedel-collaboration--guest-roster room)))
+        (let ((roster (mevedel-collaboration--guest-roster room full)))
           ;; A local command and a skill are both offered, each tagged
           ;; with the namespace the viewer needs to render its sigil.
           (should (equal '("plan" "remember")
@@ -786,7 +840,16 @@
           (should (equal "[focus]" (cdr (assoc "hint" (nth 1 roster)))))
           ;; Unsafe and unresolvable names never become buttons.
           (should-not (assoc "mode" roster))
-          (should-not (assoc "nonexistent" roster)))))))
+          (should-not (assoc "nonexistent" roster)))
+        ;; A `(not ...) t' policy offers the whole universe minus the
+        ;; excluded and unsafe names, commands before skills.
+        (should (equal '("plan" "remember")
+                       (mapcar (lambda (e) (cdr (assoc "name" e)))
+                               (mevedel-collaboration--guest-roster
+                                room owner))))
+        ;; A viewer is offered nothing.
+        (should-not (mevedel-collaboration--guest-roster
+                     room (list :name "Viewer" :writable nil)))))))
 
 (mevedel-deftest mevedel-collaboration--handle-abort ()
   ,test

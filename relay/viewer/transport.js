@@ -170,8 +170,17 @@
           window.mevedelViewerApplied = (window.mevedelViewerApplied || 0) + 1;
         }).catch(() => {});
       });
-      nextSocket.addEventListener('close', () => {
-        if (socket === nextSocket && !ended) scheduleReconnect();
+      nextSocket.addEventListener('close', event => {
+        if (socket !== nextSocket || ended) return;
+        // 4004 is the relay saying the room does not exist: a stale
+        // stored link, not a blip. Retrying it for minutes only hides
+        // that the link is dead.
+        if (event && event.code === 4004) {
+          ended = true;
+          options.onGiveUp();
+          return;
+        }
+        scheduleReconnect();
       });
     }
 

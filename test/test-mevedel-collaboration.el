@@ -703,7 +703,7 @@
    :quiet t)
   (mevedel-view-test--with-buffers
     (let ((session (mevedel-session--create :name "invoke"))
-          (mevedel-collaboration-guest-skills '("plan"))
+          (mevedel-collaboration-guest-skills '((full "plan")))
           ran)
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
@@ -711,6 +711,7 @@
         (setq-local mevedel--session session))
       (mevedel-session-enqueue-pending-input
        session 'follow-up (list :input "" :guest-invoke "plan"
+                               :guest-role 'full
                                :guest-id "g1" :inert-skills t))
       (cl-letf (((symbol-function 'mevedel-plan-mode-enter)
                  (lambda (&rest _) (setq ran t)))
@@ -767,22 +768,26 @@
       (mevedel-workspace-clear-registry))))
 
 (mevedel-deftest mevedel-view--drop-disallowed-guest-skills
-  (:doc "drops queued guest invocations the allowlist no longer names"
+  (:doc "drops queued guest invocations the allowlist no longer admits"
    :quiet t)
   (let ((session (mevedel-session--create :name "s"))
-        (mevedel-collaboration-guest-skills '("plan")))
+        (mevedel-collaboration-guest-skills '((full "plan") (owner . t))))
     (mevedel-session-enqueue-pending-input
-     session 'follow-up '(:input "" :guest-invoke "plan"))
+     session 'follow-up '(:input "" :guest-invoke "plan" :guest-role full))
     (mevedel-session-enqueue-pending-input
-     session 'follow-up '(:input "" :guest-invoke "review"))
+     session 'follow-up '(:input "" :guest-invoke "review" :guest-role full))
+    ;; The same name queued under the owner tier stays.
+    (mevedel-session-enqueue-pending-input
+     session 'follow-up '(:input "owner" :guest-invoke "review"
+                          :guest-role owner))
     (mevedel-session-enqueue-pending-input
      session 'follow-up '(:input "plain question"))
-    (should (equal '("" "plain question")
+    (should (equal '("" "owner" "plain question")
                    (mapcar (lambda (entry) (plist-get entry :input))
                            (mevedel-view--drop-disallowed-guest-skills
                             session))))
     ;; Nothing to drop leaves the queue untouched and quiet.
-    (should (= 2 (length (mevedel-view--drop-disallowed-guest-skills
+    (should (= 3 (length (mevedel-view--drop-disallowed-guest-skills
                           session))))))
 
 

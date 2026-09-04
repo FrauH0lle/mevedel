@@ -149,34 +149,56 @@ query parameter because reverse proxies log query strings."
                  (string :tag "Token"))
   :group 'mevedel)
 
-(defcustom mevedel-collaboration-guest-skills nil
-  "Command and skill names a full-link guest may invoke as buttons.
+(defcustom mevedel-collaboration-guest-skills '((owner . t))
+  "Commands and skills a writable guest may invoke, by link tier.
 
-A name is offered to write-token guests as a tappable chip and
-validated against this same list when the invocation arrives and again
-when the queued entry is delivered, so removing a name takes effect
-immediately.  Write the bare name without a sigil: mevedel resolves
-whether it is a local slash command or a skill and uses the right one.
+An alist keyed by the symbols `full\=' and `owner\='.  Each value follows
+the shape of `global-minor-mode\=' mode lists: t admits every local slash
+command and user-invocable skill, nil admits none, and a list is read
+left to right until an element decides -- a bare name admits that name,
+`(not NAME...)\=' refuses those names, t admits, nil refuses, and an
+implicit nil ends the list.  For instance
 
-Names in `mevedel-collaboration-unsafe-guest-commands\=' are refused
-even when listed here.  Guest free text is never parsed for slash
-commands regardless of this list; the typed frame is the only
-invocation surface a guest has."
-  :type '(repeat string)
+  ((full \"plan\" \"goal\" \"review\" \"verify\")
+   (owner (not \"learn\" \"remember\") t))
+
+offers a full-link guest four buttons and an owner-link guest everything
+but the two memory-writing skills.  An owner link with no entry of its
+own uses the `full\=' entry.  Write bare names without a sigil: mevedel
+resolves whether a name is a local slash command or a skill and uses the
+right one, commands first.
+
+The admitted names are offered to the guest as tappable chips in the
+welcome, validated against this same value when an invocation arrives,
+and again when the queued entry is delivered, so a change takes effect
+immediately.  Names in `mevedel-collaboration-unsafe-guest-commands\='
+are refused even when admitted here.  Guest free text is never parsed
+for slash commands; the typed frame is the only invocation surface a
+guest has."
+  :type '(alist :key-type (choice (const full) (const owner))
+                :value-type (choice (const :tag "Everything" t)
+                                    (const :tag "Nothing" nil)
+                                    (repeat :tag "Mode-list"
+                                            (choice string
+                                                    (const t)
+                                                    (const nil)
+                                                    (cons (const not)
+                                                          (repeat string))))))
   :group 'mevedel)
 
 (defconst mevedel-collaboration-unsafe-guest-commands
   '("mode" "model" "clear" "tools" "plugin" "skills" "prompt" "edits"
-    "collab" "help" "btw")
+    "collab" "help" "btw" "tokens" "ps" "worktree")
   "Local slash commands a guest may never invoke, whatever the allowlist.
 
 These either escalate authority (`mode\=' reaches full-auto, whose whole
 point is skipping the permission prompts a guest would otherwise have
 to be asked), mutate durable session state (`clear\='), manage the share
-itself (`collab\='), or open a transient on the host\='s display that no
-guest can see or dismiss.  Keeping the refusal here rather than in the
-host\='s judgement means a mistaken allowlist entry cannot become an
-escalation.")
+itself (`collab\='), or only report to the host\='s display -- an echo
+area message, a cockpit, a transient -- that no guest can see or
+dismiss.  Keeping the refusal here rather than in the host\='s judgement
+means a mistaken allowlist entry cannot become an escalation or a dead
+button.")
 
 (defcustom mevedel-collaboration-remote-interactions t
   "Whether full-link guests may answer pending interactions.

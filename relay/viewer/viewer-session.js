@@ -18,7 +18,7 @@
     {name: 'owner', bytes: 64, what: 'and change mode, create sessions'},
   ];
 
-  function create({state, send, el, encode, decode}) {
+  function create({state, send, el, encode, decode, summarize}) {
     const button = document.getElementById('new-session-button');
     const sheet = document.getElementById('new-session');
     const nameInput = document.getElementById('new-session-name');
@@ -257,12 +257,25 @@
       return open;
     }
 
+    // The Rooms and Invite buttons live in the Session menu, so the menu
+    // has to know when either is worth opening for.
+    let roomCount = 0;
+    let inviteShown = false;
+    function reportRoom() {
+      if (!summarize) return;
+      summarize('room', roomCount
+        ? `${roomCount} room${roomCount === 1 ? '' : 's'}`
+        : inviteShown ? 'invite' : '');
+    }
+
     function renderRooms() {
       const rooms = elsewhere();
+      roomCount = rooms.length;
       if (roomsButton) {
         roomsButton.hidden = rooms.length === 0;
         roomsButton.textContent = `Rooms ${rooms.length}`;
       }
+      reportRoom();
       if (!roomsList) return;
       roomsList.replaceChildren();
       rooms.forEach(room => {
@@ -329,7 +342,8 @@
     // hand on too -- but not the room: an ended room's link is dead, and
     // offering to pass it on would be a lie.
     function setInviteVisible(visible) {
-      if (inviteButton) inviteButton.hidden = !(visible && secret);
+      inviteShown = Boolean(visible && secret);
+      if (inviteButton) inviteButton.hidden = !inviteShown;
       // Rooms outlive this room, so the list stays reachable after it
       // ends; only its own count decides whether the button is there.
       renderRooms();

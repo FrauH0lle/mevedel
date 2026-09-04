@@ -116,6 +116,7 @@
 (declare-function mevedel-skills-user-visible-skills
                   "mevedel-skills-ui" (session &optional inline-only))
 (autoload 'mevedel-skills-user-visible-skills "mevedel-skills-ui")
+(defvar mevedel-slash-commands)
 
 ;; `mevedel-structs'
 (declare-function mevedel-directive-id "mevedel-structs" (record))
@@ -209,34 +210,80 @@ frame costs before its records; it defaults to the snapshot frame's."
   '(("plan" . "[prompt]")
     ("goal" . "[objective]")
     ("compact" . "[instructions]")
-    ("stop" . "[execution]"))
+    ("stop" . "[execution]")
+    ("review" . "uncommitted | HEAD | branch:NAME | commit:REV | instructions")
+    ("verify" . "uncommitted | HEAD | branch:NAME | commit:REV | instructions"))
   "Argument hints for the local slash commands a guest may invoke.
 Only commands whose arguments a guest can meaningfully supply appear;
 anything absent is offered as an argument-less button.")
 
-(defun mevedel-collaboration--guest-invocable-p (name)
-  "Return non-nil when NAME may be invoked by a guest at all."
+(defconst mevedel-collaboration--invocation-defaults
+  '(("review" . "uncommitted")
+    ("verify" . "uncommitted"))
+  "Arguments substituted when a guest invokes a command with none.
+Without an argument these commands open a target picker in the host's
+minibuffer, which a guest can neither see nor answer.")
+
+(defun mevedel-collaboration--guest-role (guest)
+  "Return the link tier of GUEST: `owner\=', `full\=', or nil for a viewer."
+  (cond ((plist-get guest :owner) 'owner)
+        ((plist-get guest :writable) 'full)))
+
+(defun mevedel-collaboration--role-policy (role)
+  "Return the `mevedel-collaboration-guest-skills\=' value for ROLE.
+An owner link without an entry of its own inherits the `full\=' entry."
+  (cdr (or (assq role mevedel-collaboration-guest-skills)
+           (and (eq role 'owner)
+                (assq 'full mevedel-collaboration-guest-skills)))))
+
+(defun mevedel-collaboration--policy-admits-p (policy name)
+  "Return non-nil when POLICY admits NAME.
+POLICY has the shape of a `global-minor-mode\=' mode list: t, nil, or
+a list read left to right until an element decides, with an implicit
+nil at the end."
+  (cond
+   ((eq policy t) t)
+   ((consp policy)
+    (catch 'decided
+      (dolist (element policy nil)
+        (pcase element
+          ('t (throw 'decided t))
+          ('nil (throw 'decided nil))
+          ((pred stringp)
+           (when (equal element name) (throw 'decided t)))
+          (`(not . ,names)
+           (when (member name names) (throw 'decided nil)))))))))
+
+(defun mevedel-collaboration--guest-invocable-p (name role)
+  "Return non-nil when a guest holding ROLE may invoke NAME at all."
   (and (stringp name)
-       (member name mevedel-collaboration-guest-skills)
-       (not (member name mevedel-collaboration-unsafe-guest-commands))))
+       (not (member name mevedel-collaboration-unsafe-guest-commands))
+       (mevedel-collaboration--policy-admits-p
+        (mevedel-collaboration--role-policy role) name)))
 
-(defun mevedel-collaboration--guest-roster (room)
-  "Return ROOM's allowlisted invocations as JSON-safe descriptors.
+(defun mevedel-collaboration--guest-roster (room guest)
+  "Return the invocations ROOM offers GUEST as JSON-safe descriptors.
 
-Each entry carries the name, which namespace it belongs to, and its
-argument hint, because a guest button has to render the right sigil and
-say whether the invocation wants arguments.  A name that resolves to
-neither namespace is dropped rather than offered as a button that
-cannot work."
+Every local slash command and user-invocable skill the guest\='s tier
+admits is listed, commands first.  Each entry carries the name, which
+namespace it belongs to, and its argument hint, because a guest button
+has to render the right sigil and say whether the invocation wants
+arguments.  A name that resolves to neither namespace is dropped rather
+than offered as a button that cannot work."
   (when-let* ((data-buffer (mevedel-collaboration--room-data-buffer room))
               (view-buffer (buffer-local-value 'mevedel--view-buffer
                                                data-buffer))
               ((buffer-live-p view-buffer)))
     (with-current-buffer view-buffer
       (let ((session (plist-get room :session))
+            (role (mevedel-collaboration--guest-role guest))
             roster)
-        (dolist (name mevedel-collaboration-guest-skills)
-          (when (mevedel-collaboration--guest-invocable-p name)
+        (dolist (name (delete-dups
+                       (append
+                        (mapcar #'car mevedel-slash-commands)
+                        (mapcar #'mevedel-skill-name
+                                (mevedel-skills-user-visible-skills session)))))
+          (when (mevedel-collaboration--guest-invocable-p name role)
             (when-let* ((kind (mevedel-view-invocation-kind name session)))
               (push (append
                      (list (cons "name" name)
@@ -278,7 +325,7 @@ cannot work."
       ;; The host-curated roster is the guest's whole discovery
       ;; surface; a view link gets none, having no way to use it.
       (when-let* (((plist-get guest :writable))
-                  (roster (mevedel-collaboration--guest-roster room)))
+                  (roster (mevedel-collaboration--guest-roster room guest)))
         (list :commands (vconcat roster)))))
     (cl-loop for rest on chunks do
              (mevedel-collaboration--transport-send
@@ -659,11 +706,18 @@ prompt.  The name travels as its own field and is validated here: guest
 text is never scanned for a sigil, so a pasted log line cannot invoke
 anything."
   (let* ((guest (mevedel-collaboration--guest room peer))
+         (role (mevedel-collaboration--guest-role guest))
          (invoke (plist-get frame :invoke))
          (text (plist-get frame :text)))
     (when (and invoke
-               (not (mevedel-collaboration--guest-invocable-p invoke)))
+               (not (mevedel-collaboration--guest-invocable-p invoke role)))
       (cl-return-from mevedel-collaboration--handle-prompt))
+    ;; A bare invocation of a command that would otherwise prompt on the
+    ;; host gets the argument the host would have picked first.
+    (when (and invoke (or (null text) (string-blank-p text)))
+      (setq text (or (cdr (assoc invoke
+                                 mevedel-collaboration--invocation-defaults))
+                     text)))
     (when (and guest
                (plist-get guest :writable)
                ;; An invocation may carry no arguments at all; a plain
@@ -732,6 +786,7 @@ anything."
                            :guest-id (plist-get guest :guest-id)
                            :paths paths
                            :invoke invoke
+                           :guest-role role
                            :directive-id
                            (unless invoke
                              (mevedel-collaboration--guest-directive-id
