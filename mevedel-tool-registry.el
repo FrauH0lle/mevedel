@@ -95,7 +95,7 @@ created as a side effect of registration and handles serialization."
   get-domain        ; function or nil: (input) -> host string for :domain rules
   get-name          ; function or nil: (input) -> match name for :name rules
   ;; Groups
-  groups            ; list of symbols: (read util code edit eval ...)
+  groups            ; list of symbols: (read util tasks agents code edit eval ...)
   ;; Output size management
   max-result-size   ; integer or nil: char limit before persisting result to disk
   ;; Display
@@ -668,7 +668,7 @@ Optional (both forms):
                                  source dir)
   :args             LIST         Arg specs: ((name type :required \"desc\") ...)
   :category         STRING       Tool category (default \"mevedel\")
-  :groups           LIST         Group symbols: (read edit util ...)
+  :groups           LIST         Group symbols: (read edit tasks agents ...)
   :read-only-p      BOOL         Tool never modifies state
   :snapshot-p       BOOL         Snapshot the touched file for final patching
   :destructive-p    BOOL-OR-FN   Needs extra confirmation

@@ -452,7 +452,9 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
             (:deferred (:tool "Eval"))
             (:deferred code)
             (:deferred web)
-            (:deferred elisp))
+            (:deferred elisp)
+            (:deferred tasks)
+            (:deferred agents))
     :agents (worker explorer reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
