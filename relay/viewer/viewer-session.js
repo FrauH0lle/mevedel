@@ -263,9 +263,10 @@
     let inviteShown = false;
     function reportRoom() {
       if (!summarize) return;
-      summarize('room', roomCount
-        ? `${roomCount} room${roomCount === 1 ? '' : 's'}`
-        : inviteShown ? 'invite' : '');
+      summarize('room', [
+        roomCount ? `${roomCount} room${roomCount === 1 ? '' : 's'}` : '',
+        inviteShown ? 'invite' : '',
+      ].filter(Boolean).join(' · '));
     }
 
     function renderRooms() {

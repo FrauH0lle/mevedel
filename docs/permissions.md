@@ -229,7 +229,11 @@ The current invocation always receives the complete approved request.
 `.mevedel/permissions.el` stores a plist containing both `:rules` and
 `:resource-grants`. It lives with the project on its execution target and stores
 target-native paths, so reopening the same workspace through an equivalent
-TRAMP alias reuses its authority. The user-global `permissions.el` remains in
+TRAMP alias reuses its authority. Paths under the target's home directory are
+written abbreviated as `~/...` and expanded against the current target at
+load, so the file can be committed and shared between machines whose home
+directories differ. A target-incarnation change never rewrites this file; only
+session-scoped exact grants are revoked. The user-global `permissions.el` remains in
 the client-local `mevedel-user-dir`; it is merged at runtime and is never copied
 to the target or into a portable session. Project-store replacement is atomic
 and descriptor-pinned; a symlink in the state path or at `permissions.el`

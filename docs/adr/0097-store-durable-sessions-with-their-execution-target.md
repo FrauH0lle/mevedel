@@ -50,8 +50,12 @@ read-pin protocol.
 
 Rebinding through a different client-specific TRAMP spelling uses durable
 workspace identity.  A changed target incarnation remains an unacknowledged
-observation while resource grants are revoked, then a sidecar marker atomically
-publishes the replacement identity with empty session resource authority.  Only
+observation while session resource grants are revoked, then a sidecar marker
+atomically publishes the replacement identity with empty session resource
+authority.  The fence originally also emptied the workspace store's resource
+grants; that was dropped on 2026-09-04 after a routine reboot wiped grants
+committed to version control and shared with a second machine.  The workspace
+store is configuration, not incarnation-bound authority.  Only
 a
 successful marker acknowledges the replacement; failure blocks the next
 request for explicit publication recovery.  This accepts remote-write latency,

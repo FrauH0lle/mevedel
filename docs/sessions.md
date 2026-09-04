@@ -218,9 +218,13 @@ persisted baseline and compares it with the fresh observation before readiness
 and authority admission, so a reboot or replacement target cannot inherit old
 grants.  A replacement probe stages the observation without changing that
 durable baseline.  The fence then runs as one transaction: it first revokes
-exact session and workspace grants, then commits a sidecar marker containing
+exact session grants, then commits a sidecar marker containing
 the new incarnation and no exact session grants; only that successful commit
-acknowledges the replacement.  Resume with an acquired lease runs that
+acknowledges the replacement. The workspace store in `.mevedel/permissions.el`
+is outside this contract: it is deliberate configuration shared through
+version control between machines, so a reboot or a different host leaves it
+untouched, and a grant there that does not apply on the current target
+matches nothing.  Resume with an acquired lease runs that
 transaction immediately, so a restored session already carries the
 acknowledged new incarnation; request admission runs it for replacements
 observed later.  Publication failure leaves admission blocked and retryable.

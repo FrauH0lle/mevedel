@@ -891,7 +891,7 @@
 (mevedel-deftest mevedel-permission-invalidate-target-grants ()
   ,test
   (test)
-  :doc "revokes exact session, frozen, dropped, and workspace grants only"
+  :doc "revokes exact session, frozen, and dropped grants but not the workspace store"
   (let* ((tmp-dir (file-name-as-directory
                    (make-temp-file "mevedel-test-" t)))
          (mevedel-user-dir (file-name-concat tmp-dir "global/"))
@@ -927,8 +927,12 @@
           (should
            (equal '(("Bash" :pattern "git status:*" :action allow))
                   (mevedel-session-permission-rules session)))
-          (should-not
-           (mevedel-permission-persistence-load-resource-grants workspace))
+          ;; The workspace store is shared configuration, not authority
+          ;; bound to this target's incarnation: it keeps its grants.
+          (should
+           (equal `((:path ,path :access read))
+                  (mevedel-permission-persistence-load-resource-grants
+                   workspace)))
           (should (equal '(("Read" :action allow))
                          (mevedel-permission-persistence-load-rules
                           workspace))))

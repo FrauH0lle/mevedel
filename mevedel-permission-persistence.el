@@ -210,37 +210,63 @@ normalizes rule path patterns."
                  (cl-every #'identity grants))
         (list :rules rules :resource-grants grants)))))
 
+(defun mevedel-permission--home-path-p (path)
+  "Return non-nil when PATH is `~' or starts with `~/'."
+  (or (equal path "~") (string-prefix-p "~/" path)))
+
+(defun mevedel-permission--abbreviate-home (path home)
+  "Return PATH with a leading HOME directory replaced by `~'.
+HOME nil leaves PATH unchanged."
+  (let* ((home (and (stringp home) (not (string-empty-p home))
+                    (directory-file-name home)))
+         (prefix (and home (file-name-as-directory home))))
+    (cond ((null home) path)
+          ((equal path home) "~")
+          ((string-prefix-p prefix path)
+           (file-name-concat "~" (substring path (length prefix))))
+          (t path))))
+
+(defun mevedel-permission--target-home (target)
+  "Return TARGET's native home directory, or nil when it is unknown."
+  (condition-case nil
+      (mevedel-execution-target-native-path
+       target (mevedel-execution-target-expand-path target "~"))
+    (error nil)))
+
 (defun mevedel-permission--portable-runtime-path
     (path target &optional pattern-p)
   "Return runtime PATH in TARGET's durable path domain.
 
-PATTERN-P permits relative path globs.  Remote absolute paths must already
-carry TARGET's prefix so client paths cannot become target authority."
+The durable form is target-native and home-abbreviated: a path under the
+target's home directory is stored as `~/...', so the store can be shared
+between machines whose home directories differ.  Expansion happens at
+load through `mevedel-permission--restore-portable-path'.  PATTERN-P
+permits relative path globs.  Remote absolute paths must already carry
+TARGET's prefix so client paths cannot become target authority."
   (when (stringp path)
     (condition-case nil
         (cond
          ((file-remote-p path nil 'never)
-          (mevedel-execution-target-native-path target path))
+          (mevedel-permission--abbreviate-home
+           (mevedel-execution-target-native-path target path)
+           (mevedel-permission--target-home target)))
          ((mevedel-execution-target-remote-p target)
           (cond
-           ((or (equal path "~") (string-prefix-p "~/" path))
-            (mevedel-execution-target-native-path
-             target (mevedel-execution-target-expand-path target path)))
+           ((mevedel-permission--home-path-p path) path)
            ((and pattern-p (not (file-name-absolute-p path))) path)
            (t nil)))
-         ((and pattern-p
-               (or (equal path "~") (string-prefix-p "~/" path)))
-          path)
+         ((mevedel-permission--home-path-p path) path)
          ((and pattern-p (not (file-name-absolute-p path))) path)
-         ((or (file-name-absolute-p path)
-              (equal path "~") (string-prefix-p "~/" path))
-          (expand-file-name path)))
+         ((file-name-absolute-p path)
+          (mevedel-permission--abbreviate-home
+           (expand-file-name path) (expand-file-name "~"))))
       (mevedel-execution-target-error nil))))
 
 (defun mevedel-permission-serialize-authority (rules grants target)
   "Return RULES and GRANTS encoded in TARGET's durable path domain.
 
-Return nil when any entry is malformed or names another filesystem authority."
+Paths under the target's home are abbreviated to `~/...'.  Return nil when
+any entry is malformed or names another filesystem authority."
   (mevedel-permission--normalize-store
    (list :rules rules :resource-grants grants)
    (lambda (path)

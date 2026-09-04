@@ -920,11 +920,12 @@ long as the tab and the room live. On boot the URL fragment wins, then the
 tab's share, then the notification opt-in's persisted last share. That
 last store is refreshed only for a room whose notifications are on, so
 before the tab store existed a reload in a newer room dialed the stale
-old one. The relay answers an unknown room with close code 4004, which the
-transport now treats as terminal: the viewer shows "Room closed" at once
-and drops the stale stored share, instead of retrying for three minutes.
-Code 4001 (room closed by the host) stays retryable, because a host blip
-comes back.
+old one. On an initial connection the relay answers an unknown room with
+close code 4004, which the viewer treats as terminal: it shows "Room closed"
+at once and drops the stale stored share instead of retrying for three
+minutes. Code 4001 (room closed by the host) starts the bounded reconnect
+window; a 4004 during that window stays retryable because the guest may have
+reached the relay before the host recreated the room.
 
 An actively focused viewer reports itself active and receives no Web Push.
 When a push-enabled viewer moves away, it receives Web Push whether its page
