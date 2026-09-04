@@ -784,6 +784,19 @@ cover, so the permission step's warning about it is captured here."
 		   (should (equal "\\x80" (plist-get out :result)))
 		   (should (equal "\\x80" (plist-get out :raw-result)))
 		   (should (json-serialize (list :result (plist-get out :result))))))
+		 :doc "normalizes non-Unicode result characters before callback"
+		 (let* ((invalid
+			 (decode-coding-string
+			  (unibyte-string #xf4 #x90 #x80 #x80) 'utf-8-unix t))
+			(tool (mevedel-tool--create
+			       :name "NonUnicodeReturn"
+			       :handler (lambda (_args) (list :result invalid))))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "\\xF4\\x90\\x80\\x80"
+				  (plist-get out :result)))
+		   (should (json-serialize (list :result (plist-get out :result)))))
 
 
 ;;
