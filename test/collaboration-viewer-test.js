@@ -289,11 +289,12 @@ async function testTransportGiveUp() {
     },
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/transport.js', 'utf8'), context);
-  const transport = window.mevedelViewerTransport.create({
+  const createTransport = () => window.mevedelViewerTransport.create({
     roomId: 'roomroomroomroom', key: {}, giveUpMs: 100,
     hello: () => ({t: 'hello'}), onConnection() {}, onFrame() {},
     onGiveUp() { giveUps++; }, async onOpen() {},
   });
+  const transport = createTransport();
   transport.connect();
   sockets[0].dispatch('open');
   await tick();
@@ -302,7 +303,9 @@ async function testTransportGiveUp() {
   now = 50;
   sockets[1].dispatch('open');
   await tick();
-  sockets[1].close();
+  retry = null;
+  sockets[1].dispatch('close', {code: 4004});
+  assert.equal(typeof retry, 'function');
   retry();
   now = 102;
   sockets[2].dispatch('open');
@@ -310,6 +313,13 @@ async function testTransportGiveUp() {
   sockets[2].close();
   assert.equal(giveUps, 1);
   assert.equal(sockets.length, 3);
+
+  retry = null;
+  const stale = createTransport();
+  stale.connect();
+  sockets[3].dispatch('close', {code: 4004});
+  assert.equal(giveUps, 2);
+  assert.equal(retry, null);
 }
 
 async function main() {
@@ -353,7 +363,8 @@ async function main() {
                'attach-button', 'image-input', 'notify-button',
                'composer-scope', 'own-queue', 'agents', 'agent-panel',
                'agent-title', 'agent-meta', 'agent-close',
-               'agent-transcript', 'skill-chips',
+               'agent-transcript', 'commands-box', 'commands-summary',
+               'skill-chips', 'artifacts-box', 'artifacts-summary',
                'artifacts', 'artifact-panel', 'artifact-title',
                'artifact-meta', 'artifact-tab', 'artifact-download',
                'artifact-close', 'artifact-body',
@@ -376,6 +387,8 @@ async function main() {
   nodes['own-queue'].hidden = true;
   nodes.agents.hidden = true;
   nodes['session-box'].hidden = true;
+  nodes['commands-box'].hidden = true;
+  nodes['artifacts-box'].hidden = true;
   nodes['agent-panel'].hidden = true;
   nodes['agent-transcript'].scrollTop = 0;
   nodes.artifacts.hidden = true;
@@ -385,6 +398,7 @@ async function main() {
   const sockets = [];
   let timer;
   const storage = new Map();
+  const tabStorage = new Map();
   let subscribedWith;
   let unsubscribeCount = 0;
   let bitmapCloseCount = 0;
@@ -537,6 +551,11 @@ async function main() {
       setItem: (k, v) => storage.set(k, v),
       removeItem: k => storage.delete(k),
     },
+    sessionStorage: {
+      getItem: k => (tabStorage.has(k) ? tabStorage.get(k) : null),
+      setItem: (k, v) => tabStorage.set(k, v),
+      removeItem: k => tabStorage.delete(k),
+    },
     setTimeout: window.setTimeout,
     clearTimeout: () => {},
     setInterval: () => 7,
@@ -550,6 +569,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-task.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-session.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
+  assert.equal(tabStorage.get('mevedel-tab-share'), `${roomId}.${ownerSecret}`);
 
   // Link grammar: view links carry the bare key, full links append the
   // write token, anything else is rejected.
@@ -662,6 +682,8 @@ async function main() {
   assert.equal(nodes['invite-button'].hidden, false);
   // The roster renders with each namespace's own sigil.
   assert.equal(nodes['skill-chips'].hidden, false);
+  assert.equal(nodes['commands-box'].hidden, false);
+  assert.equal(nodes['commands-summary'].textContent, '2 commands');
   assert.equal(nodes['skill-chips'].children.length, 2);
   assert.equal(textOf(nodes['skill-chips'].children[0]), '/plan');
   // Every control says what it does on hover.
@@ -1001,7 +1023,7 @@ async function main() {
   assert.equal(nodes['agents-done-list'].children.length, 1);
   assert.equal(nodes['session-box'].hidden, false);
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 1 agent · 1 finished');
+               'Session · 2 commands · 1 agent · 1 finished · invite');
   const agentFetchBefore = first.sent.length;
   nodes.agents.children[0].dispatch('click');
   await waitFor(() => first.sent.length === agentFetchBefore + 1,
@@ -1016,7 +1038,8 @@ async function main() {
   assert.match(textOf(nodes['agent-transcript']), /Looking/);
   nodes['agent-close'].dispatch('click');
   await deliver({t: 'agents', agents: []});
-  assert.equal(nodes['session-box'].hidden, true);
+  assert.equal(textOf(nodes['session-summary']),
+               'Session · 2 commands · invite');
 
   // The session task list renders as a collapsible summary with one
   // line per task: in-progress first, completed last and counted.
@@ -1047,26 +1070,28 @@ async function main() {
     {path: '/root/worker-1', role: 'worker', status: 'blocked'},
   ]});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 1 agent · 0/1 tasks · 1 omitted · ⚠ 1 active omitted');
+               'Session · 2 commands · 1 agent · 0/1 tasks · 1 omitted · ⚠ 1 active omitted · invite');
   await deliver({t: 'tasks', total: 1, completed: 0, omitted: 0,
     omittedActive: 0, tasks: [
     {id: 1, subject: 'Still going', status: 'pending'},
   ]});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 1 agent · 0/1 tasks');
+               'Session · 2 commands · 1 agent · 0/1 tasks · invite');
   assert.equal(nodes['session-summary'].dataset.warning, 'true');
   await deliver({t: 'agents', agents: []});
   assert.equal(nodes['session-summary'].dataset.warning, 'false');
   // A genuinely empty list hides the block again.
   await deliver({t: 'tasks', total: 0, completed: 0, omitted: 0,
     omittedActive: 0, tasks: []});
-  assert.equal(nodes['session-box'].hidden, true);
+  assert.equal(textOf(nodes['session-summary']),
+               'Session · 2 commands · invite');
   assert.equal(nodes['session-summary'].dataset.warning, 'false');
   // The superseded tasks-only frame is rejected instead of inferred.
   await deliver({t: 'tasks', tasks: [
     {id: 1, subject: 'Legacy task', status: 'pending'},
   ]});
-  assert.equal(nodes['session-box'].hidden, true);
+  assert.equal(textOf(nodes['session-summary']),
+               'Session · 2 commands · invite');
   assert.equal(nodes['tasks-list'].children.length, 0);
 
   // Routed artifact frames likewise reach the artifact controller.
@@ -1075,6 +1100,8 @@ async function main() {
     status: 'completed', summary: 'ApplyPatch',
     artifact: 'mockup.html', size: 20,
   }});
+  assert.equal(nodes['artifacts-box'].hidden, false);
+  assert.equal(nodes['artifacts-summary'].textContent, '1 artifact');
   const artifactBefore = first.sent.length;
   nodes.artifacts.children[0].dispatch('click');
   await waitFor(() => first.sent.length === artifactBefore + 1, 'artifact-get');
@@ -1255,6 +1282,7 @@ async function main() {
                    [{room: 'other', name: 'onboarding', secret: otherSecret},
                     {room: 'third', name: 'handed-over',
                      secret: thirdSecret}]);
+  assert.match(textOf(nodes['session-summary']), /2 rooms · invite/);
   // The same room twice is one room: a reconnect re-offering it must not
   // stack a second card.
   await deliver({t: 'room', name: 'handed-over',
@@ -1512,13 +1540,14 @@ async function main() {
   assert.equal(nodes['own-queue'].hidden, true);
   assert.equal(nodes['queue-state'].hidden, true);
   assert.equal(nodes.filter.hidden, true);
-  assert.equal(nodes['skill-chips'].hidden, true);
+  assert.equal(nodes['commands-box'].hidden, true);
   assert.ok(revokedUrls.includes(pendingUrl));
   assert.equal(nodes.attachments.children.length, 0);
   assert.equal(createdUrls.length, urlsBeforeStaleAttachment);
   assert.equal(nodes['notify-button'].hidden, true);
   // A dead room's persisted credentials die with it.
   assert.equal(storage.has('mevedel-last-share'), false);
+  assert.equal(tabStorage.has('mevedel-tab-share'), false);
   nodes['notify-button'].dispatch('click');
   await tick();
   assert.equal(storage.has('mevedel-last-share'), false);

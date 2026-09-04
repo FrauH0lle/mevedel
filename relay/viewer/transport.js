@@ -113,8 +113,8 @@
     }
 
     // The relay garbage-collects the room the moment the host connection
-    // drops, so "no such room" and "room closed" are retryable during a host
-    // network blip. Give up only after the retry window.
+    // drops, so a reconnect may briefly find no room before the host recreates
+    // it. Give up only after the retry window.
     function scheduleReconnect() {
       if (ended || reconnectTimer) return;
       if (!downSince) downSince = Date.now();
@@ -172,10 +172,10 @@
       });
       nextSocket.addEventListener('close', event => {
         if (socket !== nextSocket || ended) return;
-        // 4004 is the relay saying the room does not exist: a stale
-        // stored link, not a blip. Retrying it for minutes only hides
-        // that the link is dead.
-        if (event && event.code === 4004) {
+        // An initial 4004 identifies a stale stored link. During an existing
+        // reconnect window it can instead mean the guest beat the host back
+        // to the relay, so keep retrying within the ordinary bound.
+        if (event && event.code === 4004 && !downSince) {
           ended = true;
           options.onGiveUp();
           return;

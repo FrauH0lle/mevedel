@@ -73,6 +73,7 @@ async function testServiceWorker() {
 
 async function testNotificationsModule() {
   const storage = new Map();
+  const tabStorage = new Map();
   const registrations = new Map();
   const unsubscribed = [];
   const unregistered = [];
@@ -136,12 +137,23 @@ async function testNotificationsModule() {
       setItem: (key, value) => storage.set(key, value),
       removeItem: key => storage.delete(key),
     },
+    sessionStorage: {
+      getItem: key => tabStorage.get(key) || null,
+      setItem: (key, value) => tabStorage.set(key, value),
+      removeItem: key => tabStorage.delete(key),
+    },
     fetch: async () => ({ok: true, json: async () => ({key: 'push-key'})}),
     Uint8Array, URL, encodeURIComponent, decodeURIComponent,
   };
   vm.runInNewContext(fs.readFileSync('relay/viewer/notifications.js', 'utf8'), context);
   const api = window.mevedelViewerNotifications;
   const parse = fragment => /^#[^.]{16}\..+/.test(fragment) ? {} : null;
+  storage.set('mevedel-last-share', 'storedstoredsto1.stored-secret');
+  tabStorage.set('mevedel-tab-share', 'tabtabtabtabtab1.tab-secret');
+  assert.equal(api.resolveShare(parse), 'tabtabtabtabtab1.tab-secret');
+  tabStorage.clear();
+  assert.equal(api.resolveShare(parse), 'storedstoredsto1.stored-secret');
+  storage.clear();
   assert.equal(api.resolveShare(parse), 'freshfreshfresh1.fresh-secret');
 
   const decode = () => Uint8Array.from({length: 65}, (_, index) => index);

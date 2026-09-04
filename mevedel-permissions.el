@@ -37,10 +37,6 @@
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-permission-persistence'
-(declare-function mevedel-permission-persistence-editable-store
-                  "mevedel-permission-persistence" (file &optional target))
-(declare-function mevedel-permission-persistence-file
-                  "mevedel-permission-persistence" (workspace))
 (declare-function mevedel-permission-persistence-load-resource-grants
                   "mevedel-permission-persistence" (workspace))
 (declare-function mevedel-permission-persistence-load-rules
@@ -51,9 +47,6 @@
 (declare-function mevedel-permission-persistence-save-rule
                   "mevedel-permission-persistence"
                   (workspace tool-name action &optional path &rest keys))
-(declare-function mevedel-permission-persistence-write-store
-                  "mevedel-permission-persistence"
-                  (file store &optional target))
 
 ;; `mevedel-permission-rules'
 (declare-function mevedel-permission-rules-build-rule
@@ -814,7 +807,14 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
 
 
 (defun mevedel-permission-invalidate-target-grants (session)
-  "Revoke SESSION's exact authority after target replacement."
+  "Revoke SESSION's exact authority after target replacement.
+
+Only session-scoped authority is bound to a target incarnation: the exact
+and dropped-file grants, and the frozen copy a running request holds.
+The workspace store in `.mevedel/permissions.el' is deliberate, durable
+configuration shared through version control between machines, so a
+reboot or a different host must leave it alone; a grant there that does
+not apply on this target simply matches nothing."
   (require 'mevedel-session-artifacts)
   (mevedel-session-artifacts-assert-mutation-authority session)
   (setf (mevedel-session-resource-grants session) nil
@@ -823,14 +823,6 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
   (when-let* ((data-buffer (mevedel-permission-mode-data-buffer)))
     (with-current-buffer data-buffer
       (setq-local mevedel-permission--frozen-resource-grants nil)))
-  (let* ((workspace (mevedel-session-workspace session))
-         (file (mevedel-permission-persistence-file workspace))
-         (target (mevedel-session-execution-target session)))
-    (when (file-exists-p file)
-      (let ((store (mevedel-permission-persistence-editable-store file target)))
-        (when (plist-get store :resource-grants)
-          (mevedel-permission-persistence-write-store
-           file (plist-put store :resource-grants nil) target)))))
   t)
 
 

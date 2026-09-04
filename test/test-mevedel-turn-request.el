@@ -388,18 +388,17 @@
                        (mevedel-execution-target-probe target t 'off)))
                   (should (eq 'ready (plist-get readiness :status)))))
               ;; Anything persisting reentrantly after the probe still sees
-              ;; the old baseline paired with the old exact grant.
+              ;; the old baseline paired with the old exact grant.  The
+              ;; grant sits under the target's probed HOME, so the sidecar
+              ;; carries it home-abbreviated.
               (let ((pre-ack
                      (mevedel-session-codec-serialize session)))
                 (should
                  (equal "old-incarnation"
                         (plist-get pre-ack :target-incarnation)))
                 (should
-                 (equal
-                  (list
-                   (list :path (file-name-concat local-root "granted.el")
-                         :access 'read))
-                  (plist-get pre-ack :resource-grants))))
+                 (equal '((:path "~/granted.el" :access read))
+                        (plist-get pre-ack :resource-grants))))
               (should (equal "old-incarnation"
                              (mevedel-execution-target-incarnation target)))
               (should (equal replacement-incarnation

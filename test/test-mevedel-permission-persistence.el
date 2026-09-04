@@ -62,7 +62,7 @@
      (mevedel-permission-serialize-authority
       nil '((:path "/home/client/.ssh/id" :access read)) target)))
 
-  :doc "resolves remote home syntax before persistence"
+  :doc "keeps remote home syntax and abbreviates paths under the remote home"
   (let ((target (mevedel-execution-target-create
                  "/docker:dev:/workspace/")))
     (setf (mevedel-execution-target-environment target)
@@ -71,14 +71,47 @@
      (equal
       '(:rules
         (("Bash" :pattern "npm test"
-          :file-system ((:path "/home/dev/.npm" :access write))
+          :file-system ((:path "~/.npm" :access write))
           :action allow))
-        :resource-grants ((:path "/home/dev/.npm" :access write)))
+        :resource-grants ((:path "~/.npm" :access write)
+                          (:path "~/.cache/x" :access read)
+                          (:path "~" :access read)
+                          (:path "/srv/data" :access read)))
       (mevedel-permission-serialize-authority
        '(("Bash" :pattern "npm test"
           :file-system ((:path "~/.npm" :access write))
           :action allow))
-       '((:path "~/.npm" :access write)) target)))))
+       '((:path "~/.npm" :access write)
+         (:path "/docker:dev:/home/dev/.cache/x" :access read)
+         (:path "/docker:dev:/home/dev" :access read)
+         (:path "/docker:dev:/srv/data" :access read))
+       target))))
+
+  :doc "abbreviates local paths under the home directory so the store is shareable"
+  (let ((target (mevedel-execution-target-create default-directory))
+        (home (expand-file-name "~")))
+    (should
+     (equal
+      `(:rules
+        (("Read" :path "~/proj/*" :action allow)
+         ("Edit" :path "/opt/elsewhere/*" :action allow))
+        :resource-grants ((:path "~/.npm" :access write)
+                          (:path "~" :access read)))
+      (mevedel-permission-serialize-authority
+       `(("Read" :path ,(file-name-concat home "proj/*") :action allow)
+         ("Edit" :path "/opt/elsewhere/*" :action allow))
+       `((:path ,(file-name-concat home ".npm") :access write)
+         (:path ,home :access read))
+       target))))
+
+  :doc "preserves the first path component when the home directory is root"
+  (let ((process-environment (copy-sequence process-environment))
+        (target (mevedel-execution-target-create default-directory)))
+    (setenv "HOME" "/")
+    (should
+     (equal '(:rules nil :resource-grants ((:path "~/cache" :access read)))
+            (mevedel-permission-serialize-authority
+             nil '((:path "/cache" :access read)) target)))))
 
 (mevedel-deftest mevedel-permission-deserialize-authority ()
   ,test

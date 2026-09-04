@@ -6,11 +6,12 @@
 const assert = require('node:assert/strict');
 const {Element, element, load, textOf} = require('./collaboration-viewer-dom');
 
-const ids = ['artifacts', 'artifact-panel', 'artifact-title', 'artifact-meta',
+const ids = ['artifacts-box', 'artifacts-summary', 'artifacts',
+             'artifact-panel', 'artifact-title', 'artifact-meta',
              'artifact-tab', 'artifact-download', 'artifact-close',
              'artifact-body'];
 const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
-nodes.artifacts.hidden = true;
+nodes['artifacts-box'].hidden = true;
 nodes['artifact-panel'].hidden = true;
 nodes['artifact-tab'].hidden = true;
 nodes['artifact-download'].hidden = true;
@@ -59,10 +60,12 @@ const context = {
 };
 load('relay/viewer/viewer-artifact.js', context);
 const sent = [];
+let summary;
 const controller = window.mevedelArtifactView.create({
   send(frame) { sent.push(frame); return Promise.resolve(true); },
   el: (tag, className, text) => element(document, tag, className, text),
   flash: message => flashes.push(message),
+  summarize: (key, text) => { summary = {key, text}; },
 });
 
 controller.render([
@@ -70,7 +73,9 @@ controller.render([
   {id: 'new', artifact: 'mockup.html', size: 20},
   {id: 'gone', artifact: 'gone.txt', missing: true},
 ]);
-assert.equal(nodes.artifacts.hidden, false);
+assert.equal(nodes['artifacts-box'].hidden, false);
+assert.equal(nodes['artifacts-summary'].textContent, '2 artifacts');
+assert.deepEqual(summary, {key: 'artifacts', text: '2 artifacts'});
 assert.equal(nodes.artifacts.children.length, 2);
 assert.match(textOf(nodes.artifacts), /mockup\.html20 B/);
 assert.equal(nodes.artifacts.children[1].disabled, true);
@@ -127,6 +132,7 @@ assert.equal(nodes['artifact-panel'].hidden, true);
 assert.deepEqual(revoked, created);
 
 controller.render([]);
-assert.equal(nodes.artifacts.hidden, true);
+assert.equal(nodes['artifacts-box'].hidden, true);
+assert.deepEqual(summary, {key: 'artifacts', text: ''});
 
 console.log('viewer artifact passed');
