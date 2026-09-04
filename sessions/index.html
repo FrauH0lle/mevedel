@@ -1,0 +1,6337 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Working documentation for mevedel, for humans and agents.">
+      
+      
+      
+        <link rel="canonical" href="https://frauh0lle.github.io/mevedel/sessions/">
+      
+      
+        <link rel="prev" href="../reminders/">
+      
+      
+        <link rel="next" href="../skills/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Session Persistence - mevedel docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#session-persistence" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="mevedel docs" class="md-header__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            mevedel docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Session Persistence
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="mevedel docs" class="md-nav__button md-logo" aria-label="mevedel docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    mevedel docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/FrauH0lle/mevedel" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    mevedel documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../address-to-resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Address-to-resource
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-agent system
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project backlog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../buddy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commit Messages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../compaction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conversation Compaction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guardian-prompts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardian prompt design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Persistent Memory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mentions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    @-mention system
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../permissions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permission system
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../plan-mode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plan mode
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ApplyPatch review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ptc-dialect/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ToolScript dialect manual
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reminders/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System reminders
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Session Persistence
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Session Persistence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#persistence-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Persistence flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#session-persistence_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session persistence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#session-owned-local-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session-owned local state
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Session-owned local state">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#portable-project-durability-publication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Portable project durability publication
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#following-a-session-owned-elsewhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Following a session owned elsewhere
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transport-reentrancy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transport reentrancy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resume-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resume contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#archived-segment-inspection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Archived segment inspection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rewind" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rewind
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#redo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Redo
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fork" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agent-transcripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent transcripts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#input-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input history
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generated-state-excludes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generated state excludes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#locking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Locking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#defcustoms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Defcustoms
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Session Telemetry and Profiler Runs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    View Buffer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_24" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../adr/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adr
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_24" id="__nav_24_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_24_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_24">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Adr
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001-worktree-command-and-skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worktree command and skill
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002-agents-resource-roots/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Resource Roots
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0003-plugin-activation-enables-components/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugin Activation Enables Implemented Components
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0004-session-cockpit-owns-view-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Session cockpit owns view status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0005-pending-plugin-hook-consent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pending Plugin Hook Consent Interrupts Interactive Startup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0006-tabulated-cockpit-surfaces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tabulated Cockpit Surfaces Share Table Plumbing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0007-worktree-has-status-menu-and-list-surface/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worktree Has A Status Menu And List Surface
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0008-skill-roster-is-prompt-context/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skill Roster Is Prompt Context
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0009-hook-audit-surfaces/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hook Audit Surfaces
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0010-worktree-session-owns-plan-execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worktree session owns plan execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0011-repair-model-tool-input-before-pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Repair model tool input before pipeline execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0012-layer-bash-command-and-resource-authorization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Layer Bash command and resource authorization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0013-full-auto-includes-unconfined-live-eval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Full-auto includes unconfined live Eval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0014-permission-guardian-never-grants-authority/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Permission guardian never grants authority
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0015-best-effort-confinement-falls-back-only-before-execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Best-effort confinement falls back only before execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0016-deny-network-by-default-and-escalate-additively/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deny network by default and escalate additively
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0017-confine-protected-paths-by-default/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Confine protected paths by default
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0018-reuse-codex-execution-escalation-vocabulary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reuse Codex execution escalation vocabulary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0019-remove-model-visible-request-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Remove model-visible RequestAccess
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0020-run-bash-through-a-login-shell/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run Bash through a login shell
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0021-isolate-guardian-prompt-boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Isolate guardian prompt boundaries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0022-bound-automatic-plan-revision/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bound automatic plan revision
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0023-goal-outcomes-outrank-plan-details/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Goal outcomes outrank plan details
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0024-yield-bash-through-session-owned-executions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Yield Bash through session-owned executions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0025-agents-execute-asynchronously/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents execute asynchronously
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0026-remove-the-privileged-coordinator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Remove the privileged coordinator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0027-restrict-agent-messaging-to-tree-edges/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restrict agent messaging to tree edges
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0028-support-nested-agent-delegation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Support nested agent delegation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0029-limit-active-agent-turns-per-session-tree/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limit active agent turns per session tree
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0030-agent-tool-grants-transitive-delegation-authority/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent tool grants transitive delegation authority
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0031-agent-roles-are-optional-overlays/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent roles are optional overlays
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0032-agent-follow-ups-retain-conversation-context/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent follow-ups retain conversation context
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0033-retain-settled-agents-for-the-session-lifetime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retain settled agents for the session lifetime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0034-address-agents-by-canonical-task-path/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Address agents by canonical task path
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0035-separate-agent-messages-from-follow-up-work/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Separate agent messages from follow-up work
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0036-wait-for-agents-explicitly/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wait for agents explicitly
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0037-allow-tree-wide-agent-communication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Allow tree-wide agent communication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0038-list-the-addressable-agent-roster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    List the addressable agent roster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0039-interrupt-agent-turns-without-removing-agents/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Interrupt agent turns without removing agents
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0040-fork-an-explicit-parent-context-snapshot/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fork an explicit parent context snapshot
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0041-allow-explicit-agent-model-overrides/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Allow explicit agent model overrides
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0042-use-one-minimal-agent-spawn-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use one minimal agent spawn schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0043-split-agent-observation-from-control-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Split agent observation from control tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0044-bound-agent-waits-with-a-successful-timeout/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bound agent waits with a successful timeout
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0045-address-agent-tools-only-by-path/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Address agent tools only by path
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0046-use-plain-text-agent-messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use plain-text agent messages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0047-keep-agent-command-acknowledgements-minimal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keep agent command acknowledgements minimal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0048-deliver-agent-mail-separately-from-wait-results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deliver agent mail separately from wait results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0049-persist-unread-agent-mail/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Persist unread agent mail
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0050-return-every-agent-turn-result-to-the-spawn-parent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Return every agent turn result to the spawn parent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0051-use-one-agent-result-envelope/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use one agent result envelope
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0052-bound-inline-agent-results/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bound inline agent results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0053-limit-automatic-agent-roster-context/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limit automatic agent roster context
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0054-render-agent-activity-from-canonical-events/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Render agent activity from canonical events
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0055-charge-capacity-only-for-new-follow-up-turns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Charge capacity only for new follow-up turns
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0056-fork-effective-post-compaction-context/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fork effective post-compaction context
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0057-compact-agent-conversations-independently/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compact agent conversations independently
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0058-freeze-agent-role-configuration-at-spawn/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Freeze agent role configuration at spawn
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0059-centralize-agent-permissions-in-the-root-session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Centralize agent permissions in the root session
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0060-centralize-agent-interactions-in-the-root-session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Centralize agent interactions in the root session
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0061-recover-abandoned-agent-turns-as-interrupted/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recover abandoned agent turns as interrupted
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0062-do-not-clone-live-agents-into-session-forks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Do not clone live agents into session forks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0063-persist-the-agent-registry-explicitly/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Persist the agent registry explicitly
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0064-publish-agent-spawns-atomically/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Publish agent spawns atomically
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0065-give-worker-an-independent-implementation-toolset/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Give worker an independent implementation toolset
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0066-hooks-follow-lifecycle-boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hooks Follow Lifecycle Boundaries, Not Model Requests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0067-separate-planning-from-goal-execution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Separate planning from Goal execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0068-keep-goal-authority-outside-conversation-history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keep Goal authority outside conversation history
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0069-drive-goals-with-idle-continuation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Drive Goals with idle continuation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0070-compose-system-prompts-from-ordered-profiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compose system prompts from ordered profiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0071-isolate-agent-tasks-by-default/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Isolate agent tasks by default
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0072-make-rewind-in-place-undo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Make rewind in-place undo
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0073-identify-fork-points-stably/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Identify fork points independently of turn numbers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0074-keep-direct-user-authority-above-heuristics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keep direct user authority above heuristics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0075-use-one-canonical-permission-mode-vocabulary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use one canonical permission-mode vocabulary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0076-name-fail-open-confinement-best-effort/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Name fail-open confinement best-effort
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0077-scope-sandbox-policy-to-the-session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scope sandbox policy to the session
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0078-default-to-best-effort-confinement/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Default to best-effort confinement
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0079-require-an-explicit-escalation-retry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Require an explicit escalation retry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0080-do-not-depend-on-guardian-availability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Do not depend on guardian availability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0081-full-auto-authorizes-live-eval/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Full-auto authorizes live Eval
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0082-full-auto-authorizes-additive-network-access/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Full-auto authorizes additive network access
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0083-store-network-authority-in-qualified-tool-rules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Store network authority in qualified tool rules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0084-limit-reusable-full-escalation-to-literal-operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limit reusable full escalation to literal operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0085-full-auto-permits-destructive-workspace-writes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Full-auto permits destructive workspace writes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0086-reuse-approved-execution-permission-profiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reuse approved execution permission profiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0087-keep-directive-identity-outside-source-overlays/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keep directive identity outside source overlays
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0088-keep-directive-activity-outside-main-chat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keep directive activity outside main chat
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0089-make-revision-state-dependent-implementation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Make revision state-dependent implementation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0090-enforce-discussion-as-a-read-only-capability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Enforce discussion as a read-only capability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0091-render-directive-turns-in-the-shared-session-view/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Render directive turns in the shared session view
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0092-use-one-patch-oriented-file-mutation-tool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use one patch-oriented file mutation tool
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0093-treat-btw-as-an-ephemeral-side-conversation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Treat /btw as an ephemeral side conversation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0094-centralize-context-summary-generation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Centralize context-summary generation without centralizing workflows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0095-select-child-agent-context-explicitly/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Select child-agent context explicitly
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0096-bind-each-session-to-one-execution-target/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bind each session to one execution target
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0097-store-durable-sessions-with-their-execution-target/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Store durable sessions with their execution target
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0098-store-unsettled-mutation-in-the-session-lease/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Store unsettled mutation in the session lease
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0099-project-live-collaboration-from-host-authoritative-state/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project live collaboration from host-authoritative state
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0100-portable-project-session-authority/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use one portable authority for project sessions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0101-carry-control-operations-as-one-pinned-program/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Carry control operations as one pinned program
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0102-settle-remote-stops-by-zombie-aware-probing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settle remote stops by zombie-aware probing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0103-spawn-remote-bash-on-a-private-channel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Spawn remote Bash on a private channel
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0104-keep-resource-addresses-closed-and-capability-neutral/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keep resource addresses closed and capability-neutral
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0105-cockpit-surfaces-follow-three-archetypes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cockpit Surfaces Follow Three Archetypes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0106-directive-frame-is-a-child-frame/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Directive Frame Is A Child Frame, Not An Overlay
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0107-non-owner-buffers-follow-published-state/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Non-Owner Buffers Follow Published State
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0108-buddy-notes-are-not-instructions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Buddy notes are not instructions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0109-edit-patch-changes-side-by-side/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Edit patch changes side by side
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0110-request-config-lives-in-the-sidecar-not-org-properties/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Request config lives in the sidecar, not Org properties
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0111-run-programmatic-tool-calls-in-a-closed-machine/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run programmatic tool calls in a closed machine
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0112-debounce-observational-agent-persists/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debounce observational agent persists
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0113-parent-ask-sample-frames-to-the-top-level-frame/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Parent Ask Sample Frames To The Top-Level Frame
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0114-tie-collaboration-room-lifetime-to-host-share/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tie collaboration room lifetime to the host share
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_25" >
+        
+          
+          <label class="md-nav__link" for="__nav_25" id="__nav_25_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_25_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_25">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/domain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Domain Docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/issue-tracker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Issue tracker: Local Markdown
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agents/triage-labels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Triage Labels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#persistence-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Persistence flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#session-persistence_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session persistence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#session-owned-local-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session-owned local state
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Session-owned local state">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#portable-project-durability-publication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Portable project durability publication
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#following-a-session-owned-elsewhere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Following a session owned elsewhere
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transport-reentrancy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transport reentrancy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resume-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resume contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#archived-segment-inspection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Archived segment inspection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rewind" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rewind
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#redo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Redo
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fork" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agent-transcripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Agent transcripts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#input-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input history
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generated-state-excludes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generated state excludes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#locking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Locking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#defcustoms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Defcustoms
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/FrauH0lle/mevedel/edit/master/docs/sessions.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="session-persistence">Session Persistence<a class="headerlink" href="#session-persistence" title="Permanent link">&para;</a></h1>
+<p>Settled directive work remains a complete first-class turn in its execution
+session segment. Its canonical user, response, and <code>(tool . id)</code> properties are
+saved through the normal transcript/GPTEL_BOUNDS path so resume and MevView use
+the ordinary renderer. Paired hidden directive-boundary audit records retain
+the directive id, action, and canonical turn identity; ordinary-chat request
+assembly finds those boundaries in gptel's temporary prompt copy and marks the
+enclosed body <code>gptel 'ignore</code>, including tool spans.</p>
+<p>The workspace-owned implementation attempt or discussion turn also retains the
+exact submitted request, terminal result, and matching
+<code>(:session-id ... :turn ...)</code> checkpoint; implementation attempts additionally
+retain the authored-request snapshot, capture timestamp, capture metadata, and
+patch. Bash/Eval/execution-control or agent activity that may mutate files
+outside the ordinary tool snapshot seam is retained as an explicit capture gap;
+such an attempt is never labeled complete, and Rewind surfaces the gap before
+restoring. This bounded duplication separates durable follow-up/inspection context
+from transcript presentation. Every accepted request reserves its turn identity
+before tools run, and that same identity keys pre-turn snapshots, transcript
+metadata, the prompt/Rewind index, and the workspace record. A directive reuses
+its bound live or persisted session. If that session no longer exists, rebinding
+requires explicit confirmation and does not rewrite historical checkpoints.</p>
+<p>Sessions auto-save lazily and per-completed-turn. Compaction rotates
+segments rather than rewriting in place.</p>
+<p>Conversation compaction has its own doc in
+<a href="../compaction/"><code>compaction.md</code></a>. This page describes the session
+persistence contract that compaction relies on.</p>
+<p>A root data buffer owns one live session epoch. Fresh initialization emits
+<code>SessionStart(startup)</code>, restoration emits <code>SessionStart(resume)</code>, and killing
+the data buffer emits one <code>SessionEnd</code>. Successful <code>/clear</code> and root compaction
+start <code>clear</code> and <code>compact</code> context epochs inside that same live epoch; they do
+not emit <code>SessionEnd</code>. Their hook context is appended as a new snapshot and is
+consumed by the next accepted root input, except automatic compaction attaches
+compact-start context to its already-pending request.</p>
+<p>A failed fresh initialization retains neither the named data buffer nor its
+companion view. Buffer-local cleanup hooks unwind any lifecycle state installed
+before the failure, and retrying the same session name starts from a new buffer.</p>
+<p>Plan Here/Summary is a root compaction and follows this rotation and context
+epoch contract. Plan Worktree/Summary is a non-mutating handoff preparation:
+the source sidecar caches its successful generated background in the durable
+implementation retry record, but the source segment and context epoch stay
+unchanged. The clean target later receives that cached background before its
+accepted-plan implementation turn.</p>
+<h2 id="persistence-flow">Persistence flow<a class="headerlink" href="#persistence-flow" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart TD
+    A[Completed turn] --&gt; B[Save current segment]
+    B --&gt; C[Update session sidecar]
+    C --&gt; D[Record file snapshots and logs]
+    D --&gt; E{Resume?}
+    E -- Yes --&gt; F[Load segment and sidecar]
+    F --&gt; G[Rebuild data buffer]
+    G --&gt; H[Render view]
+    E -- No --&gt; I{Compact, Rewind, or Fork?}
+    I -- Compact --&gt; J[Rotate segment]
+    I -- Rewind --&gt; K[Transactionally truncate session and restore files]
+    I -- Fork --&gt; L[Arm settled assistant response]
+    J --&gt; B
+    K --&gt; B
+    L --&gt; M[Accepted model-bound follow-up]
+    M --&gt; N[Publish and open independent child]</code></pre>
+<h2 id="session-persistence_1">Session persistence<a class="headerlink" href="#session-persistence_1" title="Permanent link">&para;</a></h2>
+<p>Persistence is split by ownership. <code>mevedel-session-codec.el</code> owns the closed
+sidecar schema and validation; <code>mevedel-session-artifacts.el</code> owns paths,
+artifacts, snapshots, and segment writes; <code>mevedel-session-rewind.el</code> owns
+restore plans and the Rewind transaction; and <code>mevedel-session-fork.el</code> owns
+Fork/Worktree projection, publication, and rename.
+<code>mevedel-session-persistence.el</code> remains the lifecycle, resume, listing,
+locking, and cleanup facade used by callers.</p>
+<p>Sessions auto-save lazily and per-completed-turn under
+<code>&lt;workspace-root&gt;/.mevedel/sessions/&lt;name&gt;-&lt;timestamp&gt;-&lt;short-uuid&gt;/</code>.
+Ordinary model turns and awaited fork-skill turns share one
+successful-turn transaction.  It advances the turn, records the token
+baseline, saves before request teardown, runs <code>Stop</code>, restores temporary
+permission state, ends the request, and schedules queued follow-up delivery.
+Layout:</p>
+<div class="highlight"><pre><span></span><code>.mevedel/workspace-id                 ; project-owned portable workspace identity
+.mevedel/sessions/main-2026-04-23T14-30-a9f2/
+  session.meta.el                    ; non-authoritative current sidecar cache
+  .lease/                            ; project-session portable lease generations
+    00000000000000000001.el         ; current renewable ownership record
+  .publications/
+    generation-a1b2c3/
+      000001.data                   ; immutable artifact bytes
+      manifest.el                  ; logical path -&gt; bytes + SHA-256
+  .recovery/                       ; target-side project recovery only
+    recovery-a1b2c3...el            ; marker, written after recovery bytes
+    a1b2c3.../                      ; manual repair material
+  segment-0001.chat.org              ; finalized at compact #1
+  segment-0002.chat.org              ; finalized at compact #2
+  segment-0003.chat.org              ; current/live
+  hook-log.el                        ; one hook execution plist per line
+  permission-log.el                  ; permission/request diagnostic plists
+  repair-log.el                      ; redacted tool-input validation telemetry
+  telemetry-log.el                   ; correlated lifecycle events, one plist/line
+  diagnostics/run-*/                 ; resource reports; local sessions only
+  file-history/                      ; per-session backup store
+    4f1e8c9a3b2d6e57@v1
+    4f1e8c9a3b2d6e57@v2
+  local/                              ; lazy session-owned shared resources
+    plans/current.md                 ; mutable Plan draft/proposal
+    plans/accepted-*.md              ; immutable accepted plans
+  artifacts/                         ; durable session artifacts (mockups,
+                                     ; documents); cockpit inventory and
+                                     ; collaboration byte source
+  agents/                            ; sub-agent transcript .chat.org files
+</code></pre></div>
+<p>Project sessions use the portable authority profile on both local and TRAMP
+targets: <code>.lease/</code> and immutable <code>.publications/</code> are authoritative, while
+the familiar sidecar and segment paths are only fixed caches.  File-workspace
+sessions use the separate <code>pid-lock</code> profile and <code>.lock</code>; they do not create a
+lease or publication tree.  A session directory containing both control
+artifacts, or a persisted authority profile that disagrees with its workspace
+category, is rejected rather than guessed.</p>
+<p>The data buffer is locked to bare <code>org-mode</code> so <code>gptel-org--save-state</code> can
+round-trip text-property bounds via <code>GPTEL_BOUNDS</code>. Entering the mode suppresses
+all major-mode hooks, Org startup UI, global-minor-mode attachment, and Local
+Variables processing. The transcript is generated authoritative storage rather
+than a normal Org editing surface, and model output must not activate project
+or user configuration. The companion view owns presentation. The sidecar holds
+session-wide state that doesn't live in the buffer text: permission rules,
+exact or recursive session resource grants, tasks, prompt-index (driving the
+rewind picker
+and latest resume preview), <code>:file-snapshots</code> (per-turn pre-turn checkpoints of
+tracked files, including absent markers and known capture gaps; post-turn
+copies remain alongside them for historical Fork), workspace identity,
+<code>:working-directory</code>, fork lineage (<code>:fork-type</code>, <code>:forked-from-session-id</code>,
+<code>:forked-from-turn</code>, and <code>:forked-from-fork-point-id</code>), and Worktree Fork
+origin (<code>:worktree-source-root</code>, <code>:worktree-directory</code>, <code>:worktree-branch</code>, and
+<code>:worktree-base-commit</code>), and <code>:agent-transcripts</code> presentation metadata and
+the explicit <code>:agent-registry</code> containing retained paths, frozen
+configurations, activity, mailboxes, and conversation locations. It records
+only the selected <code>:preset-name</code>; resume rebuilds mevedel variables from that
+currently registered trusted preset, so sidecar data cannot name or populate
+buffer locals. It also records the session's exact <code>:model-provider</code> and
+explicit <code>:reasoning-effort</code>. This removal of persisted preset variable keys
+and values and the durable ToolScript audit checkpoint change the sidecar
+format to <code>v0.5.4</code>; older sessions are intentionally rejected rather than
+migrated. The checkpoint contains the ToolScript call and bounded child audit,
+never an interpreter continuation. A Session Fork also copies the source
+session's permission mode, sandbox mode, session permission rules, and resource
+grants at the fork point. Parent and child then diverge independently.
+Other gptel buffer-local settings are request-time state only; mevedel does not
+persist them as Org properties. An Agent <code>summary</code> selection is persisted only
+in the child transcript as a labelled <code>&lt;task-background&gt;</code> block before the
+authoritative Agent Task. The parent sidecar and tool result retain only
+provider/model/effort metadata, not the generated summary text.</p>
+<h2 id="session-owned-local-state">Session-owned local state<a class="headerlink" href="#session-owned-local-state" title="Permanent link">&para;</a></h2>
+<p><code>local/</code> is created lazily when the first durable write to <code>local://</code> succeeds.
+It is shared by the root and its retained-agent tree, survives save, resume,
+and rename, and is removed when its owning session is cleaned up. A Conversation
+or Worktree Fork copies it into independent child state; Rewind leaves it
+unchanged. Local files are not workspace snapshots, touched files, instruction
+discovery, LSP inputs, directive patch captures, or Git summary inputs. An
+ephemeral request without durable session ownership cannot create or mutate it.</p>
+<p><code>local/plans/</code> is the shared durable plan namespace. The parent and retained
+agents use <code>local://plans/...</code> for current and accepted plans alongside shared
+notes, findings, contracts, and handoffs. Accepted archives are always canonical
+<code>accepted-TIMESTAMP.md</code> names, so every managed plan is addressable. The layout
+is intentionally current: there is no migration or compatibility reader for an
+older top-level <code>plans/</code> directory or persisted plan format.</p>
+<p><code>local/plans/</code> is the one exception to plain Fork copying, because it is managed
+plan state rather than free-form local content. A Fork drops the copied
+<code>local/plans/</code> subtree and re-adds only the accepted artifact that was already
+accepted at the fork point, after re-verifying its recorded hash. The child
+therefore starts without an inherited current-plan draft.</p>
+<p>Session-owned <code>local://</code>, <code>artifact://</code>, <code>agent://</code>, and <code>history://</code> addresses
+belong to the session's execution target. Client-local skill and memory roots
+retain their origin, while MCP addresses use the current configured connection;
+no resource address changes a session's target. See
+<a href="../address-to-resource/#local"><code>address-to-resource.md</code></a>.</p>
+<p>The workspace identity is one opaque 64-character lowercase hexadecimal value
+stored in <code>.mevedel/workspace-id</code> when the first session is materialized.  The
+sidecar's nested <code>:workspace</code> record stores that <code>:workspace-id</code> together with
+<code>:target-native-root</code>; the top-level <code>:working-directory</code> is target-native as
+well.  Neither field stores a client-specific TRAMP prefix or the process-local
+workspace registry id.  Resume binds the record to the currently opened
+workspace, verifies its project-owned identity, maps saved target-native paths
+to the current target root, and constructs a fresh immutable execution target.
+A missing identity is an error.  An identity mismatch requires explicit
+confirmation; declining aborts resume, while accepting binds the conversation
+to the opened workspace and discards copied session permission rules, resource
+grants, and additional roots.  The next save records the opened workspace's
+identity.  Superseded sidecar shapes are not migrated.</p>
+<p>The package release is <code>0.5.0</code>; its persisted session format is independently
+<code>v0.5.4</code>.  The top-level <code>:authority-mode</code>, <code>:ptc-checkpoints</code>, and
+execution-target incarnation are
+required by that session format:
+project sessions persist <code>portable</code>, while file-workspace sessions
+persist <code>pid-lock</code>.  Portable project sessions always persist a non-empty
+<code>:target-incarnation</code>, including local sessions; the local and TRAMP probes use
+one canonical boot-id, machine-id, PID-1 start, and hostname payload, without
+client-specific TRAMP spelling or Emacs build details.  Resume restores the
+persisted baseline and compares it with the fresh observation before readiness
+and authority admission, so a reboot or replacement target cannot inherit old
+grants.  A replacement probe stages the observation without changing that
+durable baseline.  The fence then runs as one transaction: it first revokes
+exact session grants, then commits a sidecar marker containing
+the new incarnation and no exact session grants; only that successful commit
+acknowledges the replacement. The workspace store in <code>.mevedel/permissions.el</code>
+is outside this contract: it is deliberate configuration shared through
+version control between machines, so a reboot or a different host leaves it
+untouched, and a grant there that does not apply on the current target
+matches nothing.  Resume with an acquired lease runs that
+transaction immediately, so a restored session already carries the
+acknowledged new incarnation; request admission runs it for replacements
+observed later.  Publication failure leaves admission blocked and retryable.</p>
+<p>Admission observes the fingerprint with one target command rather than a full
+readiness probe.  Environment, capabilities, and sandbox facts are fixed for
+the life of a connection, so they are probed when the session opens, when the
+connection is replaced, and on <code>mevedel-retry-target-readiness</code>; re-deriving
+them at every mutation boundary cost roughly fifteen synchronous round trips
+per admitted mutation, and a session admits several per prompt.  A failed
+observation falls back to the full probe, which settles the blocked readiness
+that admission reports.</p>
+<p>A lost settlement records the target process-group identity, so a mutating
+request re-proves that group against the target before it is refused: an
+affirmative <code>dead</code> clears the block with no user action, while live,
+unreachable, or ambiguous keeps it. If the transport is already active, the
+request stays blocked rather than nesting a target probe; the next mutation
+attempt retries the proof. The durable latch restored across a restart carries
+no process identity and still needs
+<code>mevedel-retry-target-readiness</code>, which every refusal names.</p>
+<p>The unsettled-mutation latch is
+<a href="../adr/0098-store-unsettled-mutation-in-the-session-lease/"><code>ADR 0098</code></a>; the
+one portable authority profile is
+<a href="../adr/0100-portable-project-session-authority/"><code>ADR 0100</code></a>.</p>
+<p>Portable control roots are physical target directories, not ordinary
+pathname-checked caches. Lease generations, transfer requests and fences, and
+specialized recovery markers are read and mutated through a pinned target-side
+parent descriptor; symlinked roots or final entries fail closed. Each control
+operation opens its parent directory, proves the opened directory is the
+requested physical path, and then works only through that descriptor.</p>
+<p>One target process carries a <em>program</em> of such operations rather than a single
+one. Every operation in a program opens and re-proves its own parent, so a
+program is exactly as pinned as the same operations run one at a time, while
+costing one round trip instead of one per operation. A program stops at the
+first operation that does not succeed and reports the rest as skipped, which is
+what lets a caller state a precondition as a <code>verify</code> operation its writes
+depend on: the proof and the write it guards share one process, which narrows
+the window between them to two adjacent syscall sequences rather than a
+network round trip. It does not remove the window -- another client can
+exclusively create the next generation in between -- so a lease commit
+decides who won from what it observes after its write, and exclusive
+creation is the only atomic election. Each operation reports <code>ok</code>, <code>conflict</code>,
+<code>absent</code>, <code>mismatch</code>, <code>failed</code> or <code>skipped</code>, so a caller reproduces the
+per-operation nil-versus-signal contract of the single-operation wrappers.
+Payloads and listings travel base64-encoded inside a NUL-framed request and
+response, because filenames and content both contain bytes a shell cannot pass
+through a command substitution literally. An operation marked optional does not
+end its program, which is how ensuring a directory that may already exist
+shares a round trip with the write that needs it. Target diagnostics are
+captured separately from the response, so a tool writing to stderr cannot
+present itself as a result.</p>
+<p>Round trips therefore dominate durable session work over a real remote
+connection, and the layer is written to spend as few as it can. One lease
+commit is one program, not a clock read plus two listings plus two reads plus
+a write. The interpreters those processes run through are resolved
+once per target rather than per operation, because locating a program on a
+TRAMP target costs one test per <code>exec-path</code> entry and the durability layer
+inhibits the remote file-name cache; a refused operation drops the resolved
+pair so a moved interpreter is looked up again. An operation that carries
+content pays two further round trips, because TRAMP copies its input file to
+the target and removes it afterwards. Reads never create control directories:
+an absent transfer mailbox holds no requests, so a polling observer performs no
+target mutation. Publication proves lease ownership immediately before every
+artifact write and once after the last one; each of those proofs is one round
+trip.
+Enumerating a workspace's sessions obeys the same budget. Every candidate
+directory's control artifacts are probed in one program and every lease
+directory is listed in one more, and both observations are then shared with
+the reads they feed: a candidate proved free of a PID lock is recorded in the
+durable transaction that spans the listing, so the assertions each publication
+read repeats cost nothing, and each listing is handed to that read in place of
+its own listing round trip. What remains scales with sessions rather than with
+probes -- one lease-record read and one manifest read each -- so a workspace
+holding dozens of candidate directories spends dozens of round trips instead
+of hundreds.
+Portable lease expiry and transfer deadlines use the target filesystem clock at
+whole-second resolution, so clients with skewed wall clocks cannot change one
+another's authority and lease durations are configured in whole seconds.  A
+lease observation reads that clock in the same process as the records it
+inspects, and one durable transaction may answer from a reading it already took
+for at most one second before taking another; local elapsed time only decides
+when to read the target again and never becomes a time value, so no deadline is
+ever derived from a client clock.  A
+client reclaims its own expired lease without a prompt, because renewal cannot
+run inside blocking target I/O and confirming a takeover from oneself is
+meaningless; the exclusive creation of the next generation still refuses the
+reclaim when another client claimed the lease meanwhile.  Taking over another
+client's expired lease still requires explicit confirmation.  The renewal
+heartbeat performs that reclaim itself: a machine that suspends longer than
+the lease duration stops its timer but not the target clock, so it wakes with
+its own record already expired and nobody else claiming it.  Reporting a lost
+lease there would cancel the heartbeat for a condition the next mutation
+heals anyway, so renewal retakes the record instead and the session keeps its
+authority across standby.</p>
+<h3 id="portable-project-durability-publication">Portable project durability publication<a class="headerlink" href="#portable-project-durability-publication" title="Permanent link">&para;</a></h3>
+<p>Portable project session state remains authoritative under the target
+workspace's <code>.mevedel/</code> directory.  Before the first target-side state write in a live
+Emacs client, mevedel discloses the exact state directory, the stored data
+categories, and that mevedel does not encrypt them.  Acceptance is remembered
+once per execution target for that Emacs process; another client or restart
+discloses again.</p>
+<p>Completed-turn saves and segment transitions stage their complete critical
+artifact batch locally before target I/O.  Replacement files at their familiar
+session paths are published through nearby target temporary files plus atomic
+rename, but these fixed files are caches, not the durable snapshot boundary.
+A successful session-local batch without a sidecar marker retains its staged
+source locally.  A later batch with exactly one <code>session.meta.el</code> artifact
+marked <code>:commit-marker t</code> merges those retained artifacts with the current
+batch in order; duplicate logical paths use the last write.  Artifacts outside
+the session directory remain ordinary fenced writes and never enter the
+session snapshot.</p>
+<p>A save whose durable state is byte for byte the committed snapshot performs no
+target transaction at all: the candidate artifacts are hashed against the
+committed manifest, and when every one matches, the save records nothing and
+<code>updated-at</code> is not even stamped, because stamping it first would make the
+sidecar differ on every call and defeat the comparison.  When some artifacts
+differ, only those are published; an omitted artifact keeps its existing
+manifest entry, so the logical snapshot is unchanged while whole per-artifact
+ownership proofs are avoided.  The commit marker always publishes, because it is
+the transaction's commit point rather than a payload.  <code>mevedel-save-session</code>
+publishes regardless, for a user who wants a snapshot rather than a record of a
+change.</p>
+<p>The free-form <code>artifacts/</code> subtree is included recursively as literal regular
+files in every portable save candidate. Its absent committed entries are
+explicit <code>:delete t</code> tombstones: ordinary omission still means unchanged, while
+a tombstone removes that logical from the overlaid manifest at the same marker
+commit. Symlinks are not publication inputs. This makes the immutable manifest,
+not a remote fixed cache, authority for artifact bytes after Resume, Save As,
+and Fork. After an owned cold Resume fences and revalidates the publication
+head, it replaces the fixed <code>artifacts/</code> subtree from verified manifest bytes;
+a read-only inspector never performs that reconciliation.</p>
+<p>The marker transaction copies the merged logical artifacts into a unique,
+never-overwritten directory below <code>.publications/</code>, records each target-native
+session-relative logical and published path plus its SHA-256, and creates the
+immutable <code>manifest.el</code> last.  That directory, its artifacts and its manifest
+are one target program, so the whole generation costs one round trip and the
+manifest is still the last byte written inside it.  Updating the exact current
+lease generation's <code>:publication-head</code> to that manifest is the only commit
+point.  Every fixed
+cache write precedes this commit, and no fixed or shared state is written
+after a failed one.  Consequently, a reader sees either
+the complete old manifest or the complete new one even if newer fixed caches
+already exist.  A lifecycle replacement such as Rewind may put <code>:replace t</code>
+only on the marker, which starts from an empty manifest rather than overlaying
+the preceding snapshot.</p>
+<p>An uncached read validates the manifest and all logical/control paths, returns
+qualified immutable paths, and verifies the selected sidecar bytes eagerly.
+Other artifact digests are verified only when those bytes are consumed, so
+session listing costs one manifest plus one sidecar rather than the whole
+conversation.  A nil head means the session is unpublished or incomplete.
+The live owning session may resolve its newest retained local staged source
+before falling back to its captured committed manifest; readers never treat
+the fixed caches as authority.</p>
+<p>Cooperative control transfer uses immutable generation-specific request and
+decision records below <code>.lease/requests/</code>. Each lease records its open transfer
+generation. Ordinary rotations preserve it, so every contender uses the same
+exclusive request path even when a lease rotation lands between lookup and
+creation. A successful rejection rotation opens the next transfer generation;
+the decision alone does not. The owner pairs a decision with that request's
+generation, and the pending request remains the only requester across ordinary
+lease rotations. A request must still name the
+current lease's client as its owner, so one left over from an earlier
+ownership cannot cross a release. Granting a request does not move
+authority: the owner drains existing work, commits one final publication, and
+releases with a short requester-only fence. New mutation admission is refused
+while draining; the named requester acquires only after observing the released
+successor, then reloads the committed sidecar and transcript before its buffer
+becomes writable. The requester also reads its exact immutable decision, so a
+rejection ends the pending state and exposes a fresh request action. The fence
+records the later generation actually released, while retaining the request's
+identity; retries therefore remain idempotent after the owner's normal
+generation drift. A failed refresh releases the new lease and leaves the
+requester read-only. Sidecar, transcript, target, and instruction restoration
+are staged before the live session or buffer advances, so a failed follower
+refresh remains retryable. View-owned drain predicates survive committed-state
+adoption. Transfer state is transient session state and is not serialized in
+the sidecar. A view polls that state every
+<code>mevedel-view-control-transfer-poll-seconds</code>, or every
+<code>mevedel-view-control-transfer-remote-poll-seconds</code> when the session lives on a
+target; each poll reads the lease head, the target clock, and the mailbox, so
+the interval trades handoff latency against time on the one target connection
+the user's own work also needs. The remote default is much longer because that
+cost is real only there, and because a command in flight is also a window in
+which a foreign process sentinel can issue its own remote operation on the same
+connection — see <a href="#transport-reentrancy">Transport reentrancy</a>.</p>
+<p>While a transfer is in flight — a request outstanding on either side — both
+sides poll at <code>mevedel-view-control-transfer-active-poll-seconds</code> instead.
+The idle cadence is chosen for a connection nobody is waiting on, and a
+handoff composes three separate waits: the owner noticing the request, the
+grant deadline, and the requester noticing the release fence. Paying the idle
+interval for each turns a thirty-second handoff into minutes. Both sides
+return to the idle cadence as soon as the transfer settles, so the timer is
+re-armed per tick rather than fixed when the view is set up.</p>
+<p>An unanswered request is granted by the owner's own poll once
+<code>mevedel-session-transfer-prompt-timeout</code> passes, so control can be taken
+from a machine nobody is sitting at. That window runs from the moment the
+owner could first <em>see</em> the request, not from when the requester wrote it: a
+poll interval can be longer than the timeout, and measuring from the
+requester's clock granted requests the owner had never displayed. Worst-case
+latency is therefore one poll interval plus the timeout, and the person at
+the owner always gets the full timeout to press Keep. That requires the owner's Emacs to be
+alive and polling; an owner that has died instead lets its lease expire, and
+the successor takes over through the expired-lease path. Grant is not
+release: the owner still drains, publishes, and releases, so a request
+against a busy owner sits in <code>quiescing</code> until the work it is waiting on
+finishes. Only the owner can say what that work is, so the owner's surface
+names the blocker and the requester's says just that it is waiting.</p>
+<p><code>mevedel-take-control</code> is the one command for the requester's side. It routes
+on lease state: an unheld or expired lease is acquired directly, because
+there is no owner to ask and the lease layer's own confirmation is the whole
+negotiation; a held one is requested. <code>mevedel-release-control</code> is the
+reverse, saving and publishing before the lease goes and leaving the buffer
+read-only and following.</p>
+<p>Entering read-only mode reports itself as a message rather than a warning.
+The buffer states its own authority in the interaction zone and the cockpit
+header for as long as it holds, so a warning window would repeat durably
+visible state and take the frame at the moment the user is watching the
+handoff. A lease that fails to renew or is lost still warns: that is a
+problem, not a transition. Neither side is privileged: the machine that just
+handed control away is a non-owner like any other and can ask for it back.</p>
+<h3 id="following-a-session-owned-elsewhere">Following a session owned elsewhere<a class="headerlink" href="#following-a-session-owned-elsewhere" title="Permanent link">&para;</a></h3>
+<p>A buffer whose session is being written somewhere else — a joined client, or
+a host that has handed control away — advances through the owner's committed
+publications while <code>mevedel-session-follow-published</code> is non-nil, which is
+the default and is read per buffer so one session can opt out through
+<code>mevedel-toggle-follow</code>. <code>mevedel-refresh-session</code> performs the same read on
+demand.</p>
+<p>Updates are per publication, which means whole turns rather than streaming
+tokens: a non-owner sees what the owner has committed, never work in
+progress. The publication head in the lease record names the owner's current
+generation, so an owner that has published nothing new costs one lease
+observation and no artifact reads. When it has advanced, the follower reloads
+the committed sidecar and segment through the same path a granted transfer
+ends with, minus the lease and the write enable. A locally modified buffer is
+never advanced: those edits are exactly what the transfer path refuses to
+discard.
+Like lease renewal, that poll performs no target I/O while another TRAMP
+operation is in progress or while a publication owns the bounded window: Emacs
+runs timers and process filters wherever the main loop waits, including inside
+a TRAMP operation, and the owner poll may itself publish. The next tick
+observes the same durable state once the transport is free.</p>
+<h3 id="transport-reentrancy">Transport reentrancy<a class="headerlink" href="#transport-reentrancy" title="Permanent link">&para;</a></h3>
+<p>Target I/O started while another remote operation is already in flight does not
+merely fail. TRAMP refuses the reentrant call, or the nested command consumes
+the running command's pending output and returns an answer belonging to
+something else — an absent lock reads as present, and durable state derived
+from that is wrong. Every caller reachable from a timer, a process filter, or
+redisplay therefore asks <code>mevedel-transport-busy-p</code> first and defers through
+<code>mevedel-transport-run-when-idle</code>.</p>
+<p>That predicate combines two signals with complementary blind spots. Advice on
+<code>tramp-file-name-handler</code> maintains a dynamic depth counter spanning the whole
+of any operation this Emacs started through a file name, including operations
+belonging to other packages: a mode line that stats a remote file during
+redisplay opens exactly this window. When the outermost handler returns, the
+same advice re-arms package-owned deferral timers created while TRAMP had
+<code>timer-list</code> temporarily bound away; otherwise the pending entry would retain
+a timer that can never fire. TRAMP's own
+per-connection lock property covers callers that reach the connection without
+a handler frame, but only for the instants it is held — TRAMP releases it and
+runs timers between the send and the read, which is the window the depth
+counter exists to see. TRAMP has no global in-operation flag, so a plain
+variable check silently never fires.</p>
+<p>Neither signal sees a remote process on a separate connection, so the predicate
+is necessary rather than sufficient. <code>mevedel-session-control-fs</code> therefore also
+refuses outright, with <code>mevedel-session-control-fs-busy</code>, any control operation
+issued while the transport is busy: a visible failure is recoverable, a
+fabricated answer is not.</p>
+<p>Transport integration follows both package and TRAMP lifecycle. Unloading TRAMP
+cancels deferred work and detaches the handler advice; reloading TRAMP restores
+it while mevedel remains active. <code>mevedel-uninstall</code> cancels the same work and
+keeps later TRAMP reloads detached until <code>mevedel-install</code> runs again; deferred
+producer callbacks arriving in that interval are dropped.</p>
+<p>The predicate only governs this package. It cannot stop the reverse case, which
+is just as destructive: an idle timer belonging to a syntax checker or a mode
+line does not consult it, and TRAMP's wait loop yields to timers with a command
+in flight, so that timer sends its own command on the same connection and
+consumes the reply this session was waiting for — our lease records arrive at
+its parser, and the record we read belongs to it. Control operations, and the
+whole save transaction around them, therefore run inside
+<code>mevedel-transport-with-exclusive-connection</code>, which suspends timers for the
+duration, exactly as TRAMP does around its own critical sections. A timer the
+body arms is re-armed on exit rather than lost, and a <code>with-timeout</code> opened
+inside it still fires, because the bound lists are the ones Emacs consults
+while the body runs; only timers that existed beforehand are held.</p>
+<p>Suspension stops timers, not process sentinels, and that residual is real
+rather than theoretical. <code>accept-process-output</code> with JUST-THIS-ONE suppresses
+other processes' <em>output</em> but still dispatches their status changes, so any
+package that performs remote I/O from a sentinel can still nest inside a
+mevedel command. Observed in practice: projectile advises <code>delete-file</code> to
+invalidate its cache, which resolves a project root — <code>file-truename</code> over the
+connection — whenever a native-compilation job or a syntax checker deletes its
+own local temporary file. TRAMP refuses that nested call, which is the
+outcome the guard exists to produce: the refusal belongs to the intruding
+sentinel and the running command's reply is untouched. Nothing on this side can
+prevent it, so the mitigation is to hold fewer commands in flight, which is why
+the remote control-transfer poll is deliberately slow.</p>
+<p>Each such package can be stopped at its own door, and projectile is worth
+stopping: a remote session hits it on every temporary file any sentinel
+deletes. <code>mevedel-transport--depth</code> is non-zero exactly while a TRAMP
+operation is on the stack, so the intruding work can decline to run there:</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span><span class="nb">with-eval-after-load</span><span class="w"> </span><span class="ss">'projectile</span>
+<span class="w">  </span><span class="p">(</span><span class="nb">define-advice</span><span class="w"> </span><span class="nv">delete-file-projectile-remove-from-cache</span>
+<span class="w">      </span><span class="p">(</span><span class="nb">:around</span><span class="w"> </span><span class="p">(</span><span class="nv">fn</span><span class="w"> </span><span class="nv">filename</span><span class="w"> </span><span class="kp">&amp;optional</span><span class="w"> </span><span class="nv">trash</span><span class="p">)</span><span class="w"> </span><span class="nv">skip-inside-remote-operation</span><span class="p">)</span>
+<span class="w">    </span><span class="p">(</span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="k">and</span><span class="w"> </span><span class="p">(</span><span class="nv">bound-and-true-p</span><span class="w"> </span><span class="nv">mevedel-transport--depth</span><span class="p">)</span>
+<span class="w">             </span><span class="p">(</span><span class="nf">&gt;</span><span class="w"> </span><span class="nv">mevedel-transport--depth</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span>
+<span class="w">        </span><span class="no">nil</span>
+<span class="w">      </span><span class="p">(</span><span class="nf">funcall</span><span class="w"> </span><span class="nv">fn</span><span class="w"> </span><span class="nv">filename</span><span class="w"> </span><span class="nv">trash</span><span class="p">))))</span>
+</code></pre></div>
+<p>The cache update is skipped only inside that window; a delete outside one
+maintains the cache as before, and the entry skipped is stale until the next
+<code>projectile-invalidate-cache</code>.</p>
+<p>Note what the test is <em>not</em>. Whether FILENAME looks remote decides nothing:
+the file a sentinel deletes is typically a local temporary, and it is
+projectile's <em>project root</em> that is remote, so the truename crosses the
+connection however the argument is spelled. The same mistake is available
+inside this package, and the transport's own state is the only reliable
+answer to "will this reach the target".</p>
+<p>Turn settlement is deferred as one unit for the same reason. gptel drives it
+from a process sentinel, which Emacs may dispatch from inside an unrelated
+remote operation. Only the turn commit — the single-use reservation fence,
+which touches no target — runs synchronously there; the publishing steps wait
+for an idle transport. The chain defers whole rather than step by step because
+its order is load-bearing: ending the request follows the autosave, and
+inverting them drops the turn's file-history checkpoints.</p>
+<p>Without a prefix, <code>M-x mevedel</code> lists persisted workspace sessions before
+creating a buffer, after sweeping expired sessions and locks left behind by
+dead Emacsen. Each candidate carries the action its authority produces,
+alongside <code>Start new session</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Lease state</th>
+<th>Label</th>
+<th>Outcome</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>already open in this Emacs</td>
+<td><code>Switch</code></td>
+<td>switch to the live buffer</td>
+</tr>
+<tr>
+<td><code>available</code></td>
+<td><code>Resume</code></td>
+<td>acquire the lease, writable</td>
+</tr>
+<tr>
+<td><code>foreign</code></td>
+<td><code>Join</code></td>
+<td>read-only, following the owner</td>
+</tr>
+<tr>
+<td><code>expired</code></td>
+<td><code>Take over</code></td>
+<td>confirmed takeover</td>
+</tr>
+</tbody>
+</table>
+<p>The verb comes from the lease alone. Whether the workspace is local or
+reached over TRAMP is a property of the client's vantage point, not of the
+session: two machines see one session directory through different path
+spellings, and what decides the outcome is whether anybody is writing it.
+The row's annotation names the machine involved — <code>held by desktop</code>,
+<code>lease expired, was laptop</code> — from the lease record's <code>:host</code>, since the
+client id is opaque and per-process and can only answer "is this me, now".
+A lease written before hosts were recorded reads as unknown, not as an error.</p>
+<p>Joining an active writer opens only its last committed publication and exposes
+<code>Request control</code> in the view. Expired takeover still requires the ordinary
+explicit confirmation. Starting an independent session while another one is
+<em>held</em> — joined or open here, not merely resumable or expired — warns that both
+share project files and points to a Worktree Fork for isolation. An expired
+lease does not warn: its writer is gone, which is the reason that row offers a
+takeover in the first place.</p>
+<p>A failure before the manifest-head compare-and-set retains the current and
+previously retained staged sources as one transient local recovery, surfaces
+<code>Publication pending</code> in session status, and blocks request and mutation
+admission until <code>mevedel-session-publication-retry</code> succeeds or the
+user explicitly runs
+<code>mevedel-session-publication-abandon</code>.  Once the compare-and-set
+succeeds, the transaction is durable even if the final <code>publishing</code> to
+<code>active</code> lease normalization fails: the client fails closed with visible lease
+loss, consumes the transaction sources, and does not create recovery or
+republish the committed bytes.  Normal session-buffer closure and Emacs exit
+are refused while recovery is pending, so releasing a lease cannot silently
+turn the only local recovery into an unreachable temporary directory.
+If publication is queued reentrantly while a live publisher is being released,
+lease release converts the queued and preceding uncommitted batches into the
+same pending-recovery state instead of deleting their staged sources.</p>
+<p>An incomplete portable-project Rewind rollback has a stronger recovery boundary. Before
+the failure is reported, its local repair directory is copied into a unique
+directory below the session's target-side <code>.recovery/</code> control tree and a
+<code>recovery-*.el</code> marker is atomically written last. The marker makes manual
+recovery durable across client loss: restore, lease takeover, and every later
+mutation admission refresh it and remain blocked until the user explicitly
+abandons the recovery. Any client that can inspect the session can therefore
+find the named target-side bytes. The client-local directory is removed only
+after the marker is installed; if target installation fails, it is retained
+and the warning reports both the failed target install and its exact local
+path. Target recovery is not a publication artifact: <code>.recovery/</code> is excluded
+from immutable publications, Rewind materialization, forks, and Save As
+clones. Explicit abandonment is destructive and removes the target marker and
+bytes (or the retained local fallback) while holding the session lease. A
+successful rollback leaves no recovery tree.</p>
+<p>Critical publication changes the owned generation to <code>publishing</code> and reserves
+a one-hour ownership window before each artifact.  Timer callbacks perform no
+target I/O while publication is active, avoiding reentrant TRAMP calls; the
+serialized publisher renews before and immediately after every artifact
+instead.  If one uninterrupted target filesystem operation exceeds that
+window, the next ownership check fails closed and preserves local recovery.
+Another client may take over an expired publishing generation only after an
+explicit prompt warns that a critical write may still be in flight and asks
+the user to confirm that the prior client is stopped.</p>
+<p>The same bounded reservation wrapper covers long synchronous lifecycle I/O,
+such as target-side copy, restore, and rename.  It suppresses timer target I/O
+and checks final ownership but does not itself publish, commit, or drain queued
+artifacts.</p>
+<p>A generation is written on every committed save, so a turn that streamed for a
+minute leaves dozens of them; one day of one session measured 101 generations
+and 67 MB, of which 54 MB was superseded copies of a growing transcript.  A
+settled turn is where the generations that turn published stop being anyone's
+recovery state -- until settlement they are what a crashed owner resumes from,
+and afterwards nothing resolves through them -- so
+<code>mevedel-session-publication-collect-generations</code> runs there, best-effort,
+under the owner's lease.  It also runs when a restore acquires the lease,
+because a turn that never settles -- crash, suspend, lost provider callback
+-- orphans everything it published and settlement never sees it again: one
+real two-day session accumulated 421 collectible generations (366 MB) that
+way.</p>
+<p>A collection pass is complete: every collectible generation is deleted in one
+batched control program (<code>mevedel-session-control-fs-delete-directories</code>),
+so a backlog costs one extra round trip rather than surviving to the next
+settlement.  An earlier per-pass cap of 32, motivated by one-deletion-per-
+program round trips, lost by arithmetic once publications streamed in at
+several per minute.</p>
+<p>Collection reads every published sidecar rather than a recent window,
+because coarse target timestamps make "the newest N generations" an
+unreliable set when several publishes share a second: a generation the
+current head still resolves through could fall outside such a window.
+Manifests and sidecar facts are therefore cached in memory per generation
+path, which a committed generation's immutability makes sound.  Reading
+752 uncached generations measured 17 seconds inside one settlement and
+0.12 once cached, so the cache is what makes the complete scan
+affordable rather than an optimisation.</p>
+<p>Collection is a mark-and-sweep, never an age cap, because manifests are
+chained: a committed manifest carries unchanged entries forward verbatim rather
+than copying their bytes, so a retained head resolves artifacts through the
+generations that first wrote them.  Deleting by age would break the current
+head.  Three kinds of generation are retained: one per distinct settled turn
+state, which is what a restore targets; the newest
+<code>mevedel-session-publication-keep-recent-generations</code> regardless; and the
+reference closure of both.  A generation captured mid-turn is not a settled
+state -- its latest prompt is one turn ahead of its turn count -- so it is
+collectable once its turn settles, and orphaned generations from failed
+publishes fall out of the same closure test.</p>
+<p>The retained count therefore floors above the number of turns rather than at
+it: the measured session collects 88 of 101 generations and keeps 13, because
+retained blobs keep their original directories alive.  Making it exactly one
+directory per turn would mean rewriting each retained head as self-contained,
+which is the copying that carry-forward exists to avoid.</p>
+<p><code>ponytail:</code> collection has no read pins.  The grace window covers the race it
+replaces them for -- a follower re-reads the owner's current head rather than
+pinning it, and the newest generations are retained regardless -- but a reader
+that resolved an older non-boundary head can still lose its bytes, and will see
+a hash or absence failure rather than silent corruption.  Add pins if
+cross-client following of superseded heads ever becomes a real access pattern.</p>
+<p>Terminal retained-agent state in an already-materialized portable project session uses
+the same seam: finalization first updates the in-memory transcript metadata and
+registry, then publishes the agent transcript followed by the session sidecar
+as one batch.  A mid-batch failure therefore leaves one retryable recovery and
+blocks later mutation.  Transcript allocation may shallowly create the session
+directory before the first root turn settles, but the first acknowledged agent
+registry or mailbox mutation forces a full non-fork-point root snapshot.  The
+sidecar therefore exists before mevedel reports the child publication or wakes
+a mailbox consumer; the root turn's later DONE publication still establishes
+its first stable fork point.</p>
+<p>An acknowledged agent mutation refuses reentrant publication queueing: its
+caller returns only after that batch changes the immutable head.  Once the head
+has changed, later lease normalization or buffer save-hook failures are
+diagnostic cleanup failures rather than grounds to roll live agent state back.</p>
+<p>Observational agent persists are not acknowledged mutations.  Activity
+transitions (blocked/waiting flavors and their release) and mailbox
+consumption debounce into one sidecar-only registry save
+(<code>mevedel-session-persistence-save-agent-state-soon</code>, landing as
+<code>mevedel-session-artifacts-save-agent-registry</code>): the sidecar carries the
+agent registry the persist is about, and the transcript segment is committed
+at settlement, so the observational path never saves the segment or scans
+snapshots.  A synchronous acknowledged commit absorbs a pending one, and
+Emacs exit flushes the rest.  Recovery treats every active activity
+identically and mail delivery is at-least-once, so a crash inside the
+debounce window costs at most a stale activity flavor and an
+already-possible re-delivery.  See ADR 0112.</p>
+<p>Diagnostic streams (telemetry, hook, permission, and repair logs) reach a
+remote target as one pinned <code>append</code> operation carrying only the delta;
+republishing the whole file per flush was quadratic in stream size.  The
+append works in place, so a crash mid-operation can tear one trailing line of
+a stream nothing reads at resume.</p>
+<p>Local Fork and Rewind retain their same-filesystem directory transactions and
+rollback trees.  Portable project lifecycle commits use the immutable
+publication head instead.  A portable project fork acquires one fresh child
+lease in hidden staging,
+publishes a complete <code>:replace t</code> child snapshot, then moves the staged tree
+with its <code>.lease/</code> and <code>.publications/</code> control state while the bounded lease is
+reserved.  The child's save path changes immediately and restore retains that
+same generation; it is never released and reacquired at a discoverable path.
+The replacement manifest contains the selected transcript, accepted-plan
+evidence, retained agent transcripts, file-history artifacts, and the current
+<code>artifacts/</code> subtree resolved from the Source's committed manifest, never its
+fixed caches.</p>
+<p>Portable project Rewind does not rename or exchange the session directory.  It
+materializes only logical committed artifacts, excludes <code>.lease/</code> and
+<code>.publications/</code> by construction, restores project files under a bounded lease
+reservation, then commits the complete rewound snapshot with one <code>:replace t</code>
+sidecar marker against the current generation and head.  A pre-commit failure
+revalidates the same authority before rolling project files back.  Incomplete
+rollback fails closed visibly and retains recovery bytes; the control trees
+and current lease generation are never copied, moved, or replaced.</p>
+<p>Portable project Rename reserves the owned lease while moving the whole session tree,
+immediately retargets the bound session to the moved <code>.lease/</code>, refreshes its
+captured immutable paths, and commits the renamed sidecar against the same
+generation and head.  Failure before that head compare-and-set moves the tree
+and in-memory paths back under revalidated authority; failure after it leaves
+the committed rename installed and reports lease loss.</p>
+<p>Portable project Save As captures the parent's current committed publication
+through the <code>mevedel-session-save-as.el</code> transaction while holding its lease.
+That module materializes only the manifest's logical artifacts in hidden child
+staging, acquires a fresh child lease before writing them, commits one complete
+replacement publication, and moves the staged child into discoverability
+before releasing the parent.  Adoption target-verifies that already-owned
+child lease, transfers its exact path, generation, and renewal responsibility
+into the live session, and only then releases the old parent path; it never
+reacquires child authority after live mutation.  The child therefore starts
+with one publication and no copied lease, publication-history, recovery, lock,
+or staging controls; work is proportional to current logical state rather
+than the parent's retained history.  Its in-memory session is built by the same
+explicit slot policy as every Save As path: logical containers are deep-copied,
+the workspace and immutable execution-target identity are shared, and all
+request, queue, publication, transfer, and lease runtime is reset.  Pre-commit
+failure removes staging and leaves
+the parent unchanged.  Once the marker commits, later finalization failure
+retains the independently resumable child and reports the failure instead of
+rolling it back. If the final staging-directory rename itself fails, session
+listing recognizes that hidden committed child by its verified publication;
+the live buffers and lease stay attached to that recoverable path.</p>
+<p>Pending input is live-session state, not sidecar state. Same-turn steering,
+queued follow-ups, their category order and edit state, session-local IDs,
+delivery pause, and failure pause are deliberately transient. Killing and
+resuming a session therefore restores accepted text only through the ordinary
+workspace input history; it does not recreate either pending-input category or
+any delivery state. There is no compatibility migration or queue-size cap.</p>
+<p>Standalone Plan metadata lives in the same sidecar, while its artifacts live
+under <code>local/plans/</code> in the session directory.
+Here/Fresh finalizes the planning segment through the <code>/clear</code> rotation path
+and records a <code>SessionStart(clear)</code> context snapshot.  Here/Summary instead
+uses aggressive root compaction with no preserved tail and records the compact
+handoff in the new segment.  Both contexts then submit the immutable accepted
+path and full plan through the ordinary prompt and request lifecycle.  If
+preparation or request startup fails, the sidecar keeps the accepted artifact,
+selected context, permission mode, model/effort snapshot, canonical skill
+references, implementation instructions, and the first incomplete step for
+<code>mevedel-retry-plan-implementation</code>. It also keeps a completed Summary
+handoff, so retry repeats neither a finished Fresh rotation nor a successful
+summary request.  Direct clears the record after request startup. Goal instead
+stores a reserved Goal ID before preparation and clears the record after the
+matching Goal is durably constructed, before kickoff.</p>
+<p>Plan approval can instead select Worktree/Fresh or Worktree/Summary.  Before acceptance, <code>RET</code>
+collects and validates the branch name; cancelling the minibuffer leaves the
+approval pending.  A dirty source checkout remains eligible, but the approval
+warns that the linked worktree starts at <code>HEAD</code> and excludes uncommitted
+changes.  Preparation never copies, stashes, or applies those changes.
+The source keeps its approval archive, permission mode, and durable retry
+record. The new session inherits the source preset and ordinary Goal budget,
+gets the accepted model/effort snapshot and selected permission mode, and owns a
+byte-identical immutable accepted artifact. Completed Worktree creation and
+target-artifact steps are recorded by target session identity and path, so
+retry restores that same target and does not create another worktree, session,
+or artifact.</p>
+<p>Worktree/Summary runs the same summary producer against the source transcript
+without compacting or rotating it.  The cached handoff converts source-checkout
+file references to repository-relative paths, and the new clean target segment
+stores that summary before the target artifact path, full plan, and Direct
+implementation instruction.  Retry reuses the summary, validated branch,
+worktree, target artifact, accepted model/effort, implementation attachments,
+and selected mode.</p>
+<p>When approval selects Goal instead of Direct, Goal construction happens only
+after the chosen segment, summary, Worktree, target settings, and target-local
+accepted artifact exist. The prepared target session owns the Goal record and
+its relative accepted-plan reference; the source session never owns or
+transfers the Worktree Goal. The first turn stores the full artifact path, plan
+content, and compact kickoff in the target transcript while the rendered view
+uses the short Goal implementation label.</p>
+<p>The source retry record is the durable handoff reservation. Its preallocated
+Goal ID plus the target accepted-plan reference identify a construction that
+survived a crash, allowing retry to reuse it without duplicating the Goal. A
+different unfinished target Goal remains a conflict. A matching Goal restored
+as paused is reactivated without scheduling; the surviving Plan handoff still
+owns the explicit kickoff. Worktree targets keep
+a temporary copy of the kickoff reservation so target input queues locally;
+source input stays in the source session. Here input likewise queues behind the
+kickoff. If kickoff startup fails after Plan recovery is cleared, the target
+Goal is paused and its owned queue remains held for <code>/goal resume</code>.</p>
+<p>The telemetry stream and diagnostics directory are observational artifacts,
+not resumable state. They are append-only within a run and are never consulted
+to restore a session. Because nothing restores from them, a session saved on a
+target keeps its profiler run directory on the client instead — in a per-run
+temporary directory, not <code>diagnostics/</code> — so a multi-megabyte profile never
+crosses the connection. Diagnostics for such a run are consequently not
+portable. See <a href="../telemetry/"><code>telemetry.md</code></a> for the event schema, redaction
+boundary, and profiler procedure.</p>
+<p>The Goal remains in the session sidecar as a strict phase-free record: identity,
+objective, status/reason, token/time/turn accounting, optional budget, optional
+accepted-plan reference, and timestamps. Provider usage is authoritative when
+available; otherwise the request estimator supplies the charge.</p>
+<p>Worktree sessions are ordinary sessions whose <code>:working-directory</code> is a
+Git linked worktree under the same workspace, created by <code>/worktree
+create</code>. Git availability, worktree-command support, and branch validity are
+checked on the session execution target before any worktree state is created.
+The linked checkout and its session remain on that same target, while
+setup-context paths use the target-native spelling. The old session remains
+live; the new session does not inherit active requests, permission queues,
+tasks, retained agents, or transcript history. Unless <code>--clean</code> is used, the
+new data buffer starts with a visible setup-context user turn explaining the
+source session, source directory, worktree directory, branch, purpose, and
+warnings. That turn is not sent automatically.</p>
+<p>When a saved session's working directory no longer exists, it remains visible
+in the resume picker. Resume prompts for an existing replacement inside the
+workspace and persists that directory after the session opens successfully.
+For a Worktree Fork this does not recreate Git state: its original worktree
+path, branch, base commit, and fork type remain origin metadata while its
+current working directory changes. The picker labels the original path as
+missing or the session as retargeted.</p>
+<p>The prompt-index is rebuilt from <code>mevedel-transcript-segments</code>
+over the live segment. Only shared <code>user</code> spans whose real prompt text
+starts outside gptel-owned org tool/reasoning/summary scaffolding become
+rewind entries, so property drawers, compaction summaries, tool glue, and
+stale structural gaps are not offered as user turns. The rebuild is one
+forward pass: the block-depth prefix each span needs is carried along
+rather than recounted from the start of the buffer per turn, which matters
+because the rebuild runs on every settled save and a live segment is
+bounded only by the compaction threshold.</p>
+<p>After mevedel restores persisted bounds, session restoration calls
+<code>mevedel-transcript-normalize-properties</code>. The transcript module reapplies
+properties from its canonical structural ranges; persistence does not parse
+transcript control forms itself.</p>
+<p>Hook execution logs are append-only diagnostics.  The in-memory
+<code>hook-log</code> slot is transient and capped, while <code>hook-log.el</code> keeps the
+session's persisted hook entries as sanitized plists.  It is not read back
+into live session state on resume.  Entries recorded before first
+materialization are backfilled when the session directory is created.</p>
+<p>Permission diagnostics are also append-only. <code>permission-log.el</code> records
+permission queue lifecycle events so transient overlays can be diagnosed after
+a turn or agent is aborted. It is not read
+back into live session state on resume.  Pre-materialization entries wait in
+a transient session queue and flush with the other diagnostic logs.  Failed
+hook, repair, permission, and telemetry appends stay queued and retry after
+the next successful session save; they never block critical publication.
+Portable project diagnostic appends share one reservation only with appends
+owned by the same session and send only their queued delta. A nested flush for
+another session reserves that session's lease independently. A crash may tear
+the final line; failed appends leave the in-memory entries queued.</p>
+<p>For mevedel chat buffers, save-time advice around <code>gptel--save-state</code>
+strips every gptel request-config Org property (<code>GPTEL_BACKEND</code>,
+<code>GPTEL_MODEL</code>, <code>GPTEL_PRESET</code>, <code>GPTEL_SYSTEM</code>, effort, tools, and the
+rest), keeping only <code>GPTEL_BOUNDS</code>. The sidecar is the sole durable
+source of session request configuration; a stale drawer copy would
+otherwise override live buffer-locals through gptel's send advice
+(<code>gptel-org--send-with-props</code>), silently undoing a mid-session model
+change. The same strip runs at chat-buffer init and agent hydration so
+segments persisted with the old format are cleaned on sight. Restored
+sessions rebuild model, effort, and preset from the sidecar
+(<code>mevedel-model-apply-session-policy</code>, <code>mevedel-preset-restore-session</code>).</p>
+<h3 id="resume-contract">Resume contract<a class="headerlink" href="#resume-contract" title="Permanent link">&para;</a></h3>
+<p>On-disk state normally reflects a completed turn boundary. Pending tool calls
+remain non-recoverable. Abort/error teardown is an explicit save boundary after
+prompts, agents, and the current request have been cleared, so resumed sessions
+do not resurrect aborted runtime state. Managed execution registries are
+likewise transient: resume never reattaches an operating-system process. After
+acquiring the session lock, resume queues a model-visible reconciliation
+reminder: prior commands may still run or have partial effects, so the next
+turn must inspect current state and prefer the newest user request. Aborting a
+live root request queues the same reminder before the explicit save boundary.
+ToolScript is the narrow exception to the non-recoverable tool rule: its guest
+machine remains transient, but the sidecar stores the envelope and bounded
+child audit. Resume converts a surviving checkpoint to an interrupted
+ToolScript row, never resumes the script, and commits the repaired segment
+together with clearing the checkpoint. Resume also atomically reconciles
+running Bash rows across the restored segment and its archived predecessors
+before rendering the view. The scan proceeds newest to oldest: a later
+<code>execution-archive</code> or <code>execution-completion</code> record marks an older copy as
+archived/superseded. Structured execution rows in later segments provide the
+same successor evidence, including rows retained in a compacted tail; a row
+with no successor becomes <code>lost</code>.</p>
+<p>An active persisted Goal is restored <code>paused</code>, with an explicit session-resumed
+reason; opening a session never dispatches Goal work. <code>/goal resume</code> is required
+to continue. Rewind preserves session preset settings but clears Goal state.</p>
+<h3 id="archived-segment-inspection">Archived segment inspection<a class="headerlink" href="#archived-segment-inspection" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-view-segments.el</code> owns the ephemeral inspection buffer and switching
+state; <code>mevedel-session-artifacts.el</code> remains the sole owner of segment
+descriptors and bytes. Source-backed expand/collapse state within either
+projection remains owned by <code>mevedel-view-disclosure.el</code>.</p>
+<p>The session cockpit's Navigate submenu projects persisted segments in the
+existing view: <code>[</code> shows the previous segment, <code>]</code> shows the next, and <code>g</code>
+chooses one directly.
+The picker lists the canonical range from segment 1 through the live segment,
+including each segment's latest prompt preview and <code>readable</code>, <code>missing</code>, or
+<code>unreadable</code> status. Adjacent navigation reports the exact broken path instead
+of skipping it; the picker lets the user bypass that segment.</p>
+<p>Each archived projection renders exactly one segment and is read-only. It does
+not merge earlier segments, modify the authoritative data buffer, or become a
+resumable session state. The view remembers cursor, window, and fold state
+ephemerally while moving among segments. The live composer draft remains
+hidden and unchanged, and <code>[Latest]</code> returns to the live segment. Fresh resume
+always starts at latest.</p>
+<p>Live work may continue while an archived segment is displayed. Status,
+interaction, and request-progress chrome stays live, while streaming transcript
+updates wait until the user returns to latest. Live-tip actions such as Send,
+follow-up, Compact, Review, Verify, and slash commands are refused. Fork,
+Rewind, and conversation-variant switching use the historical assistant
+response at point. A successful Rewind returns to latest; cancellation and
+no-op Rewind remain on the archived projection.</p>
+<h3 id="rewind">Rewind<a class="headerlink" href="#rewind" title="Permanent link">&para;</a></h3>
+<p>Rewind removes everything after a boundary, and each entry point places that
+boundary on the side that matches what it names. <code>mevedel-view-rewind-at-point</code>,
+also available as <code>R</code> in the session cockpit, names the assistant response at
+point: that turn is the last one <strong>kept</strong>. <code>mevedel-rewind</code> picks one of the
+user's own prompts across all segments and returns to just <strong>before</strong> it, so
+the prompt and its answer are discarded and it can be asked again -- which is
+the reason to select a prompt at all. The directive <strong>Rewind before this
+implementation...</strong> action is a <code>before</code> boundary for the same reason.</p>
+<p>Coverage is complementary rather than duplicated: the point route reaches every
+boundary that follows a response but cannot empty a session, since no response
+precedes the first prompt, while the prompt picker reaches every boundary before
+a prompt including the first, which is the empty state. Both routes show the
+same impact, name the boundary and both sides of it, and require explicit
+confirmation.</p>
+<p>The Navigate submenu's <code>n</code>/<code>p</code> actions move through rendered displays for
+inspection, while <code>C-n</code>/<code>C-p</code> move through user queries. These navigation actions change
+neither transcript nor session state; Rewind remains a separate explicit
+operation.</p>
+<p>Rewind is an in-place logical transaction. It discards historical transcript
+and managed session state after the boundary, restores every captured working-tree file
+to the state that boundary owned, and keeps the same session identity, name,
+directory, working directory, and lineage. The candidate session state is the
+single place the boundary is decided; the transcript cutoff, instruction
+snapshot pruning, and remote staging pruning all derive their answers from its
+surviving turn count, and the file plan reads a turn's pre-turn checkpoint for a
+<code>before</code> boundary and its post-turn checkpoint for <code>after</code>.
+File-workspace sessions stage and swap a session directory with a rollback
+tree.  Portable project sessions leave the directory and control state in
+place and commit one complete replacement manifest through the owned lease
+head.
+The current free-form <code>artifacts/</code> folder is preserved unchanged: it is durable
+session content like <code>local/</code>, not a turn-indexed snapshot.
+The impact lists the discarded prompt suffix in order, including ordinary chat
+and complete directive turns, alongside restored files and every known gap.
+External working-tree changes to captured files are overwritten. Git HEAD and
+the index are not changed, so the impact identifies staged files whose index
+content will diverge from the restored working tree. Failure before the commit
+point rolls back both session and file changes, including a live transcript
+already replaced during local publication. Portable project rollback first
+revalidates
+the same lease authority and never substitutes fixed session caches for the
+captured manifest. A failed rollback reports every inconsistent path and
+promotes its temporary repair directory to the target-side specialized
+recovery marker and bytes described above; a successful Rewind removes those
+rollback bytes and does not create a recovery tree. Every settled model turn, including the first, owns a durable pre-turn
+checkpoint. The impact marks coverage as complete or lists known gaps; gaps do
+not disable Rewind and are never presented as restored paths. Rewind creates no child session. A portable
+session's superseded head stays published, so <code>mevedel-redo</code> can restore its
+conversation as described below; a PID-lock session has no redo. Existing
+child sessions and worktrees are not removed; children forked after the target
+become detached from the Source's visible history.</p>
+<p>Workspace-owned directive identity is not historical session state. Rewind
+retains each authored directive and its current request, removes only model
+activity at or after the target turn in that execution session, and recomputes
+the lifecycle from what survives. A surviving request edit remains Ready with
+a request-changed qualifier. Subdirectives consumed by discarded successful
+attempts return to their parent from immutable attempt snapshots; subdirectives
+authored later remain current, and neither receives independent activity.
+Historical instruction snapshots restore source presentation only; a source
+file restored by Rewind uses the normal safe anchor reattachment path. The
+directive turn or read-only inspector's Rewind action resolves an
+effectful attempt's exact execution session and pre-turn checkpoint, then uses
+this same Rewind transaction and impact confirmation.</p>
+<p>Only a committed Rewind emits <code>SessionStart(rewind)</code>; it does not emit
+<code>SessionEnd</code>. Any context produced by that event belongs to the next accepted
+prompt. Cancellation, rollback, and an empty impact emit no Rewind lifecycle
+event. Selecting the first prompt in the picker discards that prompt and its
+answer, which empties the session; selecting the latest response at point keeps
+everything and reports an empty impact instead.</p>
+<p>Current session settings survive. Tasks, Goal, retained agents and mailboxes,
+pending Plan state, permission queues, and execution state are cleared because
+they do not have a trustworthy per-turn journal. Session-owned <code>local/</code> is
+deliberately not per-turn state and remains unchanged.</p>
+<p>Rewind refuses while the session has live executions and points the user to
+<code>/ps</code> and <code>/stop</code>; hiding a process behind older history would violate its
+session ownership boundary.</p>
+<p>Rewind and <code>/clear</code> also refuse while either pending-input category is nonempty.
+The user must resolve the entries in the Pending Inputs cockpit or explicitly
+clear them with <code>C-c C-q</code> before a destructive transcript operation.</p>
+<h3 id="redo">Redo<a class="headerlink" href="#redo" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-redo</code>, also available as <code>D</code> in the session cockpit beside
+Rewind's <code>R</code>, restores a portable session's conversation to one of its
+superseded published heads.  The cockpit entry is inapt for a file
+session, which publishes no immutable heads and therefore has nothing to
+restore. Every committed head is immutable, so the state a
+Rewind moved away from is still on disk as a complete, hash-verified
+generation; redo is an exposure of that state rather than a new mechanism.</p>
+<p>The picker lists turn states, not generations. A generation is written on every
+committed save, so <code>mevedel-session-rewind-published-heads</code> groups them by the
+turn count and fork point their published sidecar records, offers the newest
+generation of each state, drops the state the session is already in, and drops
+heads captured mid-turn -- a head whose latest prompt is one turn ahead of its
+turn count restores a half-arrived response, which is a recovery state rather
+than a choice. Rows are labelled with segment, turn, and that turn's prompt
+through <code>mevedel-session-rewind--prompt-label</code>, the same label the Rewind
+picker uses, so undo and redo read as one vocabulary over turns. On the
+measured session this turned 100 generation rows into 5 turn rows.</p>
+<p>Restoring republishes the chosen generation as a <strong>new</strong> committed head under
+the session's reserved lease: the artifacts are materialized into a temporary
+staging root, the staged sidecar becomes the candidate logical state, and the
+whole set is published exactly as a Rewind publishes its replacement. Because
+the restore is an ordinary publication and not a rollback, the head it moves
+away from stays published in turn, so redo composes in both directions instead
+of consuming history. Where a session lives and what it talks to -- save path,
+execution target, working directory -- stays live and is never adopted from the
+snapshot.</p>
+<p>Redo returns the transcript, sidecar state, instruction snapshots, retained
+agent transcripts, and persisted tool results, and it restores captured
+working-tree files in the same transaction. Captured bytes live in published
+<code>file-history</code> artifacts indexed by the sidecar's per-turn snapshots: a Rewind
+trims that index while republishing the bytes, so the head being restored still
+names its own captured file state. Coverage is Rewind's coverage -- uncaptured
+filesystem effects remain -- and workspace directive records a Rewind pruned do
+not come back.</p>
+<p>Because files are involved, redo is a two-phase transaction and follows
+Rewind's ordering. Preparation reads only immutable published bytes, so
+materialization, the file plan, the modified-buffer prompt, and the
+confirmation all run with no lease held. The confirmation names the turns and
+captured files the restore returns, plus any captured file whose current
+contents changed externally and would be overwritten. One reserved-lease
+operation then rechecks that the current head is still the one the caller saw,
+rechecks the confirmed file plan, backs up current contents, and restores the
+files; the head CAS follows, and any failure before it rolls those files back.
+Declining the confirmation mutates nothing.</p>
+<p>A PID-lock file session publishes no immutable heads and therefore has no redo,
+which is why the Rewind confirmation promises conversation and captured-file
+redo for a portable session and none for a file session. Redo refuses under the same
+stable-source conditions as Rewind, and a failed buffer install degrades to a
+warning naming its own frame rather than abandoning the refreshes that follow
+a committed head.</p>
+<h3 id="fork">Fork<a class="headerlink" href="#fork" title="Permanent link">&para;</a></h3>
+<p><code>f</code> in the session cockpit arms a Conversation Fork and <code>F</code> arms a Worktree
+Fork from the settled assistant response at point. Both focus the existing
+composer draft. The interaction row identifies the assistant turn and fork
+type; <code>[Cancel]</code> or <code>C-c C-k</code> disarms it without changing the draft. An empty
+prompt, a local command, a failed syntax or mention preflight, or cancellation
+creates no child.</p>
+<p>The next preflight-valid model-bound submission publishes an ordinary child
+session whose transcript ends at the selected response. Child then emits
+<code>SessionStart(fork)</code> and owns skill expansion, <code>UserPromptSubmit</code>, and the
+request. The draft and its referenced grants transfer from Source at
+publication. A Child hook rejection keeps them in the published child for
+revision without sending a request. The Source transcript, sidecar, lock,
+workflow state, and checkout remain live and unchanged. The child keeps the
+Source working directory and restores no files, so Conversation Fork also
+works outside Git. A sparse <code>fork-provenance</code> reminder regenerates the source
+session, shared working directory, and current-file caveat from durable child
+state; its hidden injection record gives the user a persistent disclosure
+without making the reminder permanent model history.</p>
+<p>Worktree Fork requires Git, its worktree command, and a supported checkout on
+the Source session's execution target. Dependency and repository preflight run
+before a branch or directory is created. It creates a linked worktree at the
+Source checkout's current <code>HEAD</code>, restores captured repository-local
+files from the selected turn before the first prompt, and retargets valid
+repository-local snapshot, permission, grant, and mention paths to the child
+checkout. An unavailable individual backup leaves that child file at <code>HEAD</code>
+and does not block the fork; a one-shot restore report on the child's pending
+reminder FIFO names every such file and every malformed copied path record
+that was dropped. Invalid restoration
+metadata, an unsafe target, or an unreadable required history store still
+aborts. Uncaptured files retain their <code>HEAD</code> contents, uncommitted Source
+changes are not copied, and captured external paths remain shared and
+non-isolated. Sparse fork provenance records the worktree path, branch, base
+commit, and uncaptured-file semantics; the one-shot report carries the
+restored-file count and restoration exceptions. The FIFO is transient, so a
+restart before the first child request can drop the report detail while the
+durable provenance facts remain available for regeneration. Failure outside
+Git never falls back to Conversation Fork.</p>
+<p>The common fork projection copies current model, preset, effort, mode,
+permission, skill, reminder, and hook configuration into independent
+child-owned values. Prompt indexes, file snapshots, skill history, historical
+agent transcripts, and accepted-plan evidence stop at the fork point. Tasks,
+Goal, pending Plan/handoff state, addressable agents and mail, pending inputs,
+requests, interactions, queues, executions, callbacks, logs, caches, and
+one-shot prompt context start empty. Ordinary session-owned local content is
+copied into independent child state rather than shared, but managed
+<code>local/plans/</code> state is projected separately: the mutable current plan and
+unrelated evidence are discarded, and only an accepted artifact that is valid
+at the fork point is preserved. There is no compatibility migration for
+discarded plan state. Only dropped-file grants referenced by the transferred
+draft move to Child.
+The Source's current free-form <code>artifacts/</code> subtree is copied into independent
+child state. Portable forks materialize its committed immutable bytes; PID-lock
+forks copy the physical folder.</p>
+<p>Conversation children use the first unused direct-child name
+<code>&lt;source&gt; · conversation N</code>, receive a normal unique session ID, and can be
+renamed with <code>mevedel-rename-session</code>. Their sidecars retain the Source session
+ID, cumulative fork turn, stable fork-point ID, and <code>conversation</code> fork type.
+Worktree children independently use <code>&lt;source&gt; · worktree N</code>; their branch and
+directory use the first suffix unused by either Git or the workspace's
+<code>.worktrees/</code> directory.</p>
+<p>Once a Fork exists, <code>B</code> switches variants for the exact assistant response at
+point. The shared assistant header also shows a text switch such as
+<code>[⇆ Source · 2 variants]</code>, <code>[⇆ Conversation · 2 variants]</code>, or
+<code>[⇆ Worktree · 2 variants]</code>.  It remains available when the turn is folded.
+With one alternative, <code>RET</code> or <code>mouse-1</code> opens it directly through the normal
+session restore path and positions its view at the same stable fork point.
+With several alternatives, the same action opens a stable chooser ordered
+Source first and then direct Forks oldest to newest. It marks the current
+session without moving it and shows each session identity, working directory,
+latest prompt, sharing status, and Worktree branch/recovery state. Switching
+redraws only source-backed history; each owning view keeps its composer draft
+and the sessions keep their working directories.</p>
+<p>A fork-point group is a star discovered from persisted Source identity plus
+stable fork-point identity; Source stores no child list. A Child cannot fork
+its inherited response again and is directed back to Source, but a later Child
+response can become the Source of a separate group. Deleted, expired, or
+rewound-past variants disappear independently. If Source disappears or no
+longer contains the exact stable point, surviving direct Children remain a
+detached sibling group and Source is omitted. Reusing a descriptive turn number
+cannot reconnect that group.</p>
+<p>Arming <code>F</code> reserves that exact branch and directory. Forking from an existing
+linked worktree creates a sibling under the workspace's <code>.worktrees/</code> directory
+from that checkout's current <code>HEAD</code>. If a later staging or publication step
+fails, the created branch and worktree remain intact and the error reports
+their names plus an exact <code>git worktree remove</code>/<code>git branch -D</code> cleanup
+command. The armed composer keeps the same reservation, draft, and grants;
+retry reports the existing-artifact conflict instead of allocating another
+suffix. Creation rejects symbolic links at the <code>.worktrees/</code> boundary and
+revalidates resolved workspace containment immediately before Git mutation.</p>
+<p>Renaming a materialized session preserves live execution ownership. Retained
+client-local spool paths and target-native remote recovery paths are retargeted
+in their own domains immediately after the session directory moves, before
+process filters can append further output. Session-relative <code>local://</code>
+addresses remain valid within the renamed session even when no new output
+arrives after the move.</p>
+<h3 id="agent-transcripts">Agent transcripts<a class="headerlink" href="#agent-transcripts" title="Permanent link">&para;</a></h3>
+<p>Retained-agent transcript files live under <code>agents/</code>. The sidecar's
+<code>:agent-transcripts</code> alist records presentation metadata for handles and
+terminal transcript inspection. The separate <code>:agent-registry</code> is the
+addressability source of truth; it persists canonical and parent paths, role
+and frozen configuration, activity, unread mailbox, conversation location,
+and internal storage identity, plus each retained agent's latest settled
+payload and terminal outcome when present. The <code>RESULT</code> mailbox remains a
+bounded preview; history addresses use the retained transcript identity.</p>
+<p>On normal resume, a persisted active turn has no surviving provider request.
+Recovery settles it once as interrupted, releases its capacity slot, preserves
+the retained identity, conversation, and unread mail, and queues a canonical
+<code>RESULT</code> for its spawn parent. Read-only attach observes the on-disk state
+without rewriting it.</p>
+<p>Live transcript views render directly from the running agent buffer. They
+do not restore or normalize saved <code>GPTEL_BOUNDS</code> while the agent is
+streaming, because partial reasoning/tool/system blocks may not have their
+closing marker yet. The session property normalizer treats such incomplete
+structural blocks as unclassified text until a complete block is present.
+When repairing persisted metadata, it only reclassifies tool-shaped org
+blocks that already carry a tool <code>gptel</code> property or overlapping non-empty
+<code>GPTEL_BOUNDS</code> tool id; pasted transcript text that happens to contain
+<code>#+begin_tool</code> stays ordinary user/ignored text.</p>
+<h3 id="input-history">Input history<a class="headerlink" href="#input-history" title="Permanent link">&para;</a></h3>
+<p>The view input ring is persisted at
+<code>&lt;workspace-root&gt;/.mevedel/input-history.el</code> when the session is
+writable. Missing files are normal. Corrupt
+files are warned about once, renamed aside, and replaced with an empty
+in-memory ring. Accepting same-turn steering or a queued follow-up records its
+text in this ring immediately, independently of the transient queue state.</p>
+<h3 id="generated-state-excludes">Generated state excludes<a class="headerlink" href="#generated-state-excludes" title="Permanent link">&para;</a></h3>
+<p>When mevedel writes generated workspace state, it best-effort appends
+exact entries to <code>.git/info/exclude</code> instead of ignoring the whole
+<code>.mevedel/</code> tree. In a linked worktree, Git resolves that file to the
+repository's common exclude file. The generated entries are:</p>
+<ul>
+<li><code>/.mevedel/sessions/</code></li>
+<li><code>/.mevedel/tool-results/</code></li>
+<li><code>/.mevedel/input-history.el</code></li>
+<li><code>/.mevedel/media/</code></li>
+<li><code>/.mevedel/plugin-data/</code></li>
+</ul>
+<h3 id="locking">Locking<a class="headerlink" href="#locking" title="Permanent link">&para;</a></h3>
+<p>File-workspace <code>.lock</code> files prevent concurrent edits. Same-host active lock →
+break / read-only / abort prompt; same-host stale lock → prompt to
+break; cross-host → break / read-only / abort prompt. Same-host locks
+are stale when their PID is dead or when the live process start time
+proves PID reuse. If the process start time or lock timestamp cannot be
+verified, the lock stays active.</p>
+<p>Portable project sessions never use client PIDs as liveness authority.  Their <code>.lease/</code>
+directory contains portable generation records with an opaque client id,
+renewal and expiry times, and a diagnostic buffer name.  A record is authority
+only while its timestamps are finite nonnegative numbers: these are file bytes
+another machine wrote, and an infinite expiry would never expire while a NaN
+fails every comparison it is put to, so either one is rejected rather than
+compared.  A new owner exclusively creates the next generation in <code>claiming</code>,
+then activates it only if the immediately preceding live generation is still
+exactly the record it observed.  A generation appearing beside a live owner's
+record without activating does not end that owner's lease, so its renewal
+heartbeat keeps running until another client's claim is actually active.
+Every complete acquire, renewal, and release transaction disables remote file
+caching so an external client's generation is observed consistently.  Renew
+and release can update only their own generation and verify that no newer head
+won.  A successful claim prunes older generations
+best-effort; aborted candidates are ignored and removed best-effort.</p>
+<p>Each generation also carries <code>:publication-head</code>, initially nil and otherwise
+a validated <code>.publications/.../manifest.el</code> session-relative path.  A new
+generation inherits its predecessor's head; renewal, status changes, and
+release preserve it.  The publisher may replace it only through an exact-head
+generation check, so a stale client can update only its older record and
+cannot commit over a newer owner.  The current head can be read uncached before
+a session object exists without acquiring or mutating the lease.</p>
+<p>Each generation also carries the required boolean <code>:unsettled-mutation</code> latch.
+Managed mutation on a portable project target sets it before child launch.
+Renewal, publishing,
+release, and takeover preserve it. Proven settlement clears it by updating the
+exact owned generation only after no other armed mutating record remains; an
+unprovable result keeps it set. A restored owner therefore blocks mutation
+without reconstructing process records, and explicit acknowledgement must
+durably clear the owned generation before transient blocking state is removed.</p>
+<p>The target-side <code>.recovery/</code> marker is independent of lease liveness. Releasing
+or losing a client lease never deletes it, and a successor refreshes it after
+takeover before mutation admission. This preserves manual repair material
+until the successor explicitly confirms destructive abandonment.</p>
+<p>The persisted states are <code>claiming</code>, <code>active</code>, <code>publishing</code>, <code>released</code>, and
+<code>aborted</code>.  Unexpired claiming, active, and publishing records fence other
+clients.  An interrupted claiming or publishing record remains bounded by its
+expiry, and its takeover still requires explicit confirmation.  A non-owner
+may inspect the last published state read-only.  Killing the owning data buffer
+cancels its renewal timer and marks only that client's active or inactive
+publishing generation released; it never interrupts live publication or
+deletes a newer owner's generation.  Retry can normalize the same client's
+still-live publishing generation back to active before reserving a new window.</p>
+<h3 id="auto-cleanup">Auto-cleanup<a class="headerlink" href="#auto-cleanup" title="Permanent link">&para;</a></h3>
+<p><code>mevedel-session-max-age-days</code> (default 30) deletes expired sessions from the
+<code>mevedel</code> session chooser and from <code>kill-emacs-hook</code>, including sessions whose sidecars
+are obsolete, unreadable, or missing. Exit cleanup scans every workspace
+registered during the Emacs invocation before releasing live-session locks.
+Cleanup uses <code>:updated-at</code> when available, otherwise the sidecar or session
+directory modification time. The <code>mevedel-session-keep-recent-count</code>
+(default 3) most-recently-updated sessions are exempt regardless of age:
+the chooser sweeps before any lock is taken, so without this floor a
+long absence would delete the very session the user came back to resume.
+Cleanup skips active locks and is throttled to once per
+workspace per Emacs invocation. Expired session cleanup removes its <code>local/</code>
+scratch directory with the rest of the session. Portable project session
+stores are never auto-cleaned; their portable lease protocol has no deletion
+claim in v1. <code>nil</code> disables local cleanup.</p>
+<h2 id="defcustoms">Defcustoms<a class="headerlink" href="#defcustoms" title="Permanent link">&para;</a></h2>
+<p>All in <code>mevedel-session-persistence.el</code>:</p>
+<ul>
+<li><code>mevedel-sessions-directory</code> (default <code>.mevedel/sessions/</code>)</li>
+<li><code>mevedel-session-max-age-days</code> (default 30)</li>
+<li><code>mevedel-session-keep-recent-count</code> (default 3)</li>
+<li><code>mevedel-file-history-max-snapshot-bytes</code> (default 1 MB)</li>
+<li><code>mevedel-session-lease-seconds</code> (in <code>mevedel-session-durability.el</code>,
+  default 90; renewal runs from a timer that cannot fire inside blocking
+  target I/O, so the owner reclaims its own expired lease)</li>
+<li><code>mevedel-session-lease-renewal-seconds</code> (in
+  <code>mevedel-session-durability.el</code>, default 30)</li>
+<li><code>mevedel-session-follow-published</code> (in
+  <code>mevedel-session-control-transfer.el</code>, default t)</li>
+<li><code>mevedel-view-control-transfer-active-poll-seconds</code> (in
+  <code>mevedel-view-control-transfer.el</code>, default 2)</li>
+<li><code>mevedel-session-publication-lease-seconds</code> (in
+  <code>mevedel-session-durability.el</code>, default 3600)</li>
+<li><code>mevedel-view-input-history-size</code> (in <code>mevedel-view-history.el</code>,
+  default 500)</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "content.action.edit", "search.suggest"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
