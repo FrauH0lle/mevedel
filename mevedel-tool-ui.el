@@ -386,7 +386,7 @@
                    "Reasoning-effort override validated for the model."))
     :async-p t
     :max-result-size 50000
-    :groups (util)
+    :groups (agents)
     :get-name (lambda (args) (plist-get args :task_name))
     :read-only-p t
     :renderer #'mevedel-tool-ui--render-agent)
@@ -399,7 +399,7 @@
                    "Canonical path or relative descendant path.")
            (message string :required
                     "Complete non-empty follow-up task."))
-    :groups (util)
+    :groups (agents)
     :get-name (lambda (args) (plist-get args :target))
     :read-only-p t
     :renderer #'mevedel-tool-ui--render-agent-interaction)
@@ -410,7 +410,7 @@
     :handler #'mevedel-tool-ui--list-agents
     :args ((path_prefix string :optional
                         "Canonical subtree path prefix. Omit to list all."))
-    :groups (util)
+    :groups (agents)
     :read-only-p t
     :renderer #'mevedel-tool-ui--render-list-agents)
   (mevedel-define-tool
@@ -420,7 +420,7 @@
     :handler #'mevedel-tool-ui--interrupt-agent
     :args ((target string :required
                    "Canonical path or relative descendant path."))
-    :groups (util)
+    :groups (agents)
     :read-only-p t
     :renderer #'mevedel-tool-ui--render-interrupt-agent)
   (mevedel-define-tool
@@ -446,7 +446,7 @@
            (message string :required
                     "Message body to deliver."))
     :read-only-p t
-    :groups (util)
+    :groups (agents)
     :renderer #'mevedel-tool-ui--render-agent-interaction)
   (mevedel-define-tool
     :name "WaitAgent"
@@ -458,7 +458,7 @@
                        :minimum 10000 :maximum 3600000))
     :async-p t
     :read-only-p t
-    :groups (util)
+    :groups (agents)
     :renderer #'mevedel-tool-ui--render-wait-agent))
 
 (provide 'mevedel-tool-ui)

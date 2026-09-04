@@ -799,7 +799,7 @@ cover, so the permission step's warning about it is captured here."
     (mevedel-tool--create :name "Bash" :groups '(eval))))
   (should
    (mevedel-pipeline--untracked-filesystem-effects-p
-    (mevedel-tool--create :name "Agent" :groups '(util) :read-only-p t)))
+    (mevedel-tool--create :name "Agent" :groups '(agents) :read-only-p t)))
   (should
    (mevedel-pipeline--untracked-filesystem-effects-p
     (mevedel-tool--create :name "MkDir" :groups '(edit))))

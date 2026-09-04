@@ -331,6 +331,11 @@ freshness, and lifecycle contracts.
 
 Tools carry `:groups`. `(:deferred GROUP)` in a preset's or agent's tool
 list pulls every tool tagged with GROUP into the session's deferred set.
+The implementation preset defers `code`, `web`, `elisp`, `Eval`, and the
+`tasks` and `agents` families. Task tracking and retained-agent
+coordination are idle on most turns, and their eleven schemas cost as much
+as the base system prompt, so they load through `ToolSearch` on demand and
+expire again after the deferred-tool TTL.
 `mevedel-preset-extra-tool-specs` / `mevedel-agent-extra-tool-specs` add
 specs without redefining the preset/agent.
 

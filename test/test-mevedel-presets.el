@@ -355,6 +355,24 @@
                         "StopExecution"))
           (should (member name active))))))
 
+  :doc "defers the task and agent tool families in the implementation preset"
+  (let ((mevedel-preset--registry nil)
+        (gptel--known-presets nil))
+    (mevedel-tools-register)
+    (mevedel--define-presets)
+    (let* ((metadata (mevedel-preset--resolved-metadata 'mevedel-implement))
+           (resolved
+            (mevedel-tool-resolve (plist-get metadata :tool-specs)))
+           (active (mapcar #'mevedel-tool-name (plist-get resolved :active)))
+           (deferred
+            (mapcar #'mevedel-tool-name (plist-get resolved :deferred))))
+      (dolist (name '("TaskCreate" "TaskUpdate" "TaskNote" "TaskList"
+                      "TaskGet" "Agent" "FollowupAgent" "ListAgents"
+                      "InterruptAgent" "SendMessage" "WaitAgent"))
+        (should (member name deferred))
+        (should-not (member name active)))
+      (should (member "ToolSearch" active))))
+
   :doc "makes directive discussion a hard read-only capability"
   (let ((mevedel-preset--registry nil)
         (gptel--known-presets nil))
