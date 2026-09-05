@@ -15,7 +15,7 @@ import {
 } from '@tiptap/y-tiptap';
 import { extensions, schema, seedEmptyText } from './document.mjs';
 import { restore, encode, inspect, putShape, validateShape, validateImage } from './model.mjs';
-import { shapeSVG, definitions, escape, bounds } from './render.mjs';
+import { shapeSVG, definitions, escape, bounds, styleOf, FILLABLE, LINEAR } from './render.mjs';
 const $ = (id) => document.getElementById(id),
   remote = Symbol('remote'),
   local = Symbol('local');
@@ -45,11 +45,30 @@ let tool = 'select',
   selected = new Set(),
   view = [-40, -40, 1000, 650],
   drag = null,
-  ink = '#242424',
-  fill = '#fff1a8',
-  background = 'none',
-  width = 2,
-  lastPresence = 0;
+  lastPresence = 0,
+  refresh = () => {};
+/* Style of the next drawn shape; the panel edits it alongside the selection. */
+const current = {
+  stroke: '#242424',
+  fill: 'none',
+  pattern: 'hachure',
+  width: 2,
+  dash: 'solid',
+  rough: 1,
+  edges: 'round',
+  opacity: 100,
+  fontSize: 24,
+};
+const drawable = ['rect', 'diamond', 'ellipse', 'cylinder', 'sticky', 'arrow', 'line', 'pen', 'text'];
+function applies(key, type) {
+  if (key === 'fill' || key === 'pattern') return FILLABLE.includes(type);
+  if (key === 'edges') return type === 'rect';
+  if (key === 'fontSize') return !LINEAR.includes(type) && type !== 'image';
+  if (key === 'width') return !['text', 'image'].includes(type);
+  if (key === 'dash' || key === 'rough') return !['text', 'pen', 'image'].includes(type);
+  if (key === 'stroke') return type !== 'image';
+  return true;
+}
 const replies = new Map(),
   people = new Map();
 let documentSelection = null;
@@ -214,8 +233,8 @@ function draw() {
         title.textContent = label;
         group.append(title);
       }
-      if (['pen', 'line', 'arrow'].includes(shape.type)) {
-        const hit = group.querySelector('polyline').cloneNode();
+      if (LINEAR.includes(shape.type)) {
+        const hit = group.querySelector('path').cloneNode();
         hit.removeAttribute('marker-end');
         hit.setAttribute('stroke', 'transparent');
         hit.setAttribute('stroke-width', Math.max(shape.width || 2, 14 / scale));
@@ -237,6 +256,7 @@ function draw() {
       return `<rect x="${x - 4}" y="${y - 4}" width="${w + 8}" height="${h + 8}" fill="none" stroke="#6965db" stroke-dasharray="5 3"/><rect data-resize="${escape(s.id)}" x="${x + w - 5}" y="${y + h - 5}" width="10" height="10" fill="white" stroke="#6965db"/>`;
     })
     .join('');
+  refresh();
 }
 function world(event) {
   const p = new DOMPoint(event.clientX, event.clientY).matrixTransform(
@@ -332,6 +352,8 @@ function selectTool(value) {
     .forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tool === value)));
   $('canvas').style.cursor =
     value === 'pan' ? 'grab' : value === 'select' ? 'default' : 'crosshair';
+  if (drawable.includes(value)) selected.clear();
+  draw();
 }
 function button(parent, label, action) {
   const b = document.createElement('button');
@@ -358,7 +380,7 @@ function editText(id) {
     top: `${Math.max(0, point.y)}px`,
     width: `${Math.max(100, Math.min(w * matrix.a, innerWidth - Math.max(0, point.x)))}px`,
     height: `${Math.max(60, h * matrix.a)}px`,
-    fontSize: `${Math.max(16, 16 * matrix.a)}px`,
+    fontSize: `${Math.max(16, (shape.get('fontSize') || 16) * matrix.a)}px`,
   });
   input.hidden = false;
   input.focus();
@@ -464,68 +486,172 @@ function board() {
   properties.className = 'popover';
   properties.innerHTML = '<summary>Style</summary><div class="menu-body"></div>';
   $('tools').append(properties);
-  const stylePanel = properties.lastElementChild;
-  const style = (key, value) => {
+  const panel = properties.lastElementChild;
+  const value = (key) => {
+    for (const s of shapeList()) if (selected.has(s.id) && applies(key, s.type)) return styleOf(s)[key];
+    return current[key];
+  };
+  const style = (key, v) => {
+    current[key] = v;
     doc.transact(() => {
-      for (const id of selected) doc.getMap('shapes').get(id)?.set(key, value);
+      for (const id of selected) {
+        const s = doc.getMap('shapes').get(id);
+        if (s && applies(key, s.get('type'))) s.set(key, v);
+      }
+    }, local);
+    refresh();
+  };
+  const remove = () =>
+    doc.transact(() => {
+      for (const id of selected) doc.getMap('shapes').delete(id);
+    }, local);
+  const reorder = (front) => {
+    const layers = shapeList().map((s) => s.layer || 0),
+      layer = front ? Math.max(...layers) + 1 : Math.min(...layers) - 1;
+    doc.transact(() => {
+      for (const id of selected) doc.getMap('shapes').get(id)?.set('layer', layer);
     }, local);
   };
+  const duplicate = () => {
+    // Copies keep their own geometry; a copied connector no longer follows the originals.
+    const copies = shapeList()
+      .filter((s) => selected.has(s.id))
+      .map(({ from: _from, to: _to, ...s }) => ({
+        ...s,
+        id: crypto.randomUUID(),
+        box: [s.box[0] + 10, s.box[1] + 10, s.box[2], s.box[3]],
+        ...(s.points ? { points: s.points.map(([x, y]) => [x + 10, y + 10]) } : {}),
+      }));
+    if (!copies.length) return;
+    doc.transact(() => copies.forEach((s) => putShape(doc, s)), local);
+    selected = new Set(copies.map((s) => s.id));
+    draw();
+  };
   if (!readOnly) {
-    for (const [label, value, set] of [
-      [
-        'Stroke',
-        ink,
-        (v) => {
-          ink = v;
-          style('stroke', v);
-        },
-      ],
-      [
+    const icon = (inner) => `<svg viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
+    const option = (key, v, label, body) =>
+      `<button type="button" class="opt" data-prop="${key}" data-val="${v}" title="${label}" aria-label="${label}">${body}</button>`;
+    const action = (act, label, body) =>
+      `<button type="button" class="opt" data-act="${act}" title="${label}" aria-label="${label}">${body}</button>`;
+    const swatch = (key, label, color) =>
+      `<button type="button" class="swatch${color === 'none' ? ' transparent' : ''}"${color === 'none' ? '' : ` style="background:${color}"`} data-prop="${key}" data-val="${color}" aria-label="${label}: ${color === 'none' ? 'transparent' : color}"></button>`;
+    const colors = (key, label, list) =>
+      list.map((c) => swatch(key, label, c)).join('') +
+      `<label class="swatch custom" title="Custom ${label.toLowerCase()} colour"><input type="color" data-color="${key}" aria-label="Custom ${label.toLowerCase()} colour"></label>`;
+    const section = (key, title, body) =>
+      `<div class="sec" data-sec="${key}"><h4>${title}</h4><div class="row">${body}</div></div>`;
+    panel.innerHTML =
+      section('stroke', 'Stroke', colors('stroke', 'Stroke', ['#242424', '#e03131', '#2f9e44', '#1971c2', '#7048e8'])) +
+      section('fill', 'Background', colors('fill', 'Background', ['none', '#ffc9c9', '#b2f2bb', '#a5d8ff', '#fff1a8'])) +
+      section(
+        'pattern',
         'Fill',
-        fill,
-        (v) => {
-          background = fill = v;
-          style('fill', v);
-        },
-      ],
-    ]) {
-      const l = document.createElement('label');
-      l.textContent = label;
-      const input = document.createElement('input');
-      input.type = 'color';
-      input.value = value;
-      input.oninput = () => set(input.value);
-      l.append(input);
-      stylePanel.append(l);
-      const swatches = document.createElement('div');
-      swatches.className = 'swatches';
-      for (const color of label === 'Stroke'
-        ? ['#242424', '#e03131', '#2f9e44', '#1971c2', '#7048e8']
-        : ['none', '#ffc9c9', '#b2f2bb', '#a5d8ff', '#fff1a8']) {
-        const swatch = button(swatches, '', () => {
-          set(color);
-          if (color !== 'none') input.value = color;
-        });
-        swatch.style.background =
-          color === 'none'
-            ? 'repeating-conic-gradient(#ddd 0% 25%, white 0% 50%) 0 / 8px 8px'
-            : color;
-        swatch.setAttribute('aria-label', `${label}: ${color === 'none' ? 'transparent' : color}`);
+        option('pattern', 'hachure', 'Hachure', icon('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 12l8-8M4 19 19 4M10 20 20 10" stroke-width="1.3"/>')) +
+          option('pattern', 'cross', 'Cross-hatch', icon('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 12l8-8M4 19 19 4M10 20 20 10M12 4l8 8M5 5l14 14M4 12l8 8" stroke-width="1.3"/>')) +
+          option('pattern', 'solid', 'Solid', icon('<rect x="4" y="4" width="16" height="16" rx="2" fill="currentColor"/>')),
+      ) +
+      section(
+        'width',
+        'Stroke width',
+        [
+          [1, 'Thin', 1.5],
+          [2, 'Bold', 3],
+          [4, 'Extra bold', 5],
+        ]
+          .map(([v, label, w]) => option('width', v, label, icon(`<path d="M5 12h14" stroke-width="${w}"/>`)))
+          .join(''),
+      ) +
+      section(
+        'dash',
+        'Stroke style',
+        option('dash', 'solid', 'Solid', icon('<path d="M5 12h14"/>')) +
+          option('dash', 'dashed', 'Dashed', icon('<path d="M4 12h4M10 12h4M16 12h4"/>')) +
+          option('dash', 'dotted', 'Dotted', icon('<path d="M5 12h.01M9.5 12h.01M14 12h.01M18.5 12h.01" stroke-width="2.4"/>')),
+      ) +
+      section(
+        'rough',
+        'Sloppiness',
+        option('rough', 0, 'Architect', icon('<path d="M4 16 10 8l5 7 5-8"/>')) +
+          option('rough', 1, 'Artist', icon('<path d="M4 16c2-3 3.5-8 6-8s2.5 7 5 7 3-6 5-8"/>')) +
+          option('rough', 2, 'Cartoonist', icon('<path d="M3.5 16c1.5-2 2-9 5-8.5S9 17 12.5 15.5s1-8 3.5-8.5 2 5 4.5 2"/>')),
+      ) +
+      section(
+        'edges',
+        'Edges',
+        option('edges', 'sharp', 'Sharp', icon('<path d="M5 19V5h14"/>')) +
+          option('edges', 'round', 'Round', icon('<path d="M5 19v-8a6 6 0 0 1 6-6h8"/>')),
+      ) +
+      section(
+        'fontSize',
+        'Font size',
+        [
+          [16, 'S'],
+          [24, 'M'],
+          [32, 'L'],
+          [44, 'XL'],
+        ]
+          .map(([v, label]) => option('fontSize', v, `Font size ${label}`, label))
+          .join(''),
+      ) +
+      section('opacity', 'Opacity', '<input type="range" min="0" max="100" step="5" aria-label="Opacity"><output>100</output>') +
+      section(
+        'layers',
+        'Layers',
+        action('back', 'Send to back', icon('<path d="M12 9v12M7.5 16.5l4.5 4.5 4.5-4.5M4 4.5h16M7 8.5h10"/>')) +
+          action('front', 'Bring to front', icon('<path d="M12 15V3M7.5 7.5 12 3l4.5 4.5M4 19.5h16M7 15.5h10"/>')),
+      ) +
+      section(
+        'actions',
+        'Actions',
+        action('dup', 'Duplicate', icon('<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/>')) +
+          action('del', 'Delete', icon('<path d="M4.5 7h15M9.5 7V4.5h5V7m-8 0 1 12.5h9l1-12.5M10 10.5v6M14 10.5v6"/>')),
+      );
+    panel.onclick = (event) => {
+      const b = event.target.closest('[data-prop]');
+      if (b) {
+        const key = b.dataset.prop;
+        style(key, ['width', 'rough', 'fontSize'].includes(key) ? +b.dataset.val : b.dataset.val);
+        return;
       }
-      stylePanel.append(swatches);
-    }
-    const weight = document.createElement('select');
-    weight.setAttribute('aria-label', 'Stroke width');
-    for (const n of [1, 2, 4, 8]) {
-      const o = new Option(`${n}px`, n);
-      o.selected = n === 2;
-      weight.add(o);
-    }
-    weight.onchange = () => {
-      width = +weight.value;
-      style('width', width);
+      const act = event.target.closest('[data-act]')?.dataset.act;
+      if (act === 'front' || act === 'back') reorder(act === 'front');
+      else if (act === 'dup') duplicate();
+      else if (act === 'del') remove();
     };
-    stylePanel.append(weight);
+    for (const input of panel.querySelectorAll('input[data-color]'))
+      input.oninput = () => style(input.dataset.color, input.value);
+    const range = panel.querySelector('input[type=range]');
+    range.oninput = () => style('opacity', +range.value);
+    refresh = () => {
+      const shapes = shapeList().filter((s) => selected.has(s.id));
+      const kinds = new Set(
+        shapes.length ? shapes.map((s) => s.type) : drawable.includes(tool) ? [tool] : [],
+      );
+      const has = (fn) => [...kinds].some(fn);
+      const show = {
+        stroke: has((k) => applies('stroke', k)),
+        fill: has((k) => applies('fill', k)),
+        pattern: has((k) => applies('pattern', k)) && value('fill') !== 'none',
+        width: has((k) => applies('width', k)),
+        dash: has((k) => applies('dash', k)),
+        rough: has((k) => applies('rough', k)),
+        edges: kinds.has('rect'),
+        fontSize: kinds.has('text') || kinds.has('sticky') || shapes.some((s) => s.text),
+        opacity: kinds.size > 0,
+        layers: shapes.length > 0,
+        actions: shapes.length > 0,
+      };
+      properties.hidden = !kinds.size;
+      for (const sec of panel.querySelectorAll('.sec')) sec.hidden = !show[sec.dataset.sec];
+      for (const b of panel.querySelectorAll('[data-prop]'))
+        b.setAttribute('aria-pressed', String(String(value(b.dataset.prop)) === b.dataset.val));
+      for (const input of panel.querySelectorAll('input[data-color]')) {
+        const v = value(input.dataset.color);
+        if (v !== 'none') input.value = v;
+      }
+      range.value = value('opacity');
+      range.nextElementSibling.value = value('opacity');
+    };
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/png,image/jpeg,image/webp';
@@ -615,20 +741,13 @@ function board() {
       if (id) doc.transact(() => doc.getMap('shapes').delete(id), local);
       return;
     }
-    drag = {
-      mode: 'draw',
-      start: point,
-      points: [point],
-      from: id,
-      shape: {
-        id: crypto.randomUUID(),
-        type: tool,
-        box: [...point, 1, 1],
-        stroke: ink,
-        fill: ['rect', 'ellipse', 'diamond', 'cylinder'].includes(tool) ? background : fill,
-        width,
-      },
-    };
+    const shape = { id: crypto.randomUUID(), type: tool, box: [...point, 1, 1] };
+    for (const [key, v] of Object.entries(current)) if (applies(key, tool)) shape[key] = v;
+    if (tool === 'sticky' && shape.fill === 'none') {
+      shape.fill = '#fff1a8';
+      shape.pattern = 'solid';
+    }
+    drag = { mode: 'draw', start: point, points: [point], from: id, shape };
   };
   canvas.onpointermove = (event) => {
     const point = world(event);
@@ -655,8 +774,7 @@ function board() {
         Math.abs(point[0] - drag.start[0]),
         Math.abs(point[1] - drag.start[1]),
       ];
-      if (['pen', 'line', 'arrow'].includes(s.type))
-        s.points = s.type === 'pen' ? drag.points : [drag.start, point];
+      if (LINEAR.includes(s.type)) s.points = s.type === 'pen' ? drag.points : [drag.start, point];
       if (s.type === 'pen') {
         const xs = s.points.map((p) => p[0]),
           ys = s.points.map((p) => p[1]),
@@ -799,9 +917,7 @@ function board() {
     if (readOnly) return;
     if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault();
-      doc.transact(() => {
-        for (const id of selected) doc.getMap('shapes').delete(id);
-      }, local);
+      remove();
     }
     if (event.key === 'Enter' && selected.size === 1) editText([...selected][0]);
     const moves = {
@@ -1086,7 +1202,7 @@ async function start(event) {
   if (item.kind === 'whiteboard') board();
   else documentEditor();
   document.addEventListener('pointerdown', (event) => {
-    document.querySelectorAll('.popover[open]').forEach((menu) => {
+    document.querySelectorAll('.popover[open]:not(#properties)').forEach((menu) => {
       if (!menu.contains(event.target)) menu.open = false;
     });
   });

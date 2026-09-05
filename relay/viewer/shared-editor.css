@@ -180,21 +180,88 @@ header {
   left: 0;
   top: 0;
 }
-#properties input[type='color'] {
-  width: 28px;
-  height: 28px;
-  border: 0;
-  background: none;
-  padding: 0;
+#properties .menu-body {
+  width: 236px;
+  max-height: calc(100dvh - 190px);
+  gap: 12px;
 }
-.swatches {
+.sec {
   display: flex;
-  gap: 7px;
+  flex-direction: column;
+  gap: 6px;
 }
-.swatches button {
-  width: 28px;
-  height: 28px;
+.sec h4 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #75728a;
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: #f2f1f8;
+  font-size: 12px;
+  font-weight: 600;
+}
+.opt svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.swatch {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border: 1px solid #aaa;
+  border-radius: 6px;
+}
+.swatch[aria-pressed='true'] {
+  box-shadow:
+    0 0 0 2px var(--paper),
+    0 0 0 3.5px var(--accent);
+}
+.swatch.transparent {
+  background: repeating-conic-gradient(#ddd 0% 25%, white 0% 50%) 0 / 8px 8px;
+}
+.swatch.custom {
+  overflow: hidden;
+  margin-left: 6px;
+  background: conic-gradient(#e03131, #f08c00, #ffd43b, #2f9e44, #1971c2, #7048e8, #e03131);
+}
+.swatch.custom input {
+  position: absolute;
+  inset: -6px;
+  width: 40px;
+  height: 40px;
+  opacity: 0;
+  cursor: pointer;
+}
+.row input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.row output {
+  width: 30px;
+  font-size: 11px;
+  color: #75728a;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .zoom-tools {
   position: fixed;

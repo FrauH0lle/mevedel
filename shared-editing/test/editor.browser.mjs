@@ -76,14 +76,16 @@ test('editor interaction regressions', async (t) => {
   try {
     await t.test('ellipse interior selects and double click edits its text', async () => {
       const { page, frame } = await open();
-      await frame.locator('#scene ellipse').click({ position: { x: 150, y: 80 }, force: true });
+      await frame
+        .locator('#scene [data-shape="ellipse"] path')
+        .click({ position: { x: 150, y: 80 }, force: true });
       assert.equal(await frame.locator('#selection [data-resize="ellipse"]').count(), 1);
-      await frame.locator('#scene ellipse').dblclick({ force: true });
+      await frame.locator('#scene [data-shape="ellipse"] path').dblclick({ force: true });
       await frame.locator('#shape-text').waitFor({ state: 'visible', timeout: 1000 });
       await frame.locator('#shape-text').fill('Database');
       await page.keyboard.press('Control+Enter');
       assert.equal(await frame.locator('#scene text').textContent(), 'Database');
-      await frame.locator('#scene ellipse').dblclick({ force: true });
+      await frame.locator('#scene [data-shape="ellipse"] path').dblclick({ force: true });
       await frame.locator('#shape-text').fill('Discard');
       await page.keyboard.press('Escape');
       assert.equal(await frame.locator('#scene text').textContent(), 'Database');
@@ -109,19 +111,50 @@ test('editor interaction regressions', async (t) => {
       assert.equal(await frame.locator('#presence text').count(), 1);
       await page.close();
     });
-    await t.test('style palette changes selected shapes and subsequent drawings', async () => {
+    await t.test('style panel changes selected shapes and subsequent drawings', async () => {
       const { page, frame } = await open();
-      await frame.locator('#scene ellipse').click({ force: true });
+      assert.equal(await frame.locator('#properties').isHidden(), true, 'nothing to style');
+      await frame.locator('#scene [data-shape="ellipse"] path').click({ force: true });
       await frame.locator('#properties > summary').click();
-      await frame.getByRole('button', { name: 'Fill: #a5d8ff', exact: true }).click();
-      assert.equal(await frame.locator('#scene ellipse').getAttribute('fill'), '#a5d8ff');
+      const shown = async () =>
+        frame.locator('.sec:not([hidden]) h4').allTextContents();
+      assert.deepEqual(await shown(), [
+        'Stroke',
+        'Background',
+        'Stroke width',
+        'Stroke style',
+        'Sloppiness',
+        'Opacity',
+        'Layers',
+        'Actions',
+      ]);
+      await frame.getByRole('button', { name: 'Background: #a5d8ff', exact: true }).click();
+      assert.equal(
+        await frame.locator('#scene [data-shape="ellipse"] path').first().getAttribute('fill'),
+        '#a5d8ff',
+      );
+      assert.ok((await shown()).includes('Fill'), 'a filled shape offers fill patterns');
+      await frame.getByRole('button', { name: 'Cartoonist', exact: true }).click();
+      assert.equal(await frame.locator('#scene [data-shape="ellipse"] path').count(), 3);
       await frame.getByRole('button', { name: 'Rectangle', exact: true }).click();
+      assert.equal(await frame.locator('.sec[data-sec="edges"]').isHidden(), false);
       const box = await frame.locator('#canvas').boundingBox();
       await page.mouse.move(box.x + 650, box.y + 180);
       await page.mouse.down();
       await page.mouse.move(box.x + 750, box.y + 250);
       await page.mouse.up();
-      assert.equal(await frame.locator('#scene [data-shape] > rect').getAttribute('fill'), '#a5d8ff');
+      const rect = frame.locator('#scene [data-shape]:not([data-shape="ellipse"])');
+      assert.equal(await rect.locator('clipPath').count(), 1, 'the new rectangle is hatched blue');
+      assert.equal(await rect.locator('g > path').getAttribute('stroke'), '#a5d8ff');
+      await frame.getByRole('button', { name: 'Send to back', exact: true }).click();
+      assert.equal(
+        await frame.locator('#scene [data-shape]').first().getAttribute('data-shape'),
+        await rect.getAttribute('data-shape'),
+      );
+      await frame.getByRole('button', { name: 'Duplicate', exact: true }).click();
+      assert.equal(await frame.locator('#scene [data-shape]').count(), 3);
+      await frame.getByRole('button', { name: 'Delete', exact: true }).click();
+      assert.equal(await frame.locator('#scene [data-shape]').count(), 2);
       await page.close();
     });
     await t.test(

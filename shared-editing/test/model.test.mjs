@@ -141,3 +141,41 @@ test('same-property writes converge and deletion defeats an in-flight property e
   assert.equal(inspect(a).content.length, 0);
   [a, b, host].forEach((d) => d.destroy());
 });
+
+test('style properties validate by value and layers order the scene', () => {
+  const doc = create('whiteboard', 'Styles');
+  putShape(doc, {
+    id: 'front',
+    type: 'rect',
+    box: [0, 0, 100, 50],
+    dash: 'dashed',
+    rough: 2,
+    pattern: 'cross',
+    edges: 'sharp',
+    opacity: 40,
+    fontSize: 44,
+    layer: 3,
+  });
+  putShape(doc, { id: 'back', type: 'ellipse', box: [0, 0, 100, 50], layer: -1 });
+  putShape(doc, { id: 'middle', type: 'diamond', box: [0, 0, 100, 50] });
+  assert.deepEqual(
+    inspect(doc).content.map((s) => s.id),
+    ['back', 'middle', 'front'],
+  );
+  for (const bad of [
+    { dash: 'wavy' },
+    { rough: 3 },
+    { pattern: 'dots' },
+    { edges: 'bevel' },
+    { opacity: 101 },
+    { fontSize: 2 },
+    { layer: Infinity },
+    { fontSize: '24' },
+  ])
+    assert.throws(
+      () => putShape(doc, { id: 'bad', type: 'rect', box: [0, 0, 10, 10], ...bad }),
+      /Invalid shape/,
+    );
+  assert.equal(doc.getMap('shapes').has('bad'), false);
+  doc.destroy();
+});

@@ -4,6 +4,23 @@ export const escape = (value) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
   );
+export const FILLABLE = ['rect', 'ellipse', 'diamond', 'cylinder', 'sticky'];
+export const LINEAR = ['arrow', 'line', 'pen'];
+/* Resolved style of a shape: every absent property has one fixed meaning. */
+export function styleOf(s) {
+  return {
+    stroke: s.stroke || '#242424',
+    fill: s.fill || (s.type === 'sticky' ? '#fff1a8' : 'none'),
+    pattern: s.pattern || 'solid',
+    width: s.width || 2,
+    dash: s.dash || 'solid',
+    rough: s.rough || 0,
+    edges: s.edges || 'round',
+    opacity: s.opacity ?? 100,
+    fontSize: s.fontSize || 16,
+    layer: s.layer || 0,
+  };
+}
 export function pathPoints(shape, context) {
   const [x, y, w, h] = shape.box;
   const points = shape.points || [
@@ -28,7 +45,7 @@ export function bounds(shapes, context = shapes) {
     for (const [x, y] of [
       [s.box[0], s.box[1]],
       [s.box[0] + s.box[2], s.box[1] + s.box[3]],
-      ...(['arrow', 'line', 'pen'].includes(s.type) ? pathPoints(s, context) : []),
+      ...(LINEAR.includes(s.type) ? pathPoints(s, context) : []),
     ]) {
       left = Math.min(left, x);
       top = Math.min(top, y);
@@ -37,36 +54,224 @@ export function bounds(shapes, context = shapes) {
     }
   return [left - 30, top - 30, Math.max(100, right - left + 60), Math.max(100, bottom - top + 60)];
 }
+
+
+/* Sloppy geometry. The generator is seeded from the shape id, so every
+   browser and the host PNG draw the same wobble for the same shape. */
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const n = (v) => String(+v.toFixed(2));
+function random(seed) {
+  let a = 0;
+  for (const c of seed) a = (a * 31 + c.charCodeAt(0)) | 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const offset = (length, r) => (r <= 0 ? 0 : (r + 0.18 * r * r) * clamp(length / 100, 0.35, 1.5));
+function line(x1, y1, x2, y2, r, rng, cont) {
+  const dx = x2 - x1,
+    dy = y2 - y1,
+    length = Math.hypot(dx, dy) || 0.001,
+    o = offset(length, r),
+    j = () => (rng() * 2 - 1) * o,
+    nx = -dy / length,
+    ny = dx / length,
+    bow = (rng() * 2 - 1) * o * 0.9;
+  return (
+    (cont ? '' : `M${n(x1 + j() * 0.5)} ${n(y1 + j() * 0.5)}`) +
+    `C${n(x1 + dx * 0.3 + j() * 0.7 + nx * bow)} ${n(y1 + dy * 0.3 + j() * 0.7 + ny * bow)} ${n(x1 + dx * 0.7 + j() * 0.7 + nx * bow)} ${n(y1 + dy * 0.7 + j() * 0.7 + ny * bow)} ${n(x2 + j() * 0.5)} ${n(y2 + j() * 0.5)}`
+  );
+}
+function polygon(pts, r, rng) {
+  return (
+    pts.map((a, i) => line(...a, ...pts[(i + 1) % pts.length], r, rng, i > 0)).join('') + 'Z'
+  );
+}
+function through(pts) {
+  let d = `M${n(pts[0][0])} ${n(pts[0][1])}`;
+  for (let i = 1; i < pts.length - 1; i++)
+    d += `Q${n(pts[i][0])} ${n(pts[i][1])} ${n((pts[i][0] + pts[i + 1][0]) / 2)} ${n((pts[i][1] + pts[i + 1][1]) / 2)}`;
+  return d + `L${n(pts.at(-1)[0])} ${n(pts.at(-1)[1])}`;
+}
+function ellipse(cx, cy, rx, ry, r, rng) {
+  if (r <= 0 || rx < 1 || ry < 1)
+    return `M${n(cx + rx)} ${n(cy)}A${n(rx)} ${n(ry)} 0 1 0 ${n(cx - rx)} ${n(cy)}A${n(rx)} ${n(ry)} 0 1 0 ${n(cx + rx)} ${n(cy)}Z`;
+  const steps = clamp(Math.round((Math.PI * (rx + ry)) / 10), 16, 90) + 3,
+    o = offset(Math.min(rx, ry) * 2, r),
+    ph1 = rng() * Math.PI * 2,
+    ph2 = rng() * Math.PI * 2,
+    k1 = 2 + Math.floor(rng() * 2),
+    k2 = 4 + Math.floor(rng() * 3),
+    a1 = o * (0.55 + rng() * 0.45),
+    a2 = o * 0.35 * rng(),
+    start = rng() * Math.PI * 2,
+    total = Math.PI * 2 + 0.14 + rng() * 0.16,
+    pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const a = start + (total * i) / steps,
+      d = a1 * Math.sin(k1 * a + ph1) + a2 * Math.sin(k2 * a + ph2);
+    pts.push([cx + (rx + d) * Math.cos(a), cy + (ry + d * 0.85) * Math.sin(a)]);
+  }
+  return through(pts);
+}
+function arc(cx, cy, rx, ry, a0, a1, r, rng) {
+  const steps = clamp(Math.round((Math.PI * (rx + ry)) / 12), 8, 60),
+    o = offset(Math.min(rx, ry) * 2, r) * 0.6,
+    pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const a = a0 + ((a1 - a0) * i) / steps,
+      d = (rng() * 2 - 1) * o;
+    pts.push([cx + (rx + d) * Math.cos(a), cy + (ry + d * 0.85) * Math.sin(a)]);
+  }
+  return through(pts);
+}
+function roundRect(x, y, w, h, rad, r, rng) {
+  const o = offset(Math.min(w, h), r) * 0.5,
+    j = () => (rng() * 2 - 1) * o,
+    q = (cx, cy, ex, ey) => `Q${n(cx)} ${n(cy)} ${n(ex)} ${n(ey)}`;
+  return (
+    line(x + rad, y, x + w - rad, y, r, rng, false) +
+    q(x + w + j(), y + j(), x + w + j() * 0.3, y + rad) +
+    line(x + w, y + rad, x + w, y + h - rad, r, rng, true) +
+    q(x + w + j(), y + h + j(), x + w - rad, y + h + j() * 0.3) +
+    line(x + w - rad, y + h, x + rad, y + h, r, rng, true) +
+    q(x + j(), y + h + j(), x + j() * 0.3, y + h - rad) +
+    line(x, y + h - rad, x, y + rad, r, rng, true) +
+    q(x + j(), y + j(), x + rad + j() * 0.3, y + j() * 0.3)
+  );
+}
+const rimRy = (h) => Math.min(16, h * 0.18);
+const sticky = ([x, y, w, h]) => {
+  const lift = Math.min(3, h * 0.06);
+  return [
+    [x + 1, y + lift],
+    [x + w - 2, y],
+    [x + w, y + h - 1],
+    [x, y + h],
+  ];
+};
+/* Outline paths of one shape: the strokes it is drawn with, and its
+   smooth silhouette used for fills. */
+function outline(s, r, rng) {
+  const [x, y, w, h] = s.box;
+  if (s.type === 'ellipse') return [ellipse(x + w / 2, y + h / 2, w / 2, h / 2, r, rng)];
+  if (s.type === 'diamond')
+    return [
+      polygon(
+        [
+          [x + w / 2, y],
+          [x + w, y + h / 2],
+          [x + w / 2, y + h],
+          [x, y + h / 2],
+        ],
+        r,
+        rng,
+      ),
+    ];
+  if (s.type === 'sticky') return [polygon(sticky(s.box), r, rng)];
+  if (s.type === 'cylinder') {
+    const ry = rimRy(h),
+      cx = x + w / 2;
+    if (r <= 0)
+      return [
+        ellipse(cx, y + ry, w / 2, ry, 0, rng),
+        `M${n(x)} ${n(y + ry)}V${n(y + h - ry)}A${n(w / 2)} ${n(ry)} 0 0 0 ${n(x + w)} ${n(y + h - ry)}V${n(y + ry)}`,
+      ];
+    return [
+      ellipse(cx, y + ry, w / 2, ry, r, rng),
+      line(x, y + ry, x, y + h - ry, r, rng, false) +
+        line(x + w, y + ry, x + w, y + h - ry, r, rng, false),
+      arc(cx, y + h - ry, w / 2, ry, 0, Math.PI, r, rng),
+    ];
+  }
+  const rad = Math.min(32, Math.min(w, h) * 0.25);
+  if (styleOf(s).edges === 'round' && Math.min(w, h) > 6)
+    return [
+      r <= 0
+        ? `M${n(x + rad)} ${n(y)}H${n(x + w - rad)}A${n(rad)} ${n(rad)} 0 0 1 ${n(x + w)} ${n(y + rad)}V${n(y + h - rad)}A${n(rad)} ${n(rad)} 0 0 1 ${n(x + w - rad)} ${n(y + h)}H${n(x + rad)}A${n(rad)} ${n(rad)} 0 0 1 ${n(x)} ${n(y + h - rad)}V${n(y + rad)}A${n(rad)} ${n(rad)} 0 0 1 ${n(x + rad)} ${n(y)}Z`
+        : roundRect(x, y, w, h, rad, r, rng),
+    ];
+  return [
+    polygon(
+      [
+        [x, y],
+        [x + w, y],
+        [x + w, y + h],
+        [x, y + h],
+      ],
+      r,
+      rng,
+    ),
+  ];
+}
+function hatch(s, style, rng) {
+  const [x, y, w, h] = s.box,
+    cx = x + w / 2,
+    cy = y + h / 2,
+    R = Math.hypot(w, h) / 2;
+  // ponytail: at most 400 lines per direction, so a board-sized shape stays cheap to draw.
+  const gap = Math.max(6, style.width * 3.4, (2 * R) / 400);
+  let d = '';
+  for (const angle of style.pattern === 'cross' ? [-Math.PI / 4, Math.PI / 4] : [-Math.PI / 4]) {
+    const dx = Math.cos(angle),
+      dy = Math.sin(angle);
+    for (let t = -R - gap + gap * rng(); t <= R + gap; t += gap) {
+      const px = cx - dy * t,
+        py = cy + dx * t;
+      d += line(px - dx * R, py - dy * R, px + dx * R, py + dy * R, style.rough * 0.35, rng, false);
+    }
+  }
+  return d;
+}
 export function shapeSVG(s, shapes) {
   const [x, y, w, h] = s.box,
-    ink = escape(s.stroke || '#242424'),
-    fill = escape(s.fill || (s.type === 'sticky' ? '#fff1a8' : 'none'));
-  const attrs = `stroke="${ink}" fill="${fill}" stroke-width="${s.width || 2}"`;
+    style = styleOf(s),
+    ink = escape(style.stroke),
+    rng = random(s.id),
+    dash =
+      style.dash === 'dashed'
+        ? ` stroke-dasharray="10 ${n(7 + style.width)}"`
+        : style.dash === 'dotted'
+          ? ` stroke-dasharray="1.2 ${n(4.5 + style.width * 1.4)}"`
+          : '';
+  const attrs = `stroke="${ink}" stroke-width="${style.width}" stroke-linecap="round" stroke-linejoin="round"${dash}`;
+  const passes = style.rough > 0 && style.dash === 'solid' ? 2 : 1;
   let body = '';
-  if (s.type === 'ellipse')
-    body = `<ellipse cx="${x + w / 2}" cy="${y + h / 2}" rx="${w / 2}" ry="${h / 2}" ${attrs}/>`;
-  else if (s.type === 'diamond')
-    body = `<polygon points="${x + w / 2},${y} ${x + w},${y + h / 2} ${x + w / 2},${y + h} ${x},${y + h / 2}" ${attrs}/>`;
-  else if (s.type === 'cylinder') {
-    const r = Math.min(h / 4, 20);
-    body = `<path d="M${x},${y + r}a${w / 2},${r} 0 0 1 ${w},0v${h - 2 * r}a${w / 2},${r} 0 0 1 ${-w},0Z" ${attrs}/><ellipse cx="${x + w / 2}" cy="${y + r}" rx="${w / 2}" ry="${r}" ${attrs}/>`;
-  } else if (s.type === 'image')
+  if (s.type === 'image')
     body = `<image href="${escape(s.src)}" x="${x}" y="${y}" width="${w}" height="${h}"/>`;
-  else if (s.type === 'arrow' || s.type === 'line' || s.type === 'pen') {
-    const pts = pathPoints(s, shapes);
-    body = `<polyline points="${pts.map((p) => p.join(',')).join(' ')}" fill="none" stroke="${ink}" stroke-width="${s.width || 2}" stroke-linecap="round" stroke-linejoin="round"${s.type === 'arrow' ? ' marker-end="url(#arrowhead)"' : ''}/>`;
-  } else if (s.type !== 'text')
-    body = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="4" ${attrs}/>`;
+  else if (LINEAR.includes(s.type)) {
+    const pts = pathPoints(s, shapes),
+      marker = s.type === 'arrow' ? ' marker-end="url(#arrowhead)"' : '';
+    if (s.type === 'pen') body = `<path d="${through(pts)}" fill="none" ${attrs}/>`;
+    else
+      for (let p = 0; p < passes; p++)
+        body += `<path d="${pts.map((a, i) => (i ? line(...pts[i - 1], ...a, style.rough, rng, i > 1) : '')).join('')}" fill="none" ${attrs}${p ? '' : marker}/>`;
+  } else if (s.type !== 'text') {
+    const fill = escape(style.fill);
+    if (fill !== 'none') {
+      const silhouette = outline(s, 0, rng).join('');
+      if (style.pattern === 'solid') body += `<path d="${silhouette}" fill="${fill}" stroke="none"/>`;
+      else
+        body += `<clipPath id="clip-${escape(s.id)}"><path d="${silhouette}"/></clipPath><g clip-path="url(#clip-${escape(s.id)})"><path d="${hatch(s, style, rng)}" fill="none" stroke="${fill}" stroke-width="${n(Math.max(1, style.width * 0.6))}" stroke-linecap="round"/></g>`;
+    }
+    for (let p = 0; p < passes; p++)
+      for (const d of outline(s, style.rough, rng)) body += `<path d="${d}" fill="none" ${attrs}/>`;
+  }
   if (s.text) {
-    const centered = !['text', 'arrow', 'line', 'pen'].includes(s.type);
+    const centered = !['text', ...LINEAR].includes(s.type),
+      size = style.fontSize,
+      lead = size * 1.375;
     const lines = s.text.split('\n'),
       tx = centered ? x + w / 2 : x + 10;
-    const ty = centered ? y + h / 2 - (lines.length - 1) * 11 + 6 : y + 24;
-    body += `<text x="${tx}" y="${ty}" text-anchor="${centered ? 'middle' : 'start'}" font-family="Noto Sans, sans-serif" font-size="16" fill="${ink}">${lines
-      .map((line, i) => `<tspan x="${tx}" dy="${i ? 22 : 0}">${escape(line)}</tspan>`)
+    const ty = centered ? y + h / 2 - ((lines.length - 1) * lead) / 2 + size * 0.375 : y + size * 1.5;
+    body += `<text x="${tx}" y="${n(ty)}" text-anchor="${centered ? 'middle' : 'start'}" font-family="Noto Sans, sans-serif" font-size="${size}" fill="${ink}">${lines
+      .map((line, i) => `<tspan x="${tx}" dy="${i ? n(lead) : 0}">${escape(line)}</tspan>`)
       .join('')}</text>`;
   }
-  return `<g data-shape="${escape(s.id)}">${body}</g>`;
+  return `<g data-shape="${escape(s.id)}"${style.opacity < 100 ? ` opacity="${style.opacity / 100}"` : ''}>${body}</g>`;
 }
 export const definitions =
   '<defs><marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>';
