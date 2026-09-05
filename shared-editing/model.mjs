@@ -55,7 +55,7 @@ export function inspect(doc) {
         ? documentJSON(doc)
         : [...doc.getMap('shapes').values()]
             .map(shapeJSON)
-            .sort((a, b) => a.id.localeCompare(b.id)),
+            .sort((a, b) => (a.layer || 0) - (b.layer || 0) || a.id.localeCompare(b.id)),
   };
 }
 export function validateImage(src) {
@@ -165,6 +165,13 @@ export function validateShape(shape) {
     'from',
     'to',
     'src',
+    'dash',
+    'rough',
+    'pattern',
+    'edges',
+    'opacity',
+    'fontSize',
+    'layer',
   ];
   check(
     Object.keys(shape).every((key) => allowed.includes(key)),
@@ -188,6 +195,21 @@ export function validateShape(shape) {
       (Number.isFinite(shape.width) && shape.width >= 1 && shape.width <= 20),
     'Invalid stroke width',
   );
+  const option = (key, values) =>
+    check(shape[key] === undefined || values.includes(shape[key]), `Invalid shape ${key}`);
+  option('dash', ['solid', 'dashed', 'dotted']);
+  option('rough', [0, 1, 2]);
+  option('pattern', ['solid', 'hachure', 'cross']);
+  option('edges', ['sharp', 'round']);
+  const range = (key, low, high) =>
+    check(
+      shape[key] === undefined ||
+        (Number.isFinite(shape[key]) && shape[key] >= low && shape[key] <= high),
+      `Invalid shape ${key}`,
+    );
+  range('opacity', 0, 100);
+  range('fontSize', 4, 400);
+  range('layer', -1e6, 1e6);
   check(
     shape.points === undefined ||
       (Array.isArray(shape.points) &&

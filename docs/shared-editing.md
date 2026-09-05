@@ -50,7 +50,14 @@ movement, Delete, and resizing. Click inside an unfilled shape to select it;
 lines have a wider invisible hit area. Double-click a shape or press Enter
 to type directly in it. Text is shared while typing; blur or Ctrl/Command+Enter
 finishes, and Escape cancels if another writer has not changed that text.
-The **Style** palette changes the selected objects and defaults for new ones.
+The **Style** panel follows the same reference: stroke and background
+colours, hachure/cross/solid fill, stroke width, solid/dashed/dotted strokes,
+sloppiness (architect, artist, cartoonist), sharp or round rectangle edges,
+font size, opacity, layer order, duplicate, and delete. It shows only the
+sections that apply to the selection or the active drawing tool, changes the
+selected objects, and remembers the choices for new ones. Sloppy outlines are
+seeded from the shape id, so every browser and the host's PNG draw the same
+wobble.
 Wheel zoom, zoom buttons, and Fit affect only the local viewport. Images accept PNG, JPEG, and WebP by
 upload or clipboard paste. Arrow endpoints can bind to shapes.
 
