@@ -68,14 +68,57 @@ const hostTokenHeader = "X-Mevedel-Host-Token"
 const viewerContentSecurityPolicy = "default-src 'none'; " +
 	"script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; " +
 	"connect-src 'self'; worker-src 'self'; manifest-src 'self'; " +
-	"object-src 'none'; frame-src 'none'; frame-ancestors 'none'; " +
+	"object-src 'none'; frame-src 'self'; frame-ancestors 'none'; " +
 	"base-uri 'none'; form-action 'none'"
 
 type room struct {
 	host          *websocket.Conn
-	guests        map[uint32]*websocket.Conn
+	guests        map[uint32]*guest
 	subscriptions map[string]pushSubscription
 	nextPeer      uint32
+}
+
+// Each recipient has an independent, bounded writer. A guest that stops
+// reading must not hold up the host's stream to every other participant.
+type guest struct {
+	*websocket.Conn
+	queue chan []byte
+	done  <-chan struct{}
+	stop  context.CancelFunc
+	mu    sync.Mutex
+	bytes int
+}
+
+func (g *guest) enqueue(data []byte) {
+	g.mu.Lock()
+	if g.bytes+len(data) <= 8<<20 {
+		select {
+		case g.queue <- data:
+			g.bytes += len(data)
+			g.mu.Unlock()
+			return
+		default:
+		}
+	}
+	g.mu.Unlock()
+	g.CloseNow()
+}
+
+func (g *guest) writeLoop() {
+	for {
+		select {
+		case <-g.done:
+			return
+		case data := <-g.queue:
+			if send(g.Conn, websocket.MessageBinary, data) != nil {
+				g.CloseNow()
+				return
+			}
+			g.mu.Lock()
+			g.bytes -= len(data)
+			g.mu.Unlock()
+		}
+	}
 }
 
 type relay struct {
@@ -123,6 +166,9 @@ func (rl *relay) mux() *http.ServeMux {
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Content-Security-Policy", viewerContentSecurityPolicy)
+		if r.URL.Path == "/shared-editor.html" {
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; connect-src 'none'; object-src 'none'; frame-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'")
+		}
 		files.ServeHTTP(w, r)
 	}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -194,7 +240,7 @@ func (rl *relay) runHost(id string, c *websocket.Conn) {
 		return
 	}
 	rm := &room{
-		host: c, guests: make(map[uint32]*websocket.Conn),
+		host: c, guests: make(map[uint32]*guest),
 		subscriptions: make(map[string]pushSubscription), nextPeer: 1,
 	}
 	rl.rooms[id] = rm
@@ -214,7 +260,7 @@ func (rl *relay) runHost(id string, c *websocket.Conn) {
 		}
 		peer := binary.BigEndian.Uint32(data)
 		rl.mu.Lock()
-		var targets []*websocket.Conn
+		var targets []*guest
 		if peer == 0 {
 			for _, g := range rm.guests {
 				targets = append(targets, g)
@@ -224,11 +270,7 @@ func (rl *relay) runHost(id string, c *websocket.Conn) {
 		}
 		rl.mu.Unlock()
 		for _, g := range targets {
-			if send(g, websocket.MessageBinary, data) != nil {
-				// The guest's own read loop notices the dead socket and
-				// cleans up; forwarding just stops here.
-				g.Close(websocket.StatusPolicyViolation, "write failed")
-			}
+			g.enqueue(data)
 		}
 	}
 }
@@ -243,9 +285,13 @@ func (rl *relay) runGuest(id string, c *websocket.Conn) {
 	}
 	peer := rm.nextPeer
 	rm.nextPeer++
-	rm.guests[peer] = c
+	ctx, cancel := context.WithCancel(context.Background())
+	g := &guest{Conn: c, queue: make(chan []byte, 64), done: ctx.Done(), stop: cancel}
+	rm.guests[peer] = g
 	host := rm.host
 	rl.mu.Unlock()
+	go g.writeLoop()
+	defer cancel()
 	send(host, websocket.MessageText, controlToHost("peer-joined", peer))
 	defer func() {
 		rl.mu.Lock()
@@ -288,16 +334,23 @@ func (rl *relay) closeRoom(id string, rm *room) {
 		return
 	}
 	delete(rl.rooms, id)
-	guests := make([]*websocket.Conn, 0, len(rm.guests))
+	guests := make([]*guest, 0, len(rm.guests))
 	for _, g := range rm.guests {
 		guests = append(guests, g)
 	}
-	rm.guests = make(map[uint32]*websocket.Conn)
+	rm.guests = make(map[uint32]*guest)
 	rl.mu.Unlock()
+	var closing sync.WaitGroup
 	for _, g := range guests {
-		send(g, websocket.MessageText, roomClosedMsg)
-		g.Close(closeRoomClosed, "room closed")
+		g.stop()
+		closing.Add(1)
+		go func() {
+			defer closing.Done()
+			send(g.Conn, websocket.MessageText, roomClosedMsg)
+			g.Close(closeRoomClosed, "room closed")
+		}()
 	}
+	closing.Wait()
 }
 
 func main() {

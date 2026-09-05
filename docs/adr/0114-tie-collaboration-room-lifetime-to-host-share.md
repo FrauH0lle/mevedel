@@ -26,6 +26,12 @@ even across periods with no guests. Explicitly stopping the share is the
 revocation operation. Artifacts inherit the same room lifetime and need no
 separate retention policy.
 
+Shared whiteboards and documents follow the same access lifetime. Their
+accepted content is durable session state and survives the room; ending a
+share revokes browser access, not the host's original. Unsynchronized browser
+drafts retain a recovery download but do not authorize writes into a later
+share. See [ADR 0120](0120-edit-shared-content-through-the-session-host.md).
+
 ## Decision history
 
 Two real collaboration sessions ended while still in use because the

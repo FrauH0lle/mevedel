@@ -361,7 +361,7 @@
         (should (equal '("ApplyPatch" "Bash" "Glob" "Grep" "Read" "ToolCall" "ToolSearch")
                        (sort active #'string<))))))
 
-  :doc "defers the task and agent tool families in the implementation preset"
+  :doc "defers task, agent, and shared editing tools in the implementation preset"
   (let ((mevedel-preset--registry nil)
         (gptel--known-presets nil))
     (mevedel-tools-register)
@@ -374,7 +374,8 @@
             (mapcar #'mevedel-tool-name (plist-get resolved :discoverable))))
       (dolist (name '("TaskCreate" "TaskUpdate" "TaskNote" "TaskList"
                       "TaskGet" "Agent" "FollowupAgent" "ListAgents"
-                      "InterruptAgent" "SendMessage" "WaitAgent"))
+                      "InterruptAgent" "SendMessage" "WaitAgent"
+                      "SharedRead" "SharedCreate" "SharedEdit"))
         (should (member name deferred))
         (should-not (member name active)))
       (should (member "ToolSearch" active))))

@@ -132,7 +132,9 @@ export MEVEDEL_TEST_PODMAN_VOLUME="$podman_workspace_volume"
 echo "mevedel: remote acceptance diagnostic: the Docker selector is not provisioned here; its journeys skip, and genuine Docker Engine evidence is external."
 echo "mevedel: remote acceptance diagnostic: all aliases and independent clients share this host and container route; physical second-host and distinct-route evidence is external."
 echo "mevedel: remote acceptance diagnostic: ordinary entry and Plan Worktree selection use callable command seams; rendered UI keypress automation is external."
-if [ -n "${MEVEDEL_TEST_REMOTE_TEST:-}" ]; then
+if [ -n "${MEVEDEL_TEST_SHARED_EDITING:-}" ]; then
+    node --no-experimental-webstorage --test shared-editing/test/room.browser.mjs
+elif [ -n "${MEVEDEL_TEST_REMOTE_TEST:-}" ]; then
     selector_home="$scratch/selector-home"
     mkdir -p "$selector_home/.cache" "$selector_home/.config" \
         "$selector_home/.local/share" "$selector_home/.local/state"

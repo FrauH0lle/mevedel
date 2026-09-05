@@ -432,7 +432,8 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
   ;; Read-only preset for discussion/analysis
   (mevedel-define-preset mevedel-discuss
     :description "Read-only tools for code analysis and discussion"
-    :tools (read (:tool "ToolCall") (:tool "ToolSearch")
+    :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
+            (:discoverable read) (:tool "ToolCall") (:tool "ToolSearch")
             (:discoverable code) (:discoverable web))
     :agents ()
     :system (lambda ()
@@ -446,7 +447,9 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
   (mevedel-define-preset mevedel-implement
     :description "Full editing capabilities with patch review workflow"
     :parents (mevedel-discuss)
-    :tools (read edit (:tool "Bash")
+    :tools ((:tool "Read") (:tool "Glob") (:tool "Grep")
+            (:discoverable read)
+            (:tool "ApplyPatch") (:discoverable edit) (:tool "Bash")
             (:tool "ToolSearch") (:tool "ToolCall")
             (:discoverable util)
             (:discoverable (:tool "WriteStdin"))

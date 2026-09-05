@@ -23,6 +23,7 @@
        '("skills/learn" "skills/learn/SKILL.md")
        '("skills/review" "skills/review/SKILL.md")
        '("collaboration" "collaboration/*")
+       '("shared-editing" "shared-editing/host.bundle.mjs" "shared-editing/THIRD-PARTY-NOTICES.txt" "shared-editing/resvg.wasm" "shared-editing/font.ttf" "shared-editing/FONT-LICENSE")
        '("docs" "docs/*.md")
        '("docs/adr" "docs/adr/*.md")
        '("docs/agents" "docs/agents/*.md")

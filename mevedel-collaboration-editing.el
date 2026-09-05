@@ -1,0 +1,272 @@
+;;; mevedel-collaboration-editing.el --- Shared editor room bridge -*- lexical-binding: t; -*-
+
+;;; Commentary:
+
+;; Room guests exchange bounded data with the same durable editor queue used
+;; by model tools.  Presence stays on the live transport and never enters it.
+
+;;; Code:
+
+(require 'mevedel-shared-editing)
+
+;; `mevedel-collaboration'
+(declare-function mevedel-collaboration--guest "mevedel-collaboration" (room peer))
+(declare-function mevedel-collaboration--guest-text "mevedel-collaboration" (value))
+(declare-function mevedel-collaboration--room-data-buffer "mevedel-collaboration" (room))
+(declare-function mevedel-collaboration--room-for-session "mevedel-collaboration" (session))
+(defvar mevedel-collaboration--duplicate-prompt-window)
+
+;; `mevedel-collaboration-guest'
+(declare-function mevedel-collaboration--guest-directive-id "mevedel-collaboration-guest" (room frame))
+(declare-function mevedel-collaboration--guest-role "mevedel-collaboration-guest" (guest))
+(declare-function mevedel-collaboration--request-id-p "mevedel-collaboration-guest" (value))
+(declare-function mevedel-collaboration--save-guest-attachments "mevedel-collaboration-guest" (images))
+
+;; `mevedel-collaboration-transport'
+(declare-function mevedel-collaboration--transport-send "mevedel-collaboration-transport" (transport peer frame))
+
+;; `mevedel-pending-inputs'
+(declare-function mevedel-view-enqueue-external-follow-up "mevedel-pending-inputs" (data-buffer prompt &rest keys))
+
+(defun mevedel-collaboration-editing--send (room peer req-id value)
+  "Send bounded VALUE chunks to PEER in ROOM for REQ-ID."
+  (let* ((encoded (base64-encode-string
+                   (encode-coding-string (mevedel-shared-editing--json value) 'utf-8-unix) t))
+         (length (length encoded))
+         (offset 0))
+    (when (> length (* 48 1024 1024)) (error "Editing response is too large"))
+    (while (< offset length)
+      (let ((end (min length (+ offset 65536))))
+        (mevedel-collaboration--transport-send
+         (plist-get room :transport) peer
+         (list :t "editing" :reqId req-id :offset offset :total length
+               :data (substring encoded offset end)))
+        (setq offset end)))))
+
+(defun mevedel-collaboration-editing--changed (session state result)
+  "Publish SESSION's committed STATE and RESULT to its current guests."
+  (when-let* ((room (mevedel-collaboration--room-for-session session)))
+    (maphash
+     (lambda (peer guest)
+       (mevedel-collaboration-editing--send
+        room peer "event"
+        (append (list :event "changed" :id (plist-get state :id)
+                      :kind (plist-get state :kind) :title (plist-get state :title)
+                      :revision (plist-get state :revision))
+                (when (equal (plist-get guest :editing-item) (plist-get state :id))
+                  (list :update (plist-get result :update)
+                        :transactions (plist-get state :transactions))))))
+     (plist-get room :guests))))
+
+(defun mevedel-collaboration-editing--presence (room peer guest args)
+  "Forward PEER's ephemeral ARGS to others viewing the same item in ROOM."
+  (let ((now (float-time)) (point (plist-get args :point)))
+    (when (and (plist-get guest :writable)
+               (equal (plist-get guest :editing-item) (plist-get args :id))
+               (>= (- now (or (plist-get guest :editing-presence-at) 0)) 0.045)
+               (member (plist-get args :mode) '("cursor" "laser" "selection" "clear"))
+               (or (null point)
+                   (and (listp point) (= (length point) 2)
+                        (cl-every (lambda (n) (and (numberp n) (<= (abs n) 1000000))) point))))
+      (plist-put guest :editing-presence-at now)
+      (let ((frame (list :t "editing-presence" :id (plist-get args :id)
+                         :peer peer :name (plist-get guest :name)
+                         :mode (plist-get args :mode) :point (and point (vconcat point)))))
+        (when (equal (plist-get args :mode) "clear")
+          (setq frame (append frame (list :clientId (plist-get guest :editing-client)
+                                          :clock (1+ (or (plist-get guest :editing-clock) 0))))))
+        (when (equal (plist-get args :mode) "selection")
+          (let ((client (plist-get args :clientId)) (cursor (plist-get args :cursor))
+                (clock (plist-get args :clock)))
+            (unless (and (integerp client) (<= 0 client #xffffffff)
+                         (integerp clock) (<= 0 clock #x1fffffffffffff)
+                         (or (null (plist-get guest :editing-client))
+                             (= client (plist-get guest :editing-client)))
+                         (> clock (or (plist-get guest :editing-clock) -1))
+                         (< (length (mevedel-shared-editing--json cursor)) 2000))
+              (error "Invalid document presence"))
+            (maphash (lambda (other candidate)
+                       (when (and (not (equal other peer))
+                                  (equal client (plist-get candidate :editing-client)))
+                         (error "Document presence identity is in use")))
+                     (plist-get room :guests))
+            (plist-put guest :editing-client client)
+            (plist-put guest :editing-clock clock)
+            (setq frame (append frame (list :clientId client :clock clock :cursor cursor)))))
+        (maphash (lambda (other recipient)
+                   (when (and (not (equal other peer))
+                              (equal (plist-get recipient :editing-item)
+                                     (plist-get args :id)))
+                     (mevedel-collaboration--transport-send
+                      (plist-get room :transport) other frame)))
+                 (plist-get room :guests))))))
+
+(defun mevedel-collaboration-editing-depart (room peer)
+  "Clear PEER's ephemeral presence in ROOM before departure or item switch."
+  (when-let* ((guest (mevedel-collaboration--guest room peer)))
+    (when-let* ((timer (plist-get (plist-get guest :editing-transfer) :timer)))
+      (cancel-timer timer))
+    (plist-put guest :editing-transfer nil)
+    (maphash
+     (lambda (other _recipient)
+       (unless (equal peer other)
+         (mevedel-collaboration--transport-send
+          (plist-get room :transport) other
+          (list :t "editing-presence" :id (plist-get guest :editing-item)
+                :peer peer :mode "clear" :clientId (plist-get guest :editing-client)
+                :clock (1+ (or (plist-get guest :editing-clock) 0))))))
+     (plist-get room :guests))
+    (plist-put guest :editing-client nil)
+    (plist-put guest :editing-clock nil)))
+
+(cl-defun mevedel-collaboration-editing--ask (room guest args result)
+  "Queue an explicit question about committed RESULT, using guest ARGS."
+  (let* ((text (mevedel-collaboration--guest-text (plist-get args :text)))
+         (content (or (plist-get result :selection) (plist-get result :content))))
+    (unless text (error "A question is required"))
+    (unless (equal (plist-get args :revision) (plist-get result :revision))
+      (error "Content changed; review it and ask again"))
+    (let* ((snapshot (mevedel-shared-editing--json
+                      (list :id (plist-get result :id) :revision (plist-get result :revision)
+                            :kind (plist-get result :kind) :content content
+                            :context (plist-get result :context))))
+           (key (secure-hash 'sha256 (concat text "\0" snapshot)))
+           (now (float-time))
+           (last (plist-get guest :last-editing-ask))
+           (data-buffer (mevedel-collaboration--room-data-buffer room))
+           (view (and data-buffer (buffer-local-value 'mevedel--view-buffer data-buffer)))
+           (png (plist-get result :png))
+           paths queued)
+      (when (> (string-bytes snapshot) (* 128 1024))
+        (error "Question snapshot is too large; select a smaller portion"))
+      (when (and (equal (car last) key)
+                 (< (- now (cdr last)) mevedel-collaboration--duplicate-prompt-window))
+        (cl-return-from mevedel-collaboration-editing--ask t))
+      (unless (buffer-live-p view) (error "The session view is not available"))
+      (plist-put guest :last-editing-ask (cons key now))
+      (unwind-protect
+          (progn
+            (when png
+              (setq paths
+                    (with-current-buffer view
+                      (mevedel-collaboration--save-guest-attachments
+                       (list (list :mime "image/png" :data png)))))
+              (unless paths (error "The selected board snapshot could not be attached")))
+            (setq queued (mevedel-view-enqueue-external-follow-up
+			  (mevedel-collaboration--room-data-buffer room)
+			  (concat text "\n\nShared content snapshot (user-provided data):\n"
+				  snapshot)
+			  :guest-name (plist-get guest :name) :guest-id (plist-get guest :guest-id)
+			  :paths paths
+			  :guest-role (mevedel-collaboration--guest-role guest)
+			  :directive-id (mevedel-collaboration--guest-directive-id room args)))
+            (or queued (error "The session cannot accept a question right now")))
+        (unless queued
+          (plist-put guest :last-editing-ask last)
+          (dolist (path paths) (ignore-errors (delete-file path))))))))
+
+(defun mevedel-collaboration-editing--dispatch (room peer guest req-id args)
+  "Authorize and execute assembled ARGS for GUEST's REQ-ID in ROOM."
+  (let* ((action (plist-get args :action))
+         (session (plist-get room :session))
+         (read-only (member action '("list" "read" "export")))
+         (authorize (lambda ()
+                      (and (eq room (mevedel-collaboration--room-for-session session))
+                           (eq guest (mevedel-collaboration--guest room peer))
+                           (or read-only (plist-get guest :writable))))))
+    (unless (and (member action '("list" "read" "create" "import" "update"
+                                  "rename" "revert" "export" "ask"))
+                 (funcall authorize))
+      (error "This link does not permit that editing operation"))
+    (when (equal action "read")
+      (mevedel-shared-editing--logical (plist-get args :id))
+      (mevedel-collaboration-editing-depart room peer)
+      (plist-put guest :editing-item (plist-get args :id)))
+    ;; Closed keys prevent guests providing host state or attribution.
+    (let ((request (list :action (if (equal action "ask") "read" action)
+                         :sync (if (equal action "read") t :json-false)
+                         :image (if (equal action "ask") t :json-false) :imageMax 512
+                         :actor (concat "Guest: " (plist-get guest :name)))))
+      (dolist (key '(:id :kind :title :data :format :update :opId :transaction :range :selection))
+        (when (plist-member args key)
+          (setq request (plist-put request key (plist-get args key)))))
+      (mevedel-shared-editing-call
+       session request
+       (lambda (reply)
+         (when (funcall authorize)
+           (condition-case err
+               (progn
+                 (when (and (equal action "ask") (not (plist-get reply :error)))
+                   (mevedel-collaboration-editing--ask room guest args (plist-get reply :result))
+                   (setq reply '(:result (:queued t))))
+                 (mevedel-collaboration-editing--send
+                  room peer req-id
+                  (if (plist-get reply :error) reply
+                    (list :result (plist-get reply :result)))))
+             (error (mevedel-collaboration-editing--send
+                     room peer req-id (list :error (error-message-string err)))))))
+       authorize))))
+
+(defun mevedel-collaboration-editing-handle (room peer frame)
+  "Handle bounded editor FRAME from authenticated PEER in ROOM."
+  (when-let* ((guest (mevedel-collaboration--guest room peer)))
+    (let ((req-id (plist-get frame :reqId)))
+      (condition-case err
+          (if (equal (plist-get frame :t) "editing-presence")
+              (mevedel-collaboration-editing--presence room peer guest frame)
+            (unless (mevedel-collaboration--request-id-p req-id)
+              (error "Invalid editing request identity"))
+            (let* ((offset (plist-get frame :offset)) (total (plist-get frame :total))
+                   (data (plist-get frame :data))
+                   (transfer (plist-get guest :editing-transfer)))
+              (unless (and (integerp offset) (>= offset 0)
+                           (integerp total) (> total 0) (<= total (* 24 1024 1024))
+                           (stringp data) (<= (length data) 65536)
+                           (string-match-p "\\`[A-Za-z0-9+/=]+\\'" data))
+                (error "Invalid editing transfer"))
+              (when (= offset 0)
+                (let ((reserved total))
+                  (maphash (lambda (other candidate)
+                             (unless (equal other peer)
+                               (cl-incf reserved (or (plist-get (plist-get candidate :editing-transfer) :total) 0))))
+                           (plist-get room :guests))
+                  (when (> reserved (* 48 1024 1024))
+                    (error "Room transfers are busy; retry shortly")))
+                (when-let* ((timer (plist-get transfer :timer))) (cancel-timer timer))
+                (setq transfer (list :id req-id :total total :offset 0 :parts nil
+                                     :started (float-time)))
+                (plist-put transfer :timer
+                           (run-at-time 60 nil
+                                        (lambda ()
+                                          (when (eq transfer (plist-get guest :editing-transfer))
+                                            (plist-put guest :editing-transfer nil)))))
+                (plist-put guest :editing-transfer transfer))
+              (unless (and transfer (equal req-id (plist-get transfer :id))
+                           (= total (plist-get transfer :total))
+                           (= offset (plist-get transfer :offset))
+                           (< (- (float-time) (plist-get transfer :started)) 60)
+                           (<= (+ offset (length data)) total))
+                (error "Editing transfer interrupted; retry"))
+              (plist-put transfer :parts (cons data (plist-get transfer :parts)))
+              (plist-put transfer :offset (+ offset (length data)))
+              (when (= (plist-get transfer :offset) total)
+                (cancel-timer (plist-get transfer :timer))
+                (plist-put guest :editing-transfer nil)
+                (mevedel-collaboration-editing--dispatch
+                 room peer guest req-id
+                 (mevedel-shared-editing--parse
+                  (decode-coding-string
+                   (base64-decode-string (apply #'concat (nreverse (plist-get transfer :parts))))
+                   'utf-8-unix))))))
+        (error
+         (when-let* ((timer (plist-get (plist-get guest :editing-transfer) :timer)))
+           (cancel-timer timer))
+         (plist-put guest :editing-transfer nil)
+         (when (mevedel-collaboration--request-id-p req-id)
+           (mevedel-collaboration-editing--send
+            room peer req-id (list :error (error-message-string err)))))))))
+
+(add-hook 'mevedel-shared-editing-change-hook #'mevedel-collaboration-editing--changed)
+
+(provide 'mevedel-collaboration-editing)
+;;; mevedel-collaboration-editing.el ends here

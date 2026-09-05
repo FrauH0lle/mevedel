@@ -391,7 +391,9 @@ async function main() {
                'new-session-result', 'new-session-name',
                'new-session-prompt',
                'new-session-create', 'new-session-lede',
-               'invites', 'invite-button', 'invite', 'invite-tiers'];
+               'invites', 'invite-button', 'invite', 'invite-tiers',
+               'editing-box', 'editing-items', 'editing-panel', 'editing-body',
+               'editing-title', 'editing-file', 'editing-import', 'editing-close'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element('div')]));
   // The dock is addressed by class, not id, and its height is what the
   // reading-mode fold threshold is measured against.
@@ -489,6 +491,7 @@ async function main() {
     listeners: {},
     addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback); },
     getElementById(id) { return nodes[id]; },
+    querySelectorAll() { return []; },
     querySelector(selector) {
       return selector === '.dock' ? dockNode : null;
     },
@@ -584,6 +587,7 @@ async function main() {
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-agent.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-task.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-session.js', 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync('relay/viewer/viewer-editing.js', 'utf8'), context);
   vm.runInNewContext(fs.readFileSync('relay/viewer/viewer.js', 'utf8'), context);
   assert.equal(tabStorage.get('mevedel-tab-share'), `${roomId}.${ownerSecret}`);
 
@@ -689,6 +693,13 @@ async function main() {
   await deliver({t: 'welcome', proto: 3, readOnly: false, recordCount: 3,
                  commands: [{name: 'plan', kind: 'command', hint: '[prompt]'},
                             {name: 'review', kind: 'skill', hint: '[target]'}]});
+  await waitFor(() => first.sent.length === 2, 'shared item catalog request');
+  const catalogRequest = await unseal(key, first.sent[1]);
+  assert.equal(catalogRequest.t, 'editing');
+  assert.deepEqual(JSON.parse(atob(catalogRequest.data)), {action: 'list'});
+  const catalogReply = btoa(JSON.stringify({result: []}));
+  await deliver({t: 'editing', reqId: catalogRequest.reqId, offset: 0,
+                 total: catalogReply.length, data: catalogReply});
   assert.equal(nodes.composer.hidden, false);
   // Asking for a session needs write authority, nothing more; the owner
   // token only decides whether asking is granted or put to the host.
@@ -879,8 +890,8 @@ async function main() {
   nodes['composer-input'].value = 'check the tests';
   nodes['composer-name'].value = 'roland';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 2, 'sealed prompt');
-  const prompt = await unseal(key, first.sent[1]);
+  await waitFor(() => first.sent.length === 3, 'sealed prompt');
+  const prompt = await unseal(key, first.sent[2]);
   assert.deepEqual(prompt, {t: 'prompt', text: 'check the tests',
                             name: 'roland'});
   assert.equal(nodes['composer-input'].value, '');
@@ -905,8 +916,8 @@ async function main() {
   assert.equal(nodes['queue-state'].hidden, true);
 
   nodes['stop-button'].dispatch('click');
-  await waitFor(() => first.sent.length === 3, 'sealed abort');
-  assert.deepEqual(await unseal(key, first.sent[2]), {t: 'abort'});
+  await waitFor(() => first.sent.length === 4, 'sealed abort');
+  assert.deepEqual(await unseal(key, first.sent[3]), {t: 'abort'});
 
   // Directive-tagged records grow the client-side filter; selecting a
   // directive hides everything outside it, per guest, no round-trips.
@@ -938,14 +949,14 @@ async function main() {
   assert.match(textOf(nodes['composer-scope']), /Refactor the parser/);
   nodes['composer-input'].value = 'and this one?';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 4, 'directive-scoped prompt');
-  assert.equal((await unseal(key, first.sent[3])).directive, 'dir-1');
+  await waitFor(() => first.sent.length === 5, 'directive-scoped prompt');
+  assert.equal((await unseal(key, first.sent[4])).directive, 'dir-1');
   nodes.filter.children[1].dispatch('click'); // Main chat
   assert.equal(nodes['composer-scope'].hidden, true);
   nodes['composer-input'].value = 'main chat';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 5, 'unscoped prompt');
-  assert.equal((await unseal(key, first.sent[4])).directive, undefined);
+  await waitFor(() => first.sent.length === 6, 'unscoped prompt');
+  assert.equal((await unseal(key, first.sent[5])).directive, undefined);
 
   // Activity in a thread the guest is not looking at marks its tab with
   // an unseen dot until the tab is selected.
@@ -981,8 +992,8 @@ async function main() {
   assert.match(textOf(nodes.attachments), /build\.log/);
   nodes['composer-input'].value = 'see the log';
   nodes.composer.dispatch('submit');
-  await waitFor(() => first.sent.length === 6, 'prompt with attachment');
-  const withFile = await unseal(key, first.sent[5]);
+  await waitFor(() => first.sent.length === 7, 'prompt with attachment');
+  const withFile = await unseal(key, first.sent[6]);
   assert.equal(withFile.images.length, 1);
   assert.equal(withFile.images[0].mime, 'text/plain');
   assert.equal(Buffer.from(withFile.images[0].data, 'base64').toString(),
@@ -1050,7 +1061,7 @@ async function main() {
   assert.equal(nodes['agents-done-list'].children.length, 1);
   assert.equal(nodes['session-box'].hidden, false);
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 2 commands · 1 agent · 1 finished · invite');
+               'Session · 2 commands · 1 agent · 1 finished · invite · Shared');
   const agentFetchBefore = first.sent.length;
   nodes.agents.children[0].dispatch('click');
   await waitFor(() => first.sent.length === agentFetchBefore + 1,
@@ -1066,7 +1077,7 @@ async function main() {
   nodes['agent-close'].dispatch('click');
   await deliver({t: 'agents', agents: []});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 2 commands · invite');
+               'Session · 2 commands · invite · Shared');
 
   // The session task list renders as a collapsible summary with one
   // line per task: in-progress first, completed last and counted.
@@ -1097,13 +1108,13 @@ async function main() {
     {path: '/root/worker-1', role: 'worker', status: 'blocked'},
   ]});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 2 commands · 1 agent · 0/1 tasks · 1 omitted · ⚠ 1 active omitted · invite');
+               'Session · 2 commands · 1 agent · 0/1 tasks · 1 omitted · ⚠ 1 active omitted · invite · Shared');
   await deliver({t: 'tasks', total: 1, completed: 0, omitted: 0,
     omittedActive: 0, tasks: [
     {id: 1, subject: 'Still going', status: 'pending'},
   ]});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 2 commands · 1 agent · 0/1 tasks · invite');
+               'Session · 2 commands · 1 agent · 0/1 tasks · invite · Shared');
   assert.equal(nodes['session-summary'].dataset.warning, 'true');
   await deliver({t: 'agents', agents: []});
   assert.equal(nodes['session-summary'].dataset.warning, 'false');
@@ -1111,14 +1122,14 @@ async function main() {
   await deliver({t: 'tasks', total: 0, completed: 0, omitted: 0,
     omittedActive: 0, tasks: []});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 2 commands · invite');
+               'Session · 2 commands · invite · Shared');
   assert.equal(nodes['session-summary'].dataset.warning, 'false');
   // The superseded tasks-only frame is rejected instead of inferred.
   await deliver({t: 'tasks', tasks: [
     {id: 1, subject: 'Legacy task', status: 'pending'},
   ]});
   assert.equal(textOf(nodes['session-summary']),
-               'Session · 2 commands · invite');
+               'Session · 2 commands · invite · Shared');
   assert.equal(nodes['tasks-list'].children.length, 0);
 
   // Routed artifact frames likewise reach the artifact controller.
@@ -1574,7 +1585,13 @@ async function main() {
   skillTurn = findByRecordId(nodes.transcript, 'parity-call');
   assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
   assert.equal(nodes.transcript.children.filter(turn => turn.dataset.recordId === 'parity-call').length, 1);
+  const reconnectSent = sockets[1].sent.length;
   await deliverTo(sockets[1], {t: 'welcome', proto: 3, readOnly: false, recordCount: 1});
+  await waitFor(() => sockets[1].sent.length > reconnectSent, 'reconnected shared item catalog');
+  const reconnectedCatalog = await unseal(key, sockets[1].sent[reconnectSent]);
+  assert.equal(reconnectedCatalog.t, 'editing');
+  await deliverTo(sockets[1], {t: 'editing', reqId: reconnectedCatalog.reqId, offset: 0,
+                             total: catalogReply.length, data: catalogReply});
   await deliverTo(sockets[1], {t: 'snapshot-chunk', final: true, records: [skillRecord]});
   skillTurn = findByRecordId(nodes.transcript, 'parity-call');
   assert.equal(skillTurn.disclosures.get('root').open, true);

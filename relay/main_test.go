@@ -60,6 +60,43 @@ func dial(t *testing.T, srv *httptest.Server, roomID, role string) *websocket.Co
 	return c
 }
 
+func TestSlowGuestDoesNotBlockOtherRecipients(t *testing.T) {
+	rl, srv := startRelay(t)
+	host := dial(t, srv, testRoom, "host")
+	dial(t, srv, testRoom, "guest") // Intentionally never read this connection.
+	expectText(t, host, `{"t":"peer-joined","peer":1}`)
+	fast := dial(t, srv, testRoom, "guest")
+	expectText(t, host, `{"t":"peer-joined","peer":2}`)
+	data := make([]byte, 1<<20)
+	binary.BigEndian.PutUint32(data, 1)
+	for range 24 {
+		if err := send(host, websocket.MessageBinary, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	marker := append([]byte{0, 0, 0, 2}, []byte("committed edit")...)
+	if err := send(host, websocket.MessageBinary, marker); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, received, err := fast.Read(ctx)
+	if err != nil || string(received) != string(marker) {
+		t.Fatalf("healthy recipient blocked: %q, %v", received, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		rl.mu.Lock()
+		_, live := rl.rooms[testRoom].guests[1]
+		rl.mu.Unlock()
+		if !live {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("slow recipient retained after its queue filled")
+}
+
 func TestHostTokenModes(t *testing.T) {
 	push, err := newWebPushSender(newPushHTTPClient())
 	if err != nil {

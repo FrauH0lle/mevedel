@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Shared editor</title>
+    <link rel="stylesheet" href="/shared-editor.css" />
+  </head>
+  <body>
+    <header>
+      <input id="title" aria-label="Item title" maxlength="200" /><span id="saved" role="status"
+        >Opening…</span
+      >
+      <button id="undo" title="Undo your last edit (Ctrl+Z)">Undo</button
+      ><button id="redo">Redo</button>
+      <button id="retry">Retry save</button>
+      <select id="export" aria-label="Download format"></select
+      ><button id="download">Download</button><button id="recovery">Recovery copy</button>
+      <details id="history">
+        <summary>Contributions</summary>
+        <div id="contributions"></div>
+      </details>
+    </header>
+    <div id="tools" role="toolbar" aria-label="Drawing tools"></div>
+    <div id="formatting" role="toolbar" aria-label="Document formatting" hidden></div>
+    <main id="board" hidden>
+      <svg id="canvas" tabindex="0" aria-label="Shared whiteboard">
+        <g id="scene"></g>
+        <g id="selection"></g>
+        <g id="presence"></g>
+      </svg>
+    </main>
+    <main id="document" hidden aria-label="Shared document"></main>
+    <footer>
+      <span id="hint">Select content to ask about it, or ask about the whole item.</span>
+      <form id="ask">
+        <select id="scope" aria-label="Question scope">
+          <option value="whole">Whole item</option>
+          <option value="selection">Selection</option></select
+        ><input
+          id="question"
+          aria-label="Question for the assistant"
+          placeholder="Ask the assistant about this…"
+          maxlength="10000"
+          required
+        /><button>Ask assistant</button>
+      </form>
+    </footer>
+    <dialog id="text-dialog">
+      <form method="dialog">
+        <label>Text<textarea id="shape-text" maxlength="10000" rows="5"></textarea></label
+        ><button value="cancel">Cancel</button><button value="save">Save</button>
+      </form>
+    </dialog>
+    <dialog id="link-dialog">
+      <form method="dialog">
+        <label>Link URL<input id="link-url" type="url" placeholder="https://…" /></label
+        ><button value="cancel">Cancel</button><button value="save">Save</button>
+      </form>
+    </dialog>
+    <script src="/shared-editor.js" defer></script>
+  </body>
+</html>

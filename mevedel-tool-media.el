@@ -575,13 +575,13 @@ SESSION control trusted side-channel lookup."
    ((and media (mevedel-tool-media--supported-p backend media))
     (mevedel-tool-media--envelope-summary result))
    ((and media (not (mevedel-tool-media--model-capable-p media)))
-    (mevedel-tool-media--envelope-summary
-     result
-     "<media omitted: current model does not support this media type>"))
+    (let* ((note "<media omitted: current model does not support this media type>")
+           (summary (mevedel-tool-media--envelope-summary result note)))
+      (if (equal summary result) (concat result "\n" note) summary)))
    (media
-    (mevedel-tool-media--envelope-summary
-     result
-     "<media omitted: backend cannot attach this media type>"))
+    (let* ((note "<media omitted: backend cannot attach this media type>")
+           (summary (mevedel-tool-media--envelope-summary result note)))
+      (if (equal summary result) (concat result "\n" note) summary)))
    (t result)))
 
 (defun mevedel-tool-media-prepare-tool-result
@@ -591,7 +591,7 @@ TOOL-RESULTS-DIR selects persisted media.  SESSION resolves remote durable
 records.  Return
 (MODEL-RESULT . NATIVE-MEDIA)."
   (let* ((original (plist-get tool-call :result))
-         (read-p (equal (plist-get tool-call :name) "Read"))
+         (read-p (member (plist-get tool-call :name) '("Read" "SharedRead")))
          (tool-use-id (plist-get tool-call :id))
          (extracted
           (and read-p tool-use-id (stringp original)
