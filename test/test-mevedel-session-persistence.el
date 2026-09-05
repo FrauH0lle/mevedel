@@ -1587,9 +1587,11 @@
                              (mevedel-session-working-directory
                               mevedel--session))))
             (let* ((summary
-                    (mevedel-session-persistence--read-summary
-                     (mevedel-session-artifacts-sidecar-path
-                      session-dir)))
+                    (plist-get
+                     (mevedel-session-persistence--read-summary
+                      (mevedel-session-artifacts-sidecar-path
+                       session-dir))
+                     :summary))
                    (display
                     (mevedel-session-persistence--format-session-candidate
                      (list :summary summary))))
@@ -2896,8 +2898,9 @@
              ((symbol-function
                'mevedel-session-persistence--sweep-stale-locks)
               #'ignore)
-             ((symbol-function 'mevedel-session-persistence-list-sessions)
-              (lambda (&rest _) (list entry)))
+             ((symbol-function 'mevedel-session-persistence--enumerate-sessions)
+              (lambda (&rest _)
+                (list :sessions (list entry) :incompatible nil)))
              ((symbol-function
                'mevedel-session-persistence--entry-authority)
               (lambda (&rest _) authority))
@@ -2905,7 +2908,7 @@
                'mevedel-session-persistence--format-session-candidate)
               (lambda (&rest _) "main"))
              ((symbol-function
-               'mevedel-session-persistence--ordered-display-collection)
+               'mevedel--ordered-completion-table)
               (lambda (values &rest _) values))
              ((symbol-function 'completing-read)
               (lambda (&rest _) choice))
@@ -2940,13 +2943,171 @@
         (kill-buffer restored))
       (when (file-directory-p root)
         (delete-directory root t))
+      (mevedel-workspace-clear-registry)))
+
+  :doc "inspects an incompatible row without authority reads or restore"
+  (let* ((root (make-temp-file "mevedel-entry-inspect-" t))
+         (workspace
+          (test-mevedel-session-persistence--make-workspace root))
+         (entry '(:kind incompatible :save-path "/old-session/"
+                  :authority-mode pid-lock :status unsupported
+                  :version "v0.5.3" :updated-at "2026-09-01T12-00-00"))
+         (inspection (generate-new-buffer " *mevedel-entry-inspection*"))
+         prompt row)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-session-persistence-cleanup-expired)
+              #'ignore)
+             ((symbol-function
+               'mevedel-session-persistence--sweep-stale-locks)
+              #'ignore)
+             ((symbol-function 'mevedel-session-persistence--enumerate-sessions)
+              (lambda (&rest _)
+                (list :sessions nil :incompatible (list entry))))
+             ((symbol-function
+               'mevedel-session-control-fs-tree-sizes)
+              (lambda (_paths)
+                '((:path "/old-session/" :status ok :value 42))))
+             ((symbol-function 'mevedel-session-rewind-format-relative-time)
+              (lambda (_iso) "4 months"))
+             ((symbol-function
+               'mevedel--ordered-completion-table)
+              (lambda (values &rest _) values))
+             ((symbol-function 'completing-read)
+              (lambda (read-prompt choices &rest _)
+                (setq prompt read-prompt
+                      row (seq-find
+                           (lambda (choice) (string-prefix-p "Inspect" choice))
+                           choices))))
+             ((symbol-function
+               'mevedel-session-persistence--entry-authority)
+              (lambda (&rest _)
+                (ert-fail "Inspect must not calculate resume authority")))
+             ((symbol-function 'mevedel-session-persistence-restore)
+              (lambda (&rest _)
+                (ert-fail "Inspect must not restore a session")))
+             ((symbol-function
+               'mevedel-session-artifacts-inspect-cold-session)
+              (lambda (path mode &optional publication)
+                (should (equal "/old-session/" path))
+                (should (eq 'pid-lock mode))
+                (should-not publication)
+                inspection)))
+          (should
+           (equal (list :action 'inspect :buffer inspection)
+                  (mevedel-session-persistence-choose-entry workspace)))
+          (should (equal "Mevedel session (1 cannot resume): " prompt))
+          (should (string-prefix-p "Inspect    4 months" row))
+          (should (string-suffix-p "/old-session/" row)))
+      (when (buffer-live-p inspection)
+        (kill-buffer inspection))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry)))
+  :doc "lists compatible rows before incompatible ones and keeps their actions"
+  (let* ((root (make-temp-file "mevedel-entry-mixed-" t))
+         (workspace
+          (test-mevedel-session-persistence--make-workspace root))
+         (session '(:save-path "/session/" :summary (:session-name "main")))
+         (incompatible '(:kind incompatible :save-path "/old-session/"
+                         :authority-mode pid-lock :status missing
+                         :diagnostic "Sidecar is missing"))
+         (restored (generate-new-buffer " *mevedel-entry-mixed-restored*"))
+         prompt choices)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-session-persistence-cleanup-expired)
+              #'ignore)
+             ((symbol-function
+               'mevedel-session-persistence--sweep-stale-locks)
+              #'ignore)
+             ((symbol-function 'mevedel-session-persistence--enumerate-sessions)
+              (lambda (&rest _)
+                (list :sessions (list session)
+                      :incompatible (list incompatible))))
+             ((symbol-function 'mevedel-session-control-fs-tree-sizes)
+              (lambda (_paths)
+                '((:path "/old-session/" :status failed))))
+             ((symbol-function
+               'mevedel-session-persistence--entry-authority)
+              (lambda (&rest _) '(:action "Resume" :detail nil :held nil)))
+             ((symbol-function
+               'mevedel-session-persistence--format-session-candidate)
+              (lambda (&rest _) "main"))
+             ((symbol-function 'mevedel--ordered-completion-table)
+              (lambda (values &rest _) values))
+             ((symbol-function 'completing-read)
+              (lambda (read-prompt read-choices &rest _)
+                (setq prompt read-prompt
+                      choices read-choices)
+                (nth 1 read-choices)))
+             ((symbol-function 'mevedel-session-artifacts-inspect-cold-session)
+              (lambda (&rest _)
+                (ert-fail "A compatible row must not be inspected")))
+             ((symbol-function 'mevedel-session-persistence-restore)
+              (lambda (path &rest _)
+                (should (equal "/session/" path))
+                restored)))
+          (should (eq restored
+                      (mevedel-session-persistence-choose-entry workspace)))
+          (should (equal "Mevedel session (1 cannot resume): " prompt))
+          (should (equal '("Start new session" "Resume     main")
+                         (seq-take choices 2)))
+          (should (string-match-p
+                   "\\`Inspect .*size unavailable.*/old-session/\\'"
+                   (nth 2 choices)))
+          (should (= 3 (length choices))))
+      (when (buffer-live-p restored)
+        (kill-buffer restored))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry)))
+  :doc "keeps a non-inspectable incompatible row visible and fails closed"
+  (let* ((root (make-temp-file "mevedel-entry-refuse-inspect-" t))
+         (workspace
+          (test-mevedel-session-persistence--make-workspace root))
+         (entry '(:kind incompatible :save-path "/mixed-session/"
+                  :authority-mode pid-lock :status undiscoverable
+                  :diagnostic "mixed authority")))
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-session-persistence-cleanup-expired)
+              #'ignore)
+             ((symbol-function
+               'mevedel-session-persistence--sweep-stale-locks)
+              #'ignore)
+             ((symbol-function 'mevedel-session-persistence--enumerate-sessions)
+              (lambda (&rest _)
+                (list :sessions nil :incompatible (list entry))))
+             ((symbol-function 'mevedel-session-control-fs-tree-sizes)
+              (lambda (&rest _)
+                (signal 'file-error '("Injected sizing failure"))))
+             ((symbol-function
+               'mevedel--ordered-completion-table)
+              (lambda (values &rest _) values))
+             ((symbol-function 'completing-read)
+              (lambda (_prompt choices &rest _)
+                (car (seq-filter
+                      (lambda (choice) (string-prefix-p "Inspect" choice))
+                      choices))))
+             ((symbol-function
+               'mevedel-session-artifacts-inspect-cold-session)
+              (lambda (&rest _)
+                (ert-fail "Unsafe inspection must not read a transcript"))))
+          (let ((err
+                 (should-error
+                  (mevedel-session-persistence-choose-entry workspace)
+                  :type 'user-error)))
+            (should (string-match-p "not safely inspectable" (cadr err)))))
+      (when (file-directory-p root)
+        (delete-directory root t))
       (mevedel-workspace-clear-registry))))
 
 
 (mevedel-deftest mevedel-session-persistence--control-artifacts ()
   ,test
   (test)
-  :doc "a failed optional probe is not treated as proof of absence"
+  :doc "retains a failed optional probe without treating it as absence"
   (let* ((root (make-temp-file "mevedel-control-artifacts-" t))
          (entry (file-name-concat root "session"))
          (lock (file-name-concat entry ".lock"))
@@ -2955,13 +3116,158 @@
         (progn
           (make-directory entry)
           (make-symbolic-link "missing" lock)
-          (should-error
-           (mevedel-session-persistence--control-artifacts (list entry))
-           :type 'file-error)
+          (let* ((observed
+                  (mevedel-session-persistence--control-artifacts (list entry)))
+                 (results (cdr (assoc entry observed))))
+            (should (eq 'failed (plist-get (car results) :status))))
           (should-not
            (member (mevedel-session-control-fs-physical-path entry)
                    (car mevedel-session-durability--asserted-directories))))
       (delete-directory root t))))
+
+
+(mevedel-deftest mevedel-session-persistence--format-incompatible-candidate ()
+  ,test
+  (test)
+  :doc "renders age, size, reason, and absolute path in fixed columns"
+  (cl-letf (((symbol-function 'mevedel-session-rewind-format-relative-time)
+             (lambda (_iso) "8 months")))
+    (should
+     (equal "8 months      size unavailable  missing: Sidecar is missing  /old/"
+            (mevedel-session-persistence--format-incompatible-candidate
+             '(:status missing :diagnostic "Sidecar is missing"
+               :updated-at "2026-01-01T00-00-00" :save-path "/old/"))))
+    (should
+     (equal "8 months      1.5M              unsupported version missing  /old/"
+            (mevedel-session-persistence--format-incompatible-candidate
+             '(:status unsupported :size 1572864 :save-path "/old/"))))
+    (should
+     (string-suffix-p
+      "obsolete: Sidecar lacks :session-id  /old/"
+      (mevedel-session-persistence--format-incompatible-candidate
+       '(:status obsolete :diagnostic "Sidecar lacks :session-id"
+         :save-path "/old/"))))))
+
+
+(mevedel-deftest mevedel-session-persistence--observed-update-time ()
+  ,test
+  (test)
+  :doc "prefers a parseable stamp, then the sidecar mtime, then the directory"
+  (let* ((root (make-temp-file "mevedel-update-time-" t))
+         (sidecar (file-name-concat root "session.meta.el"))
+         (stamp "2026-03-04T05-06-07"))
+    (unwind-protect
+        (progn
+          (should (equal (mevedel-session-persistence-parse-iso-time stamp)
+                         (mevedel-session-persistence--observed-update-time
+                          stamp sidecar root)))
+          (should (time-equal-p
+                   (file-attribute-modification-time (file-attributes root))
+                   (mevedel-session-persistence--observed-update-time
+                    "garbage" sidecar root)))
+          (with-temp-file sidecar (insert "(:version \"v0.0.0\")"))
+          (set-file-times sidecar (encode-time '(0 0 0 1 1 2020 nil nil t)))
+          (should (time-equal-p
+                   (encode-time '(0 0 0 1 1 2020 nil nil t))
+                   (mevedel-session-persistence--observed-update-time
+                    nil sidecar root)))
+          (should-not (mevedel-session-persistence--observed-update-time
+                       nil nil (file-name-concat root "absent"))))
+      (delete-directory root t))))
+
+
+(mevedel-deftest mevedel-session-persistence--enumerate-sessions ()
+  ,test
+  (test)
+  :doc "isolates failed control probes to their own visible session row"
+  (let* ((root (make-temp-file "mevedel-enumerate-controls-" t))
+         (bad (file-name-as-directory (file-name-concat root "bad")))
+         (good (file-name-as-directory (file-name-concat root "good")))
+         (workspace
+          (test-mevedel-session-persistence--make-file-workspace root))
+         (mevedel-session-persistence--list-sessions-cache
+          (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          (make-directory bad)
+          (make-directory good)
+          (cl-letf
+              (((symbol-function 'mevedel-session-artifacts-sessions-dir)
+                (lambda (_) root))
+               ((symbol-function 'mevedel-session-control-fs-run-program)
+                (lambda (_)
+                  (list
+                   (list :path (file-name-concat bad ".lock")
+                         :status 'failed :diagnostic "symlink refused")
+                   (list :path (file-name-concat bad ".lease") :status 'absent)
+                   (list :path (file-name-concat bad "session.meta.el")
+                         :status 'ok)
+                   (list :path (file-name-concat good ".lock") :status 'absent)
+                   (list :path (file-name-concat good ".lease") :status 'absent)
+                   (list :path (file-name-concat good "session.meta.el")
+                         :status 'ok))))
+               ((symbol-function
+                 'mevedel-session-codec-authority-mode-for-path)
+                (lambda (&rest _) 'pid-lock))
+               ((symbol-function 'mevedel-session-persistence--read-summary)
+                (lambda (_)
+                  '(:status current
+                    :summary (:session-id "good" :updated-at "2026")))))
+            (let* ((result
+                    (mevedel-session-persistence--enumerate-sessions workspace))
+                   (incompatible (car (plist-get result :incompatible))))
+              (should (= 1 (length (plist-get result :sessions))))
+              (should (equal bad (plist-get incompatible :save-path)))
+              (should (eq 'undiscoverable (plist-get incompatible :status)))
+              (should (string-match-p
+                       "symlink refused"
+                       (plist-get incompatible :diagnostic))))))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry)))
+  :doc "keeps a current session listed beside an unsupported one on disk"
+  (let* ((root (make-temp-file "mevedel-enumerate-mixed-" t))
+         (old (file-name-as-directory (file-name-concat root "old")))
+         (good (file-name-as-directory (file-name-concat root "good")))
+         (workspace
+          (test-mevedel-session-persistence--make-file-workspace root))
+         (mevedel-session-persistence--list-sessions-cache
+          (make-hash-table :test #'equal))
+         (mevedel-session-persistence--summary-cache
+          (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          (make-directory old)
+          (make-directory good)
+          (mevedel-session-codec-write
+           (file-name-concat old "session.meta.el")
+           '(:version "v0.5.3" :updated-at "2026-01-01T00-00-00"))
+          (mevedel-session-codec-write
+           (file-name-concat good "session.meta.el")
+           (test-mevedel-session-persistence--complete-sidecar
+            '(:session-name "good" :session-id "good-1"
+              :updated-at "2026-02-01T00-00-00")))
+          (cl-letf (((symbol-function 'mevedel-session-artifacts-sessions-dir)
+                     (lambda (_) root)))
+            (let* ((result
+                    (mevedel-session-persistence--enumerate-sessions workspace))
+                   (incompatible (car (plist-get result :incompatible))))
+              (should (equal (list good)
+                             (mapcar (lambda (item) (plist-get item :save-path))
+                                     (plist-get result :sessions))))
+              (should (= 1 (length (plist-get result :incompatible))))
+              (should (equal old (plist-get incompatible :save-path)))
+              (should (eq 'unsupported (plist-get incompatible :status)))
+              (should (equal "v0.5.3" (plist-get incompatible :version)))
+              (should (equal "2026-01-01T00-00-00"
+                             (plist-get incompatible :updated-at)))
+              (should (equal (list good)
+                             (mapcar (lambda (item) (plist-get item :save-path))
+                                     (mevedel-session-persistence-list-sessions
+                                      workspace)))))))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry))))
 
 
 (mevedel-deftest mevedel-session-persistence-list-sessions (:quiet t)
@@ -3217,17 +3523,7 @@
             (kill-buffer restored))))
       (when (file-directory-p local-root)
         (delete-directory local-root t))
-      (mevedel-workspace-clear-registry)))
-  :doc "resume completion preserves newest-first session order"
-  (let* ((displays '("2h ago       new" "yesterday    old"))
-         (collection
-          (mevedel-session-persistence--ordered-display-collection
-           displays 'mevedel-session))
-         (metadata (funcall collection "" nil 'metadata)))
-    (should (eq 'identity
-                (cdr (assq 'display-sort-function (cdr metadata)))))
-    (should (eq 'identity
-                (cdr (assq 'cycle-sort-function (cdr metadata)))))))
+      (mevedel-workspace-clear-registry))))
 
 
 (mevedel-deftest mevedel-session-persistence-conversation-variants ()
@@ -3436,7 +3732,9 @@
             (should
              (equal "first"
                     (plist-get
-                     (mevedel-session-persistence--read-summary tmp)
+                     (plist-get
+                      (mevedel-session-persistence--read-summary tmp)
+                      :summary)
                      :session-name)))
             (mevedel-session-persistence--read-summary tmp)
             (should (= 1 read-count))
@@ -3444,7 +3742,9 @@
             (should
              (equal "second"
                     (plist-get
-                     (mevedel-session-persistence--read-summary tmp)
+                     (plist-get
+                      (mevedel-session-persistence--read-summary tmp)
+                      :summary)
                      :session-name)))
             (should (= 2 read-count))))
       (when (file-exists-p tmp) (delete-file tmp))))
@@ -3463,10 +3763,14 @@
                 (lambda (path)
                   (cl-incf read-count)
                   (funcall read-function path))))
-            (should-not
-             (mevedel-session-persistence--read-summary tmp))
-            (should-not
-             (mevedel-session-persistence--read-summary tmp))
+            (should
+             (eq 'unreadable
+                 (plist-get
+                  (mevedel-session-persistence--read-summary tmp) :status)))
+            (should
+             (eq 'unreadable
+                 (plist-get
+                  (mevedel-session-persistence--read-summary tmp) :status)))
             (should (= 1 read-count))))
       (when (file-exists-p tmp) (delete-file tmp))))
   :doc "extracts only picker-relevant fields"
@@ -3487,17 +3791,61 @@
                      (:turn 2 :file-turn 2 :cum-turn 2)
                      (:turn 3 :file-turn 3 :cum-turn 3
                       :fork-point-id "fork-point-2")))))))
-          (let ((s (mevedel-session-persistence--read-summary tmp)))
+          (let ((s (plist-get
+                    (mevedel-session-persistence--read-summary tmp)
+                    :summary)))
             (should (equal "demo" (plist-get s :session-name)))
             (should (equal "demo-1234" (plist-get s :session-id)))
             (should (equal "Hello" (plist-get s :first-user-message)))
             (should (equal "Latest" (plist-get s :latest-user-message)))
             (should (equal '("fork-point-1" "fork-point-2")
                            (plist-get s :fork-point-ids)))))
-      (when (file-exists-p tmp) (delete-file tmp))))
-  :doc "returns nil on unreadable file"
-  (should (null (mevedel-session-persistence--read-summary
-                 "/nonexistent/path"))))
+      (when (file-exists-p tmp) (delete-file tmp)))))
+
+
+(mevedel-deftest mevedel-session-persistence--classify-sidecar ()
+  ,test
+  (test)
+  :doc "classifies each rejection by processing stage and keeps current sidecars"
+  (let ((tmp (make-temp-file "mevedel-classify-" nil ".el")))
+    (unwind-protect
+        (progn
+          (should
+           (equal '(:status missing :diagnostic "Sidecar is missing")
+                  (mevedel-session-persistence--classify-sidecar
+                   (file-name-concat temporary-file-directory "absent.el"))))
+          (write-region "(" nil tmp nil 'silent)
+          (should (eq 'unreadable
+                      (plist-get
+                       (mevedel-session-persistence--classify-sidecar tmp)
+                       :status)))
+          (mevedel-session-codec-write tmp '(1 2))
+          (should
+           (equal '(:status unreadable :diagnostic "Invalid session sidecar")
+                  (mevedel-session-persistence--classify-sidecar tmp)))
+          (mevedel-session-codec-write
+           tmp '(:version "v0.5.3" :updated-at "2026-09-01T12-00-00"))
+          (should
+           (equal '(:status unsupported :version "v0.5.3"
+                    :updated-at "2026-09-01T12-00-00"
+                    :diagnostic "Unsupported session version: v0.5.3")
+                  (mevedel-session-persistence--classify-sidecar tmp)))
+          (mevedel-session-codec-write
+           tmp (list :version mevedel-session-codec-format-version))
+          (let ((result (mevedel-session-persistence--classify-sidecar tmp)))
+            (should (eq 'obsolete (plist-get result :status)))
+            (should (equal mevedel-session-codec-format-version
+                           (plist-get result :version)))
+            (should (stringp (plist-get result :diagnostic))))
+          (mevedel-session-codec-write
+           tmp (test-mevedel-session-persistence--complete-sidecar
+                '(:session-name "current" :session-id "current-1")))
+          (let ((result (mevedel-session-persistence--classify-sidecar tmp)))
+            (should (eq 'current (plist-get result :status)))
+            (should (equal "current-1"
+                           (plist-get (plist-get result :sidecar)
+                                      :session-id)))))
+      (when (file-exists-p tmp) (delete-file tmp)))))
 
 
 (mevedel-deftest mevedel-session-persistence--format-session-candidate ()
@@ -4262,7 +4610,7 @@
                   (cl-letf (((symbol-function 'mevedel-workspace)
                              (lambda (&optional _arg) workspace))
                             ((symbol-function
-                              'mevedel-session-persistence--ordered-display-collection)
+                              'mevedel--ordered-completion-table)
                              (lambda (values &rest _) values))
                             ;; The first candidate starts a new session; the
                             ;; second is the persisted one under test.
@@ -4297,12 +4645,12 @@
 
 
 ;;
-;;; Sidecar missing / unreadable fallback on restore
+;;; Sidecar failure during restore
 
-(mevedel-deftest mevedel-session-persistence/sidecar-missing-on-restore ()
+(mevedel-deftest mevedel-session-persistence/sidecar-missing-on-restore (:quiet t)
   ,test
   (test)
-  :doc "deleted sidecar fails closed without a committed authority profile"
+  :doc "deleted sidecar fails closed with chooser-supplied authority"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
@@ -4322,14 +4670,15 @@
                 (delete-file
                  (mevedel-session-artifacts-sidecar-path session-dir))
                 (should-error
-                 (mevedel-session-persistence-restore session-dir)
-                 :type 'error))
+                 (mevedel-session-persistence-restore
+                  session-dir nil nil workspace)
+                 :type 'user-error))
             (ignore-errors
               (test-mevedel-session-persistence--release-and-kill
                buf session)))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
-  :doc "corrupt sidecar fails closed instead of synthesizing authority"
+  :doc "corrupt sidecar fails closed with chooser-supplied authority"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
@@ -4351,8 +4700,9 @@
                                session-dir)
                               nil 'silent)
                 (should-error
-                 (mevedel-session-persistence-restore session-dir)
-                 :type 'error))
+                 (mevedel-session-persistence-restore
+                  session-dir nil nil workspace)
+                 :type 'user-error))
             (ignore-errors
               (test-mevedel-session-persistence--release-and-kill
                buf session)))

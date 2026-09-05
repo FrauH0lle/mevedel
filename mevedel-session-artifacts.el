@@ -91,6 +91,10 @@
 (autoload 'mevedel-session-codec-serialize "mevedel-session-codec")
 (autoload 'mevedel-session-codec-write "mevedel-session-codec")
 
+;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs" (path &optional coding-system))
+(autoload 'mevedel-session-control-fs-read-file "mevedel-session-control-fs")
+
 ;; `mevedel-session-control-transfer'
 (declare-function mevedel-session-control-transfer-observe "mevedel-session-control-transfer" (session))
 (declare-function mevedel-session-control-transfer-register-root-buffer "mevedel-session-control-transfer" (session buffer))
@@ -233,12 +237,16 @@
 
 ;; `mevedel-utilities'
 (declare-function mevedel--forget-place "mevedel-utilities" nil)
+(declare-function mevedel--ordered-completion-table "mevedel-utilities" (displays category))
+(declare-function mevedel--transcript-org-mode "mevedel-utilities" nil)
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 (declare-function mevedel--write-file-atomically
                   "mevedel-utilities" (path content &optional coding mode))
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
 (autoload 'mevedel--forget-place "mevedel-utilities")
+(autoload 'mevedel--ordered-completion-table "mevedel-utilities")
+(autoload 'mevedel--transcript-org-mode "mevedel-utilities")
 (autoload 'mevedel--warn-once "mevedel-utilities")
 (autoload 'mevedel--write-file-atomically "mevedel-utilities")
 (autoload 'mevedel-version "mevedel-utilities")
@@ -369,6 +377,23 @@ Segments are zero-padded to four digits (`segment-0001.chat.org')."
 (defvar-local mevedel-session--inspection-buffer-p nil
   "Non-nil in a read-only archived-segment inspection buffer.")
 
+(defun mevedel-session-artifacts--read-published-artifact
+    (publication logical)
+  "Return verified LOGICAL bytes from validated PUBLICATION."
+  (let ((entry (and publication
+                    (cdr (assoc logical
+                                (plist-get publication :artifacts))))))
+    (unless entry
+      (error "Session artifact is not published: %s" logical))
+    (let* ((content
+            (mevedel-session-artifacts-read-file-raw
+             (plist-get entry :published)))
+           (expected (plist-get entry :sha256)))
+      (when (and expected
+                 (not (equal expected (secure-hash 'sha256 content))))
+        (error "Published session artifact failed verification: %s" logical))
+      content)))
+
 (defun mevedel-session-artifacts-read-artifact
     (session logical &optional committed-only)
   "Return SESSION artifact LOGICAL as literal bytes.
@@ -385,33 +410,112 @@ recorded hash; fixed portable caches are never an authority fallback."
     (if (not (mevedel-session-codec-portable-authority-p session))
         (mevedel-session-artifacts-read-file-raw
          (expand-file-name logical save-path))
-      (let ((source
-             (and (not committed-only)
-                  (mevedel-session-durability-lease-owned-p session)
-                  (mevedel-session-publication-uncommitted-artifact
-                   session logical)))
-            expected)
-        (unless source
-          (let* ((publication
-                  (or (mevedel-session-publication session)
-                      (setf
-                       (mevedel-session-publication session)
-                       (mevedel-session-publication-read
-                        save-path))))
-                 (entry (and publication
-                             (cdr (assoc
-                                   logical
-                                   (plist-get publication :artifacts))))))
-            (unless entry
-              (error "Session artifact is not published: %s" logical))
-            (setq source (plist-get entry :published)
-                  expected (plist-get entry :sha256))))
-        (let ((content (mevedel-session-artifacts-read-file-raw source)))
-          (when (and expected
-                     (not (equal expected (secure-hash 'sha256 content))))
-            (error
-             "Published session artifact failed verification: %s" logical))
-          content)))))
+      (if-let* ((source
+                 (and (not committed-only)
+                      (mevedel-session-durability-lease-owned-p session)
+                      (mevedel-session-publication-uncommitted-artifact
+                       session logical))))
+          (mevedel-session-artifacts-read-file-raw source)
+        (mevedel-session-artifacts--read-published-artifact
+         (or (mevedel-session-publication session)
+             (setf (mevedel-session-publication session)
+                   (mevedel-session-publication-read save-path)))
+         logical)))))
+
+(defun mevedel-session-artifacts-segment-number (logical)
+  "Return LOGICAL's positive canonical segment number, or nil."
+  (when (and (stringp logical)
+             (string-match
+              "\\`segment-\\([0-9]+\\)\\.chat\\.org\\'" logical))
+    (let ((number (string-to-number (match-string 1 logical))))
+      (and (> number 0)
+           (equal logical (format "segment-%04d.chat.org" number))
+           number))))
+
+(defun mevedel-session-artifacts--cold-segments
+    (save-path authority-mode publication)
+  "Return authoritative segment logical names in numeric order.
+
+SAVE-PATH supplies PID-lock storage.  Portable segments come only from
+validated PUBLICATION."
+  (let (segments)
+    (pcase authority-mode
+      ('pid-lock
+       (when (file-directory-p save-path)
+         (dolist (logical (directory-files save-path nil nil t))
+           (when-let* ((number
+                        (mevedel-session-artifacts-segment-number logical))
+                       (path (file-name-concat save-path logical))
+                       ((file-regular-p path))
+                       ((not (file-symlink-p path))))
+             (push (cons number logical) segments)))))
+      ('portable
+       (dolist (entry (plist-get publication :artifacts))
+         (when-let* ((logical (car-safe entry))
+                     (number
+                      (mevedel-session-artifacts-segment-number logical)))
+           (push (cons number logical) segments))))
+      (_ (error "Invalid session authority mode: %S" authority-mode)))
+    (mapcar #'cdr (sort segments :key #'car))))
+
+(defun mevedel-session-artifacts--select-cold-segment (segments)
+  "Select one logical segment name from ordered SEGMENTS.
+
+Do not prompt for a singleton.  For multiple segments, default to the newest."
+  (if (cdr segments)
+      (completing-read "Transcript segment: "
+                       (mevedel--ordered-completion-table
+                        segments 'mevedel-session-segment)
+                       nil t nil nil (car (last segments)))
+    (car segments)))
+
+(defun mevedel-session-artifacts-inspect-cold-session
+    (save-path authority-mode &optional publication)
+  "Open an authoritative persisted transcript without hydrating a session.
+
+SAVE-PATH is the persisted session directory.  AUTHORITY-MODE is `pid-lock'
+or `portable'.  Portable inspection uses only the optional already-validated
+PUBLICATION capture.  Return a safe read-only inspection buffer or signal a
+`user-error'."
+  (let* ((segments
+          (or (mevedel-session-artifacts--cold-segments
+               save-path authority-mode publication)
+              (user-error
+               "No authoritative transcript segment is available: %s"
+               save-path)))
+         (logical (mevedel-session-artifacts--select-cold-segment segments))
+         buffer)
+    (condition-case err
+        (let* ((bytes
+                (if (eq authority-mode 'portable)
+                    (mevedel-session-artifacts--read-published-artifact
+                     publication logical)
+                  (mevedel-session-control-fs-read-file
+                   (file-name-concat save-path logical) 'no-conversion)))
+               (text (decode-coding-string bytes 'utf-8-unix)))
+          ;; The decoder turns every malformed sequence into a raw byte or an
+          ;; out-of-range character, so one scan rejects them all.
+          (when (string-match-p "[^\0-\U0010FFFF]" text)
+            (error "Transcript segment is not valid UTF-8: %s" logical))
+          (setq buffer
+                (generate-new-buffer
+                 (format "*mevedel inspection %s %s*"
+                         (file-name-nondirectory (directory-file-name save-path))
+                         logical)))
+          (with-current-buffer buffer
+            (insert text)
+            (mevedel--transcript-org-mode)
+            (mevedel-session-artifacts-inhibit-so-long)
+            (setq-local mevedel-session--inspection-buffer-p t)
+            (setq buffer-read-only t)
+            (set-buffer-modified-p nil)
+            (goto-char (point-min)))
+          buffer)
+      (error
+       (when (buffer-live-p buffer)
+         (kill-buffer buffer))
+       (user-error "Could not inspect session transcript: %s"
+                   (error-message-string err))))))
 
 (defun mevedel-session-artifacts-artifact-present-p
     (session logical &optional committed-only)
@@ -2747,14 +2851,10 @@ A no-op when the saved root is missing or matches current."
 
 (defun mevedel-session-artifacts-detect-highest-segment (save-path)
   "Return the highest segment number found on disk under SAVE-PATH, or 0."
-  (let ((max-n 0))
-    (when (file-directory-p save-path)
-      (dolist (f (directory-files save-path nil
-                                  "\\`segment-[0-9]+\\.chat\\.org\\'"))
-        (when (string-match "segment-\\([0-9]+\\)\\.chat\\.org" f)
-          (let ((n (string-to-number (match-string 1 f))))
-            (when (> n max-n) (setq max-n n))))))
-    max-n))
+  (apply #'max 0
+         (and (file-directory-p save-path)
+              (delq nil (mapcar #'mevedel-session-artifacts-segment-number
+                                (directory-files save-path))))))
 
 (defun mevedel-session-artifacts-self-heal-segment-counter
     (session save-path &optional defer-finalization-p)

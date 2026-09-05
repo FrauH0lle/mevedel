@@ -237,6 +237,294 @@
                  (mevedel-session-artifacts-segment-path "/x" 1000))))
 
 
+(mevedel-deftest mevedel-session-artifacts--read-published-artifact ()
+  ,test
+  (test)
+  :doc "reads immutable publication bytes and verifies their digest"
+  (let* ((directory (make-temp-file "mevedel-published-read-" t))
+         (path (file-name-concat directory "published"))
+         (content "published bytes")
+         (publication
+          (list :artifacts
+                (list
+                 (list "segment-0001.chat.org"
+                       :published path
+                       :sha256 (secure-hash 'sha256 content))))))
+    (unwind-protect
+        (progn
+          (write-region content nil path nil 'silent)
+          (should
+           (equal content
+                  (mevedel-session-artifacts--read-published-artifact
+                   publication "segment-0001.chat.org")))
+          (write-region "corrupt" nil path nil 'silent)
+          (should-error
+           (mevedel-session-artifacts--read-published-artifact
+            publication "segment-0001.chat.org"))
+          (should-error
+           (mevedel-session-artifacts--read-published-artifact
+            publication "segment-0002.chat.org")))
+      (delete-directory directory t))))
+
+
+(mevedel-deftest mevedel-session-artifacts-segment-number ()
+  ,test
+  (test)
+  :doc "accepts only positive canonical round-trip segment names"
+  (should (= 1 (mevedel-session-artifacts-segment-number
+                "segment-0001.chat.org")))
+  (should (= 10000 (mevedel-session-artifacts-segment-number
+                    "segment-10000.chat.org")))
+  (dolist (logical '("segment-0000.chat.org"
+                     "segment-01.chat.org"
+                     "segment-00001.chat.org"
+                     "segment--001.chat.org"
+                     "nested/segment-0001.chat.org"
+                     "segment-0001.chat.org.bak"))
+    (should-not
+     (mevedel-session-artifacts-segment-number logical))))
+
+
+(mevedel-deftest mevedel-session-artifacts--cold-segments ()
+  ,test
+  (test)
+  :doc "enumerates PID-lock regular canonical entries with gaps in numeric order"
+  (let* ((directory (make-temp-file "mevedel-cold-segments-" t))
+         (target (file-name-concat directory "target")))
+    (unwind-protect
+        (progn
+          (dolist (logical '("segment-10000.chat.org"
+                             "segment-0005.chat.org"
+                             "segment-0001.chat.org"
+                             "segment-01.chat.org"
+                             "segment-0000.chat.org"))
+            (write-region logical nil
+                          (file-name-concat directory logical) nil 'silent))
+          (make-directory
+           (file-name-concat directory "segment-0003.chat.org"))
+          (write-region "target" nil target nil 'silent)
+          (make-symbolic-link target
+                              (file-name-concat
+                               directory "segment-0004.chat.org"))
+          (should
+           (equal '("segment-0001.chat.org"
+                    "segment-0005.chat.org"
+                    "segment-10000.chat.org")
+                  (mevedel-session-artifacts--cold-segments
+                   directory 'pid-lock nil))))
+      (delete-directory directory t)))
+  :doc "enumerates portable manifest names without consulting fixed caches"
+  (let ((directory (make-temp-file "mevedel-portable-segments-" t))
+        (publication
+         '(:artifacts
+           (("segment-0010.chat.org" :published "/published/ten")
+            ("segment-0002.chat.org" :published "/published/two")
+            ("segment-02.chat.org" :published "/published/malformed")
+            ("plans/current.md" :published "/published/plan")))))
+    (unwind-protect
+        (progn
+          (write-region "stale" nil
+                        (file-name-concat
+                         directory "segment-9999.chat.org") nil 'silent)
+          (should
+           (equal '("segment-0002.chat.org" "segment-0010.chat.org")
+                  (mevedel-session-artifacts--cold-segments
+                   directory 'portable publication))))
+      (delete-directory directory t))))
+
+
+(mevedel-deftest mevedel-session-artifacts--select-cold-segment ()
+  ,test
+  (test)
+  :doc "returns a singleton without prompting"
+  (cl-letf (((symbol-function 'completing-read)
+             (lambda (&rest _)
+               (ert-fail "Prompted for a single segment"))))
+    (should
+     (equal "segment-0001.chat.org"
+            (mevedel-session-artifacts--select-cold-segment
+             '("segment-0001.chat.org")))))
+  :doc "prompts for multiple segments with the newest as default"
+  (let (seen-candidates seen-default)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt table _predicate _require-match
+                        _initial _history default)
+                 (setq seen-candidates (all-completions "" table)
+                       seen-default default)
+                 (should (eq 'identity
+                             (alist-get 'display-sort-function
+                                        (cdr (funcall table "" nil 'metadata)))))
+                 (car seen-candidates))))
+      (should
+       (equal "segment-0001.chat.org"
+              (mevedel-session-artifacts--select-cold-segment
+               '("segment-0001.chat.org" "segment-0003.chat.org")))))
+    (should
+     (equal '("segment-0001.chat.org" "segment-0003.chat.org")
+            seen-candidates))
+    (should (equal "segment-0003.chat.org" seen-default))))
+
+
+(mevedel-deftest mevedel-session-artifacts-inspect-cold-session ()
+  ,test
+  (test)
+  :doc "creates unique safe bare Org buffers from verified UTF-8 PID bytes"
+  (let* ((directory (make-temp-file "mevedel-cold-inspect-" t))
+         (path (file-name-concat directory "segment-0001.chat.org"))
+         (content ":PROPERTIES:\n:GPTEL_BOUNDS: ((1 . 2))\n:END:\n* hello\n")
+         (hook-ran nil)
+         buffers)
+    (unwind-protect
+        (progn
+          (write-region content nil path nil 'silent)
+          (let ((org-mode-hook (list (lambda () (setq hook-ran t)))))
+            (cl-letf (((symbol-function 'completing-read)
+                       (lambda (&rest _)
+                         (ert-fail "Prompted for a single segment"))))
+              (push (mevedel-session-artifacts-inspect-cold-session
+                     directory 'pid-lock)
+                    buffers)
+              (push (mevedel-session-artifacts-inspect-cold-session
+                     directory 'pid-lock)
+                    buffers)))
+          (should-not hook-ran)
+          (should-not (equal (buffer-name (car buffers))
+                             (buffer-name (cadr buffers))))
+          (dolist (buffer buffers)
+            (with-current-buffer buffer
+              (should (derived-mode-p 'org-mode))
+              (should (equal content (buffer-string)))
+              (should mevedel-session--inspection-buffer-p)
+              (should so-long--inhibited)
+              (should buffer-read-only)
+              (should-not (buffer-modified-p))
+              (should-not buffer-file-name)
+              (should-not buffer-offer-save)
+              (should-not (bound-and-true-p gptel-mode))
+              (should-not (text-property-not-all
+                           (point-min) (point-max) 'gptel nil)))))
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer)))
+      (delete-directory directory t)))
+  :doc "reads PID-lock bytes through the pinned no-follow filesystem helper"
+  (let ((read-path nil)
+        buffer)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-session-artifacts--cold-segments)
+              (lambda (&rest _) '("segment-0001.chat.org")))
+             ((symbol-function 'mevedel-session-control-fs-read-file)
+              (lambda (path coding)
+                (setq read-path path)
+                (should (eq coding 'no-conversion))
+                (encode-coding-string "* pinned\n" 'utf-8-unix)))
+             ((symbol-function 'mevedel-session-artifacts-read-file-raw)
+              (lambda (&rest _)
+                (ert-fail "PID inspection used the unpinned raw reader"))))
+          (setq buffer
+                (mevedel-session-artifacts-inspect-cold-session
+                 "/session/" 'pid-lock))
+          (should (equal "/session/segment-0001.chat.org" read-path)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))))
+  :doc "uses published bytes only and rejects a failed portable hash"
+  (let* ((directory (make-temp-file "mevedel-cold-portable-" t))
+         (published (file-name-concat directory "published"))
+         (fixed (file-name-concat directory "segment-0001.chat.org"))
+         (content "* committed\n")
+         (publication
+          (list :artifacts
+                (list
+                 (list "segment-0001.chat.org"
+                       :published published
+                       :sha256 (secure-hash 'sha256 content)))))
+         buffer)
+    (unwind-protect
+        (progn
+          (write-region content nil published nil 'silent)
+          (write-region "* stale cache\n" nil fixed nil 'silent)
+          (setq buffer
+                (mevedel-session-artifacts-inspect-cold-session
+                 directory 'portable publication))
+          (with-current-buffer buffer
+            (should (equal content (buffer-string))))
+          (write-region "corrupt" nil published nil 'silent)
+          (let ((before (buffer-list)))
+            (should-error
+             (mevedel-session-artifacts-inspect-cold-session
+              directory 'portable publication)
+             :type 'user-error)
+            (should (equal before (buffer-list)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (delete-directory directory t)))
+  :doc "rejects invalid UTF-8 before creating an inspection buffer"
+  (let* ((directory (make-temp-file "mevedel-cold-invalid-" t))
+         (logical "segment-0001.chat.org")
+         (path (file-name-concat directory logical))
+         (expected-name
+          (format "*mevedel inspection %s %s*"
+                  (file-name-nondirectory (directory-file-name directory))
+                  logical)))
+    (unwind-protect
+        ;; A stray byte, an overlong form, a surrogate, a scalar past
+        ;; U+10FFFF, and a truncated sequence.
+        (dolist (bytes (list (unibyte-string #xff)
+                             (unibyte-string #xc0 #x80)
+                             (unibyte-string #xed #xa0 #x80)
+                             (unibyte-string #xf4 #x90 #x80 #x80)
+                             (unibyte-string #xe2 #x82)))
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region bytes nil path nil 'silent))
+          (should-error
+           (mevedel-session-artifacts-inspect-cold-session
+            directory 'pid-lock)
+           :type 'user-error)
+          (should-not (get-buffer expected-name)))
+      (delete-directory directory t)))
+  :doc "reports no authoritative segment with a stable user error"
+  (let ((directory (make-temp-file "mevedel-cold-empty-" t)))
+    (unwind-protect
+        (condition-case err
+            (ert-fail
+             (format "Expected failure, got %S"
+                     (mevedel-session-artifacts-inspect-cold-session
+                      directory 'pid-lock)))
+          (user-error
+           (should
+            (equal
+             (format "No authoritative transcript segment is available: %s"
+                     directory)
+             (error-message-string err))))
+          ;; A portable record without a validated publication has no
+          ;; authoritative segment either.
+          (should-error
+           (mevedel-session-artifacts-inspect-cold-session
+            directory 'portable nil)
+           :type 'user-error))
+      (delete-directory directory t)))
+  :doc "kills a partially initialized buffer when mode setup fails"
+  (let* ((directory (make-temp-file "mevedel-cold-failed-" t))
+         (logical "segment-0001.chat.org")
+         (expected-name
+          (format "*mevedel inspection %s %s*"
+                  (file-name-nondirectory (directory-file-name directory))
+                  logical)))
+    (unwind-protect
+        (progn
+          (write-region "* transcript\n" nil
+                        (file-name-concat directory logical) nil 'silent)
+          (cl-letf (((symbol-function 'mevedel--transcript-org-mode)
+                     (lambda () (error "Injected setup failure"))))
+            (should-error
+             (mevedel-session-artifacts-inspect-cold-session
+              directory 'pid-lock)
+             :type 'user-error))
+          (should-not (get-buffer expected-name)))
+      (delete-directory directory t))))
+
+
 (mevedel-deftest mevedel-session-artifacts-segments ()
   ,test
   (test)
@@ -2535,7 +2823,7 @@ rotation never saves through a rebound temporary visited filename or prompts"
 (mevedel-deftest mevedel-session-artifacts-mixed-authority-controls ()
   ,test
   (test)
-  :doc "rejects mixed PID-lock and portable controls during discovery, restore, and admission"
+  :doc "surfaces mixed controls as incompatible while restore and admission reject them"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-mixed-authority-" t)))
          (workspace (test-mevedel-session-persistence--make-workspace root))
@@ -2558,9 +2846,13 @@ rotation never saves through a rebound temporary visited filename or prompts"
              (mevedel-session-artifacts-assert-mutation-authority
               session (current-buffer))
              :type 'error))
-          (should-error
-           (mevedel-session-persistence-list-sessions workspace)
-           :type 'error)
+          (let ((listing
+                 (mevedel-session-persistence--enumerate-sessions workspace)))
+            (should-not (plist-get listing :sessions))
+            (should
+             (eq 'undiscoverable
+                 (plist-get (car (plist-get listing :incompatible))
+                            :status))))
           (should-error
            (mevedel-session-persistence-restore
             session-dir nil nil workspace)

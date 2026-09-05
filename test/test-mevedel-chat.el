@@ -26,6 +26,7 @@
 ;; `gptel'
 (defvar gptel--known-presets)
 (defvar gptel-backend)
+(defvar gptel-display-buffer-action)
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
 
@@ -78,6 +79,36 @@
           (should-not displayed))
       (when (buffer-live-p restored)
         (kill-buffer restored))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "displays inspection buffers without live chat initialization"
+  (let* ((root (make-temp-file "mevedel-inspection-command-" t))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id root :root root :name "inspection"))
+         (inspection (generate-new-buffer " *mevedel-inspection-command*"))
+         displayed)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-workspace)
+              (lambda () workspace))
+             ((symbol-function 'mevedel-session-persistence-choose-entry)
+              (lambda (&rest _)
+                (list :action 'inspect :buffer inspection)))
+             ((symbol-function 'display-buffer)
+              (lambda (buffer &optional action)
+                (setq displayed (list buffer action))))
+             ((symbol-function 'mevedel--display-chat-buffer)
+              (lambda (&rest _)
+                (ert-fail "Inspection must not initialize a chat view")))
+             ((symbol-function 'mevedel--start-chat)
+              (lambda (&rest _)
+                (ert-fail "Inspection must not start a session"))))
+          (mevedel)
+          (should
+           (equal (list inspection gptel-display-buffer-action) displayed)))
+      (when (buffer-live-p inspection)
+        (kill-buffer inspection))
       (when (file-directory-p root)
         (delete-directory root t)))))
 

@@ -125,16 +125,12 @@ before the operation ran."
    "    read)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      test -e \"$leaf\" || exit 77\n"
-   "      exec 8<\"$leaf\" || exit 67\n"
-   "      test ! -L \"$leaf\" || exit 69\n"
-   "      base64 -w0 <&8 || exit 67\n"
+   "      (set -o pipefail; dd if=\"$leaf\" iflag=nofollow status=none | base64 -w0) || exit 67\n"
    "      ;;\n"
    "    verify)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      test -e \"$leaf\" || exit 77\n"
-   "      exec 8<\"$leaf\" || exit 67\n"
-   "      test ! -L \"$leaf\" || exit 69\n"
-   "      observed=$(base64 -w0 <&8) || exit 67\n"
+   "      observed=$(set -o pipefail; dd if=\"$leaf\" iflag=nofollow status=none | base64 -w0) || exit 67\n"
    ;; The expected payload may arrive newline-wrapped so the command
    ;; line's physical lines stay short; the observation is unwrapped.
    "      test \"$observed\" = \"$(printf '%s' \"$payload\" | tr -d '\\n')\" || exit 72\n"
@@ -227,6 +223,22 @@ before the operation ran."
    "          printf '%s\\0' \"${entry#./}\"\n"
    "        done\n"
    "      } | base64 -w0\n"
+   "      ;;\n"
+   "    tree-size)\n"
+   "      test ! -L \"$leaf\" || exit 69\n"
+   "      test -d \"$leaf\" || exit 68\n"
+   ;; One traversal both refuses symlinks and sums regular files: a second
+   ;; `find' could run after a descendant was swapped for a link.  The
+   ;; refusal leaves only the summing subshell, so `pipefail' carries it out
+   ;; as the same failure as a broken traversal.
+   "      (set -o pipefail\n"
+   "       find -P \"./$leaf\" \\( -type l -printf 'L\\n' \\) -o \\( -type f -printf '%s\\n' \\) |\n"
+   "         { total=0\n"
+   "           while IFS= read -r record; do\n"
+   "             test \"$record\" != L || exit 67\n"
+   "             total=$((total + record))\n"
+   "           done\n"
+   "           printf '%s' \"$total\"; } | base64 -w0) || exit 67\n"
    "      ;;\n"
    "    *) exit 74 ;;\n"
    "  esac\n"
@@ -339,7 +351,8 @@ parent must not turn into a `Setting current directory' failure."
     (delete-file . "delete-file")
     (delete-directory . "delete-directory")
     (target-time . "clock")
-    (list-directory . "list"))
+    (list-directory . "list")
+    (tree-size . "tree-size"))
   "Program operation names mapped to their target-side verbs.")
 
 (defun mevedel-session-control-fs--program-status (code)
@@ -364,6 +377,12 @@ parent must not turn into a `Setting current directory' failure."
                  (list "Portable control clock is unavailable"
                        (plist-get op :path))))
        (string-to-number text)))
+    ('tree-size
+     (unless (string-match-p "\\`[0-9]+\\'" payload)
+       (signal 'file-error
+               (list "Portable control tree size is unavailable"
+                     (plist-get op :path))))
+     (string-to-number payload))
     (_ nil)))
 
 (defun mevedel-session-control-fs--program-fields (op)
@@ -788,16 +807,25 @@ Symlink entries fail closed before their names can be handed to a caller."
   (mevedel-session-control-fs--run-1 'delete-directory path)
   t)
 
-(defun mevedel-session-control-fs-delete-directories (paths)
-  "Recursively delete the target control directories PATHS in one program.
-Each deletion is independent: a failure neither stops the program nor
+(defun mevedel-session-control-fs--optional-batch (op paths)
+  "Run OP over every one of PATHS in one program, none of them required.
+Each operation is independent: a failure neither stops the program nor
 signals here.  Returns the per-path result plists in PATHS order, each
 carrying `:path' and `:status' for the caller to classify."
   (when paths
     (mevedel-session-control-fs-run-program
-     (mapcar (lambda (path)
-               (list :op 'delete-directory :path path :optional t))
-             paths))))
+     (mapcar (lambda (path) (list :op op :path path :optional t)) paths))))
+
+(defun mevedel-session-control-fs-delete-directories (paths)
+  "Recursively delete the target control directories PATHS in one program.
+See `mevedel-session-control-fs--optional-batch' for the result shape."
+  (mevedel-session-control-fs--optional-batch 'delete-directory paths))
+
+(defun mevedel-session-control-fs-tree-sizes (paths)
+  "Recursively size the target control directory trees PATHS in one program.
+See `mevedel-session-control-fs--optional-batch' for the result shape; a
+successful result also carries the tree's byte count as an integer `:value'."
+  (mevedel-session-control-fs--optional-batch 'tree-size paths))
 
 (defun mevedel-session-control-fs-target-time (directory)
   "Return target filesystem seconds from a descriptor-relative marker.
