@@ -644,6 +644,11 @@ request or prompt transaction."
     ;; Clear the authority before any teardown operation can signal.  The
     ;; local ROOM still supplies the transport and timers to close below.
     (remhash (plist-get room :data-buffer) mevedel-collaboration--rooms)
+    (when (hash-table-p (plist-get room :guests))
+      (maphash (lambda (peer _guest)
+                 (condition-case nil (mevedel-collaboration-editing-depart room peer)
+                   (error nil)))
+               (plist-get room :guests)))
     (condition-case nil
         (mevedel-collaboration-share-dismiss room)
       (error nil))

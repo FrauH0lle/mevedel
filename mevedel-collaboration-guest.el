@@ -952,6 +952,8 @@ handling stops the room instead of leaking into the session."
            (mevedel-collaboration--handle-fetch-agent room peer frame))
           ("artifact-get"
            (mevedel-collaboration--handle-artifact-get room peer frame))
+          ((or "editing" "editing-presence")
+           (mevedel-collaboration-editing-handle room peer frame))
           ("retract" (mevedel-collaboration--handle-retract room peer frame))
           ("ui-response"
            (mevedel-collaboration--handle-ui-response room peer frame))
@@ -967,7 +969,9 @@ handling stops the room instead of leaking into the session."
     (pcase event
       ;; A joined peer becomes a guest only through its hello frame.
       ('peer-joined nil)
-      ('peer-left (remhash peer (plist-get room :guests))))))
+      ('peer-left
+       (mevedel-collaboration-editing-depart room peer)
+       (remhash peer (plist-get room :guests))))))
 
 (defun mevedel-collaboration--on-state (data-buffer state)
   "Track relay transport STATE for DATA-BUFFER's room."
@@ -977,6 +981,8 @@ handling stops the room instead of leaking into the session."
       ;; a drop invalidated every guest; they rejoin and re-hello against
       ;; the re-created room.
       ('down
+       (maphash (lambda (peer _guest) (mevedel-collaboration-editing-depart room peer))
+                (plist-get room :guests))
        (clrhash (plist-get room :guests))
        ;; The links and QR are handed out before the async dial settles.
        ;; A dial that has never succeeded -- wrong relay URL or a missing or
@@ -1000,6 +1006,7 @@ handling stops the room instead of leaking into the session."
 ;; guest extensions.  Neither extension requires this module back.
 (require 'mevedel-collaboration-agent)
 (require 'mevedel-collaboration-artifact)
+(require 'mevedel-collaboration-editing)
 
 (provide 'mevedel-collaboration-guest)
 ;;; mevedel-collaboration-guest.el ends here

@@ -151,3 +151,5 @@ to the decision bearing that ID.
   gathers existing rationale from the telemetry manual; no original ADR is replaced.
 
 - [ADR 0119: Keep views reconstructable and rendering bounded](0119-keep-views-reconstructable-and-rendering-bounded.md).
+
+- [ADR 0120: Edit shared content through the session host](0120-edit-shared-content-through-the-session-host.md).

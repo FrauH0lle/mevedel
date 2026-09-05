@@ -39,6 +39,14 @@ there was a queue entry or provider review to drain.
 Public abort uses the same terminal cancellation boundary while preserving the
 request reservation and file snapshots until pending durable settlement finishes.
 
+Shared whiteboards and documents also commit bounded editing batches between
+model turns. Their canonical state and embedded assets live below
+`artifacts/shared-editing/`, through the same target-side authority and
+publication contract. Resume, Save As, and Fork carry them; Rewind preserves
+current accepted content. Ending a browser share revokes access without
+deleting it. See [shared editing](shared-editing.md) for pending browser drafts,
+operation retries, and native exports.
+
 Conversation compaction has its own doc in
 [`compaction.md`](compaction.md). This page describes the session
 persistence contract that compaction relies on.

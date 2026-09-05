@@ -292,6 +292,17 @@
     (should-not (string-search "QUJD" (car prepared)))
     (should-not (cdr prepared)))
 
+  :doc "shared content media uses the same provider boundary and reports missing vision"
+  (let* ((media '((:mime "image/png" :kind image :data "QUJD")))
+         (raw (mevedel-tool-media-attach-result "{\"kind\":\"whiteboard\"}"
+                                                media nil "shared-read"))
+         (prepared (mevedel-tool-media-prepare-tool-result
+                    'unknown-backend
+                    (list :id "shared-read" :name "SharedRead" :result raw) nil)))
+    (should (string-search "media omitted" (car prepared)))
+    (should-not (string-search "QUJD" (car prepared)))
+    (should-not (cdr prepared)))
+
   :doc "an owned unresolvable reference is stripped with an honest note"
   ;; The store is empty and no durable record exists, so the reference
   ;; cannot resolve.  The model used to keep both the internal block and

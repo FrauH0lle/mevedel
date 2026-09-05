@@ -128,6 +128,8 @@ Chat / view
   mevedel-collaboration-agent.el  browser agent roster and transcript fetch
   mevedel-collaboration-artifact-projection.el ApplyPatch artifact projection
   mevedel-collaboration-artifact.el browser artifact fetch and notifications
+  mevedel-collaboration-editing.el browser shared editing and selection questions
+  mevedel-shared-editing.el   private editor engine queue and durable session commits
   mevedel-collaboration-projection.el canonical browser transcript projection
   mevedel-collaboration-task.el browser task projection and publication
   mevedel-collaboration-share.el bearer-link and QR presentation surface
@@ -200,6 +202,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-ui.el          Agent/InterruptAgent/ToolSearch/SendMessage assembly
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
   mevedel-tool-goal.el        UpdateGoal terminal-state tool and captured Goal authority checks
+  mevedel-tool-editing.el     SharedRead/Create/Edit model tools
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
   mevedel-tool-introspect.el  native Emacs introspection tools
   mevedel-buddy.el            edit recording, diff assembly, review requests

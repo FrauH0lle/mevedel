@@ -1,0 +1,321 @@
+/* Canonical shared content. Browser and host use the same validated Yjs model. */
+import * as Y from 'yjs';
+import { equalityDeep } from 'lib0/function';
+import { documentJSON, validateDocument } from './document.mjs';
+
+export const LIMIT = 16 * 1024 * 1024;
+export const identifier = (value) =>
+  typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
+export const same = equalityDeep;
+export const clone = (value) => JSON.parse(JSON.stringify(value));
+export function check(ok, message) {
+  if (!ok) throw new Error(message);
+}
+export function create(kind, title) {
+  check(['whiteboard', 'document'].includes(kind), 'Unknown editor kind');
+  const doc = new Y.Doc();
+  doc.getMap('meta').set('kind', kind);
+  doc.getMap('meta').set('title', title);
+  doc.getMap('shapes');
+  doc.getXmlFragment('document');
+  validate(doc);
+  return doc;
+}
+export const encode = (doc) => Y.encodeStateAsUpdate(doc);
+export function shapeJSON(value) {
+  const { geometry, ...properties } = value.toJSON();
+  check(
+    geometry && Object.keys(geometry).every((k) => ['box', 'points'].includes(k)),
+    'Invalid shape geometry record',
+  );
+  check(
+    !Object.hasOwn(properties, 'box') && !Object.hasOwn(properties, 'points'),
+    'Geometry must stay together',
+  );
+  return { ...properties, ...geometry };
+}
+export function restore(bytes) {
+  check(bytes.length <= LIMIT, 'Shared content is too large');
+  const doc = new Y.Doc();
+  try {
+    Y.applyUpdate(doc, bytes);
+    validate(doc);
+    return doc;
+  } catch (error) {
+    doc.destroy();
+    throw error;
+  }
+}
+export function inspect(doc) {
+  return {
+    kind: doc.getMap('meta').get('kind'),
+    title: doc.getMap('meta').get('title'),
+    content:
+      doc.getMap('meta').get('kind') === 'document'
+        ? documentJSON(doc)
+        : [...doc.getMap('shapes').values()]
+            .map(shapeJSON)
+            .sort((a, b) => a.id.localeCompare(b.id)),
+  };
+}
+export function validateImage(src) {
+  const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]*={0,2})$/.exec(src);
+  check(match && src.length <= 6 * 1024 * 1024, 'Invalid embedded image');
+  const raw = atob(match[2]),
+    data = Uint8Array.from(raw, (c) => c.charCodeAt(0)),
+    v = new DataView(data.buffer);
+  let width = 0,
+    height = 0;
+  if (
+    match[1] === 'png' &&
+    data.length >= 33 &&
+    v.getUint32(0) === 0x89504e47 &&
+    v.getUint32(4) === 0x0d0a1a0a &&
+    v.getUint32(8) === 13 &&
+    v.getUint32(12) === 0x49484452
+  ) {
+    width = v.getUint32(16);
+    height = v.getUint32(20);
+    let pixels = false,
+      ended = false;
+    for (let offset = 8; offset < data.length;) {
+      check(offset + 12 <= data.length, 'Truncated PNG');
+      const size = v.getUint32(offset),
+        kind = raw.slice(offset + 4, offset + 8);
+      check(offset + 12 + size <= data.length, 'Truncated PNG');
+      check(kind !== 'acTL', 'Animated images are unsupported');
+      if (kind === 'IDAT') pixels = true;
+      if (kind === 'IEND') {
+        check(size === 0 && offset + 12 === data.length, 'Malformed PNG ending');
+        ended = true;
+      }
+      offset += 12 + size;
+    }
+    check(pixels && ended, 'Truncated PNG');
+  } else if (match[1] === 'jpeg' && data.length >= 4 && v.getUint16(0) === 0xffd8) {
+    check(v.getUint16(data.length - 2) === 0xffd9, 'Truncated JPEG');
+    for (let offset = 2; offset + 4 <= data.length;) {
+      check(data[offset] === 255, 'Malformed JPEG');
+      const marker = data[offset + 1],
+        length = v.getUint16(offset + 2);
+      check(length >= 2 && offset + 2 + length <= data.length, 'Truncated JPEG');
+      if ([0xc0, 0xc1, 0xc2].includes(marker)) {
+        check(length >= 8, 'Malformed JPEG dimensions');
+        height = v.getUint16(offset + 5);
+        width = v.getUint16(offset + 7);
+        break;
+      }
+      if (marker === 0xda || marker === 0xd9) break;
+      offset += 2 + length;
+    }
+  } else if (
+    match[1] === 'webp' &&
+    data.length >= 30 &&
+    raw.slice(0, 4) === 'RIFF' &&
+    raw.slice(8, 12) === 'WEBP'
+  ) {
+    check(v.getUint32(4, true) === data.length - 8, 'Truncated WebP');
+    const kind = raw.slice(12, 16),
+      u24 = (i) => data[i] + (data[i + 1] << 8) + (data[i + 2] << 16);
+    if (kind === 'VP8X') {
+      check(!(data[20] & 2), 'Animated images are unsupported');
+      width = 1 + u24(24);
+      height = 1 + u24(27);
+    } else if (kind === 'VP8 ' && data[23] === 0x9d && data[24] === 1 && data[25] === 0x2a) {
+      width = v.getUint16(26, true) & 0x3fff;
+      height = v.getUint16(28, true) & 0x3fff;
+    } else if (kind === 'VP8L' && data[20] === 0x2f) {
+      const bits = v.getUint32(21, true);
+      width = 1 + (bits & 0x3fff);
+      height = 1 + ((bits >>> 14) & 0x3fff);
+    }
+  }
+  check(
+    width > 0 && height > 0 && width <= 8192 && height <= 8192 && width * height <= 16000000,
+    'Image dimensions are unsupported or exceed 16 megapixels',
+  );
+  return width * height;
+}
+export function validateShape(shape) {
+  check(shape && identifier(shape.id), 'Invalid shape identity');
+  check(
+    [
+      'rect',
+      'ellipse',
+      'diamond',
+      'cylinder',
+      'sticky',
+      'text',
+      'arrow',
+      'line',
+      'pen',
+      'image',
+    ].includes(shape.type),
+    'Unknown shape type',
+  );
+  const allowed = [
+    'id',
+    'type',
+    'box',
+    'text',
+    'stroke',
+    'fill',
+    'width',
+    'points',
+    'from',
+    'to',
+    'src',
+  ];
+  check(
+    Object.keys(shape).every((key) => allowed.includes(key)),
+    'Unknown shape property',
+  );
+  check(
+    Array.isArray(shape.box) &&
+      shape.box.length === 4 &&
+      shape.box.every((v) => Number.isFinite(v) && Math.abs(v) <= 1e6) &&
+      shape.box[2] >= 0 &&
+      shape.box[3] >= 0,
+    'Invalid shape geometry',
+  );
+  for (const key of ['text', 'stroke', 'fill', 'src', 'from', 'to'])
+    check(shape[key] === undefined || typeof shape[key] === 'string', 'Invalid shape text');
+  check((shape.text?.length || 0) <= 10000, 'Shape text is too long');
+  for (const key of ['stroke', 'fill'])
+    check(!shape[key] || /^(none|#[0-9a-fA-F]{6})$/.test(shape[key]), 'Invalid shape colour');
+  check(
+    shape.width === undefined ||
+      (Number.isFinite(shape.width) && shape.width >= 1 && shape.width <= 20),
+    'Invalid stroke width',
+  );
+  check(
+    shape.points === undefined ||
+      (Array.isArray(shape.points) &&
+        shape.points.length <= 4000 &&
+        shape.points.every(
+          (p) =>
+            Array.isArray(p) &&
+            p.length === 2 &&
+            p.every((n) => Number.isFinite(n) && Math.abs(n) <= 1e6),
+        )),
+    'Invalid drawing points',
+  );
+  if (['pen', 'line', 'arrow'].includes(shape.type) && shape.points)
+    check(shape.points.length >= 2, 'A stroke needs two points');
+  if (shape.points) {
+    check(['pen', 'line', 'arrow'].includes(shape.type), 'Only strokes carry points');
+    const [x, y, w, h] = shape.box;
+    check(
+      shape.points.every(
+        ([px, py]) => px >= x - 1e-8 && py >= y - 1e-8 && px <= x + w + 1e-8 && py <= y + h + 1e-8,
+      ),
+      'Drawing points exceed their geometry',
+    );
+  }
+  check(
+    !shape.src ||
+      (shape.src.length <= 6 * 1024 * 1024 &&
+        /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]*={0,2}$/.test(shape.src)),
+    'Invalid embedded image',
+  );
+  check(
+    shape.type === 'image' ? Boolean(shape.src) : shape.src === undefined,
+    'Images require embedded data on an image shape',
+  );
+  const pixels = shape.src ? validateImage(shape.src) : 0;
+  for (const key of ['from', 'to'])
+    check(!shape[key] || identifier(shape[key]), 'Invalid connector target');
+  check(shape.type === 'arrow' || (!shape.from && !shape.to), 'Only arrows bind to shapes');
+  return pixels;
+}
+export function validate(doc) {
+  check(
+    [...doc.share.keys()].every((key) => ['meta', 'shapes', 'document'].includes(key)),
+    'Unknown shared content',
+  );
+  const meta = doc.getMap('meta');
+  check(
+    [...meta.keys()].every((key) => ['kind', 'title'].includes(key)),
+    'Unknown editor property',
+  );
+  check(['whiteboard', 'document'].includes(meta.get('kind')), 'Unknown editor kind');
+  check(
+    typeof meta.get('title') === 'string' &&
+      meta.get('title').trim().length > 0 &&
+      meta.get('title').length <= 200,
+    'Invalid title',
+  );
+  const shapes = doc.getMap('shapes');
+  check(shapes.size <= 2000, 'Too many shapes');
+  let pixels = 0;
+  for (const [id, value] of shapes) {
+    check(value instanceof Y.Map && value.get('id') === id, 'Invalid shape record');
+    pixels += validateShape(shapeJSON(value));
+  }
+  check(pixels <= 32000000, 'Board images exceed 32 megapixels in total');
+  if (meta.get('kind') === 'document') {
+    check(shapes.size === 0, 'Shapes cannot enter a document');
+    if (doc.getXmlFragment('document').length) validateDocument(documentJSON(doc));
+  } else check(doc.getXmlFragment('document').length === 0, 'Text document cannot enter a board');
+  check(encode(doc).length <= LIMIT, 'Shared content is too large');
+}
+export function putShape(doc, shape) {
+  validateShape(shape);
+  const { box, points, ...properties } = shape;
+  shape = { ...properties, geometry: points ? { box, points } : { box } };
+  const shapes = doc.getMap('shapes');
+  doc.transact(() => {
+    let target = shapes.get(shape.id);
+    if (!target) {
+      target = new Y.Map();
+      shapes.set(shape.id, target);
+    }
+    for (const key of [...target.keys()]) if (!(key in shape)) target.delete(key);
+    for (const [key, value] of Object.entries(shape))
+      if (!same(target.get(key), value)) target.set(key, clone(value));
+  });
+}
+export function applyUpdate(doc, bytes) {
+  // Validate a disposable replica before altering the accepted state.
+  const candidate = restore(encode(doc));
+  try {
+    Y.applyUpdate(candidate, bytes);
+    validate(candidate);
+    check(
+      candidate.getMap('meta').get('kind') === doc.getMap('meta').get('kind'),
+      'Cannot change editor kind',
+    );
+    Y.applyUpdate(doc, bytes);
+  } finally {
+    candidate.destroy();
+  }
+}
+export function patch(doc, changes) {
+  check(
+    Array.isArray(changes) && changes.length > 0 && changes.length <= 200,
+    'Expected 1 to 200 changes',
+  );
+  const shapes = doc.getMap('shapes'),
+    ids = new Set();
+  for (const change of changes) {
+    check(identifier(change.id) && !ids.has(change.id), 'Invalid or duplicate target');
+    ids.add(change.id);
+    const current = shapes.has(change.id) ? shapeJSON(shapes.get(change.id)) : null;
+    if (!same(current, change.before))
+      throw Object.assign(new Error(`Stale target: ${change.id}`), {
+        code: 'stale',
+        targets: [{ id: change.id, current }],
+      });
+    if (change.after !== null) {
+      validateShape(change.after);
+      check(change.after.id === change.id, 'Cannot change shape identity');
+    }
+  }
+  doc.transact(() => {
+    for (const change of changes) {
+      if (change.after === null) shapes.delete(change.id);
+      else putShape(doc, change.after);
+    }
+  });
+  validate(doc);
+}

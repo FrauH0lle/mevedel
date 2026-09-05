@@ -31,6 +31,15 @@ Update manuals with the implementation, and retrieve needed detail again after
 context loss or a manual change. Static manuals do not list dynamic capabilities:
 ToolSearch delivers current contracts; the dialect manual lists pure operations.
 
+## Shared editing
+
+`SharedRead`, `SharedCreate`, and `SharedEdit` expose session-owned collaborative
+whiteboards and documents. Reads return revisioned targets and matching board
+media; mutations use exact target preconditions and the normal permission
+pipeline. An atomic commit and its result delivery defer cancellation
+settlement until the actual durable outcome is known. See
+[shared editing](shared-editing.md) for schemas, reversion, and host ownership.
+
 ## Tool pipeline
 
 `mevedel-tool-registry.el` owns registration, schemas, and conversion of gptel's

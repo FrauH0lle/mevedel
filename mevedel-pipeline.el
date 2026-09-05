@@ -221,6 +221,15 @@
 (require 'mevedel-tool-render-data)
 (require 'mevedel-turn)
 
+(defvar mevedel-pipeline--handler-active-p nil
+  "Predicate an asynchronous handler may capture to fence late mutations.
+It becomes false when its pipeline step is cancelled or settled.")
+
+(defvar mevedel-pipeline--handler-commit nil
+  "Function running a handler's irreversible commit and result delivery.
+Cancellation during that bounded section waits for its actual outcome.
+The handler must deliver a committed result before returning from the section.")
+
 (defvar mevedel-pipeline--active-tool-use-id nil
   "Tool-use id dynamically visible while a handler starts its work.")
 
@@ -1173,7 +1182,26 @@ buffer."
                  :status 'error))))))
          (invoke
           (lambda ()
-            (let ((mevedel-pipeline--active-tool-use-id
+            (let* ((cell (plist-get context :cancel-cell))
+                   (active (car cell))
+                   committing
+                   (mevedel-pipeline--handler-active-p
+                    (lambda () (or (null cell) (eq active (car cell))
+                                   (and committing (eq committing (car cell))))))
+                   (mevedel-pipeline--handler-commit
+                    (lambda (thunk)
+                      (unless (or (null cell) (eq active (car cell)))
+                        (error "Tool was cancelled before commit"))
+                      (let* (cancelled
+                             (defer (lambda () (setq cancelled t))))
+                        (when cell (setcar cell defer))
+                        (setq committing defer)
+                        (unwind-protect (funcall thunk)
+                          (setq committing nil)
+                          (when (and cell (eq (car cell) defer))
+                            (setcar cell active)
+                            (when cancelled (funcall active)))))))
+                  (mevedel-pipeline--active-tool-use-id
                    (plist-get context :tool-use-id))
                   (mevedel-pipeline--active-call-source
                    (plist-get context :call-source))

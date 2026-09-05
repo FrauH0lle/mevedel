@@ -93,6 +93,7 @@
   function setConnection(text, className) {
     connection.textContent = text;
     connection.className = `conn ${className || ''}`;
+    if (className !== 'connected') editing.connection(false);
   }
 
   function showNotice(text) {
@@ -139,6 +140,7 @@
     summarize: summarizeSession,
   });
   const tasks = window.mevedelTaskView.create({el, summarize: summarizeSession});
+  const editing = window.mevedelEditingView.create({state, send, el, flash: flashNotice, summarize: summarizeSession});
   const sessions = window.mevedelSessionView.create(
     {state, send, el, encode: base64urlEncode, decode: base64urlDecode,
      summarize: summarizeSession});
@@ -935,6 +937,9 @@
       agents.show([]);
       tasks.show();
       setConnection('Loading…', 'connected');
+      editing.welcome();
+    } else if (frame.t === 'editing' || frame.t === 'editing-presence') {
+      editing.receive(frame);
     } else if (frame.t === 'snapshot-chunk') {
       if (!state.staging) return;
       if (Array.isArray(frame.records)) state.staging.records.push(...frame.records);

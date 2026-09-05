@@ -23,7 +23,8 @@ Link tiers grant progressively more typed actions:
 
 - **View:** inspect projected state and fetch already-published artifacts.
 - **Full:** additionally queue prompts, interrupt the running request, answer
-  eligible interactions, and invoke host-admitted commands or skills.
+  eligible interactions, invoke host-admitted commands or skills, and edit
+  shared whiteboards and documents through the host.
 - **Owner:** additionally change permission mode and create a same-workspace
   isolated session directly. A full-link creation request instead requires
   approval from Emacs or an owner-link guest.
@@ -48,6 +49,10 @@ record ID, resolved and bounded by the host. HTML runs in a sandboxed iframe
 with scripts permitted but no same-origin authority and a restrictive CSP.
 Artifacts use existing portable session publication, not relay file storage or
 a separate retention system. See [Session artifacts](../view.md#session-artifacts).
+
+Shared whiteboards and documents allow direct browser editing through typed,
+host-committed operations. [ADR 0120](0120-edit-shared-content-through-the-session-host.md)
+owns this extension beyond model-authored artifacts.
 
 Opt-in notifications use browser-native Push with room-scoped service workers.
 The host forwards endpoint routing metadata to the relay, which sends an empty

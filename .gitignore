@@ -44,3 +44,5 @@ __pycache__/
 *.py[codz]
 *$py.class
 /relay/mevedel-relay
+
+/shared-editing/node_modules/

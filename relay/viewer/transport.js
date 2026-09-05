@@ -60,6 +60,7 @@
     let downSince = null;
     let inbound = Promise.resolve();
     let outbound = Promise.resolve();
+    let sending = 0;
 
     async function sealFrame(text) {
       const nonce = crypto.getRandomValues(new Uint8Array(12));
@@ -97,8 +98,14 @@
 
     function send(frame) {
       const target = socket;
+      // Presence is disposable. Keep it behind durable edits and control,
+      // and never let a slow socket accumulate pointer samples.
+      if (frame.t === 'editing-presence' &&
+          (sending || !target || target.bufferedAmount > 65536)) return Promise.resolve(false);
+      sending++;
       const text = JSON.stringify(frame);
-      const work = outbound.then(() => sendNow(text, target));
+      const work = outbound.then(() => sendNow(text, target))
+        .finally(() => { sending--; });
       outbound = work.catch(() => {});
       return work;
     }
@@ -135,6 +142,7 @@
       outbound = Promise.resolve();
       options.onConnection('Connecting…');
       const nextSocket = new WebSocket(websocketUrl());
+      let queuedBytes=0,queuedFrames=0;
       nextSocket.binaryType = 'arraybuffer';
       socket = nextSocket;
       nextSocket.addEventListener('open', async () => {
@@ -155,6 +163,8 @@
           } catch (_error) { /* ignore */ }
           return;
         }
+        queuedBytes+=event.data.byteLength;queuedFrames++;
+        if(queuedBytes>32*1024*1024||queuedFrames>256){nextSocket.close();return;}
         inbound = inbound.then(async () => {
           if (ended || socket !== nextSocket) return;
           const frame = await unsealEnvelope(new Uint8Array(event.data));
@@ -166,7 +176,7 @@
           }
           // Observability hook for the deterministic protocol test.
           window.mevedelViewerApplied = (window.mevedelViewerApplied || 0) + 1;
-        }).catch(() => {});
+        }).catch(() => {}).finally(()=>{queuedBytes-=event.data.byteLength;queuedFrames--;});
       });
       nextSocket.addEventListener('close', event => {
         if (socket !== nextSocket || ended) return;

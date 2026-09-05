@@ -74,6 +74,8 @@ Key features:
   batch Eval child confinement
 - Optional: [mcp.el](https://github.com/lizqwerscott/mcp.el) for `@mcp` mentions
 - Optional: Poppler (`pdftoppm`) for rendering selected PDF pages with `Read`
+- Optional: Node 22.4 or newer on the Emacs host for
+  [shared whiteboard and document editing](docs/shared-editing.md) in browser rooms
 - Optional: ImageMagick (`magick` or `convert`) for image/PDF resize and
   compression options in `Read`
 

@@ -58,6 +58,11 @@
       <div id="artifact-body" class="artifact-body"></div>
     </section>
     <div class="dock">
+      <section id="editing-panel" class="viewer-panel" hidden role="dialog" aria-label="Shared editing">
+        <header class="panel-head"><span id="editing-title" class="panel-title"></span>
+          <button id="editing-close" class="btn quiet" type="button">Close</button></header>
+        <div id="editing-body"></div>
+      </section>
       <div class="live-controls">
         <button id="live-button" class="live-button" type="button" hidden
                 title="Jump back to the newest turn">Return to live</button>
@@ -78,6 +83,13 @@
             <nav id="artifacts" class="dock-strip" aria-label="Session artifacts"></nav>
           </details>
           <div class="dock-actions">
+            <details id="editing-box" hidden><summary>Shared</summary>
+              <nav id="editing-items" class="dock-strip" aria-label="Shared whiteboards and documents"></nav>
+              <button class="btn quiet" data-create-editor="whiteboard" type="button">New whiteboard</button>
+              <button class="btn quiet" data-create-editor="document" type="button">New document</button>
+              <button id="editing-import" class="btn quiet" type="button">Import</button>
+              <input id="editing-file" type="file" accept=".json,.md,.txt,image/png,image/jpeg,image/webp" hidden>
+            </details>
             <button id="new-session-button" class="btn quiet" type="button" hidden
                     title="Start a separate session — this room stays open"
                     aria-label="New session">＋ Session</button>
@@ -192,6 +204,7 @@
     <script src="/viewer-agent.js" defer></script>
     <script src="/viewer-task.js" defer></script>
     <script src="/viewer-session.js" defer></script>
+    <script src="/viewer-editing.js" defer></script>
     <script src="/viewer.js" defer></script>
   </body>
 </html>

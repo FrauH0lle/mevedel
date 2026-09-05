@@ -124,6 +124,8 @@ created as a side effect of registration and handles serialization."
     ("Glob" "Grep" "Read"
      mevedel-tool-fs mevedel-tool-fs--register)
     ("ApplyPatch" mevedel-tool-patch mevedel-tool-patch-register)
+    ("SharedRead" "SharedCreate" "SharedEdit"
+     mevedel-tool-editing mevedel-tool-editing--register)
     ("ToolCall" mevedel-tool-ptc mevedel-tool-ptc--register)
     ("UpdateGoal" mevedel-tool-goal mevedel-tool-goal--register)
     ("Imenu" "Treesitter" "XrefDefinitions" "XrefReferences"

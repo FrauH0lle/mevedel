@@ -34,6 +34,7 @@
 (require 'mevedel-goal)
 (require 'mevedel-tool-skills)
 (require 'mevedel-tool-task)
+(require 'mevedel-tool-editing)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-web)
 
@@ -110,6 +111,7 @@
   (mevedel-tool-ui--register)
   (mevedel-tool-skills--register)
   (mevedel-tool-task--register)
+  (mevedel-tool-editing--register)
   (mevedel-tool-ptc--register)
   (mevedel-tool-introspect--register))
 
