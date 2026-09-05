@@ -32,7 +32,8 @@
     }
 
     function markTitle(on) {
-      document.title = on ? `\u25cf ${baseTitle}` : baseTitle;
+      const title = state.editorTitle || baseTitle;
+      document.title = on ? `\u25cf ${title}` : title;
     }
 
     function render() {

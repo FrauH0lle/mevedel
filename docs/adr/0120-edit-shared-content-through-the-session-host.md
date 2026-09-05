@@ -53,3 +53,20 @@ The cost is a local Node runtime and packaged browser/helper bundles. End
 users do not install npm dependencies. Large content and operation histories
 have explicit bounds; reaching them calls for a smaller item or a native
 export/import, rather than unbounded memory or hidden history truncation.
+
+
+## Usability findings from the first shared session
+
+The first trial on an iPhone 13 mini left the document almost entirely hidden
+behind wrapping toolbars and the keyboard. Editors now open in their own tabs,
+with independent room connections and a full-size opaque iframe. The original
+room retains its composer. The parent sizes the editor to the visual viewport;
+formatting stays on one scrolling row and phone question controls collapse.
+A tab URL identifies the item, while credentials continue through the existing
+fragment-to-tab-storage lifecycle and never reach the iframe.
+
+The trial also showed that a contribution row per 300 ms save was unreadable.
+Keep those commits and their exact inverse records; group their presentation
+by participant name and five-second idle gaps. Agent transactions remain
+separate. Local view decorations distinguish the latest retained agent changes
+without modifying CRDT content or exported formatting.

@@ -50,6 +50,8 @@ test('host creates, exports, imports independently, and renders without a browse
   assert.deepEqual(copy.result.content, edited.result.content);
   assert.equal(copy.state.revision, 1);
   assert.equal(edited.state.transactions[0].actor, 'Agent');
+  assert.ok(Number.isSafeInteger(edited.state.transactions[0].time));
+  assert.equal(retried.state.transactions[0].time, edited.state.transactions[0].time);
 });
 
 test('selected connector PNG uses the current bound endpoint and includes its reference', async () => {

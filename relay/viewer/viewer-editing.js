@@ -6,6 +6,8 @@ window.mevedelEditingView = {
       list = document.getElementById('editing-items');
     const panel = document.getElementById('editing-panel'),
       holder = document.getElementById('editing-body');
+    const editorTab = new URL(window.location.href).searchParams.has('shared');
+    let requestedItem = new URL(window.location.href).searchParams.get('shared');
     const pending = new Map(),
       transfers = new Map(),
       catalog = new Map();
@@ -16,6 +18,30 @@ window.mevedelEditingView = {
       frame = null,
       sequence = 0,
       outbound = Promise.resolve();
+    function reserveTab() {
+      if (editorTab) return null;
+      const tab = window.open('about:blank', '_blank');
+      if (!tab) throw new Error('Allow a new tab to open the editor');
+      tab.opener = null;
+      return tab;
+    }
+    function launch(id, tab) {
+      if (editorTab) return open(id);
+      const url = new URL(window.location.href);
+      url.searchParams.set('shared', id);
+      url.hash = state.fragment || window.location.hash;
+      (tab || reserveTab()).location.replace(url.href);
+    }
+    // Mobile keyboards resize the visual viewport, not necessarily the layout
+    // viewport. Keep the complete editor above the keyboard, including in Safari.
+    function viewport() {
+      if (!window.visualViewport) return;
+      panel.style.height = `${window.visualViewport.height}px`;
+      panel.style.top = `${window.visualViewport.offsetTop}px`;
+    }
+    window.visualViewport?.addEventListener('resize', viewport);
+    window.visualViewport?.addEventListener('scroll', viewport);
+    viewport();
     const b64 = (text) => {
       const bytes = new TextEncoder().encode(text);
       let raw = '';
@@ -51,7 +77,12 @@ window.mevedelEditingView = {
           const id = key.slice(prefix.length),
             draft = readDraft(id);
           if (draft && !catalog.has(id))
-            catalog.set(id, { id, kind: draft.kind, title: draft.title, local: true });
+            catalog.set(id, {
+              id,
+              kind: draft.kind,
+              title: draft.title,
+              local: true,
+            });
         }
       } catch (_) {
         /* Existing open editors can still export without storage. */
@@ -107,7 +138,13 @@ window.mevedelEditingView = {
         );
         button.dataset.itemId = item.id;
         button.type = 'button';
-        button.onclick = () => open(item.id).catch((e) => flash(e.message));
+        button.onclick = async () => {
+          try {
+            await launch(item.id);
+          } catch (e) {
+            flash(e.message);
+          }
+        };
         list.append(button);
       }
       document
@@ -143,8 +180,15 @@ window.mevedelEditingView = {
       setTimeout(() => URL.revokeObjectURL(url), 10000);
     }
     async function open(id) {
+      if (editorTab) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('shared', id);
+        window.history.replaceState(null, '', url);
+      }
       if (current === id && frame) {
         panel.hidden = false;
+        document.title =
+          state.editorTitle = `${document.getElementById('editing-title').textContent} · mevedel`;
         return;
       }
       const draft = readDraft(id);
@@ -161,6 +205,7 @@ window.mevedelEditingView = {
       current = id;
       panel.hidden = false;
       document.getElementById('editing-title').textContent = result.title;
+      document.title = state.editorTitle = `${result.title} · mevedel`;
       frame = el('iframe');
       frame.title = `Shared ${result.kind}: ${result.title}`;
       frame.setAttribute('sandbox', 'allow-scripts allow-forms');
@@ -214,7 +259,11 @@ window.mevedelEditingView = {
           port.postMessage({ type: 'reply', reqId: data.reqId, result: value });
         } catch (error) {
           if (current === id)
-            channel.port1.postMessage({ type: 'reply', reqId: data.reqId, error: error.message });
+            channel.port1.postMessage({
+              type: 'reply',
+              reqId: data.reqId,
+              error: error.message,
+            });
         }
       };
       frame.onload = () => {
@@ -243,9 +292,18 @@ window.mevedelEditingView = {
         items.forEach((item) => catalog.set(item.id, item));
         recoveryCatalog();
         render();
+        if (requestedItem && !current) {
+          const id = requestedItem;
+          requestedItem = null;
+          await open(id);
+        }
         if (current) {
           const result = await request({ action: 'read', id: current });
-          port?.postMessage({ type: 'sync', item: result, readOnly: state.readOnly });
+          port?.postMessage({
+            type: 'sync',
+            item: result,
+            readOnly: state.readOnly,
+          });
         }
       } catch (error) {
         flash(error.message);
@@ -265,6 +323,11 @@ window.mevedelEditingView = {
       pending.clear();
       recoveryCatalog();
       if (catalog.size) render();
+      if (requestedItem && catalog.has(requestedItem) && !current) {
+        const id = requestedItem;
+        requestedItem = null;
+        open(id).catch((error) => flash(error.message));
+      }
     }
     function receive(frame) {
       if (frame.t === 'editing-presence') {
@@ -316,6 +379,7 @@ window.mevedelEditingView = {
         if (!previous || previous.title !== title || previous.kind !== kind) render();
         if (id === current) {
           document.getElementById('editing-title').textContent = title;
+          if (!panel.hidden) document.title = state.editorTitle = `${title} · mevedel`;
           port?.postMessage({ type: 'changed', ...value });
         }
       } else {
@@ -330,7 +394,9 @@ window.mevedelEditingView = {
     document.querySelectorAll('[data-create-editor]').forEach(
       (button) =>
         (button.onclick = async () => {
+          let tab;
           try {
+            tab = reserveTab();
             const item = await request({
               action: 'create',
               kind: button.dataset.createEditor,
@@ -338,8 +404,9 @@ window.mevedelEditingView = {
               opId: crypto.randomUUID(),
               title: button.dataset.createEditor === 'whiteboard' ? 'Whiteboard' : 'Document',
             });
-            await open(item.id);
+            await launch(item.id, tab);
           } catch (error) {
+            tab?.close();
             flash(error.message);
           }
         }),
@@ -350,7 +417,9 @@ window.mevedelEditingView = {
       const file = input.files[0];
       input.value = '';
       if (!file) return;
+      let tab;
       try {
+        tab = reserveTab();
         if (file.size > 16 * 1024 * 1024) throw new Error('File is too large');
         let format = file.name.endsWith('.json')
             ? 'native'
@@ -395,16 +464,28 @@ window.mevedelEditingView = {
           id: crypto.randomUUID(),
           opId: crypto.randomUUID(),
         });
-        await open(item.id);
+        await launch(item.id, tab);
       } catch (error) {
+        tab?.close();
         flash(error.message);
       }
     };
     document.getElementById('editing-close').onclick = () => {
       panel.hidden = true;
+      state.editorTitle = null;
+      document.title = 'mevedel live session';
+      requestedItem = null;
+      const url = new URL(window.location.href);
+      url.searchParams.delete('shared');
+      window.history.replaceState(null, '', url);
       port?.postMessage({ type: 'closed' });
       if (connected && !state.readOnly)
-        send({ t: 'editing-presence', id: current, mode: 'clear', point: null });
+        send({
+          t: 'editing-presence',
+          id: current,
+          mode: 'clear',
+          point: null,
+        });
     };
     return { welcome, connection, receive, open };
   },
