@@ -38,9 +38,20 @@ Agent persistence splits along the seam the code already had:
   modified segment every debounce tick — a follow-up profile (2026-08-26)
   attributed over 2GB of a session's allocation to the deferred full saves
   and showed one visible whole-segment write every few seconds.  Portable
-  sessions keep the full save, whose remote transaction already elides
-  byte-identical durable state; a synchronous commit still cancels a
-  pending registry save outright.  The deferred thunk re-arms instead of
+  sessions publish that same sidecar as a one-artifact commit; the
+  manifest overlay keeps the committed segment, instruction, and
+  artifact-folder entries.  The original decision kept the full save for
+  portable sessions on the assumption that its byte comparison made an
+  unchanged save free.  A 2026-09 profile attributed 37% of all allocation
+  in a 2h45m session to those saves: the segment copy, artifact-folder
+  read, and instruction serialization run before the comparison, and the
+  registry a persist is about differs from the committed one by
+  construction, so the transaction was never elided.  Project sessions are
+  always portable, which made the sidecar-only path unreachable for the
+  default session type.  A portable session with no committed sidecar yet
+  skips the observational save; the next critical commit carries its
+  registry.  A synchronous commit still cancels a pending registry save
+  outright.  The deferred thunk re-arms instead of
   writing while a critical publication is active, and the kill-emacs hook
   flushes pending saves inline because registry mutations do not mark the
   root buffer modified.

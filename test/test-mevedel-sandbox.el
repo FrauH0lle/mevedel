@@ -356,7 +356,42 @@
                              :test #'string-equal))))
       (delete-directory root t)
       (set-file-modes unreadable #o700)
-      (delete-directory secondary t))))
+      (delete-directory secondary t)))
+
+  :doc "temporary root exemption:
+`mevedel-sandbox--protected-candidates' never walks the temporary root"
+  (let* ((root (make-temp-file "mevedel-sandbox-candidates-" t))
+         (scratch (make-temp-file "mevedel-sandbox-scratch-" t))
+         (dot-git (file-name-concat root "nested" ".git"))
+         (scratch-dot-git (file-name-concat scratch "nested" ".git"))
+         scanned-roots
+         (mevedel-protected-paths '(("**/.git/**" . read-only))))
+    (unwind-protect
+        (progn
+          (make-directory dot-git t)
+          (make-directory scratch-dot-git t)
+          (let* ((original (symbol-function 'directory-files-recursively))
+                 (candidates
+                  (cl-letf
+                      (((symbol-function 'directory-files-recursively)
+                        (lambda (directory regexp &rest arguments)
+                          (push (file-name-as-directory
+                                 (file-truename directory))
+                                scanned-roots)
+                          (apply original directory regexp arguments))))
+                    (mevedel-sandbox--protected-candidates
+                     root (list root scratch) scratch))))
+            (should (cl-find dot-git candidates
+                             :key (lambda (item) (plist-get item :path))
+                             :test #'string-equal))
+            (should-not (cl-find scratch-dot-git candidates
+                                 :key (lambda (item) (plist-get item :path))
+                                 :test #'string-equal))
+            (should-not (member (file-name-as-directory
+                                 (file-truename scratch))
+                                scanned-roots))))
+      (delete-directory root t)
+      (delete-directory scratch t))))
 
 (mevedel-deftest mevedel-sandbox-cleanup ()
   ,test
@@ -426,7 +461,10 @@ a disabled transport cleans immediately instead of dropping work"
                 (mevedel-sandbox--protected-restrictions root (list root)))
           (let ((arguments (plist-get restrictions :arguments)))
             (should (member dot-git arguments))
-            (should (member "--ro-bind" arguments))
+            ;; A read-only source may vanish between planning and
+            ;; launch; the try variant keeps the launch confined.
+            (should (member "--ro-bind-try" arguments))
+            (should-not (member "--ro-bind" arguments))
             (should (member credentials arguments))
             (should (member "--tmpfs" arguments))
             (should (member missing arguments)))

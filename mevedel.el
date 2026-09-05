@@ -249,6 +249,9 @@
 (declare-function mevedel-transport-install "mevedel-transport" ())
 (declare-function mevedel-transport-uninstall "mevedel-transport" ())
 
+;; `mevedel-view'
+(declare-function mevedel-view--resume-attended-views "mevedel-view" (&rest _))
+
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-install-slash-command "mevedel-worktree" ())
 (declare-function mevedel-worktree-uninstall-slash-command
@@ -697,6 +700,8 @@ always prompt for the session name."
   (interactive)
 
   (mevedel-transport-install)
+  (add-function :after after-focus-change-function
+                #'mevedel-view--resume-attended-views)
 
   ;; Define custom tools
   (mevedel-tools-register)
@@ -777,6 +782,8 @@ always prompt for the session name."
   (setf (alist-get "mevedel" gptel--known-tools nil 'remove #'equal) nil)
   (remove-hook 'mevedel-execution-event-functions
                #'mevedel-view-stream-handle-execution-event)
+  (remove-function after-focus-change-function
+                   #'mevedel-view--resume-attended-views)
   (when (eq mevedel-execution-mailbox-delivery-function
             #'mevedel-tool-exec-handle-execution-event)
     (setq mevedel-execution-mailbox-delivery-function nil))

@@ -54,9 +54,11 @@
 (declare-function mevedel-view--schedule-render
                   "mevedel-view" (kind data-buffer delay))
 (declare-function mevedel-view--tool-status-string "mevedel-view" (tool-name args))
+(declare-function mevedel-view--unattended-p "mevedel-view" (&optional buffer))
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (defvar mevedel-view--display-map)
 (defvar mevedel-view-pending-tools-visible-max)
+(defvar mevedel-view-rerender-debounce)
 (defvar mevedel-view-spinner-animate)
 (defvar mevedel-view-spinner-frames)
 (defvar mevedel-view-spinner-interval)
@@ -515,15 +517,19 @@ line."
        'mevedel-view-spinner))))
 
 (defun mevedel-view--spinner-tick ()
-  "Advance visible spinner frames in the current view buffer."
-  (mevedel-view--call-preserving-user-view-state
-   (lambda ()
-     (setq mevedel-view--spinner-frame-index
-           (mod (1+ mevedel-view--spinner-frame-index)
-                (max 1 (length mevedel-view-spinner-frames))))
-     (mevedel-view--ensure-request-progress)
-     (mevedel-view--refresh-request-spinner-frame)
-     (mevedel-view--refresh-inline-spinner-frames))))
+  "Advance visible spinner frames in the current view buffer.
+An unattended view skips the tick: nobody sees the frame, and the
+property rewrite would only force a redisplay.  The timer keeps running,
+so the animation resumes with the next tick after focus returns."
+  (unless (mevedel-view--unattended-p)
+    (mevedel-view--call-preserving-user-view-state
+     (lambda ()
+       (setq mevedel-view--spinner-frame-index
+             (mod (1+ mevedel-view--spinner-frame-index)
+                  (max 1 (length mevedel-view-spinner-frames))))
+       (mevedel-view--ensure-request-progress)
+       (mevedel-view--refresh-request-spinner-frame)
+       (mevedel-view--refresh-inline-spinner-frames)))))
 
 (defun mevedel-view--start-spinner (&optional status)
   "Show request progress with STATUS text in the view buffer.
@@ -755,10 +761,18 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
            (mevedel-view-stream--cache-execution-progress event))
           ('terminal
            (mevedel-view-stream--remove-execution-progress tool-use-id)))
-        (unless (and tool-use-id
-                     (mevedel-view--refresh-tool-row data-buffer tool-use-id))
+        (cond
+         ;; Nobody sees the row.  The cache above is what a render reads,
+         ;; so fold the change into the next attended full render instead
+         ;; of rewriting the row four times a second.
+         ((mevedel-view--unattended-p)
+          (mevedel-view--schedule-render
+           'full data-buffer mevedel-view-rerender-debounce))
+         ((and tool-use-id
+               (mevedel-view--refresh-tool-row data-buffer tool-use-id)))
+         (t
           (mevedel-view-stream--schedule-execution-row-recovery
-           data-buffer)))))
+           data-buffer))))))
   nil)
 
 (defun mevedel-view--render-stream-update (data-buf)

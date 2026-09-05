@@ -1858,11 +1858,23 @@ record only that context was added, without duplicating the body."
            (when (and stderr-process (process-live-p stderr-process))
              (delete-process stderr-process)))
          (cancel ()
+           ;; A request teardown drains this while the child runs.  The
+           ;; handler still owes one log entry and its settlement: without
+           ;; them the event's telemetry span stays open and the slow
+           ;; notice later reports a dead child as still running.
            (unless settled
              (setq settled t)
-             (release-children)
+             (with-demoted-errors "mevedel: hook teardown failed: %S"
+               (release-children))
              (when (buffer-live-p stdout-buffer) (kill-buffer stdout-buffer))
-             (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))))
+             (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))
+             (mevedel-hooks--log
+              session
+              (mevedel-hooks--log-entry
+               event event-plist handler 'cancelled
+               :elapsed (- (float-time) start-time)
+               :exit-status 'cancelled))
+             (funcall callback 'cancelled)))
          (finish (status reason)
            (unless settled
              (setq settled t)
@@ -2062,6 +2074,14 @@ stable public event payload."
                     :handler-source (plist-get handler :source)))))
         (cl-labels
             ((advance (handler-decision)
+               (if (eq handler-decision 'cancelled)
+                   ;; The request is being torn down: settle the spans and
+                   ;; the event, but run no further handler.
+                   (progn
+                     (when handler-span
+                       (mevedel-telemetry-finish
+                        handler-span :outcome 'cancelled))
+                     (funcall callback 'cancelled))
                (let* ((context
                        (mevedel-hooks-additional-context-string
                         handler-decision event))
@@ -2088,7 +2108,7 @@ stable public event payload."
                     :context-deduplicated nil))
                  (mevedel-hooks--run-handlers
                   event (cdr handlers) next-plist session request next callback
-                  dispatch-buffer next-context-handlers))))
+                  dispatch-buffer next-context-handlers)))))
           (pcase (plist-get handler :type)
             ('elisp
              (advance
@@ -2155,20 +2175,24 @@ decision plist."
             ((finish (decision)
                (unless settled
                  (setq settled t)
-                 (setq decision
-                       (mevedel-hooks-sanitize-final-decision
-                        event decision))
+                 (unless (eq decision 'cancelled)
+                   (setq decision
+                         (mevedel-hooks-sanitize-final-decision
+                          event decision)))
 	                 (when telemetry-span
 	                   (mevedel-telemetry-finish
 	                    telemetry-span
 	                    :outcome
-	                    (if (mevedel-hooks--decision-blocking-p decision)
-	                        'blocked
-	                      'continued)
+	                    (cond
+	                     ((eq decision 'cancelled) 'cancelled)
+	                     ((mevedel-hooks--decision-blocking-p decision)
+	                      'blocked)
+	                     (t 'continued))
 	                    :context-chars
-	                    (when-let* ((context
-	                                (mevedel-hooks-additional-context-string
-	                                 decision event)))
+	                    (when-let* (((not (eq decision 'cancelled)))
+	                                (context
+	                                 (mevedel-hooks-additional-context-string
+	                                  decision event)))
 	                      (length context))))
 	                 (when (timerp slow-timer)
 	                   (cancel-timer slow-timer))
@@ -2191,14 +2215,20 @@ decision plist."
                                 :hook-event event
                                 :handler-count (length handlers)
                                 :restored (and restored t)))))
-                         (if (buffer-live-p dispatch-buffer)
-                             (with-current-buffer dispatch-buffer
-	                       (mevedel-hooks--surface-final-decision
-	                        event session decision)
-	                       (funcall callback decision))
+                         ;; A cancelled event belongs to a request being
+                         ;; torn down: nothing to surface, and the caller's
+                         ;; continuation must not run.
+                         (cond
+                          ((eq decision 'cancelled) nil)
+                          ((buffer-live-p dispatch-buffer)
+                           (with-current-buffer dispatch-buffer
+	                     (mevedel-hooks--surface-final-decision
+	                      event session decision)
+	                     (funcall callback decision)))
+                          (t
                            (mevedel-hooks--surface-final-decision
                             event session decision)
-                           (funcall callback decision)))))
+                           (funcall callback decision))))))
           (when (and mevedel-hooks-slow-threshold
                      handlers)
             (setq slow-timer
@@ -2226,7 +2256,11 @@ decision plist."
                             :threshold-ms
                             (round (* 1000 mevedel-hooks-slow-threshold))))))))))
           (mevedel-hooks--run-handlers
-           event handlers payload session request nil #'finish
+           event handlers payload session
+           ;; Terminal hooks retain the request's rule layer above, but
+           ;; outlive its teardown and are bounded by their own timeout.
+           (unless (memq event '(Stop StopFailure)) request)
+           nil #'finish
            dispatch-buffer))))))
 
 (defun mevedel-hooks--target-key-for-event (event)

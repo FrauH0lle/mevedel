@@ -1194,6 +1194,114 @@
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
 
+  :doc "publishes only the sidecar for a portable session"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-registry-portable-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (buf (generate-new-buffer " *test-registry-portable*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (org-mode)
+          (setq-local mevedel--session session)
+          (mevedel-test--with-shifted-clock
+            (insert "First prompt\n")
+            (mevedel-session-artifacts-save session buf)
+            (let* ((artifacts-before
+                    (plist-get (mevedel-session-publication session)
+                               :artifacts))
+                   (segment-before
+                    (cdr (assoc "segment-0001.chat.org" artifacts-before)))
+                   (sidecar-before
+                    (cdr (assoc "session.meta.el" artifacts-before)))
+                   (committed-segment
+                    (mevedel-session-artifacts-read-artifact
+                     session "segment-0001.chat.org" t))
+                   (first-updated (mevedel-session-updated-at session)))
+              (should segment-before)
+              (should sidecar-before)
+              (setq mevedel-test--timestamp-offset 2)
+              (insert "Streamed text not yet settled\n")
+              (should
+               (equal (mevedel-session-artifacts-save-agent-registry
+                       session buf)
+                      (mevedel-session-save-path session)))
+              (let ((artifacts-after
+                     (plist-get (mevedel-session-publication session)
+                                :artifacts)))
+                ;; The segment entry is the committed one, untouched; the
+                ;; sidecar entry is new.
+                (should (equal segment-before
+                               (cdr (assoc "segment-0001.chat.org"
+                                           artifacts-after))))
+                (should-not
+                 (equal (plist-get sidecar-before :published)
+                        (plist-get (cdr (assoc "session.meta.el"
+                                               artifacts-after))
+                                   :published))))
+              (should (equal committed-segment
+                             (mevedel-session-artifacts-read-artifact
+                              session "segment-0001.chat.org" t)))
+              (should (buffer-modified-p))
+              (should-not (equal first-updated
+                                 (mevedel-session-updated-at session)))
+              (should
+               (equal (mevedel-session-updated-at session)
+                      (plist-get
+                       (mevedel-session-codec-read
+                        (mevedel-session-artifacts-sidecar-path
+                         (mevedel-session-save-path session)))
+                       :updated-at))))))
+      (test-mevedel-session-persistence--release-and-kill buf session)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "skips a portable session whose sidecar is not yet committed"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-registry-shallow-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (buf (generate-new-buffer " *test-registry-shallow*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (org-mode)
+          (setq-local mevedel--session session)
+          (let ((save-path (mevedel-session-persistence-shallow-ensure-files
+                            session buf)))
+            (should save-path)
+            (should-not (mevedel-session-artifacts-save-agent-registry
+                         session buf))
+            (should-not (file-exists-p
+                         (file-name-concat save-path "session.meta.el")))))
+      (test-mevedel-session-persistence--release-and-kill buf session)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+
+  :doc "a portable publication failure leaves the committed snapshot intact"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-registry-failure-" t)))
+         (workspace (test-mevedel-session-persistence--make-workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (buf (generate-new-buffer " *test-registry-failure*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (org-mode)
+          (setq-local mevedel--session session)
+          (insert "First prompt\n")
+          (mevedel-session-artifacts-save session buf)
+          (let ((committed (mevedel-session-artifacts-read-artifact
+                            session "segment-0001.chat.org" t)))
+            (cl-letf (((symbol-function 'mevedel-session-publication-publish)
+                       (lambda (&rest _) (error "Publication unavailable"))))
+              (should-error (mevedel-session-artifacts-save-agent-registry
+                             session buf)))
+            (should (equal committed
+                           (mevedel-session-artifacts-read-artifact
+                            session "segment-0001.chat.org" t)))))
+      (test-mevedel-session-persistence--release-and-kill buf session)
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+
   :doc "does nothing for an unmaterialized session"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)

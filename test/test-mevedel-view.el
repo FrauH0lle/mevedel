@@ -184,8 +184,10 @@
         (mevedel-view-rerender view-buf))
       (should (= 1 scheduled)))))
 
-(mevedel-deftest mevedel-view--flush-scheduled-render
-  (:doc "keeps historical projection fixed while refreshing live chrome")
+(mevedel-deftest mevedel-view--flush-scheduled-render ()
+  ,test
+  (test)
+  :doc "keeps historical projection fixed while refreshing live chrome"
   (mevedel-view-test--with-buffers
     (let ((full-count 0)
           (incremental-count 0)
@@ -211,7 +213,149 @@
         (should-not mevedel-view--pending-render-kind))
       (should (= 0 full-count))
       (should (= 0 incremental-count))
-      (should (= 3 chrome-count)))))
+      (should (= 3 chrome-count))))
+
+  :doc "an unattended view keeps its pending render until focus returns"
+  (mevedel-view-test--with-buffers
+    (let ((full-count 0)
+          (unattended t))
+      (with-current-buffer view-buf
+        (setq-local mevedel-view--pending-render-kind 'full
+                    mevedel-view--pending-render-data-buffer data-buf))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--unattended-p)
+                     (lambda (&rest _) unattended))
+                    ((symbol-function 'mevedel-view--full-rerender)
+                     (lambda (&rest _) (cl-incf full-count))))
+            (mevedel-view--flush-scheduled-render view-buf)
+            (with-current-buffer view-buf
+              (should (= 0 full-count))
+              (should (eq 'full mevedel-view--pending-render-kind))
+              (should (eq data-buf mevedel-view--pending-render-data-buffer))
+              (should-not mevedel-view--render-timer))
+            ;; Focus returns: the resume hook re-arms the same render,
+            ;; and the flush then runs it exactly once.
+            (setq unattended nil)
+            (mevedel-view--resume-attended-views)
+            (with-current-buffer view-buf
+              (should (mevedel--timer-pending-p mevedel-view--render-timer))
+              (mevedel-view--schedule-render 'full data-buf 0))
+            (with-current-buffer view-buf
+              (should (= 1 full-count))
+              (should-not mevedel-view--pending-render-kind)
+              (should-not mevedel-view--render-timer)))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-scheduled-render))))))
+
+(mevedel-deftest mevedel-view--unattended-p ()
+  ,test
+  (test)
+  :doc "a view without a window, or on a terminal frame, is attended"
+  (mevedel-view-test--with-buffers
+    (should-not (mevedel-view--unattended-p view-buf))
+    (let ((window (selected-window))
+          (original (window-buffer (selected-window))))
+      (unwind-protect
+          (progn
+            (set-window-buffer window view-buf)
+            ;; The batch frame is visible, non-graphic, and reports no
+            ;; focus; a terminal cannot tell, so it counts as attended.
+            (should-not (mevedel-view--unattended-p view-buf))
+            (with-current-buffer view-buf
+              (should-not (mevedel-view--unattended-p))))
+        (set-window-buffer window original))))
+
+  :doc "a graphical frame without focus or visibility is unattended"
+  (mevedel-view-test--with-buffers
+    (let ((window (selected-window))
+          (original (window-buffer (selected-window)))
+          (focused nil)
+          (visible t))
+      (unwind-protect
+          (cl-letf (((symbol-function 'display-graphic-p)
+                     (lambda (&rest _) t))
+                    ((symbol-function 'frame-focus-state)
+                     (lambda (&rest _) focused))
+                    ((symbol-function 'frame-visible-p)
+                     (lambda (&rest _) visible)))
+            (set-window-buffer window view-buf)
+            (should (mevedel-view--unattended-p view-buf))
+            (setq focused t)
+            (should-not (mevedel-view--unattended-p view-buf))
+            (setq visible 'icon)
+            (should (mevedel-view--unattended-p view-buf))
+            (setq visible nil)
+            (should (mevedel-view--unattended-p view-buf)))
+        (set-window-buffer window original))))
+
+  :doc "a child frame reports the focus of its top-level ancestor"
+  (mevedel-view-test--with-buffers
+    (let ((window (selected-window))
+          (original (window-buffer (selected-window)))
+          (parent-focused nil)
+          asked)
+      (unwind-protect
+          (cl-letf (((symbol-function 'frame-parent)
+                     (lambda (frame) (and (not (eq frame 'parent)) 'parent)))
+                    ((symbol-function 'display-graphic-p)
+                     (lambda (&rest _) t))
+                    ((symbol-function 'frame-focus-state)
+                     (lambda (&optional frame)
+                       (push frame asked)
+                       (and (eq frame 'parent) parent-focused))))
+            (set-window-buffer window view-buf)
+            (should (mevedel-view--unattended-p view-buf))
+            (should (equal '(parent) (delete-dups asked)))
+            (setq parent-focused t)
+            (should-not (mevedel-view--unattended-p view-buf)))
+        (set-window-buffer window original)))))
+
+(mevedel-deftest mevedel-view--resume-attended-views ()
+  ,test
+  (test)
+  :doc "re-arms only attended views that still owe a render"
+  (mevedel-view-test--with-buffers
+    (let ((unattended nil))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--unattended-p)
+                     (lambda (&rest _) unattended)))
+            ;; Nothing pending: nothing armed.
+            (mevedel-view--resume-attended-views)
+            (with-current-buffer view-buf
+              (should-not mevedel-view--render-timer)
+              (setq-local mevedel-view--pending-render-kind 'incremental
+                          mevedel-view--pending-render-data-buffer data-buf))
+            ;; Still unattended: keep waiting.
+            (setq unattended t)
+            (mevedel-view--resume-attended-views)
+            (with-current-buffer view-buf
+              (should-not mevedel-view--render-timer))
+            ;; Attended again: the stored kind is rescheduled once, and a
+            ;; second focus change does not arm a second timer.
+            (setq unattended nil)
+            (mevedel-view--resume-attended-views)
+            (with-current-buffer view-buf
+              (should (mevedel--timer-pending-p mevedel-view--render-timer))
+              (should (eq 'incremental mevedel-view--pending-render-kind))
+              (let ((timer mevedel-view--render-timer))
+                (mevedel-view--resume-attended-views)
+                (should (eq timer mevedel-view--render-timer)))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-scheduled-render)))))
+
+  :doc "skips a pending render whose data buffer died"
+  (mevedel-view-test--with-buffers
+    (let ((dead (generate-new-buffer " *dead-data*")))
+      (kill-buffer dead)
+      (with-current-buffer view-buf
+        (setq-local mevedel-view--pending-render-kind 'full
+                    mevedel-view--pending-render-data-buffer dead))
+      (cl-letf (((symbol-function 'mevedel-view--unattended-p)
+                 (lambda (&rest _) nil)))
+        (mevedel-view--resume-attended-views))
+      (with-current-buffer view-buf
+        (should-not mevedel-view--render-timer)
+        (mevedel-view--cancel-scheduled-render)))))
 
 (mevedel-deftest mevedel-view--status-strip-button ()
   ,test

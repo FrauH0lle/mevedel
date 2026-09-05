@@ -736,8 +736,12 @@ consumption debounce into one sidecar-only registry save
 (`mevedel-session-persistence-save-agent-state-soon`, landing as
 `mevedel-session-artifacts-save-agent-registry`): the sidecar carries the
 agent registry the persist is about, and the transcript segment is committed
-at settlement, so the observational path never saves the segment or scans
-snapshots.  A synchronous acknowledged commit absorbs a pending one, and
+at settlement, so the observational path never saves the segment, scans
+snapshots, or rereads the artifact folder.  A portable session publishes the
+sidecar alone as a one-artifact commit and the manifest overlay keeps every
+other committed entry; a portable session whose sidecar is not yet committed
+skips the save until the next critical commit.  A synchronous acknowledged
+commit absorbs a pending one, and
 Emacs exit flushes the rest.  Recovery treats every active activity
 identically and mail delivery is at-least-once, so a crash inside the
 debounce window costs at most a stale activity flavor and an

@@ -375,10 +375,30 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
               (concat target-prefix target)
             (expand-file-name target (file-name-directory path))))))))
 
-(defun mevedel-sandbox--protected-candidates (workdir writable-roots)
-  "Return concrete protected-path candidates for WORKDIR and WRITABLE-ROOTS."
-  (let ((target-prefix (file-remote-p workdir))
-        target-home candidates)
+(defun mevedel-sandbox--protected-candidates
+    (workdir writable-roots &optional temporary-root)
+  "Return concrete protected-path candidates for WORKDIR and WRITABLE-ROOTS.
+
+Glob patterns are discovered by walking the writable roots.  TEMPORARY-ROOT,
+the execution target's temporary directory, is exempt from that walk: it is
+scratch the child already owns, a repository placed there is not protected,
+and walking all of it on every launch cost more than the protection was
+worth while surfacing transient trees that vanished before launch."
+  (let* ((target-prefix (file-remote-p workdir))
+         (exempt (and temporary-root
+                      (mevedel-sandbox--canonical-directories
+                       (list temporary-root))))
+         (discovery-roots
+          (if exempt
+              (cl-remove-if
+               (lambda (root)
+                 (and (file-directory-p (expand-file-name root))
+                      (member (file-name-as-directory
+                               (file-truename (expand-file-name root)))
+                              exempt)))
+               writable-roots)
+            writable-roots))
+         target-home candidates)
     (cl-labels
         ((add-candidate
           (path mode directory-p)
@@ -493,12 +513,12 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                                  (expand-file-name root-pattern workdir))
                              mode directory-p))
              (literal-directory
-              (dolist (root (delete-dups (copy-sequence writable-roots)))
+              (dolist (root (delete-dups (copy-sequence discovery-roots)))
                 (search-literal-directory root literal-directory mode)
                 (add-candidate
                  (file-name-concat root literal-directory) mode t)))
              (t
-              (let ((search-roots (copy-sequence writable-roots)))
+              (let ((search-roots (copy-sequence discovery-roots)))
                 (when absolute-pattern
                   (let* ((index
                           (cl-position-if
@@ -564,14 +584,17 @@ the targets behind."
                     path (error-message-string err))
             :warning)))))))
 
-(defun mevedel-sandbox--protected-restrictions (workdir writable-roots)
-  "Compile protected restrictions for WORKDIR and WRITABLE-ROOTS."
+(defun mevedel-sandbox--protected-restrictions
+    (workdir writable-roots &optional temporary-root)
+  "Compile protected restrictions for WORKDIR and WRITABLE-ROOTS.
+TEMPORARY-ROOT is exempt from glob discovery; see
+`mevedel-sandbox--protected-candidates'."
   (let (restrictions cleanup-paths)
     (condition-case err
         (progn
           (dolist (candidate
                    (mevedel-sandbox--protected-candidates
-                    workdir writable-roots))
+                    workdir writable-roots temporary-root))
             (let* ((path (plist-get candidate :path))
                    (mode (plist-get candidate :mode))
                    (directory-p (plist-get candidate :directory-p))
@@ -654,8 +677,17 @@ the targets behind."
                       (append
                        arguments
                        (pcase mode
+                         ;; A read-only candidate is discovered by
+                         ;; scanning the writable roots, which include
+                         ;; the temporary directory.  A transient tree
+                         ;; found there -- a helper scratch holding a
+                         ;; `.git' -- can vanish between planning and
+                         ;; launch, and a plain `--ro-bind' then aborts
+                         ;; the whole launch and falls back to an
+                         ;; unconfined child.  A vanished source has
+                         ;; nothing left to protect, so skip it.
                          ('read-only
-                          (list "--ro-bind" path path))
+                          (list "--ro-bind-try" path path))
                          ('inaccessible
                           (if directory-p
                               (progn
@@ -745,10 +777,12 @@ WORKDIR identifies the execution target that the pending child will use."
 
 (defun mevedel-sandbox--confined-preparation
     (command workdir writable-roots executable mount-proc-p
-             additional-permissions)
+             additional-permissions &optional temporary-root)
   "Prepare COMMAND in WORKDIR with WRITABLE-ROOTS using EXECUTABLE.
 MOUNT-PROC-P requests a fresh proc filesystem for the PID namespace.
-ADDITIONAL-PERMISSIONS is the validated additive execution profile."
+ADDITIONAL-PERMISSIONS is the validated additive execution profile.
+TEMPORARY-ROOT is the writable temporary directory exempt from
+protected-path glob discovery."
   (let* ((canonical-workdir
           (file-name-as-directory (file-truename workdir)))
          (roots (mevedel-sandbox--canonical-directories writable-roots)))
@@ -767,7 +801,7 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
     (let* ((marker (make-temp-name "MEVEDEL_SANDBOX_STARTED_"))
            (protected
             (mevedel-sandbox--protected-restrictions
-             canonical-workdir roots))
+             canonical-workdir roots temporary-root))
            (filesystem-permissions
             (mevedel-sandbox--resolve-filesystem-permissions
              (cl-remove-if
@@ -873,7 +907,8 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
 
 (defun mevedel-sandbox-prepare
     (command workdir writable-roots
-             &optional additional-permissions sandbox-permissions mode)
+             &optional additional-permissions sandbox-permissions mode
+             temporary-root)
   "Prepare child COMMAND for WORKDIR and WRITABLE-ROOTS.
 
 Return a plist with :state, :command, and :facts.  Confined preparations also
@@ -881,7 +916,8 @@ carry :marker and :original-command.  A required but unavailable backend
 returns :state `refused' and :error without a command.
 ADDITIONAL-PERMISSIONS is a validated additive execution profile.
 SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval.
-MODE defaults to the global sandbox mode."
+MODE defaults to the global sandbox mode.  TEMPORARY-ROOT names the
+writable temporary directory that protected-path glob discovery skips."
   (setq mode (mevedel-sandbox-mode-normalize
               (or mode mevedel-sandbox-mode)))
   (if (and (eq sandbox-permissions 'require-escalated)
@@ -916,7 +952,7 @@ MODE defaults to the global sandbox mode."
                          command workdir writable-roots
                          (plist-get availability :executable)
                          (plist-get availability :mount-proc)
-                         additional-permissions)))
+                         additional-permissions temporary-root)))
                    (plist-put preparation :fallback-p
                               (eq mode 'best-effort)))
                (mevedel-sandbox-policy-error

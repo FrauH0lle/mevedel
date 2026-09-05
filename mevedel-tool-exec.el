@@ -169,21 +169,26 @@ writes use 250-30000ms and pure polls use 5000-300000ms."
                       (current-buffer)))))
       (file-name-concat root "executions"))))
 
+(defun mevedel-tool-exec--sandbox-temporary-root (workdir)
+  "Return the execution target's temporary directory for WORKDIR."
+  (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+         (target (and session (mevedel-session-execution-target session))))
+    (if (and target (mevedel-execution-target-remote-p target))
+        (mevedel-execution-target-expand-path
+         target
+         (or (cdr (assoc "TMPDIR"
+                         (mevedel-execution-target-environment target)))
+             "/tmp")
+         workdir)
+      temporary-file-directory)))
+
 (defun mevedel-tool-exec--sandbox-writable-roots (workdir)
   "Return writable child-confinement roots for WORKDIR."
   (let* ((session (and (boundp 'mevedel--session) mevedel--session))
          (target (and session (mevedel-session-execution-target session)))
          (remote (and target
                       (mevedel-execution-target-remote-p target)))
-         (temporary-root
-          (if remote
-              (mevedel-execution-target-expand-path
-               target
-               (or (cdr (assoc "TMPDIR"
-                               (mevedel-execution-target-environment target)))
-                   "/tmp")
-               workdir)
-            temporary-file-directory))
+         (temporary-root (mevedel-tool-exec--sandbox-temporary-root workdir))
          (roots
          (condition-case nil
               (mevedel--all-allowed-roots (current-buffer))
@@ -414,6 +419,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :command."
        :command (list "bash" "-lc" command)
        :workdir workdir
        :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
+       :temporary-root (mevedel-tool-exec--sandbox-temporary-root workdir)
        :outcome-function
        (lambda (exit-code termination)
          (mevedel-tool-exec--bash-outcome analysis exit-code termination))
@@ -686,6 +692,7 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
                  "-Q" "--batch" "-l" script-file)
            :workdir workdir
            :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
+           :temporary-root (mevedel-tool-exec--sandbox-temporary-root workdir)
            :additional-permissions additional-permissions
            :sandbox-permissions sandbox-permissions
            :session session

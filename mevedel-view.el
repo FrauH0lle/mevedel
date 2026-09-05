@@ -651,7 +651,11 @@ the editable composer body.
               #'mevedel-view--buffer-substring-filter)
   ;; Reflow rendered tables and ratio-sized images when a window
   ;; showing this view changes size or first displays it.
-  (mevedel-view--enable-markdown-realign))
+  (mevedel-view--enable-markdown-realign)
+  ;; A render deferred while nobody watched runs once a window shows
+  ;; the view again.  Buffer-local, so the hook dies with the buffer.
+  (add-hook 'window-buffer-change-functions
+            #'mevedel-view--resume-on-window-change nil t))
 
 
 ;;
@@ -880,6 +884,7 @@ kill hook sees nil and exits without re-entering this function."
   (when (fboundp 'mevedel-view-path-teardown)
     (mevedel-view-path-teardown))
   (mevedel-view--stop-spinner-timer)
+  (mevedel-view--cancel-scheduled-render)
   (mevedel-view-render-invalidate-live-tail)
   (when (and (boundp 'mevedel-view--control-transfer-timer)
              (timerp mevedel-view--control-transfer-timer))
@@ -1120,24 +1125,53 @@ refresh; a full request upgrades a pending incremental refresh."
         mevedel-view--pending-render-kind nil
         mevedel-view--pending-render-data-buffer nil))
 
+(defun mevedel-view--unattended-p (&optional buffer)
+  "Return non-nil when nobody can be watching BUFFER's view.
+
+BUFFER defaults to the current buffer.  A view is unattended when every
+window showing it sits on a frame that is invisible or iconified, or on a
+graphical frame without input focus; a child frame reports the focus of
+its top-level ancestor.  A view with no window, or one on a terminal
+frame, counts as attended: focus is unknowable there, and batch tests
+run their views without windows.  An unattended session otherwise paid a
+quarter of its CPU redisplaying spinner frames and live rows nobody saw."
+  (let ((windows (get-buffer-window-list (or buffer (current-buffer)) nil t)))
+    (and windows
+         (cl-every
+          (lambda (window)
+            (let* ((frame (window-frame window))
+                   (top frame))
+              (while (frame-parent top)
+                (setq top (frame-parent top)))
+              (or (not (eq (frame-visible-p frame) t))
+                  (and (display-graphic-p top)
+                       (null (frame-focus-state top))))))
+          windows))))
+
 (defun mevedel-view--flush-scheduled-render (view-buffer)
-  "Run VIEW-BUFFER's pending transcript render once."
+  "Run VIEW-BUFFER's pending transcript render once.
+An unattended view keeps its pending kind instead: the focus and
+redisplay hooks reschedule it once someone can see the result."
   (when (buffer-live-p view-buffer)
     (with-current-buffer view-buffer
       (let ((kind mevedel-view--pending-render-kind)
             (data-buffer mevedel-view--pending-render-data-buffer))
-        ;; Rendering reads target files, so it waits for an idle transport.
-        ;; It must not test `tramp-current-connection': that is the last
-        ;; connection timestamp, which stays set for the life of the process
-        ;; once any remote file has been touched, so testing it postponed
-        ;; every render on a remote workspace forever.
-        (if (mevedel-transport-busy-p
-             (and (buffer-live-p data-buffer)
-                  (buffer-local-value 'default-directory data-buffer)))
-            (setq mevedel-view--render-timer
-                  (run-at-time
-                   (max 0.1 mevedel-view-rerender-debounce) nil
-                   #'mevedel-view--flush-scheduled-render view-buffer))
+        (cond
+         ((mevedel-view--unattended-p)
+          (setq mevedel-view--render-timer nil))
+         ;; Rendering reads target files, so it waits for an idle transport.
+         ;; It must not test `tramp-current-connection': that is the last
+         ;; connection timestamp, which stays set for the life of the process
+         ;; once any remote file has been touched, so testing it postponed
+         ;; every render on a remote workspace forever.
+         ((mevedel-transport-busy-p
+           (and (buffer-live-p data-buffer)
+                (buffer-local-value 'default-directory data-buffer)))
+          (setq mevedel-view--render-timer
+                (run-at-time
+                 (max 0.1 mevedel-view-rerender-debounce) nil
+                 #'mevedel-view--flush-scheduled-render view-buffer)))
+         (t
           (setq mevedel-view--render-timer nil
                 mevedel-view--pending-render-kind nil
                 mevedel-view--pending-render-data-buffer nil)
@@ -1155,13 +1189,41 @@ refresh; a full request upgrades a pending incremental refresh."
                        (mevedel-view--render-stream-update data-buffer))))))
             (error
              (message "mevedel: view refresh failed: %s"
-                      (error-message-string err)))))))))
+                      (error-message-string err))))))))))
+
+(defun mevedel-view--resume-render-if-attended (view-buffer)
+  "Reschedule VIEW-BUFFER's pending render once someone can see it again."
+  (when (buffer-live-p view-buffer)
+    (with-current-buffer view-buffer
+      (when (and (derived-mode-p 'mevedel-view-mode)
+                 mevedel-view--pending-render-kind
+                 (buffer-live-p mevedel-view--pending-render-data-buffer)
+                 (not (mevedel--timer-pending-p mevedel-view--render-timer))
+                 (not (mevedel-view--unattended-p)))
+        (mevedel-view--schedule-render
+         mevedel-view--pending-render-kind
+         mevedel-view--pending-render-data-buffer
+         mevedel-view-rerender-debounce)))))
+
+(defun mevedel-view--resume-attended-views (&rest _)
+  "Resume the pending render of every view that became attended.
+Runs after every frame focus change; the predicate filters focus-out."
+  ;; ponytail: focus and redisplay hooks only; add
+  ;; `window-state-change-functions' if a deiconified but unfocused frame
+  ;; is observed to keep a stale view.
+  (dolist (buffer (buffer-list))
+    (mevedel-view--resume-render-if-attended buffer)))
+
+(defun mevedel-view--resume-on-window-change (window)
+  "Resume the pending render of the view WINDOW now shows."
+  (mevedel-view--resume-render-if-attended (window-buffer window)))
 
 (defun mevedel-view--schedule-render (kind data-buffer delay)
   "Coalesce a KIND render of DATA-BUFFER after DELAY seconds.
 `full' supersedes `incremental'.  Once scheduled, later requests join
 the same refresh instead of creating independent stream, tool, and full
-render timers."
+render timers.  A non-positive DELAY flushes at once, which still defers
+while the view is unattended."
   (unless (memq kind '(incremental full))
     (error "Unknown render kind: %S" kind))
   (when (buffer-live-p data-buffer)

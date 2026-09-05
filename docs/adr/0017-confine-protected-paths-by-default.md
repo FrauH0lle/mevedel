@@ -19,3 +19,15 @@ once, for the session, or persistently; such a resource grant suppresses the
 covered path prompt without authorizing any command form.  Grants are stored
 separately and never rewrite protected-path policy, so revocation immediately
 restores the underlying confinement restriction.
+
+## Amendment: the temporary directory is not searched
+
+Glob resolution walks the writable roots to find concrete matches, and the
+execution target's temporary directory is a writable root.  A 2026-09
+profile of an unattended session showed that walk descending all of `/tmp`
+before every Bash launch, and a transient tree found there (a helper scratch
+holding a `.git`) vanished before launch, which failed the Bubblewrap mount
+and dropped the child to unconfined execution.  The temporary directory is
+scratch the child already owns, so protecting a repository placed there
+buys little.  Discovery therefore skips the temporary root; a read-only mount
+whose source has vanished is skipped rather than aborting the launch.

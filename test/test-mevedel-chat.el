@@ -143,12 +143,54 @@
 		 :doc "`mevedel' loads preset definitions used by `mevedel-install'"
 		 (should (fboundp 'mevedel--define-presets)))
 
+(mevedel-deftest mevedel-install (:quiet t)
+  ,test
+  (test)
+  :doc "restores focus-driven view resumption after uninstall and reinstall"
+  (let ((after-focus-change-function #'ignore)
+        (gptel--known-tools (copy-tree gptel--known-tools))
+        (gptel--known-presets (copy-tree gptel--known-presets))
+        (gptel-prompt-transform-functions gptel-prompt-transform-functions)
+        (mevedel-execution-event-functions mevedel-execution-event-functions)
+        (mevedel-execution-mailbox-delivery-function
+         mevedel-execution-mailbox-delivery-function)
+        (resumed 0))
+    (cl-letf (((symbol-function 'mevedel-transport-install) #'ignore)
+              ((symbol-function 'mevedel-transport-uninstall) #'ignore)
+              ((symbol-function 'mevedel-execution-teardown-all) #'ignore)
+              ((symbol-function 'mevedel-tools-register) #'ignore)
+              ((symbol-function 'mevedel--define-presets) #'ignore)
+              ((symbol-function 'mevedel-tool-render-data-install-provider-adapter) #'ignore)
+              ((symbol-function 'mevedel-tool-render-data-uninstall-provider-adapter) #'ignore)
+              ((symbol-function 'mevedel-tool-repair-install-shape-adapter) #'ignore)
+              ((symbol-function 'mevedel-tool-repair-uninstall-shape-adapter) #'ignore)
+              ((symbol-function 'mevedel-worktree-install-slash-command) #'ignore)
+              ((symbol-function 'mevedel-worktree-uninstall-slash-command) #'ignore)
+              ((symbol-function 'mevedel-skills-install-slash-commands) #'ignore)
+              ((symbol-function 'mevedel-skills-uninstall-slash-commands) #'ignore)
+              ((symbol-function 'mevedel-skills-install-hot-reload) #'ignore)
+              ((symbol-function 'mevedel-skills-uninstall-hot-reload) #'ignore)
+              ((symbol-function 'mevedel-gptel-stream-bridge-install) #'ignore)
+              ((symbol-function 'mevedel-gptel-stream-bridge-uninstall) #'ignore)
+              ((symbol-function 'mevedel-view--resume-attended-views)
+               (lambda (&rest _) (cl-incf resumed))))
+      (mevedel-install)
+      (funcall after-focus-change-function)
+      (should (= 1 resumed))
+      (mevedel-uninstall)
+      (funcall after-focus-change-function)
+      (should (= 1 resumed))
+      (mevedel-install)
+      (funcall after-focus-change-function)
+      (should (= 2 resumed)))))
+
 (mevedel-deftest mevedel-uninstall ()
   ,test
   (test)
 
   :doc "tears down skill hot-reload lifecycle state"
-  (let ((gptel--known-tools gptel--known-tools)
+  (let ((after-focus-change-function #'ignore)
+        (gptel--known-tools gptel--known-tools)
         (gptel--known-presets gptel--known-presets)
         (gptel-prompt-transform-functions gptel-prompt-transform-functions)
         called)
@@ -165,7 +207,8 @@
     (should called))
 
   :doc "force-tears down executions"
-  (let ((gptel--known-tools gptel--known-tools)
+  (let ((after-focus-change-function #'ignore)
+        (gptel--known-tools gptel--known-tools)
         (gptel--known-presets gptel--known-presets)
         (gptel-prompt-transform-functions gptel-prompt-transform-functions)
         torn-down)
@@ -180,7 +223,8 @@
     (should torn-down))
 
   :doc "cancels deferred transport work and removes its advice"
-  (let ((gptel--known-tools gptel--known-tools)
+  (let ((after-focus-change-function #'ignore)
+        (gptel--known-tools gptel--known-tools)
         (gptel--known-presets gptel--known-presets)
         (gptel-prompt-transform-functions
          gptel-prompt-transform-functions)

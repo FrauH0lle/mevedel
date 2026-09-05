@@ -1141,9 +1141,16 @@ user's idle GC tuning left behind; a profiled unattended session sat at
 the 800KB default and paid dozens of ~135ms collections inside single
 redraws and save transactions.  Raising the threshold for the dynamic
 extent of BODY trades those for one collection at the next allocation
-after BODY."
+after BODY.
+
+A collection triggers at whichever of `gc-cons-threshold' and
+`gc-cons-percentage' times the live heap is larger.  On a multi-hour
+session heap the percentage term wins by a wide margin, so raising only
+the threshold left a profiled stream-cleanup path collecting inside its
+batched section.  Both are raised, and neither is ever lowered."
   (declare (indent 0) (debug t))
-  `(let ((gc-cons-threshold (max gc-cons-threshold (* 64 1024 1024))))
+  `(let ((gc-cons-threshold (max gc-cons-threshold (* 64 1024 1024)))
+         (gc-cons-percentage (max gc-cons-percentage 0.5)))
      ,@body))
 
 (defun mevedel--write-file-atomically (path content &optional coding mode)
