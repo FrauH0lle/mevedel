@@ -3,9 +3,17 @@
 The room's **Shared** menu lists named whiteboards and documents. Full and
 owner links can create, rename, import, and edit them concurrently. View
 links can observe and download. Opening an item affects that browser only;
-other participants get a followable entry. Desktop layouts keep chat beside
-the editor; narrow layouts have a Close button to return to chat. The host
-uses the same editor through a browser share link.
+other participants get a followable entry. Each editor opens in its own
+browser tab, leaving the room and its composer draft in the original tab.
+The editor tab reconnects independently and reopens its item on reload.
+**Room** shows the session in that tab. The host uses the same editor through
+a browser share link. Browser popup permission is needed to open a new tab.
+
+Documents use a continuous paper surface and a compact, horizontally scrolling
+formatting bar. On phones, **Ask assistant** expands the question form only
+when needed; the editor follows the visible viewport above the keyboard.
+Downloads, recovery, retry, contribution history, and assistant highlighting
+are in the editor's **☰** menu.
 
 ## Runtime and build
 
@@ -38,15 +46,29 @@ The drawing menu follows the selected `af756034` reference: hand, selection,
 rectangle, diamond, ellipse, database, sticky note, arrow, line, freehand,
 text, and eraser, followed by the laser tool. Buttons expose tool names and
 keyboard shortcuts. Selection supports Shift multi-selection, arrow-key
-movement, Delete, resizing, and Enter to edit text. Wheel zoom, zoom buttons,
-and Fit affect only the local viewport. Images accept PNG, JPEG, and WebP by
+movement, Delete, and resizing. Click inside an unfilled shape to select it;
+lines have a wider invisible hit area. Double-click a shape or press Enter
+to type directly in it. Text is shared while typing; blur or Ctrl/Command+Enter
+finishes, and Escape cancels if another writer has not changed that text.
+The **Style** palette changes the selected objects and defaults for new ones.
+Wheel zoom, zoom buttons, and Fit affect only the local viewport. Images accept PNG, JPEG, and WebP by
 upload or clipboard paste. Arrow endpoints can bind to shapes.
 
 Documents support paragraphs, headings, emphasis, lists, links, code blocks,
 and basic tables. Named carets show other writers. Each browser's Undo/Redo
 uses its own transactions. Agent contributions have readable attribution and
 a Revert action; an overlapping later edit makes the inverse fail instead
-of restoring an old whole-item snapshot.
+of restoring an old whole-item snapshot. The Contributions display groups
+consecutive saves from the same participant name until another participant
+edits or there is a five-second idle gap. Saves still run every 300 ms; grouping
+does not delay durability or merge the underlying revision records. Agent
+transactions remain individually revertible. Only the latest 32 transactions
+are available, so a displayed burst may cover just the retained part.
+
+A pale highlight identifies shapes or document blocks whose latest retained
+contribution came from an agent. Human changes replace that attribution.
+**Highlight assistant edits** toggles this display; highlights do not become
+content, formatting, or export marks.
 
 Yjs merges concurrent typing and unrelated shape changes. A shape's geometry
 is one atomic property, while text and style remain independently editable.
@@ -54,8 +76,10 @@ Same-property writes resolve using Yjs's deterministic ordering. Deletion
 wins over an in-flight property edit to the deleted record. This guarantees
 convergence, not reconciliation of competing human intentions.
 
-Laser gestures transmit board coordinates with sender attribution. Each
-receiver renders through its own viewport. Trails fade within 1.5 seconds;
+Ordinary board cursors move one named pointer per participant. Laser gestures
+show locally as well as to other participants, with a continuous short trail
+and one name at its tip. They transmit board coordinates; each receiver renders
+through its own viewport. Trails fade within 1.5 seconds;
 item changes, disconnects, and cancellation clear presence. Presence is
 rate-limited and discarded behind queued content/control traffic. It creates
 no revision, undo history, export marks, queued question, or model context.
@@ -159,8 +183,15 @@ npx @emacs-eask/cli test ert test/test-mevedel-shared-editing*.el test/test-meve
 MEVEDEL_TEST_SHARED_EDITING=1 timeout 600s ./test/run-remote-acceptance.sh
 ```
 
-The browser scenario uses a real relay and isolated Emacs, multiple Chromium
-contexts, and a deterministic participant invoking actual native tools. It
+The focused editor checks reproduce interior selection, inline text, cursor
+replacement, local/remote laser trails, grouped contributions, export-neutral
+assistant highlights, and a small keyboard-sized viewport. Set
+`MEVEDEL_EDITOR_SCREENSHOTS=1` when running `test/editor.browser.mjs` to save
+preview screenshots under `.scratch/shared-collaborative-editing/`.
+
+The room browser scenario checks the separate tab and preserved composer,
+as well as caret visibility after a mobile viewport resize. It uses a real
+relay and isolated Emacs, multiple Chromium contexts, and a deterministic participant invoking actual native tools. It
 requires Go, Emacs dependencies installed by Eask, and Playwright Chromium
 (`shared-editing/node_modules/.bin/playwright install chromium`). The remote
 command provisions the repository's temporary SSH/container fixture.

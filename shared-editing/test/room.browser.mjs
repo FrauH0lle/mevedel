@@ -105,7 +105,10 @@ test(
       browser = await chromium.launch({ headless: true });
       const contexts = await Promise.all([
         browser.newContext(),
-        browser.newContext({ viewport: { width: 1000, height: 800 }, deviceScaleFactor: 2 }),
+        browser.newContext({
+          viewport: { width: 1000, height: 800 },
+          deviceScaleFactor: 2,
+        }),
         browser.newContext(),
       ]);
       const sockets = [];
@@ -120,7 +123,16 @@ test(
           if (m.type() === 'error') logs.push(m.text());
         });
       });
-      await Promise.all(pages.map((p, i) => p.goto(i === 2 ? links.view : links.full)));
+      const standalone = (link) => {
+        const url = new URL(link);
+        url.searchParams.set('shared', '');
+        return url.href;
+      };
+      await Promise.all(
+        pages.map((p, i) =>
+          p.goto(i === 0 ? links.full : standalone(i === 2 ? links.view : links.full)),
+        ),
+      );
       await Promise.all(
         pages.map((p) => p.waitForFunction(() => !document.getElementById('editing-box').hidden)),
       );
@@ -129,9 +141,20 @@ test(
         await p.locator('#editing-box').evaluate((e) => (e.open = true));
       }
       await pages[0].locator('#composer-input').fill('> Browser draft\nsecond line');
-      await pages[0].locator('[data-create-editor="whiteboard"]').click();
+      const chatPage = pages[0];
+      const openingTab = chatPage.waitForEvent('popup');
+      await chatPage.locator('[data-create-editor="whiteboard"]').click();
+      pages[0] = await openingTab;
+      pages[0].on('pageerror', (e) => errors.push(e.message));
+      await pages[0].waitForURL((url) => url.searchParams.has('shared'));
+      assert.equal(await pages[0].evaluate(() => window.opener), null);
+      assert.equal(await chatPage.locator('#editing-panel').isVisible(), false);
+      await pages[0].locator('#session-box').evaluate((e) => (e.open = true));
+      await pages[0].locator('#editing-box').evaluate((e) => (e.open = true));
       const frame = (p) => p.frameLocator('#editing-body iframe');
       await frame(pages[0]).locator('#canvas').waitFor({ state: 'visible' });
+      await pages[0].evaluate(() => window.dispatchEvent(new Event('focus')));
+      assert.match(await pages[0].title(), /Whiteboard/);
       await until(async () => (await pages[1].locator('#editing-items button').count()) === 1);
       await pages[1].locator('#editing-items button').click();
       await pages[2].locator('#editing-items button').click();
@@ -310,7 +333,11 @@ test(
             id: documentId,
             action: 'patch',
             changes: [
-              { id: formattedBefore.attrs.id, before: formattedBefore, after: formattedAfter },
+              {
+                id: formattedBefore.attrs.id,
+                before: formattedBefore,
+                after: formattedAfter,
+              },
             ],
           })
         ).status,
@@ -452,11 +479,14 @@ test(
         return a === b && a.includes('Offline draft.') && a.includes('Meanwhile. ');
       });
       assert.equal(
-        await pages[0].locator('#composer-input').inputValue(),
+        await chatPage.locator('#composer-input').inputValue(),
         '> Browser draft\nsecond line',
       );
       assert.equal((await agent('InspectTest')).queue.length, 1);
       const downloadPromise = pages[2].waitForEvent('download');
+      await frame(pages[2])
+        .locator('#menu')
+        .evaluate((e) => (e.open = true));
       await frame(pages[2]).locator('#download').click();
       const download = await downloadPromise;
       const exported = await readFile(await download.path());
@@ -476,6 +506,9 @@ test(
         JSON.parse((await agent('SharedRead', { id: imported[0].id })).result).content,
         JSON.parse(exported).content,
       );
+      await pages[0].reload();
+      await frame(pages[0]).locator('#canvas').waitFor({ state: 'visible' });
+      await frame(pages[0]).locator('[data-tool="rect"]').waitFor({ state: 'visible', timeout: 2000 });
       async function forged(link, args) {
         return pages[2].evaluate(
           async ({ link, args }) => {
@@ -547,6 +580,45 @@ test(
         JSON.parse((await agent('SharedRead', { id: boardId })).result).title,
         'Whiteboard',
       );
+      // Real parent/iframe viewport changes, with space for an iPhone-sized keyboard.
+      const phone = await browser.newContext({
+        viewport: { width: 375, height: 812 },
+        isMobile: true,
+        hasTouch: true,
+      });
+      const phonePage = await phone.newPage();
+      const phoneUrl = new URL(links.full);
+      phoneUrl.searchParams.set('shared', documentId);
+      await phonePage.goto(phoneUrl.href);
+      await frame(phonePage).locator('.tiptap').waitFor();
+      await phonePage.setViewportSize({ width: 375, height: 340 });
+      await frame(phonePage).locator('.tiptap p').last().click();
+      await phonePage.keyboard.press('End');
+      await phonePage.keyboard.type(' Phone typing.');
+      const geometry = await frame(phonePage)
+        .locator('#document')
+        .evaluate((container) => {
+          const rect = container.getBoundingClientRect();
+          const range = document.getSelection().getRangeAt(0).cloneRange();
+          range.collapse(false);
+          const caret = range.getBoundingClientRect();
+          return {
+            height: rect.height,
+            top: rect.top,
+            bottom: rect.bottom,
+            caretTop: caret.top,
+            caretBottom: caret.bottom,
+          };
+        });
+      assert.ok(geometry.height >= 150, JSON.stringify(geometry));
+      assert.ok(
+        geometry.caretTop >= geometry.top && geometry.caretBottom <= geometry.bottom,
+        JSON.stringify(geometry),
+      );
+      await until(
+        async () => (await frame(phonePage).locator('#saved').innerText()) === 'Saved on host',
+      );
+      await phone.close();
       await Promise.all(contexts.map((c) => c.close()));
       await agent('RestartHelper');
       const headless = {
@@ -577,7 +649,7 @@ test(
       });
       const ownerPage = await owner.newPage();
       ownerPage.on('pageerror', (error) => errors.push(error.message));
-      await ownerPage.goto(links.owner);
+      await ownerPage.goto(standalone(links.owner));
       await ownerPage.waitForFunction(() => !document.getElementById('editing-box').hidden);
       await ownerPage.locator('#session-box').evaluate((e) => (e.open = true));
       await ownerPage.locator('#editing-box').evaluate((e) => (e.open = true));
@@ -613,8 +685,14 @@ test(
       await frame(ownerPage).locator('[data-shape="headless"]').waitFor({ state: 'visible' });
       await frame(ownerPage).locator('[data-shape="during_load"]').waitFor({ state: 'visible' });
       for (const format of ['svg', 'png']) {
+        await frame(ownerPage)
+          .locator('#menu')
+          .evaluate((e) => (e.open = true));
         await frame(ownerPage).locator('#export').selectOption(format);
         const waiting = ownerPage.waitForEvent('download');
+        await frame(ownerPage)
+          .locator('#menu')
+          .evaluate((e) => (e.open = true));
         await frame(ownerPage).locator('#download').click();
         const file = await readFile(await (await waiting).path());
         if (format === 'png') assert.equal(file.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
@@ -661,6 +739,9 @@ test(
         priorRevision,
       );
       const recoveryWaiting = ownerPage.waitForEvent('download');
+      await frame(ownerPage)
+        .locator('#menu')
+        .evaluate((e) => (e.open = true));
       await frame(ownerPage).locator('#recovery').click();
       const recoveryDownload = await recoveryWaiting;
       assert.match(recoveryDownload.suggestedFilename(), /recovery/);
@@ -670,6 +751,9 @@ test(
       );
       await agent('StorageWritable', { writable: true });
       await agent('RetryPublication');
+      await frame(ownerPage)
+        .locator('#menu')
+        .evaluate((e) => (e.open = true));
       await frame(ownerPage).locator('#retry').click();
       await until(
         async () => (await frame(ownerPage).locator('#saved').innerText()) === 'Saved on host',
@@ -694,7 +778,10 @@ test(
         type: 'touchMove',
         touchPoints: [{ x: area.x + 350, y: area.y + 190, id: 1 }],
       });
-      await device.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await device.send('Input.dispatchTouchEvent', {
+        type: 'touchEnd',
+        touchPoints: [],
+      });
       await until(
         async () => (await frame(ownerPage).locator('#scene [data-shape]').count()) === 3,
       );
@@ -793,6 +880,9 @@ test(
       await agent('EndShare');
       await owner.setOffline(false);
       const endedRecovery = ownerPage.waitForEvent('download');
+      await frame(ownerPage)
+        .locator('#menu')
+        .evaluate((e) => (e.open = true));
       await frame(ownerPage).locator('#recovery').click();
       assert.equal(
         JSON.parse(await readFile(await (await endedRecovery).path(), 'utf8')).content.length,
@@ -806,12 +896,17 @@ test(
       await ownerPage.locator('#session-box').evaluate((e) => (e.open = true));
       await ownerPage.locator('#editing-box').evaluate((e) => (e.open = true));
       const recoveryButton = ownerPage.locator(`#editing-items [data-item-id="${transferred.id}"]`);
+      await frame(ownerPage).locator('#canvas').waitFor({ state: 'visible' });
+      await ownerPage.locator('#editing-close').click();
       await recoveryButton.waitFor({ state: 'visible' });
       assert.match(await recoveryButton.innerText(), /local recovery/);
       await recoveryButton.click();
       await frame(ownerPage).locator('#canvas').waitFor({ state: 'visible' });
       assert.equal(await frame(ownerPage).locator('[data-tool="rect"]').count(), 0);
       const recoveredDownload = ownerPage.waitForEvent('download');
+      await frame(ownerPage)
+        .locator('#menu')
+        .evaluate((e) => (e.open = true));
       await frame(ownerPage).locator('#recovery').click();
       assert.equal(
         JSON.parse(await readFile(await (await recoveredDownload).path(), 'utf8')).content.length,

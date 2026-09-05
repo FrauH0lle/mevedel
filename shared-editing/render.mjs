@@ -57,11 +57,15 @@ export function shapeSVG(s, shapes) {
     body = `<polyline points="${pts.map((p) => p.join(',')).join(' ')}" fill="none" stroke="${ink}" stroke-width="${s.width || 2}" stroke-linecap="round" stroke-linejoin="round"${s.type === 'arrow' ? ' marker-end="url(#arrowhead)"' : ''}/>`;
   } else if (s.type !== 'text')
     body = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="4" ${attrs}/>`;
-  if (s.text)
-    body += `<text x="${x + 10}" y="${y + 24}" font-family="Noto Sans, sans-serif" font-size="16" fill="${ink}">${s.text
-      .split('\n')
-      .map((line, i) => `<tspan x="${x + 10}" dy="${i ? 22 : 0}">${escape(line)}</tspan>`)
+  if (s.text) {
+    const centered = !['text', 'arrow', 'line', 'pen'].includes(s.type);
+    const lines = s.text.split('\n'),
+      tx = centered ? x + w / 2 : x + 10;
+    const ty = centered ? y + h / 2 - (lines.length - 1) * 11 + 6 : y + 24;
+    body += `<text x="${tx}" y="${ty}" text-anchor="${centered ? 'middle' : 'start'}" font-family="Noto Sans, sans-serif" font-size="16" fill="${ink}">${lines
+      .map((line, i) => `<tspan x="${tx}" dy="${i ? 22 : 0}">${escape(line)}</tspan>`)
       .join('')}</text>`;
+  }
   return `<g data-shape="${escape(s.id)}">${body}</g>`;
 }
 export const definitions =

@@ -1,6 +1,8 @@
 /* Packaged editor in an opaque iframe. All host access uses the bound port. */
 import * as Y from 'yjs';
-import { Editor } from '@tiptap/core';
+import { Editor, Extension } from '@tiptap/core';
+import { Plugin } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import { Awareness, applyAwarenessUpdate, removeAwarenessStates } from 'y-protocols/awareness';
@@ -13,7 +15,7 @@ import {
 } from '@tiptap/y-tiptap';
 import { extensions, schema, seedEmptyText } from './document.mjs';
 import { restore, encode, inspect, putShape, validateShape, validateImage } from './model.mjs';
-import { shapeSVG, definitions, escape, bounds, boardSVG, documentHTML } from './render.mjs';
+import { shapeSVG, definitions, escape, bounds } from './render.mjs';
 const $ = (id) => document.getElementById(id),
   remote = Symbol('remote'),
   local = Symbol('local');
@@ -45,12 +47,17 @@ let tool = 'select',
   drag = null,
   ink = '#242424',
   fill = '#fff1a8',
+  background = 'none',
   width = 2,
   lastPresence = 0;
 const replies = new Map(),
   people = new Map();
 let documentSelection = null;
 let recoveryWarning = '';
+let participant = 'You',
+  textEditing = null,
+  sceneSignature = '';
+const agentTargets = new Map();
 function status(text, error = false) {
   $('saved').textContent = text;
   $('saved').dataset.error = String(error);
@@ -122,16 +129,48 @@ async function pump() {
   }
 }
 function history(transactions = []) {
+  agentTargets.clear();
+  const seen = new Set();
+  for (const tx of transactions)
+    for (const change of tx.changes || []) {
+      if (!seen.has(change.id) && tx.actor.startsWith('Agent:') && change.after)
+        agentTargets.set(change.id, `${tx.actor} · revision ${tx.revision}`);
+      seen.add(change.id);
+    }
+  if (editor) editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
+  else if (doc) draw();
   $('contributions').replaceChildren();
+  const groups = [];
   for (const tx of transactions) {
+    const previous = groups.at(-1);
+    if (
+      previous &&
+      !tx.actor.startsWith('Agent:') &&
+      previous[0].actor === tx.actor &&
+      previous.at(-1).time - tx.time >= 0 &&
+      previous.at(-1).time - tx.time < 5000
+    )
+      previous.push(tx);
+    else groups.push([tx]);
+  }
+  for (const group of groups) {
+    const tx = group[0];
     const row = document.createElement('div');
-    row.append(document.createTextNode(`${tx.actor} · revision ${tx.revision} `));
+    row.append(
+      document.createTextNode(
+        `${tx.actor} · ${group.length > 1 ? `revisions ${group.at(-1).revision}–${tx.revision}` : `revision ${tx.revision}`} `,
+      ),
+    );
     if (!readOnly && tx.actor.startsWith('Agent:')) {
       const button = document.createElement('button');
       button.textContent = 'Revert';
       button.onclick = async () => {
         try {
-          await request({ action: 'revert', transaction: tx.id, opId: crypto.randomUUID() });
+          await request({
+            action: 'revert',
+            transaction: tx.id,
+            opId: crypto.randomUUID(),
+          });
         } catch (e) {
           status(e.message, true);
         }
@@ -161,7 +200,35 @@ function transformGeometry(geometry, box) {
 function draw() {
   const shapes = shapeList();
   $('canvas').setAttribute('viewBox', view.join(' '));
-  $('scene').innerHTML = definitions + shapes.map((s) => shapeSVG(s, shapes)).join('');
+  const scale = $('canvas').getScreenCTM()?.a || 1;
+  const signature = JSON.stringify([shapes, scale, [...agentTargets], $('show-agent').checked]);
+  if (signature !== sceneSignature) {
+    sceneSignature = signature;
+    $('scene').innerHTML = definitions + shapes.map((s) => shapeSVG(s, shapes)).join('');
+    for (const [index, group] of $('scene').querySelectorAll('[data-shape]').entries()) {
+      const shape = shapes[index];
+      group.dataset.agent = String(agentTargets.has(shape.id) && $('show-agent').checked);
+      const label = agentTargets.get(shape.id);
+      if (label) {
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        title.textContent = label;
+        group.append(title);
+      }
+      if (['pen', 'line', 'arrow'].includes(shape.type)) {
+        const hit = group.querySelector('polyline').cloneNode();
+        hit.removeAttribute('marker-end');
+        hit.setAttribute('stroke', 'transparent');
+        hit.setAttribute('stroke-width', Math.max(shape.width || 2, 14 / scale));
+        hit.style.pointerEvents = 'stroke';
+        group.prepend(hit);
+      } else if (shape.type === 'text') {
+        const hit = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        ['x', 'y', 'width', 'height'].forEach((key, i) => hit.setAttribute(key, shape.box[i]));
+        hit.setAttribute('fill', 'transparent');
+        group.prepend(hit);
+      }
+    }
+  }
   for (const id of selected) if (!doc.getMap('shapes').has(id)) selected.delete(id);
   $('selection').innerHTML = shapes
     .filter((s) => selected.has(s.id))
@@ -178,13 +245,23 @@ function world(event) {
   return [Math.max(-999000, Math.min(999000, p.x)), Math.max(-999000, Math.min(999000, p.y))];
 }
 function presence(point, mode = 'cursor') {
+  if (mode === 'laser' && !readOnly) showPresence({ peer: 'self', name: participant, point, mode });
   if (readOnly || !online || performance.now() - lastPresence < 50) return;
   lastPresence = performance.now();
   port.postMessage({ type: 'presence', point, mode });
 }
+function clearPresence() {
+  for (const person of people.values()) clearTimeout(person.timer);
+  people.clear();
+  $('presence').replaceChildren();
+}
 function showPresence(data) {
   if (data.mode === 'clear') {
-    for (const node of people.get(data.peer) || []) node.remove();
+    const person = people.get(data.peer);
+    if (person) {
+      person.group.remove();
+      clearTimeout(person.timer);
+    }
     people.delete(data.peer);
   }
   if (awareness && Number.isSafeInteger(data.clientId) && data.clientId !== doc.clientID) {
@@ -198,7 +275,10 @@ function showPresence(data) {
         JSON.stringify(
           data.mode === 'clear'
             ? null
-            : { cursor: data.cursor, user: { name: data.name, color: '#a22458' } },
+            : {
+                cursor: data.cursor,
+                user: { name: data.name, color: '#a22458' },
+              },
         ),
       );
       applyAwarenessUpdate(awareness, encoding.toUint8Array(update), remote);
@@ -207,19 +287,45 @@ function showPresence(data) {
     }
   }
   if (item.kind !== 'whiteboard' || !Array.isArray(data.point)) return;
-  const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  let person = people.get(data.peer);
+  if (!person) {
+    person = {
+      group: document.createElementNS('http://www.w3.org/2000/svg', 'g'),
+      points: [],
+    };
+    people.set(data.peer, person);
+    $('presence').append(person.group);
+  }
+  const { group } = person;
   const [x, y] = data.point;
-  group.innerHTML = `<circle cx="${x}" cy="${y}" r="${data.mode === 'laser' ? 7 : 3}" fill="#d83268"/><text x="${x + 12}" y="${y - 8}" font-size="13" fill="#a22458">${escape(data.name)}</text>`;
-  group.classList.add('laser');
-  $('presence').append(group);
-  setTimeout(() => group.remove(), 1500);
-  // A bounded number of samples per peer keeps presence out of content and undo.
-  const old = people.get(data.peer) || [];
-  old.push(group);
-  while (old.length > 16) old.shift().remove();
-  people.set(data.peer, old);
+  const scale = 1 / ($('canvas').getScreenCTM()?.a || 1);
+  const laser = data.mode === 'laser',
+    now = performance.now();
+  person.points = laser
+    ? [...person.points.filter((p) => now - p.time < 600), { point: data.point, time: now }].slice(
+        -32,
+      )
+    : [];
+  group.innerHTML = laser
+    ? `<polyline points="${person.points.map((p) => p.point.join(',')).join(' ')}" fill="none" stroke="#e33164" stroke-width="${3 * scale}" stroke-linecap="round" stroke-linejoin="round"/><circle cx="${x}" cy="${y}" r="${5 * scale}" fill="#e33164"/>`
+    : `<path d="M0 0 4 17 8 11 15 10Z" transform="translate(${x} ${y}) scale(${scale})" fill="#a22458" stroke="white" stroke-width="1.5"/>`;
+  group.innerHTML += `<text x="${x + 14 * scale}" y="${y - 8 * scale}" font-size="${12 * scale}" fill="#a22458">${escape(data.name)}</text>`;
+  group.classList.toggle('laser', laser);
+  // Restart the fade on a new sample; ordinary cursors move, never leave trails.
+  group.getAnimations().forEach((animation) => {
+    animation.currentTime = 0;
+  });
+  clearTimeout(person.timer);
+  person.timer = setTimeout(
+    () => {
+      group.remove();
+      people.delete(data.peer);
+    },
+    laser ? 1500 : 10000,
+  );
 }
 function selectTool(value) {
+  $('menu').open = false;
   tool = value;
   document
     .querySelectorAll('[data-tool]')
@@ -239,12 +345,44 @@ function editText(id) {
   if (readOnly) return;
   const shape = doc.getMap('shapes').get(id);
   if (!shape) return;
-  $('shape-text').value = shape.get('text') || '';
-  $('text-dialog').showModal();
-  $('shape-text').focus();
-  $('text-dialog').onclose = () => {
-    if ($('text-dialog').returnValue === 'save' && doc.getMap('shapes').has(id))
-      doc.transact(() => doc.getMap('shapes').get(id).set('text', $('shape-text').value), local);
+  const input = $('shape-text'),
+    [x, y, w, h] = shape.get('geometry').box;
+  const matrix = $('canvas').getScreenCTM(),
+    point = new DOMPoint(x, y).matrixTransform(matrix);
+  textEditing = id;
+  undo?.stopCapturing();
+  const before = shape.get('text') || '';
+  input.value = before;
+  Object.assign(input.style, {
+    left: `${Math.max(0, point.x)}px`,
+    top: `${Math.max(0, point.y)}px`,
+    width: `${Math.max(100, Math.min(w * matrix.a, innerWidth - Math.max(0, point.x)))}px`,
+    height: `${Math.max(60, h * matrix.a)}px`,
+    fontSize: `${Math.max(16, 16 * matrix.a)}px`,
+  });
+  input.hidden = false;
+  input.focus();
+  input.select();
+  const finish = (save) => {
+    if (textEditing !== id) return;
+    textEditing = null;
+    input.hidden = true;
+    const current = doc.getMap('shapes').get(id);
+    if (!save && current?.get('text') === input.value)
+      doc.transact(() => current.set('text', before), local);
+    undo?.stopCapturing();
+  };
+  input.oninput = () => {
+    const current = doc.getMap('shapes').get(id);
+    if (current) doc.transact(() => current.set('text', input.value), local);
+  };
+  input.onblur = () => finish(true);
+  input.onkeydown = (event) => {
+    if (event.key === 'Escape' || (event.key === 'Enter' && (event.ctrlKey || event.metaKey))) {
+      event.preventDefault();
+      finish(event.key !== 'Escape');
+      $('canvas').focus();
+    }
   };
 }
 async function insertImage(file) {
@@ -321,10 +459,35 @@ function board() {
     b.setAttribute('aria-pressed', String(value === 'select'));
     b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[value]}"/></svg><kbd>${key}</kbd>`;
   }
+  const properties = document.createElement('details');
+  properties.id = 'properties';
+  properties.className = 'popover';
+  properties.innerHTML = '<summary>Style</summary><div class="menu-body"></div>';
+  $('tools').append(properties);
+  const stylePanel = properties.lastElementChild;
+  const style = (key, value) => {
+    doc.transact(() => {
+      for (const id of selected) doc.getMap('shapes').get(id)?.set(key, value);
+    }, local);
+  };
   if (!readOnly) {
     for (const [label, value, set] of [
-      ['Ink', ink, (v) => (ink = v)],
-      ['Fill', fill, (v) => (fill = v)],
+      [
+        'Stroke',
+        ink,
+        (v) => {
+          ink = v;
+          style('stroke', v);
+        },
+      ],
+      [
+        'Fill',
+        fill,
+        (v) => {
+          background = fill = v;
+          style('fill', v);
+        },
+      ],
     ]) {
       const l = document.createElement('label');
       l.textContent = label;
@@ -333,7 +496,23 @@ function board() {
       input.value = value;
       input.oninput = () => set(input.value);
       l.append(input);
-      $('tools').append(l);
+      stylePanel.append(l);
+      const swatches = document.createElement('div');
+      swatches.className = 'swatches';
+      for (const color of label === 'Stroke'
+        ? ['#242424', '#e03131', '#2f9e44', '#1971c2', '#7048e8']
+        : ['none', '#ffc9c9', '#b2f2bb', '#a5d8ff', '#fff1a8']) {
+        const swatch = button(swatches, '', () => {
+          set(color);
+          if (color !== 'none') input.value = color;
+        });
+        swatch.style.background =
+          color === 'none'
+            ? 'repeating-conic-gradient(#ddd 0% 25%, white 0% 50%) 0 / 8px 8px'
+            : color;
+        swatch.setAttribute('aria-label', `${label}: ${color === 'none' ? 'transparent' : color}`);
+      }
+      stylePanel.append(swatches);
     }
     const weight = document.createElement('select');
     weight.setAttribute('aria-label', 'Stroke width');
@@ -342,14 +521,17 @@ function board() {
       o.selected = n === 2;
       weight.add(o);
     }
-    weight.onchange = () => (width = +weight.value);
-    $('tools').append(weight);
+    weight.onchange = () => {
+      width = +weight.value;
+      style('width', width);
+    };
+    stylePanel.append(weight);
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/png,image/jpeg,image/webp';
     input.hidden = true;
     $('tools').append(input);
-    button($('tools'), 'Image', () => input.click());
+    button($('menu').querySelector('.menu-body'), 'Insert image…', () => input.click());
     input.onchange = () => {
       const file = input.files[0];
       input.value = '';
@@ -363,19 +545,25 @@ function board() {
       }
     });
   }
-  button($('tools'), 'Fit', () => {
+  properties.hidden = readOnly;
+  const zoom = document.createElement('div');
+  zoom.className = 'zoom-tools';
+  $('tools').append(zoom);
+  button(zoom, 'Fit', () => {
     view = bounds(shapeList());
     draw();
   });
-  button($('tools'), '−', () => {
+  button(zoom, '−', () => {
     view = [view[0], view[1], Math.min(100000, view[2] * 1.2), Math.min(100000, view[3] * 1.2)];
     draw();
   }).setAttribute('aria-label', 'Zoom out');
-  button($('tools'), '+', () => {
+  button(zoom, '+', () => {
     view = [view[0], view[1], Math.max(100, view[2] / 1.2), Math.max(65, view[3] / 1.2)];
     draw();
   }).setAttribute('aria-label', 'Zoom in');
   const canvas = $('canvas');
+  const hitAt = (event) =>
+    document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-shape]')?.dataset.shape;
   canvas.onpointerdown = (event) => {
     if (event.button !== 0 && event.button !== 1) return;
     event.preventDefault();
@@ -383,7 +571,7 @@ function board() {
     canvas.setPointerCapture(event.pointerId);
     undo?.stopCapturing();
     const point = world(event),
-      id = event.target.closest('[data-shape]')?.dataset.shape,
+      id = hitAt(event),
       resize = event.target.dataset.resize;
     if (tool === 'laser' && !readOnly) {
       drag = { mode: 'laser' };
@@ -391,7 +579,11 @@ function board() {
       return;
     }
     if (tool === 'pan' || event.button === 1) {
-      drag = { mode: 'pan', start: [event.clientX, event.clientY], view: view.slice() };
+      drag = {
+        mode: 'pan',
+        start: [event.clientX, event.clientY],
+        view: view.slice(),
+      };
       return;
     }
     if (tool === 'select') {
@@ -433,14 +625,15 @@ function board() {
         type: tool,
         box: [...point, 1, 1],
         stroke: ink,
-        fill: ['rect', 'ellipse', 'diamond', 'cylinder'].includes(tool) ? 'none' : fill,
+        fill: ['rect', 'ellipse', 'diamond', 'cylinder'].includes(tool) ? background : fill,
         width,
       },
     };
   };
   canvas.onpointermove = (event) => {
     const point = world(event);
-    presence(point, drag?.mode === 'laser' ? 'laser' : 'cursor');
+    if (tool !== 'laser' || drag?.mode === 'laser')
+      presence(point, drag?.mode === 'laser' ? 'laser' : 'cursor');
     if (!drag) return;
     if (drag.mode === 'pan') {
       const rect = canvas.getBoundingClientRect();
@@ -534,13 +727,17 @@ function board() {
       }, local);
     }
   };
+  canvas.onpointerleave = () => {
+    if (!drag) port.postMessage({ type: 'presence', mode: 'clear', point: null });
+  };
   canvas.onpointercancel = () => {
+    showPresence({ peer: 'self', mode: 'clear' });
     drag = null;
     port.postMessage({ type: 'presence', mode: 'clear', point: null });
     draw();
   };
   canvas.ondblclick = (event) => {
-    const id = event.target.closest('[data-shape]')?.dataset.shape;
+    const id = hitAt(event);
     if (id) editText(id);
   };
   canvas.onwheel = (event) => {
@@ -607,7 +804,12 @@ function board() {
       }, local);
     }
     if (event.key === 'Enter' && selected.size === 1) editText([...selected][0]);
-    const moves = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    const moves = {
+      ArrowLeft: [-1, 0],
+      ArrowRight: [1, 0],
+      ArrowUp: [0, -1],
+      ArrowDown: [0, 1],
+    };
     if (moves[event.key]) {
       event.preventDefault();
       const [dx, dy] = moves[event.key],
@@ -625,11 +827,14 @@ function board() {
       }, local);
     }
   };
-  undo = new Y.UndoManager(doc.getMap('shapes'), { trackedOrigins: new Set([local]) });
+  undo = new Y.UndoManager(doc.getMap('shapes'), {
+    trackedOrigins: new Set([local]),
+  });
   doc.on('update', () => draw());
   draw();
 }
 function documentEditor() {
+  document.body.dataset.kind = 'document';
   $('tools').hidden = true;
   $('document').hidden = false;
   $('formatting').hidden = readOnly;
@@ -649,12 +854,41 @@ function documentEditor() {
     editable: !readOnly,
     extensions: [
       ...extensions,
+      Extension.create({
+        name: 'agentAttribution',
+        addProseMirrorPlugins() {
+          return [
+            new Plugin({
+              props: {
+                decorations(state) {
+                  const decorations = [];
+                  if ($('show-agent').checked)
+                    state.doc.forEach((node, offset) => {
+                      const label = agentTargets.get(node.attrs.id);
+                      if (label)
+                        decorations.push(
+                          Decoration.node(offset, offset + node.nodeSize, {
+                            class: 'agent-contribution',
+                            title: label,
+                          }),
+                        );
+                    });
+                  return DecorationSet.create(state.doc, decorations);
+                },
+              },
+            }),
+          ];
+        },
+      }),
       Collaboration.configure({
         document: doc,
         field: 'document',
         yUndoOptions: { undoManager: undo },
       }),
-      CollaborationCaret.configure({ provider, user: { name: 'You', color: '#6965db' } }),
+      CollaborationCaret.configure({
+        provider,
+        user: { name: 'You', color: '#6965db' },
+      }),
     ],
   });
   editor.on('create', () => provider.emit('synced', []));
@@ -673,19 +907,44 @@ function documentEditor() {
         });
     }, 60);
   });
+  const styles = document.createElement('select');
+  styles.setAttribute('aria-label', 'Paragraph style');
+  for (const [label, value] of [
+    ['Body', 0],
+    ['Title', 1],
+    ['Heading', 2],
+    ['Subheading', 3],
+  ])
+    styles.add(new Option(label, value));
+  styles.onchange = () => {
+    const c = editor.chain().focus();
+    (+styles.value ? c.setHeading({ level: +styles.value }) : c.setParagraph()).run();
+  };
+  $('formatting').append(styles);
   const actions = [
-    ['Paragraph', (c) => c.setParagraph()],
-    ['Heading', (c) => c.toggleHeading({ level: 2 })],
-    ['Bold', (c) => c.toggleBold()],
-    ['Italic', (c) => c.toggleItalic()],
-    ['Bullets', (c) => c.toggleBulletList()],
-    ['Numbers', (c) => c.toggleOrderedList()],
-    ['Code', (c) => c.toggleCodeBlock()],
-    ['Table', (c) => c.insertTable({ rows: 3, cols: 3, withHeaderRow: true })],
+    ['Bold', 'B', 'bold', (c) => c.toggleBold()],
+    ['Italic', 'I', 'italic', (c) => c.toggleItalic()],
+    ['Underline', 'U', 'underline', (c) => c.toggleUnderline()],
+    ['Strike', 'S', 'strike', (c) => c.toggleStrike()],
+    ['Bullets', '☷', 'bulletList', (c) => c.toggleBulletList()],
+    ['Numbers', '≡', 'orderedList', (c) => c.toggleOrderedList()],
+    ['Quote', '❞', 'blockquote', (c) => c.toggleBlockquote()],
+    ['Code', '</>', 'codeBlock', (c) => c.toggleCodeBlock()],
+    ['Table', '▦', 'table', (c) => c.insertTable({ rows: 3, cols: 3, withHeaderRow: true })],
   ];
-  for (const [label, run] of actions)
-    button($('formatting'), label, () => run(editor.chain().focus()).run());
-  button($('formatting'), 'Link', () => {
+  for (const [label, icon, node, run] of actions) {
+    const b = button($('formatting'), icon, () => run(editor.chain().focus()).run());
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.dataset.format = node;
+  }
+  editor.on('transaction', () => {
+    styles.value = editor.isActive('heading') ? editor.getAttributes('heading').level : 0;
+    document
+      .querySelectorAll('[data-format]')
+      .forEach((b) => b.setAttribute('aria-pressed', String(editor.isActive(b.dataset.format))));
+  });
+  const link = button($('formatting'), '↗', () => {
     $('link-dialog').showModal();
     $('link-url').focus();
     $('link-dialog').onclose = () => {
@@ -694,6 +953,8 @@ function documentEditor() {
         editor.chain().focus().setLink({ href: url }).run();
     };
   });
+  link.title = 'Link';
+  link.setAttribute('aria-label', 'Link');
   function captureSelection() {
     // Capture before focus leaves the editor. DOM selection changes can precede
     // ProseMirror's selection transaction by one browser event-loop turn.
@@ -741,6 +1002,7 @@ async function start(event) {
   initialized = true;
   port = event.ports[0];
   item = event.data.item;
+  participant = event.data.name || 'You';
   readOnly = event.data.readOnly;
   online = event.data.online !== false;
   revision = item.revision;
@@ -784,8 +1046,7 @@ async function start(event) {
     }
     if (data.type === 'offline') {
       online = false;
-      people.clear();
-      $('presence').replaceChildren();
+      clearPresence();
       if (awareness)
         removeAwarenessStates(
           awareness,
@@ -809,8 +1070,7 @@ async function start(event) {
     }
     if (data.type === 'closed') {
       awareness?.setLocalStateField('cursor', null);
-      $('presence').replaceChildren();
-      people.clear();
+      clearPresence();
       return;
     }
     if (data.type === 'presence') showPresence(data);
@@ -825,14 +1085,37 @@ async function start(event) {
   });
   if (item.kind === 'whiteboard') board();
   else documentEditor();
+  document.addEventListener('pointerdown', (event) => {
+    document.querySelectorAll('.popover[open]').forEach((menu) => {
+      if (!menu.contains(event.target)) menu.open = false;
+    });
+  });
   $('title').value = item.title;
   $('title').readOnly = readOnly;
   $('title').onchange = async () => {
     try {
-      await request({ action: 'rename', title: $('title').value, opId: crypto.randomUUID() });
+      await request({
+        action: 'rename',
+        title: $('title').value,
+        opId: crypto.randomUUID(),
+      });
     } catch (e) {
       status(e.message, true);
     }
+  };
+  $('undo').textContent = '↶';
+  $('undo').setAttribute('aria-label', 'Undo');
+  $('redo').textContent = '↷';
+  $('redo').setAttribute('aria-label', 'Redo');
+  $('show-agent').onchange = () => {
+    if (editor) editor.view.dispatch(editor.state.tr.setMeta('addToHistory', false));
+    else draw();
+  };
+  $('ask-toggle').hidden = readOnly;
+  $('ask-toggle').onclick = () => {
+    const shown = document.querySelector('footer').classList.toggle('asking');
+    $('ask-toggle').setAttribute('aria-expanded', String(shown));
+    if (shown) $('question').focus();
   };
   $('undo').disabled = readOnly;
   $('redo').disabled = readOnly;

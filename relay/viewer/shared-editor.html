@@ -13,12 +13,22 @@
       >
       <button id="undo" title="Undo your last edit (Ctrl+Z)">Undo</button
       ><button id="redo">Redo</button>
-      <button id="retry">Retry save</button>
-      <select id="export" aria-label="Download format"></select
-      ><button id="download">Download</button><button id="recovery">Recovery copy</button>
-      <details id="history">
-        <summary>Contributions</summary>
-        <div id="contributions"></div>
+      <details id="menu" class="popover">
+        <summary aria-label="Editor menu" title="Editor menu">☰</summary>
+        <div class="menu-body">
+          <label
+            >Download as
+            <select id="export" aria-label="Download format"></select
+          ></label>
+          <button id="download">Download</button>
+          <button id="recovery">Recovery copy</button>
+          <button id="retry">Retry save</button>
+          <label><input id="show-agent" type="checkbox" checked /> Highlight assistant edits</label>
+          <details id="history">
+            <summary>Contributions</summary>
+            <div id="contributions"></div>
+          </details>
+        </div>
       </details>
     </header>
     <div id="tools" role="toolbar" aria-label="Drawing tools"></div>
@@ -32,6 +42,7 @@
     </main>
     <main id="document" hidden aria-label="Shared document"></main>
     <footer>
+      <button id="ask-toggle" type="button" aria-expanded="false">Ask assistant</button>
       <span id="hint">Select content to ask about it, or ask about the whole item.</span>
       <form id="ask">
         <select id="scope" aria-label="Question scope">
@@ -46,12 +57,7 @@
         /><button>Ask assistant</button>
       </form>
     </footer>
-    <dialog id="text-dialog">
-      <form method="dialog">
-        <label>Text<textarea id="shape-text" maxlength="10000" rows="5"></textarea></label
-        ><button value="cancel">Cancel</button><button value="save">Save</button>
-      </form>
-    </dialog>
+    <textarea id="shape-text" aria-label="Shape text" maxlength="10000" hidden></textarea>
     <dialog id="link-dialog">
       <form method="dialog">
         <label>Link URL<input id="link-url" type="url" placeholder="https://…" /></label

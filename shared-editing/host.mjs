@@ -280,6 +280,7 @@ export async function handle(request) {
       id: request.opId,
       revision,
       actor: request.actor,
+      time: Date.now(),
       changes,
       ...(before.title !== after.title
         ? { title: { before: before.title, after: after.title } }
