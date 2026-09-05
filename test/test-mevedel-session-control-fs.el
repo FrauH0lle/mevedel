@@ -475,6 +475,146 @@
   :doc "an empty path list runs no program"
   (should-not (mevedel-session-control-fs-delete-directories nil)))
 
+(mevedel-deftest mevedel-session-control-fs-tree-sizes
+  ()
+  ,test
+  (test)
+
+  :doc "counts nested and hidden regular files in one target program"
+  (let* ((root (make-temp-file "mevedel-control-fs-size-" t))
+         (one (file-name-concat root "one"))
+         (nested (file-name-concat one ".nested"))
+         (two (file-name-concat root "two"))
+         (calls 0)
+         results)
+    (unwind-protect
+        (progn
+          (make-directory nested t)
+          (make-directory two)
+          (with-temp-file (file-name-concat one "visible") (insert "abc"))
+          (with-temp-file (file-name-concat one ".hidden") (insert "12345"))
+          (with-temp-file (file-name-concat nested "data") (insert "1234567"))
+          (with-temp-file (file-name-concat two "data") (insert "four"))
+          (setq results
+                (cl-letf* ((original (symbol-function 'process-file))
+                           ((symbol-function 'process-file)
+                            (lambda (&rest args)
+                              (setq calls (1+ calls))
+                              (apply original args))))
+                  (mevedel-session-control-fs-tree-sizes (list one two))))
+          (should (= 1 calls))
+          (should (equal (list one two)
+                         (mapcar (lambda (result)
+                                   (plist-get result :path))
+                                 results)))
+          (should (equal '(ok ok)
+                         (mapcar (lambda (result)
+                                   (plist-get result :status))
+                                 results)))
+          (should (equal '(15 4)
+                         (mapcar (lambda (result)
+                                   (plist-get result :value))
+                                 results))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "refuses symlink entries and roots without suppressing later sizes"
+  (let* ((root (make-temp-file "mevedel-control-fs-size-links-" t))
+         (linked-entry (file-name-concat root "linked-entry"))
+         (linked-root (file-name-concat root "linked-root"))
+         (good (file-name-concat root "good")))
+    (unwind-protect
+        (progn
+          (make-directory linked-entry)
+          (make-directory good)
+          (with-temp-file (file-name-concat good "data") (insert "valid"))
+          (make-symbolic-link (file-name-concat good "data")
+                              (file-name-concat linked-entry "link"))
+          (make-symbolic-link good linked-root)
+          (let ((results
+                 (mevedel-session-control-fs-tree-sizes
+                  (list linked-entry linked-root good))))
+            (should (equal '(failed failed ok)
+                           (mapcar (lambda (result)
+                                     (plist-get result :status))
+                                   results)))
+            (should (= 5 (plist-get (nth 2 results) :value)))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "treats a leading-dash directory name as data"
+  (let* ((root (make-temp-file "mevedel-control-fs-size-dash-" t))
+         (tree (file-name-concat root "-delete"))
+         (sibling (file-name-concat root "sibling")))
+    (unwind-protect
+        (progn
+          (make-directory tree)
+          (with-temp-file (file-name-concat tree "data") (insert "safe"))
+          (with-temp-file sibling (insert "untouched"))
+          (let ((result (car (mevedel-session-control-fs-tree-sizes
+                              (list tree)))))
+            (should (eq 'ok (plist-get result :status)))
+            (should (= 4 (plist-get result :value)))
+            (should (file-exists-p sibling))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "does not follow a descendant replaced by a symlink"
+  (let* ((root (make-temp-file "mevedel-control-fs-size-link-race-" t))
+         (tree (file-name-concat root "tree"))
+         (outside (file-name-concat root "outside"))
+         (entry (file-name-concat tree "entry"))
+         (pause ".mevedel-test-pause")
+         (worker-buffer (generate-new-buffer " *mevedel-control-fs-size-worker*"))
+         worker)
+    (unwind-protect
+        (progn
+          (make-directory entry t)
+          (make-directory outside)
+          (with-temp-file (file-name-concat entry "small") (insert "x"))
+          (with-temp-file (file-name-concat outside "large")
+            (insert (make-string 1000 ?x)))
+          (setq worker
+                (start-process
+                 "mevedel-control-fs-size-worker" worker-buffer
+                 (or invocation-name "emacs")
+                 "-Q" "--batch" "--eval"
+                 (format
+                  "(progn (load %S nil t) (let ((mevedel-session-control-fs--test-pause-file %S)) (prin1 (mevedel-session-control-fs-tree-sizes (list %S)))))"
+                  (expand-file-name "mevedel-session-control-fs.el"
+                                    default-directory)
+                  pause tree)))
+          (while (and (process-live-p worker)
+                      (not (file-exists-p (file-name-concat root pause))))
+            (accept-process-output worker 0.01))
+          (should (file-exists-p (file-name-concat root pause)))
+          (delete-directory entry t)
+          (make-symbolic-link outside entry)
+          (with-temp-file (file-name-concat root (concat pause ".continue")))
+          (while (process-live-p worker)
+            (accept-process-output worker 0.01))
+          (should (zerop (process-exit-status worker)))
+          (with-current-buffer worker-buffer
+            (goto-char (point-min))
+            (should (search-forward ":status failed" nil t))))
+      (when (process-live-p worker)
+        (delete-process worker))
+      (when (buffer-live-p worker-buffer)
+        (kill-buffer worker-buffer))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "an empty path list runs no program"
+  (should-not (mevedel-session-control-fs-tree-sizes nil)))
+
+(mevedel-deftest mevedel-session-control-fs--program-value
+  (:doc "decodes only nonnegative integer tree byte counts")
+  (let ((op (list :op 'tree-size :path "/tmp/tree")))
+    (should (= 42 (mevedel-session-control-fs--program-value op "42")))
+    (dolist (payload '("" "-1" "+1" "1.0" " 1" "1\n" "unknown"))
+      (should-error (mevedel-session-control-fs--program-value op payload)
+                    :type 'file-error))))
+
 (mevedel-deftest mevedel-session-control-fs-program-parent-swap
   (:doc "keeps a program's write in the opened directory when its pathname is swapped")
   (let* ((root (make-temp-file "mevedel-control-fs-root-" t))
@@ -526,6 +666,47 @@
         (delete-directory outside t))
       (when (buffer-live-p worker-buffer)
         (kill-buffer worker-buffer)))))
+
+(mevedel-deftest mevedel-session-control-fs-read-leaf-swap
+  (:doc "refuses a file replaced by a symlink after its parent is pinned")
+  (let* ((root (make-temp-file "mevedel-control-fs-read-swap-" t))
+         (outside (make-temp-file "mevedel-control-fs-read-outside-" nil))
+         (path (file-name-concat root "segment.chat.org"))
+         (pause ".mevedel-test-pause")
+         (worker-buffer (generate-new-buffer " *mevedel-control-fs-read-worker*"))
+         worker)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "inside"))
+          (with-temp-file outside (insert "outside"))
+          (setq worker
+                (start-process
+                 "mevedel-control-fs-read-worker" worker-buffer
+                 (or invocation-name "emacs")
+                 "-Q" "--batch" "--eval"
+                 (format
+                  "(progn (load %S nil t) (let ((mevedel-session-control-fs--test-pause-file %S)) (mevedel-session-control-fs-read-file %S 'no-conversion)))"
+                  (expand-file-name "mevedel-session-control-fs.el"
+                                    default-directory)
+                  pause path)))
+          (while (and (process-live-p worker)
+                      (not (file-exists-p (file-name-concat root pause))))
+            (accept-process-output worker 0.01))
+          (should (file-exists-p (file-name-concat root pause)))
+          (delete-file path)
+          (make-symbolic-link outside path)
+          (with-temp-file (file-name-concat root (concat pause ".continue")))
+          (while (process-live-p worker)
+            (accept-process-output worker 0.01))
+          (should-not (zerop (process-exit-status worker))))
+      (when (process-live-p worker)
+        (delete-process worker))
+      (when (buffer-live-p worker-buffer)
+        (kill-buffer worker-buffer))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (when (file-exists-p outside)
+        (delete-file outside)))))
 
 (mevedel-deftest mevedel-session-control-fs--take-diagnostic ()
   ,test

@@ -969,6 +969,39 @@ An active persisted Goal is restored `paused`, with an explicit session-resumed
 reason; opening a session never dispatches Goal work. `/goal resume` is required
 to continue. Rewind preserves session preset settings but clears Goal state.
 
+### Incompatible session inspection
+
+Only a sidecar whose format is exactly the current
+`mevedel-session-codec-format-version` and whose complete current shape
+validates is resumable. The session chooser keeps surviving directories
+with missing, unreadable, unsupported, or obsolete sidecars visible as
+`Inspect` rows instead of silently omitting them. Each row reports the rejection
+reason, age, whole-directory disk usage, and absolute path; all incompatible
+directories are sized by one target-side program, and an independently failed
+measurement is shown as `size unavailable`. Compatible-only listing APIs and
+ordinary view redraws do not calculate disk usage. Restoring such a directory
+directly signals an error; no minimal session is synthesized from its name.
+
+Selecting `Inspect` branches before resume authority calculation. It never
+deserializes or hydrates the sidecar, acquires a lock or lease, repairs or
+migrates state, materializes a publication, or initializes a session, request,
+composer, gptel mode, or Mevedel view. It opens an unbacked, unmodified,
+read-only bare Org buffer with saving, autosave, backups, and lockfiles disabled.
+Persisted presets and `GPTEL_BOUNDS` are not restored.
+
+For a PID-lock file-workspace session, inspection enumerates the actual
+canonical `segment-NNNN.chat.org` regular files, preserves gaps, orders them by
+segment number, and reads the selected fixed file. For a portable project
+session, it enumerates only the canonical segment entries in the already
+validated immutable publication manifest and verifies the recorded SHA-256
+before display. Mutable fixed portable caches are never fallback evidence. A
+single authoritative segment opens directly; several prompt in chronological
+order with the newest as default; zero authoritative segments fail closed.
+A directory whose discovery itself fails -- contradictory control artifacts
+or an unreadable publication -- is listed as `undiscoverable`: it remains
+visible with its diagnostic but is never inspected, because no authoritative
+transcript bytes can be resolved for it.
+
 ### Archived segment inspection
 
 `mevedel-view-segments.el` owns the ephemeral inspection buffer and switching
@@ -1376,6 +1409,11 @@ workspace per Emacs invocation. Expired session cleanup removes its `local/`
 scratch directory with the rest of the session. Portable project session
 stores are never auto-cleaned; their portable lease protocol has no deletion
 claim in v1. `nil` disables local cleanup.
+
+Chooser cleanup still runs before incompatibility discovery. Consequently an
+expired file-workspace session may be deleted before it can appear as an
+`Inspect` row; portable project sessions remain exempt. Inspection itself never
+archives, deletes, or modifies persisted session files.
 
 ## Defcustoms
 

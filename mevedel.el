@@ -646,9 +646,10 @@ the command will resize the directive in the following manner:
 
 Without prefix ARG, discover persisted workspace sessions first.  The entry
 chooser offers a new session, ordinary resume, read-only inspection of an
-active writer, or confirmed takeover of an expired lease.  With no persisted
-sessions, retain the live-buffer behavior: create \"main\", switch to the sole
-live session, or prompt among multiple live sessions.
+active writer, inert transcript inspection for incompatible sessions, or
+confirmed takeover of an expired lease.  With no persisted sessions, retain
+the live-buffer behavior: create \"main\", switch to the sole live session, or
+prompt among multiple live sessions.
 
 With prefix ARG (\\[universal-argument]):
 - Prompt for a working directory under the current project.
@@ -663,6 +664,8 @@ With prefix ARG (\\[universal-argument]):
           (unless arg
             (mevedel-session-persistence-choose-entry workspace))))
     (cond
+     ((and (consp entry) (eq (plist-get entry :action) 'inspect))
+      (display-buffer (plist-get entry :buffer) gptel-display-buffer-action))
      ((bufferp entry)
       (mevedel--display-chat-buffer entry))
      ((eq entry 'new)

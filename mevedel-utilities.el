@@ -211,6 +211,17 @@ in *Messages*, where it reads like a defect and is not one."
         text
       (truncate-string-to-width text width nil nil (or ellipsis "...")))))
 
+(defun mevedel--ordered-completion-table (displays category)
+  "Return a completion table over DISPLAYS that preserves their order.
+CATEGORY is exposed as completion metadata for completion UI integrations."
+  (lambda (string pred action)
+    (if (eq action 'metadata)
+        `(metadata
+          (category . ,category)
+          (display-sort-function . identity)
+          (cycle-sort-function . identity))
+      (complete-with-action action displays string pred))))
+
 ;;
 ;;; Diagnostics
 

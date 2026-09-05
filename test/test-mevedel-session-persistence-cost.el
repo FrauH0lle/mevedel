@@ -250,6 +250,70 @@ directories -- the existence probes and the lease listings."
       (clrhash mevedel-session-persistence--list-sessions-cache)
       (clrhash mevedel-session-persistence--summary-cache))))
 
+
+(mevedel-deftest mevedel-session-persistence-choose-entry/cost ()
+  ,test
+  (test)
+  :doc "sizes every incompatible row in one target program"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-incompatible-cost-" t)))
+         (workspace
+          (mevedel-workspace-get-or-create
+           'file "incompatible-cost" root "incompatible-cost"))
+         (paths
+          (mapcar
+           (lambda (name)
+             (let ((path (file-name-as-directory
+                          (file-name-concat root name))))
+               (make-directory path)
+               (with-temp-file (file-name-concat path "segment-0001.chat.org")
+                 (insert name))
+               path))
+           '("one" "two" "three")))
+         (programs nil))
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-session-persistence-cleanup-expired)
+              #'ignore)
+             ((symbol-function
+               'mevedel-session-persistence--sweep-stale-locks)
+              #'ignore)
+             ((symbol-function 'mevedel-session-persistence--enumerate-sessions)
+              (lambda (&rest _)
+                (list
+                 :sessions nil
+                 :incompatible
+                 (mapcar
+                  (lambda (path)
+                    (list :kind 'incompatible :save-path path
+                          :authority-mode 'pid-lock :status 'missing))
+                  paths))))
+             ((symbol-function
+               'mevedel--ordered-completion-table)
+              (lambda (values &rest _) values))
+             ((symbol-function 'completing-read)
+              (lambda (&rest _) "Start new session"))
+             ((symbol-function 'mevedel-session-control-fs-run-program)
+              (let ((run
+                     (symbol-function
+                      'mevedel-session-control-fs-run-program)))
+                (lambda (operations &rest arguments)
+                  (push operations programs)
+                  (apply run operations arguments)))))
+          (should
+           (eq 'new
+               (mevedel-session-persistence-choose-entry workspace)))
+          (should (= 1 (length programs)))
+          (should (= 3 (length (car programs))))
+          (should
+           (seq-every-p
+            (lambda (operation)
+              (eq 'tree-size (plist-get operation :op)))
+            (car programs))))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry))))
+
 (provide 'test-mevedel-session-persistence-cost)
 
 ;;; test-mevedel-session-persistence-cost.el ends here

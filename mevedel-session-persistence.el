@@ -115,7 +115,6 @@
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-acknowledge-incarnation "mevedel-execution-target" (target))
-(declare-function mevedel-execution-target-create "mevedel-execution-target" (workspace-root))
 (declare-function mevedel-execution-target-expand-path "mevedel-execution-target" (target path &optional directory))
 (declare-function mevedel-execution-target-incarnation "mevedel-execution-target" (cl-x))
 (declare-function mevedel-execution-target-incarnation-changed-p "mevedel-execution-target" (cl-x))
@@ -128,7 +127,6 @@
 (declare-function mevedel-execution-target-refresh-incarnation "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-remote-p "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-restore-incarnation "mevedel-execution-target" (target incarnation))
-(autoload 'mevedel-execution-target-create "mevedel-execution-target")
 (autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
 
 ;; `mevedel-hooks'
@@ -162,11 +160,11 @@
 (declare-function mevedel-session-artifacts-check-target-incarnation "mevedel-session-artifacts" (session buffer))
 (declare-function mevedel-session-artifacts-compute-id "mevedel-session-artifacts" (name))
 (declare-function mevedel-session-artifacts-content-start "mevedel-session-artifacts" (buffer))
-(declare-function mevedel-session-artifacts-detect-highest-segment "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-disown-save-machinery "mevedel-session-artifacts" nil)
 (declare-function mevedel-session-artifacts-finalized-segment-text "mevedel-session-artifacts" (text coding))
 (declare-function mevedel-session-artifacts-find-artifact-noselect "mevedel-session-artifacts" (session logical &optional inspection))
 (declare-function mevedel-session-artifacts-inhibit-so-long "mevedel-session-artifacts" ())
+(declare-function mevedel-session-artifacts-inspect-cold-session "mevedel-session-artifacts" (save-path authority-mode &optional publication))
 (declare-function mevedel-session-artifacts-load-instructions "mevedel-session-artifacts" (session buffer &optional turn directive-records preserve-directives-p))
 (declare-function mevedel-session-artifacts-materialize-published-artifacts "mevedel-session-artifacts" (session destination-save-path))
 (declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
@@ -200,8 +198,9 @@
 (declare-function mevedel-session-control-fs-path-exists-p "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-physical-path "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-program-value "mevedel-session-control-fs" (result))
-(declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs" (path))
+(declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs" (path &optional coding-system))
 (declare-function mevedel-session-control-fs-run-program "mevedel-session-control-fs" (operations))
+(declare-function mevedel-session-control-fs-tree-sizes "mevedel-session-control-fs" (paths))
 (declare-function mevedel-session-control-fs-write-file "mevedel-session-control-fs" (path content))
 (autoload 'mevedel-session-control-fs-path-exists-p
   "mevedel-session-control-fs")
@@ -421,10 +420,12 @@
                   "mevedel-utilities" (function))
 (declare-function mevedel--forget-place "mevedel-utilities" nil)
 (declare-function mevedel--normalize-message-text "mevedel-utilities" (text))
+(declare-function mevedel--ordered-completion-table "mevedel-utilities" (displays category))
 (declare-function mevedel--transcript-org-mode "mevedel-utilities" nil)
 (declare-function mevedel-version "mevedel-utilities" (&optional here message))
 (autoload 'mevedel--call-with-bare-transcript-mode "mevedel-utilities")
 (autoload 'mevedel--forget-place "mevedel-utilities")
+(autoload 'mevedel--ordered-completion-table "mevedel-utilities")
 (autoload 'mevedel--transcript-org-mode "mevedel-utilities")
 
 ;; `mevedel-view'
@@ -1302,38 +1303,51 @@ restoration and reveal timers."
   "Read a current-version sidecar plist from PATH.
 Return nil when the sidecar is missing or unreadable.  Signal when a
 readable sidecar has an unsupported version or obsolete shape."
-  (cond
-   ((not (file-exists-p path))
-    (display-warning 'mevedel
-                     (format "Sidecar missing at %s; treating as fresh session"
-                             path)
-                     :warning)
-    nil)
-   (t
-    (let ((plist
-           (condition-case err
-               (mevedel-session-codec-read path)
-             (error
-              (display-warning
-               'mevedel
-               (format "Sidecar unreadable at %s: %s; treating as fresh session"
-                       path (error-message-string err))
-               :warning)
-              nil))))
-      (cond
-       ((null plist) nil)
-       ((not (proper-list-p plist))
-        (display-warning
-         'mevedel
-         (format "Sidecar unreadable at %s; treating as fresh session" path)
-         :warning)
-        nil)
-       (t
-        (unless (equal (plist-get plist :version)
-                       mevedel-session-codec-format-version)
-          (error "Unsupported session version: %s"
-                 (or (plist-get plist :version) "missing")))
-        (mevedel-session-codec-validate-current-sidecar plist)))))))
+  (let* ((result (mevedel-session-persistence--classify-sidecar path))
+         (diagnostic (plist-get result :diagnostic)))
+    (pcase (plist-get result :status)
+      ('current (plist-get result :sidecar))
+      ((or 'missing 'unreadable)
+       (display-warning 'mevedel (format "%s: %s" diagnostic path) :warning)
+       nil)
+      (_ (error "%s" diagnostic)))))
+
+(defun mevedel-session-persistence--classify-sidecar (path)
+  "Return the compatibility classification for the sidecar at PATH.
+
+The returned plist has `:status' equal to `current', `missing', `unreadable',
+`unsupported', or `obsolete'.  Current results carry `:sidecar'; readable
+incompatible results retain their observed version, update stamp, and exact
+validation diagnostic."
+  (if (not (file-exists-p path))
+      (list :status 'missing :diagnostic "Sidecar is missing")
+    (condition-case err
+        (let ((sidecar (mevedel-session-codec-read path)))
+          (cond
+           ((not (and (plistp sidecar) (keywordp (car sidecar))))
+            (list :status 'unreadable
+                  :diagnostic "Invalid session sidecar"))
+           ((not (equal (plist-get sidecar :version)
+                        mevedel-session-codec-format-version))
+            (list :status 'unsupported
+                  :version (plist-get sidecar :version)
+                  :updated-at (plist-get sidecar :updated-at)
+                  :diagnostic
+                  (format "Unsupported session version: %s"
+                          (or (plist-get sidecar :version) "missing"))))
+           (t
+            (condition-case shape-error
+                (progn
+                  (mevedel-session-codec-validate-current-sidecar sidecar)
+                  (list :status 'current :sidecar sidecar))
+              (error
+               (list :status 'obsolete
+                     :version (plist-get sidecar :version)
+                     :updated-at (plist-get sidecar :updated-at)
+                     :diagnostic (error-message-string shape-error)))))))
+      (error
+       (list :status 'unreadable
+             :diagnostic (error-message-string err))))))
 
 (defvar-local mevedel-session--read-only-mode nil
   "Non-nil when this chat buffer is in read-only session mode.
@@ -1361,42 +1375,6 @@ See `mevedel-session--read-only-mode' for semantics."
     (message "mevedel: %s"
              (or reason
                  "session opened read-only; another client holds the lease"))))
-
-(defun mevedel-session-persistence--synthesize-session (session-dir workspace)
-  "Build a minimal `mevedel-session' when the sidecar is absent.
-Used when the sidecar file for SESSION-DIR is missing or unparseable.
-WORKSPACE is the current workspace (resolved by the caller)."
-  (let* ((dir-name (file-name-nondirectory
-                    (directory-file-name session-dir)))
-         (name (if (string-match
-                    "\\`\\(.*?\\)-[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}T[0-9]\\{2\\}-[0-9]\\{2\\}-[0-9a-f]+\\'"
-                    dir-name)
-                   (match-string 1 dir-name)
-                 dir-name))
-         (highest (mevedel-session-artifacts-detect-highest-segment
-                   session-dir))
-         (now (format-time-string "%FT%H-%M-%S")))
-    (mevedel-session--create
-     :name            name
-     :workspace       workspace
-     :execution-target
-     (mevedel-execution-target-create (mevedel-workspace-root workspace))
-     :authority-mode
-     (mevedel-session-codec-workspace-authority-mode workspace)
-     :working-directory (mevedel-workspace-root workspace)
-     :touched-files   (make-hash-table :test #'equal)
-     :mentions-shown  (make-hash-table :test #'equal)
-     :session-id      dir-name
-     :last-observed-date (format-time-string "%F")
-     :agent-types-snapshot :uninitialized
-     :skills-snapshot :uninitialized
-     :save-path       (file-name-as-directory session-dir)
-     :current-segment (if (> highest 0) highest 1)
-     :created-at      now
-     :updated-at      now
-     :turn-count      0
-     :permission-mode 'ask
-     :sandbox-mode 'best-effort)))
 
 (defun mevedel-session-persistence-find-live-buffer (session-id buf-name)
   "Return the named live root buffer for SESSION-ID, or nil.
@@ -1566,8 +1544,8 @@ root for the client doing the restore."
     (session-dir &optional lifecycle-source session-override workspace)
   "Restore the chat buffer for the session at SESSION-DIR.
 
-Loads the sidecar (or, locally, synthesizes a minimal session when the sidecar
-is missing/unreadable), opens the live segment file in a buffer named
+Loads the exact current-version sidecar, opens the live segment file in a
+buffer named
 per `mevedel-session-buffer-name', enables `org-mode' and
 `gptel-mode' without gptel's Org-state restore, restores text-property
 bounds through mevedel's transcript path, hydrates the session struct on
@@ -1645,8 +1623,9 @@ mentions-shown reset to empty hash tables on load."
                                    (user-error
                                     "Portable session has no valid published sidecar: %s"
                                     session-dir)
-                                 (mevedel-session-persistence--synthesize-session
-                                  session-dir opened-workspace))))
+                                 (user-error
+                                  "Session has no valid sidecar: %s"
+                                  session-dir))))
          (agent-registry-repaired-p
           (plist-get result :agent-registry-repaired-p))
          (additional-roots (plist-get result :additional-roots))
@@ -1861,15 +1840,45 @@ mentions-shown reset to empty hash tables on load."
 
 (defvar mevedel-session-persistence--summary-cache
   (make-hash-table :test #'equal)
-  "Parsed session summaries keyed by sidecar path and file fingerprint.")
+  "Classified session summaries keyed by sidecar path and file fingerprint.")
+
+(defun mevedel-session-persistence--sidecar-summary (sidecar)
+  "Return picker-relevant fields extracted from current SIDECAR."
+  (list :session-id (plist-get sidecar :session-id)
+        :session-name (plist-get sidecar :session-name)
+        :workspace (plist-get sidecar :workspace)
+        :created-at (plist-get sidecar :created-at)
+        :updated-at (plist-get sidecar :updated-at)
+        :current-segment (plist-get sidecar :current-segment)
+        :total-turn-count (plist-get sidecar :total-turn-count)
+        :first-user-message (plist-get sidecar :first-user-message)
+        :latest-user-message (plist-get sidecar :latest-user-message)
+        :fork-point-ids
+        (cl-loop
+         for segment in (plist-get sidecar :prompt-index)
+         append
+         (cl-loop
+          for prompt in (cdr segment)
+          for id = (plist-get prompt :fork-point-id)
+          when (stringp id)
+          collect id))
+        :working-directory (plist-get sidecar :working-directory)
+        :forked-from-session-id (plist-get sidecar :forked-from-session-id)
+        :fork-type (plist-get sidecar :fork-type)
+        :forked-from-fork-point-id
+        (plist-get sidecar :forked-from-fork-point-id)
+        :worktree-source-root (plist-get sidecar :worktree-source-root)
+        :worktree-directory (plist-get sidecar :worktree-directory)
+        :worktree-branch (plist-get sidecar :worktree-branch)
+        :worktree-base-commit (plist-get sidecar :worktree-base-commit)))
 
 (defun mevedel-session-persistence--read-summary (sidecar-path)
-  "Read picker-relevant fields from SIDECAR-PATH; nil on failure.
+  "Return a classified picker summary for SIDECAR-PATH.
 
 Cheap by design: only fields displayed in the picker (annotations,
-sort key) are extracted.  The full sidecar plist is left on disk
-until restore actually reads it.  An unchanged file fingerprint reuses
-its previously parsed summary."
+sort key, and rejection details) are retained.  The full sidecar plist is
+left on disk until restore actually reads it.  An unchanged file fingerprint
+reuses its previous classification."
   (let* ((path (expand-file-name sidecar-path))
          (attributes (file-attributes path))
          (fingerprint
@@ -1882,52 +1891,15 @@ its previously parsed summary."
                (gethash path mevedel-session-persistence--summary-cache))))
     (if (and cached (equal fingerprint (car cached)))
         (cdr cached)
-      (let ((summary
-             (condition-case _
-                 (let* ((plist (mevedel-session-codec-read path))
-                        (_version
-                         (unless
-                             (equal (plist-get plist :version)
-                                    mevedel-session-codec-format-version)
-                           (error "Unsupported session version")))
-                        (_shape
-                         (mevedel-session-codec-validate-current-sidecar
-                          plist)))
-                   (list :session-id         (plist-get plist :session-id)
-                         :session-name       (plist-get plist :session-name)
-                         :workspace          (plist-get plist :workspace)
-                         :created-at         (plist-get plist :created-at)
-                         :updated-at         (plist-get plist :updated-at)
-                         :current-segment    (plist-get plist :current-segment)
-                         :total-turn-count   (plist-get plist :total-turn-count)
-                         :first-user-message
-                         (plist-get plist :first-user-message)
-                         :latest-user-message
-                         (plist-get plist :latest-user-message)
-                         :fork-point-ids
-                         (cl-loop
-                          for segment in (plist-get plist :prompt-index)
-                          append
-                          (cl-loop
-                           for prompt in (cdr segment)
-                           for id = (plist-get prompt :fork-point-id)
-                           when (stringp id)
-                           collect id))
-                         :working-directory
-                         (plist-get plist :working-directory)
-                         :forked-from-session-id
-                         (plist-get plist :forked-from-session-id)
-                         :fork-type (plist-get plist :fork-type)
-                         :forked-from-fork-point-id
-                         (plist-get plist :forked-from-fork-point-id)
-                         :worktree-source-root
-                         (plist-get plist :worktree-source-root)
-                         :worktree-directory
-                         (plist-get plist :worktree-directory)
-                         :worktree-branch (plist-get plist :worktree-branch)
-                         :worktree-base-commit
-                         (plist-get plist :worktree-base-commit)))
-               (error nil))))
+      (let* ((classified
+              (mevedel-session-persistence--classify-sidecar path))
+             (sidecar (plist-get classified :sidecar))
+             (summary
+              (if sidecar
+                  (list :status 'current
+                        :summary
+                        (mevedel-session-persistence--sidecar-summary sidecar))
+                classified)))
         (when fingerprint
           (puthash path (cons fingerprint summary)
                    mevedel-session-persistence--summary-cache))
@@ -1935,14 +1907,14 @@ its previously parsed summary."
 
 (defvar mevedel-session-persistence--list-sessions-cache
   (make-hash-table :test #'equal)
-  "Last live session enumeration per workspace root, as (t . SESSIONS).
+  "Last live session enumeration per workspace root, as (t . RESULT).
 
 Enumerating a workspace costs several target round trips per session,
 so decorative consumers reuse the newest live listing instead of
 paying that on every redraw.  Every live enumeration refreshes it.")
 
 (defun mevedel-session-persistence--control-artifacts (entries)
-  "Return ENTRIES that carry a session control artifact, in one program.
+  "Return control probe results for ENTRIES, in one program.
 
 Each candidate is probed for the three artifacts that make a directory a
 session -- the obsolete PID lock, the portable lease, and the sidecar --
@@ -1965,22 +1937,14 @@ own assertion reports the authority violation at its canonical call site."
                                     :path (file-name-concat entry name)
                                     :optional t))
                             names))))
-         found)
-    (dolist (entry entries (nreverse found))
+         observed)
+    (dolist (entry entries (nreverse observed))
       ;; Results arrive in the order the operations were emitted: one per
       ;; name, in `names' order, per entry.
-      (let* ((entry-results
-              (list (pop results) (pop results) (pop results)))
-             (statuses (mapcar (lambda (result)
-                                 (plist-get result :status))
-                               entry-results)))
-        (dolist (result entry-results)
-          (unless (memq (plist-get result :status) '(ok absent))
-            (mevedel-session-control-fs-program-value result)))
-        (when (eq 'absent (car statuses))
+      (let ((entry-results (list (pop results) (pop results) (pop results))))
+        (when (eq 'absent (plist-get (car entry-results) :status))
           (mevedel-session-durability-note-no-pid-lock entry))
-        (when (memq 'ok statuses)
-          (push entry found))))))
+        (push (cons entry entry-results) observed)))))
 
 (defun mevedel-session-persistence--lease-listings (entries)
   "Return an alist of ENTRIES to their observed lease-directory listings.
@@ -2005,17 +1969,86 @@ listing failed is left out, and lists for itself."
         (when (memq status '(ok absent))
           (push (cons entry (or (plist-get result :value) 'none)) alist))))))
 
-(defun mevedel-session-persistence-list-sessions (workspace &optional cached)
-  "Return a list of `(:save-path :summary)' plists for WORKSPACE's sessions.
+(defun mevedel-session-persistence--observed-update-time
+    (updated-at sidecar-path save-path)
+  "Return when the session at SAVE-PATH was last updated, or nil.
+UPDATED-AT is authoritative when it parses as a session timestamp.
+Otherwise the sidecar at SIDECAR-PATH lends its modification time, then the
+directory itself."
+  (or (mevedel-session-persistence-parse-iso-time updated-at)
+      (file-attribute-modification-time
+       (or (and sidecar-path (file-attributes sidecar-path))
+           (file-attributes save-path)))))
 
-Sorted by `:updated-at' descending.  Sessions whose sidecar can't be
-parsed are silently dropped.  Portable sessions are listed only when their
-lease names a valid immutable publication; fixed portable sidecars are ignored.
+(defun mevedel-session-persistence--incompatible-entry
+    (save-path authority-mode status &optional publication sidecar-path)
+  "Return an incompatible discovery record for SAVE-PATH.
+AUTHORITY-MODE, STATUS, PUBLICATION, and SIDECAR-PATH describe the failed
+cold discovery without making it resumable."
+  (list :kind 'incompatible
+        :save-path (file-name-as-directory save-path)
+        :authority-mode authority-mode
+        :status (plist-get status :status)
+        :diagnostic (plist-get status :diagnostic)
+        :version (plist-get status :version)
+        :updated-at
+        ;; A remote stat that fails leaves the row undated rather than
+        ;; unlisted.
+        (when-let* ((time (condition-case nil
+                              (mevedel-session-persistence--observed-update-time
+                               (plist-get status :updated-at)
+                               sidecar-path save-path)
+                            (file-error nil))))
+          (format-time-string "%FT%H-%M-%S" time))
+        :publication publication))
 
-When CACHED is non-nil, reuse this process's last live enumeration for
-WORKSPACE when one exists.  Only decorations tolerant of a listing as
-old as the last picker, resume, or fork should pass it; anything that
-decides authority or names sessions to the user enumerates live."
+(defun mevedel-session-persistence--discover-entry
+    (entry authority-mode control-results listing)
+  "Return the discovery record for the session directory ENTRY.
+
+AUTHORITY-MODE is the workspace's mode, CONTROL-RESULTS are ENTRY's control
+probe results, and LISTING is its observed lease listing.  A current sidecar
+yields a compatible `(:save-path :summary :publication)' record; any other
+outcome yields an incompatible record.  Signal when a probe failed or ENTRY's
+controls contradict AUTHORITY-MODE; the caller records that as an
+`undiscoverable' row, which stays visible but is never inspected."
+  (let ((portable-p (eq authority-mode 'portable)))
+    (when-let* ((failed
+                 (seq-find (lambda (result)
+                             (not (memq (plist-get result :status)
+                                        '(ok absent))))
+                           control-results)))
+      (mevedel-session-control-fs-program-value failed))
+    (when (seq-find (lambda (result) (eq (plist-get result :status) 'ok))
+                    control-results)
+      (mevedel-session-codec-authority-mode-for-path
+       entry nil authority-mode))
+    (let* ((publication
+            (when portable-p
+              (mevedel-session-publication-read entry nil listing)))
+           (sidecar
+            (if portable-p
+                (plist-get publication :sidecar)
+              (file-name-concat entry "session.meta.el")))
+           (status
+            (if sidecar
+                (mevedel-session-persistence--read-summary sidecar)
+              (list :status 'missing
+                    :diagnostic
+                    "Portable session has no committed publication"))))
+      (if (eq (plist-get status :status) 'current)
+          (list :save-path (file-name-as-directory entry)
+                :summary (plist-get status :summary)
+                :publication publication)
+        (mevedel-session-persistence--incompatible-entry
+         entry authority-mode status publication sidecar)))))
+
+(defun mevedel-session-persistence--enumerate-sessions
+    (workspace &optional cached)
+  "Return compatible and incompatible persisted sessions for WORKSPACE.
+
+The result is `(:sessions LIST :incompatible LIST)'.  When CACHED is non-nil,
+reuse the last live enumeration when one exists."
   (let ((root (mevedel-workspace-root workspace)))
     (or (and cached
              (cdr (gethash
@@ -2024,13 +2057,13 @@ decides authority or names sessions to the user enumerates live."
         (let* ((sessions-dir
                 (mevedel-session-artifacts-sessions-dir workspace))
                (authority-mode
-                (mevedel-session-codec-workspace-authority-mode
-                 workspace))
+                (mevedel-session-codec-workspace-authority-mode workspace))
                (portable-p (eq authority-mode 'portable))
-               (results nil))
+               sessions
+               incompatible)
           ;; One enumeration is one transaction: the PID-lock proofs and the
-          ;; target clock reading that every entry's publication read
-          ;; repeats are paid once for the whole listing.
+          ;; target clock reading that every entry's publication read repeats
+          ;; are paid once for the whole listing.
           (mevedel-session-durability-with-transaction
             (when (file-directory-p sessions-dir)
               (let* ((entries
@@ -2039,7 +2072,7 @@ decides authority or names sessions to the user enumerates live."
                        (directory-files
                         sessions-dir t
                         "\\`\\(?:[^.]\\|\\.mevedel-save-as-\\)")))
-                     (controlled
+                     (controls
                       (and entries
                            (mevedel-session-persistence--control-artifacts
                             entries)))
@@ -2048,43 +2081,52 @@ decides authority or names sessions to the user enumerates live."
                            (mevedel-session-persistence--lease-listings
                             entries))))
                 (dolist (entry entries)
-                  (when (member entry controlled)
-                    (mevedel-session-codec-authority-mode-for-path
-                     entry nil authority-mode))
-                  (condition-case nil
-                      (let* ((publication
-                              (when portable-p
-                                (mevedel-session-publication-read
-                                 entry nil (cdr (assoc entry listings)))))
-                             (sidecar
-                              (if portable-p
-                                  (plist-get publication :sidecar)
-                                (file-name-concat entry "session.meta.el")))
-                             (summary
-                              (and sidecar
-                                   (mevedel-session-persistence--read-summary
-                                    sidecar))))
-                        (when summary
-                          (let ((item
-                                 (list :save-path
-                                       (file-name-as-directory entry)
-                                       :summary summary)))
-                            (when publication
-                              (setq item (plist-put item :publication
-                                                    publication)))
-                            (push item results))))
-                    (error nil))))))
-          (setq results
-                (sort results
-                      (lambda (a b)
-                        (string-greaterp
-                         (or (plist-get (plist-get a :summary) :updated-at)
-                             "")
-                         (or (plist-get (plist-get b :summary) :updated-at)
-                             "")))))
-          (puthash root (cons t results)
-                   mevedel-session-persistence--list-sessions-cache)
-          results))))
+                  (let ((record
+                         (condition-case err
+                             (mevedel-session-persistence--discover-entry
+                              entry authority-mode
+                              (cdr (assoc entry controls))
+                              (cdr (assoc entry listings)))
+                           ;; Discovery itself failed, so not even the
+                           ;; transcript can be trusted for inspection.
+                           (error
+                            (mevedel-session-persistence--incompatible-entry
+                             entry authority-mode
+                             (list :status 'undiscoverable
+                                   :diagnostic (error-message-string err)))))))
+                    (if (eq (plist-get record :kind) 'incompatible)
+                        (push record incompatible)
+                      (push record sessions)))))))
+          (setq sessions
+                (sort sessions
+                      :key (lambda (item)
+                             (or (plist-get (plist-get item :summary)
+                                            :updated-at)
+                                 ""))
+                      :lessp #'string-greaterp)
+                incompatible
+                (sort incompatible
+                      :key (lambda (item) (or (plist-get item :updated-at) ""))
+                      :lessp #'string-greaterp))
+          (let ((result (list :sessions sessions
+                              :incompatible incompatible)))
+            (puthash root (cons t result)
+                     mevedel-session-persistence--list-sessions-cache)
+            result)))))
+
+(defun mevedel-session-persistence-list-sessions (workspace &optional cached)
+  "Return a list of `(:save-path :summary)' plists for WORKSPACE's sessions.
+
+Sorted by `:updated-at' descending.  Incompatible sessions remain absent from
+this compatible-only interface.  Portable sessions are listed only when their
+lease names a valid immutable publication; fixed portable sidecars are ignored.
+
+When CACHED is non-nil, reuse this process's last live enumeration for
+WORKSPACE when one exists.  Only decorations tolerant of a listing as
+old as the last picker, resume, or fork should pass it; anything that
+decides authority or names sessions to the user enumerates live."
+  (plist-get (mevedel-session-persistence--enumerate-sessions workspace cached)
+             :sessions))
 
 (defun mevedel-session-persistence-conversation-variants
     (session fork-point-id &optional sessions)
@@ -2243,73 +2285,130 @@ the state and the holder are read together."
   (plist-get (mevedel-session-persistence--entry-authority workspace entry)
              :action))
 
+(defun mevedel-session-persistence--size-incompatible (entries)
+  "Return incompatible ENTRIES extended with their measured directory sizes.
+ENTRIES themselves are cached listing state and stay untouched.  The size is
+a decorative column, so a measurement that fails as a whole leaves every row
+at `size unavailable' rather than hiding the chooser."
+  (condition-case nil
+      (cl-mapcar
+       (lambda (entry result)
+         (if (eq (plist-get result :status) 'ok)
+             (append entry (list :size (plist-get result :value)))
+           entry))
+       entries
+       (mevedel-session-control-fs-tree-sizes
+        (mapcar (lambda (entry) (plist-get entry :save-path)) entries)))
+    (error entries)))
+
+(defun mevedel-session-persistence--incompatible-reason (entry)
+  "Return the human-readable incompatibility reason for ENTRY."
+  (if (eq (plist-get entry :status) 'unsupported)
+      (format "unsupported %s"
+              (or (plist-get entry :version) "version missing"))
+    (format "%s: %s" (plist-get entry :status) (plist-get entry :diagnostic))))
+
+(defun mevedel-session-persistence--format-incompatible-candidate (entry)
+  "Return a `completing-read' display string for incompatible ENTRY."
+  (format "%-12s  %-16s  %s  %s"
+          (mevedel-session-rewind-format-relative-time
+           (plist-get entry :updated-at))
+          (if-let* ((size (plist-get entry :size)))
+              (file-size-human-readable size)
+            "size unavailable")
+          (mevedel-session-persistence--incompatible-reason entry)
+          (plist-get entry :save-path)))
+
 (defun mevedel-session-persistence-choose-entry (workspace)
   "Choose a persisted WORKSPACE session or return `new'.
 
-Return nil when no persisted sessions exist.  The action offered per row
-follows the session's authority: an unheld session resumes, one already open
-in this Emacs is switched to, one another client holds is joined read-only
-and follows the owner from there, and an expired lease is taken over."
+Return nil when no persisted sessions exist.  Choosing an incompatible row
+returns `(:action inspect :buffer BUFFER)', where BUFFER shows authoritative
+transcript bytes without becoming a resumable session.  Other rows return
+the restored chat buffer and follow the session's authority: an unheld
+session resumes, one already open in this Emacs is switched to, one another
+client holds is joined read-only and follows the owner from there, and an
+expired lease is taken over."
   ;; Expired sessions and locks left behind by dead Emacsen are swept before
   ;; listing, so the chooser never offers a row that exists only because
   ;; nothing has cleaned up after a previous invocation.
   (mevedel-session-persistence-cleanup-expired workspace)
   (mevedel-session-persistence--sweep-stale-locks workspace)
-  (when-let* ((sessions
-              (mevedel-session-persistence-list-sessions workspace)))
-    (let* ((new-label "Start new session")
-           (held-p nil)
-           (candidates
-            (mapcar
-             (lambda (entry)
-               (let* ((authority
-                       (mevedel-session-persistence--entry-authority
-                        workspace entry))
-                      (action (plist-get authority :action)))
-                 ;; Whether another writer is live is already answered by
-                 ;; the row's own authority read; asking the target again per
-                 ;; candidate is a second round trip for the same fact.
-                 (when (plist-get authority :held)
-                   (setq held-p t))
+  (let* ((enumeration
+          (mevedel-session-persistence--enumerate-sessions workspace))
+         (sessions (plist-get enumeration :sessions))
+         (incompatible
+          (mevedel-session-persistence--size-incompatible
+           (plist-get enumeration :incompatible))))
+    (when (or sessions incompatible)
+      (let* ((new-label "Start new session")
+             (held-p nil)
+             (session-candidates
+              (mapcar
+               (lambda (entry)
+                 (let* ((authority
+                         (mevedel-session-persistence--entry-authority
+                          workspace entry))
+                        (action (plist-get authority :action)))
+                   ;; Whether another writer is live is already answered by
+                   ;; the row's own authority read; asking the target again per
+                   ;; candidate is a second round trip for the same fact.
+                   (when (plist-get authority :held)
+                     (setq held-p t))
+                   (cons
+                    (format
+                     "%-10s %s" action
+                     (mevedel-session-persistence--format-session-candidate
+                      entry (plist-get authority :detail)))
+                    entry)))
+               sessions))
+             (incompatible-candidates
+              (mapcar
+               (lambda (entry)
                  (cons
-                  (format "%-10s %s" action
-                          (mevedel-session-persistence--format-session-candidate
-                           entry (plist-get authority :detail)))
-                  entry)))
-             sessions))
-           (choices (cons new-label (mapcar #'car candidates)))
-           (choice
-            (completing-read
-             "Mevedel session: "
-             (mevedel-session-persistence--ordered-display-collection
-              choices 'mevedel-session-entry)
-             nil t nil nil (car choices))))
-      (if (equal choice new-label)
-          (progn
-            (when held-p
-              (unless
-                  (yes-or-no-p
-                   (concat
-                    "Another session writer is active. Independent sessions "
-                    "can race over project files; use a Worktree Fork for "
-                    "isolation. Start anyway? "))
-                (user-error "New session was not started")))
-            'new)
-        (mevedel-session-persistence-restore
-         (plist-get (cdr (assoc choice candidates)) :save-path)
-         nil nil workspace)))))
-
-(defun mevedel-session-persistence--ordered-display-collection
-    (displays category)
-  "Return a completion table over DISPLAYS that preserves candidate order.
-CATEGORY is exposed as completion metadata for completion UI integrations."
-  (lambda (string pred action)
-    (if (eq action 'metadata)
-        `(metadata
-          (category . ,category)
-          (display-sort-function . identity)
-          (cycle-sort-function . identity))
-      (complete-with-action action displays string pred))))
+                  (format
+                   "%-10s %s" "Inspect"
+                   (mevedel-session-persistence--format-incompatible-candidate
+                    entry))
+                  entry))
+               incompatible))
+             (candidates
+              (append session-candidates incompatible-candidates))
+             (choices (cons new-label (mapcar #'car candidates)))
+             (choice
+              (completing-read
+               (if incompatible
+                   (format "Mevedel session (%d cannot resume): "
+                           (length incompatible))
+                 "Mevedel session: ")
+               (mevedel--ordered-completion-table
+                choices 'mevedel-session-entry)
+               nil t nil nil (car choices))))
+        (if (equal choice new-label)
+            (progn
+              (when held-p
+                (unless
+                    (yes-or-no-p
+                     (concat
+                      "Another session writer is active. Independent sessions "
+                      "can race over project files; use a Worktree Fork for "
+                      "isolation. Start anyway? "))
+                  (user-error "New session was not started")))
+              'new)
+          (let ((entry (cdr (assoc choice candidates))))
+            (if (eq (plist-get entry :kind) 'incompatible)
+                (if (eq (plist-get entry :status) 'undiscoverable)
+                    (user-error "Session transcript is not safely inspectable: %s"
+                                (plist-get entry :diagnostic))
+                  (list
+                   :action 'inspect
+                   :buffer
+                   (mevedel-session-artifacts-inspect-cold-session
+                    (plist-get entry :save-path)
+                    (plist-get entry :authority-mode)
+                    (plist-get entry :publication))))
+              (mevedel-session-persistence-restore
+               (plist-get entry :save-path) nil nil workspace))))))))
 
 (defun mevedel-session-persistence-choose-conversation-variant
     (variants current-session-id)
@@ -2395,7 +2494,7 @@ CATEGORY is exposed as completion metadata for completion UI integrations."
            variants))
          (displays (mapcar #'car candidates))
          (collection
-          (mevedel-session-persistence--ordered-display-collection
+          (mevedel--ordered-completion-table
            displays 'mevedel-conversation-variant))
          (current
           (cl-find
@@ -2603,15 +2702,10 @@ uses portable authority, or the throttle has already fired."
                       (condition-case nil
                           (mevedel-session-codec-read sidecar-path)
                         (error nil)))
-                     (updated-str (plist-get sidecar :updated-at))
                      (parsed-time
-                      (or (mevedel-session-persistence-parse-iso-time
-                           updated-str)
-                          (file-attribute-modification-time
-                           (file-attributes
-                            (if (file-exists-p sidecar-path)
-                                sidecar-path
-                              save-path))))))
+                      (mevedel-session-persistence--observed-update-time
+                       (plist-get sidecar :updated-at)
+                       sidecar-path save-path)))
                 (push (cons save-path
                             (and parsed-time (float-time parsed-time)))
                       candidates))))

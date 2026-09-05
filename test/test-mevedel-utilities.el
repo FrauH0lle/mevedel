@@ -38,6 +38,18 @@
   (should-not (mevedel--plain-data-p (lambda () t)))
   (should-not (mevedel--plain-data-p (make-hash-table))))
 
+(mevedel-deftest mevedel--ordered-completion-table ()
+  ,test
+  (test)
+  :doc "completes over the displays in their given order under CATEGORY"
+  (let* ((displays '("2h ago       new" "yesterday    old"))
+         (table (mevedel--ordered-completion-table displays 'mevedel-session))
+         (metadata (cdr (funcall table "" nil 'metadata))))
+    (should (equal displays (all-completions "" table)))
+    (should (eq 'mevedel-session (alist-get 'category metadata)))
+    (should (eq 'identity (alist-get 'display-sort-function metadata)))
+    (should (eq 'identity (alist-get 'cycle-sort-function metadata)))))
+
 (mevedel-deftest mevedel--transcript-org-mode ()
   ,test
   (test)
