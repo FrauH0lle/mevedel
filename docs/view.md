@@ -188,6 +188,19 @@ transcript parsing.  Reconciliation leaves an unchanged managed fragment in
 place, and spinner animation changes its frame display property without
 rewriting the textual progress row until elapsed or agent metadata changes.
 
+Spinner ticks, scheduled transcript flushes, and live tool-row refreshes
+are attention-gated (`mevedel-view--unattended-p`).  When every window
+showing the view sits on an invisible or iconified frame, or on an unfocused
+graphical frame, the tick and the row refresh do nothing and a scheduled
+render keeps its pending kind without running; a skipped row refresh
+escalates the pending kind to a full render, whose projection re-derives
+every row from the progress cache.  Focus returning to a frame
+(`after-focus-change-function`) or a window redisplaying the buffer
+(`window-buffer-change-functions`) reschedules the pending render.  A view
+with no window, or one on a terminal frame, is always attended, which keeps
+batch behavior unchanged.  An unattended profiled session otherwise spent a
+quarter of its CPU in redisplay for frames nobody was looking at.
+
 Before rendering a restored transcript, `mevedel-transcript-restore.el`
 recovers gptel bounds and normalizes their text properties through that same
 canonical transcript grammar. Restoration does not maintain a second parser.
@@ -1107,6 +1120,9 @@ Redraw paths must treat the composer as user-owned text. Full rerenders,
 interaction rebuilds, status/task rows, spinner ticks, pending-tool live
 lines, and targeted agent refreshes should preserve both composer text
 and point while suppressing modification hooks for view-owned changes.
+Attention gating is a redraw path like any other: a skipped tick or flush
+leaves buffer text, properties, and the composer byte-identical, and the
+resumed render runs through the same preserving wrappers.
 
 `mevedel-view--call-preserving-window-state` restores point, window points,
 and window starts through semantic render anchors rather than raw buffer
@@ -1121,12 +1137,16 @@ rerenders. Anchors that cannot be resolved after the redraw fall back to the
 clamped raw position.
 
 The allocation-heavy chokepoints run with garbage collection batched
-(`mevedel--with-gc-batched`, a direct `gc-cons-threshold` binding with no
-external GC-tuning dependency): full and incremental transcript renders,
-session save transactions, every tool-pipeline step chain, and the gptel
+(`mevedel--with-gc-batched`, a direct `gc-cons-threshold` and
+`gc-cons-percentage` binding with no external GC-tuning dependency): full and
+incremental transcript renders, session save transactions, exclusive
+transport sections, every tool-pipeline step chain, and the whole gptel
 stream filter/cleanup advice. An unattended session otherwise runs at
 whatever low threshold the user's idle GC tuning left behind, paying many
-long collections inside a single redraw or settlement.
+long collections inside a single redraw or settlement. Both GC criteria must
+be satisfied: on a large heap the percentage term can exceed the batched
+absolute threshold, so raising that threshold alone may leave collection
+frequency unchanged.
 
 A send that fails or is interrupted before the provider starts gets no
 terminal callback, so that boundary settles the turn itself: it keeps the

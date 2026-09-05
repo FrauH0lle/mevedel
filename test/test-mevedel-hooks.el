@@ -1310,7 +1310,10 @@
 ;;; Execution
 
 (mevedel-deftest mevedel-hooks-run-event
-		 (:doc "runs matching Elisp hooks and ignores nonmatching groups")
+  ()
+  ,test
+  (test)
+  :doc "runs matching Elisp hooks and ignores nonmatching groups"
 		 (let* ((root (make-temp-file "mevedel-hooks-run" t))
 			(session (mevedel-hooks-test--session root))
 			(mevedel-hook-rules
@@ -1332,7 +1335,66 @@
 			 (should (equal decision
 					'(:updated-input (:command "echo rewritten"))))
 			 (should (= (length (mevedel-session-hook-log session)) 1)))
-		     (delete-directory root t))))
+		     (delete-directory root t)))
+
+  :doc "request terminal hooks survive teardown without attaching to the next request"
+  (skip-unless (not (eq system-type 'windows-nt)))
+  (dolist (event '(Stop StopFailure))
+    (let* ((root (make-temp-file "mevedel-hooks-terminal" t))
+           (release-file (file-name-concat root "release"))
+           (session (mevedel-hooks-test--session root))
+           (request
+            (mevedel-request--create
+             :session session
+             :hook-rules
+             `((,event
+                ((:hooks
+                  ((:type command :source user :source-root ,root
+                    :command ,(format
+                               "while [ ! -e %s ]; do sleep 0.01; done; cat >/dev/null"
+                               (shell-quote-argument release-file))
+                    :timeout 2)
+                   (:type command :source user :source-root ,root
+                    :command "cat >/dev/null" :timeout 2))))))))
+           (next-request (mevedel-request--create :session session))
+           (mevedel-hook-rules nil)
+           (mevedel-hooks-slow-threshold nil)
+           (callbacks 0)
+           started)
+      (unwind-protect
+          (with-temp-buffer
+            (setq-local mevedel--current-request request)
+            (mevedel-hooks-test--await
+             (lambda (callback)
+               (setq started t)
+               (mevedel-hooks-run-event
+                event nil
+                (lambda (decision)
+                  (cl-incf callbacks)
+                  (funcall callback decision))
+                session)
+               ;; The real command cannot finish until released below.
+               (should (= callbacks 0))
+               (should-not (mevedel-request-cancellers request))
+               (mevedel-request-drain-cancellers request)
+               (setq-local mevedel--current-request next-request)
+               (mevedel-request-drain-cancellers next-request)
+               (with-temp-file release-file)))
+            (should (= callbacks 1))
+            (should-not (mevedel-request-cancellers next-request))
+            (let ((entries (mevedel-session-hook-log session)))
+              (should (= (length entries) 2))
+              (dolist (entry entries)
+                (should (eq (plist-get entry :status) 'ok)))))
+        ;; Release and settle detached children even if an assertion fails.
+        (with-temp-file release-file)
+        (let ((deadline (+ (float-time) 3)))
+          (while (and started (= callbacks 0) (< (float-time) deadline))
+            (accept-process-output nil 0.01)))
+        (mevedel-request-drain-cancellers request)
+        (mevedel-request-drain-cancellers next-request)
+        (delete-directory root t)
+        (mevedel-workspace-clear-registry)))))
 
 (mevedel-deftest mevedel-hooks-run-event/invalid-matcher
   (:doc "an unusable matcher is reported and the event still runs")
@@ -1384,7 +1446,10 @@
          (late-file (file-name-concat root "late"))
          (session (mevedel-hooks-test--session root))
          (request (mevedel-request--create :session session))
-         (mevedel-hooks-slow-threshold nil)
+         ;; Short enough that the drain must cancel the slow notice for
+         ;; the assertion below to hold, long enough that it cannot fire
+         ;; before the child has written its ready marker.
+         (mevedel-hooks-slow-threshold 0.3)
          (mevedel-hook-rules
           `((PreToolUse
              ((:matcher "Bash"
@@ -1395,25 +1460,34 @@
                           (shell-quote-argument ready-file)
                           (shell-quote-argument late-file))
                  :timeout 5)))))))
-         callback-called)
+         callback-called messages)
     (unwind-protect
         (progn
           (skip-unless (not (eq system-type 'windows-nt)))
-          (mevedel-hooks-run-event
-           'PreToolUse '(:tool-name "Bash")
-           (lambda (_) (setq callback-called t))
-           session nil request)
-          (let ((deadline (+ (float-time) 2)))
-            (while (and (not (file-exists-p ready-file))
-                        (< (float-time) deadline))
-              (accept-process-output nil 0.01)))
-          (should (file-exists-p ready-file))
-          (mevedel-request-drain-cancellers request)
-          (let ((deadline (+ (float-time) 0.5)))
-            (while (< (float-time) deadline)
-              (accept-process-output nil 0.01)))
+          (mevedel-test--with-captured-messages messages
+            (mevedel-hooks-run-event
+             'PreToolUse '(:tool-name "Bash")
+             (lambda (_) (setq callback-called t))
+             session nil request)
+            (let ((deadline (+ (float-time) 2)))
+              (while (and (not (file-exists-p ready-file))
+                          (< (float-time) deadline))
+                (accept-process-output nil 0.01)))
+            (should (file-exists-p ready-file))
+            (mevedel-request-drain-cancellers request)
+            (let ((deadline (+ (float-time) 0.5)))
+              (while (< (float-time) deadline)
+                (accept-process-output nil 0.01))))
           (should-not (file-exists-p late-file))
-          (should-not callback-called))
+          ;; The caller's continuation belongs to the torn-down request
+          ;; and never runs, but the handler still settles: one log entry
+          ;; and no slow notice for a child that is already dead.
+          (should-not callback-called)
+          (should-not (string-match-p "still running" messages))
+          (let ((entry (car (last (mevedel-session-hook-log session)))))
+            (should (eq 'cancelled (plist-get entry :status)))
+            (should (eq 'cancelled (plist-get entry :exit-status)))
+            (should (numberp (plist-get entry :elapsed)))))
       (mevedel-request-drain-cancellers request)
       (delete-directory root t))))
 

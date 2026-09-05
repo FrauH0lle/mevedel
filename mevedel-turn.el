@@ -464,10 +464,6 @@ is returned here."
                             (or (and (not (eq status 'lost))
                                      (mevedel--fsm-error-message fsm))
                                 (symbol-name status)))))
-          ;; Deliberately no request: the turn's own teardown drains the
-          ;; request's cancellers two settlement steps later, which would
-          ;; kill this hook's process before it can settle.  A terminal
-          ;; hook outlives its request and is bounded by its own timeout.
           (mevedel-hooks-run-event
            event
            (mevedel-hooks-event-plist
@@ -475,7 +471,7 @@ is returned here."
             :status (symbol-name status)
             :terminal-reason reason)
            #'ignore
-           mevedel--session workspace nil nil))))))
+           mevedel--session workspace mevedel--current-request nil))))))
 
 
 (defun mevedel--turn-commit (fsm)

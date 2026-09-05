@@ -88,7 +88,8 @@
         captured-mode done)
     (cl-letf (((symbol-function 'mevedel-sandbox-prepare)
                (lambda (command _workdir _roots
-                                &optional _additional _permissions mode)
+                                &optional _additional _permissions mode
+                                _temporary-root)
                  (setq captured-mode mode)
                  (list :state 'unrestricted
                        :command command

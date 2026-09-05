@@ -113,7 +113,8 @@
 (declare-function mevedel-sandbox-prepare
                   "mevedel-sandbox"
                   (command workdir writable-roots &optional
-                           additional-permissions sandbox-permissions mode))
+                           additional-permissions sandbox-permissions mode
+                           temporary-root))
 (declare-function mevedel-sandbox-strip-marker
                   "mevedel-sandbox" (preparation child-result))
 (autoload 'mevedel-sandbox--record-launch-failure "mevedel-sandbox")
@@ -1572,7 +1573,7 @@ process-filter appends use the published path."
 (cl-defun mevedel-execution-start-bash
     (callback &key session data-buffer owner owner-context request
               command workdir
-              writable-roots
+              writable-roots temporary-root
               additional-permissions sandbox-permissions artifact-directory
               outcome-function read-only-p tool-args tool-use-id tty
               (yield-time-ms 10000))
@@ -1581,7 +1582,9 @@ process-filter appends use the published path."
 SESSION, canonical OWNER, and OWNER-CONTEXT fix the control boundary.
 OWNER-CONTEXT is the durable mailbox object captured at spawn.
 REQUEST owns the foreground lifetime only.  Remaining confinement arguments
-match the one-shot interface.  ARTIFACT-DIRECTORY owns the spool after yield.
+match the one-shot interface; TEMPORARY-ROOT is the writable temporary
+directory that protected-path discovery skips.  ARTIFACT-DIRECTORY owns the
+spool after yield.
 OUTCOME-FUNCTION derives canonical outcome from exit code and termination.
 READ-ONLY-P selects the overlapping reader lane; all other calls are exclusive.
 DATA-BUFFER and TOOL-USE-ID identify the authoritative transcript row.
@@ -1688,7 +1691,8 @@ terminal settlement."
                        (mevedel-sandbox-prepare
                         command workdir writable-roots additional-permissions
                         sandbox-permissions
-                        (mevedel-session-sandbox-mode session))))
+                        (mevedel-session-sandbox-mode session)
+                        temporary-root)))
                   (error
                    (setf (mevedel-execution--record-error-data record) err
                          (mevedel-execution--record-exit-code record) -1
@@ -2144,14 +2148,16 @@ foreground state.  Yielded terminal output still goes to its owner mailbox."
 ;;; Confined one-shot interface
 
 (cl-defun mevedel-execution-start-one-shot
-    (callback &key name command workdir writable-roots timeout
+    (callback &key name command workdir writable-roots temporary-root timeout
               additional-permissions sandbox-permissions session owner
               teardown-function)
   "Start one confined COMMAND and call CALLBACK with terminal facts.
 
 NAME identifies the operating-system process.  WORKDIR and WRITABLE-ROOTS
-describe its filesystem boundary.  TIMEOUT is nil or a positive number of
-seconds.  ADDITIONAL-PERMISSIONS and SANDBOX-PERMISSIONS are already-authorized
+describe its filesystem boundary; TEMPORARY-ROOT is the writable temporary
+directory that protected-path discovery skips.  TIMEOUT is nil or a
+positive number of seconds.  ADDITIONAL-PERMISSIONS and SANDBOX-PERMISSIONS
+are already-authorized
 confinement inputs.  SESSION and OWNER fix the transient ownership boundary.
 TEARDOWN-FUNCTION releases caller-owned resources when lifecycle destruction
 discards the process without invoking CALLBACK."
@@ -2174,7 +2180,8 @@ discards the process without invoking CALLBACK."
           (mevedel-sandbox-prepare
            command workdir writable-roots additional-permissions
            sandbox-permissions
-           (and session (mevedel-session-sandbox-mode session))))
+           (and session (mevedel-session-sandbox-mode session))
+           temporary-root))
          (_
           (when (and (eq (plist-get preparation :state) 'unrestricted)
                      (eq (plist-get (plist-get preparation :facts) :sandbox)

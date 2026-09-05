@@ -461,6 +461,30 @@
                    mevedel-session-persistence--deferred-agent-saves)))))
 
 
+(mevedel-deftest mevedel-agent-control-clear-context-mailbox ()
+  ,test
+  (test)
+  :doc "clears a populated root mailbox and persists once"
+  (let ((session (mevedel-agent-control-test--session))
+        (persisted 0))
+    (mevedel-session--set-messages session (list (list :id "m1")))
+    (cl-letf (((symbol-function 'mevedel-agent-control--persist-session)
+               (lambda (_session) (cl-incf persisted))))
+      (mevedel-agent-control-clear-context-mailbox session)
+      (should-not (mevedel-session-messages session))
+      (should (= 1 persisted))
+      ;; Every WAIT transition clears the mailbox again; an already
+      ;; empty one costs no persist.
+      (mevedel-agent-control-clear-context-mailbox session)
+      (should (= 1 persisted))))
+  :doc "does not persist an already empty mailbox"
+  (let ((session (mevedel-agent-control-test--session))
+        (persisted 0))
+    (cl-letf (((symbol-function 'mevedel-agent-control--persist-session)
+               (lambda (_session) (cl-incf persisted))))
+      (mevedel-agent-control-clear-context-mailbox session)
+      (should (= 0 persisted)))))
+
 (mevedel-deftest mevedel-agent-control-recover-interrupted ()
   ,test
   (test)

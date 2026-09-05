@@ -5022,6 +5022,24 @@
       (mevedel-session-persistence-cancel-deferred-agent-save session)
       (when (buffer-live-p buffer) (kill-buffer buffer))))
 
+  :doc "swallows a registry save failure"
+  (let ((session (mevedel-session--create :name "debounce"))
+        (buffer (generate-new-buffer " *debounce-root*")))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) temporary-file-directory)
+          (setf (mevedel-session-root-buffer session) buffer)
+          (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
+                     (lambda (_key _path thunk) (funcall thunk)))
+                    ((symbol-function
+                      'mevedel-session-artifacts-save-agent-registry)
+                     (lambda (&rest _) (error "Publication unavailable"))))
+            (mevedel-session-persistence--deferred-agent-save session))
+          (should-not (gethash
+                       session
+                       mevedel-session-persistence--deferred-agent-saves)))
+      (when (buffer-live-p buffer) (kill-buffer buffer))))
+
   :doc "re-arms instead of writing while a publication is active"
   (let ((session (mevedel-session--create :name "debounce"))
         saved)

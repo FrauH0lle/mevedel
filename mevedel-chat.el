@@ -944,12 +944,11 @@ settles the turn and clears `mevedel--current-request\', so an iteration
 that began with a live request could reach the next one holding nil and
 signal `wrong-type-argument\'.  A caller that already knows the request --
 because it captured it while the turn was live -- should pass it."
-  (let* ((diffs "")
-         (workspace-root (mevedel-workspace-root
+  (let* ((workspace-root (mevedel-workspace-root
                           (or workspace (mevedel-workspace))))
          (request (or request mevedel--current-request))
          (snapshots (and request (mevedel-request-file-snapshots request)))
-         paths)
+         paths parts)
     (when snapshots
       (maphash (lambda (filepath _original) (push filepath paths)) snapshots))
     (dolist (filepath (sort paths #'string<))
@@ -970,21 +969,23 @@ because it captured it while the turn was live -- should pass it."
                (and original (not current))
                ;; Created
                (and (not original) current)))
-          (setq diffs (concat diffs
-                              (format "diff --git a/%s b/%s\n" relpath relpath)
-                              (cond
-                               ((and (or (not original) (string-empty-p original))
-                                     (and current (not (string-empty-p current))))
-                                "new file mode 100644\n")
-                               ((and (and original (not (string-empty-p original)))
-                                     (or (not current) (string-empty-p current)))
-                                "deleted file mode 100644\n"))
-                              (mevedel-generate-diff
-                               (or original "")
-                               (or current "")
-                               relpath)
-                              "\n")))))
-    diffs))
+          ;; Collect per-file parts and join once: appending to one
+          ;; growing string reallocated the whole patch per file.
+          (push (concat (format "diff --git a/%s b/%s\n" relpath relpath)
+                        (cond
+                         ((and (or (not original) (string-empty-p original))
+                               (and current (not (string-empty-p current))))
+                          "new file mode 100644\n")
+                         ((and (and original (not (string-empty-p original)))
+                               (or (not current) (string-empty-p current)))
+                          "deleted file mode 100644\n"))
+                        (mevedel-generate-diff
+                         (or original "")
+                         (or current "")
+                         relpath)
+                        "\n")
+                parts))))
+    (apply #'concat (nreverse parts))))
 
 (defun mevedel--directive-capture (request)
   "Return file coverage metadata captured by REQUEST."
@@ -1014,7 +1015,10 @@ If PATCH-CONTENT is empty, does nothing."
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert patch-content)
-        (diff-mode)
+        ;; The buffer persists across turns; re-entering the mode on
+        ;; every stream end re-ran its whole setup for nothing.
+        (unless (derived-mode-p 'diff-mode)
+          (diff-mode))
         (goto-char (point-min))))
     (mevedel--indicate-patch-ready)))
 

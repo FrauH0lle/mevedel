@@ -251,7 +251,11 @@ session cwd.  A command handler without trusted project, user, or plugin
 provenance is refused before launch.  Default timeout is 30 seconds with a
 global cap, armed as soon as the child exists rather than after its stdin is
 written; whatever settles a command handler — exit, timeout, request
-cancellation, or a failed stdin write — leaves no child running.  Each
+cancellation, or a failed stdin write — leaves no child running and writes
+one log entry.  A cancellation logs status `cancelled` and closes the
+event's telemetry span without running the remaining handlers or the
+caller's continuation, because the request that owned them is being torn
+down.  Each
 stdout/stderr stream is capped by `mevedel-hooks-command-output-max-chars`
 before parsing decisions or writing log previews, so noisy hooks cannot
 inject unbounded output through `updated_result` or block reasons.
@@ -559,7 +563,11 @@ Decisions are currently logged but do not change terminal status or parent
 feedback.
 
 `Stop` runs after a successful top-level assistant turn, before the
-request-scoped hook layers are cleared. This includes awaited fork user skill
+request-scoped hook layers are cleared. `Stop` and `StopFailure` retain the
+ending request's hook rules and event context, but their handlers are not
+registered as request cancellers: turn teardown must not kill them before
+they settle. Each command handler remains bounded by its own timeout.
+This includes awaited fork user skill
 completions, which finalize the parent turn without a
 normal gptel DONE transition.  `StopFailure` runs for top-level error and
 abort terminals and includes `:terminal-reason` when available.  Both

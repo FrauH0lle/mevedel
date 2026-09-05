@@ -418,18 +418,20 @@ blockers compose and stale releases cannot alter a later follow-up."
       (and path (mevedel-agent-control--mailbox session path)))))
 
 (defun mevedel-agent-control-clear-context-mailbox (context)
-  "Remove all retained unread records for CONTEXT."
-  (if (mevedel-session-p context)
-      (progn
-        (mevedel-agent-control--set-mailbox-queue context "/root" nil)
-        (mevedel-agent-control--persist-session context))
-    (let* ((session (mevedel-agent-invocation-parent-session context))
-           (path (and session
-                      (mevedel-agent-control--path-for-invocation
-                       session context))))
-      (when path
-        (mevedel-agent-control--set-mailbox-queue session path nil)
-        (mevedel-agent-control--persist-session session)))))
+  "Remove all retained unread records for CONTEXT.
+
+An already empty mailbox persists nothing: every WAIT transition of every
+agent clears its mailbox, and almost all of them find it empty."
+  (let* ((session (if (mevedel-session-p context)
+                      context
+                    (mevedel-agent-invocation-parent-session context)))
+         (path (cond
+                ((mevedel-session-p context) "/root")
+                (session (mevedel-agent-control--path-for-invocation
+                          session context)))))
+    (when (and path (mevedel-agent-control--mailbox-queue session path))
+      (mevedel-agent-control--set-mailbox-queue session path nil)
+      (mevedel-agent-control--persist-session session))))
 
 (defun mevedel-agent-control--waiter (session path)
   "Return PATH's active waiter in SESSION, or nil."

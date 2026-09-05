@@ -183,7 +183,7 @@
    :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "reports Stop and StopFailure without coupling the hook to the ending request"
+  :doc "reports Stop and StopFailure with the ending request's hook context"
   (let* ((ws (mevedel-workspace-get-or-create
               'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
@@ -205,7 +205,9 @@
                                     &optional session-arg workspace-arg
                                     request-arg invocation)
                        (push (list event event-plist session-arg
-                                   workspace-arg request-arg invocation)
+                                   workspace-arg request-arg invocation
+                                   (bound-and-true-p
+                                    mevedel--current-request))
                              captured)
                        (funcall callback nil))))
             (let ((fsm (gptel-make-fsm
@@ -220,17 +222,21 @@
             (should (equal "completed"
                            (plist-get (cdr (cadr stop)) :status)))
             (should-not (plist-get (cdr (cadr stop)) :terminal-reason))
-            ;; No request: the turn's own teardown drains the request's
-            ;; cancellers right after this hook, which would kill the
-            ;; hook's process before it settles.
-            (should-not (nth 4 stop))
+            ;; The runner needs the request's skill rules and payload
+            ;; context; it detaches only the handlers' teardown ownership.
+            (should (eq request (nth 4 stop)))
+            (should (eq request (nth 6 stop)))
+            (should (eq request (nth 6 failure)))
+            (should (eq request
+                        (buffer-local-value 'mevedel--current-request
+                                            chat-buf)))
             (should (eq 'StopFailure (car failure)))
             (should (equal "aborted"
                            (plist-get (cdr (cadr failure)) :status)))
             (should (equal "backend failed"
                            (plist-get (cdr (cadr failure))
                                       :terminal-reason)))
-            (should-not (nth 4 failure))))
+            (should (eq request (nth 4 failure)))))
       (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--turn-settled-p ()

@@ -204,7 +204,10 @@ a trailing `/**`, policy covers both the directory and its descendants. On a
 remote session, leading `~` uses the target user's probed home; a
 client-absolute custom pattern stays in the client path domain and therefore
 does not become a remote protection rule.
-String-only entries are invalid by design.
+String-only entries are invalid by design. Glob discovery walks the
+workspace, memory, and additional writable roots before every launch; the
+execution target's temporary directory is writable scratch the child already
+owns and is not searched, so a repository placed there is not protected.
 
 The three canonical modes are `ask`, `edits`, and `full-auto`:
 

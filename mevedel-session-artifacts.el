@@ -2116,40 +2116,56 @@ transaction wrote the whole segment and scanned snapshots on every
 debounced tick, which dominated a profiled multi-agent session's
 allocation and produced a visible segment write every few seconds.
 
-Portable sessions keep the full save, whose remote transaction already
-elides byte-identical durable state.
+A portable session publishes the sidecar as a one-artifact commit: the
+manifest overlay keeps every other committed entry, so the segment,
+instruction, and artifact-folder entries are neither read nor rewritten.
+The full save was kept for portable sessions on the assumption that its
+byte comparison made an unchanged save free; it did not, because the
+segment copy, artifact-folder read, and instruction serialization run
+before the comparison and the registry a persist is about differs from
+the committed one by construction.  Before the first full snapshot has
+committed a sidecar there is nothing to overlay, so the save is skipped
+and the next critical commit carries the registry.
 
 Returns SESSION's save path on success, nil when SESSION is not yet
-materialized."
-  (when (mevedel-session-save-path session)
-    (if (mevedel-session-codec-portable-authority-p session)
-        (mevedel-session-artifacts-save session buffer)
-      (when-let* ((buffer (mevedel-session-persistence-authoritative-buffer
-                           buffer)))
-        (let ((mevedel-session-recovery--mutation-cache
-               (or (bound-and-true-p mevedel-session-recovery--mutation-cache)
-                   (list nil)))
-              (mevedel-session-durability--transaction-clock
-               (or (bound-and-true-p
-                    mevedel-session-durability--transaction-clock)
-                   (list nil)))
-              (mevedel-session-durability--asserted-directories
-               (or (bound-and-true-p
-                    mevedel-session-durability--asserted-directories)
-                   (list nil))))
-          (mevedel--with-gc-batched
-            (mevedel-transport-with-exclusive-connection
-              (mevedel-session-artifacts-assert-mutation-authority
-               session buffer)
-              (setf (mevedel-session-updated-at session)
-                    (format-time-string "%FT%H-%M-%S"))
+materialized or has no committed sidecar."
+  (when-let* ((save-path (mevedel-session-save-path session))
+              (buffer (mevedel-session-persistence-authoritative-buffer
+                       buffer)))
+    (let ((portable-p (mevedel-session-codec-portable-authority-p session))
+          (mevedel-session-recovery--mutation-cache
+           (or (bound-and-true-p mevedel-session-recovery--mutation-cache)
+               (list nil)))
+          (mevedel-session-durability--transaction-clock
+           (or (bound-and-true-p
+                mevedel-session-durability--transaction-clock)
+               (list nil)))
+          (mevedel-session-durability--asserted-directories
+           (or (bound-and-true-p
+                mevedel-session-durability--asserted-directories)
+               (list nil))))
+      (when (or (not portable-p)
+                (mevedel-session-artifacts-artifact-present-p
+                 session "session.meta.el" t))
+        (mevedel--with-gc-batched
+          (mevedel-transport-with-exclusive-connection
+            (mevedel-session-artifacts-assert-mutation-authority
+             session buffer)
+            (setf (mevedel-session-updated-at session)
+                  (format-time-string "%FT%H-%M-%S"))
+            (if portable-p
+                ;; A `queued' result is success here: the deferred caller
+                ;; re-arms while a critical publication is active.
+                (mevedel-session-publication-publish
+                 session
+                 (list (mevedel-session-artifacts--sidecar-artifact
+                        session buffer)))
               (mevedel-session-codec-write
-               (mevedel-session-artifacts-sidecar-path
-                (mevedel-session-save-path session))
-               (mevedel-session-artifacts-build-sidecar session buffer))
-              (mevedel-session-persistence-notify-session-event
-               session 'save-history)
-              (mevedel-session-save-path session))))))))
+               (mevedel-session-artifacts-sidecar-path save-path)
+               (mevedel-session-artifacts-build-sidecar session buffer)))
+            (mevedel-session-persistence-notify-session-event
+             session 'save-history)
+            save-path))))))
 
 
 ;;

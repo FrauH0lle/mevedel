@@ -548,7 +548,78 @@
          (list :type 'terminal :data-buffer data-buf
                :tool-use-id "ptc-live"))
         (with-current-buffer view-buf
-          (should-not (gethash "ptc-live" mevedel-view--execution-events)))))))
+          (should-not (gethash "ptc-live" mevedel-view--execution-events))))))
+
+  :doc "an unattended view caches progress and defers to one full render"
+  (mevedel-view-stream-test--with-buffers
+    (let ((refreshed 0)
+          (unattended t)
+          (draft "> quoted\nsecond line"))
+      (with-current-buffer view-buf
+        (mevedel-view-stream-test--insert-composer-draft draft 3))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--unattended-p)
+                     (lambda (&rest _) unattended))
+                    ((symbol-function 'mevedel-view--refresh-tool-row)
+                     (lambda (&rest _) (cl-incf refreshed) t)))
+            (mevedel-view-stream-handle-tool-progress
+             (list :type 'progress :data-buffer data-buf
+                   :tool-use-id "bash-live"
+                   :facts '(:kind bash) :output-tail "line"))
+            (with-current-buffer view-buf
+              (should (= 0 refreshed))
+              (should (gethash "bash-live" mevedel-view--execution-events))
+              (should (eq 'full mevedel-view--pending-render-kind))
+              (should (eq data-buf mevedel-view--pending-render-data-buffer))
+              (should (equal draft
+                             (buffer-substring-no-properties
+                              (mevedel-view--input-start) (point-max))))
+              (mevedel-view--schedule-render 'full data-buf 0)
+              (should-not mevedel-view--render-timer))
+            (setq unattended nil)
+            (mevedel-view--resume-attended-views)
+            (with-current-buffer view-buf
+              (should (mevedel--timer-pending-p mevedel-view--render-timer))
+              (mevedel-view--schedule-render 'full data-buf 0)
+              (should-not mevedel-view--pending-render-kind)
+              (should (equal draft (mevedel-view--input-text)))
+              (should (= 3 (- (point) (mevedel-view--input-start))))))
+        (with-current-buffer view-buf
+          (mevedel-view--cancel-scheduled-render))))))
+
+(mevedel-deftest mevedel-view--spinner-tick ()
+  ,test
+  (test)
+  :doc "an unattended tick leaves text, properties, and the composer untouched"
+  (mevedel-view-stream-test--with-buffers
+    (let ((draft "> quoted\nsecond line"))
+      (with-current-buffer view-buf
+        (mevedel-view--start-spinner "Working...")
+        (mevedel-view-stream-test--insert-composer-draft draft 3)
+        (let* ((before (buffer-string))
+               (point-before (point))
+               (index mevedel-view--spinner-frame-index))
+          (cl-letf (((symbol-function 'mevedel-view--unattended-p)
+                     (lambda (&rest _) t)))
+            (mevedel-view--spinner-tick))
+          (should (equal-including-properties before (buffer-string)))
+          (should (= point-before (point)))
+          (should (= index mevedel-view--spinner-frame-index))
+          (should (equal draft
+                         (buffer-substring-no-properties
+                          (mevedel-view--input-start) (point-max)))))
+        (mevedel-view--stop-spinner))))
+
+  :doc "an attended tick advances the frame"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--start-spinner "Working...")
+      (let ((index mevedel-view--spinner-frame-index))
+        (cl-letf (((symbol-function 'mevedel-view--unattended-p)
+                   (lambda (&rest _) nil)))
+          (mevedel-view--spinner-tick))
+        (should-not (= index mevedel-view--spinner-frame-index)))
+      (mevedel-view--stop-spinner))))
 
 (mevedel-deftest mevedel-view-stream-ensure-progress-for-fsm ()
   ,test

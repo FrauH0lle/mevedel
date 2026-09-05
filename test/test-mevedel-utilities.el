@@ -952,7 +952,16 @@ rejects trailing binary operators"
   :doc "never lowers an already higher threshold"
   (let ((gc-cons-threshold (* 128 1024 1024)))
     (mevedel--with-gc-batched
-      (should (= gc-cons-threshold (* 128 1024 1024))))))
+      (should (= gc-cons-threshold (* 128 1024 1024)))))
+
+  :doc "raises the percentage trigger and never lowers it"
+  (let ((gc-cons-percentage 0.1))
+    (mevedel--with-gc-batched
+      (should (>= gc-cons-percentage 0.5)))
+    (should (= gc-cons-percentage 0.1)))
+  (let ((gc-cons-percentage 0.8))
+    (mevedel--with-gc-batched
+      (should (= gc-cons-percentage 0.8)))))
 
 (mevedel-deftest mevedel--file-name-candidates ()
   ,test
