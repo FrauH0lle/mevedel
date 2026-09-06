@@ -31,7 +31,9 @@ prose, so an explainer that is mostly text is underusing it.
 3. Replace each `<!-- SLOT: ... -->` marker with real content, including the
    placeholder prose, the example diagram, and the sample code.
 4. Self-check before writing the file: no `SLOT` markers left, one flavor only,
-   no placeholder text, and no hardcoded color anywhere in an SVG.
+   no placeholder text, and no hardcoded color anywhere in an SVG. Check labels
+   at a narrow displayed width, not just their authored SVG size, and check
+   print output. Retune palette tokens in light, dark, and print scopes.
 5. Write the file into the session artifacts directory with ApplyPatch, per the
    artifact rules above.
 
@@ -74,6 +76,10 @@ here is the balance:
   subject matter itself, and a diagram earns its place only where structure or
   flow genuinely needs one.
 - **Code belongs in `<pre>`,** never as text inside an SVG.
+- **Size for reading.** The template's `.diagram-scroll` keeps the example
+  diagram readable inside a local scroll container. Set its SVG minimum width
+  for your actual labels, or reflow a wide diagram into smaller figures. Keep
+  the caption outside that scroller, and do not rely on scrolling in print.
 - **Keep one visual vocabulary across the page** so the sequence reads as one
   picture evolving rather than a new drawing each step, and put the accent only
   on what the current step focuses on.

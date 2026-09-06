@@ -21,8 +21,8 @@ prints cleanly.
 It is a page, not an editor. Nobody types into it: the reader reads, and the
 document changes when the session changes it and the artifact is written again.
 Never add a toolbar, a `contenteditable` region, or copy telling the reader how
-to edit or save - the sandbox blocks every way those could persist anything, so
-the controls would look real and silently lose the reader's work.
+to edit or save - the artifact has no host publication API for reader edits, so
+such controls would promise persistence this document does not provide.
 
 ## How to use
 
@@ -68,6 +68,12 @@ Write so people can respond. Front-load the purpose so a reader knows in one
 sentence whether this concerns them. Keep paragraphs short - this is a document
 someone skims before they read. Name an owner for every open item; an
 unassigned question is a question nobody answers.
+
+For a long document, add concise takeaways and a static `<nav aria-label="Contents">`
+linking to stable heading IDs when they help readers navigate. Omit them for a
+short memo; no automatic contents runtime is needed. Check long URLs, inline
+code, and tables at a narrow width and in print. Tables may span pages with
+repeated headers; do not hide columns or trap printed content in a scroll box.
 
 Don't repeat in the page what the artifact card already carries. The filename
 is the label on every cockpit row and collaboration card, so name the file for

@@ -50,6 +50,16 @@ This session's artifacts directory:
 - HTML renders sandboxed (scripts run, network does not), Markdown and
   images render in the viewer, plain text shows as text; any other type
   is offered to the guest as a download.
+- **Embed data safely.** Strict JSON is not enough inside an HTML
+  `<script type="application/json">` block: the HTML parser still recognizes
+  `</script>` and comment-like text. Serialize the data, then replace every
+  literal `<` with `\u003c` before embedding it. Parse with `JSON.parse` and
+  emit labels with `textContent`, never `innerHTML`. This applies to every
+  data block, including charts and tables.
+- **Be honest about controls.** A control must perform its advertised local
+  action or be visibly identified as part of a static prototype. Do not imply
+  saving, filtering, approval, or host integration that is not implemented.
+  Explain unavailable behavior in visible text, not only in a tooltip.
 - Name the file for what it shows (`checkout-flow-mockup.html`, not
   `test.html`); the name is the label on every card and cockpit row.
   Subdirectories are allowed but rarely worth it.

@@ -29,14 +29,6 @@
     }
   }
 
-  @media print {
-    :root {
-      --ink: #000; --ink-soft: #444; --bg: #fff; --card: #fff;
-      --stripe: #fff; --rule: #bbb; --accent: #000;
-    }
-    .dt-controls { display: none; }
-  }
-
   * { box-sizing: border-box; }
 
   body {
@@ -62,6 +54,7 @@
 
   #dt-filter {
     flex: 1 1 16rem;
+    min-width: 0;
     padding: 0.5rem 0.7rem;
     font: inherit;
     color: var(--ink);
@@ -72,6 +65,7 @@
   #dt-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
   #dt-count { color: var(--ink-soft); font-size: 0.85rem; white-space: nowrap; }
+  #dt-filter-context { color: var(--ink-soft); font-size: 0.85rem; overflow-wrap: anywhere; }
 
   .table-wrap {
     overflow-x: auto;
@@ -98,10 +92,20 @@
     text-transform: uppercase;
     color: var(--ink-soft);
     font-weight: 600;
-    cursor: pointer;
-    user-select: none;
   }
-  th:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  th button {
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    text-align: inherit;
+    cursor: pointer;
+  }
+  th button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   th.sorted { color: var(--accent); }
   th .arrow { opacity: 0; margin-left: 0.3rem; }
   th.sorted .arrow { opacity: 1; }
@@ -115,6 +119,21 @@
   .dt-none { padding: 2rem; text-align: center; color: var(--ink-soft); }
 
   footer { margin-top: 1.25rem; color: var(--ink-soft); font-size: 0.82rem; }
+
+  @media print {
+    :root {
+      color-scheme: light;
+      --ink: #000; --ink-soft: #444; --bg: #fff; --card: #fff;
+      --stripe: #fff; --rule: #bbb; --accent: #000;
+    }
+    .wrap { max-width: none; padding: 0; }
+    #dt-filter { display: none; }
+    .table-wrap { overflow: visible; max-height: none; border-radius: 0; }
+    table { table-layout: fixed; }
+    th, td { white-space: normal; overflow-wrap: anywhere; }
+    th { position: static; }
+    th button:focus-visible { outline: none; }
+  }
 </style>
 </head>
 <body>
@@ -124,9 +143,10 @@
   <p class="scope"><!-- SLOT: SCOPE - what this dataset covers and as of when. -->What this covers, and as of when.</p>
 
   <div class="dt-controls">
-    <input id="dt-filter" type="search" placeholder="Filter rows" aria-label="Filter rows">
-    <span id="dt-count"></span>
+    <input id="dt-filter" type="search" placeholder="Filter text columns" aria-label="Filter text columns">
+    <span id="dt-count" aria-live="polite" aria-atomic="true"></span>
   </div>
+  <p id="dt-filter-context">All rows shown. Filter searches text columns only.</p>
 
   <div class="table-wrap">
     <table id="dt">
@@ -166,7 +186,11 @@
   const table = document.getElementById('dt');
   const filter = document.getElementById('dt-filter');
   const count = document.getElementById('dt-count');
+  const filterContext = document.getElementById('dt-filter-context');
   if (!table) return;
+
+  const head = table.querySelector('thead tr');
+  const body = table.querySelector('tbody');
 
   const parse = id => {
     const node = document.getElementById(id);
@@ -176,10 +200,35 @@
 
   const columns = parse('dt-columns');
   const rows = parse('dt-rows');
-  if (!Array.isArray(columns) || !Array.isArray(rows)) return;
+  const object = value => value !== null && typeof value === 'object'
+    && !Array.isArray(value);
+  // Missing keys such as "constructor" must not read the prototype chain.
+  const cell = (row, key) => Object.hasOwn(row, key) ? row[key] : null;
+  const validColumns = Array.isArray(columns) && columns.length > 0
+    && columns.every(column => object(column)
+      && typeof column.key === 'string' && column.key.trim() !== ''
+      && (column.label == null
+        || ['string', 'number', 'boolean'].includes(typeof column.label))
+      && (column.type == null || column.type === 'text' || column.type === 'num'))
+    && new Set(columns.map(column => column.key)).size === columns.length;
+  const validRows = validColumns && Array.isArray(rows)
+    && rows.every(row => object(row) && columns.every(column => {
+      const value = cell(row, column.key);
+      return value === null || ['string', 'number', 'boolean'].includes(typeof value);
+    }));
+  if (!validRows) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.className = 'dt-none';
+    td.textContent = 'Data failed to load: invalid JSON or malformed columns or rows.';
+    tr.append(td);
+    body.replaceChildren(tr);
+    if (filter) filter.disabled = true;
+    if (count) count.textContent = 'Data unavailable';
+    if (filterContext) filterContext.textContent = 'The dataset could not be loaded.';
+    return;
+  }
 
-  const head = table.querySelector('thead tr');
-  const body = table.querySelector('tbody');
   let sortKey = null, sortDir = 1;
 
   const isMissing = v =>
@@ -191,7 +240,7 @@
     if (column.type === 'num') {
       const n = numeric(value);
       // A non-number in a num column is shown as authored rather than
-      // silently coerced; it just misses formatting and sorts last.
+      // coerced; it skips formatting and sorts after numbers, before missing.
       if (n === null) return String(value);
       return n.toLocaleString(undefined, {maximumFractionDigits: 6});
     }
@@ -201,31 +250,27 @@
   columns.forEach(column => {
     const th = document.createElement('th');
     if (column.type === 'num') th.className = 'num';
-    th.tabIndex = 0;
-    th.setAttribute('role', 'button');
-    th.textContent = column.label == null ? column.key : String(column.label);
+    th.scope = 'col';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = column.label == null ? column.key : String(column.label);
     const arrow = document.createElement('span');
     arrow.className = 'arrow';
+    arrow.setAttribute('aria-hidden', 'true');
     arrow.textContent = '↑';
-    th.append(arrow);
-    const sort = () => {
+    button.append(arrow);
+    button.addEventListener('click', () => {
       sortDir = sortKey === column.key ? -sortDir : 1;
       sortKey = column.key;
       draw();
-    };
-    th.addEventListener('click', sort);
-    th.addEventListener('keydown', event => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        sort();
-      }
     });
+    th.append(button);
     head.append(th);
   });
 
   function compare(a, b) {
     const column = columns.find(c => c.key === sortKey);
-    const x = a[sortKey], y = b[sortKey];
+    const x = cell(a, sortKey), y = cell(b, sortKey);
     // Missing values sort last in both directions: they are absent, not
     // extreme, so flipping the arrow should not parade them to the top.
     const xGone = isMissing(x), yGone = isMissing(y);
@@ -247,14 +292,15 @@
     if (!needle) return true;
     return columns.some(column => {
       if (column.type === 'num') return false;
-      const value = row[column.key];
+      const value = cell(row, column.key);
       return !isMissing(value)
         && String(value).toLowerCase().includes(needle);
     });
   }
 
   function draw() {
-    const needle = (filter && filter.value || '').trim().toLowerCase();
+    const query = (filter && filter.value || '').trim();
+    const needle = query.toLowerCase();
     const visible = rows.filter(row => matches(row, needle));
     if (sortKey) visible.sort(compare);
 
@@ -264,7 +310,7 @@
       const td = document.createElement('td');
       td.className = 'dt-none';
       td.colSpan = columns.length;
-      td.textContent = 'No rows match.';
+      td.textContent = rows.length ? 'No rows match.' : 'No rows.';
       tr.append(td);
       body.append(tr);
     } else {
@@ -273,7 +319,7 @@
         const tr = document.createElement('tr');
         columns.forEach(column => {
           const td = document.createElement('td');
-          const text = show(row[column.key], column);
+          const text = show(cell(row, column.key), column);
           if (column.type === 'num') td.className = 'num';
           if (!text) td.className = (td.className + ' empty').trim();
           td.textContent = text;
@@ -287,14 +333,21 @@
     head.querySelectorAll('th').forEach((th, i) => {
       const active = columns[i] && columns[i].key === sortKey;
       th.classList.toggle('sorted', active);
+      th.setAttribute('aria-sort', active
+        ? (sortDir > 0 ? 'ascending' : 'descending') : 'none');
       const arrow = th.querySelector('.arrow');
       if (arrow) arrow.textContent = sortDir > 0 ? '↑' : '↓';
     });
 
     if (count) {
-      count.textContent = visible.length === rows.length
-        ? `${rows.length} rows`
-        : `${visible.length} of ${rows.length} rows`;
+      count.textContent = needle
+        ? `${visible.length} of ${rows.length} rows`
+        : `${rows.length} rows`;
+    }
+    if (filterContext) {
+      filterContext.textContent = query
+        ? `Filtered view: text columns contain "${query}". Only matching rows are shown and printed.`
+        : 'All rows shown. Filter searches text columns only.';
     }
   }
 
