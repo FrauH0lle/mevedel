@@ -105,7 +105,9 @@ omission.
 tables, code, diagrams - gets `overflow-x: auto` on its own container so the
 page body never scrolls sideways. Reach for `font-variant-numeric: tabular-nums`
 wherever digits line up in columns. Guests open artifacts on phones: check that
-the layout holds at a narrow width.
+the layout holds at a narrow width. Judge diagram labels at their displayed
+size, not just their SVG font size: reflow, simplify, or use a minimum-width
+figure in a local scroll container rather than shrinking text beyond legibility.
 
 **Avoid AI-generated design.** AI-generated design currently clusters around a
 few looks: warm cream (`#F4F1EA`) with a serif display and terracotta accent;
@@ -148,6 +150,12 @@ the accent hue and doesn't count as your accent. Give sparklines and charts the
 same care as type: an area fill, a faint grid, an emphasized endpoint. What's
 interactive should look interactive.
 
+**Keep detail reachable.** Essential information must not require hover. Pair
+chart inspection with keyboard access and exact data; native disclosures and
+tables give touch users a reliable route. Preserve visible focus, distinguish
+series by more than color, and keep filtered counts and scope visible in print
+so a printed subset does not pretend to be the full dataset.
+
 ## Process
 
 Before writing code, sketch a short design plan - a compact token system:
@@ -159,6 +167,13 @@ Before writing code, sketch a short design plan - a compact token system:
 - **Layout**: the layout concept in one or two sentences.
 
 Then build, deriving every color and type decision from that plan.
+
+Before publishing, check the page offline, at a narrow width, with the keyboard,
+in both themes (including switching while open), and in print when relevant.
+Check visible and accessible descriptions against the data, units, totals, and
+legends. Distinguish observations, estimates, forecasts, and illustrative data.
+Source inspection alone does not establish browser layout or accessibility;
+state which checks could not be performed.
 
 ## When the request is editorial
 

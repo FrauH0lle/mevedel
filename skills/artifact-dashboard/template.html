@@ -99,15 +99,24 @@
     font-weight: 600;
     margin: 0 0 0.9rem;
   }
-  .section-title .sub {
-    font-weight: 400;
-    color: var(--ink-soft);
-    margin-left: 0.5rem;
-    font-size: 0.85rem;
-  }
-
-  .chart-holder { overflow-x: auto; }
+  .chart-holder, .table-wrap { overflow-x: auto; max-width: 100%; }
   svg.chart { display: block; width: 100%; height: auto; }
+  svg.chart[hidden], [hidden] { display: none; }
+  .chart-description, .chart-status { color: var(--ink-soft); }
+  .chart-status[data-state="invalid"] { color: var(--bad); }
+  .chart-mark:focus { outline: 2px solid var(--ink); outline-offset: 3px; }
+  summary { cursor: pointer; padding: 0.75rem 0; }
+  summary:focus-visible, .chart-holder:focus-visible { outline: 2px solid var(--accent); }
+  #chart-tooltip {
+    position: fixed; z-index: 2; pointer-events: none;
+    max-width: min(24rem, calc(100vw - 1rem)); padding: 0.5rem 0.75rem;
+    background: var(--card); color: var(--ink); border: 1px solid var(--ink-soft);
+    border-radius: 4px; font-size: 0.85rem; overflow-wrap: anywhere;
+  }
+  #chart-table caption { text-align: left; font-weight: 600; }
+  #chart-table th { text-transform: none; letter-spacing: normal; }
+  .card, .kpi-row { min-width: 0; }
+  .card, header, footer { overflow-wrap: anywhere; }
 
   .legend {
     display: flex;
@@ -118,13 +127,9 @@
     color: var(--ink-soft);
   }
   .legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
-  .legend i {
-    width: 0.7rem; height: 0.7rem; border-radius: 2px;
-    display: inline-block; flex: none;
-  }
+  .legend svg { width: 1.5rem; height: 0.8rem; flex: none; }
 
-  .table-wrap { overflow-x: auto; }
-  table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.92rem; overflow-wrap: normal; }
   th, td {
     text-align: left;
     padding: 0.55rem 0.85rem 0.55rem 0;
@@ -138,9 +143,27 @@
     font-weight: 600;
   }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.num { white-space: nowrap; }
   tbody tr:last-child td { border-bottom: none; }
 
   footer { color: var(--ink-soft); font-size: 0.82rem; }
+
+  @media print {
+    :root {
+      color-scheme: light;
+      --ink: #16181d; --ink-soft: #4b5360; --bg: #ffffff; --card: #ffffff;
+      --rule: #c2c8d0; --accent: #2f6f8f; --good: #1d7a4d; --bad: #b1382f;
+    }
+    .wrap { max-width: none; padding: 0; }
+    #chart-tooltip, #chart-values summary, #chart-status[data-state="ready"] { display: none; }
+    :focus { outline: none !important; }
+    h1, h2, .section-title, caption { break-after: avoid; }
+    .chart-holder, .table-wrap { overflow: visible; }
+    svg.chart { min-width: 0 !important; }
+    table { table-layout: fixed; }
+    th, td, td.num { white-space: normal; overflow-wrap: anywhere; }
+    tr { break-inside: avoid; }
+  }
 </style>
 </head>
 <body>
@@ -163,24 +186,30 @@
     </div>
   </div>
 
-  <section class="card">
-    <p class="section-title">
-      <!-- SLOT: CHART_TITLE -->Chart title<span class="sub"><!-- SLOT: CHART_NOTE - axis caveats, e.g. a truncated y-domain. Delete if none. --></span>
-    </p>
-    <div class="chart-holder">
-      <svg class="chart" id="chart" role="img" aria-label="Chart"></svg>
+  <section class="card" aria-labelledby="chart-title">
+    <h2 class="section-title" id="chart-title"><!-- SLOT: CHART_TITLE -->Chart title</h2>
+    <p class="chart-description" id="chart-description"><!-- SLOT: CHART_NOTE - describe the measure, units, categories, and any axis caveat. -->What is measured, in which units, across which categories.</p>
+    <p class="chart-status" id="chart-status" role="status"></p>
+    <div class="chart-holder" tabindex="0" role="region" aria-label="Chart; scroll horizontally if needed">
+      <svg class="chart" id="chart" role="group" aria-labelledby="chart-title" aria-describedby="chart-description"></svg>
     </div>
     <div class="legend" id="legend"></div>
+    <details id="chart-values">
+      <summary>Exact chart values (also available without hover)</summary>
+      <div class="table-wrap"><table id="chart-table"></table></div>
+    </details>
+    <div id="chart-tooltip" role="tooltip" hidden></div>
+    <noscript>Enable JavaScript to render this chart and its exact-values table.</noscript>
   </section>
 
   <section class="card">
-    <p class="section-title"><!-- SLOT: BREAKDOWN_TITLE -->Breakdown</p>
+    <h2 class="section-title"><!-- SLOT: BREAKDOWN_TITLE -->Breakdown</h2>
     <div class="table-wrap">
       <table>
         <!-- SLOT: BREAKDOWN_ROWS - header cells and one row per record. Add
              class="num" to both the th and the td of numeric columns. -->
-        <thead><tr><th>Name</th><th class="num">Value</th></tr></thead>
-        <tbody><tr><td>Row</td><td class="num">0</td></tr></tbody>
+        <thead><tr><th scope="col">Name</th><th scope="col" class="num">Value</th></tr></thead>
+        <tbody><tr><th scope="row">Row</th><td class="num">0</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -196,7 +225,7 @@
   "x": { "label": "" },
   "y": { "label": "", "min": null, "max": null },
   "series": [
-    { "name": "REPLACE ME", "points": [{ "x": "", "y": 0 }] }
+    { "name": "REPLACE ME", "points": [{ "x": "Category", "y": 0 }] }
   ]
 }
 </script>
@@ -210,160 +239,332 @@
   const svg = document.getElementById('chart');
   const legend = document.getElementById('legend');
   const NS = 'http://www.w3.org/2000/svg';
-  const W = 760, H = 300, PAD = { t: 16, r: 16, b: 34, l: 52 };
-
-  let spec;
-  try { spec = JSON.parse(document.getElementById('chart-spec').textContent); }
-  catch (_) { return; }
-  if (!spec) return;
-
-  const css = getComputedStyle(document.documentElement);
-  const token = name => css.getPropertyValue(name).trim();
-  // Series beyond the first step the accent's lightness so a multi-series
-  // chart stays on-palette instead of importing a second hue.
-  const hueFor = i => i === 0 ? token('--accent')
-    : `color-mix(in oklab, ${token('--accent')}, ${token('--ink-soft')} ${i * 28}%)`;
-
+  const status = document.getElementById('chart-status');
+  const details = document.getElementById('chart-values');
+  const table = document.getElementById('chart-table');
+  const tooltip = document.getElementById('chart-tooltip');
+  // Keep token references live when the OS theme changes; mixes never exceed 60%.
+  const hueFor = i => i % 4 === 0 ? 'var(--accent)'
+    : `color-mix(in oklab, var(--accent), var(--ink-soft) ${(i % 4) * 20}%)`;
+  const dashes = ['', '7 3', '2 3', '9 3 2 3'];
   const el = (name, attrs) => {
     const node = document.createElementNS(NS, name);
     for (const k in attrs) node.setAttribute(k, attrs[k]);
     return node;
   };
-  const fmt = n => {
-    const abs = Math.abs(n);
-    if (abs >= 1e9) return (n / 1e9).toFixed(1) + 'B';
-    if (abs >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-    if (abs >= 1e3) return (n / 1e3).toFixed(1) + 'k';
-    return String(Math.round(n * 100) / 100);
+  const html = (name, text) => {
+    const node = document.createElement(name);
+    if (text !== undefined) node.textContent = text;
+    return node;
   };
+  const state = (kind, text) => {
+    svg.setAttribute('data-state', kind);
+    status.setAttribute('data-state', kind);
+    status.textContent = text;
+    if (kind === 'ready') svg.removeAttribute('hidden');
+    else svg.setAttribute('hidden', '');
+  };
+  const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const name = v => typeof v === 'string' && v.trim().length > 0;
+  const finite = v => typeof v === 'number' && Number.isFinite(v);
+  const check = (ok, message) => { if (!ok) throw new Error(message); };
+  let spec, type, labels = [], values = [], series = [], slices = [], total = 0;
+  let lo, hi, ticks, tickLabels;
+  try {
+    spec = JSON.parse(document.getElementById('chart-spec').textContent);
+    check(object(spec), 'Expected a chart object.');
+    type = spec.type === undefined ? 'line' : spec.type;
+    check(['line', 'bar', 'donut'].includes(type), 'Unknown chart type.');
+    for (const axis of ['x', 'y']) {
+      check(spec[axis] === undefined || object(spec[axis]), `${axis} must be an object.`);
+      check(spec[axis]?.label === undefined || typeof spec[axis].label === 'string',
+        `${axis}.label must be text.`);
+    }
+    for (const bound of ['min', 'max']) {
+      check(spec.y?.[bound] == null || finite(spec.y[bound]), `y.${bound} must be a finite number.`);
+    }
+    check(spec.y?.min == null || spec.y?.max == null || spec.y.min < spec.y.max,
+      'The y bounds must be increasing.');
+    if (type === 'donut') {
+      check(Array.isArray(spec.slices), 'Expected a slices array.');
+      slices = spec.slices;
+      slices.forEach(s => check(object(s) && name(s.name) && finite(s.value) && s.value >= 0,
+        'Each slice needs a name and a nonnegative finite value.'));
+      total = slices.reduce((sum, s) => sum + s.value, 0);
+      check(Number.isFinite(total), 'The slice total is too large to represent.');
+      check(slices.every(s => s.value === 0 || s.value / total > 0),
+        'A slice is too small to represent relative to the total.');
+      let angle = -Math.PI / 2;
+      const positives = slices.filter(s => s.value > 0).length;
+      slices.forEach(s => {
+        if (s.value === 0) return;
+        const fraction = s.value / total, end = angle + fraction * Math.PI * 2;
+        check(end > angle && (positives === 1 || fraction < 1),
+          'The slice proportions cannot be represented safely.');
+        angle = end;
+      });
+    } else {
+      check(Array.isArray(spec.series), 'Expected a series array.');
+      series = spec.series;
+      series.forEach((s, si) => {
+        check(object(s) && name(s.name) && Array.isArray(s.points), 'Each series needs a name and points array.');
+        s.points.forEach(p => check(object(p) && name(p.x) &&
+          (finite(p.y) || (type === 'line' && p.y === null)),
+          'Points need a nonempty x string and a finite y number (or null for a line gap).'));
+        const xs = s.points.map(p => p.x);
+        check(new Set(xs).size === xs.length, 'Categories must be unique within a series.');
+        if (si === 0) labels = xs;
+        else check(xs.length === labels.length && xs.every((x, i) => x === labels[i]),
+          'All series must have identical ordered categories.');
+        s.points.forEach(p => { if (p.y !== null) values.push(p.y); });
+      });
+      if (type === 'bar') check((spec.y?.min == null || spec.y.min <= 0) &&
+        (spec.y?.max == null || spec.y.max >= 0), 'Bar bounds must include zero.');
+      if (values.length) {
+        let min = values[0], max = values[0];
+        values.forEach(v => { min = Math.min(min, v); max = Math.max(max, v); });
+        lo = spec.y?.min ?? Math.min(0, min);
+        hi = spec.y?.max ?? Math.max(0, max);
+        check(lo <= min && hi >= max, 'The y bounds must contain every value.');
+        if (lo === hi) {
+          const pad = Math.max(Math.abs(lo) * 0.05, Number.MIN_VALUE);
+          if (spec.y?.max == null) hi = lo === 0 ? 1 : lo + pad;
+          else if (spec.y?.min == null) lo = hi === 0 ? -1 : hi - pad;
+        }
+        const span = hi - lo;
+        check(finite(lo) && finite(hi) && finite(span) && span > 0,
+          'The y range cannot be represented safely.');
+        ticks = Array.from({ length: 5 }, (_, i) => i === 4 ? hi : lo + span * (i / 4));
+        check(ticks.every(finite) && new Set(ticks).size === 5,
+          'The y range is too narrow to represent distinct ticks.');
+        // Use the fewest significant digits that distinguish this scale's ticks.
+        for (let precision = 3; precision <= 17; precision++) {
+          tickLabels = ticks.map(v => String(Number(v.toPrecision(precision))));
+          if (tickLabels.every(label => Number.isFinite(Number(label))) &&
+              new Set(tickLabels).size === ticks.length) break;
+        }
+      }
+    }
+  } catch (error) {
+    state('invalid', `Invalid chart data: ${error.message}`);
+    details.hidden = true;
+    return;
+  }
 
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const unit = spec.y?.label || '';
+  const exact = v => v === null ? 'Missing' : String(v);
+  const valueHeading = label => unit ? `${label} (${unit})` : label;
+  table.append(html('caption', `${document.getElementById('chart-title').textContent.trim()} — exact values`));
+  const head = html('thead'), heading = html('tr'), body = html('tbody');
+  const headers = type === 'donut' ? ['Slice', valueHeading('Value')]
+    : [spec.x?.label || 'Category', ...series.map((s, i) => valueHeading(`${i + 1}. ${s.name}`))];
+  headers.forEach((text, i) => {
+    const cell = html('th', text);
+    cell.setAttribute('scope', 'col');
+    if (i > 0) cell.setAttribute('class', 'num');
+    heading.append(cell);
+  });
+  head.append(heading);
+  const rows = type === 'donut' ? slices.map((s, i) => [`${i + 1}. ${s.name}`, exact(s.value)])
+    : labels.map((label, i) => [label, ...series.map(s => exact(s.points[i].y))]);
+  rows.forEach(cells => {
+    const row = html('tr');
+    cells.forEach((text, i) => {
+      const cell = html(i === 0 ? 'th' : 'td', text);
+      if (i === 0) cell.setAttribute('scope', 'row');
+      else cell.setAttribute('class', 'num');
+      row.append(cell);
+    });
+    body.append(row);
+  });
+  table.append(head, body);
+  let wasOpen;
+  window.addEventListener('beforeprint', () => { wasOpen = details.open; details.open = true; });
+  window.addEventListener('afterprint', () => { details.open = wasOpen; });
+  if (type === 'donut' ? total === 0 : values.length === 0) {
+    state('empty', 'No data to chart. Exact values, including missing or zero values, are listed below.');
+    return;
+  }
+  state('ready', 'Hover or focus a mark for its value. Use Exact chart values for touch or dense charts.');
 
-  if (spec.type === 'donut') {
-    const slices = (spec.slices || []).filter(s => Number(s.value) > 0);
-    const total = slices.reduce((sum, s) => sum + Number(s.value), 0);
-    if (!total) return;
+  let active;
+  const hideTooltip = () => {
+    tooltip.hidden = true;
+    if (active) active.removeAttribute('aria-describedby');
+    active = null;
+  };
+  const positionTooltip = (node, event) => {
+    const box = node.getBoundingClientRect();
+    const x = event?.clientX ?? box.left + box.width / 2;
+    const y = event?.clientY ?? box.top;
+    const tip = tooltip.getBoundingClientRect();
+    tooltip.style.left = `${Math.max(8, Math.min(x + 12, window.innerWidth - tip.width - 8))}px`;
+    tooltip.style.top = `${Math.max(8, Math.min(y + 12, window.innerHeight - tip.height - 8))}px`;
+  };
+  const markCount = type === 'donut' ? slices.filter(s => s.value > 0).length : values.length;
+  const interactive = (node, text, si, i) => {
+    node.setAttribute('class', 'chart-mark');
+    node.setAttribute('data-series', si);
+    node.setAttribute('data-index', i);
+    node.setAttribute('role', 'graphics-symbol');
+    node.setAttribute('aria-label', text);
+    // ponytail: dense charts use the native exact table, not a custom keyboard navigator.
+    if (markCount <= 40) node.setAttribute('tabindex', '0');
+    const show = event => {
+      hideTooltip();
+      active = node;
+      tooltip.textContent = text;
+      tooltip.hidden = false;
+      node.setAttribute('aria-describedby', 'chart-tooltip');
+      positionTooltip(node, event);
+    };
+    node.addEventListener('pointerenter', show);
+    node.addEventListener('pointermove', event => { if (active === node) positionTooltip(node, event); });
+    node.addEventListener('pointerleave', () => { if (active === node) hideTooltip(); });
+    node.addEventListener('focus', () => show());
+    node.addEventListener('blur', () => { if (active === node) hideTooltip(); });
+    svg.append(node);
+  };
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') hideTooltip(); });
+
+  const defs = el('defs', {});
+  svg.append(defs);
+  const patternFor = i => {
+    const id = `chart-pattern-${i}`;
+    const pattern = el('pattern', { id, width: 8, height: 8, patternUnits: 'userSpaceOnUse',
+      patternTransform: `rotate(${(i % 4) * 45})` });
+    pattern.append(el('rect', { width: 8, height: 8, fill: hueFor(i) }));
+    pattern.append(el('path', { d: 'M 2 0 V 8', stroke: 'var(--card)', 'stroke-width': 1.5 }));
+    defs.append(pattern);
+    return `url(#${id})`;
+  };
+  const legendItem = (i, label) => {
+    const item = html('span');
+    const swatch = el('svg', { viewBox: '0 0 24 12', 'aria-hidden': 'true' });
+    swatch.append(type === 'line'
+      ? el('line', { x1: 0, x2: 24, y1: 6, y2: 6, stroke: hueFor(i),
+          'stroke-width': 2, 'stroke-dasharray': dashes[i % 4] })
+      : el('rect', { width: 24, height: 12, fill: `url(#chart-pattern-${i})` }));
+    item.append(swatch, `${i + 1}. ${label}`);
+    legend.append(item);
+  };
+  const text = (x, y, value, anchor = 'middle') => {
+    const node = el('text', { x, y, 'text-anchor': anchor, 'font-size': 12, fill: 'var(--ink-soft)' });
+    node.textContent = value;
+    svg.append(node);
+    return node;
+  };
+  if (type === 'donut') {
+    const W = 320, H = 300;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.style.minWidth = `${W}px`;
+    svg.style.maxWidth = '480px';
+    svg.style.marginInline = 'auto';
     const cx = W / 2, cy = H / 2, rOuter = 110, rInner = 66;
+    const positiveCount = slices.filter(s => s.value > 0).length;
     let angle = -Math.PI / 2;
     slices.forEach((slice, i) => {
-      const sweep = (Number(slice.value) / total) * Math.PI * 2;
+      const fill = patternFor(i);
+      legendItem(i, `${slice.name} · ${exact(slice.value)}${unit ? ` ${unit}` : ''}`);
+      if (slice.value === 0) return;
+      const sweep = (slice.value / total) * Math.PI * 2;
       const end = angle + sweep;
       const pt = (r, a) => `${cx + r * Math.cos(a)} ${cy + r * Math.sin(a)}`;
-      // A single slice covering the whole ring cannot be drawn as one arc
-      // (start and end coincide), so draw it as two stacked rings instead.
+      // A full ring needs two arcs because a single arc's endpoints coincide.
       const large = sweep > Math.PI ? 1 : 0;
-      const d = slices.length === 1
+      const d = positiveCount === 1
         ? `M ${cx - rOuter} ${cy} A ${rOuter} ${rOuter} 0 1 1 ${cx + rOuter} ${cy}`
           + ` A ${rOuter} ${rOuter} 0 1 1 ${cx - rOuter} ${cy} Z`
           + ` M ${cx - rInner} ${cy} A ${rInner} ${rInner} 0 1 0 ${cx + rInner} ${cy}`
           + ` A ${rInner} ${rInner} 0 1 0 ${cx - rInner} ${cy} Z`
         : `M ${pt(rOuter, angle)} A ${rOuter} ${rOuter} 0 ${large} 1 ${pt(rOuter, end)}`
           + ` L ${pt(rInner, end)} A ${rInner} ${rInner} 0 ${large} 0 ${pt(rInner, angle)} Z`;
-      svg.append(el('path', { d, fill: hueFor(i), 'fill-rule': 'evenodd' }));
+      interactive(el('path', { d, fill, 'fill-rule': 'evenodd',
+        stroke: 'var(--card)', 'stroke-width': 2 }),
+        `${i + 1}. ${slice.name}: ${exact(slice.value)}${unit ? ` ${unit}` : ''}`, i, i);
+      if (sweep > 0.18) {
+        const mid = angle + sweep / 2;
+        text(cx + 126 * Math.cos(mid), cy + 126 * Math.sin(mid) + 4, String(i + 1));
+      }
       angle = end;
-    });
-    slices.forEach((slice, i) => {
-      const item = document.createElement('span');
-      const swatch = document.createElement('i');
-      swatch.style.background = hueFor(i);
-      item.append(swatch, `${slice.name} · ${fmt(Number(slice.value))}`);
-      legend.append(item);
     });
     return;
   }
-
-  const series = (spec.series || []).filter(s => (s.points || []).length);
-  if (!series.length) return;
-  const labels = series[0].points.map(p => String(p.x));
-  const values = series.flatMap(s => s.points.map(p => Number(p.y)))
-    .filter(Number.isFinite);
-  if (!values.length) return;
-
-  let lo = spec.y && spec.y.min != null ? Number(spec.y.min)
-    : Math.min(0, ...values);
-  let hi = spec.y && spec.y.max != null ? Number(spec.y.max)
-    : Math.max(...values);
-  if (hi === lo) hi = lo + 1;               // flat series still needs a range
+  const longestTick = tickLabels.reduce((n, t) => Math.max(n, t.length), 0);
+  const labelWidth = labels.reduce((n, t) => Math.max(n, Math.min(24, t.length) * 7), 64);
+  const PAD = { t: unit ? 38 : 18, r: 40, b: spec.x?.label ? 60 : 40, l: Math.max(64, longestTick * 7 + 16) };
+  const groupWidth = Math.max(labelWidth + 16, type === 'bar' ? series.length * 28 : 0);
+  const W = Math.max(760, PAD.l + PAD.r + Math.min(labels.length, 8) * groupWidth,
+    (unit.length + 2) * 7, ((spec.x?.label || '').length + 2) * 7);
+  const H = 320;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.style.minWidth = `${W}px`;
   const plotW = W - PAD.l - PAD.r, plotH = H - PAD.t - PAD.b;
   const yFor = v => PAD.t + plotH - ((v - lo) / (hi - lo)) * plotH;
-  // One point has no span to divide, so centre it rather than dividing by zero.
-  const xFor = i => labels.length === 1
-    ? PAD.l + plotW / 2
-    : PAD.l + (i / (labels.length - 1)) * plotW;
-
-  for (let g = 0; g <= 4; g++) {
-    const v = lo + ((hi - lo) * g) / 4, y = yFor(v);
+  const xFor = i => type === 'bar' ? PAD.l + ((i + 0.5) / labels.length) * plotW
+    : labels.length === 1 ? PAD.l + plotW / 2 : PAD.l + (i / (labels.length - 1)) * plotW;
+  ticks.forEach((v, g) => {
+    const y = yFor(v);
     svg.append(el('line', {
       x1: PAD.l, x2: W - PAD.r, y1: y, y2: y,
-      stroke: token('--rule'), 'stroke-width': 1,
+      stroke: 'var(--rule)', 'stroke-width': 1,
     }));
-    const label = el('text', {
-      x: PAD.l - 8, y: y + 4, 'text-anchor': 'end',
-      'font-size': 11, fill: token('--ink-soft'),
-    });
-    label.textContent = fmt(v);
-    svg.append(label);
-  }
-
-  // Skip x labels rather than let them collide.
+    text(PAD.l - 8, y + 4, tickLabels[g], 'end').setAttribute('class', 'y-tick');
+  });
+  if (unit) text(PAD.l, 16, unit, 'start');
+  if (spec.x?.label) text(PAD.l + plotW / 2, H - 8, spec.x.label);
+  // Omit crowded ticks; the exact table retains every complete category label.
   const every = Math.ceil(labels.length / 8);
   labels.forEach((name, i) => {
     if (i % every) return;
-    const label = el('text', {
-      x: xFor(i), y: H - PAD.b + 18, 'text-anchor': 'middle',
-      'font-size': 11, fill: token('--ink-soft'),
-    });
-    label.textContent = name;
-    svg.append(label);
+    const label = text(xFor(i), H - PAD.b + 20, name.length > 24 ? name.slice(0, 23) + '…' : name,
+      type === 'line' && labels.length > 1 && i === 0 ? 'start'
+        : type === 'line' && labels.length > 1 && i === labels.length - 1 ? 'end' : 'middle');
+    label.setAttribute('aria-label', name);
   });
-
-  if (spec.type === 'bar') {
+  const pointText = (s, si, p) => `${si + 1}. ${s.name} — ${p.x}: ${exact(p.y)}${unit ? ` ${unit}` : ''}`;
+  if (type === 'bar') {
     const groupW = plotW / labels.length;
-    const barW = Math.max(2, (groupW * 0.7) / series.length);
-    const baseline = Math.max(lo, Math.min(0, hi));
-    const baselineY = yFor(baseline);
+    const barW = (groupW * 0.7) / series.length;
+    const baselineY = yFor(0);
     series.forEach((s, si) => {
+      const fill = patternFor(si);
       s.points.forEach((p, i) => {
-        const v = Number(p.y);
-        if (!Number.isFinite(v)) return;
         const x = PAD.l + i * groupW + groupW * 0.15 + si * barW;
-        const y = yFor(Math.max(lo, Math.min(v, hi)));
-        svg.append(el('rect', {
-          x, y: Math.min(y, baselineY), width: barW,
-          height: Math.max(1, Math.abs(baselineY - y)),
-          fill: hueFor(si), rx: 2,
-        }));
+        const y = yFor(p.y);
+        interactive(el('rect', {
+          x, y: p.y === 0 ? baselineY - 6 : Math.min(y, baselineY), width: barW,
+          height: p.y === 0 ? 12 : Math.abs(baselineY - y), fill: p.y === 0 ? 'transparent' : fill,
+        }), pointText(s, si, p), si, i);
+        if (barW >= 18 && series.length > 1) text(x + barW / 2, p.y >= 0 ? y - 5 : y + 14, String(si + 1));
       });
     });
   } else {
     series.forEach((s, si) => {
-      const points = s.points
-        .map((p, i) => Number.isFinite(Number(p.y))
-          ? `${xFor(i)},${yFor(Number(p.y))}` : null)
-        .filter(Boolean).join(' ');
-      svg.append(el('polyline', {
-        points, fill: 'none', stroke: hueFor(si), 'stroke-width': 2,
-        'stroke-linejoin': 'round', 'stroke-linecap': 'round',
-      }));
-      const last = s.points[s.points.length - 1];
-      if (Number.isFinite(Number(last.y))) {
-        svg.append(el('circle', {
-          cx: xFor(s.points.length - 1), cy: yFor(Number(last.y)),
-          r: 3.5, fill: hueFor(si),
+      let segment = [];
+      const flush = () => {
+        if (!segment.length) return;
+        if (segment.length > 1) svg.append(el('polyline', {
+          points: segment.map(i => `${xFor(i)},${yFor(s.points[i].y)}`).join(' '),
+          fill: 'none', stroke: hueFor(si), 'stroke-width': 2, 'stroke-dasharray': dashes[si % 4],
+          'stroke-linejoin': 'round', 'stroke-linecap': 'round',
         }));
-      }
+        const last = segment[segment.length - 1];
+        svg.append(el('circle', { cx: xFor(last), cy: yFor(s.points[last].y), r: 3.5, fill: hueFor(si) }));
+        if (series.length > 1) text(xFor(last) + 7, yFor(s.points[last].y) - 6, String(si + 1), 'start');
+        segment = [];
+      };
+      s.points.forEach((p, i) => { if (p.y === null) flush(); else segment.push(i); });
+      flush();
     });
+    // Separate transparent hit targets preserve line geometry and isolated points.
+    series.forEach((s, si) => s.points.forEach((p, i) => {
+      if (p.y !== null) interactive(el('rect', {
+        x: xFor(i) - 6, y: yFor(p.y) - 6, width: 12, height: 12, fill: 'transparent',
+      }), pointText(s, si, p), si, i);
+    }));
   }
-
-  if (series.length > 1) {
-    series.forEach((s, i) => {
-      const item = document.createElement('span');
-      const swatch = document.createElement('i');
-      swatch.style.background = hueFor(i);
-      item.append(swatch, s.name || `Series ${i + 1}`);
-      legend.append(item);
-    });
-  }
+  if (series.length > 1) series.forEach((s, i) => legendItem(i, s.name));
 })();
 </script>
 </body>

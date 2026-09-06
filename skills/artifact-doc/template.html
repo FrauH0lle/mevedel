@@ -44,6 +44,7 @@
     font-family: var(--serif);
     font-size: 17px;
     line-height: 1.65;
+    overflow-wrap: break-word;
   }
 
   .page {
@@ -99,6 +100,7 @@
   li { margin-bottom: 0.4rem; }
 
   a { color: var(--accent); text-underline-offset: 0.15em; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
   blockquote {
     margin: 1.75rem 0;
@@ -116,6 +118,7 @@
     background: var(--accent-soft);
     padding: 0.12em 0.35em;
     border-radius: 3px;
+    overflow-wrap: anywhere;
   }
 
   pre {
@@ -128,7 +131,7 @@
     overflow-x: auto;
     line-height: 1.5;
   }
-  pre code { background: none; padding: 0; }
+  pre code { background: none; padding: 0; overflow-wrap: normal; }
 
   /* Tables scroll inside their own container so the page never does. */
   .table-wrap { overflow-x: auto; margin: 1.5rem 0; }
@@ -168,13 +171,21 @@
 
   @media print {
     :root {
+      color-scheme: light;
       --ink: #000; --ink-muted: #444; --ground: #fff;
       --surface: #fff; --rule: #bbb; --accent: #000; --accent-soft: #f2f2f2;
     }
     body { font-size: 11pt; }
     .page { max-width: none; padding: 0; }
-    h2, h3 { break-after: avoid; }
-    blockquote, pre, .table-wrap { break-inside: avoid; }
+    a:focus-visible { outline: none; }
+    h1, h2, h3 { break-after: avoid; }
+    p, li { widows: 3; orphans: 3; }
+    blockquote, tr { break-inside: avoid; }
+    .table-wrap, pre { overflow: visible; }
+    pre, pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
+    table { table-layout: fixed; }
+    th, td { overflow-wrap: anywhere; }
+    thead { display: table-header-group; }
   }
 </style>
 </head>
