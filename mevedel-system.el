@@ -597,8 +597,13 @@ present."
                     "`skill://NAME@SOURCE-KEY` locator.")
             lines))
     (when retained
-      (push "- `agent://` - retained agent results for this session." lines)
-      (push "- `history://` - retained agent conversation history for this session." lines))
+      (push "- `agent://` - retained agent results for this session." lines))
+    (when (seq-some (lambda (entry) (plist-get entry :history-p))
+                    (plist-get metadata :agents))
+      (push (concat "- `history://` - conversation history for this session. "
+                    "Read `history://root` for the main conversation or "
+                    "`history://root/PATH` for a retained agent conversation.")
+            lines))
     (when memory
       (push (concat "- `memory://` - existing configured persistent-memory "
                     "roots. `memory://root` reads the ordered union; a topic "

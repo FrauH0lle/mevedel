@@ -81,6 +81,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
 (declare-function mevedel-session-agent-registry "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-root-buffer "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-skills "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -667,10 +668,17 @@ SCHEME is nil, include metadata for every scheme."
           :agents
           (mapcar
            (lambda (item)
-             (list :item item
-                   :record
-                   (mevedel-resource--agent-record
-                    (plist-get item :path) session)))
+             (let* ((path (plist-get item :path))
+                    (record (mevedel-resource--agent-record path session)))
+               (list :item item :record record
+                     :history-p
+                     (if (equal path "/root")
+                         (buffer-live-p (mevedel-session-root-buffer session))
+                       (and record
+                            (or (buffer-live-p
+                                 (mevedel-agent-record-conversation-buffer record))
+                                (mevedel-agent-record-conversation-location
+                                 record)))))))
            agents)
           :memory-roots
           (delq nil
@@ -806,7 +814,11 @@ Physical resolution is intentionally not performed here."
       (let* ((specific
               (pcase scheme
                 ('skill (mevedel-resource--parse-skill-tail tail))
-                ((or 'agent 'history)
+                ('history
+                 (if (equal tail "root")
+                     (list :components '("root") :dynamic-p nil)
+                   (mevedel-resource--parse-agent-history-tail tail)))
+                ('agent
                  (mevedel-resource--parse-agent-history-tail tail))
                 ('memory (mevedel-resource--parse-memory-tail tail))
                 ('mcp (mevedel-resource--parse-mcp-tail tail))
@@ -1007,39 +1019,42 @@ as Glob or Grep scopes."
     (cdr (assoc path (mevedel-session-agent-registry session)))))
 
 (defun mevedel-resource--agent-list-result (session &optional history-p)
-  "Return a sorted retained-agent listing for SESSION.
-When HISTORY-P is non-nil, list only identities with retained conversations."
+  "Return a sorted agent resource listing for SESSION.
+When HISTORY-P is non-nil, include root and retained conversation histories."
   (let ((entries
-         (cl-loop for item in (mevedel-agent-control-list-agents session)
+         (cl-loop for entry in
+                  (plist-get
+                   (mevedel-resource-completion-metadata
+                    (list :session session) (if history-p 'history 'agent))
+                   :agents)
+                  for item = (plist-get entry :item)
                   for path = (plist-get item :path)
-                  for record = (mevedel-resource--agent-record path session)
-                  unless (equal path "/root")
-                  when (or (not history-p)
-                           (and record
-                                (or (mevedel-agent-record-conversation-buffer
-                                     record)
-                                    (mevedel-agent-record-conversation-location
-                                     record))))
+                  for record = (plist-get entry :record)
+                  when (if history-p
+                           (plist-get entry :history-p)
+                         (not (equal path "/root")))
                   collect
                   (let* ((address (format "%s://%s"
                                           (if history-p "history" "agent")
                                           (substring path 1)))
                          (activity (or (plist-get item :activity) "idle"))
-                         (ready (and record
-                                     (not (member activity
-                                                  '("running" "starting"
-                                                    "waiting"
-                                                    "permission-blocked"
-                                                    "interaction-blocked")))
-                                     (mevedel-agent-control-settled-result
-                                      record))))
+                         (ready (or (and history-p (equal path "/root"))
+                                    (and record
+                                         (not (member activity
+                                                      '("running" "starting"
+                                                        "waiting"
+                                                        "permission-blocked"
+                                                        "interaction-blocked")))
+                                         (mevedel-agent-control-settled-result
+                                          record)))))
                     (format "%s\t%s\t%s"
                             address
                             (or (plist-get item :role) "default")
                             (if ready "ready" "not-ready"))))))
     (if entries
         (string-join (sort entries #'string-lessp) "\n")
-      (format "No retained %s agents" (if history-p "history" "agent")))))
+      (if history-p "No conversation histories"
+        "No retained agents"))))
 
 (defconst mevedel-resource--json-null
   (make-symbol "mevedel-resource-json-null")
@@ -1157,11 +1172,15 @@ parent is discarded."
         (kill-buffer root-buffer)))))
 
 (defun mevedel-resource--history-read (record session)
-  "Return concise Markdown projection for RECORD's retained conversation."
-  (let ((buffer (and record
-                     (mevedel-agent-record-conversation-buffer record))))
-    (unless (buffer-live-p buffer)
+  "Return concise Markdown for RECORD, or SESSION's root when RECORD is nil."
+  (let ((buffer (if record
+                    (mevedel-agent-record-conversation-buffer record)
+                  (and session (mevedel-session-root-buffer session)))))
+    (when (and record (not (buffer-live-p buffer)))
       (setq buffer (mevedel-resource--history-hydrate record session)))
+    (unless (buffer-live-p buffer)
+      (signal 'mevedel-resource-unavailable
+              (list "Root conversation is unavailable")))
     (mevedel-agent-conversation-project-history buffer session)))
 
 (defun mevedel-resource--skill-list-result (session context)
@@ -1379,6 +1398,10 @@ before an authorized handler receives a backing path or virtual record."
                                (file-regular-p physical)
                              (file-exists-p physical)))
                 (setq data (plist-put data :unavailable-p t))))))))
+     ((and (eq scheme 'history) (equal components '("root")))
+      (unless (and session
+                   (buffer-live-p (mevedel-session-root-buffer session)))
+        (setq data (plist-put data :unavailable-p t))))
      ((memq scheme '(agent history))
       (when components
         (let ((record
@@ -1502,15 +1525,20 @@ errors before any content or handler is reached."
                          skill root components))))))))
        ((memq scheme '(agent history))
         (setq logical-p t)
-        (if (null components)
-            nil
+        (cond
+         ((null components))
+         ((and (eq scheme 'history) (equal components '("root")))
+          (unless (and session
+                       (buffer-live-p (mevedel-session-root-buffer session)))
+            (setq data (plist-put data :unavailable-p t))))
+         (t
           (let ((record
                  (and (equal (car components) "root")
                       (mevedel-resource--agent-record
                        (concat "/" (string-join components "/")) session))))
             (setq data (plist-put data :record record))
             (unless record
-              (setq data (plist-put data :unavailable-p t))))))
+              (setq data (plist-put data :unavailable-p t)))))))
        ((eq scheme 'memory)
         (if (equal components '("root"))
             (setq logical-p t)

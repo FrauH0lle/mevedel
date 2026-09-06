@@ -25,7 +25,7 @@ resource URI.
 | Persisted output | `artifact://`, `artifact://HANDLE` | yes | yes | yes | no |
 | Skill package | `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]` | yes | yes | yes | no |
 | Retained agent | `agent://`, `agent://root/PATH[#POINTER]` | yes | no | no | no |
-| Retained history | `history://`, `history://root/PATH` | yes | no | no | no |
+| Conversation history | `history://`, `history://root`, `history://root/PATH` | yes | no | no | no |
 | Persistent memory | `memory://root`, `memory://ROOT-KEY/RELATIVE-PATH` | yes | yes | yes | no |
 | MCP resource | `mcp://`, `mcp://ENCODED-SERVER`, `mcp://ENCODED-SERVER/ENCODED-URI` | yes | no | no | no |
 | Packaged documentation | `mevedel://`, `mevedel://RELATIVE-PATH` | yes | yes | yes | no |
@@ -41,7 +41,8 @@ an existing save path. The remaining families are advertised only when the
 current resource metadata has a usable surface:
 
 - `skill://` requires at least one enabled, discoverable skill;
-- `agent://` and `history://` require at least one retained agent record;
+- `agent://` requires at least one retained agent record;
+- `history://` requires a live root conversation or a retained agent conversation;
 - `memory://` requires at least one configured memory root directory that
   exists; and
 - `mcp://` requires at least one configured MCP server.
@@ -85,7 +86,9 @@ The address forms have these identity rules:
   changing the authored address shown in transcripts, errors, or results.
 - `agent://root/PATH` and `history://root/PATH` name the canonical retained
   agent path without its leading slash. Caller-relative paths and opaque
-  storage IDs are rejected.
+  storage IDs are rejected. `history://root` names the owning session's main
+  agent conversation; it is session-relative and does not make `agent://root`
+  a valid result address.
 - `memory://root` is a dynamic union/index query. A listed topic uses its
   root's key in `memory://ROOT-KEY/RELATIVE-PATH`. A configured `.mevedel` or
   `.agents` root that is the only one of its kind uses the readable key
@@ -195,9 +198,11 @@ or conflicting origin/name pair does not fall back to another skill.
 
 ### `agent://` and `history://`
 
-Bare `agent://` and `history://` are path-sorted listings from the explicit
-retained-agent registry. Historical transcript files without an addressable
-retained identity are not listed.
+Bare `agent://` lists retained agent results in path order. Bare `history://`
+lists the live root conversation and available retained agent conversations
+in the same order. Root history is available even when there are no retained
+agents. Listings and completion inspect availability metadata only; they do
+not read transcripts or create sessions.
 
 An agent address returns the complete payload and terminal outcome of its
 latest settled turn. Completed, errored, and interrupted turns expose the same
@@ -206,11 +211,19 @@ agents expose no streaming text and are reported as not ready. JSON selection
 is read-only and cannot alter the conversation, settled result, or `RESULT`
 mailbox.
 
-`history://root/PATH` renders the retained conversation through the existing
+`history://root` renders the session's registered root data buffer, including
+unsaved transcript content. A retained agent reading this address gets its
+owning session's root conversation, regardless of its caller buffer. A missing
+or killed root buffer is unavailable; reading does not resume a session.
+Authorized execution rechecks the current root buffer after permission.
+
+`history://root/PATH` renders the retained conversation through the same
 transcript classification and source mapping. Live and resumed conversations
 use the same concise Markdown projection, excluding hidden audit encoding,
 provider bookkeeping, and persistence scaffolding. History is observational
-and cannot rewrite the transcript.
+and cannot rewrite the transcript. Both addresses retain the existing tool
+output truncation and Read offset/limit behavior. They project the current
+conversation representation, without traversing pre-compaction archives.
 
 ### `memory://`
 

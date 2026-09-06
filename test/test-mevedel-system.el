@@ -241,6 +241,24 @@
                             "memory://" "mcp://"))
             (should-not (string-match-p (regexp-quote scheme) roster)))))))
 
+  :doc "advertises root history without retained agents or reading content"
+  (let* ((workspace (mevedel-workspace-get-or-create
+                     'project root-dir root-dir "root-history"))
+         (session (mevedel-session-create "main" workspace root-dir))
+         (context (mevedel-system-context--create
+                   :workspace workspace :working-directory root-dir
+                   :session session)))
+    (with-temp-buffer
+      (mevedel-session-set-root-buffer session (current-buffer))
+      (cl-letf (((symbol-function 'mevedel-agent-conversation-project-history)
+                 (lambda (&rest _) (ert-fail "Roster read history"))))
+        (let ((roster (mevedel-system--resource-roster context)))
+          (should (string-match-p "history://root`" roster))
+          (should (string-match-p "history://root/PATH" roster))
+          (should-not (string-match-p "agent://" roster)))))
+    (should-not (string-match-p
+                 "history://" (mevedel-system--resource-roster context))))
+
   :doc "advertises configured resource families when their targets exist"
   (let* ((workspace (mevedel-workspace-get-or-create
                      'project root-dir root-dir "resource-roster"))

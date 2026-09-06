@@ -14,6 +14,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
+(require 'mevedel-resource)
 
 
 (mevedel-deftest mevedel-session-persistence-write-current-buffer-atomically ()
@@ -4458,7 +4459,7 @@
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
 
-  :doc "resume path calls mevedel-view--full-rerender"
+  :doc "resume path rerenders and exposes the restored root history"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
@@ -4481,6 +4482,17 @@
                   (setq restored
                         (mevedel-session-persistence-restore session-dir)))
                 (should (buffer-live-p restored))
+                (let* ((restored-session
+                        (buffer-local-value 'mevedel--session restored))
+                       (history
+                        (mevedel-resource-execute
+                         (mevedel-resource-prepare
+                          'read "history://root"
+                          (list :session restored-session)))))
+                  (should (eq restored
+                              (mevedel-session-root-buffer restored-session)))
+                  (should (string-match-p "hello from resume test"
+                                          (plist-get history :result))))
                 ;; The rerender may fire via init-common's view-ensure
                 ;; flow (which touches the view buffer).  We only care
                 ;; that it fires at least once.
