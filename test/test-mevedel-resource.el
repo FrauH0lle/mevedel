@@ -15,6 +15,7 @@
 (require 'mevedel-agent-persistence)
 (require 'mevedel-agents)
 (require 'mevedel-tools)
+(require 'mevedel-tool-fs-read)
 (require 'mevedel-skills-core)
 (require 'mevedel-system)
 (require 'mevedel-mentions)
@@ -128,7 +129,9 @@
                    "agent://reviewer"
                    "agent://root"
                    "history://reviewer"
-                   "history://root"
+                   "history://root/"
+                   "history://root#"
+                   "history://root/../other"
                    "agent://root/Reviewer"
                    "history://root/reviewer-name"
                    "skill://name@ABC"
@@ -141,6 +144,15 @@
                    "agent://root/reviewer#/%7E0"
                    "agent://root/reviewer#/bad~2escape"))
       (should-error (mevedel-resource-parse-address address))))
+  :doc "accepts the root history as a session-relative read-only address"
+  (let ((parsed (mevedel-resource-parse-address "history://root")))
+    (should (equal '("root") (plist-get parsed :components)))
+    (should (equal "history://root" (plist-get parsed :canonical)))
+    (should (eq 'session-relative (plist-get parsed :locator-class)))
+    (should-not (plist-get parsed :dynamic-p))
+    (dolist (operation '(glob grep apply-patch))
+      (should-error (mevedel-resource-prepare operation "history://root" nil)
+                    :type 'mevedel-resource-error)))
   :doc "decodes one encoded MCP URI component without splitting it"
   (let ((parsed (mevedel-resource-parse-address "mcp://server/a%2Fb%3Fx")))
     (should (equal '("server" "a/b?x")
@@ -677,7 +689,105 @@
                                     (plist-get history :result)))
             (should-not (string-match-p "path /private/raw.png"
                                         (plist-get history :result)))))
-      (kill-buffer buffer))))
+      (kill-buffer buffer)))
+  :doc "projects and paginates the owning root like a retained conversation"
+  (with-temp-buffer
+    (org-mode)
+    (let* ((root (current-buffer))
+           (session (mevedel-session--create))
+           (record (mevedel-agent-record--create
+                    :path "/root/reviewer" :role "reviewer" :activity 'idle
+                    :conversation-buffer root)))
+      (setq-local mevedel--session session)
+      (mevedel-session-set-root-buffer session root)
+      (insert ":PROPERTIES:\n:GPTEL_SYSTEM: hidden provider prompt\n:END:\n\n"
+              "Root user request\n")
+      (let ((start (point)))
+        (insert "Root assistant answer\nsecond answer line\n"
+                "[media: image; MIME image/png; path /private/raw.png]\n")
+        (put-text-property start (point) 'gptel 'response))
+      (insert "#+begin_tool (Read :file_path \"src.el\")\n")
+      (let ((start (point)))
+        (insert "(:name \"Read\" :args (:file_path \"src.el\"))\n\n"
+                "visible tool evidence\n")
+        (put-text-property start (point) 'gptel '(tool . "history-read")))
+      (insert "#+end_tool\n"
+              (mevedel-tool-render-data-format '(:secret "hidden render data")))
+      (insert "<system-reminder>\nhidden reminder\n</system-reminder>\n"
+              "#+begin_reasoning\nhidden reasoning\n#+end_reasoning\n")
+      (let ((before (buffer-string))
+            (modified (buffer-modified-p))
+            (position (point)))
+        (with-temp-buffer
+          (org-mode)
+          (setq-local mevedel--session (mevedel-session--create))
+          (insert "Unrelated caller conversation\n")
+          (cl-labels
+              ((read-history (address)
+                 (plist-get
+                  (mevedel-resource-execute
+                   (mevedel-resource-prepare
+                    'read address (list :session session)))
+                  :result)))
+            (should (equal "history://root\tdefault\tready"
+                           (read-history "history://")))
+            (let ((root-history (read-history "history://root")))
+              (should (string-match-p "Root user request" root-history))
+              (should (string-match-p "Root assistant answer" root-history))
+              (should (string-match-p "visible tool evidence" root-history))
+              (dolist (hidden '("hidden provider" "hidden reminder"
+                                "hidden reasoning" "hidden render data"
+                                "#+begin_tool" "/private/raw.png"
+                                "Unrelated caller"))
+                (should-not (string-match-p (regexp-quote hidden) root-history)))
+              (mevedel-session--set-agent-registry
+               session (list (cons "/root/reviewer" record)))
+              (should (equal root-history
+                             (read-history "history://root/reviewer")))
+              (let (pages)
+                (dolist (address '("history://root" "history://root/reviewer"))
+                  (let* ((attempt (mevedel-resource-prepare
+                                   'read address (list :session session)))
+                         (mevedel-resource-current-attempts
+                          (list (cons address attempt)))
+                         (page (plist-get
+                                (mevedel-tool-fs-read
+                                 (list :file_path address :offset 2 :limit 1))
+                                :result)))
+                    (should (string-match-p "Root user request" page))
+                    (should-not (string-match-p "Root assistant answer" page))
+                    (push (replace-regexp-in-string
+                           (regexp-quote address) "HISTORY" page t t)
+                          pages)))
+                (should (equal (car pages) (cadr pages)))))))
+        (should (equal before (buffer-string)))
+        (should (eq modified (buffer-modified-p)))
+        (should (= position (point)))
+        (should-not (mevedel-session-save-path session)))))
+  :doc "refreshes root availability without reading another ambient session"
+  (let* ((session (mevedel-session--create))
+         (attempt (mevedel-resource-prepare
+                   'read "history://root" (list :session session))))
+    (with-temp-buffer
+      (org-mode)
+      (insert "Root appeared while permission was pending\n")
+      (mevedel-session-set-root-buffer session (current-buffer))
+      (should (string-match-p
+               "Root appeared"
+               (plist-get (mevedel-resource-execute attempt) :result)))
+      (setq attempt (mevedel-resource-prepare
+                     'read "history://root" (list :session session))))
+    (with-temp-buffer
+      (setq-local mevedel--session (mevedel-session--create))
+      (mevedel-session-set-root-buffer mevedel--session (current-buffer))
+      (insert "Unrelated live root\n")
+      (should-error (mevedel-resource-execute attempt)
+                    :type 'mevedel-resource-unavailable)
+      (should-error
+       (mevedel-resource-execute
+        (mevedel-resource-prepare
+         'read "history://root" (list :session session)))
+       :type 'mevedel-resource-unavailable))))
 
 (mevedel-deftest mevedel-resource-history-provider-cold-hydration ()
   ,test

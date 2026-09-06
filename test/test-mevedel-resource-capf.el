@@ -295,7 +295,10 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-resource-capf-agents
-  (:doc "completes agents while limiting history to retained conversations")
+  ()
+  ,test
+  (test)
+  :doc "completes agents while limiting history to available conversations"
   (let* ((session (mevedel-resource-capf-test--session nil))
          (record
           (mevedel-agent-record--create
@@ -316,7 +319,41 @@
       (insert "history://")
       (should (equal '("history://root/reviewer")
                      (mevedel-resource-capf-test--candidates
-                      (mevedel-resource-capf)))))))
+                      (mevedel-resource-capf))))))
+  :doc "offers root history without children or reading the root transcript"
+  (let ((session (mevedel-resource-capf-test--session nil)))
+    (with-temp-buffer
+      (let ((root (current-buffer)))
+        (insert "Root transcript stays untouched\n")
+        (mevedel-session-set-root-buffer session root)
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (cl-letf (((symbol-function 'mevedel-agent-conversation-project-history)
+                     (lambda (&rest _) (ert-fail "Completion read history"))))
+            (insert "history://")
+            (let ((result (mevedel-resource-capf)))
+              (should (equal '("history://root")
+                             (mevedel-resource-capf-test--candidates result)))
+              (should (string-match-p
+                       "ready"
+                       (mevedel-resource-capf-test--annotation
+                        result "history://root"))))
+            (erase-buffer)
+            (insert "history://ro")
+            (should (equal '("history://root")
+                           (mevedel-resource-capf-test--candidates
+                            (mevedel-resource-capf)))))
+          (erase-buffer)
+          (insert "agent://")
+          (should-not (member "agent://root"
+                              (mevedel-resource-capf-test--candidates
+                               (mevedel-resource-capf)))))))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (insert "history://")
+      (should-not (mevedel-resource-capf-test--candidates
+                   (mevedel-resource-capf))))
+    (should-not (mevedel-session-save-path session))))
 
 (mevedel-deftest mevedel-resource-capf-memory
   (:doc "completes configured memory topics without recursive scans")

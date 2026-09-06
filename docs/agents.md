@@ -194,6 +194,14 @@ as not ready. A later idle turn replaces the retained result atomically.
 the shared read-only resource-address resolver. Neither address changes the
 conversation, mailbox, transcript, or settlement state. The canonical path,
 not the registry's opaque storage identity, is the only addressable identity.
+`history://root` uses the same projection for the main agent's current
+conversation, including unsaved transcript content. It resolves the owning
+session's root data buffer even when called by a retained agent, and appears
+in history listings and completion without requiring a child agent. Both
+history forms support the existing Read pagination and concise tool results;
+neither traverses pre-compaction archives or supports search. Root history
+requires a live root buffer, including one restored by normal session resume;
+the read itself never resumes a session.
 See [`address-to-resource.md`](address-to-resource.md#agent-and-history).
 
 ## Interrupting retained agent turns

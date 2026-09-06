@@ -18,10 +18,6 @@
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-settled-result
                   "mevedel-agent-control" (record))
-(declare-function mevedel-agent-record-conversation-buffer
-                  "mevedel-agent-control" (record) t)
-(declare-function mevedel-agent-record-conversation-location
-                  "mevedel-agent-control" (record) t)
 
 ;; `mevedel-resource'
 (declare-function mevedel-resource-completion-metadata
@@ -263,31 +259,24 @@ doubled by digests nobody reads."
                    entries)))))))))
 
 (defun mevedel-resource-capf--agents (tail metadata &optional history)
-  "Complete retained agent paths for TAIL and METADATA.
+  "Complete agent resource paths for TAIL and METADATA.
 
-History candidates are limited to records with retained conversations."
+History candidates include the root and retained conversations."
   (let ((prefix (if history "history://" "agent://"))
         entries)
     (dolist (entry (plist-get metadata :agents))
       (let* ((item (plist-get entry :item))
              (path (plist-get item :path))
              (record (plist-get entry :record))
-             (has-history
-              (and record
-                   (or (and (fboundp
-                             'mevedel-agent-record-conversation-buffer)
-                            (mevedel-agent-record-conversation-buffer record))
-                       (and (fboundp
-                             'mevedel-agent-record-conversation-location)
-                            (mevedel-agent-record-conversation-location
-                             record)))))
-             (ready (and record
-                         (fboundp 'mevedel-agent-control-settled-result)
-                         (mevedel-agent-control-settled-result record)))
+             (ready (or (and history (equal path "/root")
+                             (plist-get entry :history-p))
+                        (and record
+                             (fboundp 'mevedel-agent-control-settled-result)
+                             (mevedel-agent-control-settled-result record))))
              (address (and path (concat prefix (substring path 1)))))
           (when (and address
-                     (not (equal path "/root"))
-                     (or (not history) has-history)
+                     (if history (plist-get entry :history-p)
+                       (not (equal path "/root")))
                      (string-prefix-p tail (substring address (length prefix))))
             (push
              (cons address
