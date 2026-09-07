@@ -804,10 +804,11 @@ host rejects only a fresh `/proc` mount, Mevedel retains filesystem, process,
 and network confinement while using the host `/proc` view and discloses that
 fact as `proc: host`. The confined profile exposes the host read-only, reopens
 allowed roots writable, uses the session working directory, and gives
-descendants fresh process and network namespaces. `best-effort` falls back to direct
-execution only when the requested process has not started and reports
+descendants fresh process and network namespaces. `best-effort` selects direct
+execution when the initial confinement probe is unavailable and reports
 unrestricted filesystem and network access; `required` refuses instead; `off`
-runs directly with the same unrestricted disclosure. Every child result
+runs directly with the same unrestricted disclosure. Once confined preparation
+begins, preparation and launcher failures return without retrying. Every child result
 includes the active confinement facts. Protected glob matches are resolved to
 concrete paths after writable roots are mounted: read-only paths are rebound
 immutable, inaccessible paths are hidden, Git directory pointer targets follow

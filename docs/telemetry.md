@@ -110,7 +110,7 @@ cancellation releases the fence and leaves the machine retryable.
   settlement, cancellation, and teardown;
 - every tool pipeline step during profiler/debug runs, plus every permission
   queue transition, interaction lifetime,
-  sandbox preparation/fallback, scheduler dwell, child start/first output/end,
+  sandbox preparation/refusal, scheduler dwell, child start/first output/end,
   `WriteStdin` requested/effective wait, and result return;
 - every ToolCall script as one redacted span with outcome, budget category,
   nested-call count, and duration, never script text, arguments, or results;

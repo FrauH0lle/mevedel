@@ -190,7 +190,7 @@
     (should (string-match-p "(Skill :name" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))
     (should (string-match-p "(ListSkills :query" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))
     (should (string-match-p "optional" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))
-    (should (string-match-p "skill://" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))
+    (should (string-match-p "listed registered resource address" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))
     (should (string-match-p "Quoted, escaped, or Markdown-code" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))
     (should-not (string-match-p "Pretty Simplifier" section))
     (should-not (string-match-p "SKILL\\.md" section))

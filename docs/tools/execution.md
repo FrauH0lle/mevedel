@@ -31,7 +31,9 @@ additional_permissions={"file_system":{"write":["/exact/path"]}}
 ```
 
 Read and write are separate grants; write permits reading that same resource.
-Approval does not grant its parent, siblings, other protected paths, network,
+Exact approval does not grant its parent or siblings. The user can explicitly
+select a containing directory tree in the permission card; the displayed scope
+then covers its descendants. This does not grant other protected paths, network,
 or unrestricted processes. Filesystem approval also does not authorize the
 command itself; command policy is checked independently. Network and filesystem
 grants can be combined in one `additional_permissions` object when both are

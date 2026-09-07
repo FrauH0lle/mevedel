@@ -440,6 +440,59 @@
       (should-not
        (string-match-p "parent request is still active" captured-body))))
 
+  :doc "browser Bash and Eval cards disclose selected one-shot scope without eliding the operation"
+  (dolist (kind '(bash eval))
+    (let* ((data (generate-new-buffer " *test-permission-source*"))
+           (view (generate-new-buffer " *test-permission-view*"))
+           (session (mevedel-session--create :name "test"))
+           (draft "> keep this draft\nsecond line")
+           (operation (mapconcat #'identity (make-list 30 "long operation text") "\n"))
+           (selection (list '((:path "/srv/input" :access read))))
+           (entry (list :kind kind :origin "/root" :once-only t
+                        :permission-mode-effective 'full-auto
+                        :permission-via 'one-shot-mutation
+                        :command (and (eq kind 'bash) operation)
+                        :expression (and (eq kind 'eval) operation)
+                        :mode "batch" :callback #'ignore
+                        :resource-selection-cell selection
+                        :requested-additional-permissions
+                        '(:file-system ((:path "/srv/input" :access read))))))
+      (unwind-protect
+          (progn
+            (with-current-buffer data
+              (org-mode)
+              (setq-local mevedel--session session))
+            (mevedel-view--setup view data)
+            (with-current-buffer view
+              (goto-char (mevedel-view--input-start))
+              (insert draft))
+            (with-current-buffer data
+              (mevedel-permission--enqueue entry session))
+            ;; A scope change redraws the same pending one-shot card.
+            (dolist (scope '((:path "/srv/input" :access read)
+                             (:path "/srv" :access write :recursive t)))
+              (setcar selection (list scope))
+              (with-current-buffer data
+                (mevedel-permission-queue--render-head session))
+              (with-current-buffer view
+                (let* ((queued (car (mevedel-session-permission-queue session)))
+                       (ov (gethash (mevedel-queue--entry-metadata-get
+                                     queued :interaction-id)
+                                    mevedel-view--interaction-overlays))
+                       (remote (plist-get (overlay-get ov 'mevedel--remote) :body)))
+                  (dolist (text (list "Permission mode at admission: full-auto"
+                                     "this mutation requires one-time approval"
+                                     "Selected authority:"
+                                     (mevedel-permission--resource-label queued scope)))
+                    (should (string-match-p (regexp-quote text) remote))
+                    (should (string-match-p (regexp-quote text) (buffer-string))))
+                  (should (string-match-p (regexp-quote operation) remote))
+                  (should-not (string-match-p (regexp-quote operation) (buffer-string)))
+                  (should (equal draft (mevedel-view--input-text)))))))
+        (mevedel-permission-queue-abort-all session)
+        (when (buffer-live-p view) (kill-buffer view))
+        (when (buffer-live-p data) (kill-buffer data)))))
+
   :doc "does not bind permission actions globally in view mode"
   (dolist (key (list (kbd "RET") (kbd "TAB")
                      "a" "c" "n" "p" "s" "A" "d" "D" "f"))
