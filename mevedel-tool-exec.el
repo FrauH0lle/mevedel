@@ -239,7 +239,18 @@ operation rather than a successful or semantic non-error result."
          (when (plist-get facts :first-direct-fallback)
            "Confinement was unavailable, so this invocation ran directly.")
          (concat "[" (mevedel-sandbox-status-text facts) "]")
+         (when (and failed-p (plist-get facts :git-common-directories))
+           (format
+            (concat "Linked Git shared metadata (objects and refs): %s. "
+                    "A grant to only the worktree's index directory does not "
+                    "include these locations. This location information does "
+                    "not establish the cause of the child failure.")
+            (string-join (plist-get facts :git-common-directories) ", ")))
          (cond
+          ((and failed-p (eq (plist-get facts :sandbox) 'refused))
+           (concat
+            "The command did not run. Resolve the reported resource or "
+            "grant-preparation problem before submitting a new invocation."))
           ((and failed-p (plist-get facts :refused))
            (concat
             "Confinement is required but unavailable. Only a new invocation "

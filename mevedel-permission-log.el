@@ -164,8 +164,12 @@
       (when (fboundp 'mevedel-telemetry-record)
         (apply #'mevedel-telemetry-record session event
                :permission-mode-base
-               (mevedel-session-permission-mode session)
-               :permission-mode-effective (plist-get props :mode)
+               (or (plist-get props :permission-mode-base)
+                   (mevedel-session-permission-mode session))
+               :permission-mode-effective
+               (or (plist-get props :permission-mode-effective)
+                   (plist-get props :mode)
+                   (mevedel-session-permission-mode session))
                props)))))
 
 (provide 'mevedel-permission-log)

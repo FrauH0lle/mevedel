@@ -47,8 +47,11 @@
 (autoload 'mevedel--prompt-key "mevedel-interaction-prompt")
 
 ;; `mevedel-permission-queue'
+(declare-function mevedel-permission-queue--log
+                  "mevedel-permission-queue" (event entry &optional session &rest props))
 (declare-function mevedel-permission-queue--render-head
                   "mevedel-permission-queue" (&optional session))
+(autoload 'mevedel-permission-queue--log "mevedel-permission-queue")
 (autoload 'mevedel-permission-queue--render-head "mevedel-permission-queue")
 
 ;; `mevedel-queue'
@@ -100,7 +103,72 @@
   (format "%s %s%s"
           (capitalize (symbol-name (plist-get grant :access)))
           (mevedel-permission--display-path entry (plist-get grant :path))
-          (if (plist-get grant :recursive) " (recursive)" "")))
+          (if (plist-get grant :recursive) " (recursive)" " (exact)")))
+
+(defun mevedel-permission--prompt-resources (entry)
+  "Return the resources ENTRY's remembering controls operate on.
+The selected scope replaces the requested grants once the user changes it."
+  (or (car (plist-get entry :resource-selection-cell))
+      (plist-get (plist-get entry :requested-additional-permissions)
+                 :file-system)))
+
+(defun mevedel-permission--prompt-select-resource ()
+  "Select exact or containing directory authority for the prompt at point.
+Selection changes the visible card only; approval chooses its lifetime."
+  (interactive)
+  (when-let* ((ov (mevedel--prompt--overlay-at-point
+                   'mevedel-permission-prompt))
+              (entry (overlay-get ov 'mevedel-view-interaction-entry))
+              (cell (plist-get entry :resource-selection-cell)))
+    (let* ((originals (plist-get entry :resource-originals))
+           (original
+            (if (cdr originals)
+                (let ((choices
+                       (mapcar (lambda (grant)
+                                 (cons (mevedel-permission--resource-label entry grant)
+                                       grant))
+                               originals)))
+                  (cdr (assoc (completing-read "Resource to change: " choices nil t)
+                              choices)))
+              (car originals)))
+           (index (cl-position original originals :test #'equal))
+           (previous (nth index (car cell)))
+           (path (plist-get original :path))
+           (access (plist-get original :access))
+           (directory (if (file-directory-p path)
+                          (expand-file-name path)
+                        (file-name-directory path)))
+           (scopes (list (append (list :path path)
+                                (and (plist-get original :recursive)
+                                     '(:recursive t)))))
+           choices)
+      ;; A missing file's nearest parents may not exist yet; offer only
+      ;; directories that do.
+      (while directory
+        (when (file-directory-p directory)
+          (setq scopes
+                (append scopes (list (list :path (directory-file-name directory)
+                                           :recursive t)))))
+        (setq directory (file-name-parent-directory directory)))
+      (dolist (scope scopes)
+        (dolist (choice-access (if (eq access 'write) '(write) '(read write)))
+          (let ((grant (append scope (list :access choice-access))))
+            (push (cons (mevedel-permission--resource-label entry grant) grant)
+                  choices))))
+      (setq choices (nreverse choices))
+      (when-let* ((selected
+                   (cdr (assoc
+                         (completing-read "Approve resource scope: "
+                                          choices nil t)
+                         choices))))
+        (setf (nth index (car cell)) selected)
+        (when-let* ((remember-cell (plist-get entry :remember-authority-cell)))
+          (setcar remember-cell
+                  (plist-put
+                   (car remember-cell) :file-system
+                   (mapcar (lambda (grant) (if (equal grant previous) selected grant))
+                           (plist-get (car remember-cell) :file-system)))))
+        (mevedel-permission-queue--render-head (plist-get entry :session))))))
 
 (defun mevedel-permission--prompt-self-insert ()
   "Insert the typed permission key when no permission prompt is active."
@@ -176,8 +244,7 @@
               (entry (overlay-get ov 'mevedel-view-interaction-entry))
               (cell (plist-get entry :remember-authority-cell)))
     (let* ((selection (copy-tree (car cell)))
-           (missing (plist-get entry :missing-additional-permissions))
-           (resources (plist-get missing :file-system)))
+           (resources (mevedel-permission--prompt-resources entry)))
       (pcase last-command-event
         (?c
          (setq selection
@@ -286,10 +353,10 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
     " allow once  "
     (unless (or suppress-allow-session once-only)
       (concat (mevedel--prompt-key "s")
-              " remember selected profile for session  "))
+              " remember selected authority for session  "))
     (when (and include-always (not once-only))
       (concat (mevedel--prompt-key "A")
-              " remember selected profile in workspace  "))
+              " remember selected authority in workspace  "))
     (mevedel--prompt-key "d")
     " deny-once  "
     (unless once-only
@@ -298,10 +365,38 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
     " feedback\n")
    'warning))
 
+(defun mevedel-permission--format-cause (entry)
+  "Describe ENTRY's captured admission mode and permission cause."
+  (when-let* ((mode (plist-get entry :permission-mode-effective)))
+    (concat
+     (format "Permission mode at admission: %s\n" mode)
+     (when-let* ((cause
+                  (pcase (plist-get entry :permission-via)
+                    ('workspace-boundary "resource outside the allowed roots")
+                    ('protected-path "protected resource needs explicit authority")
+                    ('rule "an explicit rule requests approval")
+                    ('pre-tool-hook "a PreToolUse hook requests approval")
+                    ('permission-request-hook "a PermissionRequest hook requests approval")
+                    ('one-shot-mutation "this mutation requires one-time approval")
+                    ('mode "this operation requires approval in the admission mode")
+                    ('sandbox-network "additional network authority is missing")
+                    ('sandbox-filesystem "additional filesystem authority is missing")
+                    ('sandbox-full-escalation "the operation requests execution without confinement"))))
+       (format "Approval required: %s.\n" cause))
+     "\n")))
+
 (defun mevedel-permission--prompt-async-with-content
     (content include-always cont
              &optional count entry suppress-allow-session once-only)
   "Display a permission prompt for CONTENT and call CONT with its outcome."
+  (setq content (concat (mevedel-permission--format-cause entry) content))
+  (when-let* ((selected (car (plist-get entry :resource-selection-cell))))
+    (setq content
+          (concat content "Selected authority:\n"
+                  (mapconcat
+                   (lambda (grant) (mevedel-permission--resource-label entry grant))
+                   selected "\n")
+                  "\n(g selects exact resource or directory tree and access)\n\n")))
   (let* ((source-buffer (current-buffer))
          (target-buf
           (if (fboundp 'mevedel-view--interaction-target-buffer)
@@ -337,6 +432,8 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
         (unless once-only
           (define-key map "D" #'mevedel-permission--prompt-deny-session))
         (define-key map "f" #'mevedel-permission--prompt-feedback)
+        (when (plist-get entry :resource-selection-cell)
+          (define-key map "g" #'mevedel-permission--prompt-select-resource))
         (when entry
           (define-key map (kbd "TAB")
                       #'mevedel-permission--prompt-toggle-expand))
@@ -345,12 +442,12 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                    (plist-get entry :reusable-operation-p))
           (define-key map "c" #'mevedel-permission--prompt-toggle-remember)
           (when (plist-get
-                 (plist-get entry :missing-additional-permissions)
+                 (plist-get entry :requested-additional-permissions)
                  :network)
             (define-key map "n"
                         #'mevedel-permission--prompt-toggle-remember)))
         (when (plist-get
-               (plist-get entry :missing-additional-permissions)
+               (plist-get entry :requested-additional-permissions)
                :file-system)
           (define-key map "p" #'mevedel-permission--prompt-toggle-remember))
         (define-key map [?q] #'mevedel-permission--prompt-deny-once)
@@ -376,6 +473,10 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                                   "Permission prompt")
                      :entry entry
                      :activate cont)))
+        (when (and entry
+                   (not (mevedel-queue--entry-metadata-get entry :displayed)))
+          (mevedel-queue--entry-metadata-put entry :displayed t)
+          (mevedel-permission-queue--log 'permission-displayed entry))
         (overlay-put ov 'mevedel-permission-prompt t)
         (overlay-put ov 'mevedel-permission-suppress-allow-session
                      suppress-allow-session)
@@ -436,10 +537,11 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
   "Format reusable authority selections from ENTRY."
   (when-let* ((cell (plist-get entry :remember-authority-cell)))
     (let* ((selection (car cell))
-           (missing (plist-get entry :missing-additional-permissions))
-           (resources (plist-get missing :file-system))
+           (resources (mevedel-permission--prompt-resources entry))
            (operation-p (plist-get entry :reusable-operation-p))
-           (network-p (and operation-p (plist-get missing :network))))
+           (network-p (and operation-p
+                           (plist-get (plist-get entry :requested-additional-permissions)
+                                      :network))))
       (when (or operation-p network-p resources)
         (concat
          (propertize "Session/workspace approval remembers the complete selected profile\n"

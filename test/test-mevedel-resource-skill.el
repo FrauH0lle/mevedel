@@ -9,11 +9,68 @@
 (require 'mevedel-resource)
 (require 'mevedel-skills-core)
 (require 'mevedel-structs)
+(require 'mevedel-pipeline)
+(require 'mevedel-permissions)
+(require 'mevedel-permission-queue)
+(require 'mevedel-skills-prompt)
+(require 'mevedel-tool-fs)
+(require 'mevedel-tool-skills)
+(require 'mevedel-tools)
 (require 'helpers
          (file-name-concat
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+
+(mevedel-deftest mevedel-skills--entry-base
+  (:quiet t :doc "listed external skill address reads through the pipeline without host grants")
+  (let* ((root (make-temp-file "mevedel-skill-roster-workspace-" t))
+         (external (make-temp-file "mevedel-skill-roster-source-" t))
+         (file (file-name-concat external "SKILL.md"))
+         (workspace (mevedel-workspace--create :root root :id root :type 'project))
+         (skill (mevedel-skill--create
+                 :name "demo" :description "Known skill"
+                 :source-file file :source-dir external
+                 :model-invocable-p t :active-p t))
+         (session (mevedel-session--create
+                   :workspace workspace :working-directory root
+                   :permission-mode 'full-auto :skills (list skill))))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (setq-local mevedel--session session)
+          (setq-local temporary-file-directory root)
+          (with-temp-file file
+            (insert "---\nname: demo\n---\nRegistered skill contents.\n"))
+          (mevedel-tool-fs--register)
+          (mevedel-tool-skills--register)
+          (let ((mevedel-permission-rules nil)
+                listing address result)
+            (mevedel-pipeline-run-tool
+             (mevedel-tool-get "ListSkills")
+             (lambda (value) (setq listing value)) nil)
+            (should (string-match "skill://demo@[[:xdigit:]]+" listing))
+            (setq address (match-string 0 listing))
+            (should-not (string-match-p (regexp-quote external) listing))
+            (should (string-match-p
+                     (regexp-quote address) (mevedel-skills-prompt-section session)))
+            (mevedel-pipeline-run-tool
+             (mevedel-tool-get "Read") (lambda (value) (setq result value))
+             (list :file_path address))
+            (should (string-match-p "Registered skill contents" result))
+            (should-not (mevedel-session-resource-grants session))
+            (should-not (mevedel-session-permission-queue session))
+            (setf (mevedel-skill-enabled-p skill) nil)
+            (setq result nil)
+            (mevedel-pipeline-run-tool
+             (mevedel-tool-get "Read") (lambda (value) (setq result value))
+             (list :file_path address))
+            (should (string-prefix-p "Error:" result))
+            (should-not (string-match-p "Registered skill contents" result))
+            (should-not (mevedel-session-permission-queue session))))
+      (mevedel-permission-queue-abort-all session)
+      (delete-directory external t)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-resource-skill-provider ()
   ,test
@@ -57,7 +114,7 @@
                        (buffer-string))))))
             (should (string-match-p (regexp-quote address)
                                     (plist-get listing :result)))
-            (should (string-match-p "Use the demo skill" body))))
+            (should (string-match-p "Use the demo skill" body)))
           (let (glob-path grep-path)
             (mevedel-resource-execute
              (mevedel-resource-prepare 'glob address
@@ -244,7 +301,7 @@
                  (lambda (path authored)
                    (setq seen (list path authored))))
                 (should (equal (list expected alias) seen))))))
-      (delete-directory root t)))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-resource-skill)
 ;;; test-mevedel-resource-skill.el ends here

@@ -277,7 +277,10 @@ Tests need a deterministic permit so they can assert on the
 substituted output without depending on the user's defcustom
 configuration."
   `(cl-letf (((symbol-function 'mevedel-bash-policy-check-permission)
-              (lambda (_command &rest _args) 'allow)))
+              (lambda (_command &rest args)
+                (if (plist-get args :metadata-p)
+                    '(:outcome allow :raw-outcome allow :via rule)
+                  'allow))))
      ,@body))
 
 (defmacro mevedel-skills-test--with-eval-allowed (&rest body)
@@ -352,14 +355,20 @@ Return the outcome plist produced by the async helper."
 
   :doc "permission deny yields :status error :reason permission-denied"
   (cl-letf (((symbol-function 'mevedel-bash-policy-check-permission)
-             (lambda (_c &rest _) 'deny)))
+             (lambda (_c &rest args)
+               (if (plist-get args :metadata-p)
+                   '(:outcome deny :raw-outcome deny :via rule)
+                 'deny))))
     (let ((outcome (mevedel-skills-test--shell-injections-sync "!`anything`")))
       (should (eq 'error (plist-get outcome :status)))
       (should (eq 'permission-denied (plist-get outcome :reason)))))
 
   :doc "permission ask yields :status error :reason permission-denied"
   (cl-letf (((symbol-function 'mevedel-bash-policy-check-permission)
-             (lambda (_c &rest _) 'ask)))
+             (lambda (_c &rest args)
+               (if (plist-get args :metadata-p)
+                   '(:outcome ask :raw-outcome ask :via rule)
+                 'ask))))
     (let ((outcome (mevedel-skills-test--shell-injections-sync "!`anything`")))
       (should (eq 'error (plist-get outcome :status)))
       (should (eq 'permission-denied (plist-get outcome :reason)))))

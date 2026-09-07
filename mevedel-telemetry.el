@@ -140,7 +140,7 @@ profile file larger and cost a little more per sample."
 
 (defconst mevedel-telemetry--allowed-keys
   '(:abort-plan-approval :active-work-paused :additional-read-count
-    :additional-write-count :admitted :after-confined-launch-failure
+    :additional-write-count :admitted :approval-lifetime
     :agent-id :agent-path :agent-type :aggressive :artifacts-directory
     :artifacts-local :backend :baseline-marker-position
     :baseline-request-id :blocked :boundary :bubblewrap-available :bucket
@@ -152,23 +152,22 @@ profile file larger and cost a little more per sample."
     :cumulative-usage :cumulative-usage-tokens :dequeue-goal-id
     :dirty-content-hash :dirty-file-count :dirty-state-hash :duration-ms
     :effective-wait-ms :effort :emacs-version :enqueue-goal-id
-    :error-class :estimate :estimate-source :execution-id :exit-code
-    :exit-status :failure-class :failure-stage :fallback-offered
-    :fallback-possible :filesystem :first-byte-seen
-    :fresh-visible-prompt-estimate :full-execution-approval-offered
+    :error-class :estimate :estimate-source :eval-mode :execution-id :exit-code
+    :exit-status :failure-class :failure-stage :filesystem :first-byte-seen
+    :fresh-visible-prompt-estimate
     :git-head :goal-id :gptel-agent-commit :gptel-agent-file-hash
     :gptel-commit :gptel-file-hash :gptel-version :handler-count
     :handler-id :handler-source :handler-type :hook-event
     :ineligible-reason :input-p :input-tokens :interaction-id :issue-count
-    :kind :lane :launch-failure-reason-class :launch-failure-stage
+    :kind :lane
     :message-chars :message-hash :mode :model :model-context-window :modes
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
     :new-count :new-segment :old-segment :omitted-count :origin :outcome
     :output-bytes :output-limit :output-tokens :overlap-count :owner
-    :parent-tool-use-id :parent-turn :pending-count :permission-mode
+    :parent-tool-use-id :parent-turn :pending-count :permission-id :permission-mode
     :permission-mode-base
-    :permission-mode-effective :preexisting-count :preparation-state
+    :permission-mode-effective :permission-via :preexisting-count :preparation-state
     :previous-owner :previous-status :proc :profile :profile-bytes-total
     :profile-file-names :prompt-chars :prompt-function :prompt-hash
     :protected-path-count :provider-context-model :provider-context-status
@@ -178,7 +177,7 @@ profile file larger and cost a little more per sample."
     :reason-class :repair-count :report-bytes-total :report-file-names
     :request-id :requested-yield-time-ms :resolved-count :resource-access
     :restored :result-bytes :result-chars :retained :roster-chars :rounds
-    :sandbox :sandbox-mode :sandbox-permissions :scope :settled
+    :sandbox :sandbox-mode :sandbox-permissions :scope :settled :settlement-source
     :skill-count :skill-name :skill-names :skip-gates :span-id
     :specifier-key :stage :status :step :summary-threshold
     :system-configuration :target-model :target-origin :target-pressure

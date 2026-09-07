@@ -567,6 +567,21 @@ for effects despite reusable authority"
                 (mevedel-bash-policy-check-permission
                  "rm /tmp/foo" :trust-literal-p t))))
 
+  :doc "decision metadata distinguishes rule, mode, and one-shot asks"
+  (let ((mevedel-permission-rules nil))
+    (dolist (case '((edits nil nil mode)
+                    (full-auto (("Bash" :pattern "make *" :action ask)) nil rule)
+                    (full-auto nil t one-shot-mutation)))
+      (pcase-let ((`(,mode ,rules ,one-shot ,via) case))
+        (let ((decision
+               (mevedel-bash-policy-check-permission
+                "make test" :metadata-p t
+                :permission-context
+                (list :mode mode :buckets (list (cons :session rules))
+                      :one-shot-mutations-p one-shot))))
+          (should (eq (plist-get decision :outcome) 'ask))
+          (should (eq (plist-get decision :via) via))))))
+
   :doc "captured context fences ambient request and invocation authority"
   (let* ((session (mevedel-session--create :authority-mode 'pid-lock))
          (mevedel--current-request

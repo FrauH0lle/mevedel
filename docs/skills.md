@@ -208,6 +208,14 @@ different same-named skill. Hot reload may change content at the same source,
 and skill addresses retain their client-local origin rather than becoming
 execution-target paths. See [`address-to-resource.md`](address-to-resource.md#skill).
 
+The model-facing roster and `ListSkills` include the exact registered resource
+address for each file-backed entry. Package guidance directs source inspection
+to `Read` on that address and resource discovery to `Read("skill://")`, avoiding
+host-directory rediscovery for known skills. This does not invoke the skill;
+`Skill(name=...)` still prepares and invokes it. Disabled or stale resources
+retain the provider's normal validation, and raw skill development uses ordinary
+filesystem grants.
+
 Bare `skill://` listings also expose readable origin aliases alongside exact
 addresses: `skill://local-mevedel/SKILL`, `skill://local-agents/SKILL`,
 `skill://global-mevedel/SKILL`, `skill://global-agents/SKILL`,

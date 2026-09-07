@@ -275,11 +275,11 @@
       (delete-directory root t)
       (delete-directory outside t))))
 
-(mevedel-deftest mevedel-sandbox--git-pointer-target ()
+(mevedel-deftest mevedel-sandbox--git-pointer-targets ()
   ,test
   (test)
   :doc "Git directory pointer:
-`mevedel-sandbox--git-pointer-target' resolves a relative worktree target"
+`mevedel-sandbox--git-pointer-targets' resolves a relative worktree target"
   (let* ((root (make-temp-file "mevedel-sandbox-gitdir-" t))
          (checkout (file-name-concat root "checkout"))
          (metadata (file-name-concat root "metadata"))
@@ -291,8 +291,13 @@
           (with-temp-file pointer
             (insert "gitdir: ../metadata\n"))
           (should
-           (equal (mevedel-sandbox--git-pointer-target pointer)
-                  metadata)))
+           (equal (mevedel-sandbox--git-pointer-targets pointer)
+                  (list metadata)))
+          (with-temp-file (file-name-concat metadata "commondir")
+            (insert "..\n"))
+          (should
+           (equal (mevedel-sandbox--git-pointer-targets pointer)
+                  (list metadata root))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-sandbox--protected-candidates ()
@@ -659,11 +664,71 @@ a disabled transport cleans immediately instead of dropping work"
           (should (string-prefix-p "MEVEDEL_SANDBOX_STARTED_"
                                    (plist-get prepared :marker)))
           (should (plist-get prepared :facts)))
-      (delete-directory root t))))
+      (delete-directory root t)))
+  :doc "confined preparation refusal removes its synthetic protected directories"
+  (let* ((root (make-temp-file "mevedel-sandbox-refusal-" t))
+         (placeholder (file-name-concat root "protected-missing"))
+         (mevedel-protected-paths `((,(concat placeholder "/**") . inaccessible))))
+    (unwind-protect
+        (progn
+          (should-error
+           (mevedel-sandbox--confined-preparation
+            '("true") root (list root) "bwrap" t
+            (list :file-system (list (list :path root :access 'write))))
+           :type 'mevedel-sandbox-policy-error)
+          (should-not (file-exists-p placeholder)))
+      (delete-directory root t)))
+  :doc "recursive masked-parent grants remain effective while protecting nested children"
+  (let* ((mevedel-sandbox--probe-cache nil)
+         (availability (mevedel-sandbox-probe)))
+    (unless (plist-get availability :available)
+      (ert-skip (plist-get availability :reason)))
+    (let* ((parent (make-temp-file "mevedel-sandbox-masked-tree-" t))
+           (root (file-name-concat parent "workspace"))
+           (tree (file-name-concat parent "resource"))
+           (child (file-name-concat tree "restricted"))
+           (mevedel-protected-paths
+            `((,(concat tree "/**") . inaccessible)
+              (,(concat child "/**") . read-only))))
+      (unwind-protect
+          (progn
+            (make-directory root)
+            (make-directory child t)
+            (with-temp-file (file-name-concat tree "visible") (insert "visible contents\n"))
+            (dolist (access '(read write))
+              (let ((prepared
+                     (mevedel-sandbox--confined-preparation
+                      (list "sh" "-c"
+                            (concat "set -eu; cat \"$1/visible\"; "
+                                    "if touch \"$1/restricted/forbidden\" 2>/dev/null; then exit 71; fi; "
+                                    "if touch \"$1/allowed\" 2>/dev/null; then printf write; else printf read; fi")
+                            "fixture" tree)
+                      root (list root) (plist-get availability :executable)
+                      (plist-get availability :mount-proc)
+                      (list :file-system (list (list :path tree :access access :recursive t))))))
+                (unwind-protect
+                    (with-temp-buffer
+                      (should (zerop (apply #'process-file
+                                            (car (plist-get prepared :command)) nil t nil
+                                            (cdr (plist-get prepared :command)))))
+                      (should (string-match-p
+                               (concat "visible contents\n" (symbol-name access)) (buffer-string))))
+                  (mevedel-sandbox-cleanup prepared)))))
+        (delete-directory parent t)))))
 
 (mevedel-deftest mevedel-sandbox-prepare ()
   ,test
   (test)
+  :doc "preparation I/O errors cannot select unrestricted execution"
+  (let ((mevedel-sandbox-mode 'best-effort))
+    (cl-letf (((symbol-function 'mevedel-sandbox-probe)
+               (lambda (&rest _) '(:available t :executable "bwrap" :mount-proc t)))
+              ((symbol-function 'mevedel-sandbox--confined-preparation)
+               (lambda (&rest _) (signal 'file-error '("Grant target changed")))))
+      (let ((prepared (mevedel-sandbox-prepare '("true") temporary-file-directory nil)))
+        (should (eq 'refused (plist-get prepared :state)))
+        (should-not (plist-get prepared :command))
+        (should (string-match-p "Grant target changed" (plist-get prepared :error))))))
   :doc "full escalation:
 `mevedel-sandbox-prepare' bypasses the backend after explicit approval"
   (let ((mevedel-sandbox-mode 'required)
@@ -1030,7 +1095,7 @@ a granted symlink chain starts under the original confined command"
                      command root (list root)
                      `(:file-system ((:path ,link :access read)))))
               (should-not (plist-get prepared :error))
-              (should (equal command (plist-get prepared :original-command)))
+              (should (member link (plist-get prepared :command)))
               (should (member (file-truename target)
                               (plist-get prepared :command)))
               (setq output-buffer
@@ -1194,7 +1259,7 @@ the named protected files reopen while parent and sibling restrictions remain"
                      root (list root)
                      `(:file-system
                        ((:path ,(file-name-as-directory credentials)
-                         :access write)))))
+                         :access write :recursive t)))))
               (should
                (zerop
                 (apply #'call-process
@@ -1234,7 +1299,7 @@ a broad read grant keeps an inaccessible descendant masked"
                                    (shell-quote-argument secret)))
                      root (list root)
                      `(:file-system
-                       ((:path ,external :access read)))))
+                       ((:path ,external :access read :recursive t)))))
               (should
                (zerop
                 (apply #'call-process
@@ -1243,6 +1308,47 @@ a broad read grant keeps an inaccessible descendant masked"
           (mevedel-sandbox-cleanup prepared)
           (delete-directory external t)
           (delete-directory root t)))))
+  :doc "real file masks refuse reads and writes while preserving child stdin"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (let ((availability (mevedel-sandbox-probe)))
+      (unless (plist-get availability :available)
+        (ert-skip (plist-get availability :reason))))
+    (let* ((root (make-temp-file "mevedel-sandbox-file-masks-" t))
+           (first (file-name-concat root "first"))
+           (second (file-name-concat root "second"))
+           (mevedel-protected-paths
+            (list (cons first 'inaccessible) (cons second 'inaccessible)))
+           prepared)
+      (unwind-protect
+          (progn
+            (dolist (file (list first second))
+              (with-temp-file file (insert "protected contents")))
+            (setq prepared
+                  (mevedel-sandbox-prepare
+                   (list "sh" "-c"
+                         (concat "read -r line; test \"$line\" = 'child stdin' || exit 41; "
+                                 "for path in \"$@\"; do "
+                                 "if cat \"$path\" 2>/dev/null; then exit 42; fi; "
+                                 "if chmod 600 \"$path\" 2>/dev/null; then exit 43; fi; "
+                                 "done; printf 'mask enforcement complete' ")
+                         "masked-files" first second)
+                   root (list root)))
+            (should (eq 'confined (plist-get prepared :state)))
+            (with-temp-buffer
+              (insert "child stdin\n")
+              (should (zerop
+                       (apply #'call-process-region
+                              (point-min) (point-max)
+                              (car (plist-get prepared :command)) t t nil
+                              (cdr (plist-get prepared :command)))))
+              (should (string-match-p "mask enforcement complete" (buffer-string))))
+            (dolist (file (list first second))
+              (with-temp-buffer
+                (insert-file-contents file)
+                (should (equal "protected contents" (buffer-string))))))
+        (mevedel-sandbox-cleanup prepared)
+        (delete-directory root t))))
   :doc "real protected paths:
 `mevedel-sandbox-prepare' keeps Git readable, hides credentials, and guards missing roots"
   (let ((mevedel-sandbox-mode 'required)
@@ -1335,7 +1441,7 @@ a broad read grant keeps an inaccessible descendant masked"
   ,test
   (test)
   :doc "pre-exec failure:
-`mevedel-sandbox-launch-failed-p' permits fallback only before the marker"
+`mevedel-sandbox-launch-failed-p' identifies failures before the marker"
   (let ((preparation '(:state confined :marker "private-start-marker")))
     (should (mevedel-sandbox-launch-failed-p
              preparation '(:exit-code 125 :timed-out-p nil :output "failed")))
@@ -1357,13 +1463,12 @@ a broad read grant keeps an inaccessible descendant masked"
   ,test
   (test)
   :doc "exact-grant failure marker:
-the real marker script emits its private marker, refuses the child, and blocks
-best-effort fallback after an exact-grant replacement"
+the real grant refusal does not claim that the requested command started"
   (let* ((root (make-temp-file "mevedel-sandbox-marker-" t))
          (side-effect (file-name-concat root "executed"))
          (marker "MEVEDEL_SANDBOX_STARTED_test")
          (output-buffer (generate-new-buffer " *mevedel-sandbox-marker*"))
-         exit-code child-result preparation fallback-called)
+         exit-code child-result preparation)
     (unwind-protect
         (progn
           (let ((process-environment
@@ -1381,18 +1486,13 @@ best-effort fallback after an exact-grant replacement"
                       :timed-out-p nil
                       :output (with-current-buffer output-buffer
                                 (buffer-string)))
-                preparation (list :state 'confined :marker marker
-                                  :fallback-p t))
+                preparation (list :state 'confined :marker marker))
           (should (= 125 exit-code))
-          (should
+          (should-not
            (member marker
                    (split-string (plist-get child-result :output) "\n" t)))
           (should-not (file-exists-p side-effect))
-          (should-not
-           (mevedel-sandbox-launch-failed-p preparation child-result))
-          (when (mevedel-sandbox-launch-failed-p preparation child-result)
-            (setq fallback-called t))
-          (should-not fallback-called))
+          (should (mevedel-sandbox-launch-failed-p preparation child-result)))
       (when (buffer-live-p output-buffer)
         (kill-buffer output-buffer))
       (delete-directory root t))))
@@ -1451,7 +1551,9 @@ best-effort fallback after an exact-grant replacement"
       (let ((cached (alist-get nil mevedel-sandbox--probe-cache)))
         (should-not (plist-get cached :available))
         (should (plist-get cached :retry-on-execution)))
-      (should (eq (plist-get facts :sandbox) 'unavailable))
+      (should (eq (plist-get facts :sandbox) 'refused))
+      (should (plist-get facts :refused))
+      (should (eq (plist-get facts :filesystem) 'unavailable))
       (should (string-match-p "backend refused" (plist-get facts :reason)))))
   :doc "empty backend output:
 `mevedel-sandbox--record-launch-failure' retains the Bubblewrap exit code"

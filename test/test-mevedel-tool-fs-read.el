@@ -11,6 +11,7 @@
 (require 'mevedel-tool-fs-read)
 (require 'mevedel-agents)
 (require 'mevedel-execution)
+(require 'mevedel-sandbox)
 (require 'mevedel-reminders)
 (require 'mevedel-system)
 (require 'mevedel-view)
@@ -943,16 +944,17 @@
   :doc "errors when PDF page extraction needs missing pdftoppm"
   (let ((tmp (make-temp-file "mevedel-test-" nil ".pdf" "%PDF-1.4\n")))
     (unwind-protect
-        (let ((orig-executable-find (symbol-function 'executable-find)))
+        (let ((orig-executable-find (symbol-function 'executable-find))
+              (mevedel-sandbox--probe-cache nil))
           (cl-letf (((symbol-function 'gptel--model-capable-p)
                      (lambda (cap &optional _model) (eq cap 'media)))
                     ((symbol-function 'gptel--model-mime-capable-p)
                      (lambda (_mime &optional _model) t))
 
                     ((symbol-function 'executable-find)
-                     (lambda (cmd)
+                     (lambda (cmd &optional remote)
                        (and (not (equal cmd "pdftoppm"))
-                            (funcall orig-executable-find cmd)))))
+                            (funcall orig-executable-find cmd remote)))))
             (let ((err (should-error
                         (mevedel-tool-fs-read--file
                          (list :file_path tmp :pages "1"))

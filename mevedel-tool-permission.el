@@ -326,6 +326,9 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
          (entry
           (append
            (list :tool-use-id (plist-get context :tool-use-id)
+                 :data-buffer (plist-get context :buffer)
+                 :request (plist-get context :request)
+                 :invocation (plist-get context :invocation)
                  :parent-tool-use-id
                  (plist-get context :parent-tool-use-id)
                  :call-source (plist-get context :call-source))
@@ -402,6 +405,14 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                (mevedel-tool-permission-log-decision
                 updated ask-decision))
              (let ((queued (copy-sequence entry)))
+               (setq queued
+                     (plist-put queued :permission-via
+                                (cond
+                                 ((eq permission-decision 'ask) 'permission-request-hook)
+                                 ((eq (plist-get context :hook-permission-decision) 'ask)
+                                  'pre-tool-hook)
+                                 (ask-decision (plist-get ask-decision :via))
+                                 (t (plist-get entry :permission-via)))))
                (when-let* ((request (plist-get context :request)))
                  (setq queued
                        (plist-put queued :request-id
@@ -410,6 +421,12 @@ FALLBACK-OUTCOME settles an unresolved request without queue admission."
                      (plist-put
                       queued :callback
                       (lambda (outcome)
+                        (when (memq outcome '(allow-once allow-session always-allow))
+                          (setq updated
+                                (plist-put updated :approved-resources
+                                           (copy-tree
+                                            (car (plist-get queued
+                                                            :resource-selection-cell))))))
                         (funcall
                          settle
                          (if (mevedel-tool-permission--denial-outcome-p
@@ -689,7 +706,11 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
                    '(protected-path workspace-boundary)))
             (resource-access
              (and resource-decision-p
-                  (plist-get permission-context :resource-access))))
+                  (plist-get permission-context :resource-access)))
+            (resource-selection
+             (and resource-access (eq rule-key :path)
+                  (list (list (list :path rule-value
+                                    :access resource-access))))))
        (mevedel-tool-permission--request
         context
         (list :kind 'generic
@@ -701,6 +722,9 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
               :protected-path
               (eq (plist-get decision-metadata :via) 'protected-path)
               :resource-access resource-access
+              :permission-mode-effective (plist-get permission-context :mode)
+              :resource-selection-cell resource-selection
+              :resource-originals (copy-tree (car resource-selection))
               :include-always
               (plist-get permission-context :include-always)
               :workspace workspace
@@ -708,16 +732,26 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
         session
         (lambda (prompt-context prompt-outcome)
           (condition-case err
-              (let ((collapsed
+              (let* ((selected (caar resource-selection))
+                     (approve-p (memq prompt-outcome
+                                      '(allow-once allow-session always-allow)))
+                     (collapsed
                      (pcase prompt-outcome
                        ((or 'allow-once 'allow-session 'always-allow
                             'deny-once 'deny-session)
                         (mevedel-permission--apply-prompt-result
                          prompt-outcome rule-tool session workspace
-                         (and (eq rule-key :path) rule-value)
+                         (if (and approve-p selected)
+                             (plist-get selected :path)
+                           (and (eq rule-key :path) rule-value))
                          :spec-key rule-key
                          :spec-value rule-value
-                         :resource-access resource-access))
+                         :resource-access
+                         (if (and approve-p selected)
+                             (plist-get selected :access)
+                           resource-access)
+                         :resource-recursive
+                         (and approve-p (plist-get selected :recursive))))
                        ((or 'allow 'deny 'aborted) prompt-outcome)
                        (other other))))
                 (mevedel-tool-permission--dispatch-outcome

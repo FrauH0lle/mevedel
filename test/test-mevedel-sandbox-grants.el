@@ -251,12 +251,11 @@ exact-grant preparation refuses when the target cannot inspect descriptors"
     (skip-unless (not (eq system-type 'windows-nt)))
     (should
      (equal
-      '("--ro-bind" "/dev/null" "/other" "--chmod" "000" "/other"
+      '("--perms" "000" "--ro-bind-data" "12" "/other"
         "--perms" "0111" "--tmpfs" "/protected")
       (mevedel-sandbox--open-granted-paths
-       '("--ro-bind" "/dev/null" "/protected/link"
-         "--chmod" "000" "/protected/link"
-         "--ro-bind" "/dev/null" "/other" "--chmod" "000" "/other"
+       '("--perms" "000" "--ro-bind-data" "11" "/protected/link"
+         "--perms" "000" "--ro-bind-data" "12" "/other"
          "--perms" "000" "--tmpfs" "/protected")
        '(:file-system
          ((:source-path "/protected/link"

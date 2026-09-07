@@ -643,7 +643,7 @@ the Bash tool path because Bash had its own flattened resolver."
 
 (cl-defun mevedel-bash-policy-check-permission
     (command &key trust-literal-p ignore-effective-trust-p
-             permission-context)
+             permission-context metadata-p)
   "Decide Bash permission for COMMAND and PERMISSION-CONTEXT.
 
 Rules come from invocation, request, session, persistent, and
@@ -662,6 +662,9 @@ win, then unknown, dangerous, and complex Bash invocations are allowed.
 When IGNORE-EFFECTIVE-TRUST-P is non-nil, `full-auto' is ignored; this
 is used by the guardian to decide whether a command would have been
 suspicious under the normal classifier.
+
+With METADATA-P, return decision metadata with the determining cause instead
+of the outcome symbol.
 
 Bucket-aware: delegated invocation and request rules may authorize ordinary
 unknown commands, but only session, persistent, and global user rules may
@@ -692,49 +695,57 @@ authorize dangerous or complex syntax."
            (lambda (segment)
              (plist-get (mevedel-bash-analysis-analyze segment) :class))
            segments)))
-    (when (mevedel-bash-policy-explicit-deny-p buckets command analysis)
-      (cl-return-from mevedel-bash-policy-check-permission 'deny))
+    (cl-flet ((decide (outcome via)
+                (if metadata-p
+                    (mevedel-permission--decision outcome via)
+                  outcome)))
+      (when (mevedel-bash-policy-explicit-deny-p buckets command analysis)
+        (cl-return-from mevedel-bash-policy-check-permission
+          (decide 'deny 'rule)))
 
-    (when (and (mevedel-permission--plan-mode-p
-                (plist-get permission-context :session))
-               (not (eq class 'read-only)))
-      (cl-return-from mevedel-bash-policy-check-permission 'deny))
+      (when (and (mevedel-permission--plan-mode-p
+                  (plist-get permission-context :session))
+                 (not (eq class 'read-only)))
+        (cl-return-from mevedel-bash-policy-check-permission
+          (decide 'deny 'plan-mode)))
 
-    (when (and (not (plist-get permission-context
-                               :resource-authority-separated-p))
-               (mevedel-bash-policy--bash-protected-path-p
-                command analysis permission-context))
-      (cl-return-from mevedel-bash-policy-check-permission 'ask))
+      (when (and (not (plist-get permission-context
+                                 :resource-authority-separated-p))
+                 (mevedel-bash-policy--bash-protected-path-p
+                  command analysis permission-context))
+        (cl-return-from mevedel-bash-policy-check-permission
+          (decide 'ask 'protected-path)))
 
-    (when (and (plist-get permission-context :one-shot-mutations-p)
-               (not (eq class 'read-only)))
-      (cl-return-from mevedel-bash-policy-check-permission 'ask))
+      (when (and (plist-get permission-context :one-shot-mutations-p)
+                 (not (eq class 'read-only)))
+        (cl-return-from mevedel-bash-policy-check-permission
+          (decide 'ask 'one-shot-mutation)))
 
-    (cond
-     ((eq (car full-match) 'ask) 'ask)
-     ((memq 'deny segment-actions) 'deny)
-     ((memq 'ask segment-actions) 'ask)
-     ((and (memq class '(dangerous complex))
-           (eq (car direct-match) 'allow))
-      'allow)
-     ((and (eq class 'dangerous)
-           segments
-           (cl-loop for action in direct-segment-actions
-                    for segment-class in segment-classes
-                    always (or (eq action 'allow)
-                               (eq segment-class 'read-only))))
-      'allow)
-     ((memq class '(dangerous complex))
-      (if full-auto-p 'allow 'ask))
-     ((and segments (cl-every (lambda (action) (eq action 'allow))
-                              segment-actions))
-      'allow)
-     ((eq class 'read-only)
-      (if (memq 'ask segment-actions) 'ask 'allow))
-     ((eq (car full-match) 'allow) 'allow)
-     ((eq (car full-match) 'deny) 'deny)
-     (full-auto-p 'allow)
-     (t 'ask))))
+      (cond
+       ((eq (car full-match) 'ask) (decide 'ask 'rule))
+       ((memq 'deny segment-actions) (decide 'deny 'rule))
+       ((memq 'ask segment-actions) (decide 'ask 'rule))
+       ((and (memq class '(dangerous complex))
+             (eq (car direct-match) 'allow))
+        (decide 'allow 'rule))
+       ((and (eq class 'dangerous)
+             segments
+             (cl-loop for action in direct-segment-actions
+                      for segment-class in segment-classes
+                      always (or (eq action 'allow)
+                                 (eq segment-class 'read-only))))
+        (decide 'allow 'rule))
+       ((memq class '(dangerous complex))
+        (decide (if full-auto-p 'allow 'ask) 'mode))
+       ((and segments (cl-every (lambda (action) (eq action 'allow))
+                                segment-actions))
+        (decide 'allow 'rule))
+       ((eq class 'read-only)
+        (decide 'allow 'read-only))
+       ((eq (car full-match) 'allow) (decide 'allow 'rule))
+       ((eq (car full-match) 'deny) (decide 'deny 'rule))
+       (full-auto-p (decide 'allow 'mode))
+       (t (decide 'ask 'mode))))))
 
 
 ;;

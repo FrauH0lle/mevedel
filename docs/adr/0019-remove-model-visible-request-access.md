@@ -9,3 +9,14 @@ persistent scopes.  Keep the manual project-root commands for deliberate broad
 user configuration.  If proactive model permission requests later prove
 necessary, add a generalized adapter over the shared grant interface rather
 than restoring a parallel directory-access system.
+
+The September 2026 session audit showed that ordinary exact-path prompts were
+not a sufficient directory workflow: one external design folder needed two
+search approvals and thirteen file-read approvals. The existing permission
+card now offers exact-resource or containing-directory-tree selection through
+`g`, with explicit read/write access and an independent invocation, session,
+or workspace lifetime. Native tools and additive execution use the shared
+grant store; remembered tree approval rechecks covered queued requests across
+the agent tree while preserving hook asks and other policy. This replaces the
+removed directory workflow without restoring a model-visible RequestAccess
+tool or a second permission system.

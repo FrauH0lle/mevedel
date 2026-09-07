@@ -26,10 +26,8 @@
                   "mevedel-agent-control" (session path activity))
 (autoload 'mevedel-agent-control-block-turn "mevedel-agent-control")
 
-;; `mevedel-bash-policy'
-(declare-function mevedel-bash-policy-check-permission
-                  "mevedel-bash-policy" (command &rest keys))
-(autoload 'mevedel-bash-policy-check-permission "mevedel-bash-policy")
+;; `mevedel-agents'
+(defvar mevedel--agent-invocation)
 
 ;; `mevedel-permission-prompt'
 (declare-function mevedel-permission--prompt-async-attributed
@@ -50,18 +48,6 @@
 (autoload 'mevedel-permission--prompt-async-sandbox
   "mevedel-permission-prompt")
 
-;; `mevedel-permission-rules'
-(declare-function mevedel-permission-rules-bucket-decision
-                  "mevedel-permission-rules"
-                  (buckets tool-name path pattern domain name))
-(declare-function mevedel-permission-rules-resource-granted-p
-                  "mevedel-permission-rules"
-                  (path access grants &optional recursive))
-(autoload 'mevedel-permission-rules-bucket-decision
-  "mevedel-permission-rules")
-(autoload 'mevedel-permission-rules-resource-granted-p
-  "mevedel-permission-rules")
-
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission
                   "mevedel-permissions" (tool-name &rest args))
@@ -69,9 +55,12 @@
                   "mevedel-permissions" (context))
 (declare-function mevedel-permission--invocation-context
                   "mevedel-permissions" (&rest args))
+(declare-function mevedel-permission--normalize-outcome
+                  "mevedel-permissions" (outcome))
 (autoload 'mevedel-check-permission "mevedel-permissions")
 (autoload 'mevedel-permission--checker-args "mevedel-permissions")
 (autoload 'mevedel-permission--invocation-context "mevedel-permissions")
+(autoload 'mevedel-permission--normalize-outcome "mevedel-permissions")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-assert-new-mutation-authority
@@ -83,6 +72,7 @@
 (declare-function mevedel-session-control-transfer
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 
 ;; `mevedel-telemetry'
@@ -94,27 +84,20 @@
 (autoload 'mevedel-telemetry-record-audit "mevedel-telemetry")
 
 ;; `mevedel-tool-exec-permission'
-(declare-function mevedel-tool-exec-permission-full-escalation-rule-decision
-                  "mevedel-tool-exec-permission"
-                  (tool-name detail buckets level))
 (declare-function mevedel-tool-exec-permission-prompt-eval
                   "mevedel-tool-exec-permission"
                   (expression callback &optional origin count entry
                               mode preserve-ui))
-(autoload 'mevedel-tool-exec-permission-full-escalation-rule-decision
-  "mevedel-tool-exec-permission")
+(declare-function mevedel-tool-exec-permission-reevaluate
+                  "mevedel-tool-exec-permission" (entry context))
 (autoload 'mevedel-tool-exec-permission-prompt-eval
   "mevedel-tool-exec-permission")
+(autoload 'mevedel-tool-exec-permission-reevaluate "mevedel-tool-exec-permission")
 
 ;; `mevedel-utilities'
 (declare-function mevedel--warn-once
                   "mevedel-utilities" (key format &rest args))
 (autoload 'mevedel--warn-once "mevedel-utilities")
-
-;; `mevedel-workspace'
-(declare-function mevedel--all-allowed-roots
-                  "mevedel-workspace" (&optional buffer))
-(autoload 'mevedel--all-allowed-roots "mevedel-workspace")
 
 (defcustom mevedel-permission-notify-function nil
   "Function called when an interactive permission card enters the queue.
@@ -188,10 +171,20 @@ SESSION defaults to the current session."
 
 (defun mevedel-permission-queue--safe-settle (entry outcome phase)
   "Settle ENTRY once with OUTCOME during PHASE.
+PHASE is the settlement source symbol recorded in the permission log.
 Return non-nil when this call delivered or consumed the outcome."
   (let ((cell (mevedel-permission-queue--ensure-settled-cell entry)))
     (unless (car cell)
       (setcar cell t)
+      (apply #'mevedel-permission-queue--log
+             (pcase phase
+               ('pop 'permission-resolved)
+               ('coalesced 'permission-coalesced)
+               ('sweep 'permission-swept)
+               (_ 'permission-aborted))
+             entry nil :outcome outcome :settlement-source phase
+             (when (eq phase 'coalesced)
+               (list :resolved (if (memq outcome '(allow allow-once)) 'allow 'deny))))
       (unwind-protect
           (condition-case err
               (when-let* ((callback (plist-get entry :callback)))
@@ -211,7 +204,8 @@ Return non-nil when this call delivered or consumed the outcome."
      ((eq source 'ptc)
       (let ((parent (plist-get entry :parent-tool-use-id))
             (child (plist-get entry :tool-use-id)))
-        (format "ToolCall %s%s"
+        (format "%sToolCall %s%s"
+                (if (equal origin "/root") "" (concat origin ": "))
                 (or parent "script")
                 (if child (format " (child %s)" child) ""))))
      ((not (equal origin "/root")) origin))))
@@ -219,11 +213,18 @@ Return non-nil when this call delivered or consumed the outcome."
 (defun mevedel-permission-queue--log-props (entry &rest props)
   "Return sanitized permission diagnostic properties for ENTRY plus PROPS."
   (let ((base nil))
+    (when (plist-member props :outcome)
+      (setq props
+            (plist-put (copy-sequence props) :outcome
+                       (mevedel-permission--normalize-outcome
+                        (plist-get props :outcome)))))
     (dolist (key '(:kind :tool-name :specifier-key :specifier-value
                    :protected-path :resource-path :resource-access
                    :origin :tool-use-id :parent-tool-use-id :call-source
-                   :command-class
-                   :mode :commands-summary :sandbox-permissions
+                   :command-class :request-id :permission-id
+                   :permission-mode-base :permission-mode-effective
+                   :resource-originals :permission-via
+                   :commands-summary :sandbox-permissions
                    :additional-permissions
                    :requested-additional-permissions
                    :missing-additional-permissions
@@ -231,6 +232,20 @@ Return non-nil when this call delivered or consumed the outcome."
                    :justification))
       (when (plist-member entry key)
         (setq base (plist-put base key (plist-get entry key)))))
+    ;; Only batch Eval reaches the child-confinement capability card.
+    (when-let* ((eval-mode
+                 (pcase (plist-get entry :kind)
+                   ('eval (plist-get entry :mode))
+                   ('sandbox (and (equal (plist-get entry :tool-name) "Eval") "batch")))))
+      (setq base (plist-put base :eval-mode eval-mode)))
+    (when-let* ((selection (car (plist-get entry :resource-selection-cell))))
+      (setq base (plist-put base :selected-resources (copy-tree selection))))
+    (when-let* ((lifetime
+                 (pcase (plist-get props :outcome)
+                   ('allow-once 'invocation)
+                   ('allow-session 'session)
+                   ('always-allow 'workspace))))
+      (setq base (plist-put base :approval-lifetime lifetime)))
     (when-let* ((id (mevedel-queue--entry-metadata-get
                     entry :interaction-id)))
       (setq base (plist-put base :interaction-id id)))
@@ -241,26 +256,26 @@ Return non-nil when this call delivered or consumed the outcome."
   (when-let* ((sess (or session
                         (plist-get entry :session)
                         (mevedel-permission-queue--current-session))))
-    (let ((queue-depth
-           (+ (length (mevedel-session-permission-queue sess))
-              (if (eq event 'permission-enqueued) 1 0))))
-      (apply #'mevedel-permission-log
-             sess event
-             (apply #'mevedel-permission-queue--log-props
-                    entry :queue-depth queue-depth props))
+    (let* ((queue-depth
+            (+ (length (mevedel-session-permission-queue sess))
+               (if (eq event 'permission-enqueued) 1 0)))
+           (diagnostic
+            (apply #'mevedel-permission-queue--log-props
+                   entry :queue-depth queue-depth props)))
+      (apply #'mevedel-permission-log sess event diagnostic)
       ;; Queue entries retain exact resources and human explanations for the
       ;; transient interaction.  Only this fixed categorical subset may cross
       ;; into a distinct durable session's unified telemetry.
       (when (mevedel-telemetry-forwarded-audit-p sess)
         (let ((safe (list :queue-depth queue-depth)))
           (dolist (key '(:kind :tool-name :specifier-key :protected-path
-                         :resource-access :origin :command-class :mode
+                         :resource-access :origin :command-class
+                         :permission-id :permission-mode-base :permission-mode-effective
+                         :permission-via :approval-lifetime :eval-mode
+                         :outcome :resolved :settlement-source
                          :sandbox-permissions))
-            (when (plist-member entry key)
-              (setq safe (plist-put safe key (plist-get entry key)))))
-          (dolist (key '(:outcome :resolved))
-            (when (plist-member props key)
-              (setq safe (plist-put safe key (plist-get props key)))))
+            (when (plist-member diagnostic key)
+              (setq safe (plist-put safe key (plist-get diagnostic key)))))
           (apply #'mevedel-telemetry-record-audit sess event safe))))))
 
 (defun mevedel-permission--enqueue (entry &optional session)
@@ -301,6 +316,13 @@ ENTRY plist keys:
     (unless (mevedel-agent-path-p origin)
       (error "Invalid permission queue origin: %S" origin)))
   (let ((session (or session (mevedel-permission-queue--current-session))))
+    (setq entry
+          (append
+           (list :permission-id (format "%s-%s" (format-time-string "%s%N")
+                                        (gensym "permission-"))
+                 :permission-mode-base
+                 (and session (mevedel-session-permission-mode session)))
+           entry))
     ;; A permission entry without a request id starts new work.  Entries
     ;; attached to an already-live request are allowed to settle while the
     ;; owner drains for cooperative transfer.
@@ -330,7 +352,7 @@ ENTRY plist keys:
                  'permission-queue-no-session
                  "permission-queue: enqueue with no session")
                 (mevedel-permission-queue--safe-settle
-                 entry 'aborted "no-session"))
+                 entry 'aborted 'no-session))
             (setq entry (plist-put entry :session session))
             (mevedel-permission-queue--ensure-settled-cell entry)
             (mevedel-permission-queue--set
@@ -355,14 +377,7 @@ Used by the permission queue's head renderer."
     ('bash (mevedel-permission-queue--render-bash entry))
     ('eval (mevedel-permission-queue--render-eval entry))
     ('sandbox (mevedel-permission-queue--render-sandbox entry))
-    (_
-     (mevedel--warn-once
-      'permission-queue-unknown-kind
-      "permission-queue: unknown :kind %S, dropping"
-      (plist-get entry :kind))
-     (let ((cb (plist-get entry :callback)))
-       (when (functionp cb)
-         (condition-case _ (funcall cb 'aborted) (error nil)))))))
+    (_ (error "Unknown permission card kind: %s" (plist-get entry :kind)))))
 
 (defun mevedel-permission-queue--render-head (&optional session)
   "Render the current head of SESSION's permission queue.
@@ -381,16 +396,17 @@ Dispatches on entry's `:kind' via `--render-entry'."
         (pcase (plist-get head :kind)
           ('bash '(deny . "Bash permission UI unavailable"))
           ('sandbox '(deny . "Additional permission UI unavailable"))
-          (_ 'aborted)))))))
+          (_ 'aborted))
+        'render-failed)))))
 
-(defun mevedel-permission-queue--pop (entry outcome)
+(defun mevedel-permission-queue--pop (entry outcome &optional phase)
   "Settle queue head ENTRY with OUTCOME and render the next head."
   (let* ((session (plist-get entry :session))
          (queue (and session (mevedel-permission-queue--get session)))
          (head (car queue)))
     (cond
      ((not session)
-      (mevedel-permission-queue--safe-settle entry outcome "pop"))
+      (mevedel-permission-queue--safe-settle entry outcome (or phase 'pop)))
      ((not (or (eq entry head)
                (mevedel-permission-queue--same-interaction-entry-p
                 entry head)))
@@ -400,7 +416,7 @@ Dispatches on entry's `:kind' via `--render-entry'."
      (t
       (setq entry head)
       (mevedel-permission-queue--set (cdr queue) session)
-      (when (mevedel-permission-queue--safe-settle entry outcome "pop")
+      (when (mevedel-permission-queue--safe-settle entry outcome (or phase 'pop))
         (when (memq outcome '(allow-session deny-session always-allow))
           (condition-case err
               (mevedel-permission-queue--coalesce outcome session)
@@ -485,16 +501,14 @@ Coalesce on rule-creating outcomes (`allow-session',
 Uses the session reference captured on ENTRY at enqueue time
 rather than reading the ambient `mevedel--session', so settlement
 runs correctly regardless of which buffer fired the keypress."
-  (mevedel-permission-queue--log
-   'permission-resolved entry nil :outcome outcome)
-  (mevedel-permission-queue--pop entry outcome))
+  (mevedel-permission-queue--pop
+   entry outcome (if (eq outcome 'aborted) 'cancelled 'pop)))
 
 (defun mevedel-permission-queue--translate-coalesce-outcome (kind resolved)
   "Translate RESOLVED (`'allow' / `'deny') into the vocabulary KIND expects.
-Generic entries and Bash adapters can consume `'allow' / `'deny'
-from coalescing directly.  Eval does not coalesce because Eval
-always asks, but keep a defensive mapping to its authoritative
-queue vocabulary."
+Generic entries and Bash adapters consume `'allow' / `'deny' directly.
+Eval and sandbox adapters use their one-invocation outcome vocabulary;
+the covering authority has already been stored by another approval."
   (pcase kind
     ((or 'generic 'bash)
      ;; The pipeline's wrapper at mevedel-pipeline.el handles
@@ -523,169 +537,85 @@ while deny rules remain final."
         (if (eq resolved 'ask)
             (push entry kept)
           (push
-           (list entry resolved
+           (list entry
                  (mevedel-permission-queue--translate-coalesce-outcome
                   (plist-get entry :kind) resolved))
            settled))))
     ;; Remove every resolved entry before callbacks can reenter queue teardown.
     (mevedel-permission-queue--set (nreverse kept) session)
     (dolist (item (nreverse settled))
-      (pcase-let ((`(,entry ,resolved ,outcome) item))
-        (mevedel-permission-queue--log
-         'permission-coalesced entry session
-         :resolved resolved :outcome outcome)
+      (pcase-let ((`(,entry ,outcome) item))
         (mevedel-permission-queue--safe-settle
-         entry outcome "coalesced")))))
+         entry outcome 'coalesced)))))
 
 (defun mevedel-permission-queue--reevaluate (entry)
-  "Re-evaluate ENTRY through the decision chain with current rules.
-Return one of `allow' / `deny' / `ask'.
-
-Dispatches on `:kind' (generic/bash/eval/sandbox).
-
-Critical: `mevedel-check-permission' consumes session-rules,
-persistent-rules, mode, and workspace-root via keyword args; it
-does not read `mevedel--session'.  An earlier draft only bound
-`mevedel--session' inside this function and the just-created
-session rule was invisible to queued sibling re-evaluation --
-the FIFO queue's central rule-coalescing was effectively a
-no-op.  This function now extracts the rule context from the
-entry's captured :session and passes it explicitly.
-
-For Bash, the entry's captured execution directory remains part of the
-re-evaluation context."
-  (let* ((session (plist-get entry :session))
-         (workspace
-          (and session (mevedel-session-workspace session)))
-         (allowed-roots
-          (when (and workspace (fboundp 'mevedel--all-allowed-roots))
-            (ignore-errors (mevedel--all-allowed-roots))))
-         (mevedel--session (or session
-                               (and (boundp 'mevedel--session)
-                                    mevedel--session))))
-    (pcase (plist-get entry :kind)
-      ('generic
-       (let ((tool-name (plist-get entry :tool-name))
-             (spec-key (or (plist-get entry :specifier-key) :path))
-             (spec-value (plist-get entry :specifier-value)))
-         (condition-case _err
-             (let ((context
-                    (mevedel-permission--invocation-context
-                     :tool-name tool-name
-                     :session session
-                     :workspace workspace
-                     :allowed-roots allowed-roots
-                     :path (and (eq spec-key :path) spec-value)
-                     :pattern (and (eq spec-key :pattern) spec-value)
-                     :domain (and (eq spec-key :domain) spec-value)
-                     :name (and (eq spec-key :name) spec-value))))
-               (when-let* ((access (plist-get entry :resource-access)))
-                 (setq context
-                       (plist-put context :resource-access access)))
-               (apply #'mevedel-check-permission
-                      tool-name
-                      (mevedel-permission--checker-args context)))
-           (error 'ask))))
-      ('bash
-       (let* ((command (plist-get entry :command))
-              (context
-               (mevedel-permission--invocation-context
-                :tool-name "Bash"
-                :session session
-                :workspace workspace
-                :allowed-roots allowed-roots
-                :pattern command))
-              (context
-               (plist-put context :execution-directory
-                          (plist-get entry :execution-directory)))
-              (rule-decision
-               (condition-case _err
-                   (apply #'mevedel-check-permission
-                          "Bash"
-                          (mevedel-permission--checker-args context))
-                 (error 'ask))))
-         (cond
-          ((eq rule-decision 'deny) 'deny)
-          ((eq rule-decision 'allow)
-           (let ((safety
-                  (condition-case _err
-                      (mevedel-bash-policy-check-permission
-                       command :trust-literal-p nil
-                       :permission-context context)
-                    (error 'ask))))
-             (if (memq safety '(allow deny)) safety 'ask)))
-          (t 'ask))))
-      ('sandbox
-       (if (eq (plist-get entry :sandbox-permissions) 'require-escalated)
-           (let* ((tool-name (plist-get entry :tool-name))
-                  (detail (plist-get entry :detail))
-                  (context
-                   (mevedel-permission--invocation-context
-                    :tool-name tool-name
-                    :session session
-                    :workspace workspace
-                    :pattern detail))
-                  (buckets (plist-get context :buckets))
-                  (level-action
-                   (mevedel-tool-exec-permission-full-escalation-rule-decision
-                    tool-name detail buckets 'require-escalated)))
-             (cond
-              ((eq level-action 'deny) 'deny)
-              ((eq level-action 'allow) 'allow)
-              (t 'ask)))
-         (let* ((missing
-                 (plist-get entry :missing-additional-permissions))
-                (network (plist-get missing :network))
-                (resources
-                 (or (plist-get missing :file-system)
-                     (when-let* ((path (plist-get entry :resource-path))
-                                 (access (plist-get entry :resource-access)))
-                       (list (list :path path :access access)))))
-                (tool-name (plist-get entry :tool-name))
-                decisions)
-           (dolist (resource resources)
-             (let* ((path (plist-get resource :path))
-                    (access (plist-get resource :access))
-                    (context
-                     (plist-put
-                      (mevedel-permission--invocation-context
-                       :tool-name tool-name
-                       :session session
-                       :workspace workspace
-                       :path path)
-                      :resource-access access))
-                    (rule-action
-                     (mevedel-permission-rules-bucket-decision
-                      (plist-get context :buckets)
-                      tool-name path nil nil nil)))
-               (push
-                (cond
-                 ((memq rule-action '(deny ask)) rule-action)
-                 ((mevedel-permission-rules-resource-granted-p
-                   path access (plist-get context :resource-grants)
-                   (plist-get resource :recursive))
-                  'allow)
-                 (t 'ask))
-                decisions)))
-           (cond
-            ((memq 'deny decisions) 'deny)
-            ((or network (memq 'ask decisions) (null decisions)) 'ask)
-            (t 'allow)))))
-      ('eval 'ask)
-      (_ 'ask))))
+  "Re-evaluate ENTRY with current policy and its captured invocation facts.
+Return `allow', `deny', or `ask'.  Execution's policy owner checks operation
+and complete capability authority together.  Hooks and one-shot restrictions
+cannot be cleared by a remembered sibling approval."
+  (condition-case _err
+      (with-current-buffer (if (buffer-live-p (plist-get entry :data-buffer))
+                               (plist-get entry :data-buffer)
+                             (current-buffer))
+        (let* ((session (plist-get entry :session))
+               (mevedel--session session)
+               (mevedel--current-request (plist-get entry :request))
+               (mevedel--agent-invocation (plist-get entry :invocation))
+               (kind (plist-get entry :kind))
+               (tool-name (pcase kind
+                            ('bash "Bash")
+                            ('eval "Eval")
+                            (_ (plist-get entry :tool-name))))
+               (spec-key (if (eq kind 'generic)
+                             (or (plist-get entry :specifier-key) :path)
+                           :pattern))
+               (spec-value (if (eq kind 'generic)
+                               (plist-get entry :specifier-value)
+                             (or (plist-get entry :command)
+                                 (plist-get entry :expression)
+                                 (plist-get entry :detail))))
+               (context
+                (mevedel-permission--invocation-context
+                 :tool-name tool-name :session session
+                 :workspace (and session (mevedel-session-workspace session))
+                 :buffer (plist-get entry :data-buffer)
+                 :request (plist-get entry :request)
+                 :invocation (plist-get entry :invocation)
+                 :args (plist-get entry :args)
+                 :one-shot-mutations-p (plist-get entry :once-only)
+                 :path (and (eq spec-key :path) spec-value)
+                 :pattern (and (eq spec-key :pattern) spec-value)
+                 :domain (and (eq spec-key :domain) spec-value)
+                 :name (and (eq spec-key :name) spec-value))))
+          (setq context (plist-put context :execution-directory
+                                   (plist-get entry :execution-directory)))
+          (when-let* ((access (plist-get entry :resource-access)))
+            (setq context (plist-put context :resource-access access)))
+          (let ((resolved
+                 (pcase kind
+                   ('generic
+                    (apply #'mevedel-check-permission tool-name
+                           (mevedel-permission--checker-args context)))
+                   ((or 'bash 'eval 'sandbox)
+                    (mevedel-tool-exec-permission-reevaluate entry context))
+                   (_ 'ask))))
+            (if (and (eq resolved 'allow)
+                     (or (memq (plist-get entry :permission-via)
+                               '(pre-tool-hook permission-request-hook))
+                         (plist-get entry :once-only)))
+                'ask
+              resolved))))
+    (error 'ask)))
 
 (defun mevedel-permission-queue-abort-all (&optional session)
   "Flush SESSION's queue, firing `'aborted' on every entry's callback.
 Called from `mevedel-abort' / request-cancel-fn."
   (let* ((session (or session (mevedel-permission-queue--current-session)))
          (queue (and session (mevedel-permission-queue--get session))))
-    (dolist (entry queue)
-      (mevedel-permission-queue--log
-       'permission-aborted entry session :outcome 'aborted))
     (when session
       (mevedel-permission-queue--set nil session))
     (dolist (entry queue)
-      (mevedel-permission-queue--safe-settle entry 'aborted "abort"))))
+      (mevedel-permission-queue--safe-settle entry 'aborted 'abort))))
 
 (defun mevedel-permission-queue-sweep-request
     (request-id &optional session no-render)
@@ -706,11 +636,8 @@ sweeping."
         (setq kept (nreverse kept))
         (mevedel-permission-queue--set kept session)
         (dolist (entry (nreverse swept))
-          (mevedel-permission-queue--log
-           'permission-swept entry session
-           :outcome 'aborted :sweep-request-id request-id)
           (mevedel-permission-queue--safe-settle
-           entry 'aborted "sweep"))
+           entry 'aborted 'sweep))
         (when (and kept
                    (not no-render)
                    (not (eq head-before (car kept))))

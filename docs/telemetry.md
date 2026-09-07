@@ -19,6 +19,15 @@ wall time and clamp emitted elapsed values so they never move backwards. Use
 `:duration-ms` for latency analysis and `:time` for correlation with external
 logs.
 
+Permission queue events use a stable `:permission-id` across admission, initial
+display, and settlement. `permission-displayed` occurs once per card, including
+when that card is later refreshed; `permission-enqueued` alone does not mean the
+user saw a prompt. `permission-resolved` counts user answers, while coalescing,
+owner-request sweeps, cancellations, and aborts retain distinct event or
+`:settlement-source` values. Captured admission modes are separate from Eval's
+`:eval-mode`. See [permission diagnostics](permissions.md) for event semantics
+and the richer resource-scope fields restricted to `permission-log.el`.
+
 Telemetry may be disabled with `mevedel-telemetry-enabled`. Events emitted
 before a new session has a directory are held in the session and flushed as
 soon as it is materialized. Persistence failures warn but never fail the user

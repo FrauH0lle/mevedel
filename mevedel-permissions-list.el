@@ -74,33 +74,43 @@
 ;;
 ;;; Items
 
+(defun mevedel-permissions-list--grant-spec (grant)
+  "Return GRANT's path with its exact or recursive extent."
+  (let ((path (plist-get grant :path)))
+    (concat (if (stringp path) (abbreviate-file-name path) (format "%S" path))
+            (if (plist-get grant :recursive) " (recursive)" " (exact)"))))
+
 (defun mevedel-permissions-list--rule-item (scope rule)
-  "Return the cockpit item for SCOPE permission RULE."
+  "Return the cockpit item for SCOPE permission RULE.
+An execution profile's remembered child grants follow the pattern."
   (let ((plist (cdr rule)))
     (list :scope scope
           :kind (if (plist-get plist :network) 'network 'operation)
           :access (or (plist-get plist :action) 'allow)
           :subject (car rule)
-          :spec (or (plist-get plist :pattern)
-                    (plist-get plist :path)
-                    (plist-get plist :domain)
-                    (plist-get plist :name)
-                    "*")
+          :spec (concat
+                 (or (plist-get plist :pattern)
+                     (plist-get plist :path)
+                     (plist-get plist :domain)
+                     (plist-get plist :name)
+                     "*")
+                 (when-let* ((grants (plist-get plist :file-system)))
+                   (format " [%s]"
+                           (mapconcat
+                            (lambda (grant)
+                              (format "%s %s" (plist-get grant :access)
+                                      (mevedel-permissions-list--grant-spec grant)))
+                            grants ", "))))
           :value rule)))
 
 (defun mevedel-permissions-list--resource-item (scope grant)
   "Return the cockpit item for SCOPE resource GRANT."
-  (let ((path (plist-get grant :path)))
-    (list :scope scope
-          :kind 'resource
-          :access (plist-get grant :access)
-          :subject "path"
-          :spec (concat (if (stringp path)
-                            (abbreviate-file-name path)
-                          (format "%S" path))
-                        (if (plist-get grant :recursive)
-                            " (recursive)" ""))
-          :value grant)))
+  (list :scope scope
+        :kind 'resource
+        :access (plist-get grant :access)
+        :subject "path"
+        :spec (mevedel-permissions-list--grant-spec grant)
+        :value grant))
 
 (defun mevedel-permissions-list--collect (context)
   "Return remembered authority items for CONTEXT."

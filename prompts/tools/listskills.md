@@ -21,6 +21,11 @@ Discover enabled model-invocable skills by name or purpose.
   a skill or make its workflow mandatory. User-only and disabled skills are
   excluded; a missing result is not permission to guess a name.
 
+- File-backed entries include their registered `skill://` address. Use `Read`
+  on that address to inspect the source, or `Read("skill://")` to list
+  registered resources. Raw directory development uses ordinary filesystem
+  permissions.
+
 ### Examples of good usage
 
 <example>

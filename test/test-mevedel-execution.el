@@ -176,9 +176,10 @@
       (should (= -1 (plist-get result :exit-code)))
       (should (plist-get result :error))
       (should-not (plist-member result :process))))
-  :doc "retries directly only after a proven pre-start launcher failure"
+  :doc "refuses a failed confined launcher without retrying unrestricted"
   (let* ((root (make-temp-file "mevedel-fallback-proof-" t))
          (replayed (file-name-concat root "replayed"))
+         (mevedel-sandbox--probe-cache nil)
          (mevedel-execution--orphan-state nil)
          result)
     (unwind-protect
@@ -186,23 +187,21 @@
                   ((symbol-function 'mevedel-sandbox-prepare)
                    (lambda (&rest _)
                      (list
-                      :state 'confined :fallback-p t :marker "not-emitted"
+                      :state 'confined :marker "not-emitted"
                       :command '("sh" "-c" "exit 125")
-                      :original-command
-                      (list "sh" "-c" "printf replayed > \"$1\""
-                            "fallback" replayed)
                       :facts
                       '(:sandbox bubblewrap :filesystem workspace-write
                         :network isolated)))))
           (setq result
                 (mevedel-execution-run-one-shot
                  :name "mevedel-test-fallback-proof"
-                 :command '("ignored")
+                 :command (list "sh" "-c" "printf replayed > \"$1\"" "fixture" replayed)
                  :workdir root :writable-roots (list root)))
-          (should (file-exists-p replayed))
+          (should-not (file-exists-p replayed))
+          (should (= 125 (plist-get result :exit-code)))
           (should
            (plist-get (plist-get result :sandbox-facts)
-                      :first-direct-fallback)))
+                      :refused)))
       (delete-directory root t)))
   :doc "never replays a command after a signal, timeout, or emitted marker"
   (let* ((root (make-temp-file "mevedel-fallback-uncertain-" t))
@@ -222,17 +221,14 @@
             (cl-letf (((symbol-function 'mevedel-sandbox-prepare)
                        (lambda (&rest _)
                          (list
-                          :state 'confined :fallback-p t :marker marker
+                          :state 'confined :marker marker
                           :command launcher
-                          :original-command
-                          (list "sh" "-c" "printf replayed > \"$1\""
-                                "fallback" replayed)
                           :facts
                           '(:sandbox bubblewrap :filesystem workspace-write
                             :network isolated)))))
               (mevedel-execution-run-one-shot
                :name (format "mevedel-test-no-replay-%s" name)
-               :command '("ignored")
+               :command (list "sh" "-c" "printf replayed > \"$1\"" "fixture" replayed)
                :workdir root :writable-roots (list root)
                :timeout timeout))
             (should-not (file-exists-p replayed))))
@@ -599,12 +595,13 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution-start-bash
-  (:doc "runs managed commands through fallback and resource capture")
+  (:doc "runs managed commands through confinement and resource capture")
   ,test
   (test)
-  :doc "settles once from the replacement process after pre-start fallback"
+  :doc "settles a failed confined launcher once without a replacement process"
   (let* ((root (make-temp-file "mevedel-managed-fallback-" t))
          (session (test-mevedel-execution--session root))
+         (mevedel-sandbox--probe-cache nil)
          (mevedel-execution--orphan-state nil)
          (callbacks 0)
          result)
@@ -613,9 +610,8 @@
                   ((symbol-function 'mevedel-sandbox-prepare)
                    (lambda (&rest _)
                      (list
-                      :state 'confined :fallback-p t :marker "not-emitted"
+                      :state 'confined :marker "not-emitted"
                       :command '("sh" "-c" "exit 125")
-                      :original-command '("sh" "-c" "printf direct")
                       :facts
                       '(:sandbox bubblewrap :filesystem workspace-write
                         :network isolated)))))
@@ -624,15 +620,15 @@
              (setq callbacks (1+ callbacks)
                    result value))
            :session session :owner "main" :owner-context session
-           :command '("ignored")
-           :tool-args '(:command "ignored")
+           :command '("sh" "-c" "printf direct")
+           :tool-args '(:command "printf direct")
            :workdir root :writable-roots (list root)
            :artifact-directory root :yield-time-ms nil)
           (test-mevedel-execution--wait (lambda () result))
           (accept-process-output nil 0.1)
           (should (= 1 callbacks))
-          (should (= 0 (plist-get (plist-get result :facts) :exit-code)))
-          (should (equal "direct" (plist-get result :output))))
+          (should (= 125 (plist-get (plist-get result :facts) :exit-code)))
+          (should-not (string-match-p "direct" (plist-get result :output))))
       (mevedel-execution-teardown-session session)
       (delete-directory root t)))
 

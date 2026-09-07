@@ -52,10 +52,8 @@
 
 (defconst mevedel-execution-telemetry--audit-prop-keys
   '(:additional-read-count :additional-write-count
-    :after-confined-launch-failure :cache-identity :chunk-bytes :command-hash
-    :duration-ms :exit-code :fallback-offered :fallback-possible :filesystem
-    :full-execution-approval-offered :lane :launch-failure-reason-class
-    :launch-failure-stage :native-resource-capture
+    :cache-identity :chunk-bytes :command-hash
+    :duration-ms :exit-code :filesystem :lane :native-resource-capture
     :native-resource-report-bytes :network :output-bytes :output-limit
     :overlap-count :preparation-state :proc :protected-path-count :queue-depth
     :queue-duration-ms :reason-class :sandbox :termination :test-scope
