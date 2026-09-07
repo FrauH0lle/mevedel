@@ -1,5 +1,7 @@
 # Best-effort confinement falls back only before execution
 
+Status: superseded by [ADR 0116](0116-return-failed-confined-launches-without-retry.md).
+
 Sandbox mode `best-effort` uses a harmless capability probe. An unavailable
 backend permits direct execution with
 persistent disclosure, while `required` refuses execution.  Once the requested

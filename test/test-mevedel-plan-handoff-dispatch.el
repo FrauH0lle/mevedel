@@ -150,6 +150,8 @@
                   ((symbol-function
                     'mevedel-session-artifacts-start-fresh-segment)
                    (lambda (&rest _) (error "Rotation failed"))))
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session))
           (mevedel-plan-handoff--dispatch-accepted session data-buffer)
           (let ((retry
                  (plist-get (mevedel-session-plan-metadata session)

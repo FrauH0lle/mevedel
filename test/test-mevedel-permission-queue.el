@@ -41,6 +41,7 @@
 (require 'mevedel-skills-ui)
 (require 'mevedel-permission-rules)
 (require 'mevedel-permission-mode)
+(require 'mevedel-sandbox)
 
 (defun test-pq--make-session (&optional rules target)
   "Create a fresh queue-test session with optional RULES and TARGET."
@@ -182,6 +183,22 @@
                :origin "/root" :callback #'ignore))))
     (should (= 1 (length (mevedel-session-permission-queue session))))
     (should (string-match-p "permission notify failed" captured)))
+
+  :doc "unrenderable cards abort once without a display or user response"
+  (let ((session (test-pq--make-session)) outcomes)
+    (mevedel-permission--enqueue
+     (list :kind 'unknown :origin "/root"
+           :callback (lambda (outcome) (push outcome outcomes)))
+     session)
+    (mevedel-permission-queue-abort-all session)
+    (should (equal '(aborted) outcomes))
+    (should-not (mevedel-session-permission-queue session))
+    (let ((events (mevedel-session-permission-log-pending session)))
+      (should (equal '(permission-enqueued permission-aborted)
+                     (mapcar (lambda (event) (plist-get event :event)) events)))
+      (should (eq 'render-failed (plist-get (cadr events) :settlement-source)))
+      (should (equal (plist-get (car events) :permission-id)
+                     (plist-get (cadr events) :permission-id)))))
 
   :doc "enqueue rejects a missing origin"
   (let ((session (test-pq--make-session)))
@@ -343,6 +360,38 @@
                         "private justification"))
           (prin1-to-string props))))))
 
+  :doc "forwarded terminal telemetry preserves categorical outcome and lifetime"
+  (dolist (outcome '(allow-session (feedback . "private feedback text")))
+    (let* ((parent (test-pq--make-session))
+           (side (test-pq--make-session))
+           (mevedel-permission-log-enabled t)
+           (mevedel-telemetry-enabled t))
+      (setf (mevedel-session-audit-session side) parent)
+      (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                 #'ignore))
+        (mevedel-permission--enqueue
+         (list :kind 'eval :mode "batch" :origin "/root"
+               :permission-mode-effective 'edits :permission-via 'mode
+               :resource-originals '((:path "/private/request" :access read))
+               :resource-selection-cell '(((:path "/private/tree" :access read :recursive t)))
+               :callback #'ignore)
+         side)
+        (mevedel-permission-queue--on-head-outcome
+         (car (mevedel-session-permission-queue side)) outcome))
+      (let ((events (reverse (mevedel-session-telemetry-pending parent))))
+        (should (= 2 (length events)))
+        (let ((admitted (car events)) (terminal (cadr events)))
+          (should (equal (plist-get admitted :permission-id)
+                         (plist-get terminal :permission-id)))
+          (should (eq 'edits (plist-get terminal :permission-mode-effective)))
+          (should (equal "batch" (plist-get terminal :eval-mode)))
+          (should (eq (if (consp outcome) 'deny outcome)
+                      (plist-get terminal :outcome)))
+          (when (eq outcome 'allow-session)
+            (should (eq 'session (plist-get terminal :approval-lifetime)))))
+        (should-not (string-match-p "/private/\\|private feedback"
+                                    (prin1-to-string events))))))
+
   :doc "permission queue writes enqueue and resolve diagnostics"
   (let* ((dir (file-name-as-directory
                (make-temp-file "mevedel-permission-log-" t)))
@@ -424,7 +473,7 @@
              session))
           (let ((entry (car (test-pq--read-permission-log session))))
             (should (eq 'permission-enqueued (plist-get entry :event)))
-            (should (equal "live" (plist-get entry :mode)))
+            (should (equal "live" (plist-get entry :eval-mode)))
             (should-not (plist-member entry :expression))))
       (when (file-directory-p dir)
         (delete-directory dir t))))
@@ -688,6 +737,9 @@
       (dotimes (_ 2)
         (mevedel-permission--enqueue
          (list :kind 'sandbox :tool-name "Bash"
+               :detail "pwd" :sandbox-permissions 'additive
+               :requested-additional-permissions
+               '(:file-system ((:path "/tmp/secret" :access read)))
                :resource-path "/tmp/secret"
                :resource-access 'read
                :origin "/root"
@@ -711,6 +763,8 @@
       (dotimes (_ 2)
         (mevedel-permission--enqueue
          (list :kind 'sandbox :tool-name "Bash"
+               :detail "pwd" :sandbox-permissions 'additive
+               :requested-additional-permissions missing
                :resource-path "/tmp/input"
                :resource-access 'read
                :missing-additional-permissions missing
@@ -736,6 +790,9 @@
       (dotimes (_ 2)
         (mevedel-permission--enqueue
          (list :kind 'sandbox :tool-name "Bash"
+               :detail "pwd" :sandbox-permissions 'additive
+               :requested-additional-permissions
+               '(:file-system ((:path "/tmp/secret" :access read)))
                :resource-path "/tmp/secret"
                :resource-access 'read
                :origin "/root"
@@ -790,6 +847,61 @@
 ;;
 ;;; Render dispatch
 
+(mevedel-deftest mevedel-permission-queue--reevaluate
+  (:doc "rechecks complete execution authority, including captured delegation")
+  (let* ((root (make-temp-file "mevedel-pq-recheck-" t))
+         (source (file-name-concat root "source"))
+         (other (file-name-concat root "other"))
+         (grant (list :path source :access 'read))
+         (missing (list :path other :access 'read))
+         (allow '(("Bash" :pattern "make *" :action allow)))
+         (mevedel-permission-rules nil)
+         (mevedel-permission-guardian nil))
+    (unwind-protect
+        (progn
+          (dolist (path (list source other))
+            (with-temp-file path (insert "recheck contents")))
+          (dolist
+              (scenario
+               `(("Bash operation does not cover missing network"
+                  ,allow (:kind bash :command "make test"
+                          :requested-additional-permissions (:network t)) ask)
+                 ("Bash operation does not cover another resource"
+                  ,allow (:kind bash :command "make test"
+                          :requested-additional-permissions
+                          (:file-system (,missing))) ask)
+                 ("covered resources do not cover an uncertain operation"
+                  nil (:kind sandbox :tool-name "Bash" :detail "make test"
+                       :sandbox-permissions additive
+                       :requested-additional-permissions (:file-system (,grant))
+                       :missing-additional-permissions (:file-system (,grant))) ask)
+                 ("recheck includes a previously granted but now missing resource"
+                  ,allow (:kind sandbox :tool-name "Bash" :detail "make test"
+                          :sandbox-permissions additive
+                          :requested-additional-permissions (:file-system (,grant ,missing))
+                          :missing-additional-permissions (:file-system (,grant))) ask)
+                 ("matching Eval authority can clear covered resources"
+                  (("Eval" :pattern "(+ 1 2)" :action allow))
+                  (:kind eval :expression "(+ 1 2)" :mode "batch"
+                   :requested-additional-permissions (:file-system (,grant))) allow)
+                 ("captured request deny remains authoritative"
+                  ,allow (:kind bash :command "make test"
+                          :request ,(mevedel-request--create
+                                     :skill-permission-rules
+                                     '(("Bash" :pattern "make *" :action deny)))) deny)
+                 ("captured Plan request still prohibits mutation"
+                  ,allow (:kind bash :command "make test"
+                          :request ,(mevedel-request--create :plan-read-only t)) deny)))
+            (ert-info ((car scenario))
+              (let* ((session (test-pq--make-session (nth 1 scenario)))
+                     (entry (append (list :session session :origin "/root")
+                                    (nth 2 scenario))))
+                (setf (mevedel-session-permission-mode session) 'edits)
+                (mevedel-permission-add-session-resource-grant session source 'read)
+                (should (eq (nth 3 scenario)
+                            (mevedel-permission-queue--reevaluate entry)))))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-permission-queue--attribution-origin
   (:doc "attributes prompts to non-root canonical agent paths")
   ,test
@@ -804,6 +916,15 @@
          (entry (list :origin origin)))
     (should (equal origin
                    (mevedel-permission-queue--attribution-origin entry))))
+
+  :doc "agent ToolCall calls retain both the requester and nested call"
+  (let ((attribution
+         (mevedel-permission-queue--attribution-origin
+          '(:origin "/root/worker" :call-source ptc
+            :tool-use-id "ptc-1/2" :parent-tool-use-id "ptc-1"))))
+    (should (string-match-p "/root/worker" attribution))
+    (should (string-match-p "ToolCall ptc-1" attribution))
+    (should (string-match-p "child ptc-1/2" attribution)))
 
   :doc "root ToolCall calls identify the envelope and child"
   (should
@@ -1061,6 +1182,372 @@
         (delete-directory outside-root t))
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel-permission--prompt-select-resource
+  (:quiet t)
+  (let* ((tree-p ,tree-p)
+         (approval ,approval)
+         (covered-p ,covered-p)
+         (hook-event ,hook-event)
+         (workspace-root (make-temp-file "mevedel-pq-tree-workspace-" t))
+         (outside-root (make-temp-file "mevedel-pq-tree-outside-" t))
+         (tree (file-name-concat outside-root "design"))
+         (nested (file-name-concat tree "notes"))
+         (first (file-name-concat nested "first.txt"))
+         (second (file-name-concat tree "second.txt"))
+         (future (file-name-concat nested "future.txt"))
+         (unrelated (file-name-concat outside-root "unrelated.txt"))
+         (data-buf (generate-new-buffer " *test-pq-tree-data*"))
+         (view-buf (generate-new-buffer " *test-pq-tree-view*"))
+         (agent-buf (generate-new-buffer " *test-pq-tree-agent*"))
+         (workspace (mevedel-workspace-get-or-create
+                     'project workspace-root workspace-root "workspace"))
+         (session (mevedel-session-create "main" workspace))
+         (_register (mevedel-tool-fs--register))
+         (read-fn (gptel-tool-function
+                   (mevedel-tool-gptel-tool (mevedel-tool-get "Read"))))
+         (draft "> please keep this draft\nsecond line")
+         results)
+    (unwind-protect
+        (progn
+          (make-directory nested t)
+          (dolist (file (list first second unrelated))
+            (with-temp-file file (insert "directory fixture contents")))
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local temporary-file-directory workspace-root))
+          (mevedel-view--setup view-buf data-buf)
+          (with-current-buffer agent-buf
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local temporary-file-directory workspace-root)
+            (setq-local mevedel--view-buffer view-buf)
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create
+                         :path "/root/reader" :agent-id "/root/reader"
+                         :parent-session session :parent-data-buffer data-buf
+                         :buffer agent-buf)))
+          (setf (mevedel-session-permission-mode session) 'full-auto)
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert draft))
+          (let ((mevedel-permission-rules nil)
+                (mevedel-permission-mode 'full-auto)
+                (hook
+                 (lambda (event)
+                   (when (equal second
+                                (plist-get (plist-get event :tool-input)
+                                           :file_path))
+                     '(:permission-decision ask)))))
+            (when hook-event
+              (with-current-buffer data-buf
+                (add-hook hook-event hook nil t)))
+            (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                       (lambda () 'ask)))
+              (with-current-buffer data-buf
+                (dolist (file (list first second unrelated))
+                  (funcall read-fn (lambda (result) (push result results)) file)))
+              (should (= 3 (length (mevedel-session-permission-queue session))))
+              (setf (mevedel-session-permission-mode session) 'ask)
+              (with-current-buffer view-buf
+                (should (equal draft (mevedel-view--input-text)))
+                (let* ((entry (car (mevedel-session-permission-queue session)))
+                       (id (mevedel-queue--entry-metadata-get entry :interaction-id))
+                       (ov (gethash id mevedel-view--interaction-overlays))
+                       (stale-callback (overlay-get ov 'mevedel--callback))
+                       (choice (if tree-p
+                                   (format "Read %s (recursive)" tree)
+                                 (format "Read %s (exact)" first))))
+                  (goto-char (overlay-start ov))
+                  (let ((before (copy-tree (car (plist-get entry :resource-selection-cell))))
+                        cancelled)
+                    (cl-letf (((symbol-function 'completing-read)
+                               (lambda (&rest _) (signal 'quit nil))))
+                      (condition-case nil
+                          (call-interactively (lookup-key (overlay-get ov 'keymap) "g"))
+                        (quit (setq cancelled t))))
+                    (should cancelled)
+                    (should (equal before (car (plist-get entry :resource-selection-cell))))
+                    (should-not (mevedel-session-resource-grants session))
+                    (should-not results)
+                    (should (equal draft (mevedel-view--input-text))))
+                  (cl-letf (((symbol-function 'completing-read)
+                             (lambda (_prompt collection &rest _)
+                               (should (assoc choice collection))
+                               choice)))
+                    (call-interactively
+                     (lookup-key (overlay-get ov 'keymap) "g")))
+                  (should-not results)
+                  (should (equal draft (mevedel-view--input-text)))
+                  (setq ov (gethash id mevedel-view--interaction-overlays))
+                  (should (string-match-p
+                           (regexp-quote choice)
+                           (buffer-substring-no-properties
+                            (overlay-start ov) (overlay-end ov))))
+                  (let ((body (buffer-substring-no-properties
+                               (overlay-start ov) (overlay-end ov))))
+                    (should (string-match-p "admission: full-auto" body))
+                    (should (string-match-p "outside the allowed roots" body)))
+                  (goto-char (overlay-start ov))
+                  (call-interactively
+                   (lookup-key (overlay-get ov 'keymap) approval))
+                  (funcall stale-callback 'allow-once))
+                (should (equal draft (mevedel-view--input-text))))
+              (should (= (if (and covered-p (not hook-event)) 2 1)
+                         (length results)))
+              (should (cl-every (lambda (result)
+                                  (string-match-p "directory fixture contents" result))
+                                results))
+              (should (= (if (and covered-p (not hook-event)) 1 2)
+                         (length (mevedel-session-permission-queue session))))
+              (with-temp-file future (insert "future descendant contents"))
+              (with-current-buffer data-buf
+                (funcall read-fn (lambda (result) (push result results)) future))
+              (should (= (if covered-p (if hook-event 2 3) 1)
+                         (length results)))
+              (when covered-p
+                (should (string-match-p "future descendant contents" (car results))))
+              (should (= (if covered-p (if hook-event 2 1) 3)
+                         (length (mevedel-session-permission-queue session))))
+              (when (and covered-p (not hook-event))
+                (dotimes (index 10)
+                  (let ((file (file-name-concat tree (format "extra-%d.txt" index))))
+                    (with-temp-file file (insert (format "design note %d" index)))
+                    (with-current-buffer (if (cl-evenp index) data-buf agent-buf)
+                      (funcall read-fn
+                               (lambda (result) (push result results)) file))
+                    (should (string-match-p
+                             (format "design note %d" index) (car results)))))
+                (should (= 13 (length results)))
+                (with-current-buffer agent-buf
+                  (funcall (gptel-tool-function
+                            (mevedel-tool-gptel-tool (mevedel-tool-get "Glob")))
+                           (lambda (result) (push result results)) "*.txt" tree))
+                (with-current-buffer data-buf
+                  (funcall (gptel-tool-function
+                            (mevedel-tool-gptel-tool (mevedel-tool-get "Grep")))
+                           (lambda (result) (push result results)) "design note" tree))
+                (let ((deadline (+ (float-time) 10)))
+                  (while (and (< (length results) 15) (< (float-time) deadline))
+                    (accept-process-output nil 0.01)))
+                (should (= 15 (length results)))
+                (should (string-match-p "extra-0.txt" (car results)))
+                (should (string-match-p "extra-0.txt" (cadr results)))
+                (when (equal approval "s")
+                  ;; The same documentation tree covers an explicitly requested
+                  ;; confined decompressor after native reading and searching.
+                  (let ((compressed (file-name-concat tree "manual.gz"))
+                        (mevedel-permission-guardian nil)
+                        decompressed)
+                    (with-temp-buffer
+                      (set-buffer-multibyte nil)
+                      (let ((coding-system-for-read 'no-conversion)
+                            (coding-system-for-write 'no-conversion))
+                        (should (zerop (process-file "gzip" nil t nil "-c" first)))
+                        (write-region (point-min) (point-max) compressed nil 'silent)))
+                    (mevedel-tool-exec--register)
+                    (setf (mevedel-session-permission-mode session) 'full-auto
+                          (mevedel-session-sandbox-mode session) 'required)
+                    (with-current-buffer data-buf
+                      (mevedel-pipeline-run-tool
+                       (mevedel-tool-get "Bash") (lambda (value) (setq decompressed value))
+                       (list :command (concat "gzip -cd -- " (shell-quote-argument compressed))
+                             :sandbox_permissions "with_additional_permissions"
+                             :additional_permissions (list :file_system (list :read (vector compressed)))
+                             :justification "Read the compressed manual in the approved documentation tree")))
+                    (let ((deadline (+ (float-time) 10)))
+                      (while (and (not decompressed) (< (float-time) deadline))
+                        (accept-process-output nil 0.01)))
+                    (should decompressed)
+                    (should (string-match-p "directory fixture contents" decompressed))
+                    (should (string-match-p "sandbox: bubblewrap" decompressed))
+                    (should (string-match-p "exit_code=\"0\"" decompressed))))
+                (should (= 1 (length (mevedel-session-permission-queue session)))))
+              (mevedel-permission-queue-abort-all session)
+              (mevedel-permission-queue-abort-all session)
+              (let* ((events (append (test-pq--read-permission-log session)
+                                     (mevedel-session-permission-log-pending session)))
+                     (admissions (seq-filter
+                                  (lambda (event)
+                                    (eq (plist-get event :event) 'permission-enqueued))
+                                  events))
+                     (first-id (plist-get (car admissions) :permission-id)))
+                (should (stringp first-id))
+                (should (= (length admissions)
+                           (length (delete-dups
+                                    (mapcar (lambda (event)
+                                              (plist-get event :permission-id))
+                                            admissions)))))
+                (dolist (admission admissions)
+                  (let* ((id (plist-get admission :permission-id))
+                         (related (seq-filter (lambda (event)
+                                                (equal id (plist-get event :permission-id)))
+                                              events))
+                         (terminal (seq-filter
+                                    (lambda (event)
+                                      (memq (plist-get event :event)
+                                            '(permission-resolved permission-coalesced
+                                              permission-aborted permission-swept)))
+                                    related)))
+                    (should (= 1 (length terminal)))
+                    (should (<= (cl-count 'permission-displayed related
+                                         :key (lambda (event) (plist-get event :event))) 1))
+                    (dolist (event related)
+                      (should (eq (plist-get admission :permission-mode-effective)
+                                  (plist-get event :permission-mode-effective))))))
+                (let* ((resolved (seq-find
+                                  (lambda (event)
+                                    (and (equal first-id (plist-get event :permission-id))
+                                         (eq (plist-get event :event) 'permission-resolved)))
+                                  events))
+                       (scope (car (plist-get resolved :selected-resources))))
+                  (should (eq 'full-auto (plist-get resolved :permission-mode-base)))
+                  (should (eq 'full-auto (plist-get resolved :permission-mode-effective)))
+                  (should (equal (if tree-p tree first) (plist-get scope :path)))
+                  (should (eq tree-p (plist-get scope :recursive)))
+                  (should (eq (pcase approval
+                                ("a" 'invocation) ("s" 'session) ("A" 'workspace))
+                              (plist-get resolved :approval-lifetime)))
+                  (should (= 1 (cl-count-if
+                                (lambda (event)
+                                  (and (equal first-id (plist-get event :permission-id))
+                                       (eq (plist-get event :event) 'permission-displayed)))
+                                events)))))
+              (with-current-buffer view-buf
+                (should (equal draft (mevedel-view--input-text)))))))
+      (mevedel-permission-queue-abort-all session)
+      (mevedel-execution-teardown-session session)
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))
+      (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
+      (delete-directory workspace-root t)
+      (delete-directory outside-root t)
+      (mevedel-workspace-clear-registry)))
+
+  (tree-p approval covered-p hook-event)
+  :doc "directory selection approves queued and future real reads"
+  t "s" t nil
+  :doc "exact approval leaves sibling and future descendant reads pending"
+  nil "s" nil nil
+  :doc "invocation directory approval leaves all other reads pending"
+  t "a" nil nil
+  :doc "workspace directory approval covers queued and future reads"
+  t "A" t nil
+  :doc "directory approval preserves a sibling PreToolUse ask"
+  t "s" t 'mevedel-pre-tool-use-functions
+  :doc "directory approval preserves a sibling PermissionRequest ask"
+  t "s" t 'mevedel-permission-request-functions)
+
+(mevedel-deftest mevedel-permission-queue--execution-directory-profile
+                 (:quiet t)
+                 (progn
+                   (let ((availability (mevedel-sandbox-probe)))
+                     (unless (plist-get availability :available)
+                       (ert-skip (plist-get availability :reason))))
+                   (let* ((remember-p ,remember-p)
+                          (root (make-temp-file "mevedel-pq-exec-root-" t))
+                          (external (make-temp-file "mevedel-pq-exec-external-" t))
+                          (cache (file-name-concat external "cache"))
+                          (script (file-name-concat root "validate"))
+                          (counter (file-name-concat root "counter"))
+                          (data-buf (generate-new-buffer " *test-pq-exec-data*"))
+                          (view-buf (generate-new-buffer " *test-pq-exec-view*"))
+                          (workspace (mevedel-workspace-get-or-create
+                                      'project root root "workspace"))
+                          (session (mevedel-session-create "main" workspace))
+                          (_register (mevedel-tool-exec--register))
+                          result)
+                     (unwind-protect
+                         (progn
+                           (make-directory cache)
+                           (with-temp-file script
+                             (insert "#!/bin/sh\nset -eu\n"
+                                     "n=0\n"
+                                     (format "if test -f %s; then n=$(cat %s); fi\n"
+                                             (shell-quote-argument counter) (shell-quote-argument counter))
+                                     "n=$((n + 1))\n"
+                                     (format "printf '%%s' \"$n\" > %s\n" (shell-quote-argument counter))
+                                     (format "mkdir -p %s/run-\"$n\"\n" (shell-quote-argument cache))
+                                     (format "printf 'cache value' > %s/run-\"$n\"/value\n"
+                                             (shell-quote-argument cache))
+                                     (format "if touch %s 2>/dev/null; then exit 55; fi\n"
+                                             (shell-quote-argument (file-name-concat external "unapproved")))
+                                     "printf 'confined validation complete'\n"))
+                           (set-file-modes script #o700)
+                           (setf (mevedel-session-permission-mode session) 'edits
+                                 (mevedel-session-sandbox-mode session) 'required)
+                           (with-current-buffer data-buf
+                             (org-mode)
+                             (setq-local mevedel--session session)
+                             (setq-local temporary-file-directory root))
+                           (mevedel-view--setup view-buf data-buf)
+                           (let ((mevedel-permission-rules nil)
+                                 (mevedel-permission-guardian nil))
+                             (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                                        (lambda () 'ask)))
+                                      (dotimes (index (if remember-p 4 1))
+                                        (setq result nil)
+                                        (with-current-buffer data-buf
+                                          (mevedel-pipeline-run-tool
+                                           (mevedel-tool-get "Bash")
+                                           (lambda (value) (setq result value))
+                                           (append
+                                            (list :command script)
+                                            (when (zerop index)
+                                              (list :sandbox_permissions "with_additional_permissions"
+                                                    :additional_permissions
+                                                    (list :file_system (list :write (vector cache)))
+                                                    :justification "Write validation cache")))))
+                                        (when (zerop index)
+                                          (should (= 1 (length (mevedel-session-permission-queue session))))
+                                          (with-current-buffer view-buf
+                                            (let* ((entry (car (mevedel-session-permission-queue session)))
+                                                   (id (mevedel-queue--entry-metadata-get entry :interaction-id))
+                                                   (ov (gethash id mevedel-view--interaction-overlays))
+                                                   (choice (format "Write %s (recursive)" cache)))
+                                              (goto-char (overlay-start ov))
+                                              (cl-letf (((symbol-function 'completing-read)
+                                                         (lambda (_prompt choices &rest _)
+                                                           (should (assoc choice choices))
+                                                           choice)))
+                                                       (call-interactively (lookup-key (overlay-get ov 'keymap) "g")))
+                                              (setq ov (gethash id mevedel-view--interaction-overlays))
+                                              (goto-char (overlay-start ov))
+                                              (call-interactively
+                                               (lookup-key (overlay-get ov 'keymap) (if remember-p "s" "a"))))))
+                                        (let ((deadline (+ (float-time) 15)))
+                                          (while (and (not result) (< (float-time) deadline))
+                                            (accept-process-output nil 0.01)))
+                                        (should result)
+                                        (should (string-match-p "confined validation complete" result))
+                                        (should (string-match-p "sandbox: bubblewrap" result))
+                                        (should (file-exists-p
+                                                 (file-name-concat cache (format "run-%d" (1+ index)) "value")))
+                                        (should-not (file-exists-p (file-name-concat external "unapproved")))
+                                        (should-not (mevedel-session-permission-queue session)))
+                                      (unless remember-p
+                                        (setq result nil)
+                                        (with-current-buffer data-buf
+                                          (mevedel-pipeline-run-tool
+                                           (mevedel-tool-get "Bash")
+                                           (lambda (value) (setq result value))
+                                           (list :command script)))
+                                        (should-not result)
+                                        (should (= 1 (length (mevedel-session-permission-queue session))))
+                                        (should-not (file-exists-p (file-name-concat cache "run-2" "value")))))))
+                       (mevedel-permission-queue-abort-all session)
+                       (mevedel-execution-teardown-session session)
+                       (when (buffer-live-p view-buf) (kill-buffer view-buf))
+                       (when (buffer-live-p data-buf) (kill-buffer data-buf))
+                       (delete-directory root t)
+                       (delete-directory external t)
+                       (mevedel-workspace-clear-registry))))
+                 (remember-p)
+                 :doc "real confined cache writes reuse a prompt-selected directory profile"
+                 t
+                 :doc "invocation-only tree selection reaches the confined child without remembering"
+                 nil)
+
 (mevedel-deftest mevedel-permission-queue--gptel-batch-deny-once
   (:doc "deny-once settles one queued gptel-dispatched permission")
   (let* ((workspace-root (file-name-as-directory
@@ -1158,8 +1645,8 @@
           (should (equal '(deny . "Bash permission UI unavailable")
                          outcome))
           (should (null (mevedel-session-permission-queue session))))
-	  (when saved
-	    (fset 'mevedel-permission--prompt-async-bash saved))))
+          (when saved
+            (fset 'mevedel-permission--prompt-async-bash saved))))
 
   :doc "Bash approval resumes exactly once"
   (let* ((session (test-pq--make-session))
@@ -1483,6 +1970,7 @@
   (let ((data-buf (generate-new-buffer " *test-pq-sweep-data*"))
         (view-buf (generate-new-buffer " *test-pq-sweep-view*"))
         (session (test-pq--make-session))
+        (draft "> preserve during cancellation\nsecond line")
         outcomes
         swept-id)
     (unwind-protect
@@ -1491,6 +1979,9 @@
             (org-mode)
             (setq-local mevedel--session session))
           (mevedel-view--setup view-buf data-buf)
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert draft))
           (cl-letf (((symbol-function 'gptel-agent--block-bg)
                      (lambda () 'ask)))
             (with-current-buffer data-buf
@@ -1527,7 +2018,43 @@
           (let ((q (mevedel-session-permission-queue session)))
             (should (= 1 (length q)))
             (should (equal "request-2"
-                           (plist-get (car q) :request-id)))))
+                           (plist-get (car q) :request-id))))
+          (with-current-buffer view-buf
+            (should (equal draft (mevedel-view--input-text)))
+            (let* ((entry (car (mevedel-session-permission-queue session)))
+                   (id (mevedel-queue--entry-metadata-get entry :interaction-id))
+                   (overlay (gethash id mevedel-view--interaction-overlays)))
+              (mevedel--prompt--settle overlay 'aborted)
+              (mevedel--prompt--settle overlay 'aborted))
+            (should-not (mevedel-session-permission-queue session))
+            (should (equal draft (mevedel-view--input-text))))
+          (mevedel-permission-queue-sweep-request "request-1" session)
+          (mevedel-permission-queue-abort-all session)
+          (should (= 2 (length outcomes)))
+          (should (eq 'aborted (cdr (assoc "main" outcomes))))
+          (should-not (mevedel-session-permission-queue session))
+          (let* ((events (mevedel-session-permission-log-pending session))
+                 (terminal
+                  (seq-filter
+                   (lambda (event)
+                     (memq (plist-get event :event)
+                           '(permission-resolved permission-swept permission-aborted)))
+                   events)))
+            (should (equal '(permission-swept permission-aborted)
+                           (mapcar (lambda (event) (plist-get event :event)) terminal)))
+            (should (eq 'cancelled (plist-get (cadr terminal) :settlement-source)))
+            (dolist (end terminal)
+              (let ((related
+                     (seq-filter
+                      (lambda (event)
+                        (equal (plist-get end :permission-id)
+                               (plist-get event :permission-id)))
+                      events)))
+                (should (= 3 (length related)))
+                (should (= 1 (seq-count
+                              (lambda (event)
+                                (eq 'permission-displayed (plist-get event :event)))
+                              related)))))))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 

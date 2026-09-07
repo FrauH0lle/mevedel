@@ -113,6 +113,9 @@
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-tool-exec-permission'
+(defvar mevedel-tool-exec-permission-approved-resources)
+
 ;; `mevedel-tool-media'
 (declare-function mevedel-tool-media-attach-result
                   "mevedel-tool-media"
@@ -1206,7 +1209,9 @@ buffer."
                   (mevedel-pipeline--canonical-path-map
                    (plist-get context :canonical-path-map))
                   (mevedel-execution-telemetry-summary-cell
-                   (plist-get context :sandbox-summary-cell)))
+                   (plist-get context :sandbox-summary-cell))
+                  (mevedel-tool-exec-permission-approved-resources
+                   (plist-get context :approved-resources)))
               (mevedel-tool-repair-mark-executed repair-entry)
               (condition-case err
                   (if (mevedel-tool-async-p tool)

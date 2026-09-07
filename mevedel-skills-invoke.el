@@ -93,6 +93,11 @@
                   "mevedel-reminders" (content))
 (autoload 'mevedel-reminders-format-block "mevedel-reminders")
 
+;; `mevedel-resource'
+(declare-function mevedel-resource--skill-address
+                  "mevedel-resource" (skill &optional components))
+(autoload 'mevedel-resource--skill-address "mevedel-resource")
+
 ;; `mevedel-skills-preparation'
 (declare-function mevedel-skills-preparation-expand-body
                   "mevedel-skills-preparation"
@@ -1650,9 +1655,12 @@ default cap is 1,536 chars."
 (defun mevedel-skills--entry-base (skill &optional dormant)
   "Return the roster line prefix for SKILL.
 When DORMANT is non-nil, mark the skill as dormant path-scoped."
-  (format "- %s%s:"
+  (format "- %s%s%s:"
           (mevedel-skill-name skill)
-          (if dormant " [dormant path-scoped]" "")))
+          (if dormant " [dormant path-scoped]" "")
+          (if (mevedel-skill-source-file skill)
+              (format " [Read %s]" (mevedel-resource--skill-address skill))
+            "")))
 
 (defun mevedel-skills--entry-description (skill &optional dormant)
   "Return SKILL's description capped for a single roster entry."
@@ -1668,7 +1676,7 @@ When DORMANT is non-nil, mark the skill as dormant path-scoped."
   "Return a one-line entry for SKILL.
 
 Format:
-  - name: description
+  - name [Read skill://name@source-identity]: description
 
 `mevedel-skills-listing-max-entry-chars' (1,536 by default) caps entries by
 truncation with an ellipsis so a single verbose skill cannot starve

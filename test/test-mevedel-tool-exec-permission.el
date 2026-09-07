@@ -43,6 +43,29 @@
           (end-of-file nil))))
     (nreverse entries)))
 
+(mevedel-deftest mevedel-tool-exec-permission-reevaluate ()
+  ,test
+  (test)
+  :doc "ordinary operation authority cannot clear full escalation"
+  (let ((mevedel-permission-rules nil))
+    (should
+     (eq 'ask
+         (mevedel-tool-exec-permission-reevaluate
+          '(:kind sandbox :tool-name "Bash" :detail "make test"
+            :sandbox-permissions require-escalated)
+          (mevedel-permission--invocation-context
+           :tool-name "Bash" :pattern "make test" :mode 'full-auto
+           :session-rules '(("Bash" :pattern "make *" :action allow)))))))
+  :doc "a pending operation does not skip an outstanding guardian decision"
+  (let ((mevedel-permission-guardian t)
+        (mevedel-permission-rules nil))
+    (should
+     (eq 'ask
+         (mevedel-tool-exec-permission-reevaluate
+          '(:kind bash :command "make test")
+          (mevedel-permission--invocation-context
+           :tool-name "Bash" :pattern "make test" :mode 'full-auto))))))
+
 (mevedel-deftest mevedel-tool-exec-permission--request-permission ()
   ,test
   (test)
@@ -57,13 +80,15 @@
     (should (equal 'session (cadr seen)))
     (should (eq #'ignore (nth 2 seen))))
   :doc "falls back to direct queue admission outside the pipeline"
-  (let (seen)
+  (let ((mevedel-permission-mode 'ask) seen)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
                (lambda (entry &optional session)
                  (setq seen (list entry session)))))
       (mevedel-tool-exec-permission--request-permission
        '(:kind bash) nil 'session))
-    (should (equal '((:kind bash) session) seen)))
+    (should (eq 'bash (plist-get (car seen) :kind)))
+    (should (eq 'ask (plist-get (car seen) :permission-mode-effective)))
+    (should (eq 'session (cadr seen))))
   :doc "combines pending operation and additive authority"
   (let ((cell (list nil))
         queued
@@ -1422,6 +1447,41 @@ both Eval and network authority proceed without prompts"
 (mevedel-deftest mevedel-tool-exec-permission--check-full-escalation-async ()
   ,test
   (test)
+  :doc "full escalation cannot override a Plan request's mutation restriction"
+  (let* ((mevedel--current-request (mevedel-request--create :plan-read-only t))
+         (mevedel-permission-mode 'full-auto)
+         (mevedel-permission-rules nil)
+         entry outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (queued &optional _session) (setq entry queued))))
+      (mevedel-tool-exec-permission-check-bash-async
+       nil
+       '(:command "make test" :sandbox_permissions "require_escalated"
+                  :justification "Run the build outside confinement")
+       (lambda (result) (setq outcome result))))
+    (should-not entry)
+    (should (eq 'deny outcome)))
+  :doc "explicit operation asks survive remembered escalation at admission and recheck"
+  (dolist (command '("make test" "cat /tmp/review-protected/value"))
+    (let ((mevedel-protected-paths '(("/tmp/review-protected/**" . inaccessible)))
+          (mevedel-permission-mode 'full-auto)
+          (mevedel-permission-rules
+           `(("Bash" :pattern ,command :action ask)
+             ("Bash" :pattern ,command :sandbox-permissions require-escalated :action allow)))
+          entry outcome)
+      (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                 (lambda (queued &optional _session) (setq entry queued))))
+        (mevedel-tool-exec-permission-check-bash-async
+         nil `(:command ,command :sandbox_permissions "require_escalated"
+                        :justification "Run the build without confinement")
+         (lambda (result) (setq outcome result))))
+      (should entry)
+      (should-not outcome)
+      (should (eq 'rule (plist-get entry :permission-via)))
+      (should (eq 'ask
+                  (mevedel-tool-exec-permission-reevaluate
+                   entry (list :tool-name "Bash" :mode 'full-auto
+                               :buckets (list (cons :defcustom mevedel-permission-rules))))))))
   :doc "full-auto still asks:
 full escalation prompts without a directly authored qualified rule"
   (let ((mevedel-permission-mode 'full-auto)
@@ -1816,6 +1876,23 @@ default Bash keeps bare dot inspection automatic"
     (mevedel-tool-exec-permission-check-bash-async
      nil '(:other "value") (lambda (r) (setq outcome r)))
     (should (null outcome)))
+  :doc "queued Bash retains the policy cause and admission mode"
+  (dolist (case '((edits nil mode)
+                  (full-auto (("Bash" :pattern "make *" :action ask)) rule)))
+    (pcase-let ((`(,mode ,rules ,via) case))
+      (let ((mevedel-permission-guardian nil) entry outcome)
+        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                   (lambda (queued &optional _session)
+                     (setq entry queued)
+                     (funcall (plist-get entry :callback) 'deny-once))))
+          (mevedel-tool-exec-permission-check-bash-async
+           nil
+           (list :command "make test" :permission-context
+                 (list :mode mode :buckets (list (cons :session rules))))
+           (lambda (result) (setq outcome result))))
+        (should (eq 'deny outcome))
+        (should (eq mode (plist-get entry :permission-mode-effective)))
+        (should (eq via (plist-get entry :permission-via))))))
   :doc "returns deny for denied commands"
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "rm*" :action deny)))
@@ -2540,9 +2617,28 @@ default Bash keeps bare dot inspection automatic"
          (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil))
     (should (eq 'allow
-                (mevedel-tool-exec-permission--check-eval-permission
-                 :permission-context context))))
+                (plist-get (mevedel-tool-exec-permission--check-eval-permission
+                            :permission-context context)
+                           :outcome))))
 
+  :doc "queued Eval retains permission cause separately from execution mode"
+  (dolist (case '((edits nil mode)
+                  (full-auto (("Eval" :action ask)) rule)))
+    (pcase-let ((`(,mode ,rules ,via) case))
+      (let (entry outcome)
+        (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                   (lambda (queued &optional _session)
+                     (setq entry queued)
+                     (funcall (plist-get entry :callback) 'deny-once))))
+          (mevedel-tool-exec-permission-check-eval-async
+           nil
+           (list :expression "(+ 1 2)" :mode "batch" :permission-context
+                 (list :mode mode :buckets (list (cons :session rules))))
+           (lambda (result) (setq outcome result))))
+        (should (eq 'deny outcome))
+        (should (equal "batch" (plist-get entry :mode)))
+        (should (eq mode (plist-get entry :permission-mode-effective)))
+        (should (eq via (plist-get entry :permission-via))))))
   :doc "explicit Eval deny beats full-auto"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules '(("Eval" :action deny)))

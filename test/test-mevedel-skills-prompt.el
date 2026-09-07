@@ -182,12 +182,15 @@
                  :path-patterns '("*.el"))))
     (setq section (mevedel-skills-prompt-section session))
     (should (string-match-p "## Skills" section))
-    (should (string-match-p "^- simplify: Review code$" section))
+    (should (string-match-p
+             "^- simplify \\[Read skill://simplify@[[:xdigit:]]+\\]: Review code$"
+             section))
     (should (string-match-p "^- plugin:flow: Plugin flow$" section))
     (should (string-match-p "\\$SkillName" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))
     (should (string-match-p "(Skill :name" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))
     (should (string-match-p "(ListSkills :query" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))
     (should (string-match-p "optional" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))
+    (should (string-match-p "skill://" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))
     (should (string-match-p "Quoted, escaped, or Markdown-code" (mevedel-system-render-prompt-file "prompts/system/skill-policy.md")))
     (should-not (string-match-p "Pretty Simplifier" section))
     (should-not (string-match-p "SKILL\\.md" section))

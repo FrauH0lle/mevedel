@@ -42,7 +42,7 @@
 (declare-function mevedel-sandbox--protected-remounts
                   "mevedel-sandbox-grants" (arguments permissions))
 (declare-function mevedel-sandbox--resolve-filesystem-permissions
-                  "mevedel-sandbox-grants" (permissions))
+                  "mevedel-sandbox-grants" (permissions &optional inaccessible-paths))
 (autoload 'mevedel-sandbox--additional-filesystem-mounts
   "mevedel-sandbox-grants")
 (autoload 'mevedel-sandbox--fd-backed-command "mevedel-sandbox-grants")
@@ -142,7 +142,6 @@ remote target is left untouched."
 (defconst mevedel-sandbox--marker-script
   (concat
    "if [ \"${MEVEDEL_SANDBOX_GRANT_FAILURE-}\" = 1 ]; then "
-   "printf '%s\\n' \"$1\"; "
    "printf '%s\\n' 'mevedel: exact filesystem grant changed before launch' >&2; "
    "exit 125; "
    "fi; printf '%s\\n' \"$1\"; shift; exec \"$@\"")
@@ -361,19 +360,32 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
           (setq found current))))
     found))
 
-(defun mevedel-sandbox--git-pointer-target (path)
-  "Return PATH's expanded Git directory pointer target, or nil."
+(defun mevedel-sandbox--git-pointer-targets (path)
+  "Return PATH's Git directory and any shared metadata directory.
+Resolve the `.git' pointer and its `commondir' file on PATH's target."
   (when (and (string-equal (file-name-nondirectory path) ".git")
              (file-regular-p path))
     (with-temp-buffer
       (insert-file-contents path nil 0 4096)
       (goto-char (point-min))
       (when (looking-at "gitdir:[[:space:]]*\\(.+\\)$")
-        (let ((target (string-trim (match-string 1)))
-              (target-prefix (file-remote-p path)))
-          (if (and target-prefix (file-name-absolute-p target))
-              (concat target-prefix target)
-            (expand-file-name target (file-name-directory path))))))))
+        (let* ((target (string-trim (match-string 1)))
+               (target-prefix (file-remote-p path))
+               (directory
+                (if (and target-prefix (file-name-absolute-p target))
+                    (concat target-prefix target)
+                  (expand-file-name target (file-name-directory path))))
+               (common-file (file-name-concat directory "commondir")))
+          (cons directory
+                (when (file-regular-p common-file)
+                  (erase-buffer)
+                  (insert-file-contents common-file nil 0 4096)
+                  (let ((common (string-trim (buffer-string))))
+                    (unless (string-empty-p common)
+                      (list
+                       (if (and target-prefix (file-name-absolute-p common))
+                           (concat target-prefix common)
+                         (expand-file-name common directory))))))))))))
 
 (defun mevedel-sandbox--protected-candidates
     (workdir writable-roots &optional temporary-root)
@@ -585,11 +597,13 @@ the targets behind."
             :warning)))))))
 
 (defun mevedel-sandbox--protected-restrictions
-    (workdir writable-roots &optional temporary-root)
+    (workdir writable-roots &optional temporary-root file-fd-start)
   "Compile protected restrictions for WORKDIR and WRITABLE-ROOTS.
 TEMPORARY-ROOT is exempt from glob discovery; see
-`mevedel-sandbox--protected-candidates'."
-  (let (restrictions cleanup-paths)
+`mevedel-sandbox--protected-candidates'.  FILE-FD-START is the first unused
+launcher descriptor for empty file masks, defaulting to 10."
+  (let ((next-file-fd (or file-fd-start 10)) restrictions cleanup-paths
+        git-common-directories)
     (condition-case err
         (progn
           (dolist (candidate
@@ -634,12 +648,15 @@ TEMPORARY-ROOT is exempt from glob discovery; see
                             :mode mode
                             :directory-p (file-directory-p path))
                       restrictions)
-                (let ((target (mevedel-sandbox--git-pointer-target path)))
-                  (when (and target (file-exists-p target))
-                    (push (list :path target
-                                :mode mode
-                                :directory-p (file-directory-p target))
-                          restrictions)))
+                (let ((targets (mevedel-sandbox--git-pointer-targets path)))
+                  (setq git-common-directories
+                        (append (cdr targets) git-common-directories))
+                  (dolist (target targets)
+                    (when (file-exists-p target)
+                      (push (list :path target
+                                  :mode mode
+                                  :directory-p (file-directory-p target))
+                            restrictions))))
                 (let ((canonical (file-truename path)))
                   (unless (string-equal canonical path)
                     (push (list :path canonical
@@ -683,8 +700,7 @@ TEMPORARY-ROOT is exempt from glob discovery; see
                          ;; found there -- a helper scratch holding a
                          ;; `.git' -- can vanish between planning and
                          ;; launch, and a plain `--ro-bind' then aborts
-                         ;; the whole launch and falls back to an
-                         ;; unconfined child.  A vanished source has
+                         ;; the whole launch.  A vanished source has
                          ;; nothing left to protect, so skip it.
                          ('read-only
                           (list "--ro-bind-try" path path))
@@ -695,11 +711,20 @@ TEMPORARY-ROOT is exempt from glob discovery; see
                                       (append post-arguments
                                               (list "--remount-ro" path)))
                                 (list "--perms" "000" "--tmpfs" path))
-                            (list "--ro-bind" "/dev/null" path
-                                  "--chmod" "000" path))))))))
+                            ;; Set permissions on a private empty file before
+                            ;; the readonly mount, never on a bound host inode.
+                            (list "--perms" "000" "--ro-bind-data"
+                                  (number-to-string
+                                   (prog1 next-file-fd (cl-incf next-file-fd)))
+                                  path))))))))
             (list :arguments arguments
+                  :git-common-directories (delete-dups git-common-directories)
                   :post-arguments post-arguments
                   :paths (mapcar #'car resolved)
+                  :inaccessible-paths
+                  (cl-loop for (path . restriction) in resolved
+                           when (eq (plist-get restriction :mode) 'inaccessible)
+                           collect path)
                   :cleanup-paths (nreverse cleanup-paths)
                   :count (length resolved))))
       (error
@@ -717,13 +742,15 @@ TEMPORARY-ROOT is exempt from glob discovery; see
         :network 'unrestricted
         :reason reason))
 
+(defun mevedel-sandbox--refused-facts (sandbox reason)
+  "Return facts for a child refused by SANDBOX for REASON."
+  (list :sandbox sandbox :filesystem 'unavailable :network 'unavailable
+        :reason reason :refused t))
+
 (defun mevedel-sandbox--refused-preparation (sandbox reason)
   "Return a refused preparation with SANDBOX facts and REASON."
-  (let ((facts
-         (plist-put
-          (mevedel-sandbox--unrestricted-facts sandbox reason)
-          :refused t)))
-    (list :state 'refused :error reason :facts facts)))
+  (list :state 'refused :error reason
+        :facts (mevedel-sandbox--refused-facts sandbox reason)))
 
 (defun mevedel-sandbox-pending-facts
     (&optional additional-permissions sandbox-permissions mode workdir)
@@ -732,8 +759,7 @@ TEMPORARY-ROOT is exempt from glob discovery; see
 ADDITIONAL-PERMISSIONS is the validated additive profile.
 SANDBOX-PERMISSIONS may be `require-escalated'.  This preview may probe the
 configured backend, but it does not prepare a command or mutate launch facts.
-A `best-effort' launch can still fall back if Bubblewrap later fails before
-the requested process starts.  MODE defaults to the global sandbox mode.
+MODE defaults to the global sandbox mode.
 WORKDIR identifies the execution target that the pending child will use."
   (let ((mode (mevedel-sandbox-mode-normalize
                (or mode mevedel-sandbox-mode))))
@@ -801,105 +827,113 @@ protected-path glob discovery."
     (let* ((marker (make-temp-name "MEVEDEL_SANDBOX_STARTED_"))
            (protected
             (mevedel-sandbox--protected-restrictions
-             canonical-workdir roots temporary-root))
-           (filesystem-permissions
-            (mevedel-sandbox--resolve-filesystem-permissions
-             (cl-remove-if
-              (lambda (grant)
-                (member (expand-file-name (plist-get grant :path))
-                        mevedel-sandbox-intrinsic-paths))
-              (plist-get additional-permissions :file-system))))
-           (effective-permissions
-            (plist-put (copy-sequence additional-permissions)
-                       :file-system filesystem-permissions))
-           (network-access-p
-            (eq t (plist-get effective-permissions :network)))
-           (filesystem-read-count
-            (cl-count 'read filesystem-permissions
-                      :key (lambda (grant) (plist-get grant :access))))
-           (filesystem-write-count
-            (cl-count 'write filesystem-permissions
-                      :key (lambda (grant) (plist-get grant :access))))
-           (protected-paths (plist-get protected :paths))
-           (ancestor-permissions
-            (cl-remove-if-not
-             (lambda (grant)
-               (cl-some
-                (lambda (grant-path)
-                  (let ((grant-path (directory-file-name grant-path)))
-                    (cl-some
-                     (lambda (protected-path)
-                       (and (not (string-equal grant-path protected-path))
-                            (string-prefix-p
-                             (file-name-as-directory grant-path)
-                             protected-path)))
-                     protected-paths)))
-                (mevedel-sandbox--grant-paths grant)))
-             filesystem-permissions))
-           (post-protection-permissions
-            (cl-set-difference filesystem-permissions ancestor-permissions
-                               :test #'eq))
-           (ancestor-mounts
-            (mevedel-sandbox--additional-filesystem-mounts
-             (list :file-system ancestor-permissions)))
-           (post-protection-mounts
-            (mevedel-sandbox--additional-filesystem-mounts
-             (list :file-system post-protection-permissions)
-             (+ 10 (length ancestor-permissions))))
-           (facts (list :sandbox 'bubblewrap
-                        :filesystem 'workspace-write
-                        :proc (if mount-proc-p 'fresh 'host)
-                        :network (if network-access-p
-                                     'unrestricted
-                                   'isolated)
-                        :writable-roots roots
-                        :protected-paths (plist-get protected :count)
-                        :additional-filesystem
-                        (length filesystem-permissions)
-                        :additional-filesystem-read filesystem-read-count
-                        :additional-filesystem-write filesystem-write-count))
-           (arguments
-            (append
-             (list "--new-session"
-                   "--die-with-parent"
-                   "--ro-bind" "/" "/"
-                   "--dev" "/dev")
-             (cl-mapcan
-              (lambda (root) (list "--bind" root root))
-              roots)
-             (plist-get ancestor-mounts :arguments)
-             (mevedel-sandbox--open-granted-paths
-              (plist-get protected :arguments)
-              effective-permissions)
-             (mevedel-sandbox--granted-path-mounts
-              (plist-get protected :arguments)
-              effective-permissions)
-             (plist-get post-protection-mounts :arguments)
-             (mevedel-sandbox--protected-remounts
-              (plist-get protected :post-arguments)
-              effective-permissions)
-             (list "--unshare-user"
-                   "--unshare-pid")
-             (unless network-access-p
-               (list "--unshare-net"))
-             (when mount-proc-p
-               (list "--proc" "/proc"))
-             (list "--chdir" canonical-workdir
-                   "--"
-                   "sh" "-c" mevedel-sandbox--marker-script
-                   "mevedel-sandbox" marker)
-             command)))
-      (list :state 'confined
-            :command
-            (mevedel-sandbox--fd-backed-command
-             (cons executable arguments)
-             (append (plist-get ancestor-mounts :grants)
-                     (plist-get post-protection-mounts :grants))
-             canonical-workdir)
-            :original-command command
-            :marker marker
-            :cleanup-paths (plist-get protected :cleanup-paths)
-            :facts facts))))
+             canonical-workdir roots temporary-root
+             (+ 10 (length (plist-get additional-permissions :file-system))))))
+      (condition-case err
+          (let* ((filesystem-permissions
+                  (mevedel-sandbox--resolve-filesystem-permissions
+                   (cl-remove-if
+                    (lambda (grant)
+                      (member (expand-file-name (plist-get grant :path))
+                              mevedel-sandbox-intrinsic-paths))
+                    (plist-get additional-permissions :file-system))
+                   (plist-get protected :inaccessible-paths)))
+                 (effective-permissions
+                  (plist-put (copy-sequence additional-permissions)
+                             :file-system filesystem-permissions))
+                 (network-access-p
+                  (eq t (plist-get effective-permissions :network)))
+                 (filesystem-read-count
+                  (cl-count 'read filesystem-permissions
+                            :key (lambda (grant) (plist-get grant :access))))
+                 (filesystem-write-count
+                  (cl-count 'write filesystem-permissions
+                            :key (lambda (grant) (plist-get grant :access))))
+                 (protected-paths (plist-get protected :paths))
+                 (ancestor-permissions
+                  (cl-remove-if-not
+                   (lambda (grant)
+                     (cl-some
+                      (lambda (grant-path)
+                        (let ((grant-path (directory-file-name grant-path)))
+                          (cl-some
+                           (lambda (protected-path)
+                             (and (not (string-equal grant-path protected-path))
+                                  (string-prefix-p
+                                   (file-name-as-directory grant-path)
+                                   protected-path)))
+                           protected-paths)))
+                      (mevedel-sandbox--grant-paths grant)))
+                   filesystem-permissions))
+                 (post-protection-permissions
+                  (cl-set-difference filesystem-permissions ancestor-permissions
+                                     :test #'eq))
+                 (ancestor-mounts
+                  (mevedel-sandbox--additional-filesystem-mounts
+                   (list :file-system ancestor-permissions)))
+                 (post-protection-mounts
+                  (mevedel-sandbox--additional-filesystem-mounts
+                   (list :file-system post-protection-permissions)
+                   (+ 10 (length ancestor-permissions))))
+                 (facts (list :sandbox 'bubblewrap
+                              :git-common-directories
+                              (mapcar #'file-local-name
+                                      (plist-get protected :git-common-directories))
+                              :filesystem 'workspace-write
+                              :proc (if mount-proc-p 'fresh 'host)
+                              :network (if network-access-p
+                                           'unrestricted
+                                         'isolated)
+                              :writable-roots roots
+                              :protected-paths (plist-get protected :count)
+                              :additional-filesystem
+                              (length filesystem-permissions)
+                              :additional-filesystem-read filesystem-read-count
+                              :additional-filesystem-write filesystem-write-count))
+                 (arguments
+                  (append
+                   (list "--new-session"
+                         "--die-with-parent"
+                         "--ro-bind" "/" "/"
+                         "--dev" "/dev")
+                   (cl-mapcan
+                    (lambda (root) (list "--bind" root root))
+                    roots)
+                   (plist-get ancestor-mounts :arguments)
+                   (mevedel-sandbox--open-granted-paths
+                    (plist-get protected :arguments)
+                    effective-permissions)
+                   (mevedel-sandbox--granted-path-mounts
+                    (plist-get protected :arguments)
+                    effective-permissions)
+                   (plist-get post-protection-mounts :arguments)
+                   (mevedel-sandbox--protected-remounts
+                    (plist-get protected :post-arguments)
+                    effective-permissions)
+                   (list "--unshare-user"
+                         "--unshare-pid")
+                   (unless network-access-p
+                     (list "--unshare-net"))
+                   (when mount-proc-p
+                     (list "--proc" "/proc"))
+                   (list "--chdir" canonical-workdir
+                         "--"
+                         "sh" "-c" mevedel-sandbox--marker-script
+                         "mevedel-sandbox" marker)
+                   command)))
+            (list :state 'confined
+                  :command
+                  (mevedel-sandbox--fd-backed-command
+                   (cons executable arguments)
+                   (append (plist-get ancestor-mounts :grants)
+                           (plist-get post-protection-mounts :grants))
+                   canonical-workdir)
+                  :marker marker
+                  :cleanup-paths (plist-get protected :cleanup-paths)
+                  :facts facts))
+        (error
+         (mevedel-sandbox-cleanup protected)
+         (signal (car err) (cdr err)))))))
 
 
 ;;
@@ -912,7 +946,7 @@ protected-path glob discovery."
   "Prepare child COMMAND for WORKDIR and WRITABLE-ROOTS.
 
 Return a plist with :state, :command, and :facts.  Confined preparations also
-carry :marker and :original-command.  A required but unavailable backend
+carry :marker.  A required but unavailable backend
 returns :state `refused' and :error without a command.
 ADDITIONAL-PERMISSIONS is a validated additive execution profile.
 SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval.
@@ -947,24 +981,14 @@ writable temporary directory that protected-path glob discovery skips."
                  (mevedel-sandbox-probe)))
          (if (plist-get availability :available)
              (condition-case err
-                 (let ((preparation
-                        (mevedel-sandbox--confined-preparation
-                         command workdir writable-roots
-                         (plist-get availability :executable)
-                         (plist-get availability :mount-proc)
-                         additional-permissions temporary-root)))
-                   (plist-put preparation :fallback-p
-                              (eq mode 'best-effort)))
-               (mevedel-sandbox-policy-error
-                (mevedel-sandbox--refused-preparation
-                 'refused (error-message-string err)))
+                 (mevedel-sandbox--confined-preparation
+                  command workdir writable-roots
+                  (plist-get availability :executable)
+                  (plist-get availability :mount-proc)
+                  additional-permissions temporary-root)
                (error
-                (let ((reason (error-message-string err)))
-                  (if (eq mode 'required)
-                      (mevedel-sandbox--refused-preparation
-                       'unavailable reason)
-                    (mevedel-sandbox--direct-preparation
-                     command 'unavailable reason)))))
+                (mevedel-sandbox--refused-preparation
+                 'refused (error-message-string err))))
            (let ((reason (plist-get availability :reason)))
              (if (eq mode 'required)
                  (mevedel-sandbox--refused-preparation
@@ -1017,7 +1041,7 @@ writable temporary directory that protected-path glob discovery skips."
          (reason
           (cond
            ((not (string-empty-p output))
-            (format "Bubblewrap failed before process start: %s" output))
+            (format "Confined launcher failed before process start: %s" output))
            ((plist-get child-result :error)
             (format "Sandbox launcher failed before process start: %s"
                     (error-message-string
@@ -1027,7 +1051,7 @@ writable temporary directory that protected-path glob discovery skips."
                     (or (plist-get child-result :exit-code) "unknown"))))))
     (setf (alist-get target mevedel-sandbox--probe-cache nil nil #'equal)
           (list :available nil :reason reason :retry-on-execution t))
-    (mevedel-sandbox--unrestricted-facts 'unavailable reason)))
+    (mevedel-sandbox--refused-facts 'refused reason)))
 
 (provide 'mevedel-sandbox)
 

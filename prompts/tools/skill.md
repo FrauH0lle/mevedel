@@ -15,8 +15,9 @@ A skill supplies task-specific instructions or a configured agent workflow.
 
 ### How to use `Skill`
 
-- `Read` inspects a skill's source; `Skill` runs its preparation and configured
-  workflow. Reading the file does not invoke the skill.
+- `Read` inspects a skill's source through its registered `skill://` address
+  from the roster or ListSkills; `Skill` runs its preparation and configured
+  workflow. Reading the source does not invoke the skill.
 - Use the exact canonical name from the user, roster, or ListSkills result,
   including a namespace when present. Queried dormant skills can be invoked;
   user-only or disabled skills cannot be invoked by this tool.

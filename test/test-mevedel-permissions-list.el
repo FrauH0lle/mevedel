@@ -88,6 +88,15 @@ Return the row's tabulated id."
                              (eq (plist-get item :scope) 'session))
                            items))))
 
+  :doc "shows an execution profile's remembered child grants after its pattern"
+  (mevedel-permissions-list-test--with-buffers
+    (setf (mevedel-session-permission-rules session)
+          '(("Bash" :pattern "npm test" :action allow
+             :file-system ((:path "/tmp/cache" :access write :recursive t)))))
+    (should (equal "npm test [write /tmp/cache (recursive)]"
+                   (plist-get (car (mevedel-permissions-list--collect context))
+                              :spec))))
+
   :doc "collects workspace authority alongside session authority"
   (mevedel-permissions-list-test--with-buffers
     (setf (mevedel-session-permission-rules session)
@@ -186,7 +195,7 @@ Return the row's tabulated id."
         (mevedel-permissions-list-revoke))
       (should-not tabulated-list-entries)))
 
-  :doc "labels recursive grants and revokes exactly the selected scope"
+  :doc "labels exact and recursive grants and revokes exactly the selected scope"
   (mevedel-permissions-list-test--with-buffers
     (let ((exact '(:path "/tmp/tree" :access read))
           (recursive '(:path "/tmp/tree" :access read :recursive t)))
@@ -194,6 +203,8 @@ Return the row's tabulated id."
             (list exact recursive))
       (with-current-buffer (mevedel-permissions-list-test--open context)
         (goto-char (point-min))
+        (should (cl-some (lambda (entry) (string-match-p "(exact)" (aref (cadr entry) 3)))
+                         tabulated-list-entries))
         (while (not (or (eobp)
                         (when-let* ((entry (tabulated-list-get-entry)))
                           (string-match-p "(recursive)" (aref entry 3)))))

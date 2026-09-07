@@ -267,13 +267,27 @@ the workspace permission file. Neither enters an unrelated session. ApplyPatch
 authority covers reading the same exact path, but read authority does not cover
 writes. An exact grant does not cover siblings or descendants; a grant carrying
 `:recursive t` covers the directory and everything beneath it, present and
-future, and is labeled `(recursive)` in prompts and the cockpit. Neither kind
+future. Prompts and the cockpit label every grant `(exact)` or `(recursive)`,
+and a remembered execution profile's row lists its child grants after the
+pattern. Neither kind
 adds workspace roots or authorizes Bash/Eval code. Revoking the grant restores
 the underlying
 workspace/protected-path restriction. Session-side paths use the same
 target-native codec as workspace authority, while another client's global
 rules are recomputed locally on resume. Invocation-only authority is consumed
 by the approved call and is not stored.
+
+The permission card keeps the original request visible. Press `g` to select
+the exact resource or an existing containing directory tree, including a higher
+ancestor, and its read/write access. For several execution resources, first
+choose which resource to change. The card shows the selected path in the
+execution target's native notation and labels exact and recursive scope.
+Selection alone neither creates a grant nor runs the tool. `RET` approves the
+current invocation, `s` remembers session authority, and `A` remembers workspace
+authority; one-shot interactions retain only their permitted lifetime choices.
+Approving a tree installs its grant before checking queued siblings. Rechecks
+retain the originating tool buffer and delegated rules, and a captured hook ask
+continues to require its own answer.
 
 Read-only tools also receive mevedel's installed package source directory as
 an allowed root, so the model can read bundled manuals named by an absolute
@@ -350,7 +364,13 @@ registers that head with `mevedel-view-interaction.el`, which owns ordering,
 callback overlays, and redraw. Rule-creating outcomes (`allow-session`,
 `deny-session`, `always-allow`) can coalesce
 queued siblings by re-running the decision chain. Resolved siblings leave the
-queue before any callback runs, and every queue exit uses the permission
+queue before any callback runs. Execution rechecks cover the operation and its
+complete requested filesystem/network authority, including capabilities that
+were already granted at admission. They retain the originating request,
+agent invocation, Plan restrictions, and frozen policy context. An operation
+rule alone cannot release a sibling that still lacks a capability; a directory
+grant alone cannot release an uncertain command in edits mode. Every queue exit
+uses the permission
 queue's exactly-once settlement gate. The queue is transient
 runtime state and is not written to the session sidecar; unfinished
 prompts are aborted on their owning request or root-session teardown. A child
@@ -467,6 +487,32 @@ Bash/Eval payloads. Prompt lifecycle events remain separate: queue
 enqueue/resolve/abort/coalesce events describe prompt handling without raw
 Bash commands or Eval expressions.
 
+Each queued card gets a `:permission-id` at admission, separate from the owning
+`:request-id` and nested tool-call identifiers. Its captured
+`:permission-mode-base` and `:permission-mode-effective` remain unchanged when
+the user changes modes while the card is pending. Eval's live/batch choice is
+recorded separately as `:eval-mode`. The visible card shows the admission mode
+and the cause supplied by the policy owner: mode-based operation judgment,
+resource boundary, protected resource, explicit ask rule, hook, missing
+additive filesystem/network authority, or execution without confinement.
+
+Count `permission-displayed` to measure actual initial card displays. Admission
+is `permission-enqueued`; refreshing a card's scope, queue count, or guardian
+guidance does not emit another display. Each admitted request settles once as
+`permission-resolved` for a user answer, `permission-coalesced` for a covering
+policy decision, `permission-swept` for owner-request teardown, or
+`permission-aborted` for cancellation, queue abort, or rendering failure.
+`:settlement-source` distinguishes these paths. A crash may leave an admission
+without a terminal record; that is an unrecorded outcome, not an approval.
+
+The permission log retains `:resource-originals` and `:selected-resources`,
+including path, read/write access, and `:recursive` extent (nil means exact),
+plus `:approval-lifetime` for invocation, session, or workspace approval.
+Unified telemetry retains the categorical identity, mode, cause, outcome, and
+lifetime fields, while its allowlist drops resource paths and capability
+payloads. Forwarded side-conversation events use the same categorical fields;
+feedback is recorded as a denial outcome without copying the user's text.
+
 ## Bash specifics
 
 Bash analysis returns a normalized command class, structured argument vectors,
@@ -538,25 +584,58 @@ mismatch refuses the child; `best-effort` does not retry that authority failure
 as an unrestricted launch. Beneath a masked parent it recreates only the link
 hops and empty traversal directories needed to reach that exact target.
 
+An inaccessible file is masked by a private empty file with mode 000, then
+mounted read-only. Dedicated launcher descriptors supply the empty contents;
+the child's stdin remains available. No chmod is applied to a host inode or an
+already read-only bind. Multiple masks and exact file additions share the
+existing descriptor-backed launcher with distinct descriptor numbers.
+
+Bubblewrap cannot add authority for only a directory inode: binding a directory
+also exposes its descendants. Exact directory write grants, and exact directory
+read grants beneath inaccessible masks, therefore refuse preparation with a
+message identifying the directory and the prompt's recursive-scope selection.
+An exact directory read already available through the baseline filesystem adds
+no mount. An explicitly approved recursive grant subsumes redundant exact
+mounts, without merging their separate identities in the authority store.
+
 A justified additive filesystem request names exact absolute paths and marks
 each as read or write. Ungranted paths prompt in every permission mode;
 invocation, session, and persistent approvals use the same resource-grant
 store as native filesystem tools. Reusable approval also records those
-requirements in the matching operation profile. User-authored profile entries
-may carry `:recursive t`, exposing the directory tree through one bind mount
-at the entry's access level; model-facing requests name exact paths only. A
+requirements in the matching operation profile. The card's `g` selection can
+broaden a requested file or directory to a containing tree. Both the current
+child and a selected remembered profile receive that explicit extent. Narrowing
+the remembering toggles does not narrow the current invocation's approval.
+The default remembered selection includes every requested capability, including
+ones already granted before the card appeared. The network and path toggles
+therefore cover the complete request, rather than only its missing additions.
+Recursive profile entries carry `:recursive t`, exposing the directory tree
+through one bind mount at the selected access level; model-facing requests
+name exact paths only. A
 later matching default call
 reattaches a path only while both the profile and a sufficient direct resource
 grant remain — recursive requirements need a recursive grant containing them —
 and removing either immediately restores confinement. Approved paths
 are rebound at only the requested access level. A grant that contains a
 protected descendant is bound before that descendant is masked; all other
-grants are bound after protected masks are installed. Inaccessible parents
+grants are bound after protected masks are installed. An explicit write grant
+supersedes the read-only restriction at that exact mount, including when the
+mount precedes protected children. It does not remove those children's masks.
+Inaccessible parents
 expose traversal only far enough to reach the named mount, so their contents
 and sibling resources remain hidden. Command or Eval authorization is resolved
 independently and is never supplied by the resource grant. Explicit path denies
 remain final. Network and filesystem additions may be combined without
 changing any unrequested confinement boundary.
+
+Protected linked-worktree `.git` pointers resolve both the worktree metadata
+directory and its `commondir` target. Both retain the applicable protection.
+Failed confined results identify the discovered shared metadata location for
+objects and refs; this is repository-layout information, not a diagnosis
+inferred from stderr or an automatic grant. A new explicit invocation can
+request the missing scope. Real prompt-to-launch tests cover staging and
+committing with both metadata trees approved, and verify that another
+repository remains unwritable.
 
 Before Bash or batch Eval starts, one shared resolver merges capabilities
 explicitly requested by that invocation with every matching direct
@@ -583,33 +662,32 @@ requires a justification and cannot be combined with additive permissions. It
 prompts in every permission mode, including `full-auto`, unless a matching
 direct user-authored `:sandbox-permissions require-escalated` rule already
 exists. The prompt and diagnostics explicitly identify that filesystem,
-network, and process confinement will all be disabled. Once approved, the child
-runs directly as the user and reports `sandbox: escalated`. Delegated rules
+network, and process confinement will all be disabled. Operation denials,
+including Bash mutations prohibited by Plan, still apply before escalation.
+Explicit operation ask rules retain their prompt even when a remembered rule
+already authorizes escalation. Once approved, the child runs directly as the
+user and reports `sandbox: escalated`. Delegated rules
 cannot grant this authority, and non-interactive trusted skill expansion cannot
 request it or create reusable escalation rules. An ordinary sub-agent may still
 place the same user-visible request in the shared permission queue.
 
-Interactive full-escalation prompts offer reusable allow only for Bash input
-that is neither dangerous nor complex and contains no glob metacharacters.
 Literal stable Bash commands, including dangerous commands, and literal batch
 Eval expressions may be remembered exactly. Dynamic, glob-bearing, or otherwise
 ambiguous Bash remains invocation-only; experts may still author an exact,
 scoped, or deliberately broad qualified rule directly. Reusable deny remains
 available because it can only reduce authority.
 
-`best-effort` executes directly when the initial probe is unavailable. For the narrow
-race where a later Bubblewrap launch fails, a marker emitted immediately before
-`exec` proves whether the requested process started: only a missing marker
-permits one direct fallback. A command failure, signal, or timeout after the
-marker is returned exactly once and is never replayed. `required` returns an
-execution error instead of falling back, while `off` selects direct execution
-deliberately. Direct execution always reports `filesystem: unrestricted` and
-`network: unrestricted`. A pre-marker failure retains its launcher error,
-Bubblewrap diagnostics, or exit code and remains visible until the next child
-execution reprobes the backend; one transient launch failure therefore does not
-disable confinement permanently. The failed launcher is detached before the
-replacement starts, so a late launcher sentinel cannot settle the direct
-attempt. Bash and batch-Eval results append their active
+`best-effort` executes directly when the initial probe is unavailable. Once
+confined preparation begins, a failure is returned without an unrestricted
+replacement. A private marker emitted immediately before `exec` distinguishes
+launch refusal from a started command; grant refusals do not emit that marker.
+Signals, timeouts, and ordinary command failures are returned once and never
+replayed. `required` refuses an unavailable backend, while `off` selects direct
+execution deliberately. Direct execution reports `filesystem: unrestricted`
+and `network: unrestricted`; refused attempts report unavailable boundaries.
+A pre-marker failure retains its launcher error, diagnostics, or exit code.
+The next independent invocation reprobes the backend, so a transient launch
+failure does not disable confinement permanently. Bash and batch-Eval results append their active
 sandbox facts for the model and audit trail. Native helper facts remain
 internal and in tests rather than being added to successful tool content.
 Trusted skill substitutions keep those facts out of the substituted literal.

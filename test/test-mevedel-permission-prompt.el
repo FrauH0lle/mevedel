@@ -119,7 +119,7 @@
            (entry
             `(:session session
               :remember-authority-cell ,cell
-              :missing-additional-permissions (:network t))))
+              :requested-additional-permissions (:network t))))
       (insert "prompt")
       (let ((ov (make-overlay (point-min) (point-max))))
         (overlay-put ov 'mevedel-permission-prompt t)
@@ -148,7 +148,7 @@
            (entry
             `(:session ,session
               :remember-authority-cell ,cell
-              :missing-additional-permissions
+              :requested-additional-permissions
               (:file-system (,grant)))))
       (insert "prompt")
       (let ((ov (make-overlay (point-min) (point-max))))
@@ -157,7 +157,7 @@
         (goto-char (point-min))
         (cl-letf (((symbol-function 'completing-read)
                    (lambda (_prompt choices &rest _)
-                     (should (equal "Write /external" (caar choices)))
+                         (should (equal "Write /external (exact)" (caar choices)))
                      (caar choices)))
                   ((symbol-function
                     'mevedel-permission-queue--render-head)
@@ -176,7 +176,7 @@
            (entry
             `(:session ,session
               :remember-authority-cell ,cell
-              :missing-additional-permissions
+              :requested-additional-permissions
               (:file-system (,exact ,recursive)))))
       (insert "prompt")
       (let ((ov (make-overlay (point-min) (point-max))))
@@ -185,7 +185,7 @@
         (goto-char (point-min))
         (cl-letf (((symbol-function 'completing-read)
                    (lambda (_prompt choices &rest _)
-                     (should (equal '("Read /srv/tree"
+                     (should (equal '("Read /srv/tree (exact)"
                                       "Read /srv/tree (recursive)")
                                     (mapcar #'car choices)))
                      "Read /srv/tree (recursive)"))
@@ -205,7 +205,7 @@
   ,test
   (test)
   :doc "formats exact and recursive grant labels"
-  (should (equal "Read /srv/tree"
+  (should (equal "Read /srv/tree (exact)"
                  (mevedel-permission--resource-label
                   nil '(:path "/srv/tree" :access read))))
   (should (equal "Write /srv/tree (recursive)"
@@ -257,7 +257,7 @@
              :reusable-operation-p t
              :remember-authority-cell
              ((:operation t :file-system (,write)))
-             :missing-additional-permissions
+             :requested-additional-permissions
              (:network t :file-system (,write))))))
     (should (string-match-p "\\[x\\] Command" text))
     (should (string-match-p "\\[ \\] Network with command" text))
@@ -273,7 +273,7 @@
           (mevedel-permission--format-remember-authority
            `(:session ,session
              :remember-authority-cell ((:operation t))
-             :missing-additional-permissions
+             :requested-additional-permissions
              (:file-system (,grant))))))
     (should (string-match-p
              (regexp-quote "[ ] Read /srv/tree (recursive)") text))))
@@ -286,15 +286,39 @@
   (cl-letf (((symbol-function 'gptel-agent--block-bg)
              (lambda () 'ask)))
     (should (string-match-p
-             "remember selected profile for session"
+             "remember selected authority for session"
              (mevedel-permission--prompt-body "Body\n" nil))))
 
   :doc "suppresses session allow without suppressing session deny"
   (cl-letf (((symbol-function 'gptel-agent--block-bg)
              (lambda () 'ask)))
     (let ((body (mevedel-permission--prompt-body "Body\n" nil t)))
-      (should-not (string-match-p "remember selected profile for session" body))
+      (should-not (string-match-p "remember selected authority for session" body))
       (should (string-match-p "deny-session" body)))))
+
+(mevedel-deftest mevedel-permission--format-cause
+  ()
+  ,test
+  (test)
+  :doc "admission mode and cause are distinct from Eval execution mode"
+  (dolist (case '((workspace-boundary "outside")
+                  (protected-path "protected")
+                  (rule "rule")
+                  (pre-tool-hook "PreToolUse")
+                  (permission-request-hook "PermissionRequest")
+                  (one-shot-mutation "one-time")
+                  (mode "operation")
+                  (sandbox-network "network")
+                  (sandbox-filesystem "filesystem")
+                  (sandbox-full-escalation "without confinement")))
+    (let ((body (mevedel-permission--format-cause
+                 (list :permission-mode-effective 'full-auto
+                       :mode "batch" :permission-via (car case)))))
+      (should (string-match-p "full-auto" body))
+      (should (string-match-p (cadr case) body))
+      (should-not (string-match-p "batch" body))))
+  :doc "absent policy provenance is not guessed from the tool kind"
+  (should-not (mevedel-permission--format-cause '(:kind bash))))
 
 (mevedel-deftest mevedel-permission--prompt-async-with-content
   ()
@@ -346,7 +370,7 @@
          "Body\n" t #'ignore nil
          '(:reusable-operation-p t
            :remember-authority-cell ((:operation t))
-           :missing-additional-permissions
+           :requested-additional-permissions
            (:network t
             :file-system ((:path "/external" :access read))))))
       (dolist (key '("c" "n" "p" "s" "A"))

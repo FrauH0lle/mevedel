@@ -491,7 +491,7 @@ connection charges for, so the program path is proved here too."
 ;;
 ;;; Remote execution
 
-(mevedel-deftest mevedel-execution-run-one-shot/remote ()
+(mevedel-deftest mevedel-execution-run-one-shot/remote (:quiet t)
   ,test
   (test)
   :doc "dispatches in a TRAMP workspace and hides launcher control output"
@@ -749,7 +749,7 @@ connection charges for, so the program path is proved here too."
       (delete-directory external-root t)
       (delete-directory root t)))))
 
-(mevedel-deftest mevedel-execution-start-bash/remote ()
+(mevedel-deftest mevedel-execution-start-bash/remote (:quiet t)
   ,test
   (test)
   :doc "keeps the live spool local and out of model-facing target facts"
@@ -1125,7 +1125,7 @@ connection charges for, so the program path is proved here too."
 
 
 
-(mevedel-deftest mevedel-execution-unsettled-mutation-p ()
+(mevedel-deftest mevedel-execution-unsettled-mutation-p (:quiet t)
   ,test
   (test)
   :doc "reports a durable latch even when no transient process record exists"
@@ -1919,7 +1919,7 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel-real-remote-alias-only
-  (:tags (external remote aliases))
+  (:quiet t :tags (external remote aliases))
   ,test
   (test)
   :doc "runs only the two-alias publication and Save As acceptance"
@@ -1928,7 +1928,7 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
     (ert-skip "Alias-only acceptance is not enabled")))
 
 (mevedel-deftest mevedel-real-remote-transfer-only
-  (:tags (external remote control-transfer))
+  (:quiet t :tags (external remote control-transfer))
   ,test
   (test)
   :doc "runs only the independent SSH control-transfer acceptance"
@@ -1936,7 +1936,7 @@ SCENARIO is `transfer', `crash-long', or `recovery'."
    "MEVEDEL_TEST_SSH_ROOT" 'ssh))
 
 (mevedel-deftest mevedel-real-remote-client-recovery-only
-  (:tags (external remote control-transfer recovery))
+  (:quiet t :tags (external remote control-transfer recovery))
   ,test
   (test)
   :doc "runs crashed-client takeover and second-client recovery on SSH"
@@ -2574,7 +2574,7 @@ work in flight genuinely unprovable rather than merely finished."
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel-real-remote-acceptance
-  (:tags (external remote))
+  (:quiet t :tags (external remote))
   ,test
   (test)
   :doc "exercises the core opt-in real SSH transport matrix"
@@ -2588,7 +2588,7 @@ work in flight genuinely unprovable rather than merely finished."
    "MEVEDEL_TEST_PODMAN_ROOT" 'podman))
 
 (mevedel-deftest mevedel-real-remote-loss
-  (:tags (external remote connection-loss))
+  (:quiet t :tags (external remote connection-loss))
   ,test
   (test)
   :doc "classifies unprovable real SSH loss and cleans its descendant"
@@ -2602,7 +2602,7 @@ work in flight genuinely unprovable rather than merely finished."
    "MEVEDEL_TEST_PODMAN_ROOT" 'podman))
 
 (mevedel-deftest mevedel-real-remote-bwrap
-  (:tags (external remote sandbox))
+  (:quiet t :tags (external remote sandbox))
   ,test
   (test)
   :doc "confines an exact symlink grant through real SSH Bubblewrap"

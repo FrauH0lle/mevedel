@@ -1218,59 +1218,6 @@ it briefly so repeated owner polls return the same result."
         :timed-out-p (mevedel-execution--record-timed-out-p record)
         :error (mevedel-execution--record-error-data record)))
 
-(defun mevedel-execution--restart-unconfined (record facts)
-  "Restart RECORD's original command without confinement using FACTS."
-  (let* ((preparation
-          (mevedel-execution--record-sandbox-preparation record))
-         (session
-          (mevedel-execution--origin-session
-           (mevedel-execution--record-origin record)))
-         (facts (mevedel-execution-telemetry-mark-direct-fallback session facts)))
-    (apply #'mevedel-execution--telemetry
-           record 'sandbox-fallback
-           :launch-failure-stage 'before-command-start
-           :launch-failure-reason-class 'sandbox-launch-failure
-           :fallback-offered t
-           :full-execution-approval-offered nil
-           (mevedel-execution-telemetry-safe-facts facts))
-    (apply #'mevedel-execution--telemetry
-           record 'execution-unrestricted
-           :reason-class 'sandbox-launch-failure
-           :after-confined-launch-failure t
-           (mevedel-execution-telemetry-safe-facts facts))
-    (let ((spool-path (mevedel-execution--spool-path record)))
-      (mevedel-execution--release-runtime record)
-      (setf (mevedel-execution--record-child record)
-            (mevedel-execution--create-child record spool-path)))
-    (mevedel-sandbox-cleanup preparation)
-    (let ((coding-system-for-write 'no-conversion))
-      (write-region "" nil (mevedel-execution--spool-path record)
-                    nil 'silent))
-    (setf (mevedel-execution--record-exit-code record) nil
-          (mevedel-execution--record-error-data record) nil
-          (mevedel-execution--record-marker record) nil
-          (mevedel-execution--record-marker-buffer record) :done
-          (mevedel-execution--record-marker-seen-p record) nil
-          (mevedel-execution--record-last-byte-newline-p record) nil
-          (mevedel-execution--record-newline-count record) 0
-          (mevedel-execution--record-output-chars record) 0
-          (mevedel-execution--record-output-head record) ""
-          (mevedel-execution--record-output-limit-p record) nil
-          (mevedel-execution--record-output-tail record) ""
-          (mevedel-execution--record-read-offset record) 0
-          (mevedel-execution--record-sandbox-facts record) facts
-          (mevedel-execution--record-sandbox-preparation record) nil
-          (mevedel-execution--record-stop-p record) nil
-          (mevedel-execution--record-termination record) nil
-          (mevedel-execution--record-timed-out-p record) nil
-          (mevedel-execution--record-unread-chars record) 0
-          (mevedel-execution--record-unread-head record) ""
-          (mevedel-execution--record-unread-tail record) "")
-    (mevedel-execution--launch-managed
-     record (plist-get preparation :original-command))
-    (unless (mevedel-execution--record-finished-p record)
-      (mevedel-execution--arm-managed-timers record))))
-
 (defun mevedel-execution--release-scheduler (record)
   "Release RECORD's scheduler lease exactly once."
   (when-let* ((lease (mevedel-execution--record-scheduler-lease record)))
@@ -1289,67 +1236,56 @@ it briefly so repeated owner polls return the same result."
            (launch-failed
             (and child-result
                  (mevedel-sandbox-launch-failed-p preparation child-result))))
-      (if (and launch-failed
-               (plist-get preparation :fallback-p)
-               (not (mevedel-execution--record-stop-p record))
-               (not (mevedel-execution--record-yielded-p record)))
-          (mevedel-execution--restart-unconfined
-           record (mevedel-sandbox--record-launch-failure
-                   child-result (mevedel-execution--record-workdir record)))
-        (when launch-failed
-          (let ((facts
-                 (mevedel-sandbox--record-launch-failure
-                  child-result (mevedel-execution--record-workdir record))))
-            (unless (plist-get preparation :fallback-p)
-              (setq facts
-                    (plist-put (copy-sequence facts) :refused t)))
-            (setf (mevedel-execution--record-sandbox-facts record) facts)))
-        (when preparation
-          (mevedel-sandbox-cleanup preparation))
-        (setf (mevedel-execution--record-finished-p record) t)
-        (mevedel-execution--settle-mutation record)
-        (let* ((facts (mevedel-execution--record-sandbox-facts record))
-               (refused-p (plist-get facts :refused))
-               (started-p
-                (and (not refused-p)
-                     (not launch-failed)
-                     (mevedel-execution-process-launch-attempted-p
-                      (mevedel-execution--record-child record)))))
-          (mevedel-execution-telemetry-record-sandbox-attempt
-           (mevedel-execution--record-telemetry-context record)
-           facts started-p refused-p))
-        (apply #'mevedel-execution--telemetry
-               record 'execution-finished
-               :exit-code (mevedel-execution--record-exit-code record)
-               :termination (mevedel-execution--termination record)
-               :duration-ms
-               (round (* 1000.0
-                         (- (float-time)
-                            (mevedel-execution--record-started-at record))))
-               :output-bytes (mevedel-execution--record-output-bytes record)
-               :output-limit (and (mevedel-execution--record-output-limit-p
-                                   record)
-                                  t)
-               :timed-out (and (mevedel-execution--record-timed-out-p record)
-                               t)
-               (append
-                (mevedel-execution-telemetry-context-properties
-                 (mevedel-execution--record-telemetry-context record))
-                (mevedel-execution-telemetry-safe-facts
-                 (mevedel-execution--record-sandbox-facts record))))
-        (mevedel-execution--notify-state-change record)
-        (mevedel-execution--release-runtime record)
-        (mevedel-execution--release-scheduler record)
-        (if (mevedel-execution--record-yielded-p record)
-            (if (mevedel-execution--record-observer record)
-                (mevedel-execution--deliver-observer record)
-              (when mevedel-execution-mailbox-delivery-function
-                (mevedel-execution--deliver-independent record)))
-          (let ((callback (mevedel-execution--record-callback record)))
-            (unless (eq (mevedel-execution--record-delivery-state record)
-                        'discarded)
-              (funcall callback
-                       (mevedel-execution--observation record t)))))))))
+      (when launch-failed
+        (setf (mevedel-execution--record-sandbox-facts record)
+              (mevedel-sandbox--record-launch-failure
+               child-result (mevedel-execution--record-workdir record))))
+      (when preparation
+        (mevedel-sandbox-cleanup preparation))
+      (setf (mevedel-execution--record-finished-p record) t)
+      (mevedel-execution--settle-mutation record)
+      (let* ((facts (mevedel-execution--record-sandbox-facts record))
+             (refused-p (plist-get facts :refused))
+             (started-p
+              (and (not refused-p)
+                   (not launch-failed)
+                   (mevedel-execution-process-launch-attempted-p
+                    (mevedel-execution--record-child record)))))
+        (mevedel-execution-telemetry-record-sandbox-attempt
+         (mevedel-execution--record-telemetry-context record)
+         facts started-p refused-p))
+      (apply #'mevedel-execution--telemetry
+             record 'execution-finished
+             :exit-code (mevedel-execution--record-exit-code record)
+             :termination (mevedel-execution--termination record)
+             :duration-ms
+             (round (* 1000.0
+                       (- (float-time)
+                          (mevedel-execution--record-started-at record))))
+             :output-bytes (mevedel-execution--record-output-bytes record)
+             :output-limit (and (mevedel-execution--record-output-limit-p
+                                 record)
+                                t)
+             :timed-out (and (mevedel-execution--record-timed-out-p record)
+                             t)
+             (append
+              (mevedel-execution-telemetry-context-properties
+               (mevedel-execution--record-telemetry-context record))
+              (mevedel-execution-telemetry-safe-facts
+               (mevedel-execution--record-sandbox-facts record))))
+      (mevedel-execution--notify-state-change record)
+      (mevedel-execution--release-runtime record)
+      (mevedel-execution--release-scheduler record)
+      (if (mevedel-execution--record-yielded-p record)
+          (if (mevedel-execution--record-observer record)
+              (mevedel-execution--deliver-observer record)
+            (when mevedel-execution-mailbox-delivery-function
+              (mevedel-execution--deliver-independent record)))
+        (let ((callback (mevedel-execution--record-callback record)))
+          (unless (eq (mevedel-execution--record-delivery-state record)
+                      'discarded)
+            (funcall callback
+                     (mevedel-execution--observation record t))))))))
 
 (defun mevedel-execution--publish-yielded-artifact (record)
   "Publish RECORD's spool without moving a file still being appended.
@@ -1495,14 +1431,12 @@ process-filter appends use the published path."
                    (- (float-time)
                       (mevedel-execution--record-started-at record))))
          :preparation-state (plist-get preparation :state)
-         :fallback-possible (and (plist-get preparation :fallback-p) t)
          (mevedel-execution-telemetry-safe-facts
           (plist-get preparation :facts)))
   (when (eq (plist-get preparation :state) 'unrestricted)
     (apply #'mevedel-execution--telemetry
            record 'execution-unrestricted
            :reason-class (plist-get (plist-get preparation :facts) :sandbox)
-           :after-confined-launch-failure nil
            (mevedel-execution-telemetry-safe-facts
             (plist-get preparation :facts))))
   (pcase (plist-get preparation :state)
@@ -2250,8 +2184,7 @@ discards the process without invoking CALLBACK."
           (append
            (list :name name :owner owner
                  :reason-class
-                 (plist-get (plist-get preparation :facts) :sandbox)
-                 :after-confined-launch-failure nil)
+                 (plist-get (plist-get preparation :facts) :sandbox))
            (mevedel-execution-telemetry-safe-facts
             (plist-get preparation :facts))))
          (setq started-p
@@ -2271,55 +2204,18 @@ discards the process without invoking CALLBACK."
               (let ((launch-failed
                      (mevedel-sandbox-launch-failed-p
                       preparation child-result)))
-                (if (and (plist-get preparation :fallback-p) launch-failed)
-                    (let ((facts
-                           (mevedel-execution-telemetry-mark-direct-fallback
-                            session
-                            (mevedel-sandbox--record-launch-failure
-                             child-result workdir))))
-                      (setq started-p nil
-                            current-facts facts)
-                      (mevedel-execution-telemetry-record
-                       telemetry-context 'sandbox-fallback
-                       (append
-                        (list
-                         :name name :owner owner
-                         :launch-failure-stage 'before-command-start
-                         :launch-failure-reason-class 'sandbox-launch-failure
-                         :fallback-offered t
-                         :full-execution-approval-offered nil)
-                        (mevedel-execution-telemetry-safe-facts facts)))
-                      (mevedel-execution-telemetry-record
-                       telemetry-context 'execution-unrestricted
-                       (append
-                        (list :name name :owner owner
-                              :reason-class 'sandbox-launch-failure
-                              :after-confined-launch-failure t)
-                        (mevedel-execution-telemetry-safe-facts facts)))
-                      (mevedel-sandbox-cleanup preparation)
-                      (setq
-                       started-p
-                       (and
-                        (mevedel-execution--start-process
-                         (lambda (fallback-result)
-                           (finish fallback-result facts))
-                         name (plist-get preparation :original-command)
-                         workdir timeout session owner #'teardown))))
-                  (let ((facts
-                         (if launch-failed
-                             (plist-put
-                              (copy-sequence
-                               (mevedel-sandbox--record-launch-failure
-                                child-result workdir))
-                              :refused t)
-                           (plist-get preparation :facts)))
-                        (clean-result
-                         (mevedel-sandbox-strip-marker
-                          preparation child-result)))
-                    (setq started-p (not launch-failed)
-                          current-facts facts)
-                    (mevedel-sandbox-cleanup preparation)
-                    (finish clean-result facts)))))
+                (let ((facts
+                       (if launch-failed
+                           (mevedel-sandbox--record-launch-failure
+                            child-result workdir)
+                         (plist-get preparation :facts)))
+                      (clean-result
+                       (mevedel-sandbox-strip-marker
+                        preparation child-result)))
+                  (setq started-p (not launch-failed)
+                        current-facts facts)
+                  (mevedel-sandbox-cleanup preparation)
+                  (finish clean-result facts))))
             name (plist-get preparation :command) workdir timeout session owner
             #'teardown))))
         (_ (error "Unknown sandbox preparation state: %s"

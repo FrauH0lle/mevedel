@@ -786,6 +786,18 @@
      "ok" '(:sandbox-facts
             (:sandbox bubblewrap :filesystem workspace-write :network isolated)))
     "ok\n\n[sandbox: bubblewrap; filesystem: workspace-write; network: isolated]"))
+  :doc "authority preparation refusal:
+invalid grants retain the specific reason and do not prescribe full escalation"
+  (let ((text
+         (mevedel-tool-exec--sandbox-disclosure
+          "Exact directory access cannot be confined: /example/cache"
+          '(:sandbox-facts (:sandbox refused :refused t :filesystem none
+                                    :network none
+                                    :reason "Exact directory access cannot be confined: /example/cache"))
+          nil t)))
+    (should (string-match-p "Exact directory access cannot be confined" text))
+    (should-not (string-match-p "unavailable" text))
+    (should-not (string-match-p "require_escalated" text)))
   :doc "first fallback disclosure:
 `mevedel-tool-exec--sandbox-disclosure' includes one model-visible note"
   (should
