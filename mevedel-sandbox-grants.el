@@ -3,9 +3,10 @@
 ;;; Commentary:
 
 ;; Compiles authorized file and directory-tree grants into FD-backed Bubblewrap
-;; mounts.  Symlink grants retain their host source path, every link hop, and
-;; the canonical mount target so protected parent masks can be rebuilt without
-;; broadening the granted resource.
+;; mounts, and lays them out against the protected-path restrictions in one
+;; mount plan.  Symlink grants retain their host source path, every link hop,
+;; and the canonical mount target so protected parent masks can be rebuilt
+;; without broadening the granted resource.
 
 ;;; Code:
 
@@ -167,166 +168,176 @@ FIRST-FD defaults to 10."
               (list "Filesystem grant lacks an exact identity")))
     identity))
 
-(defun mevedel-sandbox--fd-backed-command (command grants &optional workdir)
+(defun mevedel-sandbox--fd-backed-command
+    (command grants &optional mask-fds workdir)
   "Wrap COMMAND to preserve exact target GRANTS on file descriptors.
-Also open empty input descriptors for compiled protected-file masks.
+MASK-FDS are the empty input descriptors backing protected-file masks.
 When WORKDIR is remote, discover and launch the wrapper on that target."
-  (let ((empty-fds
-         (cl-loop for tail on command
-                  until (equal (car tail) "--")
-                  when (equal (car tail) "--ro-bind-data")
-                  collect (string-to-number (cadr tail)))))
-    (if (not (or grants empty-fds))
-        command
-      (let* ((remote (and workdir (file-remote-p workdir)))
-             (bash
-              (if remote
-                  (with-temp-buffer
-                    (setq default-directory workdir)
-                    (executable-find "bash" remote))
-                (executable-find "bash"))))
-        (unless bash
+  (if (not (or grants mask-fds))
+      command
+    (let* ((remote (and workdir (file-remote-p workdir)))
+           (bash
+            (if remote
+                (with-temp-buffer
+                  (setq default-directory workdir)
+                  (executable-find "bash" remote))
+              (executable-find "bash"))))
+      (unless bash
+        (signal 'mevedel-sandbox-policy-error
+                '("Additive filesystem confinement requires 'bash'")))
+      (let ((stat
+             (if remote
+                 (with-temp-buffer
+                   (setq default-directory workdir)
+                   (executable-find "stat" remote))
+               (executable-find "stat"))))
+        (when (and grants (not stat))
           (signal 'mevedel-sandbox-policy-error
-                  '("Additive filesystem confinement requires 'bash'")))
-        (let ((stat
-               (if remote
-                   (with-temp-buffer
-                     (setq default-directory workdir)
-                     (executable-find "stat" remote))
-                 (executable-find "stat"))))
-          (when (and grants (not stat))
-            (signal 'mevedel-sandbox-policy-error
-                    '("Additive filesystem confinement requires 'stat'")))
-          (let* ((count (length grants))
-                 (open-forms
-                  (cl-loop for fd from 10 repeat count
-                           collect
-                           (format
-                            (concat
-                             "if ! exec %d<\"$1\"; then "
-                             "export MEVEDEL_SANDBOX_GRANT_FAILURE=1; "
-                             "exec %d<&0; "
-                             "fi; "
-                             "actual=$(%s -Lc '%%d:%%i' /proc/self/fd/%d "
-                             "2>/dev/null) || "
-                             "export MEVEDEL_SANDBOX_GRANT_FAILURE=1; "
-                             "if [ \"$actual\" != \"$2\" ]; then "
-                             "export MEVEDEL_SANDBOX_GRANT_FAILURE=1; "
-                             "fi; shift 2")
-                            fd fd (shell-quote-argument stat) fd)))
-                 (script
-                  (string-join
-                   (append
-                    ;; A target exporting POSIXLY_CORRECT puts `bash -p -c' in
-                    ;; posix mode, where a failed `exec' redirection kills the
-                    ;; shell instead of setting the failure flag.  Keep the
-                    ;; controlled grant-refusal diagnostic in that case too.
-                    (list "set +o posix"
-                          "unset MEVEDEL_SANDBOX_GRANT_FAILURE")
-                    open-forms
-                    (mapcar (lambda (fd) (format "exec %d</dev/null || exit 125" fd))
-                            empty-fds)
-                    (list "exec \"$@\""))
-                   "; ")))
-            (append
-             (list bash "-p" "-c" script "mevedel-sandbox-fds")
-             (cl-mapcan
-              (lambda (grant)
-                (list (plist-get grant :source-path)
-                      (mevedel-sandbox--grant-identity grant)))
-              grants)
-             command)))))))
+                  '("Additive filesystem confinement requires 'stat'")))
+        (let* ((count (length grants))
+               (open-forms
+                (cl-loop for fd from 10 repeat count
+                         collect
+                         (format
+                          (concat
+                           "if ! exec %d<\"$1\"; then "
+                           "export MEVEDEL_SANDBOX_GRANT_FAILURE=1; "
+                           "exec %d<&0; "
+                           "fi; "
+                           "actual=$(%s -Lc '%%d:%%i' /proc/self/fd/%d "
+                           "2>/dev/null) || "
+                           "export MEVEDEL_SANDBOX_GRANT_FAILURE=1; "
+                           "if [ \"$actual\" != \"$2\" ]; then "
+                           "export MEVEDEL_SANDBOX_GRANT_FAILURE=1; "
+                           "fi; shift 2")
+                          fd fd (shell-quote-argument stat) fd)))
+               (script
+                (string-join
+                 (append
+                  ;; A target exporting POSIXLY_CORRECT puts `bash -p -c' in
+                  ;; posix mode, where a failed `exec' redirection kills the
+                  ;; shell instead of setting the failure flag.  Keep the
+                  ;; controlled grant-refusal diagnostic in that case too.
+                  (list "set +o posix"
+                        "unset MEVEDEL_SANDBOX_GRANT_FAILURE")
+                  open-forms
+                  (mapcar (lambda (fd) (format "exec %d</dev/null || exit 125" fd))
+                          mask-fds)
+                  (list "exec \"$@\""))
+                 "; ")))
+          (append
+           (list bash "-p" "-c" script "mevedel-sandbox-fds")
+           (cl-mapcan
+            (lambda (grant)
+              (list (plist-get grant :source-path)
+                    (mevedel-sandbox--grant-identity grant)))
+            grants)
+           command))))))
 
-(defun mevedel-sandbox--open-granted-paths (arguments permissions)
-  "Reopen exact granted paths in protected Bubblewrap ARGUMENTS."
-  (let* ((grants (plist-get permissions :file-system))
-         (granted-paths
-          (cl-mapcan #'mevedel-sandbox--grant-paths grants))
+(defun mevedel-sandbox--mount-plan (restrictions grants)
+  "Return the Bubblewrap mounts for protected RESTRICTIONS and GRANTS.
+
+RESTRICTIONS are `(:path :mode :directory-p)' plists ordered shallow to deep.
+GRANTS are normalized filesystem grants.  A grant containing a protected path
+is bound before the protections so nested masks still apply inside it; every
+other grant is bound after them.  A protected path that is itself granted
+keeps no mask, and an explicit write grant also lifts its read-only
+restriction and remount.  A masked directory above a grant stays traversable,
+with only the parents and link hops the grant needs recreated beneath it.
+Return `:arguments', the `:grants' in descriptor order, and the `:mask-fds'
+backing private empty file masks."
+  (let* ((grant-paths
+          (lambda (grant)
+            (mapcar #'directory-file-name (mevedel-sandbox--grant-paths grant))))
+         (granted-paths (mapcan grant-paths grants))
          (write-paths
-          (cl-mapcan #'mevedel-sandbox--grant-paths
-                     (cl-remove-if-not
-                      (lambda (grant) (eq (plist-get grant :access) 'write))
-                      grants)))
-         updated)
-    (while arguments
-      (cond
-       ((and (equal (car arguments) "--ro-bind-try")
-             (member (nth 1 arguments) write-paths)
-             (equal (nth 1 arguments) (nth 2 arguments)))
-        ;; A granted ancestor is mounted before its protected children.  Its
-        ;; own readonly restriction must not undo that explicit write grant.
-        (setq arguments (nthcdr 3 arguments)))
-       ((and (equal (car arguments) "--perms")
-             (equal (nth 1 arguments) "000")
-             (equal (nth 2 arguments) "--tmpfs")
-             (member (nth 3 arguments) granted-paths))
-        ;; Retain child restrictions, but not the granted directory's mask.
-        (setq arguments (nthcdr 4 arguments)))
-       ((and (equal (car arguments) "--perms")
-             (equal (nth 1 arguments) "000")
-             (equal (nth 2 arguments) "--ro-bind-data")
-             (member (nth 4 arguments) granted-paths))
-        (setq arguments (nthcdr 5 arguments)))
-       (t (push (pop arguments) updated))))
-    (setq updated (nreverse updated))
-    (cl-loop for tail on updated
-             when (and (equal (car tail) "--perms")
-                       (equal (nth 1 tail) "000")
-                       (equal (nth 2 tail) "--tmpfs")
-                       (stringp (nth 3 tail))
-                       (cl-some
-                        (lambda (grant)
-                          (let ((parent (file-name-as-directory
-                                         (expand-file-name (nth 3 tail)))))
-                            (cl-some
-                             (lambda (path)
-                               (string-prefix-p parent path))
-                             (mevedel-sandbox--grant-paths grant))))
-                        grants))
-             do (setcar (cdr tail) "0111"))
-    updated))
-
-(defun mevedel-sandbox--granted-path-mounts (arguments permissions)
-  "Return empty parent and symlink mounts needed below masked ARGUMENTS."
-  (let (directories symlinks)
-    (cl-loop for tail on arguments
-             when (and (equal (car tail) "--perms")
-                       (equal (nth 2 tail) "--tmpfs"))
-             do (let ((root (file-name-as-directory (nth 3 tail))))
-                  (dolist (grant (plist-get permissions :file-system))
-                    (dolist (path (mevedel-sandbox--grant-paths grant))
-                      (let ((parent
-                             (directory-file-name
-                              (file-name-directory path))))
-                        (while (and (not (string-equal parent
-                                                       (directory-file-name root)))
-                                    (string-prefix-p root parent))
-                          (push parent directories)
-                          (setq parent
-                                (directory-file-name
-                                 (file-name-directory parent))))))
-                    (dolist (link (plist-get grant :symlinks))
-                      (when (string-prefix-p root (car link))
-                        (push link symlinks))))))
-    (append
-     (cl-mapcan (lambda (path) (list "--dir" path))
-                (sort (delete-dups directories)
-                      (lambda (left right) (< (length left) (length right)))))
-     (cl-mapcan (lambda (link) (list "--symlink" (cdr link) (car link)))
-                (delete-dups (nreverse symlinks))))))
-
-(defun mevedel-sandbox--protected-remounts (arguments permissions)
-  "Return protected remount ARGUMENTS not superseded by exact PERMISSIONS."
-  (cl-loop for (option path) on arguments by #'cddr
-           unless (cl-some
-                   (lambda (grant)
-                     (and (eq (plist-get grant :access) 'write)
-                          (member
-                           (directory-file-name (expand-file-name path))
-                           (mapcar #'directory-file-name
-                                   (mevedel-sandbox--grant-paths grant)))))
-                   (plist-get permissions :file-system))
-           append (list option path)))
+          (mapcan grant-paths
+                  (cl-remove-if-not
+                   (lambda (grant) (eq (plist-get grant :access) 'write))
+                   grants)))
+         (protected-paths
+          (mapcar (lambda (restriction) (plist-get restriction :path))
+                  restrictions))
+         (under-p (lambda (root path)
+                    (string-prefix-p (file-name-as-directory root) path)))
+         (ancestors
+          (cl-remove-if-not
+           (lambda (grant)
+             (cl-some (lambda (grant-path)
+                        (cl-some (lambda (protected)
+                                   (funcall under-p grant-path protected))
+                                 protected-paths))
+                      (funcall grant-paths grant)))
+           grants))
+         (ordered (append ancestors
+                          (cl-set-difference grants ancestors :test #'eq)))
+         (ancestor-mounts
+          (mevedel-sandbox--additional-filesystem-mounts
+           (list :file-system ancestors)))
+         (later-mounts
+          (mevedel-sandbox--additional-filesystem-mounts
+           (list :file-system (nthcdr (length ancestors) ordered))
+           (+ 10 (length ancestors))))
+         (next-fd (+ 10 (length grants)))
+         protections remounts directories symlinks mask-fds)
+    (dolist (restriction restrictions)
+      (let* ((path (plist-get restriction :path))
+             (granted-p (member path granted-paths))
+             (writable-p (member path write-paths)))
+        (pcase (plist-get restriction :mode)
+          ('read-only
+           ;; A read-only source discovered under a writable root may vanish
+           ;; between planning and launch; the try variant keeps the launch
+           ;; confined.
+           (unless writable-p
+             (setq protections
+                   (append protections (list "--ro-bind-try" path path)))))
+          ('inaccessible
+           (cond
+            ((not (plist-get restriction :directory-p))
+             (unless granted-p
+               ;; Set permissions on a private empty file before the readonly
+               ;; mount, never on a bound host inode.
+               (push next-fd mask-fds)
+               (setq protections
+                     (append protections
+                             (list "--perms" "000" "--ro-bind-data"
+                                   (number-to-string next-fd) path)))
+               (cl-incf next-fd)))
+            (t
+             (unless writable-p
+               (setq remounts (append remounts (list "--remount-ro" path))))
+             (unless granted-p
+               (let ((traversed
+                      (cl-some (lambda (grant-path) (funcall under-p path grant-path))
+                               granted-paths)))
+                 (dolist (grant grants)
+                   (dolist (grant-path (funcall grant-paths grant))
+                     (let ((parent (file-name-parent-directory grant-path)))
+                       (while (and parent
+                                   (funcall under-p path (directory-file-name parent)))
+                         (push (directory-file-name parent) directories)
+                         (setq parent (file-name-parent-directory parent)))))
+                   (dolist (link (plist-get grant :symlinks))
+                     (when (funcall under-p path (car link))
+                       (push link symlinks))))
+                 (setq protections
+                       (append protections
+                               (list "--perms" (if traversed "0111" "000")
+                                     "--tmpfs" path)))))))))))
+    (list :arguments
+          (append
+           (plist-get ancestor-mounts :arguments)
+           protections
+           (mapcan (lambda (directory) (list "--dir" directory))
+                   (sort (delete-dups directories)
+                         (lambda (left right) (< (length left) (length right)))))
+           (mapcan (lambda (link) (list "--symlink" (cdr link) (car link)))
+                   (delete-dups (nreverse symlinks)))
+           (plist-get later-mounts :arguments)
+           remounts)
+          :grants ordered
+          :mask-fds (nreverse mask-fds))))
 
 (provide 'mevedel-sandbox-grants)
 

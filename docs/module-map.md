@@ -23,7 +23,7 @@ Data model
   mevedel-execution-scheduler.el fair session-scoped Bash admission
   mevedel-execution-telemetry.el safe execution facts and profiler adaptation
   mevedel-sandbox.el          optional Bubblewrap child-process confinement
-  mevedel-sandbox-grants.el   exact FD-backed grants and symlink mount planning
+  mevedel-sandbox-grants.el   FD-backed grant mounts and the protected-path mount plan
   mevedel-telemetry.el        append-only lifecycle events and profiler capture
   mevedel-plan.el             lifecycle-neutral plan data and artifacts
   mevedel-plan-handoff.el     durable accepted-plan preparation and kickoff

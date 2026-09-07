@@ -117,6 +117,13 @@
 `mevedel-sandbox--fd-backed-command' leaves a command without paths unchanged"
   (let ((command '("printf" "ok")))
     (should (eq command (mevedel-sandbox--fd-backed-command command nil))))
+  :doc "mask descriptors:
+`mevedel-sandbox--fd-backed-command' opens empty input for file masks"
+  (let ((wrapped (mevedel-sandbox--fd-backed-command '("printf" "ok") nil '(12 13))))
+    (should (equal (executable-find "bash") (car wrapped)))
+    (should (string-match-p "exec 12</dev/null || exit 125; exec 13</dev/null"
+                            (nth 3 wrapped)))
+    (should (equal '("printf" "ok") (last wrapped 2))))
   :doc "one grant:
 `mevedel-sandbox--fd-backed-command' opens and verifies the target identity"
   (let* ((source (make-temp-file "mevedel-sandbox-fd-source-"))
@@ -242,57 +249,64 @@ exact-grant preparation refuses when the target cannot inspect descriptors"
            :type 'mevedel-sandbox-policy-error))
       (delete-file source))))
 
-(mevedel-deftest mevedel-sandbox--open-granted-paths ()
+(mevedel-deftest mevedel-sandbox--mount-plan ()
   ,test
   (test)
-  :doc "protected exact path:
-`mevedel-sandbox--open-granted-paths' removes only granted file masks"
-  (progn
-    (skip-unless (not (eq system-type 'windows-nt)))
-    (should
-     (equal
-      '("--perms" "000" "--ro-bind-data" "12" "/other"
-        "--perms" "0111" "--tmpfs" "/protected")
-      (mevedel-sandbox--open-granted-paths
-       '("--perms" "000" "--ro-bind-data" "11" "/protected/link"
-         "--perms" "000" "--ro-bind-data" "12" "/other"
-         "--perms" "000" "--tmpfs" "/protected")
-       '(:file-system
-         ((:source-path "/protected/link"
-           :symlinks (("/protected/link" . "bin/runner"))
-           :path "/protected/bin/runner" :access read))))))))
-
-(mevedel-deftest mevedel-sandbox--granted-path-mounts ()
-  ,test
-  (test)
-  :doc "masked link target:
-`mevedel-sandbox--granted-path-mounts' recreates only required paths and links"
+  :doc "read-only restrictions:
+`mevedel-sandbox--mount-plan' binds with the try variant unless the path has a write grant"
   (should
    (equal
-    '("--dir" "/protected/bin"
-      "--symlink" "bin/runner" "/protected/alias")
-    (mevedel-sandbox--granted-path-mounts
-     '("--perms" "0111" "--tmpfs" "/protected")
-     '(:file-system
-       ((:source-path "/outside/link"
-         :symlinks (("/outside/link" . "/protected/alias")
-                    ("/protected/alias" . "bin/runner"))
-         :path "/protected/bin/runner" :access read)))))))
-
-(mevedel-deftest mevedel-sandbox--protected-remounts ()
-  ,test
-  (test)
-  :doc "writable exact path:
-`mevedel-sandbox--protected-remounts' omits only a granted writable remount"
-  (progn
-    (skip-unless (not (eq system-type 'windows-nt)))
+    '(:arguments ("--ro-bind-try" "/w/other" "/w/other"
+                  "--bind-fd" "10" "/w/.git")
+      :grants ((:source-path "/w/.git" :path "/w/.git" :access write))
+      :mask-fds nil)
+    (mevedel-sandbox--mount-plan
+     '((:path "/w/.git" :mode read-only :directory-p t)
+       (:path "/w/other" :mode read-only :directory-p t))
+     '((:source-path "/w/.git" :path "/w/.git" :access write)))))
+  :doc "masked link target:
+`mevedel-sandbox--mount-plan' drops the granted file mask, keeps the parent traversable, and numbers masks after grants"
+  (let ((grant '(:source-path "/protected/link"
+                 :symlinks (("/protected/link" . "bin/runner"))
+                 :path "/protected/bin/runner" :access read)))
     (should
      (equal
-      '("--remount-ro" "/other")
-      (mevedel-sandbox--protected-remounts
-       '("--remount-ro" "/protected" "--remount-ro" "/other")
-       '(:file-system
-         ((:source-path "/source" :path "/protected" :access write))))))))
+      `(:arguments ("--perms" "0111" "--tmpfs" "/protected"
+                    "--perms" "000" "--ro-bind-data" "11" "/other"
+                    "--dir" "/protected/bin"
+                    "--symlink" "bin/runner" "/protected/link"
+                    "--ro-bind-fd" "10" "/protected/bin/runner"
+                    "--remount-ro" "/protected")
+        :grants (,grant)
+        :mask-fds (11))
+      (mevedel-sandbox--mount-plan
+       '((:path "/protected" :mode inaccessible :directory-p t)
+         (:path "/protected/link" :mode inaccessible :directory-p nil)
+         (:path "/other" :mode inaccessible :directory-p nil))
+       (list grant)))))
+  :doc "granted ancestor tree:
+`mevedel-sandbox--mount-plan' binds it first, keeps nested masks, and lifts only its own remount"
+  (should
+   (equal
+    '(:arguments ("--bind-fd" "10" "/meta"
+                  "--perms" "000" "--tmpfs" "/meta/child"
+                  "--remount-ro" "/meta/child")
+      :grants ((:source-path "/meta" :path "/meta" :access write :recursive t))
+      :mask-fds nil)
+    (mevedel-sandbox--mount-plan
+     '((:path "/meta" :mode inaccessible :directory-p t)
+       (:path "/meta/child" :mode inaccessible :directory-p t))
+     '((:source-path "/meta" :path "/meta" :access write :recursive t)))))
+  :doc "read grant on a masked directory:
+`mevedel-sandbox--mount-plan' drops the mask but keeps the read-only remount"
+  (should
+   (equal
+    '(:arguments ("--ro-bind-fd" "10" "/p" "--remount-ro" "/p")
+      :grants ((:source-path "/p" :path "/p" :access read :recursive t))
+      :mask-fds nil)
+    (mevedel-sandbox--mount-plan
+     '((:path "/p" :mode inaccessible :directory-p t))
+     '((:source-path "/p" :path "/p" :access read :recursive t))))))
 
 (provide 'test-mevedel-sandbox-grants)
 

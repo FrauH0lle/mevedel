@@ -464,15 +464,13 @@ a disabled transport cleans immediately instead of dropping work"
           (make-directory credentials)
           (setq restrictions
                 (mevedel-sandbox--protected-restrictions root (list root)))
-          (let ((arguments (plist-get restrictions :arguments)))
-            (should (member dot-git arguments))
-            ;; A read-only source may vanish between planning and
-            ;; launch; the try variant keeps the launch confined.
-            (should (member "--ro-bind-try" arguments))
-            (should-not (member "--ro-bind" arguments))
-            (should (member credentials arguments))
-            (should (member "--tmpfs" arguments))
-            (should (member missing arguments)))
+          (let ((modes (mapcar (lambda (restriction)
+                                 (cons (plist-get restriction :path)
+                                       (plist-get restriction :mode)))
+                               (plist-get restrictions :restrictions))))
+            (should (eq 'read-only (alist-get dot-git modes nil nil #'equal)))
+            (should (eq 'inaccessible (alist-get credentials modes nil nil #'equal)))
+            (should (eq 'inaccessible (alist-get missing modes nil nil #'equal))))
           (should (file-directory-p missing))
           (mevedel-sandbox-cleanup restrictions)
           (should-not (file-exists-p missing)))
@@ -490,11 +488,12 @@ a disabled transport cleans immediately instead of dropping work"
           (make-directory checkout t)
           (with-temp-file pointer
             (insert (format "gitdir: %s\n" metadata)))
-          (let* ((restrictions
-                  (mevedel-sandbox--protected-restrictions root (list root)))
-                 (arguments (plist-get restrictions :arguments)))
-            (should (member pointer arguments))
-            (should (member metadata arguments))))
+          (let ((paths (mapcar (lambda (restriction) (plist-get restriction :path))
+                               (plist-get (mevedel-sandbox--protected-restrictions
+                                           root (list root))
+                                          :restrictions))))
+            (should (member pointer paths))
+            (should (member metadata paths))))
       (delete-directory root t)
       (delete-directory metadata t)))
   :doc "nested Git symlink:
@@ -544,8 +543,9 @@ a disabled transport cleans immediately instead of dropping work"
           (let ((restrictions
                  (mevedel-sandbox--protected-restrictions root (list root))))
             (should-not (file-exists-p protected))
-            (should-not (member protected
-                                (plist-get restrictions :arguments)))))
+            (should-not (cl-find protected (plist-get restrictions :restrictions)
+                                 :key (lambda (restriction) (plist-get restriction :path))
+                                 :test #'equal))))
       (delete-directory parent t))))
 
 (mevedel-deftest mevedel-sandbox--unrestricted-facts ()
