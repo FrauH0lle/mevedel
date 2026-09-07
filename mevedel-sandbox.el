@@ -5,9 +5,8 @@
 ;; Builds and probes the Linux Bubblewrap boundary used by model-triggered
 ;; child processes.  The host is read-only, approved roots are rebound
 ;; writable, and process and network namespaces cover the requested process
-;; and all descendants.  This module prepares execution facts;
-;; `mevedel-execution' owns launch, teardown, and the narrowly permitted
-;; pre-exec fallback.
+;; and all descendants.  This module selects confinement and prepares
+;; execution facts; `mevedel-execution' owns launch and teardown without replay.
 
 ;;; Code:
 

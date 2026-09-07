@@ -364,9 +364,14 @@ registers that head with `mevedel-view-interaction.el`, which owns ordering,
 callback overlays, and redraw. Rule-creating outcomes (`allow-session`,
 `deny-session`, `always-allow`) can coalesce
 queued siblings by re-running the decision chain. Resolved siblings leave the
-queue before any callback runs. Execution rechecks cover the operation and its
-complete requested filesystem/network authority, including capabilities that
-were already granted at admission. They retain the originating request,
+queue before any callback runs. Execution admission and rechecks share one
+pure decision in `mevedel-tool-exec-permission.el`: it orders operation
+policy, guardian review, full escalation, denied capabilities, command
+resources, and missing capabilities, and names the one thing that still
+stands in the way. Admission resolves that need with a prompt or guardian
+review and decides again; a recheck reports it as a pending ask. Rechecks
+therefore cover the operation and its complete requested filesystem/network
+authority, including capabilities that were already granted at admission. They retain the originating request,
 agent invocation, Plan restrictions, and frozen policy context. An operation
 rule alone cannot release a sibling that still lacks a capability; a directory
 grant alone cannot release an uncertain command in edits mode. Every queue exit
@@ -465,7 +470,9 @@ the guardian verdict, the detected-command summary, the patterns a
 session/always allow would add, and every warning stay visible, because those
 are what the decision rests on. The `mevedel--remote` descriptor a browser
 collaborator reads always carries the whole command, elided or not -- a guest
-has no `TAB` to press and must not approve what it cannot see.
+has no `TAB` to press and must not approve what it cannot see. Both surfaces
+show the captured admission mode, approval cause, and selected resource scope,
+including directory selections on one-shot cards without remembering controls.
 
 `mevedel-bash-policy.el` supplies Bash classification, reusable rule patterns,
 and guardian guidance. `mevedel-tool-exec-permission.el` combines that policy

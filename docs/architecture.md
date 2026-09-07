@@ -319,7 +319,7 @@ its files do.
 observations, delivery, and the public execution facade. Its opaque child
 values belong to `mevedel-execution-process.el`, which owns process creation,
 stable child environments, process-group signaling, timeout cleanup, and
-bounded disk spooling. Bubblewrap admission and fallback remain with the
+bounded disk spooling. Bubblewrap admission and refusal remain with the
 managed facade. `mevedel-execution-scheduler.el` admits managed Bash through a
 fair session-scoped readers/writer lane. `mevedel-bash-policy.el` owns Bash
 classification, reusable rules, and guardian guidance;

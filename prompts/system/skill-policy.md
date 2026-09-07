@@ -3,4 +3,4 @@
 - Other skills are optional guidance: use one when its scope and approach help the task. A matching description or path makes it discoverable, not mandatory.
 - ToolCall expression `(ListSkills :query "...")` searches enabled model-invocable skills by purpose, including dormant path-scoped skills and names omitted from this budgeted roster. Use the returned canonical name; do not guess missing names.
 - Reuse relevant guidance already in context. Its scope follows the task, authored applicability, and explicit user direction; a new message alone does not end it. Retire completed or superseded instructions, and retrieve missing or changed guidance again when needed.
-- Inspect a known skill with `Read` on its listed `skill://` address; `Read("skill://")` lists registered resources. Raw skill-directory development uses ordinary filesystem permissions.
+- Inspect a known skill's source with `Read` on its listed registered resource address. Raw skill-directory development uses ordinary filesystem permissions.

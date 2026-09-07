@@ -211,9 +211,10 @@ execution-target paths. See [`address-to-resource.md`](address-to-resource.md#sk
 The model-facing roster and `ListSkills` include the exact registered resource
 address for each file-backed entry. Package guidance directs source inspection
 to `Read` on that address and resource discovery to `Read("skill://")`, avoiding
-host-directory rediscovery for known skills. This does not invoke the skill;
-`Skill(name=...)` still prepares and invokes it. Disabled or stale resources
-retain the provider's normal validation, and raw skill development uses ordinary
+host-directory rediscovery for known skills. This does not invoke the skill.
+The `ToolCall` expression `(Skill :name "...")` still prepares and invokes it.
+Disabled or stale resources retain the provider's normal validation, and raw
+skill development uses ordinary
 filesystem grants.
 
 Bare `skill://` listings also expose readable origin aliases alongside exact

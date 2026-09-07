@@ -695,9 +695,10 @@ after the callback. The process owner handles timeout/process-group cleanup
 and streams output into a bounded temporary disk spool rather than an Emacs
 process buffer. The one-shot terminal result contains the captured output and
 structured exit, timeout, output-limit, byte, and wall-time facts. In
-`best-effort`, the facade may retry directly only after a pre-exec Bubblewrap
-failure; it never replays a helper that may have started. `required` fails the
-tool explicitly and `off` runs directly.
+`best-effort`, an unavailable initial confinement probe permits disclosed direct
+execution. Once confined preparation begins, preparation and launcher failures
+return without retrying the helper. `required` refuses an unavailable backend
+and `off` runs directly.
 
 Bubblewrap capability probes are cached independently per execution target.
 Local probes use the short `mevedel-sandbox-probe-timeout`; remote probes use

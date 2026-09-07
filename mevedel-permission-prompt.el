@@ -389,15 +389,21 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
     (content include-always cont
              &optional count entry suppress-allow-session once-only)
   "Display a permission prompt for CONTENT and call CONT with its outcome."
-  (setq content (concat (mevedel-permission--format-cause entry) content))
-  (when-let* ((selected (car (plist-get entry :resource-selection-cell))))
-    (setq content
-          (concat content "Selected authority:\n"
-                  (mapconcat
-                   (lambda (grant) (mevedel-permission--resource-label entry grant))
-                   selected "\n")
-                  "\n(g selects exact resource or directory tree and access)\n\n")))
-  (let* ((source-buffer (current-buffer))
+  (let* ((cause (mevedel-permission--format-cause entry))
+         (authority
+          (when-let* ((selected (car (plist-get entry :resource-selection-cell))))
+            (concat "Selected authority:\n"
+                    (mapconcat
+                     (lambda (grant) (mevedel-permission--resource-label entry grant))
+                     selected "\n")
+                    "\n(g selects exact resource or directory tree and access)\n\n")))
+         (remote-content
+          (concat cause
+                  (or (and entry (mevedel-queue--entry-metadata-get entry :remote-body))
+                      content)
+                  authority))
+         (content (concat cause content authority))
+         (source-buffer (current-buffer))
          (target-buf
           (if (fboundp 'mevedel-view--interaction-target-buffer)
               (mevedel-view--interaction-target-buffer
@@ -486,11 +492,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
         ;; The remote surface gets the one-shot outcomes only: durable
         ;; session or workspace authority is never mintable from a guest.
         (overlay-put ov 'mevedel--remote
-                     (list :body (substring-no-properties
-                                  (or (and entry
-                                           (mevedel-queue--entry-metadata-get
-                                            entry :remote-body))
-                                      content))
+                     (list :body (substring-no-properties remote-content)
                            :options '((allow-once . "Allow once")
                                       (deny-once . "Deny"))
                            :feedback t))

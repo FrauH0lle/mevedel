@@ -43,6 +43,105 @@
           (end-of-file nil))))
     (nreverse entries)))
 
+(mevedel-deftest mevedel-tool-exec-permission--decide ()
+  ,test
+  (test)
+  :doc "an operation deny is final and carries the operation's own cause"
+  (let ((mevedel-permission-rules nil))
+    (should
+     (equal '(deny rule)
+            (let ((decision
+                   (mevedel-tool-exec-permission--decide
+                    "Bash" "rm -rf build"
+                    '(:sandbox-permissions additive
+                      :additional-permissions (:network t))
+                    (mevedel-permission--invocation-context
+                     :tool-name "Bash" :pattern "rm -rf build" :mode 'full-auto
+                     :session-rules '(("Bash" :pattern "rm *" :action deny))))))
+              (list (plist-get decision :outcome) (plist-get decision :via))))))
+  :doc "an unsettled operation ask names the operation and its cause"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-permission-guardian nil))
+    (let ((decision (mevedel-tool-exec-permission--decide
+                     "Bash" "make test" '(:sandbox-permissions additive)
+                     (mevedel-permission--invocation-context
+                      :tool-name "Bash" :pattern "make test" :mode 'ask))))
+      (should (eq 'ask (plist-get decision :outcome)))
+      (should (eq 'operation (plist-get decision :needs)))
+      (should (eq 'mode (plist-get decision :via)))))
+  :doc "a settled operation moves on to the remaining capabilities"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-permission-guardian nil))
+    (let ((decision (mevedel-tool-exec-permission--decide
+                     "Bash" "make test"
+                     '(:sandbox-permissions additive
+                       :additional-permissions (:network t)
+                       :operation-pattern "make test")
+                     (mevedel-permission--invocation-context
+                      :tool-name "Bash" :pattern "make test" :mode 'ask)
+                     '(:operation t))))
+      (should (eq 'ask (plist-get decision :outcome)))
+      (should (eq 'capabilities (plist-get decision :needs)))
+      (should (eq 'sandbox-network (plist-get decision :via)))
+      (should (plist-get (plist-get decision :state) :missing))))
+  :doc "the operation card's approval covers the requested capabilities"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-permission-guardian nil))
+    (should
+     (eq 'allow
+         (plist-get (mevedel-tool-exec-permission--decide
+                     "Bash" "make test"
+                     '(:sandbox-permissions additive
+                       :additional-permissions (:network t)
+                       :operation-pattern "make test"
+                       :approval-cell (allow-once))
+                     (mevedel-permission--invocation-context
+                      :tool-name "Bash" :pattern "make test" :mode 'ask)
+                     '(:operation t))
+                    :outcome))))
+  :doc "full-auto guardian review is needed once and then settled"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-permission-guardian t))
+    (let ((context (mevedel-permission--invocation-context
+                    :tool-name "Bash" :pattern "make test" :mode 'full-auto)))
+      (should (eq 'guardian
+                  (plist-get (mevedel-tool-exec-permission--decide
+                              "Bash" "make test" '(:sandbox-permissions additive)
+                              context)
+                             :needs)))
+      (should (eq 'allow
+                  (plist-get (mevedel-tool-exec-permission--decide
+                              "Bash" "make test" '(:sandbox-permissions additive)
+                              context '(:guardian t))
+                             :outcome)))))
+  :doc "escalation honors qualified allows, explicit asks, and denies in order"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-sandbox-mode 'required)
+        (request '(:sandbox-permissions require-escalated)))
+    (cl-flet ((decide (rules)
+                (let ((decision
+                       (mevedel-tool-exec-permission--decide
+                        "Bash" "make test" request
+                        (mevedel-permission--invocation-context
+                         :tool-name "Bash" :pattern "make test" :mode 'full-auto
+                         :session-rules rules))))
+                  (list (plist-get decision :outcome) (plist-get decision :via)
+                        (plist-get decision :needs)))))
+      (should (equal '(ask sandbox-full-escalation escalation) (decide nil)))
+      (should (equal '(allow sandbox-full-escalation nil)
+                     (decide '(("Bash" :pattern "make test"
+                                :sandbox-permissions require-escalated
+                                :action allow)))))
+      (should (equal '(ask rule escalation)
+                     (decide '(("Bash" :pattern "make test" :action ask)
+                               ("Bash" :pattern "make test"
+                                :sandbox-permissions require-escalated
+                                :action allow)))))
+      (should (equal '(deny sandbox-full-escalation nil)
+                     (decide '(("Bash" :pattern "make test"
+                                :sandbox-permissions require-escalated
+                                :action deny))))))))
+
 (mevedel-deftest mevedel-tool-exec-permission-reevaluate ()
   ,test
   (test)
@@ -767,9 +866,33 @@ additive child permissions are available only to batch Eval"
              (lambda (call) (memq 'sandbox-filesystem call))
              calls))))
 
-(mevedel-deftest mevedel-tool-exec-permission--check-additional-permission-async ()
+(mevedel-deftest mevedel-tool-exec-permission--capabilities-prompt-async ()
   ,test
   (test)
+  :doc "a prompted capability approval stores and logs each capability once"
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules nil)
+        (mevedel-permission-guardian nil)
+        logged outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (queued &optional _session)
+                 (funcall (plist-get queued :callback) 'allow-once)))
+              ((symbol-function 'mevedel-tool-exec-permission--log-permission-decision)
+               (lambda (_tool outcome via &rest _props)
+                 (push (cons outcome via) logged))))
+      (mevedel-tool-exec-permission-check-bash-async
+       nil
+       '(:command "true"
+                  :sandbox_permissions "with_additional_permissions"
+                  :additional_permissions
+                  (:file_system (:read ["/tmp/capability-once/input"]))
+                  :justification "Read the fixture input"
+                  :permission-decision-metadata t)
+       (lambda (result) (setq outcome result))))
+    (should (eq 'allow (plist-get outcome :outcome)))
+    (should (equal '((allow . sandbox-filesystem))
+                   (cl-remove-if-not (lambda (item) (eq (cdr item) 'sandbox-filesystem))
+                                     logged))))
   :doc "ask Bash:
 recognized command authority is followed by a once-only network prompt"
   (let ((mevedel-permission-mode 'ask)
@@ -1444,7 +1567,7 @@ both Eval and network authority proceed without prompts"
     (should-not enqueued)
     (should (eq 'allow outcome))))
 
-(mevedel-deftest mevedel-tool-exec-permission--check-full-escalation-async ()
+(mevedel-deftest mevedel-tool-exec-permission--escalation-prompt-async ()
   ,test
   (test)
   :doc "full escalation cannot override a Plan request's mutation restriction"
