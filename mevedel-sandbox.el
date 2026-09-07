@@ -29,27 +29,15 @@
 (autoload 'mevedel-permission-rules-match-path-p "mevedel-permission-rules")
 
 ;; `mevedel-sandbox-grants'
-(declare-function mevedel-sandbox--additional-filesystem-mounts
-                  "mevedel-sandbox-grants" (permissions &optional first-fd))
 (declare-function mevedel-sandbox--fd-backed-command
-                  "mevedel-sandbox-grants" (command paths &optional workdir))
-(declare-function mevedel-sandbox--grant-paths
-                  "mevedel-sandbox-grants" (grant))
-(declare-function mevedel-sandbox--granted-path-mounts
-                  "mevedel-sandbox-grants" (arguments permissions))
-(declare-function mevedel-sandbox--open-granted-paths
-                  "mevedel-sandbox-grants" (arguments permissions))
-(declare-function mevedel-sandbox--protected-remounts
-                  "mevedel-sandbox-grants" (arguments permissions))
+                  "mevedel-sandbox-grants"
+                  (command grants &optional mask-fds workdir))
+(declare-function mevedel-sandbox--mount-plan
+                  "mevedel-sandbox-grants" (restrictions grants))
 (declare-function mevedel-sandbox--resolve-filesystem-permissions
                   "mevedel-sandbox-grants" (permissions &optional inaccessible-paths))
-(autoload 'mevedel-sandbox--additional-filesystem-mounts
-  "mevedel-sandbox-grants")
 (autoload 'mevedel-sandbox--fd-backed-command "mevedel-sandbox-grants")
-(autoload 'mevedel-sandbox--grant-paths "mevedel-sandbox-grants")
-(autoload 'mevedel-sandbox--granted-path-mounts "mevedel-sandbox-grants")
-(autoload 'mevedel-sandbox--open-granted-paths "mevedel-sandbox-grants")
-(autoload 'mevedel-sandbox--protected-remounts "mevedel-sandbox-grants")
+(autoload 'mevedel-sandbox--mount-plan "mevedel-sandbox-grants")
 (autoload 'mevedel-sandbox--resolve-filesystem-permissions
   "mevedel-sandbox-grants")
 
@@ -597,13 +585,14 @@ the targets behind."
             :warning)))))))
 
 (defun mevedel-sandbox--protected-restrictions
-    (workdir writable-roots &optional temporary-root file-fd-start)
-  "Compile protected restrictions for WORKDIR and WRITABLE-ROOTS.
+    (workdir writable-roots &optional temporary-root)
+  "Resolve protected restrictions for WORKDIR and WRITABLE-ROOTS.
 TEMPORARY-ROOT is exempt from glob discovery; see
-`mevedel-sandbox--protected-candidates'.  FILE-FD-START is the first unused
-launcher descriptor for empty file masks, defaulting to 10."
-  (let ((next-file-fd (or file-fd-start 10)) restrictions cleanup-paths
-        git-common-directories)
+`mevedel-sandbox--protected-candidates'.  Return `:restrictions', each a
+`(:path :mode :directory-p)' plist ordered shallow to deep with one entry per
+path, plus the shared Git metadata directories and synthetic mount targets
+created for missing protected directories."
+  (let (restrictions cleanup-paths git-common-directories)
     (condition-case err
         (progn
           (dolist (candidate
@@ -663,7 +652,7 @@ launcher descriptor for empty file masks, defaulting to 10."
                                 :mode mode
                                 :directory-p (file-directory-p canonical))
                           restrictions))))))
-          (let (arguments post-arguments resolved)
+          (let (resolved)
             (dolist (restriction restrictions)
               (let* ((path (plist-get restriction :path))
                      (existing (assoc path resolved)))
@@ -680,53 +669,14 @@ launcher descriptor for empty file masks, defaulting to 10."
                     (when (eq (plist-get restriction :mode) 'inaccessible)
                       (setcdr existing restriction))
                   (push (cons path restriction) resolved))))
-            (setq resolved
-                  (sort resolved
-                        (lambda (left right)
-                          (< (length (split-string (car left) "/" t))
-                             (length (split-string (car right) "/" t))))))
-            (dolist (entry resolved)
-              (let* ((restriction (cdr entry))
-                     (path (plist-get restriction :path))
-                     (mode (plist-get restriction :mode))
-                     (directory-p (plist-get restriction :directory-p)))
-                (setq arguments
-                      (append
-                       arguments
-                       (pcase mode
-                         ;; A read-only candidate is discovered by
-                         ;; scanning the writable roots, which include
-                         ;; the temporary directory.  A transient tree
-                         ;; found there -- a helper scratch holding a
-                         ;; `.git' -- can vanish between planning and
-                         ;; launch, and a plain `--ro-bind' then aborts
-                         ;; the whole launch.  A vanished source has
-                         ;; nothing left to protect, so skip it.
-                         ('read-only
-                          (list "--ro-bind-try" path path))
-                         ('inaccessible
-                          (if directory-p
-                              (progn
-                                (setq post-arguments
-                                      (append post-arguments
-                                              (list "--remount-ro" path)))
-                                (list "--perms" "000" "--tmpfs" path))
-                            ;; Set permissions on a private empty file before
-                            ;; the readonly mount, never on a bound host inode.
-                            (list "--perms" "000" "--ro-bind-data"
-                                  (number-to-string
-                                   (prog1 next-file-fd (cl-incf next-file-fd)))
-                                  path))))))))
-            (list :arguments arguments
+            (list :restrictions
+                  (mapcar #'cdr
+                          (sort resolved
+                                (lambda (left right)
+                                  (< (length (split-string (car left) "/" t))
+                                     (length (split-string (car right) "/" t))))))
                   :git-common-directories (delete-dups git-common-directories)
-                  :post-arguments post-arguments
-                  :paths (mapcar #'car resolved)
-                  :inaccessible-paths
-                  (cl-loop for (path . restriction) in resolved
-                           when (eq (plist-get restriction :mode) 'inaccessible)
-                           collect path)
-                  :cleanup-paths (nreverse cleanup-paths)
-                  :count (length resolved))))
+                  :cleanup-paths (nreverse cleanup-paths))))
       (error
        (mevedel-sandbox-cleanup (list :cleanup-paths cleanup-paths))
        (if (eq (car err) 'mevedel-sandbox-policy-error)
@@ -827,8 +777,8 @@ protected-path glob discovery."
     (let* ((marker (make-temp-name "MEVEDEL_SANDBOX_STARTED_"))
            (protected
             (mevedel-sandbox--protected-restrictions
-             canonical-workdir roots temporary-root
-             (+ 10 (length (plist-get additional-permissions :file-system))))))
+             canonical-workdir roots temporary-root))
+           (restrictions (plist-get protected :restrictions)))
       (condition-case err
           (let* ((filesystem-permissions
                   (mevedel-sandbox--resolve-filesystem-permissions
@@ -837,44 +787,19 @@ protected-path glob discovery."
                       (member (expand-file-name (plist-get grant :path))
                               mevedel-sandbox-intrinsic-paths))
                     (plist-get additional-permissions :file-system))
-                   (plist-get protected :inaccessible-paths)))
-                 (effective-permissions
-                  (plist-put (copy-sequence additional-permissions)
-                             :file-system filesystem-permissions))
+                   (cl-loop for restriction in restrictions
+                            when (eq (plist-get restriction :mode) 'inaccessible)
+                            collect (plist-get restriction :path))))
+                 (plan (mevedel-sandbox--mount-plan
+                        restrictions filesystem-permissions))
                  (network-access-p
-                  (eq t (plist-get effective-permissions :network)))
+                  (eq t (plist-get additional-permissions :network)))
                  (filesystem-read-count
                   (cl-count 'read filesystem-permissions
                             :key (lambda (grant) (plist-get grant :access))))
                  (filesystem-write-count
                   (cl-count 'write filesystem-permissions
                             :key (lambda (grant) (plist-get grant :access))))
-                 (protected-paths (plist-get protected :paths))
-                 (ancestor-permissions
-                  (cl-remove-if-not
-                   (lambda (grant)
-                     (cl-some
-                      (lambda (grant-path)
-                        (let ((grant-path (directory-file-name grant-path)))
-                          (cl-some
-                           (lambda (protected-path)
-                             (and (not (string-equal grant-path protected-path))
-                                  (string-prefix-p
-                                   (file-name-as-directory grant-path)
-                                   protected-path)))
-                           protected-paths)))
-                      (mevedel-sandbox--grant-paths grant)))
-                   filesystem-permissions))
-                 (post-protection-permissions
-                  (cl-set-difference filesystem-permissions ancestor-permissions
-                                     :test #'eq))
-                 (ancestor-mounts
-                  (mevedel-sandbox--additional-filesystem-mounts
-                   (list :file-system ancestor-permissions)))
-                 (post-protection-mounts
-                  (mevedel-sandbox--additional-filesystem-mounts
-                   (list :file-system post-protection-permissions)
-                   (+ 10 (length ancestor-permissions))))
                  (facts (list :sandbox 'bubblewrap
                               :git-common-directories
                               (mapcar #'file-local-name
@@ -885,7 +810,7 @@ protected-path glob discovery."
                                            'unrestricted
                                          'isolated)
                               :writable-roots roots
-                              :protected-paths (plist-get protected :count)
+                              :protected-paths (length restrictions)
                               :additional-filesystem
                               (length filesystem-permissions)
                               :additional-filesystem-read filesystem-read-count
@@ -899,17 +824,7 @@ protected-path glob discovery."
                    (cl-mapcan
                     (lambda (root) (list "--bind" root root))
                     roots)
-                   (plist-get ancestor-mounts :arguments)
-                   (mevedel-sandbox--open-granted-paths
-                    (plist-get protected :arguments)
-                    effective-permissions)
-                   (mevedel-sandbox--granted-path-mounts
-                    (plist-get protected :arguments)
-                    effective-permissions)
-                   (plist-get post-protection-mounts :arguments)
-                   (mevedel-sandbox--protected-remounts
-                    (plist-get protected :post-arguments)
-                    effective-permissions)
+                   (plist-get plan :arguments)
                    (list "--unshare-user"
                          "--unshare-pid")
                    (unless network-access-p
@@ -925,8 +840,7 @@ protected-path glob discovery."
                   :command
                   (mevedel-sandbox--fd-backed-command
                    (cons executable arguments)
-                   (append (plist-get ancestor-mounts :grants)
-                           (plist-get post-protection-mounts :grants))
+                   (plist-get plan :grants) (plist-get plan :mask-fds)
                    canonical-workdir)
                   :marker marker
                   :cleanup-paths (plist-get protected :cleanup-paths)
