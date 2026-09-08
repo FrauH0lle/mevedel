@@ -1736,6 +1736,17 @@ description: Yell
             (should (string-match-p "<system-reminder>" result))
             (should (string-match-p "Child contract" result))
             (should (equal '("child") (plist-get render-data :attachments)))
+            (mevedel-skills-test--write-skill
+             dir "child" "name: child\ndescription: Child\n" "Changed after delivery")
+            (let* ((encoded (concat result (mevedel-tool-render-data-format render-data)))
+                   (restored (mevedel-tool-render-data-extract encoded)))
+              (should (equal result (car restored)))
+              (should (string-match-p
+                       "Child contract"
+                       (cdr (assoc "child" (plist-get (cdr restored) :attachment-bodies)))))
+              (should-not (string-match-p
+                           "Changed after delivery"
+                           (cdr (assoc "child" (plist-get (cdr restored) :attachment-bodies))))))
             (should (string-match-p "Root body"
                                     (plist-get render-data :prompt)))
             (should-not (string-match-p "<system-reminder>"

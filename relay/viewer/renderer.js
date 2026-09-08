@@ -476,57 +476,105 @@
     return card;
   }
 
-  function renderContent(record, onArtifactOpen) {
+  function renderToolPresentation(presentation, disclosures, path) {
+    const status = presentation.status || 'completed';
+    const details = el('details', `tool ${status}`);
+    details.open = presentation.collapsed === false;
+    disclosures.set(path, details);
+    const summary = el('summary');
+    const glyph = {completed: '\u2713', failed: '\u2715', denied: '\u2715',
+      cancelled: '\u2715', warning: '!', running: '\u25cf'}[status] || '\u00b7';
+    const mark = el('span', `st ${status}`, glyph);
+    mark.setAttribute('role', 'img');
+    mark.setAttribute('aria-label', status);
+    summary.append(mark);
+    const name = presentation.name || 'Tool';
+    summary.append(el('span', 'tname', name));
+    const header = presentation.header || '';
+    const target = header.startsWith(`${name}: `) ? header.slice(name.length + 2)
+      : presentation.detail || (header !== name ? header : '');
+    summary.append(el('span', 'targ', target));
+    details.append(summary);
+    if (presentation.diff) {
+      const diff = renderDiff(presentation.diff);
+      diff.className = 'result diff';
+      details.append(diff);
+    }
+    const body = presentation.body || '';
+    if (body) {
+      if (presentation.format === 'markdown') {
+        const prose = renderMarkdown(body);
+        prose.className = 'prose result tool-markdown';
+        details.append(prose);
+      } else if (presentation.format === 'diff'
+                 || (!presentation.diff && looksLikeDiff(body))) {
+        const diff = renderDiff(body);
+        diff.className = 'result diff';
+        details.append(diff);
+      } else {
+        details.append(renderToolResult(presentation, body));
+      }
+    }
+    const appendChild = (parent, child) => {
+      if (child && typeof child.id === 'string' && typeof child.name === 'string') {
+        parent.append(renderToolPresentation(child, disclosures, `${path}/${child.id}`));
+      }
+    };
+    if (Array.isArray(presentation.attachments) && presentation.attachments.length) {
+      const dependencies = el('div', 'tool-dependencies');
+      presentation.attachments.forEach(child => appendChild(dependencies, child));
+      details.append(dependencies);
+    }
+    const children = Array.isArray(presentation.children) ? presentation.children : [];
+    for (let index = 0; index < children.length;) {
+      const batch = children[index] && children[index].batch;
+      let end = index + 1;
+      if (typeof batch === 'string') {
+        while (end < children.length && children[end] && children[end].batch === batch) end++;
+      }
+      if (end - index > 1) {
+        const group = el('div', 'tool-parallel');
+        group.append(el('div', 'tool-group-label', 'Parallel'));
+        children.slice(index, end).forEach(child => appendChild(group, child));
+        details.append(group);
+      } else {
+        appendChild(details, children[index]);
+      }
+      index = end;
+    }
+    if (presentation.truncated) {
+      details.append(el('p', 'tool-truncated', 'Tool display truncated: additional content omitted (size limit).'));
+    }
+    return details;
+  }
+
+  function renderContent(record, onArtifactOpen, disclosures) {
     if (record.kind === 'user') {
       const prose = renderMarkdown(record.text || '');
       prose.className = 'prose prompt';
       return prose;
     }
-    if (record.kind === 'assistant') {
-      return renderMarkdown(record.text || '');
-    }
+    if (record.kind === 'assistant') return renderMarkdown(record.text || '');
     if (record.kind === 'tool' && record.artifact) {
       return renderArtifactCard(record, onArtifactOpen);
     }
-    // A tool call is one line: status glyph, name, target. Only things
-    // waiting on a decision get a box, so eight finished reads cannot
-    // shout as loudly as the permission holding up the run.
-    const status = record.status || '';
-    const details = el('details', `tool ${status}`);
-    const summary = el('summary');
-    const glyph = {completed: '\u2713', failed: '\u2715', running: '\u25cf'}[status]
-      || '\u00b7';
-    const mark = el('span', `st ${status}`, glyph);
-    mark.setAttribute('role', 'img');
-    mark.setAttribute('aria-label', status || 'pending');
-    summary.append(mark);
-    summary.append(el('span', 'tname', record.name || 'Tool'));
-    summary.append(el('span', 'targ',
-                      record.detail
-                      || (record.summary !== record.name ? record.summary : '')
-                      || ''));
-    details.append(summary);
-    // A patch travels as a dedicated diff field; the result text is only
-    // the application summary.
-    if (record.diff) {
-      const body = renderDiff(record.diff);
-      body.className = 'result diff';
-      details.append(body);
+    const presentation = record.presentation;
+    return renderToolPresentation(
+      presentation && typeof presentation.name === 'string' ? presentation
+        : {name: record.name, detail: record.detail, header: record.summary,
+          status: record.status, body: record.result, diff: record.diff,
+          truncated: record.truncated, collapsed: true}, disclosures, 'root');
+  }
+
+  function captureDisclosures(turn) {
+    return new Map([...(turn.disclosures || [])].map(([key, node]) => [key, !!node.open]));
+  }
+
+  function restoreDisclosures(turn, saved) {
+    for (const [key, open] of saved || []) {
+      const node = turn.disclosures && turn.disclosures.get(key);
+      if (node) node.open = open;
     }
-    const result = record.result || '';
-    if (result) {
-      if (!record.diff && looksLikeDiff(result)) {
-        const body = renderDiff(result);
-        body.className = 'result diff';
-        details.append(body);
-      } else {
-        details.append(renderToolResult(record, result));
-      }
-      if (record.truncated) {
-        details.append(el('pre', 'result', '[result truncated]'));
-      }
-    }
-    return details;
   }
 
   function renderRecord(record, directiveLabel, onArtifactOpen) {
@@ -540,16 +588,13 @@
     turn.append(rail);
     const content = el('div', 'content');
     content.append(whoLine(record, directiveLabel));
-    const rendered = renderContent(record, onArtifactOpen);
+    turn.disclosures = new Map();
+    const rendered = renderContent(record, onArtifactOpen, turn.disclosures);
     content.append(rendered);
     turn.append(content);
-    // Tool rows keep their disclosure state across updates; stashing the
-    // details element avoids a querySelector the protocol test's fake DOM
-    // does not implement.
-    if (record.kind === 'tool') turn.toolDetails = rendered;
     return turn;
   }
 
   window.mevedelTranscriptRenderer = Object.freeze(
-    {renderRecord, renderDiff, renderMarkdown, formatBytes});
+    {renderRecord, renderDiff, renderMarkdown, formatBytes, captureDisclosures, restoreDisclosures});
 })();

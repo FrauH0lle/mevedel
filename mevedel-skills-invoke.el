@@ -1480,6 +1480,14 @@ returns the body; error returns a `Error: ' prefixed message."
                                          (plist-get outcome :body))
                             :attachments attachments
                             :ignored-policy-fields ignored))))
+              (when attachments
+                (setq render-data
+                      (plist-put render-data :attachment-bodies
+                                 (mapcar
+                                  (lambda (attachment)
+                                    (cons (plist-get attachment :name)
+                                          (or (plist-get attachment :body) "")))
+                                  (plist-get outcome :required-attachments)))))
               (funcall callback
                        (if render-data
                            (list :result result :render-data render-data)

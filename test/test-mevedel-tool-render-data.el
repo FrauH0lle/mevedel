@@ -60,6 +60,30 @@
 
 ;;; Render-data codec and provider adapter
 
+(mevedel-deftest mevedel-tool-render-data-direct-call
+  (:doc "selects one settled child while retaining envelope failures and malformed metadata")
+  (let* ((data '(:kind ptc :direct-tool "Skill" :outcome completed
+                 :calls ((:id "outer/1" :tool "Skill" :status success
+                          :args (:name "guide") :render-data (:kind skill-invocation)))))
+         (original (copy-tree data))
+         (child (mevedel-tool-render-data-direct-call "ToolCall" data)))
+    (should (equal "Skill" (plist-get child :tool)))
+    (should (eq 'success (plist-get (plist-get child :render-data) :status)))
+    (should (equal original data))
+    (dolist (change '((:live-p . t) (:outcome . script-error)
+                      (:status . error) (:direct-tool . "Read")
+                      (:calls . nil)))
+      (should-not (mevedel-tool-render-data-direct-call
+                   "ToolCall" (plist-put (copy-tree data) (car change) (cdr change)))))
+    (should-not (mevedel-tool-render-data-direct-call "Other" data))
+    (let ((failed (copy-tree data)))
+      (setf (plist-get failed :outcome) 'tool-error
+            (plist-get failed :status) 'error
+            (plist-get (car (plist-get failed :calls)) :status) 'error)
+      (should (eq 'error (plist-get
+                         (mevedel-tool-render-data-direct-call "ToolCall" failed)
+                         :status))))))
+
 (mevedel-deftest mevedel-tool-render-data-extract
   ()
   ,test

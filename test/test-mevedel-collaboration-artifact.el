@@ -131,7 +131,8 @@
                     :result "Applied patch: 2 changes"
                     :render-data
                     (:kind patch :files
-                     ((:kind add :path ,one) (:kind add :path ,two)))))
+                     ((:kind add :added 1 :deleted 0 :diff "" :path ,one)
+                      (:kind add :added 1 :deleted 0 :diff "" :path ,two)))))
             (let ((records (mevedel-collaboration--tool-segment-records
                             (current-buffer) '(tool 1 5))))
               (should (equal '("one.html" "two.md")
@@ -149,8 +150,8 @@
                     :result "Applied patch: 2 changes"
                     :render-data
                     (:kind patch :files
-                     ((:kind update :path ,code)
-                      (:kind move :path ,code :move-path ,one)))))
+                     ((:kind update :added 1 :deleted 0 :diff "" :path ,code)
+                      (:kind move :added 1 :deleted 0 :diff "" :path ,code :move-path ,one)))))
             (let ((records (mevedel-collaboration--tool-segment-records
                             (current-buffer) '(tool 1 5))))
               (should (= 2 (length records)))
@@ -161,7 +162,7 @@
                   `(:name "ApplyPatch" :args (:patch "patch")
                     :result "Error: patch failed"
                     :render-data
-                    (:kind patch :files ((:kind add :path ,one)))))
+                    (:kind patch :files ((:kind add :added 1 :deleted 0 :diff "" :path ,one)))))
             (let ((records (mevedel-collaboration--tool-segment-records
                             (current-buffer) '(tool 1 5))))
               (should (= 1 (length records)))

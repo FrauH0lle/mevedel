@@ -234,9 +234,9 @@ relay's room plist."
 (mevedel-deftest mevedel-collaboration--frame-decode
   (:doc "parses frames to plists and returns nil for malformed JSON")
   (progn
-    (should (equal '(:t "hello" :proto 2)
+    (should (equal '(:t "hello" :proto 3)
                    (mevedel-collaboration--frame-decode
-                    "{\"t\":\"hello\",\"proto\":2}")))
+                    "{\"t\":\"hello\",\"proto\":3}")))
     (should-not (mevedel-collaboration--frame-decode "not json"))
     (should-not (mevedel-collaboration--frame-decode ""))
     ;; Encode and decode compose across the sealing boundary.
@@ -298,7 +298,7 @@ relay's room plist."
                       :payload (mevedel-collaboration--envelope-pack
                                 999
                                 (mevedel-collaboration--seal
-                                 key "{\"t\":\"hello\",\"proto\":2}"))
+                                 key "{\"t\":\"hello\",\"proto\":3}"))
                       :completep t))
                     (should (mevedel-test--pump (lambda () frames)))
                     (should (equal 1 (caar frames)))
@@ -306,7 +306,7 @@ relay's room plist."
                     ;; Host -> guest: targeted and broadcast envelopes
                     ;; arrive sealed and unseal to the sent frame.
                     (should (mevedel-collaboration--transport-send
-                             transport 1 (list :t "welcome" :proto 2)))
+                             transport 1 (list :t "welcome" :proto 3)))
                     (should (mevedel-collaboration--transport-send
                              transport 0 (list :t "record")))
                     (should (mevedel-test--pump

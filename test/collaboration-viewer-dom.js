@@ -6,6 +6,8 @@ const vm = require('node:vm');
 class Element {
   constructor(tag) {
     this.tagName = tag;
+    this.dataset = {};
+    this.open = false;
     this.children = [];
     this.listeners = {};
     this.attributes = {};

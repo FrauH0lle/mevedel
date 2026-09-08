@@ -6,6 +6,11 @@ envelopes between them and serves the static viewer. It never holds a room
 key: every session payload is AES-256-GCM sealed end to end, and the key
 travels only in the share link's URL fragment.
 
+The sealed host/viewer payload protocol is **3**. Update the Emacs host and
+viewer together. Rebuild the relay binary after viewer changes because the
+assets are embedded; reload browser tabs after updating. Tool presentation
+metadata does not change the relay's content-blind forwarding contract.
+
 ## Wire contract
 
 - `GET /` — the bundled viewer (`viewer/`, embedded via `go:embed`).

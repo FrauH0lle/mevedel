@@ -914,7 +914,7 @@
       (cl-letf (((symbol-function 'mevedel-collaboration--handle-hello)
                  (lambda (_room peer _frame) (setq handled peer))))
         (mevedel-collaboration--on-frame (current-buffer) 5
-                                         (list :t "hello" :proto 2)))
+                                         (list :t "hello" :proto 3)))
       (should (= 5 handled))
       ;; Unknown frame types are tolerated.
       (mevedel-collaboration--on-frame (current-buffer) 5

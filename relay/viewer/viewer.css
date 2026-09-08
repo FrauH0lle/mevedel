@@ -988,3 +988,16 @@ code, pre {
   padding: .15rem .6rem;
 }
 .composer-scope[hidden] { display: none; }
+.tool > .tool, .tool-dependencies, .tool-parallel {
+  margin-left: 1rem;
+  padding-left: .75rem;
+  border-left: 2px solid var(--line, #ddd);
+}
+.tool .tool-markdown { font-size: .95rem; white-space: normal; }
+.tool-group-label, .tool-truncated {
+  font: .8rem var(--mono, monospace);
+  opacity: .75;
+  margin: .5rem 0;
+}
+.st.warning { color: #a66b00; }
+.st.denied, .st.cancelled { color: var(--failed); }

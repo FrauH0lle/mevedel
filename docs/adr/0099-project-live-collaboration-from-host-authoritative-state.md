@@ -1,7 +1,7 @@
 # Project live collaboration from host-authoritative state
 
 Status: accepted (amended 2026-08-29, twice; 2026-08-30; 2026-08-31;
-2026-09-02;
+2026-09-02; 2026-09-08;
 room lifetime superseded by ADR 0114)
 
 Live collaboration keeps the original Emacs process authoritative and exposes
@@ -313,3 +313,18 @@ these files are durable session state, not per-turn file snapshots.
 The cockpit and the next save still consume the fixed folder, so an owned cold
 Resume replaces that cache from digest-verified manifest bytes after fencing
 and head revalidation. Read-only inspection does not mutate the cache.
+
+## Amendment: tool presentation metadata (2026-09-08)
+
+A captured direct Skill call displayed correctly in Emacs but appeared as
+`ToolCall` and raw dependency reminders in the browser. Projection had dropped
+the renderer metadata. The host now projects an allowlisted, bounded tool
+presentation tree from the same renderers and direct-call selection as Emacs.
+Execution IDs and names remain separate from display identity so pending rows
+settle in place. Prepared dependency bodies are captured at Skill invocation
+and displayed in separate foldouts; current filesystem contents never replace
+historical delivery. Nested disclosure choices belong to each browser.
+
+The sealed host/viewer payload protocol is now 3. Update both together; no
+version adapter is retained. The relay still forwards opaque encrypted frames,
+but its binary must be rebuilt to embed the updated viewer assets.
