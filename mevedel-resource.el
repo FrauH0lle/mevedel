@@ -159,6 +159,30 @@ dynamic seam, not private state.")
 (define-error 'mevedel-resource-error "Resource address error")
 (define-error 'mevedel-resource-unavailable "Resource unavailable")
 
+(defun mevedel-resource-error-message (failure &optional address private-paths)
+  "Format FAILURE once, naming ADDRESS and hiding PRIVATE-PATHS.
+Resource conditions already contain a useful message; omit their redundant
+condition labels.  Other conditions retain their ordinary diagnostic text."
+  (let ((message (if (memq (car failure)
+                           '(mevedel-resource-error mevedel-resource-unavailable))
+                     (cadr failure)
+                   (error-message-string failure))))
+    (when address
+      (dolist (path (sort (delete-dups (delq nil (copy-sequence private-paths)))
+                          (lambda (left right) (> (length left) (length right)))))
+        (dolist (variant (delete-dups
+                          (list (directory-file-name path)
+                                (file-local-name (directory-file-name path)))))
+          (setq message (string-replace
+                         (concat variant "/")
+                         (if (string-suffix-p "://" address) address
+                           (concat address "/"))
+                         message))
+          (setq message (string-replace variant address message))))
+      (unless (string-search address message)
+        (setq message (format "%s (%s)" message address))))
+    message))
+
 (defun mevedel-resource--control-character-p (character)
   "Return non-nil when CHARACTER is a disallowed control character."
   (or (< character #x20) (= character #x7f)))
@@ -285,6 +309,9 @@ MCP address."
   (if (string-empty-p tail)
       nil
     (let ((raw-components (split-string tail "/" nil)))
+      (when (string-suffix-p "/" tail)
+        (signal 'mevedel-resource-error
+                '("Remove the trailing slash from the resource address; directories use their canonical name")))
       (when (or (member "" raw-components)
                 (string-prefix-p "/" tail)
                 (string-suffix-p "/" tail))
@@ -591,10 +618,10 @@ digest remains the authority a readable key resolves to."
     (cond
      ((null matches)
       (signal 'mevedel-resource-error
-              (list "Skill alias does not name an enabled skill")))
+              (list "Skill alias does not name an enabled skill; Read skill:// to discover available skills")))
      ((cdr matches)
       (signal 'mevedel-resource-error
-              (list "Skill alias is ambiguous")))
+              (list "Skill alias is ambiguous; Read skill:// and use an exact source address")))
      (t (car matches)))))
 
 (defun mevedel-resource--skill-root (skill)
@@ -1076,10 +1103,14 @@ as Glob or Grep scopes."
         (signal 'mevedel-resource-unavailable
                 (list (format "No active MCP connection to %s" server))))
       (condition-case err
-          (let ((text (mevedel-resource-mcp-extract-text
-                       (mcp-read-resource connection uri))))
+          (let* ((response (mcp-read-resource connection uri))
+                 (text (mevedel-resource-mcp-extract-text response)))
             (if (string-empty-p text)
-                "(resource returned no text content)"
+                (format "%s (%s)"
+                        (if (seq-empty-p (plist-get response :contents))
+                            "MCP resource returned no content"
+                          "MCP resource returned no text; this Read surface exposes text content only")
+                        (mevedel-resource--mcp-address server uri))
               text))
         (error
          (signal 'mevedel-resource-unavailable
@@ -1150,7 +1181,7 @@ When HISTORY-P is non-nil, include root and retained conversation histories."
        :false-object mevedel-resource--json-false)
     (error
      (signal 'mevedel-resource-unavailable
-             (list (format "Agent result is not valid JSON: %s"
+             (list (format "Agent result is not valid JSON; Read without a JSON pointer to inspect the full result: %s"
                            (error-message-string err)))))))
 
 (defun mevedel-resource--json-pointer-value (value tokens)
@@ -1212,7 +1243,7 @@ When HISTORY-P is non-nil, include root and retained conversation histories."
                       (mevedel-agent-control-settled-result record))))
     (unless settled
       (signal 'mevedel-resource-unavailable
-              (list "Retained agent has no settled result")))
+              (list "Retained agent has no settled result yet; wait for completion or inspect its history:// conversation")))
     (let ((payload (plist-get settled :payload)))
       (if (not (plist-get parsed :fragment-p))
           payload
@@ -1313,43 +1344,51 @@ the union index read, which already tolerates missing roots."
          (root (plist-get data :root)))
     (pcase scheme
       ('work
-       (let* ((shared (car (mevedel-resource--work-location (list mevedel-resource--shared-work-component)
-                                                            context session)))
+       (let* ((shared (car (mevedel-resource--work-location
+                           (list mevedel-resource--shared-work-component) context session)))
+              (shared-p (equal components '("shared")))
+              (empty (if shared-p
+                         "No shared working files yet. Create a file under work://shared/ using ApplyPatch when workspace writes are permitted."
+                       "No working files found under work://."))
               (roots (cl-remove-if-not
                       (lambda (entry)
                         (and (plist-get entry :path)
                              (file-directory-p (plist-get entry :path))))
-                      (list (list :path root :address "work://")
+                      (list (list :path (unless shared-p root) :address "work://")
                             (list :path shared :address-prefix mevedel-resource-shared-work-address)))))
          (if (eq operation 'read)
-             (concat (mevedel-resource--directory-list-result 'work root)
-                     (when shared
-                       (concat "\nwork://shared (workspace working files)\n"
-                               (mapconcat
-                                (lambda (file)
-                                  (mevedel-resource--logical-address
-                                   'work (cons mevedel-resource--shared-work-component
+             (let ((files
+                    (cl-loop for entry in roots
+                             append
+                             (mapcar
+                              (lambda (file)
+                                (mevedel-resource--logical-address
+                                 'work (append (when (plist-get entry :address-prefix)
+                                                 '("shared"))
                                                (split-string file "/" t))))
-                                (mevedel-resource--file-list shared) "\n"))))
-           (if roots (list :resource-search-roots roots) "No working files found"))))
+                              (mevedel-resource--file-list (plist-get entry :path))))))
+               (if files (string-join files "\n") empty))
+           (list :resource-search-roots roots :empty-result empty))))
       ('artifact
        (if (null components)
            (if (eq operation 'read)
                (mevedel-resource--directory-list-result 'artifact root)
-             (signal 'mevedel-resource-error
-                     (list "Artifact search requires a file-backed directory")))
+             (list :resource-search-roots
+                   (when (and root (file-directory-p root))
+                     (list (list :path root :address "artifact://")))
+                   :empty-result "No persisted tool results found under artifact://."))
          (signal 'mevedel-resource-unavailable
-                 (list "Artifact resource is file-backed"))))
+                 (list "Internal resource error: artifact file reached discovery execution"))))
       ('mevedel
        (if (null components)
            (mevedel-resource--directory-list-result 'mevedel root)
          (signal 'mevedel-resource-unavailable
-                 (list "Mevedel documentation is file-backed"))))
+                 (list "Internal resource error: documentation file reached discovery execution"))))
       ('skill
        (if (null (plist-get data :source-file))
            (mevedel-resource--skill-list-result session context)
          (signal 'mevedel-resource-unavailable
-                 (list "Skill resource is file-backed"))))
+                 (list "Internal resource error: skill file reached discovery execution"))))
       ('agent
        (if (null components)
            (mevedel-resource--agent-list-result session)
@@ -1364,20 +1403,26 @@ the union index read, which already tolerates missing roots."
        (if (equal components '("root"))
            (pcase operation
              ('read
-              (mevedel-system--memory-content
-               (mevedel-resource--workspace context session)))
+              (if (mevedel-resource--memory-roots context session)
+                  (mevedel-system--memory-content
+                   (mevedel-resource--workspace context session))
+                "No memory roots configured."))
              ((or 'glob 'grep)
               (list :resource-search-roots
                     (mevedel-resource--memory-search-roots
-                     context session))))
+                     context session)
+                    :empty-result
+                    (if (mevedel-resource--memory-roots context session)
+                        "No memory files found under memory://root."
+                      "No memory roots configured."))))
          (signal 'mevedel-resource-unavailable
-                 (list "Memory topic is file-backed"))))
+                 (list "Internal resource error: memory file reached discovery execution"))))
       ('journal
        (let* ((workspace (mevedel-resource--workspace context session))
               (workspace-root (and workspace (mevedel-workspace-root workspace))))
          (unless workspace-root
            (signal 'mevedel-resource-unavailable '("Journal requires a workspace")))
-         (condition-case nil
+         (condition-case err
              (let ((entries (if components
                                 (list (mevedel-journal-store-read
                                        workspace-root (car components)))
@@ -1397,10 +1442,21 @@ the union index read, which already tolerates missing roots."
                        (mapcar (lambda (entry)
                                  (cons (plist-get entry :file) (plist-get entry :text)))
                                entries))))
+           ((file-missing mevedel-session-control-fs-absent)
+            (signal 'mevedel-resource-unavailable
+                    '("Journal entry not found; Read journal:// to discover published entries")))
+           (mevedel-journal-store-invalid
+            (signal 'mevedel-resource-unavailable
+                    (list (format "Invalid journal entry: %s"
+                                  (car (last (cdr err)))))))
+           (file-error
+            (signal 'mevedel-resource-unavailable
+                    '("Journal storage could not be read; check workspace storage access")))
            (error
             (signal 'mevedel-resource-unavailable
-                    (list (format "Journal resource is unavailable or invalid: %s"
-                                  (plist-get data :address))))))))
+                    (list (format "Journal read failed: %s"
+                                  (mevedel-resource-error-message
+                                   err (plist-get data :address) (list root)))))))))
       ('mcp
        (cond
         ((null components)
@@ -1415,7 +1471,7 @@ the union index read, which already tolerates missing roots."
         (t (mevedel-resource--mcp-read
             (car components) (cadr components)))))
       (_ (signal 'mevedel-resource-error
-                 (list "Unknown resource provider"))))))
+                 (list "Internal resource error: unknown provider"))))))
 
 (defun mevedel-resource-within-root-p (path root)
   "Return non-nil when PATH resolves beneath ROOT, including ROOT itself.
@@ -1550,7 +1606,9 @@ before an authorized handler receives a backing path or virtual record."
                (or (eq scheme 'memory)
                    (and (eq scheme 'work) (mevedel-resource--shared-work-p components)))
                (not (equal root (plist-get data :root))))
-      (signal 'mevedel-resource-error '("Writable resource root changed after preparation")))
+      (signal 'mevedel-resource-error
+              (list (format "Writable resource root changed after preparation: %s; retry the patch against the current workspace"
+                            (plist-get data :address)))))
     (setq data (plist-put data :root root))
     (plist-put data :physical-path physical)))
 
@@ -1590,8 +1648,9 @@ errors before any content or handler is reached."
                   (and (eq operation 'apply-patch)
                        (memq scheme '(work memory))))
         (signal 'mevedel-resource-error
-                (list (format "%s does not support %s addresses"
-                              (upcase (symbol-name operation)) scheme))))
+                (list (format "%s does not support %s:// resources"
+                              (if (eq operation 'apply-patch) "ApplyPatch"
+                                (capitalize (symbol-name operation))) scheme))))
       (when (and (eq scheme 'skill)
                  (plist-get parsed :dynamic-p)
                  (not (eq operation 'read)))
@@ -1613,13 +1672,13 @@ errors before any content or handler is reached."
         (pcase-let ((`(,owner . ,relative) (mevedel-resource--work-location components context session)))
           (setq root owner
                 physical (mevedel-resource--safe-path owner relative)
-                logical-p (null components))))
+                logical-p (or (null components)
+                              (equal components '("shared"))))))
        ((eq scheme 'artifact)
         (setq root (mevedel-resource--root scheme session)
               physical (and root
                             (mevedel-resource--safe-path root components))
-              logical-p (and (null components)
-                             (eq operation 'read)))
+              logical-p (null components))
         (when (and (eq scheme 'artifact)
                    (member ".mevedel-pending-executions" components))
           (setq data (plist-put data :unavailable-p t))))
@@ -1709,8 +1768,52 @@ errors before any content or handler is reached."
         attempt))
       (mevedel-resource-error
        (signal 'mevedel-resource-error
-               (list (format "Invalid resource address %s: %s"
-                             address (error-message-string err))))))))
+               (list (mevedel-resource-error-message err address)))))))
+
+(defun mevedel-resource--unavailable-reason (data)
+  "Return the actionable availability failure for refreshed DATA, or nil."
+  (let ((scheme (plist-get data :scheme))
+        (session (plist-get data :session))
+        (components (plist-get data :components))
+        (root (plist-get data :root))
+        (path (plist-get data :physical-path))
+        (unavailable (plist-get data :unavailable-p)))
+    (cond
+     ((and (eq scheme 'work) (mevedel-resource--shared-work-p components))
+      (unless root "Shared working files require a workspace"))
+     ((and (memq scheme '(work artifact agent history)) (null session))
+      (format "%s resources require a session"
+              (if (eq scheme 'work) "Session working file"
+                (capitalize (symbol-name scheme)))))
+     ((not unavailable) nil)
+     ((eq scheme 'artifact)
+      "Artifact is not published; Read artifact:// to discover available results")
+     ((eq scheme 'mevedel)
+      (cond
+       ((or (null root) (not (file-directory-p root))
+            (file-symlink-p (directory-file-name root)))
+        "Installed documentation is missing or its root is invalid")
+       ((not (file-exists-p path)) "File not found")
+       ((file-directory-p path)
+        "Read requires a Markdown document; use Glob or Grep for documentation directories")
+       (t "Only packaged Markdown documents are readable; Read mevedel:// to discover documents")))
+     ((eq scheme 'skill)
+      (cond
+       ((or (null path) (null (plist-get data :source-file)))
+        "Skill not found or disabled; Read skill:// to discover available skills")
+       ((not (file-regular-p (plist-get data :source-file)))
+        "Skill source file is missing; Read skill:// to discover available skills")
+       ((not (file-exists-p path)) "File not found")
+       (t "Read requires a skill file; use Glob or Grep for package directories")))
+     ((and (eq scheme 'history) (equal components '("root")))
+      "Root conversation is not open in this session")
+     ((memq scheme '(agent history))
+      (format "Agent not found in this session; Read %s:// to discover available %s"
+              scheme (if (eq scheme 'agent) "agents" "histories")))
+     ((eq scheme 'memory)
+      "Memory root is not configured; Read memory://root to discover configured roots")
+     ((eq scheme 'journal) "Journal resources require a workspace")
+     (t "Internal resource error: availability failure has no reason"))))
 
 (defun mevedel-resource-attempt-address (attempt)
   "Return ATTEMPT's authored address."
@@ -1733,7 +1836,8 @@ and commit.  It does not grant authority or read file content."
                          (not (plist-get fresh :unavailable-p))
                          (equal identity (file-truename root)))
               (signal 'mevedel-resource-error
-                      '("Writable resource target changed during review")))
+                      (list (format "Writable resource target changed during review: %s; review a fresh patch"
+                                    (plist-get data :address)))))
             t))))))
 
 (defun mevedel-resource-attempt-write-path (attempt)
@@ -1743,7 +1847,13 @@ Session-owned scratch keeps its address-based permission treatment."
     (when (and (eq (plist-get data :operation) 'apply-patch)
                (not (mevedel-resource-session-work-p (plist-get data :address))))
       (or (plist-get data :physical-path)
-          (signal 'mevedel-resource-unavailable '("Writable resource root unavailable"))))))
+          (signal 'mevedel-resource-unavailable
+                  (list (mevedel-resource-error-message
+                         (list 'mevedel-resource-unavailable
+                               (or (mevedel-resource--unavailable-reason
+                                    (mevedel-resource--refresh-data (copy-sequence data)))
+                                   "Writable resource owner is unavailable"))
+                         (plist-get data :address))))))))
 
 (defun mevedel-resource-execute (attempt &optional executor options)
   "Execute authorized opaque ATTEMPT.
@@ -1758,38 +1868,62 @@ address.  No backing path is returned for a file-backed attempt without an
 executor."
   (let ((data (gethash attempt mevedel-resource--attempt-table)))
     (unwind-protect
-        (progn
-          (unless (plist-get data :resource-p)
-            (signal 'mevedel-resource-error
-                    (list "Invalid resource execution attempt")))
-          (setq data (mevedel-resource--refresh-data data))
-          (when (plist-get data :unavailable-p)
-            (signal 'mevedel-resource-unavailable
-                    (list (format "Resource is unavailable: %s"
-                                  (plist-get data :address)))))
-          (if (plist-get data :logical-p)
-              (let* ((result (mevedel-resource--execute-logical data options))
-                     (descriptor (list :virtual t
-                                       :result result
-                                       :address (plist-get data :address)
-                                       :scheme (plist-get data :scheme)
-                                       :operation (plist-get data :operation))))
-                (when (and (listp result)
-                           (plist-member result :resource-search-roots))
-                  (setq descriptor
-                        (plist-put descriptor :resource-search-roots
-                                   (plist-get result :resource-search-roots))))
-                (when (and (listp result) (plist-member result :resource-search-documents))
-                  (setq descriptor (append descriptor result)))
-                (if executor
-                    (funcall executor descriptor (plist-get data :address))
-                  descriptor))
-            (unless (functionp executor)
-              (signal 'mevedel-resource-error
-                      (list "File-backed resources require an executor")))
-            (funcall executor
-                     (plist-get data :physical-path)
-                     (plist-get data :address))))
+        (condition-case err
+            (progn
+              (unless (plist-get data :resource-p)
+                (signal 'mevedel-resource-error
+                        (list "Internal resource error: invalid execution attempt")))
+              (setq data (mevedel-resource--refresh-data data))
+              (when-let* ((reason (mevedel-resource--unavailable-reason data)))
+                (signal 'mevedel-resource-unavailable
+                        (list reason)))
+              (when (and (plist-get data :logical-p)
+                         (memq (plist-get data :scheme) '(work artifact))
+                         (plist-get data :root)
+                         (file-exists-p (plist-get data :root))
+                         (not (file-directory-p (plist-get data :root))))
+                (signal 'mevedel-resource-unavailable
+                        '("Resource storage root is not a directory")))
+              (if (plist-get data :logical-p)
+                  (let* ((result (mevedel-resource--execute-logical data options))
+                         (descriptor (list :virtual t
+                                           :result (if (and (listp result)
+                                                            (plist-member result :resource-search-roots)
+                                                            (null (plist-get result :resource-search-roots)))
+                                                       (plist-get result :empty-result)
+                                                     result)
+                                           :address (plist-get data :address)
+                                           :scheme (plist-get data :scheme)
+                                           :operation (plist-get data :operation))))
+                    (when (and (listp result)
+                               (plist-member result :resource-search-roots))
+                      (if (plist-get result :resource-search-roots)
+                          (setq descriptor
+                                (plist-put descriptor :resource-search-roots
+                                           (plist-get result :resource-search-roots)))
+                        (setq descriptor (plist-put descriptor :render-data '(:count 0)))))
+                    (when (and (listp result) (plist-member result :resource-search-documents))
+                      (setq descriptor (append descriptor result)))
+                    (if executor
+                        (funcall executor descriptor (plist-get data :address))
+                      descriptor))
+                (unless (functionp executor)
+                  (signal 'mevedel-resource-error
+                          (list "Internal resource error: file-backed resource has no executor")))
+                (funcall executor
+                         (plist-get data :physical-path)
+                         (plist-get data :address))))
+          (error
+           (signal (car err)
+                   (list (mevedel-resource-error-message
+                          err (plist-get data :address)
+                          (list (plist-get data :physical-path)
+                                (plist-get data :root)
+                                (when-let* ((session (plist-get data :session)))
+                                  (mevedel-session-save-path session))
+                                (when (eq (plist-get data :scheme) 'work)
+                                  (mevedel-resource-work-shared-directory
+                                   (plist-get data :workspace)))))))))
       (remhash attempt mevedel-resource--attempt-table))))
 
 (defun mevedel-resource-discard-attempts (attempts)

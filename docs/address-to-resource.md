@@ -67,6 +67,14 @@ unknown `scheme://` prefix, malformed known address, traversal, or containment
 failure is a validation error and is not treated as a filesystem path. Other
 strings containing a colon remain ordinary tool input.
 
+Diagnostics identify the authored address and the actual reason. Unsupported
+operations are described as unsupported operations, rather than malformed
+addresses. Missing explicit files remain failures; missing resource owners,
+unknown selections, unreadable storage, and results that are not ready have
+distinct messages. Discovery guidance names the appropriate resource listing.
+Private storage paths stay out of model-visible errors, including helper
+failures. Internal execution-contract failures are identified as internal errors.
+
 Canonical serialization uses UTF-8 RFC 3986 percent encoding: leave only
 unreserved bytes literal and use uppercase hexadecimal escapes. For
 path-oriented families, split on literal `/` before decoding each component
@@ -153,6 +161,14 @@ Bare Read lists both scopes and bare Glob/Grep searches both. Directory operands
 use canonical names without a trailing slash, such as `work://shared`; the
 `work://shared/` spelling denotes the prefix for its file descendants.
 
+An unused shared root is a successful empty discovery result for Read, Glob,
+and Grep. The result explains that an authorized ApplyPatch can create a file
+under `work://shared/`; discovery itself never creates storage. Bare `work://`
+lists the union without claiming the entire union is empty when only the
+session scope is empty. A missing session or workspace owner is still an error.
+An explicit missing descendant, including an arbitrary directory descendant,
+is an error rather than an empty discovery root.
+
 - `work://shared/...` maps to `WORKSPACE-ROOT/.mevedel/shared/`. All agents and
   sessions in that workspace see the same files. The directory is created only
   by a permitted write and has no prescribed children. Working notes, drafts,
@@ -197,6 +213,10 @@ lists current handles; descendants resolve only existing artifacts. A yielded
 execution may still append to its spool: each `Read` observes a bounded
 snapshot of bytes available when that read begins, while later pagination may
 observe growth. A foreground execution that has not yielded is not listed.
+
+Before the first result is persisted, bare Read, Glob, and Grep return successful
+empty discovery results. Discovery does not create session storage. An explicit
+missing handle is a missing-target error, and a missing session is an owner error.
 
 Oversized tool and execution notices emit followable `artifact://` addresses,
 never absolute session-storage paths. No artifact address can rewrite,
@@ -256,6 +276,10 @@ shadowed matches. Listed topics and disclosed search results use the readable
 root key when the configured roots make it unambiguous, and the digest key
 otherwise; the union query itself is never atomically bound.
 
+An empty union returns plain text for Read, Glob, and Grep, with zero search
+results. No configured roots and configured roots without stored files are
+reported separately. Resolver descriptors never become public result values.
+
 Memory reads are fresh against the configured roots. ApplyPatch accepts only
 explicit `memory://ROOT-KEY/RELATIVE-PATH` file descendants; neither the union nor
 a root-only address is writable. Add, Update, Move and Delete use the same
@@ -305,6 +329,11 @@ MCP reads are fresh on every call and use the current connection. Unknown,
 disconnected, or failed resources return no content and follow ordinary tool
 failure handling. MCP addresses are read-only and create no filesystem grant,
 cache, or server mutation route.
+
+Read exposes MCP text content. A successful response without content is
+distinguished from a response containing no usable text, and both notices name
+the requested address. Failures also name that address and preserve the server
+or provider reason.
 
 ### `mevedel://`
 

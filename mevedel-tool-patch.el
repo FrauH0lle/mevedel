@@ -71,6 +71,8 @@
 ;; `mevedel-resource'
 (declare-function mevedel-resource-address-like-p
                   "mevedel-resource" (value))
+(declare-function mevedel-resource-error-message "mevedel-resource"
+                  (failure &optional address private-paths))
 (declare-function mevedel-resource-execute
                   "mevedel-resource" (attempt &optional executor options))
 (declare-function mevedel-resource-prepare
@@ -157,14 +159,14 @@ PROPOSAL is the prepared proposal whose physical fields are private."
         (request (and (boundp 'mevedel--current-request)
                       mevedel--current-request)))
     (unless session
-      (error "Local resources require a session"))
+      (error "Session working files require a session (work://)"))
     (when (and request (mevedel-request-ephemeral-p request))
-      (error "Ephemeral requests cannot own local resources"))
+      (error "Ephemeral requests cannot write session working files (work://)"))
     (unless (mevedel-session-save-path session)
       (require 'mevedel-session-persistence)
       (unless (mevedel-session-persistence-shallow-ensure-files
                session (current-buffer))
-        (error "Could not materialize the local resource session")))
+        (error "Could not create storage for session working files (work://)")))
     (make-directory
      (file-name-concat (mevedel-session-save-path session) "local") t)
     session))
@@ -220,7 +222,7 @@ local sessions untouched until permission and plan checks have completed."
             (mevedel-resource-execute
              attempt (lambda (path _authored) (setq physical path)))
             (unless physical
-              (error "Resource has no writable filesystem target: %s" address))
+              (error "Writable resource owner is unavailable: %s" address))
             (plist-put operation physical-key physical)
             (plist-put operation attempt-key nil))
           (plist-put operation resource-key t)
@@ -248,7 +250,9 @@ local sessions untouched until permission and plan checks have completed."
             (mevedel-resource-execute
              attempt (lambda (path _authored) (setq physical path)))
             (unless physical
-              (error "Resource has no writable filesystem target"))
+              (error "Writable resource owner is unavailable: %s"
+                     (plist-get operation (if (eq (car entry) :resource-attempt-path)
+                                              :rel-path :move-rel-path))))
             (plist-put operation (nth 1 entry) physical)
             (plist-put operation (car entry) nil)))))
     proposal))
@@ -1679,7 +1683,7 @@ file buttons, rewritten links, or inline images."
                 (list :result
                       (format "Error: %s"
                               (mevedel-tool-patch-sanitize-error
-                               (error-message-string err) proposal))
+                               (mevedel-resource-error-message err) proposal))
                       :status 'error))))))
 
 (defun mevedel-tool-patch--get-paths (args)

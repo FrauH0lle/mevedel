@@ -72,6 +72,8 @@
                   (path session))
 (declare-function mevedel-resource-discard-attempts "mevedel-resource"
                   (attempts))
+(declare-function mevedel-resource-error-message "mevedel-resource"
+                  (failure &optional address private-paths))
 (declare-function mevedel-resource-normalize-file-path "mevedel-resource"
                   (value &optional directory))
 (declare-function mevedel-resource-prepare "mevedel-resource"
@@ -655,7 +657,7 @@ ignoring duplicate outcome"
             (funcall callback
                      (mevedel-pipeline--settlement
                       context 'pipeline-error
-                      (error-message-string err)))))))))))
+                      (mevedel-resource-error-message err)))))))))))
 
 
 ;;
@@ -1221,7 +1223,7 @@ buffer."
                  (funcall
                   finish
                   (list :result (format "Error: %s"
-                                        (error-message-string err))
+                                        (mevedel-resource-error-message err))
                         :status 'error)))))))
          (dispatch-buffer (plist-get context :buffer)))
     (cond

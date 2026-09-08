@@ -902,6 +902,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
                        :offset 99)))
           (should-not (string-empty-p result))
           (should (string-match-p "after the last" result))
+          (should (string-prefix-p "Error:" result))
           ;; A head limit alongside must not append a contradictory
           ;; truncation notice to the answer.
           (setq result
@@ -1144,6 +1145,65 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
               (should (string-search "work://plan.md" result))
               (should (string-search "work://shared/decision.md" result))
               (should-not (string-search root result)))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-fs-search/artifact-discovery ()
+  ,test
+  (test)
+  :doc "bare artifact searches return published files and exclude private execution spools"
+  (let* ((root (make-temp-file "mevedel-resource-artifacts-" t))
+         (session (mevedel-session--create :save-path root))
+         (artifacts (file-name-concat root "tool-results")))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat artifacts ".mevedel-pending-executions") t)
+          (with-temp-file (file-name-concat artifacts "answer.txt") (insert "needle public\n"))
+          (with-temp-file (file-name-concat artifacts ".mevedel-pending-executions" "secret.txt")
+            (insert "needle private\n"))
+          (dolist (operation '(glob grep))
+            (let* ((attempt (mevedel-resource-prepare operation "artifact://" (list :session session)))
+                   (mevedel-resource-current-attempts (list (cons "artifact://" attempt)))
+                   (result
+                    (test-mevedel-tool-fs-search--await-callback
+                     (if (eq operation 'glob) #'mevedel-tool-fs-search-glob #'mevedel-tool-fs-search-grep)
+                     (list :path "artifact://" :pattern (if (eq operation 'glob) "**/*" "needle")))))
+              (should (string-search "artifact://answer.txt" result))
+              (ert-info ((format "Operation: %s" operation))
+                (should-not (string-search "secret" result)))
+              (should-not (string-search root result)))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-fs-search--documents/diagnostics ()
+  ,test
+  (test)
+  :doc "search preparation errors retain a useful cause while hiding temporary storage"
+  (let* ((address "journal://")
+         (failure
+          (should-error
+           (mevedel-tool-fs-search--documents
+            #'ignore '(:pattern "note")
+            (list :address address :scheme 'journal :resource-search-documents nil)
+            (lambda (&rest _) (error "'rg' not installed on execution target"))))))
+    (should (string-search "not installed on execution target" (cadr failure)))
+    (should (string-search address (cadr failure)))
+    (should-not (string-search "mevedel-resource-search-" (cadr failure)))))
+
+(mevedel-deftest mevedel-tool-fs-search-grep/partial-range ()
+  ,test
+  (test)
+  :doc "out-of-range pagination stays an error when a partial-results warning precedes it"
+  (let ((root (make-temp-file "mevedel-grep-range-" t)) result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                   (lambda (callback &rest _)
+                     (funcall callback '(:output "one.txt\n" :exit-code 0 :timed-out-p t)))))
+          (mevedel-tool-fs-search-grep
+           (lambda (value) (setq result value))
+           (list :path root :pattern "needle" :offset 99))
+          (should (eq 'error (plist-get result :status)))
+          (should (string-search "results are partial" (plist-get result :result)))
+          (should (string-search "Error: Offset 99" (plist-get result :result)))
+          (should (= 0 (plist-get (plist-get result :render-data) :count))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-tool-fs-search-render-grep ()

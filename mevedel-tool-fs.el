@@ -142,7 +142,9 @@ path that crosses the handler result boundary is the authored address."
   (when (stringp address)
     (cond
      ((string-prefix-p "artifact://" address)
-      '("--glob=!**/.mevedel-pending-executions/**"))
+      ;; Glob uses --iglob for its include pattern.  Ripgrep gives those
+      ;; patterns precedence over --glob, so exclusions must use it too.
+      '("--iglob=!**/.mevedel-pending-executions/**"))
      ((string-prefix-p "mevedel://" address)
       '("--glob=**/*.md")))))
 
