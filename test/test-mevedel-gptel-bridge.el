@@ -387,6 +387,207 @@
     (should-not (memq #'mevedel-gptel-bridge--cleanup-advice
                       transient-post-exit-hook))))
 
+(mevedel-deftest mevedel-gptel-bridge--steering-buffer ()
+  ,test
+  (test)
+  :doc "resolves request ownership even from a tool inspection buffer"
+  (mevedel-gptel-bridge-test--with-buffers
+    (with-temp-buffer
+      (should-not (mevedel-gptel-bridge--steering-buffer))
+      (let ((info (list :buffer data-buf)))
+        (should (eq data-buf (mevedel-gptel-bridge--steering-buffer info)))
+        (let ((gptel--fsm-last (gptel-make-fsm :info info)))
+          (should (eq data-buf (mevedel-gptel-bridge--steering-buffer))))))))
+
+(mevedel-deftest mevedel-gptel-bridge--steer-advice (:quiet t)
+  ,test
+  (test)
+  :doc "native steering runs hooks and queues FIFO without changing the draft"
+  (mevedel-gptel-bridge-test--with-buffers
+    (let* ((draft "> first line\nsecond line")
+           (info (list :buffer data-buf :mevedel-request-id "bridge-steer"
+                       :backend (gptel--make-openai) :data (list :messages [])
+                       :history '(TRET)))
+           (fsm (gptel-make-fsm :state 'TOOL :info info))
+           (request (mevedel-request--create
+                     :id "bridge-steer" :session session :fsm fsm))
+           (mevedel-user-prompt-submit-functions
+            (list (lambda (_event) '(:additional-context "prepared by hook")))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request request
+                    mevedel--workspace workspace
+                    gptel--fsm-last fsm))
+      (with-current-buffer view-buf
+        (goto-char (point-max))
+        (insert draft))
+      (mevedel-session-set-pending-input-paused session t)
+      ;; Equal text must still preserve an independently authored draft.
+      (dolist (text (list "first steering" draft))
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) text)))
+          (with-current-buffer data-buf
+            (mevedel-gptel-bridge--steer-advice #'ert-fail))))
+      (let ((entries (mevedel-session-pending-steering session)))
+        (should (equal (mapcar (lambda (entry) (plist-get entry :input)) entries)
+                       (list "first steering" draft)))
+        (should (string-match-p "prepared by hook"
+                                (plist-get (car entries) :model-input))))
+      (mevedel-tools--handle-steering-inject fsm)
+      (should (= 2 (length (mevedel-session-pending-steering session))))
+      (should (= 0 (length (plist-get (plist-get info :data) :messages))))
+      (should-not (plist-get info :steering-message))
+      (should-not (plist-get info :post-tool))
+      (with-current-buffer view-buf
+        (should (equal draft (mevedel-view--input-text))))))
+
+  :doc "hook rejection preserves the draft and leaves both steering stores empty"
+  (mevedel-gptel-bridge-test--with-buffers
+    (let* ((fsm (gptel-make-fsm :state 'TOOL :info (list :buffer data-buf)))
+           (request (mevedel-request--create :id "blocked" :session session
+                                            :fsm fsm))
+           (mevedel-user-prompt-submit-functions
+            (list (lambda (_event) '(:continue nil :stop-reason "blocked")))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request request
+                    gptel--fsm-last fsm))
+      (with-current-buffer view-buf
+        (goto-char (point-max))
+        (insert "> retained\ndraft"))
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "blocked text")))
+        (with-current-buffer data-buf
+          (mevedel-gptel-bridge--steer-advice #'ert-fail)))
+      (should-not (mevedel-session-pending-steering session))
+      (should-not (plist-get (gptel-fsm-info fsm) :steering-message))
+      (with-current-buffer view-buf
+        (should (equal "> retained\ndraft" (mevedel-view--input-text))))))
+
+  :doc "retained-agent native steering is refused before creating a TSTR message"
+  (mevedel-gptel-bridge-test--with-buffers
+    (with-current-buffer data-buf
+      (let ((mevedel--agent-invocation 'retained-agent))
+        (cl-letf (((symbol-function 'read-string) #'ert-fail))
+          (should-error (mevedel-gptel-bridge--steer-advice #'ert-fail)
+                        :type 'user-error))))
+    (should-not (mevedel-session-pending-steering session)))
+
+  :doc "blank input preserves pending entries and unrelated gptel delegates"
+  (mevedel-gptel-bridge-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :id "blank" :session session)))
+    (mevedel-session-set-pending-inputs session 'steering '((:input "queued")))
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) " \n ")))
+      (with-current-buffer data-buf
+        (mevedel-gptel-bridge--steer-advice #'ert-fail)))
+    (should (equal '((:input "queued"))
+                   (mevedel-session-pending-steering session))))
+  (with-temp-buffer
+    (should (equal '(original arg)
+                   (mevedel-gptel-bridge--steer-advice
+                    (lambda (&rest args) (cons 'original args)) 'arg))))
+
+  :doc "a request replaced during minibuffer input cannot receive the steering"
+  (mevedel-gptel-bridge-test--with-buffers
+    (with-current-buffer data-buf
+      (setq-local mevedel--current-request
+                  (mevedel-request--create :id "before" :session session))
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (&rest _)
+                   (with-current-buffer data-buf
+                     (setq mevedel--current-request
+                           (mevedel-request--create :id "after" :session session)))
+                   "for the previous turn")))
+        (should-error (mevedel-gptel-bridge--steer-advice #'ert-fail)
+                      :type 'user-error)))
+    (should-not (mevedel-session-pending-steering session)))
+
+  :doc "delayed preparation preserves a new draft and rejects a replaced request"
+  (dolist (replace-request '(nil t))
+    (mevedel-gptel-bridge-test--with-buffers
+      (let* ((fsm (gptel-make-fsm :state 'TOOL :info (list :buffer data-buf)))
+             (request (mevedel-request--create :id "delayed" :session session
+                                              :fsm fsm))
+             continuation)
+        (with-current-buffer data-buf
+          (setq-local mevedel--current-request request))
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "old input"))
+                  ((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (event _plist callback &rest _)
+                     (should (eq event 'UserPromptSubmit))
+                     (setq continuation callback))))
+          (with-current-buffer data-buf
+            (mevedel-gptel-bridge--steer-advice #'ert-fail)))
+        (should (functionp continuation))
+        (when replace-request
+          (with-current-buffer data-buf
+            (setq mevedel--current-request
+                  (mevedel-request--create :id "replacement" :session session))))
+        (with-current-buffer view-buf
+          (goto-char (point-max))
+          (insert "> newly authored\ndraft"))
+        (funcall continuation nil)
+        (should (eq (not replace-request)
+                    (not (null (mevedel-session-pending-steering session)))))
+        (with-current-buffer view-buf
+          (should-not mevedel-view--prompt-hook-pending)
+          (should (equal "> newly authored\ndraft" (mevedel-view--input-text))))))))
+
+(mevedel-deftest mevedel-gptel-bridge--tool-steer-advice ()
+  ,test
+  (test)
+  :doc "refuses native confirmation steering by its owning request"
+  (mevedel-gptel-bridge-test--with-buffers
+    (with-temp-buffer
+      (let* ((info (list :buffer data-buf))
+             (overlay (make-overlay (point-min) (point-max))))
+        (overlay-put overlay 'info info)
+        (should-error
+         (mevedel-gptel-bridge--tool-steer-advice #'ert-fail 'calls overlay)
+         :type 'user-error)
+        (should-not (plist-get info :steering-message)))))
+  :doc "preserves ordinary gptel confirmation arguments"
+  (with-temp-buffer
+    (let ((info (list :buffer (current-buffer))))
+      (should (equal (list 'calls nil info)
+                     (mevedel-gptel-bridge--tool-steer-advice
+                      #'list 'calls nil info))))))
+
+(mevedel-deftest mevedel-gptel-bridge-install ()
+  ,test
+  (test)
+  :doc "both native command entrances route through mevedel until uninstalled"
+  (let ((installed (advice-member-p #'mevedel-gptel-bridge--steer-advice
+                                    'gptel-send--steer)))
+    (unwind-protect
+        (progn
+          (mevedel-gptel-bridge-install)
+          (mevedel-gptel-bridge-install)
+          (mevedel-gptel-bridge-test--with-buffers
+            (with-current-buffer data-buf
+              (let ((mevedel--agent-invocation 'retained-agent))
+                (dolist (command '(gptel-send--steer gptel--suffix-steer))
+                  (should-error (funcall command) :type 'user-error)))))
+          (should (advice-member-p #'mevedel-gptel-bridge--tool-steer-advice
+                                   'gptel--steer-tool-calls)))
+      (unless installed (mevedel-gptel-bridge-uninstall)))))
+
+(mevedel-deftest mevedel-gptel-bridge-uninstall ()
+  ,test
+  (test)
+  :doc "uninstall removes routing from every native steering entry"
+  (let ((installed (advice-member-p #'mevedel-gptel-bridge--steer-advice
+                                    'gptel-send--steer)))
+    (unwind-protect
+        (progn
+          (mevedel-gptel-bridge-install)
+          (mevedel-gptel-bridge-uninstall)
+          (dolist (command '(gptel-send--steer gptel--suffix-steer))
+            (should-not
+             (advice-member-p #'mevedel-gptel-bridge--steer-advice command)))
+          (should-not
+           (advice-member-p #'mevedel-gptel-bridge--tool-steer-advice
+                            'gptel--steer-tool-calls)))
+      (when installed (mevedel-gptel-bridge-install)))))
+
 (provide 'test-mevedel-gptel-bridge)
 
 ;;; test-mevedel-gptel-bridge.el ends here

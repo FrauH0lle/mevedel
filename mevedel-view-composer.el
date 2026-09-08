@@ -146,7 +146,8 @@
 
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view--queue-prepared-steering
-                  "mevedel-pending-inputs" (submission request))
+                  "mevedel-pending-inputs"
+                  (submission request &optional preserve-draft))
 (defvar mevedel-view--pending-guest-attribution)
 (defvar mevedel-view--pending-input-edit)
 
@@ -2193,12 +2194,14 @@ SNAPSHOT is the exact Source composer state transferred on publication."
       (mevedel-side-conversation-send)
     (mevedel-view--send-root)))
 
-(defun mevedel-view--send-root ()
+(defun mevedel-view--send-root (&optional steering-input)
   "Send the current composer text to the LLM via the data buffer.
 Extracts text from the input zone, plans all bound `$skill' mentions,
 renders the original text in the history region, and dispatches either
 one coherent request or one leading fork command.  Slash commands retain
-their local dispatch path."
+their local dispatch path.
+When STEERING-INPUT is non-nil, submit that text to the active root turn
+instead of the composer, preserving its draft."
   (mevedel-view--ensure-interactive-chat-view)
   (mevedel-view--assert-live-tip t)
   (when mevedel-view--pending-input-edit
@@ -2221,17 +2224,31 @@ their local dispatch path."
   (when (buffer-local-value 'mevedel-session--read-only-mode
                             mevedel--data-buffer)
     (user-error "Session is open read-only (another host holds the lock)"))
+  (when steering-input
+    (when mevedel-view--composer-scope
+      (user-error "Return to the main conversation to steer"))
+    (unless (buffer-local-value 'mevedel--current-request mevedel--data-buffer)
+      (user-error "No active root turn to steer")))
   (let* ((session (buffer-local-value 'mevedel--session
                                       mevedel--data-buffer))
-         (snapshot (and session
+         (snapshot (and session (not steering-input)
                         (mevedel-view--composer-snapshot session)))
-         (input (if (and session (not mevedel-view--composer-scope))
-                    (mevedel-view--bind-input-mentions session)
-                  (mevedel-view--input-text))))
+         (input
+          (if steering-input
+              (with-current-buffer mevedel--data-buffer
+                (string-trim
+                 (mevedel-mentions-prepare-user-input
+                  (mevedel-skills-input-prepare-user-input steering-input session)
+                  session)))
+            (if (and session (not mevedel-view--composer-scope))
+                (mevedel-view--bind-input-mentions session)
+              (mevedel-view--input-text)))))
     (when session
       (mevedel-session-artifacts-assert-new-mutation-authority session))
     (when (string-empty-p input)
       (user-error "Nothing to send"))
+    (when (and steering-input (mevedel-skills-parse-slash-line input))
+      (user-error "Slash commands cannot be queued as steering"))
     (if mevedel-view--composer-scope
         (mevedel-view--send-directive-input input)
       (let* ((slash-parsed (mevedel-skills-parse-slash-line input))
@@ -2289,7 +2306,7 @@ their local dispatch path."
                      (lambda (submission)
                        (unless
                            (mevedel-view--queue-prepared-steering
-                            submission active-request)
+                            submission active-request steering-input)
 			 (funcall restore))))
                   (error
                    (funcall restore)

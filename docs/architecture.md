@@ -469,7 +469,15 @@ Resource availability remains context-specific. Stable assembly is structural
 cache evidence, not a provider cache-hit measurement.
 
 `mevedel-gptel-stream-bridge.el` isolates private, version-sensitive gptel
-stream advice. `mevedel-view-stream.el` owns live-tail render scheduling,
+stream advice. gptel 0.9.9.6 owns tracking-marker movement around response
+insertion and the trailing navigation newline. Mevedel retains marker locking
+if a reasoning-close stream hook signals, plus the semantic reasoning-state
+reset before injected user messages. It no longer advises WAIT to preserve the
+removed fork-only `:reasoning-open` flag.
+`mevedel-gptel-bridge.el` routes native steering commands through the root
+composer submission path and refuses native agent/confirmation steering;
+there is no second request-local steering queue in managed sessions.
+`mevedel-view-stream.el` owns live-tail render scheduling,
 pending-tool live rows, and foreground request-progress state, while
 `mevedel-execution-transcript.el` owns durable execution render data and
 compaction archive reconciliation. View Stream delegates transcript projection

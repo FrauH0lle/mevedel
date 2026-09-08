@@ -943,7 +943,8 @@ the advice must not rescan their derived prompt text.  Pending-stash cleanup
 is tied to the continuation that actually resumes ORIG-FN so async shell
 preparation does not clear the stash before the request begin handler can
 drain it."
-  (if (or (not (bound-and-true-p mevedel--session))
+  (if (or (eq (car args) 0) ;Steering does not submit the buffer prompt.
+          (not (bound-and-true-p mevedel--session))
           (and (boundp 'mevedel--view-buffer)
                (buffer-live-p mevedel--view-buffer)))
       (apply orig-fn args)

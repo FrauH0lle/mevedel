@@ -1532,6 +1532,21 @@ uses the same pending-grant path.
 
 ## Pending Input
 
+In a managed root data buffer, gptel's `M-RET` menu action and prefix-0
+`gptel-send` ask for steering text and submit it through the same preparation
+and queue as the composer. The existing draft remains unchanged, even when it
+equals the submitted text. Blank minibuffer input does nothing; edit or delete
+pending entries through the Pending Inputs cockpit. These commands do not mark
+raw transcript regions for later submission. A scoped directive composer or
+side conversation cannot use this root steering route.
+
+Retained-agent buffers refuse native gptel steering: use `FollowupAgent` or
+`SendMessage` for their existing retained delivery path. Native gptel
+reject-and-steer confirmation actions likewise direct managed sessions to
+mevedel's permission feedback or composer. This keeps raw native steering out
+of agent FSMs and assistant-output accumulation. Ordinary gptel buffers retain
+their native commands.
+
 Pending input is session-owned and has two independent FIFO categories.
 `C-c RET` during an ordinary active root turn accepts same-turn steering:
 preparation and `UserPromptSubmit` run immediately, then all steering already

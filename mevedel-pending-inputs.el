@@ -561,8 +561,10 @@ longer accepts the prepared input."
              :queued-at-turn
              (or (mevedel-session-turn-count session) 0)))))))))
 
-(defun mevedel-view--queue-prepared-steering (submission request)
-  "Queue accepted prompt SUBMISSION as steering for REQUEST."
+(defun mevedel-view--queue-prepared-steering
+    (submission request &optional preserve-draft)
+  "Queue accepted prompt SUBMISSION as steering for REQUEST.
+When PRESERVE-DRAFT is non-nil, leave the composer untouched."
   (when-let* ((prepared
                (mevedel-view--prepare-steering-entry submission request))
               (session (mevedel-view--session))
@@ -571,8 +573,9 @@ longer accepts the prepared input."
                 session 'steering prepared)))
     (let ((input (plist-get entry :input)))
       (mevedel-view-history-add input)
-      (when (equal-including-properties
-             (mevedel-view--input-text) input)
+      (when (and (not preserve-draft)
+                 (equal-including-properties
+                  (mevedel-view--input-text) input))
         (mevedel-view--clear-input))
       (mevedel-view--interaction-rebuild)
       (when (mevedel-agent-control-root-waiting-p session)
