@@ -401,7 +401,7 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
   ,test
   (test)
 
-  :doc "deferred extras augment the session's deferred-set at :post time"
+  :doc "deferred extras augment the session's tool-catalog at :post time"
   (let* ((extra-name (test-mevedel-tool-wrap--unique "extra"))
          (src (test-mevedel-tool-wrap--make-source
                :name extra-name
@@ -414,9 +414,9 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
       (setf (alist-get 'extratest mevedel-preset--registry)
             (list :agents nil :tool-specs nil))
       (let ((mevedel-preset-extra-tool-specs
-             '((extratest . ((:deferred xtra))))))
+             '((extratest . ((:discoverable xtra))))))
         (mevedel-preset--setup-extras 'extratest)
-        (let ((set (mevedel-session-deferred-set session)))
+        (let ((set (mevedel-session-tool-catalog session)))
           (should (cl-some
                    (lambda (entry)
                      (equal extra-name (cadr (car entry))))
@@ -438,15 +438,17 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
                  :name "e-agent"
                  :tools '(read (:tool "Bash"))))
          (mevedel-agent-extra-tool-specs
-          '((e-agent . ((:deferred xtra))))))
+          '((e-agent . ((:discoverable xtra))))))
     (let ((specs (mevedel-agent--effective-specs agent)))
-      (should (member '(:deferred xtra) specs))
+      (should (member '(:discoverable xtra) specs))
       (should (member 'read specs))))
 
   :doc "adds the common communication tools when no extras are registered"
   (let ((agent (mevedel-agent--create :name "other-agent" :tools '(read)))
         (mevedel-agent-extra-tool-specs nil))
-    (should (equal '(read (:tool "SendMessage") (:tool "ListAgents"))
+    (should (equal '(read (:tool "ToolSearch") (:tool "ToolCall")
+                          (:discoverable (:tool "SendMessage"))
+                          (:discoverable (:tool "ListAgents")))
                    (mevedel-agent--effective-specs agent)))))
 
 (provide 'test-mevedel-tool-wrap)

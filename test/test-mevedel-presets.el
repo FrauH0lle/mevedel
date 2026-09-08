@@ -18,6 +18,7 @@
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-introspect)
 (require 'mevedel-agents)
+(require 'mevedel-agent-conversation)
 (require 'mevedel-hooks)
 (require 'mevedel-view)
 (require 'mevedel-workspace)
@@ -69,7 +70,7 @@
   ,test
   (test)
 
-  :doc "adds deferred inject to WAIT and extra handlers to terminal states"
+  :doc "adds pre-sample guidance and terminal handlers"
   (let* ((gptel-request--transitions
           '((INIT . ((t . WAIT)))
             (WAIT . ((t . TYPE)))
@@ -88,7 +89,7 @@
          (result (mevedel-preset--build-handlers
                   (copy-tree base-handlers))))
     ;; WAIT entry should have deferred inject handler prepended
-    (should (memq #'mevedel-tools--handle-deferred-inject
+    (should (memq #'mevedel-tools--handle-plan-tool-filter
                   (cdr (assq 'WAIT result))))
     (should (memq #'mevedel-compact-estimation-record-token-baseline
                   (cdr (assq 'TPRE result))))
@@ -170,7 +171,7 @@
          (roster-pos
           (cl-position #'mevedel-tools--handle-agent-roster-inject
                        wait-handlers))
-         (deferred-pos (cl-position #'mevedel-tools--handle-deferred-inject
+         (deferred-pos (cl-position #'mevedel-tools--handle-plan-tool-filter
                                     wait-handlers)))
     (should-not (memq #'gptel--handle-wait wait-handlers))
     (should gate-pos)
@@ -340,7 +341,7 @@
   ,test
   (test)
 
-  :doc "keeps Bash lifecycle controls active in implementation presets"
+  :doc "keeps only the seven core tools native in implementation presets"
   (let ((mevedel-preset--registry nil)
         (gptel--known-presets nil))
     (mevedel-tools-register)
@@ -351,9 +352,8 @@
               (mevedel-tool-resolve (plist-get metadata :tool-specs)))
              (active
               (mapcar #'mevedel-tool-name (plist-get resolved :active))))
-        (dolist (name '("Bash" "WriteStdin" "ListExecutions"
-                        "StopExecution"))
-          (should (member name active))))))
+        (should (equal '("ApplyPatch" "Bash" "Glob" "Grep" "Read" "ToolCall" "ToolSearch")
+                       (sort active #'string<))))))
 
   :doc "defers the task and agent tool families in the implementation preset"
   (let ((mevedel-preset--registry nil)
@@ -365,7 +365,7 @@
             (mevedel-tool-resolve (plist-get metadata :tool-specs)))
            (active (mapcar #'mevedel-tool-name (plist-get resolved :active)))
            (deferred
-            (mapcar #'mevedel-tool-name (plist-get resolved :deferred))))
+            (mapcar #'mevedel-tool-name (plist-get resolved :discoverable))))
       (dolist (name '("TaskCreate" "TaskUpdate" "TaskNote" "TaskList"
                       "TaskGet" "Agent" "FollowupAgent" "ListAgents"
                       "InterruptAgent" "SendMessage" "WaitAgent"))
@@ -737,7 +737,7 @@
                (lambda (_) (push 'settings calls)))
               ((symbol-function 'mevedel-agents--setup-for-request)
                (lambda (_) (push 'agents calls)))
-              ((symbol-function 'mevedel-preset--setup-deferred)
+              ((symbol-function 'mevedel-preset--setup-catalog)
                (lambda (_) (push 'deferred calls)))
               ((symbol-function 'mevedel-preset--refresh-tools)
                (lambda (_) (push 'tools calls)))
@@ -747,6 +747,35 @@
                             (lambda () (push 'user calls))))
     (should (equal '(user settings tools agents deferred extras)
                    (nreverse calls)))))
+
+(mevedel-deftest mevedel-preset--setup-catalog ()
+  ,test
+  (test)
+  :doc "refreshes the catalog and extras without changing native tools during search"
+  (let* ((mevedel-preset--registry nil)
+         (gptel--known-presets (copy-tree gptel--known-presets))
+         (session (mevedel-session--create :name "catalog-test"))
+         (mevedel-preset-extra-tool-specs
+          '((catalog-test (:discoverable (:tool "Eval"))))))
+    (mevedel-tools-register)
+    (mevedel-preset--define 'catalog-test
+                           '(:tools ((:tool "Read") (:discoverable (:tool "Imenu")))))
+    (mevedel-preset--define 'read-test '(:tools ((:tool "Read"))))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (dotimes (_ 2)
+        (mevedel-preset--refresh-tools 'catalog-test)
+        (mevedel-preset--setup-catalog 'catalog-test)
+        (mevedel-preset--setup-extras 'catalog-test)
+        (let ((before (copy-sequence gptel-tools)) result)
+          (mevedel-tools--tool-search (lambda (value) (setq result value)) "Eval Imenu")
+          (should (string-search "ToolCall(expression)" result))
+          (should (equal before gptel-tools))
+          (should (equal '("Read") (mapcar #'gptel-tool-name gptel-tools)))
+          (should (equal '("Imenu" "Eval")
+                         (mapcar #'cadar (mevedel-session-tool-catalog session))))))
+      (mevedel-preset--setup-catalog 'read-test)
+      (should-not (mevedel-session-tool-catalog session)))))
 
 (mevedel-deftest mevedel-preset--parent-chain-to
   (:after-each
@@ -872,7 +901,7 @@
                           (mevedel-session--create :name "test"))
               (cl-letf (((symbol-function 'mevedel-agents--setup-for-request)
                          #'ignore)
-                        ((symbol-function 'mevedel-preset--setup-deferred)
+                        ((symbol-function 'mevedel-preset--setup-catalog)
                          #'ignore)
                         ((symbol-function 'mevedel-preset--setup-extras)
                          #'ignore))
@@ -895,7 +924,7 @@
       (setq-local mevedel--session (mevedel-session--create :name "test"))
       (cl-letf (((symbol-function 'mevedel-agents--setup-for-request)
                  #'ignore)
-                ((symbol-function 'mevedel-preset--setup-deferred)
+                ((symbol-function 'mevedel-preset--setup-catalog)
                  #'ignore)
                 ((symbol-function 'mevedel-preset--setup-extras)
                  #'ignore))
@@ -913,7 +942,7 @@
       (setq-local mevedel--session (mevedel-session--create :name "test"))
       (cl-letf (((symbol-function 'mevedel-agents--setup-for-request)
                  #'ignore)
-                ((symbol-function 'mevedel-preset--setup-deferred)
+                ((symbol-function 'mevedel-preset--setup-catalog)
                  #'ignore)
                 ((symbol-function 'mevedel-preset--setup-extras)
                  #'ignore))
@@ -942,7 +971,7 @@
               :preset-name 'test-preset)))
         (cl-letf (((symbol-function 'mevedel-agents--setup-for-request)
                    #'ignore)
-                  ((symbol-function 'mevedel-preset--setup-deferred)
+                  ((symbol-function 'mevedel-preset--setup-catalog)
                    #'ignore)
                   ((symbol-function 'mevedel-preset--setup-extras)
                    #'ignore))
@@ -969,7 +998,7 @@
       (mevedel-define-preset test-preset :test-setting 'inside)
       (cl-letf (((symbol-function 'mevedel-agents--setup-for-request)
                  #'ignore)
-                ((symbol-function 'mevedel-preset--setup-deferred)
+                ((symbol-function 'mevedel-preset--setup-catalog)
                  #'ignore)
                 ((symbol-function 'mevedel-preset--setup-extras)
                  #'ignore))
@@ -1007,24 +1036,37 @@
     (should agent)
     (should (equal "verifier" (mevedel-agent-name agent)))
     (should (= 20 (mevedel-agent-max-turns agent)))
-    ;; Reminders are NOT embedded at definition time to avoid a
-    ;; require cycle with mevedel-reminders; they are attached at
-    ;; invocation time instead.
+    ;; The frozen role prompt owns its verification contract.
     (should (null (mevedel-agent-reminders agent))))
 
-  :doc "verifier invocation gets the read-only reminder attached"
-  (let* ((agent (mevedel-agent-get "verifier"))
-         (inv (mevedel-agent-invocation-create agent))
-         (types (mapcar #'mevedel-reminder-type
-                        (mevedel-agent-invocation-reminders inv))))
-    (should (memq 'verifier-read-only types)))
-
-  :doc "reviewer invocation gets the read-only reminder attached"
-  (let* ((agent (mevedel-agent-get "reviewer"))
-         (inv (mevedel-agent-invocation-create agent))
-         (types (mapcar #'mevedel-reminder-type
-                        (mevedel-agent-invocation-reminders inv))))
-    (should (memq 'reviewer-read-only types)))
+  :doc "read-only role contracts survive fresh configuration without per-turn duplicates"
+  (dolist (name '("verifier" "reviewer"))
+    (let* ((agent (mevedel-agent-freeze (mevedel-agent-get name)))
+           (prompt (mevedel-agent-system-prompt agent))
+           (inv (mevedel-agent-invocation-create agent)))
+      (should (string-search "read-only" prompt))
+      (should (string-search (if (equal name "verifier")
+                                "VERDICT: PASS" "overall_correctness")
+                            prompt))
+      (setf (mevedel-agent-invocation-frozen-configuration inv)
+            (mevedel-agent-configuration--create
+             :agent agent
+             :request-locals `((gptel-system-prompt . ,prompt))))
+      (with-temp-buffer
+        ;; Role policy lives outside the transcript that compaction replaces.
+        (dotimes (turn 2)
+          (erase-buffer)
+          (insert "Replacement conversation summary.")
+          (setq-local gptel-system-prompt "stale request configuration")
+          (mevedel-agent-conversation-configure inv (current-buffer))
+          (should (equal prompt gptel-system-prompt))
+          (let ((staged (mevedel-reminders--collect-from
+                         (mevedel-agent-invocation-reminders inv) turn inv)))
+            (dolist (entry (plist-get staged :entries))
+              (should-not
+               (memq (plist-get entry :type)
+                     '(verifier-read-only reviewer-read-only))))
+            (mapc #'funcall (plist-get staged :commits)))))))
 
   :doc "explorer agent is registered and read-only"
   (should (mevedel-agent-get "explorer"))
@@ -1032,7 +1074,7 @@
   :doc "task-capable agents include the standalone task note tool"
   (dolist (name '("worker" "explorer"))
     (let ((agent (mevedel-agent-get name)))
-      (should (member '(:tool "TaskNote")
+      (should (member '(:discoverable (:tool "TaskNote"))
                       (mevedel-agent-tools agent)))))
 
   :doc "planner agent is no longer a first-class built-in agent"

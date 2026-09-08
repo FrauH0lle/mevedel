@@ -667,7 +667,7 @@
 (mevedel-deftest mevedel-session-persistence-restore (:quiet t)
   ,test
   (test)
-  :doc "settles a durable ToolScript checkpoint as interrupted, no resume"
+  :doc "settles a durable ToolCall checkpoint as interrupted, no resume"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let (buffer restored session session-dir)
@@ -678,7 +678,7 @@
             (with-current-buffer buffer
               (org-mode)
               (setq-local mevedel--session session)
-              (insert "Prompt before interrupted ToolScript\n")
+              (insert "Prompt before interrupted ToolCall\n")
               (should
                (mevedel-ptc-checkpoint-start
                 session buffer "ptc-recovery"

@@ -6,7 +6,7 @@
 ;; `mevedel-tools-register' as the single initializer for the complete
 ;; built-in tool surface, including Skill and ListSkills.
 ;;
-;; Also hosts the deferred-tool (ToolSearch) infrastructure that does
+;; Also hosts the specialist discovery (ToolSearch) infrastructure that does
 ;; not yet belong to any single tool module: the polymorphic
 ;; `mevedel-tools--ctx-*' accessors that dispatch on session vs.
 ;; invocation state, the WAIT-state handler that drains queued
@@ -175,14 +175,37 @@
       0)))
 
 (defun mevedel-tools--request-data-set-tools (info)
-  "Serialize INFO's active tools back into its provider request data."
+  "Serialize INFO's active tools with gptel's chosen cache boundary.
+Use cache annotations from the realized request, not current buffer settings.
+Keep them request-local across temporary removal of all callable tools."
   (let* ((data (plist-get info :data))
          (parsed (gptel--parse-tools (plist-get info :backend)
                                      (plist-get info :tools)))
-         (tool-config (plist-get data :toolConfig)))
-    (if (and (listp tool-config) (plist-member tool-config :tools))
-        (plist-put tool-config :tools parsed)
-      (plist-put data :tools parsed))))
+         (tool-config (plist-get data :toolConfig))
+         (container (if (and (listp tool-config)
+                             (plist-member tool-config :tools))
+                        tool-config data)))
+    (unless (plist-member info :mevedel-tool-cache-boundary)
+      (let* ((original (plist-get container :tools))
+             (last (and (vectorp original) (> (length original) 0)
+                        (aref original (1- (length original)))))
+             (boundary
+              (cond
+               ((plist-member last :cache_control)
+                (cons 'inline (list :cache_control
+                                    (copy-tree (plist-get last :cache_control) t))))
+               ((plist-member last :cachePoint)
+                (cons 'suffix (copy-tree last t))))))
+        (plist-put info :mevedel-tool-cache-boundary boundary)))
+    (when (and (vectorp parsed) (> (length parsed) 0))
+      (pcase (plist-get info :mevedel-tool-cache-boundary)
+        (`(inline . ,annotation)
+         (let ((index (1- (length parsed))))
+           (aset parsed index (append (aref parsed index)
+                                      (copy-tree annotation t)))))
+        (`(suffix . ,annotation)
+         (setq parsed (vconcat parsed (vector (copy-tree annotation t)))))))
+    (plist-put container :tools parsed)))
 
 (defun mevedel-tools--handle-plan-tool-filter (fsm)
   "Apply Plan and active-Goal request-time tool visibility to FSM."
@@ -239,60 +262,26 @@
 
 
 ;;
-;;; Deferred Tool Loading (ToolSearch)
-
-(defcustom mevedel-deferred-tool-ttl 5
-  "Number of turns a deferred tool stays active after its last use.
-
-Injected deferred tools start with this counter and are removed from
-the active payload when it reaches zero.  Calling the tool resets the
-counter.  Set higher for looser timeouts, lower to prune more
-aggressively."
-  :type 'integer
-  :group 'mevedel)
+;;; Specialist discovery (ToolSearch)
 
 ;;
-;;; Polymorphic deferred-slot accessors
+;;; Catalog ownership
 ;;
 ;; Both `mevedel-session' and `mevedel-agent-invocation' carry the
-;; same five deferred-* slots.  These accessors dispatch on struct type
-;; so the WAIT handler, pipeline, ToolSearch, and reminders can all
+;; same tool-catalog slot.  These accessors dispatch on struct type
+;; so the pipeline, ToolSearch, and reminders can all
 ;; operate on whichever context is current without branching on type.
 
-(defmacro mevedel-tools--define-deferred-accessor (slot)
-  "Define a polymorphic accessor for SLOT on session or agent-invocation.
+(defun mevedel-tools--ctx-tool-catalog (ctx)
+  "Return CTX's discoverable tool catalog."
+  (if (mevedel-agent-invocation-p ctx)
+      (mevedel-agent-invocation-tool-catalog ctx)
+    (mevedel-session-tool-catalog ctx)))
 
-Creates `mevedel-tools--ctx-deferred-SLOT' that reads from either a
-`mevedel-session' or a `mevedel-agent-invocation', plus a `setf'
-expander that writes to the correct underlying `cl-defstruct' slot."
-  (let* ((getter (intern (format "mevedel-tools--ctx-deferred-%s" slot)))
-         (session-acc (intern (format "mevedel-session-deferred-%s" slot)))
-         (inv-acc (intern (format "mevedel-agent-invocation-deferred-%s" slot))))
-    `(progn
-       (defun ,getter (ctx)
-         ,(format "Return CTX's deferred-%s slot (session or invocation)." slot)
-         (if (mevedel-agent-invocation-p ctx)
-             (,inv-acc ctx)
-           (,session-acc ctx)))
-       (gv-define-setter ,getter (val ctx)
-         (list 'if (list 'mevedel-agent-invocation-p ctx)
-               (list 'setf (list ',inv-acc ctx) val)
-               (list 'setf (list ',session-acc ctx) val))))))
-
-(mevedel-tools--define-deferred-accessor set)
-(mevedel-tools--define-deferred-accessor pending)
-(mevedel-tools--define-deferred-accessor injected)
-(mevedel-tools--define-deferred-accessor used)
-(mevedel-tools--define-deferred-accessor expired)
-
-(defun mevedel-tools--ctx-record-used (ctx name)
-  "Push tool NAME onto CTX's deferred-used slot.
-
-Exposed as a plain function so callers outside `mevedel-tools' (which
-cannot require it due to the load cycle through
-`mevedel-tool-registry') can mutate the slot without depending on the
-polymorphic `gv-setter' being visible at byte-compile time."
-  (cl-pushnew name (mevedel-tools--ctx-deferred-used ctx) :test #'equal))
+(gv-define-setter mevedel-tools--ctx-tool-catalog (value ctx)
+  (list 'if (list 'mevedel-agent-invocation-p ctx)
+        (list 'setf (list 'mevedel-agent-invocation-tool-catalog ctx) value)
+        (list 'setf (list 'mevedel-session-tool-catalog ctx) value)))
 
 ;;
 ;;; FSM tracking for pipeline context dispatch
@@ -327,22 +316,17 @@ call.  Nil outside tool dispatch.")
            entries))
 
 (defun mevedel-tools--deferred-tool-name-p (ctx name)
-  "Return non-nil when CTX knows NAME as deferred or recently expired."
+  "Return non-nil when CTX knows NAME as a deferred capability."
   (and ctx
-       (or (mevedel-tools--deferred-entry-name-p
-            name (mevedel-tools--ctx-deferred-set ctx))
-           (member name (mevedel-tools--ctx-deferred-expired ctx)))))
+       (mevedel-tools--deferred-entry-name-p
+        name (mevedel-tools--ctx-tool-catalog ctx))))
 
 (defun mevedel-tools--unknown-tool-result (ctx name)
-  "Return the synthetic tool result for unknown tool NAME in CTX."
-  (if (mevedel-tools--deferred-tool-name-p ctx name)
-      (format (concat "Error: Tool %s is not currently loaded. "
-                      "Call ToolSearch(query=%S, load=true) first, "
-                      "then call %s after ToolSearch returns.")
-              name name name)
-    (format (concat "Error: Unknown tool %s. Use an available tool, "
-                    "or ToolSearch if this is a deferred capability.")
-            name)))
+  "Return repair guidance for unknown native tool NAME in CTX."
+  (format "Error: %s %s. Use ToolSearch(query=%S) for its contract, then ToolCall(expression) to invoke it."
+          (if (mevedel-tools--deferred-tool-name-p ctx name)
+              "Specialist is available through ToolCall:" "Unknown tool")
+          name name))
 
 (defun mevedel-tools--synthetic-unknown-tool (name)
   "Return an unregistered display-only gptel tool for unknown NAME."
@@ -364,7 +348,7 @@ call.  Nil outside tool dispatch.")
 (defun mevedel-tools--settle-unknown-tool-calls (fsm)
   "Convert unresolved unknown tool-use entries in FSM into errors."
   (when-let* ((info (gptel-fsm-info fsm)))
-    (let ((ctx (mevedel-tools--deferred-context-for fsm))
+    (let ((ctx (mevedel-tools--context-for fsm))
           (tools (plist-get info :tools)))
       (dolist (tool-call (plist-get info :tool-use))
         (when (mevedel-tools--unknown-tool-call-p tool-call tools)
@@ -380,7 +364,7 @@ call.  Nil outside tool dispatch.")
 Used as an `:around' advice on `gptel--handle-tool-use' so that tool
 handlers (via the pipeline) can recover the FSM that triggered them
 without threading it through every call site.  Settle unknown tool calls
-before ORIG-FUN so mevedel can preserve deferred-tool guidance before
+before ORIG-FUN so mevedel can preserve specialist guidance before
 gptel's generic unknown-tool fallback consumes those calls."
   (let ((mevedel-tools--current-fsm fsm))
     (mevedel-tools--settle-unknown-tool-calls fsm)
@@ -404,8 +388,8 @@ gptel's generic unknown-tool fallback consumes those calls."
       (and (boundp 'mevedel--session)
            mevedel--session))))
 
-(defun mevedel-tools--deferred-context-for (fsm)
-  "Return the deferred context (invocation or session) for FSM.
+(defun mevedel-tools--context-for (fsm)
+  "Return the tool context (invocation or session) for FSM.
 
 First checks FSM's info plist for an attached
 `mevedel-agent-invocation'.  Falls back to the request buffer's
@@ -428,220 +412,126 @@ carry both."
                   ((buffer-live-p buffer)))
         (mevedel-tools--buffer-local-session buffer))))
 
-(defun mevedel-tools--current-deferred-context ()
-  "Return the deferred context for the currently-executing tool call.
+(defun mevedel-tools--current-context ()
+  "Return the tool context for the currently-executing tool call.
 
 Prefers `mevedel-tools--current-fsm' (set during tool dispatch).
 Falls back to the current buffer's `mevedel--agent-invocation' before
 `mevedel--session' when no FSM is bound (e.g., direct calls from
 tests or tool dispatch paths already inside an agent buffer)."
   (if mevedel-tools--current-fsm
-      (mevedel-tools--deferred-context-for mevedel-tools--current-fsm)
+      (mevedel-tools--context-for mevedel-tools--current-fsm)
     (or (and (boundp 'mevedel--agent-invocation)
              (mevedel-agent-invocation-p mevedel--agent-invocation)
              mevedel--agent-invocation)
         (and (boundp 'mevedel--session) mevedel--session))))
 
-(defun mevedel-tools--handle-deferred-inject (fsm)
-  "Manage deferred tool lifecycle in FSM's request payload.
-
-Runs as a WAIT state handler, before `gptel--handle-wait' fires the
-HTTP request.  Operates on the session or agent invocation that owns
-FSM, reading and mutating its deferred state slots:
-
-  - `deferred-set'       alist (PATH . DESC) of discoverable tools
-  - `deferred-pending'   `gptel-tools' queued by ToolSearch(load=t)
-  - `deferred-injected'  alist of tool-name -> remaining TTL counter
-  - `deferred-used'      tool-names invoked since the last turn
-  - `deferred-expired'   tool-names evicted this turn (for reminder)
-
-Each WAIT cycle:
-
-  1. Reset TTL for any currently-injected tool that the model called
-     since the last turn (record from `deferred-used').
-  2. Decrement TTL for all other currently-injected tools.
-  3. Remove tools whose TTL reached zero from the active payload,
-     return them to `deferred-set', and record their names on
-     `deferred-expired' so the next-turn reminder can cite them.
-  4. Inject newly-pending tools with an initial TTL of
-     `mevedel-deferred-tool-ttl'.
-  5. Clear `deferred-used' and `deferred-pending'.
-  6. Re-serialize the provider's request tools via `gptel--parse-tools'
-     when anything changed."
-  (let ((info (gptel-fsm-info fsm)))
-    (when-let* ((ctx (mevedel-tools--deferred-context-for fsm)))
-      (let* ((used (mevedel-tools--ctx-deferred-used ctx))
-             (injected (mevedel-tools--ctx-deferred-injected ctx))
-             (pending (mevedel-tools--ctx-deferred-pending ctx))
-             (expired nil)
-             (kept nil)
-             (changed nil))
-        ;; Phase 1+2: reset TTL for used tools, decrement others.
-        (dolist (entry injected)
-          (let* ((name (car entry))
-                 (ttl (cdr entry))
-                 (new-ttl (if (member name used)
-                              mevedel-deferred-tool-ttl
-                            (1- ttl))))
-            (if (> new-ttl 0)
-                (push (cons name new-ttl) kept)
-              (push name expired))))
-        ;; Phase 3: drop expired tools from the active payload and
-        ;; return their registry entries to the deferred set.
-        (when expired
-          (plist-put info :tools
-                     (cl-remove-if (lambda (ts)
-                                     (member (gptel-tool-name ts) expired))
-                                   (plist-get info :tools)))
-          (setq changed t))
-        (setf (mevedel-tools--ctx-deferred-injected ctx) (nreverse kept))
-        ;; Phase 4: inject newly-pending tools with initial TTL.
-        (when pending
-          (dolist (tool pending)
-            (let ((name (gptel-tool-name tool)))
-              (unless (cl-find-if
-                       (lambda (ts) (equal (gptel-tool-name ts) name))
-                       (plist-get info :tools))
-                (plist-put info :tools (cons tool (plist-get info :tools)))
-                (push (cons name mevedel-deferred-tool-ttl)
-                      (mevedel-tools--ctx-deferred-injected ctx))
-                (setq changed t)))))
-        ;; Clear single-turn slots.
-        (setf (mevedel-tools--ctx-deferred-pending ctx) nil)
-        (setf (mevedel-tools--ctx-deferred-used ctx) nil)
-        ;; Expose expired names for the next-turn reminder.
-        (setf (mevedel-tools--ctx-deferred-expired ctx) expired)
-        ;; Phase 6: re-serialize when the active tool list changed.
-        (when changed
-          (mevedel-tools--request-data-set-tools info))))))
-
-;;
-;;; Deferred Tool Loading -- Search and ToolSearch tool
-
-(defun mevedel-tools--search-deferred (ctx query)
-  "Search CTX's deferred tool set for entries matching QUERY.
-
-CTX is a `mevedel-session' or `mevedel-agent-invocation'.  QUERY is
-split into whitespace-separated terms.  An entry matches if ANY term
-appears as a substring in the tool name or its short description.
-Matching is case-insensitive.
-
-Returns a list of (TOOL-PATH . SHORT-DESCRIPTION) pairs from CTX's
-`deferred-set' slot."
-  (let ((terms (mapcar (lambda (term) (regexp-quote (downcase term)))
-                       (split-string query nil t))))
-    (cl-remove-if-not
-     (lambda (entry)
-       (let* ((path (car entry))
-              (category (car path))
-              (name (cadr path))
-              (tool (and category name (mevedel-tool-get name category)))
-              (groups (and tool
-                           (mapconcat #'symbol-name
-                                      (mevedel-tool-groups tool)
-                                      " ")))
-              (text (downcase
-                     (concat category " " name " " (cdr entry) " " groups))))
-         (cl-some (lambda (term) (string-match-p term text)) terms)))
-     (mevedel-tools--ctx-deferred-set ctx))))
-
-(defconst mevedel-tools--tool-search-usage-hints
-  '(("XrefReferences" . "Usage: XrefReferences(identifier, file_path) for references/callers.")
-    ("XrefDefinitions" . "Usage: XrefDefinitions(pattern, file_path) for definitions/name discovery.")
-    ("Imenu" . "Usage: Imenu(file_path) for symbols in one known file.")
-    ("Treesitter" . "Usage: Treesitter(file_path, line/column or whole_file) for syntax structure.")
-    ("function_source" . "Usage: function_source(function) for loaded function source.")
-    ("variable_source" . "Usage: variable_source(variable) for variable source.")
-    ("function_documentation" . "Usage: function_documentation(function) for docstrings.")
-    ("variable_documentation" . "Usage: variable_documentation(variable) for docstrings.")
-    ("library_source" . "Usage: library_source(library) for load-path library source."))
-  "Concise call-shape hints for ToolSearch results.")
+(defun mevedel-tools--search-catalog (ctx query)
+  "Search CTX's catalog using case-insensitive OR terms from QUERY.
+An exact name or category/name selects only those identities for that
+term.  Otherwise match substrings in names, summaries and groups.
+Return each (TOOL-PATH . SHORT-DESCRIPTION) once, exact identities first,
+with catalog order preserved within each group."
+  (let* ((catalog (mevedel-tools--ctx-tool-catalog ctx))
+         (terms (mapcar #'downcase (split-string query nil t)))
+         (selected nil)
+         (exact-identities nil))
+    (dolist (term terms)
+      (let ((exact
+             (cl-remove-if-not
+              (lambda (entry)
+                (let ((path (car entry)))
+                  (or (equal term (downcase (cadr path)))
+                      (equal term (downcase (mapconcat #'identity path "/"))))))
+              catalog)))
+        (dolist (entry exact)
+          (cl-pushnew (car entry) exact-identities :test #'equal))
+        (dolist (entry
+                 (or exact
+                     (cl-remove-if-not
+                      (lambda (entry)
+                        (let* ((path (car entry))
+                               (tool (mevedel-tool-get (cadr path) (car path)))
+                               (groups (and tool (mevedel-tool-groups tool)))
+                               (text (concat (mapconcat #'identity path "/") " "
+                                             (cdr entry) " "
+                                             (mapconcat #'symbol-name groups " "))))
+                          (string-match-p (regexp-quote term) (downcase text))))
+                      catalog)))
+          (cl-pushnew (car entry) selected :test #'equal))))
+    (let (seen)
+      (cl-stable-sort
+       (cl-remove-if-not
+        (lambda (entry)
+          (when (and (member (car entry) selected)
+                     (not (member (car entry) seen)))
+            (push (car entry) seen)))
+        catalog)
+       (lambda (a b)
+         (and (member (car a) exact-identities)
+              (not (member (car b) exact-identities))))))))
 
 (defun mevedel-tools--tool-search-format-entry (entry)
-  "Format one deferred tool search ENTRY with a concise usage hint."
-  (let* ((name (cadr (car entry)))
-         (summary (cdr entry))
-         (usage (cdr (assoc name mevedel-tools--tool-search-usage-hints)))
-         (base (if (and (stringp summary) (not (string-empty-p summary)))
-                   (format "- %s: %s" name summary)
-                 (format "- %s" name))))
-    (if usage
-        (format "%s\n  %s" base usage)
-      base)))
+  "Return the complete callable contract for catalog ENTRY."
+  (let* ((path (car entry))
+         (tool (mevedel-tool-get (cadr path) (car path)))
+         (name (mevedel-tool-call-name tool)))
+    (format "%s\n\n%s\n\nArguments (name type requirement description schema):\n%S\n\nCalling signature: %s\n\nExpression template (replace placeholders using the contract above):\n%s\n%s"
+            name (or (mevedel-tool-prompt tool) (mevedel-tool-description tool)) (mevedel-tool-args tool)
+            (mevedel-tool-ptc--tool-declaration name)
+            (mevedel-tool-ptc--call-template name)
+            (if (mevedel-tool-ptc--composable-p name)
+                "May be composed with other tool calls."
+              "Standalone only: use this single call as the entire expression."))))
 
-(defun mevedel-tools--tool-search-report (matches unresolved load)
-  "Return the ToolSearch answer for MATCHES.
-UNRESOLVED holds the entries the registry could not resolve, and is
-empty unless LOAD is non-nil.  MATCHES has already had them removed, so
-under LOAD every remaining match is one the model can now call."
-  (let ((found
-         (and matches
-              (format "Found %d tool(s):\n%s"
-                      (length matches)
-                      (mapconcat #'mevedel-tools--tool-search-format-entry
-                                 matches "\n"))))
-        (unresolved-note
-         (and unresolved
-              (format "Not registered, so not loaded: %s.  Do not call %s."
-                      (mapconcat (lambda (entry) (cadr (car entry)))
-                                 unresolved ", ")
-                      (if (cdr unresolved) "them" "it")))))
-    (cond
-     ((not (or found unresolved-note)) "No matching tools found.")
-     ((not found) unresolved-note)
-     ((not load)
-      (concat found
-              "\n\nCall ToolSearch again with load=true to activate these"
-              " tools. Search by exact tool name when known (for example"
-              " XrefReferences or Imenu), or by capability group such as"
-              " xref, imenu, treesitter, elisp, or web."))
-     (t
-      (concat found
-              "\n\nTools loaded. They are available now; call them in your"
-              " next tool call."
-              (and unresolved-note (concat "\n\n" unresolved-note)))))))
+(defun mevedel-tools--tool-search-report (matches catalog)
+  "Return complete contracts or a bounded summary catalog for MATCHES.
+On a miss, suggest search terms from the effective callable CATALOG."
+  (cond
+   ((null matches)
+    (if (null catalog)
+        "No matching tools found."
+      (let (terms)
+        (dolist (entry catalog)
+          (let* ((path (car entry))
+                 (tool (mevedel-tool-get (cadr path) (car path))))
+            (cl-pushnew (car path) terms :test #'equal)
+            (dolist (group (mevedel-tool-groups tool))
+              (cl-pushnew (symbol-name group) terms :test #'equal))))
+        (setq terms (sort terms #'string<))
+        (format "No matching tools found. Try a capability keyword or one of these categories/groups%s: %s."
+                (if (> (length terms) 20)
+                    (format " (first 20 of %d)" (length terms)) "")
+                (mapconcat #'identity (seq-take terms 20) ", ")))))
+   ((<= (length matches) 3)
+    (concat (mapconcat #'mevedel-tools--tool-search-format-entry matches "\n\n---\n\n")
+            "\n\nFill the expression template with actual values and pass it to ToolCall(expression)."))
+   (t
+    (format "Found %d tools%s:\n%s\n\nSearch one or two exact names to retrieve their full contracts."
+            (length matches) (if (> (length matches) 20) "; showing the first 20" "")
+            (mapconcat
+             (lambda (entry)
+               (let ((tool (mevedel-tool-get (cadr (car entry)) (car (car entry)))))
+                 (format "- %s%s" (mevedel-tool-call-name tool)
+                         (if (cdr entry) (concat ": " (cdr entry)) ""))))
+             (seq-take matches 20) "\n")))))
 
-(cl-defun mevedel-tools--tool-search (callback query &optional load)
-  "Search deferred tools matching QUERY, optionally LOAD them.
-
-CALLBACK is the async callback.  QUERY is a search string matched
-against tool names and descriptions.  When LOAD is non-nil (or
-:json-false for false), matching tools are injected into the
-current request for immediate use.
-
-Dispatches on the current deferred context: when running inside a
-spawned sub-agent, queues pending tools on the agent invocation;
-otherwise queues them on the chat buffer's session."
+(cl-defun mevedel-tools--tool-search (callback query)
+  "Retrieve contracts matching QUERY and deliver them through CALLBACK."
   (mevedel-tools--validate-params callback mevedel-tools--tool-search
-                                  (query (stringp . "string"))
-                                  (load booleanp nil))
-  (setq load (mevedel-tool-truthy-p load))
-  (let* ((ctx (mevedel-tools--current-deferred-context))
-         (matches (and ctx
-                       (mevedel-tools--search-deferred ctx query)))
-         (unresolved nil))
-    (when (and load matches ctx)
-      ;; The availability claim below has to come from what the registry
-      ;; actually resolved, not from the entries that matched the query.
-      (dolist (entry matches)
-        (if-let* ((tool (ignore-errors (gptel-get-tool (car entry)))))
-            (dolist (t1 (ensure-list tool))
-              (unless (cl-find-if (lambda (pending)
-                                    (equal (gptel-tool-name pending)
-                                           (gptel-tool-name t1)))
-                                  (mevedel-tools--ctx-deferred-pending ctx))
-                (push t1 (mevedel-tools--ctx-deferred-pending ctx))))
-          (push entry unresolved)))
-      ;; An entry that cannot resolve is dropped, or the roster and the
-      ;; unknown-tool guidance keep sending the model back to load it.
-      (when unresolved
-        (let ((stale-p (lambda (entry) (memq entry unresolved))))
-          (setf (mevedel-tools--ctx-deferred-set ctx)
-                (cl-remove-if stale-p (mevedel-tools--ctx-deferred-set ctx)))
-          (setq matches (cl-remove-if stale-p matches)))))
-    (funcall callback
-             (mevedel-tools--tool-search-report
-              matches (nreverse unresolved) load))))
+                                  (query (stringp . "string")))
+  (let* ((ctx (mevedel-tools--current-context))
+         (roster (mevedel-tool-ptc--roster))
+         (catalog
+          (seq-filter
+           (lambda (entry)
+             (when-let* ((tool (mevedel-tool-get (cadr (car entry)) (car (car entry)))))
+               (member (mevedel-tool-call-name tool) roster)))
+           (and ctx (mevedel-tools--ctx-tool-catalog ctx))))
+         (matches
+          (seq-filter (lambda (entry) (member entry catalog))
+                      (and ctx (mevedel-tools--search-catalog ctx query)))))
+    (funcall callback (mevedel-tools--tool-search-report matches catalog))))
 
 
 ;;
@@ -857,7 +747,7 @@ context that owns FSM, injects each unread record as a separate user-role
 communication block, and then removes it from the retained FIFO.  Each
 injected block is also written to the owning transcript, preserving the
 model-visible communication in conversation history."
-  (when-let* ((ctx (mevedel-tools--deferred-context-for fsm)))
+  (when-let* ((ctx (mevedel-tools--context-for fsm)))
     (let* ((agent-p (mevedel-agent-invocation-p ctx))
            (messages (mevedel-agent-control-context-mailbox ctx))
            (info (gptel-fsm-info fsm))
@@ -896,7 +786,7 @@ model-visible communication in conversation history."
 
 (defun mevedel-tools--handle-agent-roster-inject (fsm)
   "WAIT-state handler: expose direct children to FSM exactly once."
-  (when-let* ((ctx (mevedel-tools--deferred-context-for fsm))
+  (when-let* ((ctx (mevedel-tools--context-for fsm))
               (session
                (if (mevedel-session-p ctx)
                    ctx
@@ -918,31 +808,28 @@ model-visible communication in conversation history."
            (data (plist-get info :data)))
       (when (or (null new) data)
         (when new
-          (gptel--inject-prompt
-           (plist-get info :backend) data
-           (list
-            :role "user"
-            :content
-            (concat
-             "<agent-roster>\n"
-             (if initialized-p
-                 "New direct child agents:\n"
-               "Direct child agents:\n")
-             (mapconcat
-              (lambda (entry)
-                (format "- `%s` (`%s`)"
-                        (plist-get entry :path)
-                        (plist-get entry :role)))
-              new "\n")
-             "\n</agent-roster>"))))
-        (setf (gptel-fsm-info fsm)
-              (plist-put info :mevedel-agent-child-paths paths))))))
+          (mevedel-reminders-stage-entry
+           fsm 'agent-roster
+           (concat
+            "<agent-roster>\n"
+            (if initialized-p "New direct child agents:\n" "Direct child agents:\n")
+            (mapconcat
+             (lambda (entry)
+               (format "- `%s` (`%s`)"
+                       (plist-get entry :path) (plist-get entry :role)))
+             new "\n")
+            "\n</agent-roster>")
+           (lambda ()
+             (setf (gptel-fsm-info fsm)
+                   (plist-put (gptel-fsm-info fsm)
+                              :mevedel-agent-child-paths paths)))))))))
+
 
 (defun mevedel-tools--handle-agent-turn-terminal (fsm)
   "Sweep pending human interactions owned by FSM's settling request."
   (let* ((info (gptel-fsm-info fsm))
          (request-id (plist-get info :mevedel-request-id))
-         (ctx (mevedel-tools--deferred-context-for fsm)))
+         (ctx (mevedel-tools--context-for fsm)))
     (when (and ctx
                request-id
                (fboundp 'mevedel-agent-invocation-p)

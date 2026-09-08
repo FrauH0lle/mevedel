@@ -8,39 +8,26 @@ injection, and the hidden injection record the view renders. The base
 system prompt teaches the model that these blocks are system context,
 not user text or tool output.
 
-## The two channels
+Contextual reminders remain a valid delivery mechanism; neither their count nor
+raw specialist-tool usage establishes whether guidance improved a task.
 
-Every reminder is delivered through exactly one of two channels, chosen
-by one rule:
+## Delivery and history
 
-**Ephemeral by default.** A reminder is injected into one request's
-payload and vanishes from later requests' history. Permanence requires
-a *position-bound* fact: something true about a specific place in the
-transcript rather than about the session's current state.
+Deliver reminders only when their firing policy establishes relevance. Once
+actually delivered, retain their complete content at that point in conversation
+history until compaction removes the corresponding prefix. Later state changes
+arrive as new context; old state descriptions do not override current settings.
 
-- **Ephemeral (the reminder channel).** Staged entries and turn events
-  are injected at WAIT into the request payload only. State-bound
-  guidance (rosters, dates, token pressure, modes, fork provenance) is
-  regenerated from session state each time it fires, so it stays
-  accurate and costs tokens once per firing instead of in every later
-  request's history.
-- **Positional-permanent (durable transcript text).** Earned by four
-  cases only: the `/btw` interrupted-context boundary (marks *where*
-  the interruption sits), Read result notices such as truncation and
-  page-range riders (facts about *that* result), and compaction
-  summary blocks (they *are* the transcript). Skill instruction
-  reminders prepended to submitted model-input are a fourth,
-  deliberate case: turn-bound provenance of prompt content that
-  several submission paths consume.
+This replaces the earlier ephemeral default. Installed lifecycle measurements
+showed that removing a reminder from reconstructed history changed the cached
+prefix, even though the rest of the conversation was unchanged. Retention costs
+historical context and local storage; sparse firing, deduplication and compaction
+control that cost. See [the decision](adr/0115-retain-delivered-conversation-fragments.md).
 
-A reminder that describes current state must not be written into the
-buffer, and a position-bound fact cannot be delivered ephemerally.
-This rule reversed the original fork-disclosure design: fork
-disclosures were durable transcript text, but provenance is session
-state, so it is now regenerated sparsely (see `fork-provenance`
-below). What moved the decision: durable disclosures cost tokens in
-every subsequent request forever, could not adapt when state changed,
-and the view had to special-case their text by prefix sniffing.
+Staged entries and turn events share this delivery contract. Unsent events remain
+owner-bound and transient; cancellation must not manufacture delivered history.
+Position-bound text such as Read truncation notices, the `/btw` interruption
+boundary and compaction summaries remains ordinary durable transcript content.
 
 ## Reminder flow
 
@@ -57,12 +44,9 @@ flowchart TD
 
 Staged reminders travel as typed entries `(:type SYM :body STRING)`;
 wrapping into `<system-reminder>` blocks happens once at injection.
-At the request's first WAIT, all staged entries are injected in one
-synthetic user-role message immediately before the actual user message
-(`gptel--inject-prompt` position `-1`). At a later WAIT the last
-message carries tool results, so everything appends after them instead
--- a message injected before them would split a tool call from its
-result. Observations produced while tools run are buffer-local and
+At every WAIT, the synthetic message appends after the actual user message or
+complete tool results, matching the durable record's transcript position. This
+never splits a tool call from its result. Observations produced while tools run are buffer-local and
 bound to the active root request or retained-agent invocation.
 Repeated observations with the same key coalesce and are injected at
 the next WAIT owned by that same turn. They are discarded when the
@@ -93,9 +77,11 @@ payload that is actually dispatched.
 ### Commits
 
 Consuming a reminder is a separate step from staging it. A content
-function returns either its body or a `:body`/`:commit` plist, and
-every commit -- the pending-event FIFO, hook context, the observed
-date, external-change snapshots, expired deferred tools, queued turn
+function returns either its body or a `:body`/`:commit` plist. A nil `:body`
+stages only the commit, for a silent acknowledgement of context already in the
+prompt. Every commit --
+the pending-event FIFO, hook context, the observed
+date, external-change snapshots, queued turn
 events, mention deduplication, and each reminder's fired turn -- runs
 only once the final provider-bound payload exists at WAIT. Hook context is the exception in
 mechanism, not in guarantee: it rides the prompt text rather than a
@@ -111,22 +97,24 @@ A trigger that mutates state has no commit channel, so a reminder
 whose trigger consumes still reports once per attempt rather than once
 per delivery.
 
-Durable state reminders are regenerated from session state rather than
-persisted as transient observations. Root and retained-agent queues
+Reminder eligibility is evaluated from current session state; delivered
+observations remain historical context rather than current authority. Root and retained-agent queues
 remain isolated.
 
 ## The injection record
 
-Every injection additionally writes one hidden hook-audit record
-(`:type injected-reminders`, phase `turn-start` or `mid-turn`, items
-with each entry's type and UTF-8 body capped in bytes at
-`mevedel-reminders--record-body-limit`) into the chat data buffer at
-the request's active response marker, immediately after the payload
-injection succeeds -- a cancelled request records nothing. The record
-is durable for the *user* even though the blocks are ephemeral for the
-*model*: it is never sent to a provider, is excluded from compaction
-evidence and token estimation, is skipped by collaboration projection,
-and persists through session segments.
+Every successful injection writes one trusted hidden record
+(`:type injected-reminders`, phase `turn-start` or `mid-turn`) containing each
+entry's type and complete body. Bodies are not truncated: the record now owns
+reconstruction, not merely inspection. Missing insertion markers or recording
+failures prevent committing delivery; injection failures retain pending state.
+
+The encoded record stays out of provider text. `mevedel-history.el` decodes it
+as a separate message during prompt preparation, including fresh-process
+restore. Compaction evidence includes its instruction bodies, and local token
+estimates count the decoded guidance instead of encoded metadata. The record
+continues to be excluded from collaboration projection and persists through
+session segments. Compaction can summarize or retire obsolete guidance.
 
 The view renders it as one grouped collapsed row -- `◇ N system
 reminders (labels…)` -- above the user turn for turn-start injections
@@ -137,9 +125,8 @@ fork disclosures, the btw boundary) keeps the single-block
 
 ## Agent requests
 
-Agent invocations carry their own reminder roster (max-turns warning,
-verifier/reviewer read-only, deferred-tool roster and expiry), cloned
-at spawn. `mevedel-reminders--agent-transform` runs in every agent
+Agent invocations carry their own reminder roster (configured reminders and
+max-turns warning), cloned at spawn. `mevedel-reminders--agent-transform` runs in every agent
 request's transform list and collects that roster with the invocation
 as firing context; delivery, commits, and the injection record ride
 the shared WAIT injector. Turn events queue against the invocation as
@@ -147,7 +134,7 @@ owner exactly as on the root path.
 
 ## Implemented reminders
 
-### Session state and mode guidance (regenerated, ephemeral)
+### Session state and mode guidance (evaluated from current state)
 
 - **Plan-mode workflow:** the every-turn `plan-mode` reminder
   reinforces Plan's read-only boundary, exploration-first behavior,
@@ -170,26 +157,46 @@ owner exactly as on the root path.
   prefix may have carried both its earlier delivery and the
   implementation prompt's full plan text; the reference then re-fires
   once with the plan address. The trigger suppresses it when an active Goal
-  carries that exact accepted-plan reference, because the Goal's system-prompt
-  context regenerates the binding plan address on every request. A Goal with
+  carries that exact accepted-plan reference, because the Goal's retained current-context
+  delivery supplies the binding plan address. A Goal with
   no plan or a different plan does not suppress it. Standalone Plan Direct
   handoff does not use this reminder.
-- **Accepted-plan verification:** `verification-suggestion` mentions
-  approved plan execution verification while `plan-metadata` marks it
-  pending; spawning a verifier clears the flag.
-- **Agent read-only roles:** every-turn `verifier-read-only` and
-  `reviewer-read-only` reminders on the respective invocations.
-- **Specialist navigation availability:** one-shot xref, Imenu,
-  Treesitter, and Emacs Lisp introspection availability reminders,
-  with `ToolSearch(..., load=true)` hints for deferred tools.
+- **Recent-edit verification:** `verification-suggestion` requires a
+  recorded file modification in the latest committed turn or the active
+  turn, and fires at most once every ten turns. Reading a file does not
+  qualify; older edits do not keep the suggestion eligible. When an
+  accepted plan's verification is pending, the suggestion also asks for
+  evidence that the plan was executed. Spawning a verifier clears that
+  plan flag. The generic suggestion remains applicable to recent edits.
 
-### Runtime status and event reminders (ephemeral)
+Read-only role and report contracts live in the frozen agent prompt, restored
+for every request even when the transcript is compacted. They are not repeated
+as reminders. Explicitly configured role reminders retain their own lifetimes.
 
-- **Specialist nudges:** eligible `Grep` and `Read` calls queue a
-  turn event (key `(specialist . TOOL)`) whose body names the
-  originating call and steers follow-up symbol work toward the
-  specialist tools. `mevedel-specialist-nudges.el` owns eligibility,
-  per-family throttling, and exact text.
+Specialist tools are discoverable through ToolSearch by capability or name.
+Their descriptions and search results own suitability and call guidance.
+There is no generic ToolSearch/ToolCall availability reminder. The native
+descriptions already deliver that stable guidance; an ephemeral duplicate
+changed the beginning of worker task history when it disappeared on follow-up.
+Ordinary Read/Grep calls and open editor buffers do not trigger navigation
+workflow advice; a registered tool alone does not establish that its backend
+works for a particular file.
+
+### Changing prompt observations
+
+Named workspace guidance, environment/date, memory indexes, compact skill
+catalogs, resource availability and active Goal facts are separate from the stable
+system prefix. Facts are grouped into a complete snapshot whenever a selected
+fact changes; workspace guidance and Goal procedures update independently.
+Unchanged turns reuse the retained snapshot. Delivery is checked
+against actual selected history; absent observations are redelivered after
+compaction, filtering or restore. The separate skills-delta snapshot and default
+date-change reminder are superseded by these updates. Explicitly configured
+custom date reminders remain available. See
+[retained instruction context](architecture.md#retained-instruction-context).
+
+### Runtime status and event reminders
+
 - **Goal budget:** turn settlement queues one-shot 50%, 80%, and 100%
   crossing events; budget changes queue one event with old and new
   limits. When provider usage is already known at a tool-result
@@ -212,17 +219,24 @@ owner exactly as on the root path.
 - **Path-scoped workspace instructions:** a successful `Read` below
   the session working directory queues changed `AGENTS.md` and
   `AGENTS.local.md` files as turn events, ordered broad to narrow and
-  deduplicated by owner, path, and content.
+  deduplicated by owner, path, and content. Delivery is acknowledged only at
+  payload injection, so cancellation leaves the guidance eligible for retry.
+  Compaction, rewind, and cold resume reset the relevant delivery acknowledgements.
+  This post-read discovery helps subsequent model decisions: it is not an edit
+  gate and cannot affect another tool already scheduled in the same batch.
+  The shared task policy therefore still requires inspecting applicable project
+  guidance before changing code. Resource reads such as session-scratch
+  `local://` addresses do not discover workspace policy.
 - **Recovery reconciliation:** cold resume and abort of a live root
   request queue one warning that processes or tool effects may be
   partial.
 - **User-revised patch:** the one-shot `user-revised-patch` reminder
   repeats the applied-content-is-authoritative directive on the turn
   after a user-edited ApplyPatch review.
-- **Date-change**, **compaction availability**, **token usage**,
-  **agent listing delta**, **skill listing delta**, **skill roster
-  budget**, **path-scoped skill activation**, **deferred tools roster
-  and expiry**, **max-turns warning**, **edited files**: state
+- **Compaction availability**, **token usage**,
+  **agent listing delta**,
+  **path-scoped skill activation**,
+  **max-turns warning**, **edited files**: state
   snapshots and deltas, each regenerated from session or invocation
   state.
 - **Hook outcome:** hooks record blocking outcomes through

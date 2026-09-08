@@ -1175,7 +1175,7 @@
 (mevedel-deftest mevedel-view--steering-request-context-supported-p ()
   ,test
   (test)
-  :doc "allows bookkeeping-only context and unrestricted ToolScript policy"
+  :doc "allows bookkeeping-only context and unrestricted ToolCall policy"
   (should
    (mevedel-view--steering-request-context-supported-p
     '(:permission-rules nil :hook-rules nil

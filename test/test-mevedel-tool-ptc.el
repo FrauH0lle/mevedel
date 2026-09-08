@@ -1,8 +1,8 @@
-;;; test-mevedel-tool-ptc.el -- Tests for the ToolScript tool adapter -*- lexical-binding: t -*-
+;;; test-mevedel-tool-ptc.el -- Tests for the ToolCall tool adapter -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Exercises ToolScript roster construction, registration, and rendering.
+;; Exercises ToolCall roster construction, registration, and rendering.
 
 ;;; Code:
 
@@ -41,13 +41,13 @@
   ,test
   (test)
 
-  :doc "registers ToolScript as an async tool with one required script argument"
+  :doc "registers ToolCall as an async tool with one required expression argument"
   (progn
     (mevedel-tool-ptc--register)
-    (let ((tool (mevedel-tool-get "ToolScript")))
+    (let ((tool (mevedel-tool-get "ToolCall")))
       (should tool)
       (should (mevedel-tool-async-p tool))
-      (should (equal '(script) (mapcar #'car (mevedel-tool-args tool))))
+      (should (equal '(expression) (mapcar #'car (mevedel-tool-args tool))))
       ;; Read-only: the envelope itself never modifies state.  Each nested
       ;; call carries its own authority, so read-only request rules deny a
       ;; mutating child individually and the denial aborts the script.
@@ -65,7 +65,7 @@
   (with-temp-buffer
     (let* ((rendering
             (mevedel-tool-ptc--render
-             "ToolScript" nil "final"
+             "ToolCall" nil "final"
              '(:kind ptc :outcome completed :elapsed-seconds 1.25
                :calls ((:id "ptc/1" :tool "Read" :status success
                         :args (:file_path "a")
@@ -88,7 +88,7 @@
                              (number-sequence 1 12) "\n"))
            (rendering
             (mevedel-tool-ptc--render
-             "ToolScript" nil value
+             "ToolCall" nil value
              '(:kind ptc :outcome completed
                :calls ((:id "ptc/1" :tool "Read" :status success
                         :args (:file_path "a") :result "child output")))))
@@ -100,7 +100,7 @@
       ;; A zero threshold keeps the value inline.
       (let* ((mevedel-tool-ptc-result-collapse-line-threshold 0)
              (inline (mevedel-tool-ptc--render
-                      "ToolScript" nil value
+                      "ToolCall" nil value
                       '(:kind ptc :outcome completed :calls nil))))
         (should (string-match-p "line 12" (plist-get inline :body)))
         (should-not (plist-get inline :child-calls)))))
@@ -111,7 +111,7 @@
                              (number-sequence 1 12) "\n"))
            (rendering
             (mevedel-tool-ptc--render
-             "ToolScript" nil value
+             "ToolCall" nil value
              '(:kind ptc :outcome error :calls nil))))
       (should (string-match-p "err 12" (plist-get rendering :body)))
       (should-not (plist-get rendering :child-calls))))
@@ -121,7 +121,7 @@
     (let ((header
            (plist-get
             (mevedel-tool-ptc--render
-             "ToolScript" nil nil
+             "ToolCall" nil nil
              '(:kind ptc :live-p t :completed-count 1 :known-total 3
                :active-tool "Read" :permission-waits ("Bash")
                :calls ((:tool "Grep" :status error :preview "failed"))))
@@ -134,7 +134,7 @@
   (with-temp-buffer
     (let* ((rendering
             (mevedel-tool-ptc--render
-             "ToolScript" nil "final"
+             "ToolCall" nil "final"
              '(:kind ptc :outcome completed
                :calls ((:id "ptc/1" :tool "Read" :status success
                         :args (:file_path "image.png")
@@ -150,25 +150,9 @@
 ;;
 ;;; Roster
 
-(mevedel-deftest mevedel-tool-ptc--pure-primitive-reference
-  (:vars ((mevedel-tool-ptc--pure-primitive-reference-cache nil)))
-  ,test
-  (test)
-
-  :doc "generates exact signatures from the closed primitive table"
-  (let ((reference (mevedel-tool-ptc--pure-primitive-reference)))
-    (dolist (signature
-             '("(split-string string [separators] [omit-nulls] [trim])"
-               "(string-prefix-p prefix string [ignore-case])"
-               "(string-suffix-p suffix string [ignore-case])"
-               "(string-search needle haystack [start-pos])"))
-      (should (string-match-p (regexp-quote signature) reference)))))
-
-
 (mevedel-deftest mevedel-tool-ptc--roster
   (:before-each (mevedel-tool-clear-registry)
    :after-each (mevedel-tool-clear-registry)
-   :vars ((mevedel-tool-ptc--pure-primitive-reference-cache nil))
    :vars* ((buffer (generate-new-buffer " *mevedel-ptc-roster*"))
            (workspace (mevedel-workspace--create
                        :type 'test :id "ptc-roster" :root "/tmp/ptc-roster/"
@@ -179,17 +163,17 @@
   ,test
   (test)
 
-  :doc "offers only tools that are both allowlisted and active"
+  :doc "offers all active tools independently of their composition policy"
   (unwind-protect
       (progn
         (mevedel-tool-fs--register)
         (with-current-buffer buffer
           (setq-local gptel-tools
                       (test-mevedel-tool-ptc--gptel-tools "Read" "Glob"))
-          (let ((mevedel-ptc-primitive-tools '("Read" "Bash")))
+          (let ((mevedel-ptc-composable-tools '("Read" "Bash")))
             ;; Read is allowlisted and active; Glob is active but not in this
             ;; allowlist; Bash is allowlisted but not active in the request.
-            (should (equal '("Read") (mevedel-tool-ptc--roster))))))
+            (should (equal '("Read" "Glob") (mevedel-tool-ptc--roster))))))
     (kill-buffer buffer))
 
   :doc "offers a deferred tool, which the pipeline can execute regardless"
@@ -200,22 +184,22 @@
         (with-current-buffer buffer
           (setq-local gptel-tools (test-mevedel-tool-ptc--gptel-tools "Read")
                       mevedel--session session)
-          (setf (mevedel-session-deferred-set session)
+          (setf (mevedel-session-tool-catalog session)
                 (list (cons (list "mevedel" "Treesitter") "tree-sitter info")))
-          (let ((mevedel-ptc-primitive-tools '("Read" "Treesitter" "Bash")))
+          (let ((mevedel-ptc-composable-tools '("Read" "Treesitter" "Bash")))
             ;; Read is active, Treesitter is deferred but still callable, and
             ;; Bash is neither.
             (should (equal '("Read" "Treesitter") (mevedel-tool-ptc--roster))))))
     (kill-buffer buffer))
 
-  :doc "offers nothing when no allowlisted tool is active"
+  :doc "allows standalone invocation when an active tool is not composable"
   (unwind-protect
       (progn
         (mevedel-tool-fs--register)
         (with-current-buffer buffer
           (setq-local gptel-tools (test-mevedel-tool-ptc--gptel-tools "Glob"))
-          (let ((mevedel-ptc-primitive-tools '("Read")))
-            (should (null (mevedel-tool-ptc--roster))))))
+          (let ((mevedel-ptc-composable-tools '("Read")))
+            (should (equal '("Glob") (mevedel-tool-ptc--roster))))))
     (kill-buffer buffer))
 
   :doc "intersects the active roster with the owning skill restriction"
@@ -227,64 +211,50 @@
                       (test-mevedel-tool-ptc--gptel-tools "Read" "Glob")
                       mevedel--current-request
                       (mevedel-request--create :ptc-primitives '("Glob" "Bash")))
-          (let ((mevedel-ptc-primitive-tools '("Read" "Glob")))
+          (let ((mevedel-ptc-composable-tools '("Read" "Glob")))
             ;; Bash is named by the skill but absent from the global allowlist
             ;; and request roster, so the restriction cannot grant it.
             (should (equal '("Glob") (mevedel-tool-ptc--roster))))))
     (kill-buffer buffer))
 
-  :doc "generates the request-local description from active and deferred tools"
+  :doc "keeps the registered description stable as the catalog changes"
   (unwind-protect
       (progn
-        (mevedel-tool-fs--register)
-        (mevedel-tool-code--register)
         (mevedel-tool-ptc--register)
         (with-current-buffer buffer
           (setq-local mevedel--session session)
-          (setf (mevedel-session-deferred-set session)
-                '((("mevedel" "Imenu") . "outline")))
-          (let* ((ptc (mevedel-tool-gptel-tool
-                      (mevedel-tool-ensure "ToolScript")))
-                 (read (mevedel-tool-gptel-tool (mevedel-tool-ensure "Read")))
-                 (original (gptel-tool-description ptc))
-                 (backend (gptel-make-openai "ptc-test" :models '(ptc-test)
-                                             :key "unused"))
-                 (fsm (gptel-make-fsm
-                       :info (list :buffer buffer :backend backend
-                                   :tools (list ptc read)
-                                   :data (list :tools nil)))))
-            (mevedel-tool-ptc--handle-description fsm)
-            (let* ((tools (plist-get (gptel-fsm-info fsm) :tools))
-                   (request-ptc
-                    (seq-find (lambda (tool)
-                                (equal "ToolScript" (gptel-tool-name tool)))
-                              tools))
-                   (description (gptel-tool-description request-ptc))
-                   (manual-path
-                    (file-name-concat mevedel-tool-registry--source-dir
-                                      "docs" "ptc-dialect.md")))
-              (should-not (eq ptc request-ptc))
-              (should (equal original (gptel-tool-description ptc)))
-              (should (string-match-p
-                       "(Read :file_path string \\[:offset integer\\]"
-                       description))
-              (should (string-match-p "(Imenu :file_path string)" description))
-              (should (string-match-p
-                       (regexp-quote
-                        "(split-string string [separators] [omit-nulls] [trim])")
-                       description))
-              (should (file-readable-p manual-path))
-              (should (string-match-p
-                       (regexp-quote manual-path)
-                       description))
-              (should-not (string-match-p
-                           "{{PTC_DIALECT_MANUAL_PATH}}" description))
-              (should (string-match-p
-                       "do not inspect\\(?:.\\|\n\\)*implementation"
-                       description))
-              (should-not (string-match-p "(Bash " description))))))
+          (let* ((tool (mevedel-tool-ensure "ToolCall"))
+                 (before (gptel-tool-description (mevedel-tool-gptel-tool tool))))
+            (setf (mevedel-session-tool-catalog session)
+                  '((("mevedel" "Imenu") . "outline")))
+            (should (equal before (gptel-tool-description (mevedel-tool-gptel-tool tool))))
+            (should (string-search "mevedel://ptc-dialect.md" before)))))
     (kill-buffer buffer)))
 
+(mevedel-deftest mevedel-tool-ptc--call-template ()
+  ,test
+  (test)
+  :doc "supplies a parseable one-line expression with required placeholders"
+  (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "TemplateProbe" :category "mevedel"
+                           :args '((path path :required "Path")
+                                   (extra string nil "Optional"))))
+    (should (equal "(TemplateProbe :path \"<path>\")"
+                   (mevedel-tool-ptc--call-template "TemplateProbe")))))
+
+(mevedel-deftest mevedel-tool-ptc--active-tool-names ()
+  ,test
+  (test)
+  :doc "keeps invalid native extras outside the expression roster"
+  (let ((mevedel-tool--registry (make-hash-table :test #'equal))
+        (gptel-tools nil))
+    (dolist (spec '(("Probe" "server/team") ("list" "mevedel") ("Good" "server")))
+      (let* ((tool (mevedel-tool--create :name (car spec) :category (cadr spec)))
+             (native (gptel-make-tool :name (car spec) :category (cadr spec))))
+        (mevedel-tool-register tool)
+        (push native gptel-tools)))
+    (should (equal '("server/Good") (mevedel-tool-ptc--active-tool-names)))))
 
 (provide 'test-mevedel-tool-ptc)
 ;;; test-mevedel-tool-ptc.el ends here

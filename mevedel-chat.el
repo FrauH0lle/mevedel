@@ -189,10 +189,7 @@
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-install-activation-hook
 		  "mevedel-skills-prompt" nil)
-(declare-function mevedel-skills-install-reminder
-		  "mevedel-skills-prompt" (session))
 (autoload 'mevedel-skills-install-activation-hook "mevedel-skills-prompt")
-(autoload 'mevedel-skills-install-reminder "mevedel-skills-prompt")
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-slash-capf "mevedel-skills-ui" nil)
@@ -684,7 +681,6 @@ M-x mevedel-retry-plan-implementation resumes it")))
     (add-hook 'kill-buffer-hook
               #'mevedel-skills--release-on-kill nil t)
     ;; Register skill event reminders on the session.
-    (mevedel-skills-install-reminder mevedel--session)
     ;; Activate conditional skills when a tool touches a matching file
     (mevedel-skills-install-activation-hook)
     ;; Create the companion view buffer

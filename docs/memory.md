@@ -3,41 +3,43 @@
 mevedel reads persistent memory from configured `.mevedel/memory/` and
 `.agents/memory/` roots, both workspace-local and user-global. Memory is
 model-writable and persists across conversations, but it is
-intentionally conservative: it should preserve durable, non-obvious
-context that will change how future sessions behave.
+selective by default: optional saves should preserve durable context useful to
+future work. Explicit user requests to save, forget, or ignore memory take
+precedence over package preferences about what is worth retaining.
 
 ## Memory flow
 
 ```mermaid
 flowchart TD
-    A[User context or explicit remember request] --> B[Minimum-signal gate]
-    B --> C{Durable and non-obvious?}
-    C -- No --> D[Do not save or ask for durable part]
-    C -- Yes --> E[Create or update topic file]
-    E --> F[Update MEMORY.md index]
-    F --> G[Included in future system prompts]
-    G --> H[Verify stale claims before acting]
+    A[Context worth retaining] --> B{Explicit save request?}
+    B -- Yes --> C[Honor the requested scope]
+    B -- No --> D{Useful durable context?}
+    D -- No --> E[No save needed]
+    D -- Yes --> C
+    C --> F[Create or update topic file and index]
+    F --> G[Discover through future memory context]
+    G --> H[Verify drift-prone claims before relying on them]
 ```
 
 ## Layout
 
 ```
 .agents/memory/
-  MEMORY.md             ; always-loaded index
+  MEMORY.md             ; delivered index
   user-style.md         ; topic file
   release-context.md    ; topic file
   external-systems.md   ; topic file
 ```
 
 `MEMORY.md` is an index, not a body store. It is the only memory file
-included directly in the normal system prompt. Each configured root may
+included in normal conversation context. Each configured root may
 have its own `MEMORY.md`; the first 200 lines of every present index are
 loaded in configured order and prefixed with the root label plus a
 generated HTML comment describing the index file's last modification
 date:
 
 ```markdown
-<!-- Last updated: 2026-05-08 (today) -->
+<!-- Last updated: 2026-05-08 -->
 - [User style](user-style.md) - communication preferences for this user
 - [Release context](release-context.md) - current release coordination facts
 ```
@@ -84,25 +86,16 @@ and `**How to apply:**`.
 
 ## Save Policy
 
-The memory prompt asks the model to pass a minimum-signal gate before
-saving:
+Ordinary saving is optional. Keep a useful preference, correction, decision,
+coordination fact, or reference when it will help future work. Do not treat an
+empty index as a task to fill, or infer a lasting preference from silence or an
+ambiguous one-time reaction.
 
-> Will a future session plausibly behave better because of what I write
-> here?
-
-If the answer is no, the model should write nothing. In particular,
-memory should not store:
-
-- Code structure, file paths, architecture summaries, or project
-  conventions that can be recovered by reading the current repo.
-- Git history, recent changes, or who changed what.
-- Debugging recipes where the fix is already represented by code and
-  commits.
-- Information already documented in `AGENTS.md` or project docs.
-- Session-specific task state, temporary tool output, live metrics, or
-  speculative conclusions.
-- Secrets, tokens, credentials, or private data not required for future
-  work.
+Avoid unsolicited activity logs, transient task state, speculative conclusions,
+and duplication of easily recovered code, git history, or maintained project
+docs. These defaults do not veto an explicit request to preserve a particular
+fact. Avoid retaining secrets or unnecessary personal information; keep the
+scope the user actually asked for.
 
 Saving is a three-step operation:
 
@@ -115,34 +108,27 @@ for cross-project user preferences or broad feedback, and local memory
 for project-specific feedback, project context, or local references.
 Prefer `.agents/memory/` for portable memories that other agent tools
 can share. Use `.mevedel/memory/` for mevedel-specific behavior or
-schema.
+schema. Record known dates absolutely so relative wording does not drift.
 
-When the user explicitly asks mevedel to remember something, the model
-should save it immediately if it fits the policy. If the request asks to
-save a log-like or recoverable fact, the model should ask for the
-surprising or non-obvious durable part instead. When the user asks to
-forget something, the model should remove both the topic content and the
-corresponding index entry.
+When the user asks to remember something, save it within their selected scope
+using the topic/index format. When they ask to forget, remove the relevant topic
+content and pointer, preserving unrelated information. Do not invent an approval
+gate solely because the requested fact is more ordinary than the default policy
+would choose to save. A separately requested report-only review retains its
+actual approval boundary.
 
-## Prompt Inclusion
+## Prompt inclusion and delivery
 
-The persistent memory section is produced by `mevedel-system.el` from
-`prompts/system/memory-policy.md`.
+The stable `memory-policy` owns relevance, authority, and freshness. The short
+`memory-save-policy` requires reading this manual before any memory mutation,
+including model-initiated saves. The manual owns format, routing, index updates,
+and forget semantics; Read retrieves it as `mevedel://memory.md`.
 
-For main sessions, memory is included after workspace
-configuration (`AGENTS.md`) and before environment details. The prompt cache key
-includes configured memory index metadata and the current date so the
-generated age annotation can refresh daily even when the files are
-unchanged.
-
-If no configured `MEMORY.md` exists, the prompt includes an empty-index
-notice that tells the model to create topic files and link them from the
-chosen root's `MEMORY.md`.
-
-Agent profiles select memory explicitly. The bundled worker includes it;
-Explorer, verifier, reviewer, guardian, and context-summary profiles do not. Custom
-agents include the `memory` component only when their role needs durable
-memory context.
+Main and worker receive current configured roots and index contents as retained
+context updates. Changed or removed indexes replace earlier observations for
+current decisions without rewriting prior messages. Other role profiles receive
+only the memory components they select. Stateless buddy prompts include their
+current memory snapshot directly.
 
 ## Staleness
 

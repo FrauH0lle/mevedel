@@ -1,118 +1,70 @@
-Apply one coherent filesystem change with a structured patch. Put every
-related file operation in one call. Paths are relative to the session working
-directory unless absolute.
+Propose a coherent text-file change as one structured patch. Related operations
+can be reviewed and applied together.
 
 ### When to use `ApplyPatch`
 
-- Creating, editing, deleting, moving, or renaming text files
-- Batching the related file operations of one coherent change into a
-  single atomic proposal
-- Editing the `local://` writable session scratchpad; it is the only resource
-  family writable by ApplyPatch and keeps working notes outside workspace
-  source files
+- Create, edit, delete, move, or rename text files.
+- Edit session scratch content through a non-bare `local://` address.
 
 ### When NOT to use `ApplyPatch`
 
-- Creating an empty file or a directory; neither is expressible in a
-  patch -> use `Bash`
-- Directive Planning remains read-only: do not call `ApplyPatch` there, even
-  for all-local proposals
-- Re-proposing a rejected change, unless the user's feedback asks for a
-  revision
-- Reading files -> use `Read`
+- Empty files or standalone directory creation: the patch grammar cannot express them.
+- Directive Planning remains read-only even for local proposals.
+- Re-proposing a rejected change unless the user's feedback asks for a revision.
 
 ### How to use `ApplyPatch`
 
-Resource addresses
-- File operands may use ordinary paths or canonical `local://` addresses.
-- `local://notes.md` names session scratch content; it is the only resource
-  family writable by ApplyPatch. Bare addresses and other resource schemes,
-  including `mevedel://`, are not patch targets.
-- Keep authored addresses in patch markers. ApplyPatch resolves them once,
-  keeps local and ordinary operations in one atomic proposal, and presents
-  the authored address in review and results.
-
-Plan-mode boundary
-- Standalone or sticky Plan mode permits only proposals whose every source and
-  destination target is a non-bare `local://` descendant.
-- Ordinary paths, mixed local/ordinary proposals, other-scheme addresses, and
-  malformed or bare endpoints are denied before materialization.
-
-Outside Plan mode, mixed local and ordinary operations remain one atomic
-proposal.
-
-The argument must use this grammar:
+- Paths are absolute or relative to the session working directory. The only
+  writable resource family is `local://`; other schemes and bare addresses
+  are not patch targets. Keep authored addresses in patch markers.
+- Standalone or sticky Plan mode allows only proposals whose every source and
+  destination is a non-bare `local://` descendant. Outside Plan mode, local and
+  ordinary paths may share one atomic proposal, subject to permission/review.
+  Disallowed or malformed targets are denied before materialization.
+- Understand the relevant contents before changing them. Unsaved buffer edits
+  are rejected; existing user changes must be preserved.
+- The basic grammar is:
 
 ```text
 *** Begin Patch
-*** Add File: path
-+every added line starts with +
-*** Update File: path
-@@ optional context anchor or line number
- unchanged context starts with one space
--removed line
-+added line
-*** Delete File: path
-*** Update File: old-path
-*** Move to: new-path
+*** Add File: new-path
++new line
+*** Update File: existing-path
 @@
--old content
-+new content
+ unchanged context
+-removed line
++replacement line
+*** Delete File: obsolete-path
 *** End Patch
 ```
 
-An Update may contain multiple `@@` hunks. By default include three unchanged
-context lines above and below each change; when consecutive changes sit fewer
-than three lines apart, do not repeat the overlapping context. If three lines
-of context cannot uniquely locate the snippet, anchor the hunk with `@@ N`,
-where N is the line number its first line carried in your most recent Read of
-that file. A line number only chooses among locations whose content already
-matches, so a stale N is harmless and never rejects a hunk on its own.
-Alternatively add a `@@ context anchor` naming a line above the hunk or a
-prefix of one, such as the enclosing definition's first line, or enlarge the
-hunk. Each hunk takes at most one `@@` anchor.
-
-A hunk made only of context lines is a locator: it matches its lines and
-changes nothing, pinning where the hunks after it apply. Every hunk must
-contain at least one line, and an Update whose hunks change nothing is
-rejected as a whole.
-
-Matching tolerates trailing whitespace, surrounding whitespace, and
-ASCII-vs-typographic punctuation differences, in that order of preference,
-but a hunk that matches more than one location is rejected: anchor it with
-`@@ N`, enlarge it, or add a context anchor. Order hunks top-to-bottom within
-a file; hunk order can disambiguate repeated patterns. Applied context lines
-are taken from the file, never rewritten from the patch.
-
-Add creates missing parent directories and cannot target an existing file;
-rewrite an existing file with one full-file Update hunk instead. Delete
-removes the whole file. Move is one indivisible source/destination operation
-and may also contain update hunks. Do not use shell commands for file edits.
+- Add creates missing parent directories but rejects an existing file. Update
+  hunks must locate the old content unambiguously; include useful surrounding
+  context. An ambiguous match fails instead of choosing a location. Delete
+  removes the entire file. A move uses `*** Update File: old-path` followed by
+  `*** Move to: new-path`; source and destination are one operation.
+- An Update may contain ordered `@@` hunks. A hunk containing only unchanged
+  context is a locator for later hunks. Include a changing hunk unless the Update
+  moves the file.
+- For unchanged locator hunks, multiple hunks, repeated matches, line/context
+  anchors, or move details, first read `mevedel://tools/applypatch.md`. The manual
+  defines detailed matching behavior. If unavailable, use only grammar described
+  here when it meets the user's requested method; otherwise report the missing
+  guidance.
+- Results report application/rejection or actionable errors. Do not treat a
+  proposed or rejected patch as an applied change.
 
 ### Examples of good usage
 
 <example>
-- Edit one function with an anchored hunk; the anchor names a line above
-  the hunk, so the hunk starts below it:
+- Update a small configuration with unique context:
 ApplyPatch(patch="*** Begin Patch
-*** Update File: src/config.py
-@@ def load_config
--    data = json.load(open(path))
-+    with open(path) as fh:
-+        data = json.load(fh)
-     return validate(data)
-*** End Patch")
-</example>
-
-<example>
-- One coherent change touching two files:
-ApplyPatch(patch="*** Begin Patch
-*** Add File: src/limits.py
-+MAX_RETRIES = 3
-*** Update File: src/client.py
+*** Update File: config.py
 @@
- import time
-+from limits import MAX_RETRIES
+ API_HOST = 'localhost'
+-MAX_RETRIES = 1
++MAX_RETRIES = 3
+ TIMEOUT = 10
 *** End Patch")
 </example>
 
@@ -120,25 +72,10 @@ ApplyPatch(patch="*** Begin Patch
 
 <example>
 ApplyPatch(patch="*** Begin Patch
-*** Add File: src/client.py
-+...entire rewritten file...
+*** Add File: config.py
++MAX_RETRIES = 3
 *** End Patch")
 <reasoning>
-Add cannot target an existing file. Rewrite an existing file with one
-full-file Update hunk instead.
-</reasoning>
-</example>
-
-<example>
-ApplyPatch(patch="*** Begin Patch
-*** Update File: src/util.py
-@@
--    return None
-+    return default
-*** End Patch")
-<reasoning>
-No surrounding context: a one-line hunk that matches several locations
-is rejected. Include three context lines or an @@ anchor naming the
-enclosing definition.
+If config.py already exists, Add fails. Use Update with its actual content.
 </reasoning>
 </example>

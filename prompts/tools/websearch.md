@@ -1,60 +1,35 @@
-Search the web and return top results with URLs and excerpts.
-
-Returns up to 5 search results from the search engine (typically
-DuckDuckGo). Each result includes `:url` and `:excerpt` keys.
-
-Uses the Emacs web browser (eww) - no API key required.
-
-Timeout after 30 seconds per search.
+Search the web for URLs and excerpts.
 
 ### When to use `WebSearch`
 
-- Finding recent documentation or resources online
-- Looking up current information not in training data
-- Discovering URLs for packages, libraries, or tools
-- Researching error messages or unfamiliar concepts
+- Discover online sources for current information, documentation, or an unfamiliar
+  topic relevant to the task.
 
 ### When NOT to use `WebSearch`
 
-- Reading known URLs -> use `WebFetch`
-- Fetching YouTube transcripts -> use `WebFetch`
-- Information likely in local codebase -> use `Grep` or delegate
-- When offline access is required
+- Reading a known URL; WebFetch retrieves its contents.
+- Looking for private or project-local facts that an internet search cannot supply.
 
 ### How to use `WebSearch`
 
-- Query can be natural language or keywords
-- Returns excerpts, not full page content
-- Use `WebFetch` with returned URLs to read full content
-- Note: `WebFetch` may not work on JavaScript-heavy sites
-- Returns the top 5 results
+- Pass a query. Returns formatted text with up to five URLs and excerpts from
+  Emacs's configured eww search engine. Excerpts are not full pages; WebFetch can
+  retrieve a result that needs closer inspection.
+- No API key is required. Each underlying fetch has a 30-second timeout; queued
+  searches can take longer. Empty output or a fetch error is not proof that no
+  relevant source exists.
 
 ### Examples of good usage
 
 <example>
-- Find official documentation:
-WebSearch(query="React useEffect official documentation")
-</example>
-
-<example>
-- Research error message:
-WebSearch(query="TypeError cannot read properties of undefined debugging")
+WebSearch(query="Python json official documentation")
 </example>
 
 ### Examples of bad usage
 
 <example>
-- Reading a known URL:
-WebSearch(query="https://docs.python.org/3/library/json.html")
+WebSearch(query="https://docs.python.org/3/library/json.html") to read that page
 <reasoning>
-The URL is already known. Should use WebFetch to read it directly.
-</reasoning>
-</example>
-
-<example>
-- Searching for local project code:
-WebSearch(query="mevedel-tool-registry defstruct fields")
-<reasoning>
-Project-local information. Should use Grep or Read on the codebase.
+The address is already known. Use WebFetch(url="https://docs.python.org/3/library/json.html").
 </reasoning>
 </example>

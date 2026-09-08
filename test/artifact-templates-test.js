@@ -665,8 +665,10 @@ function runTableTests() {
   {
     const hostile = '<img src=x onerror=alert(1)>';
     const t = renderTable(columns, [{name: hostile, size: 42}, {name: 'Apple', size: 7}]);
+    assert.ok(!/\bfiltered\b/.test(t.filterContext.className), 'scope line shown before any filter');
     t.type('  APP  ');
     assert.deepEqual(t.cells(), [['Apple', '7']]);
+    assert.match(t.filterContext.className, /\bfiltered\b/);
     assert.match(t.filterContext.textContent, /Filtered view:.*app/i);
     assert.match(t.filterContext.textContent, /printed/);
     t.type(hostile);
@@ -678,6 +680,7 @@ function runTableTests() {
     assert.equal(t.count.textContent, '0 of 2 rows');
     t.type('');
     assert.match(t.filterContext.textContent, /all.*rows/i);
+    assert.ok(!/\bfiltered\b/.test(t.filterContext.className), 'scope line stayed on after clearing');
   }
 
   console.log('data-table renderer: all assertions passed');

@@ -18,6 +18,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-fs)
 (require 'mevedel-utilities)
+(require 'xml)
 
 ;; `gptel-request'
 (declare-function gptel--model-capable-p "ext:gptel-request"
@@ -53,6 +54,7 @@
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-queue-turn-event
                   "mevedel-reminders" (buffer key body &optional commit))
+(autoload 'mevedel-reminders-queue-turn-event "mevedel-reminders")
 
 ;; `mevedel-session-artifacts'
 (declare-function mevedel-session-artifacts-read-artifact
@@ -72,6 +74,7 @@
 ;; `mevedel-system'
 (declare-function mevedel-system-workspace-config-files
                   "mevedel-system" (workspace &optional working-directory))
+(autoload 'mevedel-system-workspace-config-files "mevedel-system")
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tool-fs-display-path "mevedel-tool-fs" (path))
@@ -206,7 +209,7 @@ agent Read must not poison the parent's later Read calls."
 (defun mevedel-tool-fs-read--dedup-exempt-p ()
   "Return non-nil when this Read must not touch duplicate-read state.
 
-Covers sub-agent calls and ToolScript nested calls.  A script sees only
+Covers sub-agent calls and ToolCall nested calls.  A script sees only
 its own tool results and the model sees only the script's final value,
 so \"reuse the previous contents\" is unusable there, and recording the
 access would poison the parent conversation's later Read calls with
@@ -1321,9 +1324,6 @@ content, not a read failure.\n</system-reminder>"
                     (file-truename
                      (mevedel-session-working-directory session))))
               ((file-in-directory-p target-dir cwd)))
-    (require 'mevedel-reminders)
-    (require 'mevedel-system)
-    (require 'xml)
     (let ((baseline
            (mapcar #'file-truename
                    (mevedel-system-workspace-config-files workspace cwd)))

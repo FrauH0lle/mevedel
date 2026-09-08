@@ -2,49 +2,31 @@ List yielded Bash executions owned by this agent.
 
 ### When to use `ListExecutions`
 
-- Recalling which executions are still running and their
-  `execution_id`s
-- Checking for a forgotten execution before starting a duplicate
-  command
+- Recover an execution ID or check for an existing command before starting a
+  possible duplicate.
 
 ### When NOT to use `ListExecutions`
 
-- You already hold the `execution_id` you need -> poll it with
-  `WriteStdin`
-- Nothing has yielded this session; there is nothing to list
+- Waiting for output from a known execution; WriteStdin observes that ID directly.
 
 ### How to use `ListExecutions`
 
-- Takes no arguments and only reports executions owned by the calling
-  agent
-- Use the returned IDs with `WriteStdin` or `StopExecution`
+- Takes no arguments. Returns execution facts and IDs, or "No yielded executions."
+  Other agents' commands are outside this tool's scope.
+- Use a returned ID with WriteStdin for unread output or StopExecution to stop it.
 
 ### Examples of good usage
 
 <example>
-- Find the ID of the test run started earlier:
-ListExecutions()
-</example>
-
-<example>
-- Verify nothing is still running before ending the turn:
 ListExecutions()
 </example>
 
 ### Examples of bad usage
 
 <example>
-ListExecutions() called between every WriteStdin poll
+ListExecutions() to inspect a sibling agent's running test
 <reasoning>
-The execution_id does not change; polling the execution itself is
-enough.
-</reasoning>
-</example>
-
-<example>
-ListExecutions() to look for another agent's execution
-<reasoning>
-Only executions owned by the calling agent are listed; other agents'
-executions are not addressable here.
+Only the caller's yielded commands are listed. Ask that agent for the needed
+information through the agent communication tools.
 </reasoning>
 </example>

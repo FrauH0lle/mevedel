@@ -4,11 +4,13 @@
 
 ;; Wraps the 16 `gptel-agent' introspection tools as mevedel tools so
 ;; they flow through the pipeline (permissions, persistence, display)
-;; and can be pulled in via `(:deferred elisp)' from presets and
+;; and can be pulled in via `(:discoverable elisp)' from presets and
 ;; agents.  The source structs in gptel's `"introspection"' category
 ;; are left untouched; this file registers copies under
 ;; `"mevedel-introspection"' whose `:function' dispatches through the
 ;; pipeline.
+;; Package-owned descriptions keep the runtime contract and examples while
+;; leaving upstream tool registrations and functions unchanged.
 
 ;;; Code:
 
@@ -28,6 +30,7 @@
 (declare-function mevedel-tool--register-wrap
                   "mevedel-tool-registry" (&rest keys))
 (defvar mevedel-tool--registry)
+(defvar mevedel-tool-registry--source-dir)
 
 
 ;;
@@ -157,11 +160,11 @@ call prompts the user regardless of permission mode."
      50000 nil)
     ("symbol_manual_section" "Find which manual section documents a symbol."
      50000 nil)
-    ("function_completions" "List function names matching a prefix."
+    ("function_completions" "List function names matching an Orderless pattern."
      20000 nil)
-    ("command_completions" "List interactive command names matching a prefix."
+    ("command_completions" "List interactive command names matching an Orderless pattern."
      20000 nil)
-    ("variable_completions" "List variable names matching a prefix."
+    ("variable_completions" "List variable names matching an Orderless pattern."
      20000 nil)
     ("function_source" "Read the source code for a function or macro."
      30000 nil)
@@ -188,10 +191,19 @@ safe."
        (remhash key mevedel-tool--registry)))
    (copy-hash-table mevedel-tool--registry))
   (dolist (registration mevedel-tool-introspect--registrations)
-    (pcase-let ((`(,name ,summary ,max-result-size ,check-permission)
-                 registration))
+    (pcase-let* ((`(,name ,summary ,max-result-size ,check-permission)
+                  registration)
+                 (prompt-path (file-name-concat
+                               mevedel-tool-registry--source-dir
+                               "prompts" "tools" (concat name ".md")))
+                 (prompt (with-temp-buffer
+                           (insert-file-contents prompt-path)
+                           (buffer-string))))
       (mevedel-tool--register-wrap
        :source (gptel-get-tool (list "introspection" name))
+       :description-override summary
+       :prompt-override prompt
+       :prompt-source (list :kind 'file :path prompt-path)
        :summary summary
        :groups '(elisp)
        :read-only-p t

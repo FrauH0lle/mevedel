@@ -1,5 +1,7 @@
 # Architecture
 
+For source-file responsibilities, see the [module map](module-map.md).
+
 ## System flow
 
 ```mermaid
@@ -251,7 +253,7 @@ after terminal request cleanup.
 
 ## Workspace context chain
 
-The request-time system prompt loads `AGENTS.md` then `AGENTS.local.md` from the
+Retained current-context delivery loads `AGENTS.md` then `AGENTS.local.md` from the
 workspace root through the session working directory. A successful `Read` of a
 deeper file queues any newly applicable instruction files as a host-generated
 same-turn reminder. Content hashes deduplicate unchanged files independently
@@ -433,23 +435,38 @@ one-off role content local. Blank components are omitted. Workspace-aware
 profiles must explicitly contain `workspace-config` and `environment`, which
 the renderer validates before dispatch.
 
+For retained conversations, named observations are delivered separately through
+`mevedel-context-delivery.el`. The table describes component selection across
+both channels: roles/policies remain stable system instructions, while workspace
+configuration, environment, memory indexes, skills, resource availability and
+Goal state become retained updates. Stateless profiles keep current snapshots.
+See [retained instruction context](#retained-instruction-context).
+
 The built-in selection is deliberate:
 
 | Consumer | Role/tone/context |
 | --- | --- |
-| Main | Base role/tone, tool orchestration, workspace config, memory, environment, skills, Goal |
-| Worker | Worker role, report tone, tool orchestration, workspace config, memory, environment, skills |
-| Explorer | Explorer role, report tone, tool orchestration, workspace config, environment, skills |
-| Verifier | Verifier role, report tone, tool orchestration, workspace config, environment |
-| Reviewer | Reviewer role, tool orchestration, workspace config, environment |
+| Main | Base role, task policy, main tone, memory use/save policy, tool orchestration, workspace config, memory data, environment, skills, Goal |
+| Worker | Worker role, task policy, report tone, memory use/save policy, tool orchestration, workspace config, memory data, environment, skills |
+| Explorer | Explorer role, task policy, report tone, tool orchestration, workspace config, environment, skills |
+| Verifier | Verifier role, task policy, report tone, tool orchestration, workspace config, environment |
+| Reviewer | Reviewer role, task policy, tool orchestration, workspace config, environment |
 | Bash guardian | Guardian role, workspace config, environment |
 | Context summary | Fixed continuation/handoff summary contract only |
+| Buddy / Buddy guide | Respective role, memory use policy, workspace config, memory data, environment |
 
-The shared tool-orchestration component asks models to batch independent tool
-calls within a bounded stage and keep dependencies, waits, approvals, and
-conflicting mutations sequential. When the request has ToolScript active, it
-also promotes a single ToolScript call over issuing a multi-call sequence one
-turn at a time. It does not encode provider pricing.
+The shared task policy owns scoped autonomy, permissions, existing edits,
+instruction provenance/conflicts, and truthful verification. Role text supplies
+the task purpose, direct-tool limits, and consumed report contract. Guardians
+and context summaries exclude coding task policy. Tone owns communication;
+tool descriptions own suitability and calling contracts.
+
+The shared tool-orchestration component describes useful delegation and batching
+without search/file thresholds. Dependencies, waits, approvals, and conflicting
+mutations remain sequential. ToolCall suitability lives in its description;
+activating it does not rewrite the earlier system prompt with a promotion.
+Resource availability remains context-specific. Stable assembly is structural
+cache evidence, not a provider cache-hit measurement.
 
 `mevedel-gptel-stream-bridge.el` isolates private, version-sensitive gptel
 stream advice. `mevedel-view-stream.el` owns live-tail render scheduling,
@@ -512,6 +529,96 @@ Matching files are included from broadest to closest scope as
 `## Workspace Configuration` so deeper instructions override earlier
 ones.
 
+## Retained instruction context
+
+A retained conversation separates behavioral instructions from observations that
+change during work. Main and retained-agent system prompts keep role, authority,
+style, skill dispatch, memory-use policy and a short memory-manual retrieval
+requirement. Named workspace configuration, environment, memory indexes, skill
+catalogs, resource availability and root Goal context are delivered after current
+input through the existing reminder transaction.
+
+Environment, active Goal, skills, memory and resource availability form one
+complete current-state snapshot, in that order. If any selected fact changes,
+the next request appends the full snapshot. It explicitly replaces the previous
+snapshot and remains valid until updated. Unchanged turns append no new snapshot.
+Workspace guidance and Goal procedures remain independently retained instruction
+updates; a counter change does not repeat their full text. Each instruction update
+supersedes the earlier observation of that component.
+
+`mevedel-context-delivery.el` owns this delivery boundary. Only components selected
+by an agent's frozen definition reach that agent. Workers do not inherit the
+root Goal. An agent's snapshot includes only its selected fact sections; an
+instruction-only recipient receives no fact snapshot. Authored inline components
+remain in the system prompt even when named like a built-in observation.
+Stateless buddy and guardian requests retain
+their current snapshot; they do not own a growing conversation prefix.
+
+### Acknowledgement and context loss
+
+The trusted `injected-reminders` transcript record remains the source of truth.
+An incremental buffer-local index avoids repeatedly decoding old tool-response
+records. Edits before its cursor invalidate the index; character-generation
+checks also catch replacements that inhibit edit hooks. A fresh process rebuilds
+it. Exact message lookup uses a hash index rather than a nested history scan.
+This cache is derived, not separately persisted acknowledgement state.
+
+Before suppressing an update, delivery matches a complete trusted reminder
+message against actual user messages in the realized provider payload. The last
+matching observation in payload order wins. A substring in tool results, a
+system message, or quoted prose cannot acknowledge delivery. Missing or
+unsupported representations cause conservative redelivery. Thus filtering,
+compaction and rewind cannot silently remove required context while leaving it
+acknowledged from excluded source history.
+
+Delivery and its transcript record commit together. Aborted preparation does
+not acknowledge an observation. A removed index, empty roster or inactive Goal
+produces an explicit current empty/inactive state. Goal procedure text is a
+separate component so counter changes do not repeat the completion procedure.
+Direct-child agent notices use the same retained transaction.
+
+### Progressive disclosure
+
+The root AGENTS.md keeps project design decisions, before-work retrieval
+triggers, verification requirements, and documentation discovery. Detailed
+setup, upstream checkout, code-style and test procedures live in
+[development.md](development.md).
+
+The system memory-save policy requires Read of `mevedel://memory.md` before
+explicit or model-initiated memory mutations. The manual owns root selection,
+frontmatter, index maintenance and forget semantics. Existing write permissions
+remain authoritative; the manual is not a new permission gate.
+
+Skill catalogs retain canonical invocation names and a one-line purpose (first
+sentence/line, at most 160 characters). ListSkills still searches full authored
+names/descriptions and returns detailed discovery entries; Skill retrieves the
+body. The context-relative total catalog budget remains a final safeguard.
+Path-scoped discovery is optional and does not promote a skill into the shared
+catalog. Stable skill policy remains available even when that catalog is empty.
+
+### Cache boundaries
+
+The goal is to preserve the eligible matching prefix, not to promise a cache
+hit. Native schema, role, model, provider settings and installed behavioral
+policy changes can legitimately change that prefix. Provider routing, stored
+breakpoints and retention can prevent reuse even for identical requests.
+
+Retained updates preserve earlier request messages. They increase history size;
+compaction can retire obsolete observations. See [reminders.md](reminders.md)
+and [ADR 0115](adr/0115-retain-delivered-conversation-fragments.md).
+
+### Adoption
+
+Recreate retained agents to adopt the current frozen role contract and dynamic
+component selection. Existing frozen configurations are not rewritten. Removed
+skill-snapshot and delta APIs have no compatibility aliases or migrations.
+
+Revisit partial updates when the general supported model baseline reaches
+gpt-5.6-sol's capability level or better. Confirm current-state interpretation and
+restore/compaction behavior across the then-supported baseline before switching
+back to reduce repeated context. This is a future design decision, not a runtime
+model-name threshold or a second delivery mode.
+
 ## Resource addressing
 
 Filesystem-shaped tools consume one closed set of eight resource-address
@@ -549,8 +656,11 @@ See [`address-to-resource.md`](address-to-resource.md) and
 Memory indexes are read from configured `.mevedel/memory/` and
 `.agents/memory/` roots, both workspace-local and user-global. The first
 200 lines of each present `MEMORY.md` are included when a profile selects
-the `memory` component, with a last-updated age
-annotation. Durable memory bodies live in linked topic files under the
+the `memory` data component, with an absolute modification-date annotation.
+Stable `memory-policy` governs use; main/worker also select
+`memory-save-policy` before the changing data. This short policy requires
+retrieving the memory manual before mutations. Buddy receives no saving
+procedure. Unchanged indexes do not rewrite this section at midnight. Durable memory bodies live in linked topic files under the
 same root, using `user`, `feedback`, `project`, or `reference`
 frontmatter. `MEMORY.md` should contain one-line links only.
 LLM-writable. See [`memory.md`](memory.md) for the full layout, save

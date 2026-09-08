@@ -1041,11 +1041,6 @@ candidate's surviving turn count."
      (mevedel-session-touched-files candidate) (make-hash-table :test #'equal)
      (mevedel-session-turn-count candidate) turn
      (mevedel-session-pending-reminders candidate) nil
-     (mevedel-session-specialist-nudge-state candidate) nil
-     (mevedel-session-deferred-pending candidate) nil
-     (mevedel-session-deferred-injected candidate) nil
-     (mevedel-session-deferred-used candidate) nil
-     (mevedel-session-deferred-expired candidate) nil
      (mevedel-session-messages candidate) nil
      (mevedel-session-agent-registry candidate) nil
      (mevedel-session-agent-reservations candidate) nil

@@ -409,11 +409,14 @@
            (parent-skill
             (mevedel-skill-invocation-record--create
              :name "parent-skill" :role 'command :origin 'model
-             :agent-path "/root/parent" :turn 4))
+             :agent-path "/root/parent" :turn 4
+             :source-path "/removed/parent-skill/SKILL.md"
+             :prepared-body "Keep the codec invariant until the task is complete."))
            (root-skill
             (mevedel-skill-invocation-record--create
              :name "root-skill" :role 'command :origin 'user
-             :agent-path "/root" :turn 3)))
+             :agent-path "/root" :turn 3
+             :prepared-body "ROOT-ONLY-BODY")))
       (setf (mevedel-session-invoked-skills session)
             (list root-skill parent-skill))
       (setq-local mevedel--session session
@@ -422,6 +425,11 @@
       (let ((evidence
              (mevedel-compact-evidence-summary-context-evidence "call_agent")))
         (should (string-match-p "parent-skill" evidence))
+        (should (string-search "Keep the codec invariant until the task is complete."
+                               evidence))
+        (should (string-search "/removed/parent-skill/SKILL.md" evidence))
+        (should (string-search "provenance: skill-invocation" evidence))
+        (should-not (string-search "ROOT-ONLY-BODY" evidence))
         (should-not (string-match-p "root-skill" evidence))))))
 
 (mevedel-deftest mevedel-compact-evidence-tail-start ()

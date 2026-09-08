@@ -120,9 +120,9 @@ the fault is rather than described from the diff. That widens where notes may
 appear; if it turns noisy, the narrower rule is to gate `add_note` back to diff
 lines.
 
-Borderline material is handled by **severity, not silence**. Something a linter
-or the byte compiler would also report is not off limits; it is just rarely
-worth more than `trivial`. Whether you ever see it is
+Findings need concrete evidence and enough value to justify an inline note;
+no notes is a valid result. Severity describes the actual impact, including
+findings a linter or compiler could also report. Whether you ever see it is
 `mevedel-buddy-severity-floor`'s job, and that is yours to set — at `trivial`
 you get cleanups and checkdoc-style remarks along with everything else, which
 is a perfectly reasonable way to run it.

@@ -150,9 +150,9 @@ only the selected `:preset-name`; resume rebuilds mevedel variables from that
 currently registered trusted preset, so sidecar data cannot name or populate
 buffer locals. It also records the session's exact `:model-provider` and
 explicit `:reasoning-effort`. This removal of persisted preset variable keys
-and values and the durable ToolScript audit checkpoint change the sidecar
+and values and the durable ToolCall audit checkpoint change the sidecar
 format to `v0.5.4`; older sessions are intentionally rejected rather than
-migrated. The checkpoint contains the ToolScript call and bounded child audit,
+migrated. The checkpoint contains the ToolCall call and bounded child audit,
 never an interpreter continuation. A Session Fork also copies the source
 session's permission mode, sandbox mode, session permission rules, and resource
 grants at the fork point. Parent and child then diverge independently.
@@ -911,6 +911,18 @@ rather than recounted from the start of the buffer per turn, which matters
 because the rebuild runs on every settled save and a live segment is
 bounded only by the compaction threshold.
 
+Delivered reminders and completed tool-response fragments also persist as
+trusted transcript records. The [history adapter](tools.md#retained-provider-history)
+preserves reminder message boundaries and exact tool-call grouping across
+follow-up and restore. Compaction discards records with removed history; edited,
+filtered or incomplete fragments use normal backend serialization.
+
+Tool IDs are established before persistence by the
+[tool-result rendering adapter](tools.md#tool-call-identity-in-transcripts).
+It renders each completed call from its own authoritative request record;
+normalization and restoration preserve those IDs. No scan of result text guesses
+an original ID, and no migration repairs previously corrupted plain transcripts.
+
 After mevedel restores persisted bounds, session restoration calls
 `mevedel-transcript-normalize-properties`. The transcript module reapplies
 properties from its canonical structural ranges; persistence does not parse
@@ -957,10 +969,10 @@ acquiring the session lock, resume queues a model-visible reconciliation
 reminder: prior commands may still run or have partial effects, so the next
 turn must inspect current state and prefer the newest user request. Aborting a
 live root request queues the same reminder before the explicit save boundary.
-ToolScript is the narrow exception to the non-recoverable tool rule: its guest
+ToolCall is the narrow exception to the non-recoverable tool rule: its guest
 machine remains transient, but the sidecar stores the envelope and bounded
 child audit. Resume converts a surviving checkpoint to an interrupted
-ToolScript row, never resumes the script, and commits the repaired segment
+ToolCall row, never resumes the script, and commits the repaired segment
 together with clearing the checkpoint. Resume also atomically reconciles
 running Bash rows across the restored segment and its archived predecessors
 before rendering the view. The scan proceeds newest to oldest: a later
@@ -1203,8 +1215,8 @@ workflow state, and checkout remain live and unchanged. The child keeps the
 Source working directory and restores no files, so Conversation Fork also
 works outside Git. A sparse `fork-provenance` reminder regenerates the source
 session, shared working directory, and current-file caveat from durable child
-state; its hidden injection record gives the user a persistent disclosure
-without making the reminder permanent model history.
+state; its complete injection record preserves the disclosure for both the
+user and subsequent model requests until compaction retires it.
 
 Worktree Fork requires Git, its worktree command, and a supported checkout on
 the Source session's execution target. Dependency and repository preflight run

@@ -10,7 +10,8 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib))
+  (require 'cl-lib)
+  (require 'gptel-request))
 
 (require 'subr-x)
 
@@ -27,9 +28,8 @@
 (defvar gptel-system-prompt)
 (defvar gptel-tools)
 
-;; `json'
-(declare-function json-encode "json" (object))
-(autoload 'json-encode "json")
+;; `mevedel-agent-conversation'
+(defvar mevedel--agent-invocation)
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-active-context "mevedel-goal" (session))
@@ -45,7 +45,6 @@
 (autoload 'mevedel-skills-prompt-section "mevedel-skills-prompt")
 
 ;; `mevedel-structs'
-(declare-function mevedel-session-deferred-pending "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-p "mevedel-structs" (cl-x))
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
@@ -65,6 +64,8 @@
 (autoload 'mevedel-tool-all "mevedel-tool-registry")
 (autoload 'mevedel-tool-gptel-tool "mevedel-tool-registry")
 (autoload 'mevedel-tool-prompt-source "mevedel-tool-registry")
+
+;; `mevedel-tools'
 
 ;; `mevedel-utilities'
 (declare-function mevedel--environment-info-string "mevedel-utilities"
@@ -340,26 +341,12 @@ round trip per file to discover."
   (mapcar (lambda (root) (plist-get root :file))
           (mevedel-system--memory-roots workspace)))
 
-(defun mevedel-system--human-time-age (time)
-  "Return a short human age string for TIME."
-  (let* ((seconds (max 0 (float-time (time-subtract (current-time) time))))
-         (days (floor (/ seconds 86400))))
-    (cond
-     ((zerop days) "today")
-     ((= days 1) "yesterday")
-     (t (format "%d days ago" days)))))
-
-(defun mevedel-system--current-date ()
-  "Return today's date for prompt cache keys."
-  (format-time-string "%Y-%m-%d"))
-
 (defun mevedel-system--memory-updated-header (memory-file)
   "Return last-updated metadata for MEMORY-FILE."
   (let* ((attrs (file-attributes memory-file))
          (mtime (file-attribute-modification-time attrs)))
-    (format "<!-- Last updated: %s (%s) -->"
-            (format-time-string "%Y-%m-%d" mtime)
-            (mevedel-system--human-time-age mtime))))
+    (format "<!-- Last updated: %s -->"
+            (format-time-string "%Y-%m-%d" mtime))))
 
 (defun mevedel-system--read-memory-index (memory-file)
   "Return the first 200 lines from MEMORY-FILE."
@@ -402,18 +389,14 @@ round trip per file to discover."
                                 (mevedel-system--memory-roots workspace)))))
     (if sections
         (string-join sections "\n\n")
-      "Your memory indexes are currently empty. As you complete tasks, save
-durable memories in separate topic files and link them from MEMORY.md.
-Anything linked from MEMORY.md can be discovered in future conversations.")))
+      "Your memory indexes are currently empty.")))
 
-(defconst mevedel-system--memory-prompt
-  (lambda (&optional workspace)
-    (mevedel-system-render-prompt-file
-     "prompts/system/memory-policy.md"
-     `(("MEMORY_ROOTS" . ,(mevedel-system--memory-roots-description
-                           workspace))
-       ("MEMORY_CONTENT" . ,(mevedel-system--memory-content workspace)))))
-  "Function returning the dynamic persistent memory prompt.")
+(defun mevedel-system--memory-context-prompt (workspace)
+  "Return configured memory roots and index contents for WORKSPACE."
+  (mevedel-system-render-prompt-file
+   "prompts/system/memory-context.md"
+   `(("MEMORY_ROOTS" . ,(mevedel-system--memory-roots-description workspace))
+     ("MEMORY_CONTENT" . ,(mevedel-system--memory-content workspace)))))
 
 (defun mevedel-system--memory-cache-key (context)
   "Return cache key for the memory prompt section in CONTEXT."
@@ -421,7 +404,9 @@ Anything linked from MEMORY.md can be discovered in future conversations.")))
    :files (mapcar #'mevedel-system--file-cache-key
                   (mevedel-system--memory-files
                    (mevedel-system-context-workspace context)))
-   :date (mevedel-system--current-date)))
+   :template (mevedel-system--file-cache-key
+              (file-name-concat mevedel-system--source-dir
+                                "prompts/system/memory-context.md"))))
 
 (defun mevedel-system--working-directory
     (workspace working-directory &optional session)
@@ -615,37 +600,10 @@ present."
       (push "- `mcp://` - configured MCP servers and their resources." lines))
     (string-join (nreverse lines) "\n")))
 
-(defconst mevedel-system--ptc-guidance
-  (concat
-   "When several tool calls are only a means to one final value - later "
-   "calls depend on earlier results, or many independent calls form one "
-   "batch - prefer a single `ToolScript` call over issuing the calls one "
-   "turn at a time. It runs the whole data-dependent sequence in one turn "
-   "and returns only the final value, keeping intermediate output out of "
-   "the conversation.\n\n")
-  "System-prompt promotion of ToolScript, ending with its own separator.")
-
-(defun mevedel-system--toolscript-active-p (context)
-  "Return non-nil when ToolScript is an active tool for CONTEXT."
-  (let* ((buffer (mevedel-system-context-refresh-buffer context))
-         (tools (and (boundp 'gptel-tools)
-                     (if (buffer-live-p buffer)
-                         (buffer-local-value 'gptel-tools buffer)
-                       gptel-tools))))
-    (seq-some (lambda (tool)
-                (equal "ToolScript" (ignore-errors (gptel-tool-name tool))))
-              tools)))
-
 (defun mevedel-system--tool-orchestration-prompt (context)
   "Return tool orchestration guidance rendered for CONTEXT."
-  (mevedel-system-render-prompt-file
-   "prompts/system/tool-orchestration.md"
-   `(("RESOURCE_ROSTER" .
-      ,(mevedel-system--resource-roster context))
-     ("PTC_GUIDANCE" .
-      ,(if (mevedel-system--toolscript-active-p context)
-           mevedel-system--ptc-guidance
-         "")))))
+  (ignore context)
+  (mevedel-system-render-prompt-file "prompts/system/tool-orchestration.md"))
 
 (defun mevedel-system--skills-prompt (context)
   "Return dynamic skills prompt text for CONTEXT, or nil."
@@ -686,12 +644,18 @@ present."
                (mevedel-system-context-workspace context)
                (mevedel-system-context-working-directory context))))
 
+(mevedel-define-prompt-component memory-policy
+  :file "prompts/system/memory-policy.md")
+
+(mevedel-define-prompt-component memory-save-policy
+  :file "prompts/system/memory-save-policy.md")
+
 (mevedel-define-prompt-component memory
   :cache 'keyed
   :cache-key #'mevedel-system--memory-cache-key
   :producer (lambda (context)
-              (funcall mevedel-system--memory-prompt
-                       (mevedel-system-context-workspace context))))
+              (mevedel-system--memory-context-prompt
+               (mevedel-system-context-workspace context))))
 
 (mevedel-define-prompt-component environment
   :producer (lambda (context)
@@ -711,8 +675,27 @@ present."
                 (when-let* ((session (mevedel-system--context-session context)))
                   (mevedel-goal-active-context session)))))
 
+(mevedel-define-prompt-component goal-policy
+  :producer (lambda (context)
+              (when-let* ((session (mevedel-system--context-session context))
+                          ((mevedel-goal-active-context session)))
+                (mevedel-system-render-prompt-file "prompts/goals/policy.md"))))
+
+(defconst mevedel-system-retained-components
+  '(workspace-config memory environment skills active-goal goal-policy resources)
+  "Named observations delivered in conversation history for retained requests.")
+
+(mevedel-define-prompt-component resources
+  :producer #'mevedel-system--resource-roster)
+
+(mevedel-define-prompt-component skill-policy
+  :file "prompts/system/skill-policy.md")
+
 (mevedel-define-prompt-component main-role
   :file "prompts/system/base.md")
+
+(mevedel-define-prompt-component task-policy
+  :file "prompts/system/task-policy.md")
 
 (mevedel-define-prompt-component main-tone
   :file "prompts/tones/main.md")
@@ -735,13 +718,19 @@ present."
 (mevedel-define-prompt-profile main
   :workspace-aware t
   :components '(main-role
+                task-policy
                 main-tone
+                memory-policy
+                memory-save-policy
                 tool-orchestration
+                resources
+                skill-policy
                 workspace-config
                 memory
                 environment
                 skills
-                active-goal))
+                active-goal
+                goal-policy))
 
 (mevedel-define-prompt-profile bash-guardian
   :workspace-aware t
@@ -749,11 +738,11 @@ present."
 
 (mevedel-define-prompt-profile buddy
   :workspace-aware t
-  :components '(buddy-role workspace-config memory environment))
+  :components '(buddy-role memory-policy workspace-config memory environment))
 
 (mevedel-define-prompt-profile buddy-guide
   :workspace-aware t
-  :components '(buddy-guide-role workspace-config memory environment))
+  :components '(buddy-guide-role memory-policy workspace-config memory environment))
 
 
 ;;
@@ -815,7 +804,7 @@ present."
     (nreverse components)))
 
 (cl-defun mevedel-system--profile-state
-  (profile &key workspace working-directory session refresh-buffer)
+  (profile &key workspace working-directory session refresh-buffer retained)
   "Return rendered component state for PROFILE and request context."
   (let ((components (mevedel-system--profile-components profile))
         (context (mevedel-system--make-context
@@ -831,16 +820,24 @@ present."
                           mevedel-system--prompt-cache-miss))))
               (value (mevedel-system--render-component component context)))
          (list :component component :value value :cached cached)))
-     components)))
+     (if retained
+         (cl-remove-if
+          (lambda (component)
+            (let ((name (mevedel-system-prompt-component-name component)))
+              (and (memq name mevedel-system-retained-components)
+                   (eq component (alist-get name mevedel-system--prompt-components)))))
+          components)
+       components))))
 
 (cl-defun mevedel-system-build-prompt
-    (profile &key workspace working-directory session refresh-buffer)
+    (profile &key workspace working-directory session refresh-buffer retained)
   "Build the system prompt selected by PROFILE.
 
 PROFILE is a registered profile symbol or an anonymous profile plist.
 Components render in their listed order.  Blank values are omitted.
 WORKSPACE, WORKING-DIRECTORY, SESSION, and REFRESH-BUFFER supply
-request-time context to dynamic components."
+request-time context to dynamic components.  RETAINED moves changing components
+to conversation delivery, leaving only the stable system contract."
   (apply
    #'mevedel-system--join-parts
    (mapcar (lambda (state) (plist-get state :value))
@@ -849,7 +846,8 @@ request-time context to dynamic components."
             :workspace workspace
             :working-directory working-directory
             :session session
-            :refresh-buffer refresh-buffer))))
+            :refresh-buffer refresh-buffer
+            :retained retained))))
 
 (defun mevedel-system--estimated-tokens (string)
   "Return a rough 4-chars-per-token estimate for STRING."
@@ -952,7 +950,7 @@ request-time context to dynamic components."
   "Return provider-serialized tool schema text for BACKEND and TOOLS."
   (when (and backend tools)
     (condition-case nil
-        (json-encode (gptel--parse-tools backend tools))
+        (gptel--json-encode (gptel--parse-tools backend tools))
       (error nil))))
 
 (defun mevedel-system--insert-effective-prompt-report (data-buffer)
@@ -963,10 +961,7 @@ request-time context to dynamic components."
              (preset (mevedel-session-preset-name session))
              (profile (mevedel-system--prompt-profile-for-preset preset))
              (prompt (mevedel-system--effective-system-prompt))
-             (tools (delete-dups
-                     (append (and (boundp 'gptel-tools) gptel-tools)
-                             (mevedel-session-deferred-pending session)
-                             nil)))
+             (tools (and (boundp 'gptel-tools) gptel-tools))
              (schema (mevedel-system--provider-tool-schema
                       (and (boundp 'gptel-backend) gptel-backend) tools))
              (components

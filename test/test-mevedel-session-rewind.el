@@ -1521,7 +1521,7 @@
   (let* ((tempdir (make-temp-file "mevedel-materialize-" t))
          (published (file-name-concat tempdir "published-0001"))
          (staging (file-name-concat tempdir "temporary" "staging"))
-         (logical "tool-results/ToolScript-aA1b2c.txt")
+         (logical "tool-results/ToolCall-aA1b2c.txt")
          (content "returned value\n")
          (publication
           (list :head ".publications/0001/manifest.el"

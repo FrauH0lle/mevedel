@@ -76,7 +76,7 @@
   (test)
 
   :doc "formats state cells with visible labels"
-  (dolist (state '(active deferred pending loaded expired))
+  (dolist (state '(active discoverable))
     (should (equal (substring-no-properties
                     (mevedel-tools-list--status-cell state))
                    (symbol-name state)))))
@@ -132,46 +132,26 @@
     (should (equal (plist-get item :description) "Fake tool Read"))
     (should (eq (plist-get item :tool) tool))))
 
-(mevedel-deftest mevedel-tools-list--deferred-item ()
+(mevedel-deftest mevedel-tools-list--catalog-item ()
   ,test
   (test)
 
-  :doc "builds deferred items from deferred-set entries"
-  (let ((item (mevedel-tools-list--deferred-item
+  :doc "builds discoverable items from tool-catalog entries"
+  (let ((item (mevedel-tools-list--catalog-item
                '((mevedel "Edit") . "Replace text"))))
-    (should (eq (plist-get item :state) 'deferred))
+    (should (eq (plist-get item :state) 'discoverable))
     (should (equal (plist-get item :name) "Edit"))
     (should (equal (plist-get item :category) 'mevedel))
     (should (equal (plist-get item :description) "Replace text"))))
 
-(mevedel-deftest mevedel-tools-list--loaded-item ()
-  ,test
-  (test)
 
-  :doc "builds loaded items with ttl cells"
-  (let ((item (mevedel-tools-list--loaded-item '("Imenu" . 3))))
-    (should (eq (plist-get item :state) 'loaded))
-    (should (equal (plist-get item :name) "Imenu"))
-    (should (equal (plist-get item :ttl) "3"))
-    (should (string-match-p "Temporarily loaded"
-                            (plist-get item :description)))))
-
-(mevedel-deftest mevedel-tools-list--expired-item ()
-  ,test
-  (test)
-
-  :doc "builds expired items"
-  (let ((item (mevedel-tools-list--expired-item "Treesitter")))
-    (should (eq (plist-get item :state) 'expired))
-    (should (equal (plist-get item :name) "Treesitter"))
-    (should (string-match-p "Expired" (plist-get item :description)))))
 
 (mevedel-deftest mevedel-tools-list--collect-items
   (:after-each (mevedel-tools-list-test--cleanup-list))
   ,test
   (test)
 
-  :doc "collects active, deferred, pending, loaded, and expired items"
+  :doc "collects active, discoverable, pending, and loaded items"
   (let* ((session (mevedel-tools-list-test--make-session))
          (data-buffer (generate-new-buffer " *mt-tools-items*"))
          (active-tool (mevedel-tools-list-test--make-fake-gptel-tool "Read"))
@@ -180,24 +160,17 @@
         (progn
           (with-current-buffer data-buffer
             (setq-local gptel-tools (list active-tool)))
-          (setf (mevedel-session-deferred-set session)
+          (setf (mevedel-session-tool-catalog session)
                 '((("mevedel" "Imenu") . "List symbols")))
-          (setf (mevedel-session-deferred-pending session)
-                (list pending-tool))
-          (setf (mevedel-session-deferred-injected session)
-                '(("XrefReferences" . 2)))
-          (setf (mevedel-session-deferred-expired session)
-                '("Treesitter"))
           (let ((items (mevedel-tools-list--collect-items session data-buffer)))
             (should (equal (mapcar (lambda (item)
                                      (plist-get item :state))
                                    items)
-                           '(active deferred pending loaded expired)))
+                           '(active discoverable)))
             (should (equal (mapcar (lambda (item)
                                      (plist-get item :name))
                                    items)
-                           '("Read" "Imenu" "Edit"
-                             "XrefReferences" "Treesitter")))))
+                           '("Read" "Imenu")))))
       (mevedel-tools-list-test--cleanup-list data-buffer))))
 
 (mevedel-deftest mevedel-tools-list--entry ()
@@ -206,11 +179,11 @@
 
   :doc "builds table cells from tool item state"
   (let* ((item '(:state loaded :name "Imenu" :category "mevedel"
-                 :ttl "3" :description "List symbols"))
+                 :description "List symbols"))
          (entry (mevedel-tools-list--entry item))
          (cells (mevedel-test-tabulated-row-cells entry)))
     (should (equal (car entry) '(loaded "mevedel" "Imenu")))
-    (should (equal cells '("loaded" "Imenu" "mevedel" "3"
+    (should (equal cells '("loaded" "Imenu" "mevedel"
                            "List symbols"))))
 
   :doc "keeps multiline details out of the table cell"
@@ -218,7 +191,7 @@
                  :description "Launch agents.\n\nForeground details."))
          (entry (mevedel-tools-list--entry item))
          (cells (mevedel-test-tabulated-row-cells entry)))
-    (should (equal (nth 4 cells) "Launch agents."))))
+    (should (equal (nth 3 cells) "Launch agents."))))
 
 (mevedel-deftest mevedel-tools-list--session-label ()
   ,test
@@ -247,17 +220,13 @@
     (mevedel-tools-list-mode)
     (let ((line (mevedel-tools-list--header-line
                  '((:state active :name "Read")
-                   (:state deferred :name "Edit")
+                   (:state discoverable :name "Edit")
                    (:state pending :name "Imenu")
-                   (:state loaded :name "XrefReferences")
-                   (:state expired :name "Treesitter"))
+                   (:state loaded :name "XrefReferences"))
                  nil)))
       (should (string-match-p "mevedel: tools" line))
-      (should (string-match-p
-               (format "TTL %d" mevedel-deferred-tool-ttl)
-               line))
-      (should (string-match-p "1 active" line))
-      (should (string-match-p "1 deferred" line))
+      (should (string-match-p "1 native" line))
+      (should (string-match-p "1 discoverable" line))
       (should (string-match-p "? keys" line))
       ;; The key list belongs in `?' help, not in the header.
       (should-not (string-match-p "RET details" line)))))
@@ -272,7 +241,7 @@
   ,test
   (test)
 
-  :doc "renders active, deferred, pending, loaded, and expired tool rows"
+  :doc "renders active, discoverable, pending, and loaded tool rows"
   (let* ((session (mevedel-tools-list-test--make-session))
          (data-buffer (generate-new-buffer " *mt-tools-data*"))
          (active-tool (mevedel-tools-list-test--make-fake-gptel-tool "Read"))
@@ -281,39 +250,22 @@
         (progn
           (with-current-buffer data-buffer
             (setq-local gptel-tools (list active-tool)))
-          (setf (mevedel-session-deferred-set session)
+          (setf (mevedel-session-tool-catalog session)
                 '((("mevedel" "Edit") . "Replace text in a file")
                   (("mevedel" "Imenu") . "List symbols in a file")))
-          (setf (mevedel-session-deferred-pending session)
-                (list pending-tool))
-          (setf (mevedel-session-deferred-injected session)
-                '(("XrefReferences" . 3)))
-          (setf (mevedel-session-deferred-expired session)
-                '("Treesitter"))
           (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
             (with-current-buffer buffer
-              (should (= 6 (length tabulated-list-entries)))
+              (should (= 3 (length tabulated-list-entries)))
               (let ((rows (mevedel-test-tabulated-entries-cells)))
                 (should (equal (cdr (assoc '(active "mevedel" "Read")
                                            rows))
-                               '("active" "Read" "mevedel" ""
+                               '("active" "Read" "mevedel"
                                  "Fake tool Read")))
-                (should (equal (cdr (assoc '(deferred "mevedel" "Edit")
+                (should (equal (cdr (assoc '(discoverable "mevedel" "Edit")
                                            rows))
-                               '("deferred" "Edit" "mevedel" ""
+                               '("discoverable" "Edit" "mevedel"
                                  "Replace text in a file")))
-                (should (equal (cdr (assoc '(pending "mevedel" "Edit")
-                                           rows))
-                               '("pending" "Edit" "mevedel" ""
-                                 "Fake tool Edit")))
-                (should (equal (cdr (assoc '(loaded "" "XrefReferences")
-                                           rows))
-                               '("loaded" "XrefReferences" "" "3"
-                                 "Temporarily loaded deferred tool")))
-                (should (equal (cdr (assoc '(expired "" "Treesitter")
-                                           rows))
-                               '("expired" "Treesitter" "" ""
-                                 "Expired after its deferred-tool TTL elapsed")))))))
+))))
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer))))
 
@@ -326,7 +278,7 @@
   ,test
   (test)
 
-  :doc "refresh updates visible deferred row content"
+  :doc "refresh updates visible discoverable row content"
   (let* ((session (mevedel-tools-list-test--make-session))
          (data-buffer (generate-new-buffer " *mt-tools-refresh*"))
          (tool (mevedel-tools-list-test--make-fake-gptel-tool "Read")))
@@ -334,18 +286,18 @@
         (progn
           (with-current-buffer data-buffer
             (setq-local gptel-tools (list tool)))
-          (setf (mevedel-session-deferred-set session)
+          (setf (mevedel-session-tool-catalog session)
                 '((("mevedel" "Edit") . "Replace text")))
           (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
             (with-current-buffer buffer
-              (mevedel-cockpit-goto-id '(deferred "mevedel" "Edit"))
-              (setcdr (car (mevedel-session-deferred-set session))
+              (mevedel-cockpit-goto-id '(discoverable "mevedel" "Edit"))
+              (setcdr (car (mevedel-session-tool-catalog session))
                       "Updated")
               (mevedel-tools-list-refresh)
               (let ((rows (mevedel-test-tabulated-entries-cells)))
-                (should (equal (cdr (assoc '(deferred "mevedel" "Edit")
+                (should (equal (cdr (assoc '(discoverable "mevedel" "Edit")
                                            rows))
-                               '("deferred" "Edit" "mevedel" ""
+                               '("discoverable" "Edit" "mevedel"
                                  "Updated")))))))
       (mevedel-tools-list-test--cleanup-list data-buffer))))
 
@@ -369,7 +321,7 @@
                            'active)))
                 (should (equal (plist-get item :name) "Read")))
               (should-not (mevedel-tools-list--selected-item-for-state
-                           'deferred)))))
+                           'discoverable)))))
       (mevedel-tools-list-test--cleanup-list data-buffer)))
 
   :doc "distinguishes same-name rows by category"
@@ -377,17 +329,19 @@
          (data-buffer (generate-new-buffer " *mt-tools-state-category*")))
     (unwind-protect
         (progn
-          (setf (mevedel-session-deferred-set session)
+          (setf (mevedel-session-tool-catalog session)
                 '((("cat-a" "Edit") . "A")
                   (("cat-b" "Edit") . "B")))
           (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
             (with-current-buffer buffer
-              (mevedel-cockpit-goto-id '(deferred "cat-b" "Edit"))
+              (mevedel-cockpit-goto-id '(discoverable "cat-b" "Edit"))
               (let ((item (mevedel-tools-list--selected-item-for-state
-                           'deferred)))
+                           'discoverable)))
                 (should (equal (plist-get item :category) "cat-b"))
                 (should (equal (plist-get item :description) "B"))))))
       (mevedel-tools-list-test--cleanup-list data-buffer))))
+
+
 
 (mevedel-deftest mevedel-tools-list--detail-text ()
   ,test
@@ -396,10 +350,9 @@
   :doc "formats selected row details"
   (let ((text (mevedel-tools-list--detail-text
                '(:state loaded :name "Imenu" :category "mevedel"
-                 :ttl "3" :description "List symbols\n\nFull guidance"))))
+                 :description "List symbols\n\nFull guidance"))))
     (should (string-match-p "Tool Imenu \\[loaded\\]" text))
     (should (string-match-p "Category: mevedel" text))
-    (should (string-match-p "TTL: 3" text))
     (should (string-match-p "Full guidance" text))))
 
 (mevedel-deftest mevedel-tools-list-details
@@ -424,271 +377,13 @@
                                       (buffer-string))))))
       (mevedel-tools-list-test--cleanup-list data-buffer))))
 
-(mevedel-deftest mevedel-tools-list--main-data-buffer
-  (:before-each (mevedel-test--capture-agent-registry)
-   :after-each (progn
-                 (mevedel-workspace-clear-registry)
-                 (mevedel-test--restore-agent-registry)
-                 (mevedel-tools-list-test--cleanup-list)))
-  ,test
-  (test)
 
-  :doc "rejects agent data buffers before lifecycle mutation"
-  (let* ((_ (mevedel-define-agent tool-child :description "child" :tools nil))
-         (agent (mevedel-agent-get "tool-child"))
-         (inv (mevedel-agent-invocation-create agent))
-         (session (mevedel-tools-list-test--make-session))
-         (data-buffer (generate-new-buffer " *mt-tools-child*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buffer
-            (setq-local mevedel--agent-invocation inv))
-          (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
-            (with-current-buffer buffer
-              (should-error (mevedel-tools-list--main-data-buffer)
-                            :type 'user-error))))
-      (when (buffer-live-p data-buffer)
-        (kill-buffer data-buffer)))))
 
-(mevedel-deftest mevedel-tools-list-defer-active
-  (:quiet t :after-each (progn
-                 (mevedel-tool-clear-registry)
-                 (mevedel-workspace-clear-registry)
-                 (mevedel-tools-list-test--cleanup-list)))
-  ,test
-  (test)
 
-  :doc "moves selected active tool into only the current session's deferred set"
-  (let* ((session (mevedel-tools-list-test--make-session))
-         (other-session (mevedel-tools-list-test--make-session))
-         (data-buffer (generate-new-buffer " *mt-tools-defer*"))
-         (other-buffer (generate-new-buffer " *mt-tools-other*"))
-         (tool (mevedel-tools-list-test--make-fake-gptel-tool "Read"))
-         (known-before (copy-tree gptel--known-tools)))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buffer
-            (setq-local gptel-tools (list tool)))
-          (with-current-buffer other-buffer
-            (setq-local gptel-tools (list tool)))
-          (setf (mevedel-session-deferred-set other-session)
-                '((("mevedel" "Keep") . "keep")))
-          (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
-            (with-current-buffer buffer
-              (mevedel-cockpit-goto-id '(active "mevedel" "Read"))
-              (mevedel-tools-list-defer-active)
-              (should (assoc '(deferred "mevedel" "Read")
-                             tabulated-list-entries))))
-          (with-current-buffer data-buffer
-            (should (null gptel-tools)))
-          (with-current-buffer other-buffer
-            (should (equal (list tool) gptel-tools)))
-          (should (equal "Read" (cadr (caar (mevedel-session-deferred-set
-                                             session)))))
-          (should (equal '((("mevedel" "Keep") . "keep"))
-                         (mevedel-session-deferred-set other-session)))
-          (should (equal known-before gptel--known-tools)))
-      (when (buffer-live-p data-buffer)
-        (kill-buffer data-buffer))
-      (when (buffer-live-p other-buffer)
-        (kill-buffer other-buffer))))
 
-  :doc "falls back to the active-tool prompt when point is not active"
-  (let* ((session (mevedel-tools-list-test--make-session))
-         (data-buffer (generate-new-buffer " *mt-tools-defer-prompt*"))
-         (tool (mevedel-tools-list-test--make-fake-gptel-tool "Read")))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buffer
-            (setq-local gptel-tools (list tool)))
-          (setf (mevedel-session-deferred-set session)
-                '((("mevedel" "Edit") . "Replace text")))
-          (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
-            (with-current-buffer buffer
-              (mevedel-cockpit-goto-id '(deferred "mevedel" "Edit"))
-              (cl-letf (((symbol-function 'completing-read)
-                         (lambda (&rest _) "Read")))
-                (mevedel-tools-list-defer-active))
-              (should (assoc '(deferred "mevedel" "Read")
-                             tabulated-list-entries)))))
-      (mevedel-tools-list-test--cleanup-list data-buffer)))
 
-  :doc "selected active row only defers the matching category"
-  (let* ((session (mevedel-tools-list-test--make-session))
-         (data-buffer (generate-new-buffer " *mt-tools-defer-category*"))
-         (cat-a (mevedel-tools-list-test--make-fake-gptel-tool "Run" "cat-a"))
-         (cat-b (mevedel-tools-list-test--make-fake-gptel-tool "Run" "cat-b")))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buffer
-            (setq-local gptel-tools (list cat-a cat-b)))
-          (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
-            (with-current-buffer buffer
-              (mevedel-cockpit-goto-id '(active "cat-b" "Run"))
-              (mevedel-tools-list-defer-active)
-              (should (assoc '(deferred "cat-b" "Run")
-                             tabulated-list-entries))))
-          (with-current-buffer data-buffer
-            (should (equal (list cat-a) gptel-tools)))
-          (should (equal '((("cat-b" "Run") . "Fake tool Run"))
-                         (mevedel-session-deferred-set session))))
-      (mevedel-tools-list-test--cleanup-list data-buffer))))
 
-(mevedel-deftest mevedel-tools-list-activate-deferred
-  (:quiet t :after-each (progn
-                 (mevedel-tool-clear-registry)
-                 (setf (alist-get "mevedel" gptel--known-tools nil t #'equal)
-                       nil)
-                 (setf (alist-get "cat-a" gptel--known-tools nil t #'equal)
-                       nil)
-                 (setf (alist-get "cat-b" gptel--known-tools nil t #'equal)
-                       nil)
-                 (mevedel-workspace-clear-registry)
-                 (mevedel-tools-list-test--cleanup-list)))
-  ,test
-  (test)
 
-  :doc "moves selected deferred tool into only the current session's active tools"
-  (let* ((session (mevedel-tools-list-test--make-session))
-         (other-session (mevedel-tools-list-test--make-session))
-         (data-buffer (generate-new-buffer " *mt-tools-activate*"))
-         (tool (mevedel-tools-list-test--make-fake-gptel-tool "Edit"))
-         known-before)
-    (unwind-protect
-        (progn
-          (setf (alist-get "Edit"
-                           (alist-get "mevedel"
-                                      gptel--known-tools nil nil #'equal)
-                           nil nil #'equal)
-                tool)
-          (setq known-before (copy-tree gptel--known-tools))
-          (with-current-buffer data-buffer
-            (setq-local gptel-tools nil))
-          (setf (mevedel-session-deferred-set session)
-                '((("mevedel" "Edit") . "Replace text in a file")))
-          (setf (mevedel-session-deferred-injected session) '(("Edit" . 2)))
-          (setf (mevedel-session-deferred-expired session) '("Edit"))
-          (setf (mevedel-session-deferred-set other-session)
-                '((("mevedel" "Edit") . "Other session copy")))
-          (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
-            (with-current-buffer buffer
-              (mevedel-cockpit-goto-id '(deferred "mevedel" "Edit"))
-              (mevedel-tools-list-activate-deferred)
-              (should (assoc '(active "mevedel" "Edit")
-                             tabulated-list-entries))))
-          (with-current-buffer data-buffer
-            (should (equal "Edit" (gptel-tool-name (car gptel-tools)))))
-          (should (null (mevedel-session-deferred-set session)))
-          (should (null (mevedel-session-deferred-injected session)))
-          (should (null (mevedel-session-deferred-expired session)))
-          (should (equal '((("mevedel" "Edit") . "Other session copy"))
-                         (mevedel-session-deferred-set other-session)))
-          (should (equal known-before gptel--known-tools)))
-      (when (buffer-live-p data-buffer)
-        (kill-buffer data-buffer))))
-
-  :doc "falls back to the deferred-tool prompt when point is not deferred"
-  (let* ((session (mevedel-tools-list-test--make-session))
-         (data-buffer (generate-new-buffer " *mt-tools-activate-prompt*"))
-         (tool (mevedel-tools-list-test--make-fake-gptel-tool "Edit"))
-         (active-tool (mevedel-tools-list-test--make-fake-gptel-tool "Read")))
-    (unwind-protect
-        (progn
-          (setf (alist-get "Edit"
-                           (alist-get "mevedel"
-                                      gptel--known-tools nil nil #'equal)
-                           nil nil #'equal)
-                tool)
-          (with-current-buffer data-buffer
-            (setq-local gptel-tools (list active-tool)))
-          (setf (mevedel-session-deferred-set session)
-                '((("mevedel" "Edit") . "Replace text")))
-          (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
-            (with-current-buffer buffer
-              (mevedel-cockpit-goto-id '(active "mevedel" "Read"))
-              (cl-letf (((symbol-function 'completing-read)
-                         (lambda (&rest _) "Edit")))
-                (mevedel-tools-list-activate-deferred))
-              (should (assoc '(active "mevedel" "Edit")
-                             tabulated-list-entries)))))
-      (mevedel-tools-list-test--cleanup-list data-buffer)))
-
-  :doc "selected deferred row only activates the matching category"
-  (let* ((session (mevedel-tools-list-test--make-session))
-         (data-buffer (generate-new-buffer " *mt-tools-activate-category*"))
-         (cat-a (mevedel-tools-list-test--make-fake-gptel-tool "Run" "cat-a"))
-         (cat-b (mevedel-tools-list-test--make-fake-gptel-tool "Run" "cat-b")))
-    (unwind-protect
-        (progn
-          (setf (alist-get "Run"
-                           (alist-get "cat-a"
-                                      gptel--known-tools nil nil #'equal)
-                           nil nil #'equal)
-                cat-a)
-          (setf (alist-get "Run"
-                           (alist-get "cat-b"
-                                      gptel--known-tools nil nil #'equal)
-                           nil nil #'equal)
-                cat-b)
-          (setf (mevedel-session-deferred-set session)
-                '((("cat-a" "Run") . "A")
-                  (("cat-b" "Run") . "B")))
-          (with-current-buffer data-buffer
-            (setq-local gptel-tools (list cat-a)))
-          (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
-            (with-current-buffer buffer
-              (mevedel-cockpit-goto-id '(deferred "cat-b" "Run"))
-              (mevedel-tools-list-activate-deferred)
-              (should (assoc '(active "cat-b" "Run")
-                             tabulated-list-entries))))
-          (with-current-buffer data-buffer
-            (should (equal (list cat-b cat-a) gptel-tools)))
-          (should (equal '((("cat-a" "Run") . "A"))
-                         (mevedel-session-deferred-set session))))
-      (mevedel-tools-list-test--cleanup-list data-buffer))))
-
-(mevedel-deftest mevedel-tools-list-search-load
-  (:quiet t :after-each (progn
-                 (mevedel-tool-clear-registry)
-                 (setf (alist-get "mevedel" gptel--known-tools nil t #'equal)
-                       nil)
-                 (mevedel-workspace-clear-registry)
-                 (mevedel-tools-list-test--cleanup-list)))
-  ,test
-  (test)
-
-  :doc "search/load queues matching deferred tools and refreshes pending state"
-  (let* ((session (mevedel-tools-list-test--make-session))
-         (data-buffer (generate-new-buffer " *mt-tools-search*"))
-         (gtool (mevedel-tools-list-test--make-fake-gptel-tool "Edit"))
-         (tool (mevedel-tool--create
-                :name "Edit" :category "mevedel"
-                :gptel-tool gtool))
-         known-before)
-    (unwind-protect
-        (progn
-          (mevedel-tool-register tool)
-          (setf (alist-get "Edit"
-                           (alist-get "mevedel"
-                                      gptel--known-tools nil nil #'equal)
-                           nil nil #'equal)
-                gtool)
-          (setq known-before (copy-tree gptel--known-tools))
-          (with-current-buffer data-buffer
-            (setq-local gptel-tools nil))
-          (setf (mevedel-session-deferred-set session)
-                '((("mevedel" "Edit") . "Replace text in a file")))
-          (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
-            (with-current-buffer buffer
-              (let ((result (mevedel-tools-list-search-load "edit")))
-                (should (string-match-p "available now" result)))
-              (should (= 1 (length (mevedel-session-deferred-pending
-                                    session))))
-              (should (assoc '(pending "mevedel" "Edit")
-                             tabulated-list-entries))
-              (should (equal known-before gptel--known-tools)))))
-      (when (buffer-live-p data-buffer)
-        (kill-buffer data-buffer)))))
 
 (mevedel-deftest mevedel-tools-list-open-gptel
   (:after-each (progn
@@ -726,7 +421,7 @@
     (with-current-buffer mevedel-tools-help-buffer-name
       (should (string-match-p "RET  Show selected tool details"
                               (buffer-string)))
-      (should (string-match-p "l    Search and load"
+      (should (string-match-p "s    Search tool contracts"
                               (buffer-string)))
       (should (string-match-p "g    Refresh table"
                               (buffer-string))))))

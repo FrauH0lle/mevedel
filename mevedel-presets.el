@@ -111,13 +111,9 @@
 (autoload 'mevedel-tool-summary "mevedel-tool-registry")
 
 ;; `mevedel-tool-ptc'
-(declare-function mevedel-tool-ptc--handle-description
-                  "mevedel-tool-ptc" (fsm))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-agent-roster-inject
-                  "mevedel-tools" (fsm))
-(declare-function mevedel-tools--handle-deferred-inject
                   "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-message-inject
                   "mevedel-tools" (fsm))
@@ -164,9 +160,9 @@
 
 Each entry is (PRESET-SYMBOL . SPEC-LIST).  SPEC-LIST uses the same
 forms accepted by `mevedel-define-preset''s :tools keyword (bare
-symbols, (:group X), (:tool X), (:deferred X)).  Extras are merged
+symbols, (:group X), (:tool X), (:discoverable X)).  Extras are merged
 into the preset's tool set every time the preset is applied:
-deferred entries are appended to the session's deferred-set and
+deferred entries are appended to the session's tool-catalog and
 active entries are appended to the buffer-local `gptel-tools'.
 
 Useful for giving user-wrapped tools a home in an existing preset
@@ -298,7 +294,7 @@ without a cycle check of its own."
   (mevedel-preset--apply-settings name)
   (mevedel-preset--refresh-tools name)
   (mevedel-agents--setup-for-request name)
-  (mevedel-preset--setup-deferred name)
+  (mevedel-preset--setup-catalog name)
   (mevedel-preset--setup-extras name))
 
 (defun mevedel-preset--define (name keys)
@@ -401,7 +397,7 @@ KEYS is a plist with the following recognized keys:
 
   :description  STRING  -- preset description for selection UI
   :tools        LIST    -- tool specs for `mevedel-tool-resolve-gptel'
-                           (bare symbols, (:group X), (:tool X), (:deferred X))
+                           (groups, (:tool X), (:discoverable X))
   :agents       LIST    -- list of agent name symbols for request-time setup
   :system       VALUE   -- system prompt (string, function, or dynamic spec)
   :model-tiers  ALIST   -- named provider/effort tier entries
@@ -433,12 +429,13 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
   ;; Read-only preset for discussion/analysis
   (mevedel-define-preset mevedel-discuss
     :description "Read-only tools for code analysis and discussion"
-    :tools (read (:tool "ToolScript") (:tool "ToolSearch")
-            (:deferred code) (:deferred web))
+    :tools (read (:tool "ToolCall") (:tool "ToolSearch")
+            (:discoverable code) (:discoverable web))
     :agents ()
     :system (lambda ()
               (mevedel-system-build-prompt
                'main
+               :retained t
                :session mevedel--session
                :refresh-buffer (current-buffer))))
 
@@ -446,19 +443,20 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
   (mevedel-define-preset mevedel-implement
     :description "Full editing capabilities with patch review workflow"
     :parents (mevedel-discuss)
-    :tools (read util edit (:tool "Bash")
-            (:tool "WriteStdin") (:tool "ListExecutions")
-            (:tool "StopExecution")
-            (:deferred (:tool "Eval"))
-            (:deferred code)
-            (:deferred web)
-            (:deferred elisp)
-            (:deferred tasks)
-            (:deferred agents))
+    :tools (read edit (:tool "Bash")
+            (:tool "ToolSearch") (:tool "ToolCall")
+            (:discoverable util)
+            (:discoverable (:tool "WriteStdin"))
+            (:discoverable (:tool "ListExecutions"))
+            (:discoverable (:tool "StopExecution"))
+            (:discoverable (:tool "Eval"))
+            (:discoverable code) (:discoverable web) (:discoverable elisp)
+            (:discoverable tasks) (:discoverable agents))
     :agents (worker explorer reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
                'main
+               :retained t
                :session mevedel--session
                :refresh-buffer (current-buffer)))))
 
@@ -484,34 +482,20 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
      gptel-tools
      (plist-get (mevedel-tool-resolve-gptel tool-specs) :active))))
 
-(defun mevedel-preset--setup-deferred (preset-name)
-  "Populate the current session's deferred tool set from PRESET-NAME.
-
-Resolves the preset's tool specs and takes the `:deferred' portion
-directly (no active-set exclusion).  Each entry is a pair
-\((CATEGORY NAME) . SHORT-DESCRIPTION) taken from the mevedel-tool
-struct, suitable for `mevedel-tools--search-deferred'.
-
-Writes to the buffer-local session's `deferred-set' slot and clears
-any prior deferred state so every request starts with a clean
-lifecycle.  Has no effect when the preset has no deferred specs or
-no active session is bound."
-  (when-let* ((session mevedel--session)
-              (meta (mevedel-preset--resolved-metadata preset-name))
-              (tool-specs (plist-get meta :tool-specs)))
-    (let* ((resolved (mevedel-tool-resolve tool-specs))
-           (deferred (plist-get resolved :deferred)))
-      (setf (mevedel-session-deferred-set session)
+(defun mevedel-preset--setup-catalog (preset-name)
+  "Refresh the discoverable set from PRESET-NAME's tool specifications.
+Retain loaded/pending names until WAIT reconciles them against the complete
+set, including extras.  Reapplying the same preset does not unload tools;
+a different scope cannot restore a capability absent from its final set."
+  (when-let* ((session mevedel--session))
+    (let* ((meta (mevedel-preset--resolved-metadata preset-name))
+           (resolved (mevedel-tool-resolve (plist-get meta :tool-specs))))
+      (setf (mevedel-session-tool-catalog session)
             (mapcar (lambda (tool)
                       (cons (list (mevedel-tool-category tool)
                                   (mevedel-tool-name tool))
                             (mevedel-tool-summary tool)))
-                    deferred))
-      ;; Reset lifecycle state so expiry/TTL starts fresh for this request.
-      (setf (mevedel-session-deferred-pending session) nil)
-      (setf (mevedel-session-deferred-injected session) nil)
-      (setf (mevedel-session-deferred-used session) nil)
-      (setf (mevedel-session-deferred-expired session) nil))))
+                    (plist-get resolved :discoverable))))))
 
 (defun mevedel-preset--setup-extras (preset-name)
   "Merge `mevedel-preset-extra-tool-specs' for PRESET-NAME into the request.
@@ -519,13 +503,13 @@ no active session is bound."
 Resolves the user-declared extra specs via `mevedel-tool-resolve'
 and its gptel counterpart.  Active entries are appended to the
 buffer-local `gptel-tools' (deduplicating against the existing
-list).  Deferred entries augment the session's `deferred-set' --
+list).  Deferred entries augment the session's `tool-catalog' --
 the built-in deferred specs from the preset stay in place.
 
 Has no effect when no extras are registered for PRESET-NAME."
   (when-let* ((extras (alist-get preset-name mevedel-preset-extra-tool-specs)))
     (let* ((resolved (mevedel-tool-resolve extras))
-           (deferred-tools (plist-get resolved :deferred))
+           (deferred-tools (plist-get resolved :discoverable))
            (gptel-resolved (mevedel-tool-resolve-gptel extras))
            (active-gptel (plist-get gptel-resolved :active)))
       ;; Append active tools to buffer-local gptel-tools, avoiding
@@ -534,10 +518,10 @@ Has no effect when no extras are registered for PRESET-NAME."
         (dolist (tool active-gptel)
           (unless (memq tool gptel-tools)
             (setq-local gptel-tools (append gptel-tools (list tool))))))
-      ;; Merge deferred entries into the session's deferred-set.
+      ;; Merge deferred entries into the session's tool-catalog.
       (when-let* ((session mevedel--session)
                   ((not (null deferred-tools))))
-        (let ((existing (mevedel-session-deferred-set session))
+        (let ((existing (mevedel-session-tool-catalog session))
               (additions
                (mapcar (lambda (tool)
                          (cons (list (mevedel-tool-category tool)
@@ -547,7 +531,7 @@ Has no effect when no extras are registered for PRESET-NAME."
           (dolist (entry additions)
             (unless (cl-find (car entry) existing :key #'car :test #'equal)
               (setq existing (append existing (list entry)))))
-          (setf (mevedel-session-deferred-set session) existing))))))
+          (setf (mevedel-session-tool-catalog session) existing))))))
 
 
 ;;
@@ -692,7 +676,7 @@ alist with mevedel-specific handlers added:
   1a.  Direct-child roster refresh (WAIT state handler)
   1b.  Inbound agent-message delivery (WAIT state handler)
   1c.  Deferred tool injection (WAIT state handler)
-  1d.  ToolScript effective-roster description (WAIT state handler)
+  1d.  ToolCall effective-roster description (WAIT state handler)
   1e.  System-reminder delivery at the final provider-dispatch seam
   2.  Ordered final patch, request callback, and terminal settlement"
   ;; 1. Add the pre-sample WAIT handlers in execution order.
@@ -703,9 +687,7 @@ alist with mevedel-specific handlers added:
                (list #'mevedel-tools--handle-steering-inject
                      #'mevedel-tools--handle-agent-roster-inject
                      #'mevedel-tools--handle-message-inject
-                     #'mevedel-tools--handle-deferred-inject
-                     #'mevedel-tools--handle-plan-tool-filter
-                     #'mevedel-tool-ptc--handle-description)
+                     #'mevedel-tools--handle-plan-tool-filter)
                (cdr wait-entry)))))
   ;; 1f. Begin the mevedel-request on the first WAIT entry.  WAIT is
   ;; re-entered after each tool call loop, so the guard on

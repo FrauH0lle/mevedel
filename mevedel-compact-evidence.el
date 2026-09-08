@@ -52,9 +52,13 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-origin
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-prepared-body
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-required-by-source-path
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-role
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-source-path
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-turn
                   "mevedel-structs" (cl-x) t)
@@ -347,14 +351,18 @@ When NO-PROPERTIES is non-nil, strip text properties from copied text."
     (session preserved-tail-turns &optional agent-path)
   "Return skill provenance selected for SESSION's compacted prefix.
 PRESERVED-TAIL-TURNS is the number of newest turns excluded from it.
-When AGENT-PATH is non-nil, include only invocations from that conversation."
+When AGENT-PATH is non-nil, include only invocations from that conversation.
+Include the recorded prepared body, not current source-file contents.  This
+is historical evidence, not an activation or assertion of current applicability."
   (if-let* ((session session)
             (records (mevedel-session-invoked-skills session)))
       (let ((cutoff (- (or (mevedel-session-turn-count session) 0)
                        (max 0 (or preserved-tail-turns 0)))))
         (mapcar
          (lambda (rec)
-           (format "$%s%s (role: %s, origin: %s, turn: %s%s)"
+           (format (concat "$%s%s (role: %s, origin: %s, turn: %s%s)\n"
+                           "Conversation: %s\nSource: %s\n"
+                           "Prepared body (historical, not a new invocation):\n%s")
                    (mevedel-skill-invocation-record-name rec)
                    (let ((args (mevedel-skill-invocation-record-args rec)))
                      (if (and args (not (string-empty-p args)))
@@ -371,7 +379,11 @@ When AGENT-PATH is non-nil, include only invocations from that conversation."
                                (or (mevedel-skill-invocation-record-dependency-depth
                                     rec)
                                    "?"))
-                     "")))
+                     "")
+                   (or (mevedel-skill-invocation-record-agent-path rec) "unknown")
+                   (or (mevedel-skill-invocation-record-source-path rec) "unknown")
+                   (or (mevedel-skill-invocation-record-prepared-body rec)
+                       "(not recorded; do not infer the missing guidance)")))
          (seq-filter
           (lambda (rec)
             (and (<= (or (mevedel-skill-invocation-record-turn rec) 0)

@@ -1,71 +1,35 @@
-Search for and load deferred tools before using them.
-
-Some tools are deferred (not loaded by default) to save context. Use
-ToolSearch to discover and activate them when needed. A deferred tool
-name from a reminder or search result is not callable until it has been
-loaded.
+Find specialist tools and retrieve their contracts for ToolCall.
 
 ### When to use `ToolSearch`
 
-- When you need a capability that isn't available in your current tool
-  set
-- When a task requires tools beyond basic reading and searching
-- At the start of complex tasks to check what specialized tools exist
+- Find a capability beyond the native core tools, including configured MCP tools.
+- Retrieve exact arguments or rediscover a contract after compaction.
 
 ### When NOT to use `ToolSearch`
 
-- The tool is already active in your tool set -- call it directly
-- Looking up general information or documentation -> ToolSearch only
-  finds tools, it is not a web or code search
-- Re-running the same failed query; if a name matched nothing, the
-  capability does not exist as a deferred tool
+- A native tool or a known current contract already covers the operation.
 
 ### How to use `ToolSearch`
 
-1. Search by exact tool name when a reminder or prior result names one:
-   `XrefReferences`, `XrefDefinitions`, `Imenu`, `Treesitter`,
-   `function_source`, etc.
-2. Search by capability group when exploring a family of tools:
-   `xref`, `imenu`, `treesitter`, `elisp`, `web`, etc.
-3. If you know you need the matching tool, call ToolSearch with
-   load=true. Use load=false only when you are exploring what tools
-   exist.
-4. After ToolSearch reports tools loaded, those tools are available now;
-   call the newly available tool in your next tool call.
-
-Do not call a deferred tool directly before loading it with ToolSearch.
-That can fail as an unknown tool call.
+- `query` matches any whitespace-separated term, case-insensitively, against
+  names, summaries, categories and groups. An exact name selects only that name for its term.
+- One to three matches return every complete contract and calling signature.
+- Broader matches return up to 20 names and summaries. Search one or two exact
+  names to get their contracts. Search never changes the native tool list.
+- Pass a calling expression to ToolCall. Availability and permissions are
+  checked again at execution; search does not grant authority.
 
 ### Examples of good usage
 
 <example>
-ToolSearch(query="function_source", load=true)
--> Loads function_source. The tool is available now; call
-   function_source with its normal arguments in your next tool call.
-</example>
-
-<example>
-ToolSearch(query="edit", load=false)
--> Shows matching editing tools without loading them.
-
-ToolSearch(query="ApplyPatch", load=true)
--> Loads ApplyPatch. The tool is available now; call ApplyPatch with its normal
-   arguments in your next tool call.
+ToolSearch(query="Imenu XrefReferences")
+Retrieve both contracts, then call the needed specialist through ToolCall.
 </example>
 
 ### Examples of bad usage
 
 <example>
-ToolSearch(query="Grep", load=true)
-<reasoning>
-Grep is already active. Call it directly instead of searching for it.
-</reasoning>
-</example>
-
-<example>
-ToolSearch(query="how to parse JSON in elisp")
-<reasoning>
-ToolSearch matches tool names and capability groups, not general
-questions. Use the appropriate research tool or answer directly.
-</reasoning>
+ToolSearch(query="elisp")
+Stop after receiving a broad catalog and guess a listed tool's arguments.
+Instead, search the selected exact name to retrieve its complete contract.
 </example>

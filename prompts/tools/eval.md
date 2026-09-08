@@ -1,122 +1,53 @@
-Evaluate one Elisp expression and return the result and any printed
-output.
+Evaluate one Elisp form and return its value and printed output.
 
 ### When to use `Eval`
 
-- Testing elisp code snippets or expressions
-- Verifying code changes work correctly
-- Checking variable values or function behavior
-- Demonstrating elisp functionality to users
-- Calculating results
-- Exploring live Emacs state or testing short hypotheses with `mode=live`
-- Running longer or UI-risky Elisp checks with `mode=batch`
+- Inspect live Emacs state or evaluate an Elisp hypothesis.
+- Use batch mode for a check that can run in a separate Emacs process.
 
 ### When NOT to use `Eval`
 
-- Multi-expression evaluations -> one call per expression (no progn)
-- File modifications -> use `ApplyPatch`
-- Shell operations -> use `Bash`
-- Test commands -> use `Bash`
-- Untrusted code -> live Eval is unrestricted code execution, and batch
-  confinement is not a substitute for trusting the expression
+- Applying source edits: ApplyPatch provides a reviewable patch.
+- Running untrusted code. Live Eval has unrestricted access to the Emacs process;
+  batch confinement does not make the expression trustworthy.
 
 ### How to use `Eval`
 
-`expression` can be anything to evaluate: a function call, a variable,
-a quasi-quoted expression. Only the first sexp is read and evaluated.
-If you need multiple expressions, make one call per expression. Do not
-combine with `progn` --- go expression by expression.
-
-`mode` controls where the expression runs:
-
-- `live` (default): evaluate, inherently unconfined, in the current Emacs
-  process. This can see live buffers, variables, windows, advice, timers, and
-  package state. Ordinary results disclose this execution scope.
-- `batch`: evaluate in a child `emacs --batch -Q` process with the
-  current `load-path` and the session working directory. On supported systems,
-  the child runs with filesystem and process confinement and without network
-  by default.
-
-`preserve_ui` applies to `mode=live`. It defaults to true and restores
-the current window configuration after evaluation. Set it to false only
-when intentional window/frame manipulation is the point of the call.
-
-Instead of saying "I can't calculate that", use this tool to evaluate
-the result.
-
-The return value is formatted using `%S`, so strings appear escaped
-and literal forms are `read`-compatible where possible. Objects
-without a printed representation show as `#<hash-notation>`.
-
-Expressions evaluate with `default-directory` set to the session working
-directory.
-
-If an important batch expression fails because it needs network access, make a
-new batch Eval call with
-`sandbox_permissions="with_additional_permissions"`,
-`additional_permissions={"network":true}`, and a concise user-facing
-`justification`. Request approval in the tool call rather than asking in prose.
-The retry is a distinct invocation; network access is the only requested
-change to the selected filesystem and process profile. If confinement is
-unavailable, the result discloses unrestricted execution. Additional sandbox
-permissions do not apply to live Eval.
-
-For a protected-path failure in batch mode, make a new call with the same
-`sandbox_permissions` value, a concise `justification`, and exact absolute
-paths under `additional_permissions.file_system.read` or
-`additional_permissions.file_system.write`. Write access includes reading the
-same path. Approval reopens only each named resource; parents, siblings, other
-protected paths, network, and process confinement remain unchanged. The Eval
-expression is authorized independently. Network and filesystem permissions
-may be combined in one justified batch invocation.
-
-If an important batch expression still fails because the sandbox itself blocks
-the operation, make a new batch Eval call with
-`sandbox_permissions="require_escalated"` and a concise, user-facing
-`justification`. Request approval in the tool call rather than asking in prose.
-Use additive permissions when they are sufficient: full escalation runs the
-batch child directly as the user with unrestricted filesystem, network, and
-process access. It is a distinct invocation, never an automatic replay, and is
-not available to live Eval.
-
-Output from `print`, `prin1`, and `princ` is captured and returned as
-STDOUT. Use `print` for diagnostic output, not `message` (which goes
-to `*Messages*` and is not captured).
+- Only the first form in `expression` is read and evaluated. A compound form such
+  as `let` or `progn` can contain related operations; separate top-level forms
+  after it are ignored.
+- `mode="live"` (default) sees live buffers, variables, advice, and package state.
+  It runs without child-process confinement. `preserve_ui=true` restores the
+  selected frame's window configuration, not other side effects; set it false
+  for intentional window manipulation.
+- `mode="batch"` runs a child `emacs --batch -Q` with the current `load-path` and
+  session working directory. It does not inherit live buffers, variable values,
+  or loaded packages. Require libraries needed by the check.
+- Evaluation uses the session working directory. Values print with `%S`; `print`,
+  `prin1`, and `princ` output is returned as STDOUT. `message` is not captured.
+  Errors can include output produced before failure. Large results have a bounded
+  preview and retrieval address.
+- Batch confinement, when available, restricts filesystem/process access and
+  defaults to no network. Non-default permission requests apply only to batch:
+  `with_additional_permissions` requests network and/or exact absolute read/write
+  paths; `require_escalated` requests unrestricted child execution. Put the reason
+  in `justification` on the new tool call. Expression authorization is separate;
+  approval is not an automatic retry. Results disclose unavailable confinement.
+- For exact grant semantics, failure recovery, and batch evaluation details,
+  read `mevedel://tools/execution.md` before using those features.
 
 ### Examples of good usage
 
 <example>
-- Calculate sum
-Eval(expression="(+ 1 2 3 4)")
-</example>
-
-<example>
-- Check current buffers
-Eval(expression="(buffer-list)")
-</example>
-
-<example>
-- Change setting
-Eval(expression="(setq tab-width 4)", mode="live")
-</example>
-
-<example>
-- Run an isolated package-level check
-Eval(expression="(and (require 'mevedel-view) (fboundp 'mevedel-view--setup))", mode="batch")
+Eval(expression="(let ((value (+ 1 2))) (princ value) (* value value))")
 </example>
 
 ### Examples of bad usage
 
 <example>
-Eval(expression="(progn (message \"hello\") (message \"world\"))")
+Eval(expression="(+ 1 2) (* 3 4)") expecting both forms to run
 <reasoning>
-Should make two separate Eval calls instead of using progn.
-</reasoning>
-</example>
-
-<example>
-Eval(expression="(find-file \"/path/to/file.txt\")")
-<reasoning>
-Use ApplyPatch for file modifications, not Eval.
+Only the first form is evaluated. Use one compound form when the operations
+belong together, or separate calls when the second depends on inspecting the first.
 </reasoning>
 </example>

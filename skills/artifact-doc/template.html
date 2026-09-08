@@ -5,182 +5,275 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><!-- SLOT: TITLE - the document's name alone, short and distinctive --></title>
 <style>
-  /* Light palette. Retune these values for the document's subject; every
-     token below is also redefined in the dark and print scopes, so change
-     all three or the value snaps back. */
+  /* Shared artifact palette: warm neutrals with a blue accent. Retune for the
+     document's subject in every scope that declares the token - the light
+     :root, both dark blocks, and print - or the value snaps back. */
   :root {
     color-scheme: light dark;
-    --ink:        #1b1a17;
-    --ink-muted:  #5d594f;
-    --ground:     #fbfaf7;
-    --surface:    #ffffff;
-    --rule:       #e2ded3;
-    --accent:     #7a4b2a;
-    --accent-soft:#f2e9e0;
+    --bg:          #f9f9f7;
+    --card:        #fcfcfb;
+    --ink:         #0b0b0b;
+    --ink-body:    var(--ink);
+    --ink-soft:    #52514e;
+    --rule:        rgba(11, 11, 11, 0.1);
+    --rule-strong: rgba(11, 11, 11, 0.2);
+    --accent:      #184f95;
+    --accent-soft: color-mix(in srgb, var(--accent) 10%, var(--bg));
     --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
-    --sans: Optima, Candara, "Noto Sans", source-sans-pro, sans-serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   }
-
+  /* Dark on both axes: the OS preference, unless the viewer pinned light, and
+     the viewer's own data-theme stamp. :where() keeps the media block at :root
+     specificity so an explicit stamp wins in either direction. Running text
+     drops one step of ink so light-on-dark does not halate; headings keep
+     the full primary. */
   @media (prefers-color-scheme: dark) {
-    :root {
-      --ink:        #ece7dc;
-      --ink-muted:  #a29b8c;
-      --ground:     #161513;
-      --surface:    #1e1c19;
-      --rule:       #33302a;
-      --accent:     #d99a6c;
-      --accent-soft:#2b2320;
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --bg:          #141412;
+      --card:        #1d1d1b;
+      --ink:         #ededea;
+      --ink-body:    #dcdbd6;
+      --ink-soft:    #b3b1a9;
+      --rule:        rgba(255, 255, 255, 0.12);
+      --rule-strong: rgba(255, 255, 255, 0.22);
+      --accent:      #6da7ec;
     }
   }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg:          #141412;
+    --card:        #1d1d1b;
+    --ink:         #ededea;
+    --ink-body:    #dcdbd6;
+    --ink-soft:    #b3b1a9;
+    --rule:        rgba(255, 255, 255, 0.12);
+    --rule-strong: rgba(255, 255, 255, 0.22);
+    --accent:      #6da7ec;
+  }
+  :root[data-theme="light"] { color-scheme: light; }
 
   * { box-sizing: border-box; }
 
+  /* One system, stated once:
+       scale   16 x 1.25^n -> 13 / 16 / 20 / 25 / 32 (lede 18, the one half-step)
+       line    26px; every block sits on 13px half-lines
+       space   13 / 26 / 39 / 52 (1/2, 1, 1 1/2, 2 lines)
+       weight  400 / 700 only - the two every fallback face carries honestly
+       measure 42em (672px) - about 75 characters of Charter */
   body {
     margin: 0;
     /* Explicit: the frame's own ground is not ours to inherit. */
-    background: var(--ground);
-    color: var(--ink);
+    background: var(--bg);
+    color: var(--ink-body);
     font-family: var(--serif);
-    font-size: 17px;
-    line-height: 1.65;
+    font-size: 16px;
+    line-height: 26px;
+    font-synthesis: none;
+    font-kerning: normal;
     overflow-wrap: break-word;
+    text-wrap: pretty;
   }
 
   .page {
-    max-width: 42rem;
+    max-width: 42em;
     margin: 0 auto;
-    padding: 4rem 1.5rem 6rem;
+    padding: 65px 24px 104px;
   }
 
   .eyebrow {
     font-family: var(--sans);
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: 0.12em;
+    font-size: 12px;
+    line-height: 13px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
     text-transform: uppercase;
     color: var(--accent);
-    margin: 0 0 0.75rem;
+    margin: 0 0 13px;
   }
 
+  h1, h2, h3 { color: var(--ink); text-wrap: balance; }
   h1 {
-    font-size: clamp(1.9rem, 5vw, 2.6rem);
-    line-height: 1.15;
-    text-wrap: balance;
-    margin: 0 0 1rem;
-    font-weight: 600;
+    font-size: 32px;
+    line-height: 39px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    margin: 0 0 13px;
   }
 
   .purpose {
-    font-size: 1.1rem;
-    color: var(--ink-muted);
-    margin: 0 0 2.5rem;
-    padding-bottom: 2.5rem;
-    border-bottom: 1px solid var(--rule);
-    text-wrap: pretty;
+    font-size: 18px;
+    line-height: 26px;
+    color: var(--ink-soft);
+    margin: 0 0 39px;
   }
+
+  /* Front matter: takeaways a skimmer reads instead of the document, and a
+     contents list a reader navigates by. Both delete cleanly. */
+  .takeaways {
+    margin: 0 0 26px;
+    padding: 13px 20px 13px 23px;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+  }
+  .takeaways ul { margin: 0; padding-left: 20px; }
+  .takeaways li { margin: 0; }
+  .takeaways li + li { margin-top: 6px; }
+  .takeaways li::marker { color: var(--accent); }
+
+  .label {
+    font-family: var(--sans);
+    font-size: 12px;
+    line-height: 13px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0 10px;
+  }
+
+  nav.toc {
+    margin: 0 0 52px;
+    padding: 0 0 0 23px;
+    border-left: 3px solid var(--rule);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 20px;
+  }
+  nav.toc ol { margin: 0; padding-left: 22px; }
+  nav.toc li { margin: 0; }
+  nav.toc li + li { margin-top: 5px; }
+  nav.toc li::marker { color: var(--accent); font-weight: 700; font-variant-numeric: tabular-nums; }
+  nav.toc a { color: var(--ink); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); text-decoration: underline; }
 
   h2 {
-    font-size: 1.3rem;
-    margin: 2.75rem 0 0.75rem;
-    font-weight: 600;
-    text-wrap: balance;
+    font-size: 20px;
+    line-height: 26px;
+    font-weight: 700;
+    margin: 39px 0 13px;
   }
-
   h3 {
     font-family: var(--sans);
-    font-size: 0.95rem;
-    letter-spacing: 0.02em;
-    margin: 1.75rem 0 0.5rem;
+    font-size: 13px;
+    line-height: 19px;
+    padding-top: 7px;
+    margin: 26px 0 0;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
   }
 
-  p, li { text-wrap: pretty; }
-  p { margin: 0 0 1rem; }
-  ul, ol { margin: 0 0 1rem; padding-left: 1.35rem; }
-  li { margin-bottom: 0.4rem; }
+  p, ul, ol { margin: 0 0 13px; }
+  ul, ol { padding-left: 26px; }
+  li { margin: 0; }
+  li + li { margin-top: 6px; }
+  strong { font-weight: 700; color: var(--ink); }
 
-  a { color: var(--accent); text-underline-offset: 0.15em; }
-  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.14em; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
+  /* The one callout a skimmer must not miss: close to what it answers,
+     a full line below, the accent rule as its second signal. */
   blockquote {
-    margin: 1.75rem 0;
-    padding: 1rem 1.25rem;
-    background: var(--accent-soft);
+    margin: 13px 0 26px;
+    padding: 0 0 0 23px;
     border-left: 3px solid var(--accent);
-    border-radius: 0 4px 4px 0;
-    font-size: 0.97rem;
+    color: var(--ink);
   }
-  blockquote p:last-child { margin-bottom: 0; }
+  blockquote > :last-child { margin-bottom: 0; }
 
   code {
     font-family: var(--mono);
-    font-size: 0.87em;
+    font-size: 0.9em;
+    line-height: 1;
     background: var(--accent-soft);
-    padding: 0.12em 0.35em;
+    padding: 0.1em 0.35em;
     border-radius: 3px;
     overflow-wrap: anywhere;
   }
 
   pre {
     font-family: var(--mono);
-    font-size: 0.85rem;
-    background: var(--surface);
+    font-size: 13px;
+    line-height: 19px;
+    background: var(--card);
     border: 1px solid var(--rule);
-    border-radius: 6px;
-    padding: 1rem;
+    border-radius: 4px;
+    padding: 13px 16px;
+    margin: 0 0 26px;
     overflow-x: auto;
-    line-height: 1.5;
   }
-  pre code { background: none; padding: 0; overflow-wrap: normal; }
+  pre code { background: none; padding: 0; line-height: inherit; overflow-wrap: normal; }
 
   /* Tables scroll inside their own container so the page never does. */
-  .table-wrap { overflow-x: auto; margin: 1.5rem 0; }
+  .table-wrap { overflow-x: auto; margin: 13px 0 26px; }
 
   table {
     border-collapse: collapse;
     width: 100%;
     font-family: var(--sans);
-    font-size: 0.92rem;
+    font-size: 14px;
+    line-height: 20px;
     font-variant-numeric: tabular-nums;
   }
   th, td {
     text-align: left;
-    padding: 0.55rem 0.9rem 0.55rem 0;
+    padding: 9px 12px 9px 0;
     border-bottom: 1px solid var(--rule);
     vertical-align: top;
   }
   th {
-    font-weight: 600;
-    font-size: 0.75rem;
-    letter-spacing: 0.08em;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--ink-muted);
+    color: var(--ink-soft);
   }
+  td.num, th.num { text-align: right; }
 
   .open-questions {
-    margin-top: 3rem;
-    padding-top: 2rem;
+    margin-top: 52px;
+    padding-top: 26px;
     border-top: 1px solid var(--rule);
   }
   .owner {
     font-family: var(--sans);
-    font-size: 0.78rem;
-    color: var(--ink-muted);
+    font-size: 13px;
+    color: var(--ink-soft);
     white-space: nowrap;
   }
 
+  /* Phones step the whole system down once: 15px on a 24px line. */
+  @media (max-width: 480px) {
+    body { font-size: 15px; line-height: 24px; }
+    .page { padding: 36px 18px 72px; }
+    h1 { font-size: 28px; line-height: 36px; margin-bottom: 12px; }
+    .purpose { font-size: 17px; line-height: 24px; margin-bottom: 36px; }
+    h2 { font-size: 19px; line-height: 24px; margin: 36px 0 12px; }
+    p, ul, ol { margin-bottom: 12px; }
+    ul, ol { padding-left: 24px; }
+  }
+
+  /* Print is always light, whatever the OS scheme or the viewer stamp. The
+     selector list ties the attribute-dark scope and wins by source order. */
   @media print {
-    :root {
+    :root, :root[data-theme="dark"] {
       color-scheme: light;
-      --ink: #000; --ink-muted: #444; --ground: #fff;
-      --surface: #fff; --rule: #bbb; --accent: #000; --accent-soft: #f2f2f2;
+      --bg: #fff; --card: #fff; --ink: #000; --ink-body: #000; --ink-soft: #444;
+      --rule: #bbb; --rule-strong: #888; --accent: #000; --accent-soft: #f2f2f2;
     }
-    body { font-size: 11pt; }
+    body { font-size: 11pt; line-height: 1.55; }
     .page { max-width: none; padding: 0; }
-    a:focus-visible { outline: none; }
+    :focus-visible { outline: none; }
+    a { color: inherit; text-decoration: underline; }
+    nav.toc a { text-decoration: none; }
     h1, h2, h3 { break-after: avoid; }
     p, li { widows: 3; orphans: 3; }
-    blockquote, tr { break-inside: avoid; }
+    blockquote, tr, .takeaways { break-inside: avoid; }
     .table-wrap, pre { overflow: visible; }
     pre, pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
     table { table-layout: fixed; }
@@ -198,26 +291,55 @@
 
   <p class="purpose"><!-- SLOT: PURPOSE - one sentence: what this document is for, and what the reader should do with it. -->One sentence stating what this document is for and what the reader should do with it.</p>
 
-  <!-- SLOT: BODY - the document itself. h2 sections a reader can scan, short
-       paragraphs, lists where structure helps, and a blockquote for the one
-       callout a skimmer must not miss. Cut any scaffolding below that this
-       document does not need. -->
-  <h2>First section</h2>
-  <p>Short paragraphs a reader can scan.</p>
+  <!-- SLOT: TAKEAWAYS - 3-5 bullets, one line each: a single clause with its
+       number or specific. What a skimmer reads instead of the document.
+       Delete the whole aside for a short memo with nothing to summarize. -->
+  <aside class="takeaways" aria-labelledby="takeaways-label">
+    <p class="label" id="takeaways-label">Key takeaways</p>
+    <ul>
+      <li>First takeaway, one line, with its number or specific.</li>
+    </ul>
+  </aside>
 
-  <blockquote>
-    <p>The one thing a skimmer must not miss.</p>
-  </blockquote>
+  <!-- SLOT: CONTENTS - one link per h2 section below, each pointing at that
+       section's id. Fill it after writing the body, from the headings you
+       actually wrote. The script at the end rebuilds it from the rendered
+       sections, so a drifted entry self-heals on screen; this static list is
+       what a reader without scripts sees. Delete the nav for a document a
+       reader can scroll in one screen. -->
+  <nav class="toc" aria-labelledby="toc-label">
+    <p class="label" id="toc-label">Contents</p>
+    <ol>
+      <li><a href="#s1">First section</a></li>
+      <li><a href="#s2">Second section</a></li>
+      <li><a href="#open-questions">Open questions</a></li>
+    </ol>
+  </nav>
 
-  <h2>Second section</h2>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Column</th><th>Column</th></tr></thead>
-      <tbody><tr><td>Value</td><td>Value</td></tr></tbody>
-    </table>
-  </div>
+  <!-- SLOT: BODY - the document itself. One <section> per h2 a reader can
+       scan, each with an id the contents list points at; short paragraphs,
+       lists where structure helps, and a blockquote for the one callout a
+       skimmer must not miss. Cut any scaffolding below that this document
+       does not need. -->
+  <section id="s1">
+    <h2>First section</h2>
+    <p>Short paragraphs a reader can scan.</p>
+    <blockquote>
+      <p>The one thing a skimmer must not miss.</p>
+    </blockquote>
+  </section>
 
-  <section class="open-questions">
+  <section id="s2">
+    <h2>Second section</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Column</th><th scope="col" class="num">Value</th></tr></thead>
+        <tbody><tr><td>Row</td><td class="num">0</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="open-questions" id="open-questions">
     <h2>Open questions</h2>
     <!-- SLOT: OPEN_QUESTIONS - every unresolved item with a named owner.
          Delete the whole section when there are none. -->
@@ -227,5 +349,31 @@
   </section>
 
 </main>
+
+<script>
+  /* Rebuild the contents list from the sections actually present, so every
+     entry matches a real heading and its anchor resolves. The static list
+     above stands wherever scripts do not run. */
+  (() => {
+    'use strict';
+    const list = document.querySelector('nav.toc ol');
+    if (!list) return;
+    const sections = [...document.querySelectorAll('main.page > section')];
+    const heads = sections.map(section => section.querySelector(':scope > h2'));
+    /* A partial match would drop entries the static list has: never degrade
+       below the static fallback. */
+    if (!sections.length || heads.some(head => !head)) return;
+    list.replaceChildren();
+    sections.forEach((section, index) => {
+      if (!section.id) section.id = `auto-s${index + 1}`;
+      const link = document.createElement('a');
+      link.href = `#${section.id}`;
+      link.textContent = heads[index].textContent;
+      const item = document.createElement('li');
+      item.append(link);
+      list.append(item);
+    });
+  })();
+</script>
 </body>
 </html>

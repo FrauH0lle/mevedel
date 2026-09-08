@@ -14,6 +14,11 @@
 (require 'mevedel-transcript-audit)
 (require 'mevedel-utilities)
 
+;; `mevedel-ptc-interpreter'
+(declare-function mevedel-ptc-state-direct-tool "mevedel-ptc-interpreter" (state))
+(autoload 'mevedel-ptc-close "mevedel-ptc-interpreter")
+(autoload 'mevedel-ptc-start "mevedel-ptc-interpreter")
+
 ;; `mevedel-tool-media'
 (declare-function mevedel-tool-media-extract
                   "mevedel-tool-media"
@@ -1597,10 +1602,26 @@ assistant turn."
               (format "; path %s" path)
             "")))
 
+(defun mevedel-transcript--instruction-tool-p (form)
+  "Return non-nil if transcript call FORM delivers a Skill instruction body.
+Interpret no guest code.  Validate a ToolCall expression using the closed
+parser so quoted names or composed results are not mistaken for instructions."
+  (or (equal (plist-get form :name) "Skill")
+      (and (equal (plist-get form :name) "ToolCall")
+           (condition-case nil
+               (let ((state (mevedel-ptc-start
+                             (plist-get (plist-get form :args) :expression)
+                             '("Skill") '("Skill"))))
+                 (unwind-protect
+                     (equal "Skill" (mevedel-ptc-state-direct-tool state))
+                   (mevedel-ptc-close state)))
+             (error nil)))))
+
 (defun mevedel-transcript--summary-tool-parts
     (text cap tool-results-dir tool-id)
   "Return neutral call/result evidence parts for tool TEXT.
-CAP bounds retained result characters.  TOOL-RESULTS-DIR and TOOL-ID resolve
+CAP bounds ordinary result characters; Skill instruction results stay complete.
+TOOL-RESULTS-DIR and TOOL-ID resolve
 trusted native media metadata without returning payload bytes."
   (let* ((extracted
           (mevedel-tool-media-extract
@@ -1625,7 +1646,10 @@ trusted native media metadata without returning payload bytes."
                             (substring visible form-end
                                        (or close (length visible))))))
                 (setq result
-                      (if (> (length body) cap)
+                      ;; Skill results carry authored guidance, also after
+                      ;; cold restore has lost the live invocation records.
+                      (if (and (not (mevedel-transcript--instruction-tool-p form))
+                               (> (length body) cap))
                           (concat
                            (substring body 0 cap)
                            (mevedel-transcript--summary-truncation-marker
@@ -1651,7 +1675,8 @@ trusted native media metadata without returning payload bytes."
   "Project selected transcript RANGES into frozen neutral evidence.
 
 RANGES is an ordered list of buffer position conses.  TOOL-OUTPUT-MAX bounds
-each tool result while preserving readable call metadata.  TOOL-RESULTS-DIR
+ordinary tool results while preserving readable call metadata.  Skill results
+retain their complete instruction text as evidence.  TOOL-RESULTS-DIR
 allows native media references to resolve to textual kind, MIME, and path
 placeholders.  SKILL-PROVENANCE is the already selected list of prior skill
 invocation descriptions."
@@ -1674,10 +1699,17 @@ invocation descriptions."
           (setq start (max (car range) start)
                 end (min (cdr range) end))
           (unless (or (>= start end)
-                      (memq type '(ignored render-data)))
+                      (eq type 'render-data))
             (let ((text (buffer-substring start end)))
               (unless (string-blank-p (substring-no-properties text))
                 (pcase type
+                  ('ignored
+                   (dolist (record (mevedel-transcript-audit-records
+                                    text 'injected-reminders))
+                     (dolist (entry (plist-get record :items))
+                       (push (mevedel-transcript--summary-evidence-item
+                              "system-reminder" (plist-get entry :body))
+                             items))))
                   ('tool
                    (pcase-let
                        ((`(,call ,result)

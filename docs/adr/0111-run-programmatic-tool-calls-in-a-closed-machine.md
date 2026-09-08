@@ -3,15 +3,15 @@
 Status: accepted
 
 Mevedel exposes programmatic tool calling as one hybrid model tool named
-`ToolScript`. The name is model-facing prompt surface, so it states what the
+`ToolCall`. The name is model-facing prompt surface, so it states what the
 tool does rather than abbreviating it; the original `PTC` acronym survives only
 as the internal `mevedel-ptc-*` namespace and the `ptc-primitives` skill key.
-Its JSON `script` argument runs in a fresh, in-process explicit
+Its JSON `expression` argument runs in a fresh, in-process explicit
 continuation machine, never through host `eval` or `macroexpand-all`. Guest
 text is read into a private obarray. Special forms, syntax transformers, and
 pure primitives are closed hand-audited tables; operator resolution precedes
 argument evaluation, and a static preflight walks the parsed script before
-execution, reporting every unknown operator in one error with nearest-match
+execution, reporting statically visible unknown operators in one error with nearest-match
 suggestions and validating literal regexps. Step, time, input, expansion,
 tool-call, operand, result, numeric, regexp, and retained-value budgets keep
 the guest bounded. Atomic operand accounting counts each use of shared
@@ -46,7 +46,7 @@ common path. Provider-only reminders, nudges, persistence banners, Goal
 warnings, and transcript side channels are applied only by the provider
 consumer. Each child carries source `ptc` and identity `ENVELOPE/N`; the model
 receives only the script's final value on ordinary success, while the settled
-ToolScript row owns elapsed time, output disposition, and the ordered child
+ToolCall row owns elapsed time, output disposition, and the ordered child
 audit. Hooks, permission logs, cancellation, and telemetry retain the same
 parent/child identity. Full child output is user-visible inside that audit but
 does not enter provider history. That audit is presented as one collapsible row
@@ -54,21 +54,37 @@ per nested call, each rendered by its own tool's renderer: a single flat body
 could carry only one fontification mode and duplicated every child result three
 ways (preview, full output, and the returned value).
 
-The per-request ToolScript description lists the effective active and deferred
-callable roster. Direct calls and ToolScript remain available together.
+Amended 2026-09-07 after provider cache measurements: ToolCall has a static
+description, with contracts retrieved through ToolSearch. Native schema loading
+has been removed; the role's native core remains fixed during discovery and
+invocation. A direct expression returns the tool's result/media and renders as
+that tool. Composed programs retain the guest final-value and audit semantics.
+Instruction and interaction tools may require standalone calls. Required hook
+context and repair feedback survive composition. See the tool delivery contract
+in [tools.md](../tools.md).
+
+The same lifecycle measurements exposed an additional avoidable prefix change:
+an ephemeral generic ToolSearch/ToolCall reminder preceded each worker task,
+then disappeared when gptel reconstructed its history. This repeated guidance
+already present in the native descriptions. The reminder and its durable
+constructor recipes are removed; discovery remains in the native tool
+contracts, with result-specific recovery and optional path-skill notices at
+their existing seams. Persisted agent templates containing the removed recipes
+are rejected under the project's no-compatibility policy; start fresh agents.
+
 `parallel` and `parallel-map` are the only concurrency forms: each entry is one
 direct tool call, the host owns a small concurrency cap, and joined results
-preserve source order. ToolScript was initially root-session-only; that
+preserve source order. The original caller was root-session-only; that
 restriction is lifted (amended 2026-08-25). What protected it was never the
 guest machine — it was two host seams: agent FSMs lacked the effective-roster
 description handler, and an agent buffer resolves to the parent session, so an
 agent-run script would have checkpointed into the parent sidecar and recovery
 would have reconciled the interrupted row into the root transcript. Agent FSMs
-now run the description handler, and the driver skips the durable envelope
+use their own callable catalog, and the driver skips the durable envelope
 checkpoint when an agent invocation owns the buffer; a restarted agent script
 settles through the agent's interrupted-turn handling. Retained agents are
 exactly where multi-call orchestration pays off, so the built-in roles declare
-ToolScript directly. Ordinary child failures are guest `(:error MESSAGE)`
+ToolCall directly. Ordinary child failures are guest `(:error MESSAGE)`
 values. Permission denial aborts the script and reports bounded completed work;
 user cancellation interrupts the envelope. A denial cancels sibling pipeline
 continuations where possible, and synchronous completions are admitted in
@@ -97,7 +113,7 @@ unusable inside a script, and recording the access would poison the
 conversation's later Reads with content that never entered provider history.
 
 This rejects native Elisp evaluation, host macro expansion, property-scraped
-primitives, a JavaScript runtime, virtual transcript rows, ToolScript-only
+primitives, a JavaScript runtime, virtual transcript rows, ToolCall-only
 modes, futures, resumable cells, guest notifications, cross-call storage, and
 guest media-emission helpers.
 
@@ -115,3 +131,10 @@ tool output, so their boundary has to hold on every platform without a probe.
 The interpreter's does. Child media references remain in the user-visible
 audit with payload bytes removed. Those broader mechanisms add lifecycle or
 trust boundaries that the measured orchestration use case does not require.
+
+The replacement review exposed a limit in the preflight claim: a runtime macro
+can construct a prohibited standalone call after an earlier authorized tool.
+We retain the language and its existing no-rollback semantics. Static and
+literal-indirect violations fail before execution; computed calls fail before
+the prohibited tool dispatches. Direct classification requires provably pure
+arguments, so an indirect nested call cannot prematurely settle the envelope.

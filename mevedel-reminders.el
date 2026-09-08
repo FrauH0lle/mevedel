@@ -15,6 +15,7 @@
 
 ;;; Code:
 
+
 (require 'cl-lib)
 (require 'mevedel-structs)
 
@@ -31,19 +32,12 @@
                   (backend prompt-list))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
-;; `imenu'
-(declare-function imenu--make-index-alist "imenu" (&optional noerror))
-(defvar imenu--index-alist)
-(autoload 'imenu--make-index-alist "imenu")
-
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-agent
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-deferred-expired
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-deferred-set
+(declare-function mevedel-agent-invocation-tool-catalog
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-data-buffer
@@ -52,8 +46,6 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-runtime-settled-p
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-set-deferred-expired
-                  "mevedel-agents" (invocation value))
 (declare-function mevedel-agent-invocation-turn-count
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-max-turns "mevedel-agents" (agent) t)
@@ -165,14 +157,6 @@
                   (workspace))
 (declare-function mevedel-workspace-root "mevedel-workspace" (workspace) t)
 
-;; `treesit'
-(declare-function treesit-available-p "treesit" ())
-(declare-function treesit-parser-list "treesit" (&optional buffer language))
-
-;; `xref'
-(declare-function xref-find-backend "xref" ())
-(defvar tags-file-name)
-(defvar tags-table-list)
 
 ;; Current prompt-transform context.
 (defvar mevedel-reminders--current-chat-buffer nil
@@ -203,7 +187,8 @@ for main chat, agent-specific context for sub-agents) and returns
 non-nil when the reminder should fire on the current turn.  CONTENT is
 called with the same context object and returns either the reminder body
 string or a plist with `:body' and an optional `:commit' thunk, which
-runs once the payload carrying the body reaches the request.
+runs once the payload reaches the request.  A nil body stages only the
+commit, for a silent acknowledgement of context already in the prompt.
 
 INTERVAL controls firing frequency:
   - nil        - fire every turn the trigger returns non-nil
@@ -235,23 +220,6 @@ only when a frozen agent template must survive a cold session resume."
      mevedel-reminders-make-agent-listing-delta no-args)
     (max-turns-warning mevedel-reminders-make-max-turns-warning ratio)
     (edited-file mevedel-reminders-make-edited-file count)
-    (xref-available mevedel-reminders-make-xref-available no-args)
-    (imenu-available mevedel-reminders-make-imenu-available no-args)
-    (treesitter-available
-     mevedel-reminders-make-treesitter-available no-args)
-    (elisp-introspection-available
-     mevedel-reminders-make-elisp-introspection-available no-args)
-    (deferred-tools-roster
-     mevedel-reminders-make-deferred-tools-roster no-args)
-    (deferred-tools-expired
-     mevedel-reminders-make-deferred-tools-expired no-args)
-    (agent-deferred-tools-roster
-     mevedel-reminders-make-agent-deferred-tools-roster no-args)
-    (agent-deferred-tools-expired
-     mevedel-reminders-make-agent-deferred-tools-expired no-args)
-    (verifier-read-only
-     mevedel-reminders-make-verifier-read-only no-args)
-    (reviewer-read-only mevedel-reminders-make-reviewer-read-only no-args)
     (task-nudge mevedel-reminders-make-task-nudge interval)
     (user-revised-patch mevedel-reminders-make-user-revised-patch text)
     (verification-suggestion
@@ -434,7 +402,7 @@ interval it fires once enough turns have passed since the last fire."
 (defun mevedel-reminders--entry-label (type)
   "Return the display label for entry TYPE.
 TYPE is a reminder type symbol or a cons turn-event key such as
-\(specialist . read)."
+\(hook . post-tool)."
   (if (consp type)
       (format "%s:%s" (car type) (cdr type))
     (format "%s" type)))
@@ -461,8 +429,9 @@ with `:entries' in reminder order, each (:type TYPE :body BODY), and
                (body (if (stringp result) result (plist-get result :body)))
                (commit (and (not (stringp result))
                             (plist-get result :commit))))
-          (push (list :type (mevedel-reminder-type reminder) :body body)
-                entries)
+          (when body
+            (push (list :type (mevedel-reminder-type reminder) :body body)
+                  entries))
           (when commit (push commit commits))
           (push (lambda ()
                   (setf (mevedel-reminder-last-fired reminder) turn-count))
@@ -615,33 +584,9 @@ The queue is not cleared here: dequeueing is the last of the returned
                    (with-current-buffer buffer
                      (setq mevedel-reminders--turn-events nil)))))))))))))
 
-(defvar mevedel-reminders--record-body-limit 16384
-  "Byte cap per reminder body stored in the hidden injection record.
-Mention expansions can carry whole file contents; the record exists for
-inspection, not archival, so oversized bodies are truncated.")
-
 (defun mevedel-reminders--injection-record (entries phase)
-  "Return the hidden audit record for injected ENTRIES in PHASE.
-PHASE is `turn-start' or `mid-turn'.  Bodies are capped at
-`mevedel-reminders--record-body-limit'."
-  (list :type 'injected-reminders
-        :phase phase
-        :items
-        (mapcar
-         (lambda (entry)
-           (let ((body (plist-get entry :body)))
-             (list :type (plist-get entry :type)
-                   :body (if (> (string-bytes body)
-                                mevedel-reminders--record-body-limit)
-                             (concat
-                              (decode-coding-string
-                               (string-limit
-                                body mevedel-reminders--record-body-limit
-                                nil 'utf-8-unix)
-                               'utf-8-unix)
-                              "\n[... truncated for record]")
-                           body))))
-         entries)))
+  "Return the complete delivered reminder record for ENTRIES in PHASE."
+  (list :type 'injected-reminders :phase phase :items (copy-tree entries)))
 
 (defun mevedel-reminders--write-injection-record (info buffer entries phase)
   "Record injected ENTRIES for PHASE as hidden text in BUFFER.
@@ -649,20 +594,21 @@ PHASE is `turn-start' or `mid-turn'.  Bodies are capped at
 `gptel--inject-prompt' mutates the realized request payload without
 touching the data buffer, so the injected blocks would otherwise leave
 no trace.  The record is a hook-audit side-channel block: invisible,
-never sent to a provider, rendered by the view as a collapsed row.
+decoded for later provider requests and rendered as a collapsed view row.
 INFO is the request's fsm info; insertion happens at its active
 response marker so streamed output continues after the record.  A
-missing marker skips the record rather than corrupting the transcript."
+missing marker signals rather than committing unrecorded guidance."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (when-let* ((marker (mevedel--active-response-marker info buffer)))
+      (if-let* ((marker (mevedel--active-response-marker info buffer)))
         (let ((inhibit-read-only t))
           (mevedel--split-open-reasoning-before-user-input info)
           (save-excursion
             (goto-char marker)
             (insert (mevedel--format-hook-audit-record
                      (mevedel-reminders--injection-record entries phase)))
-            (set-marker marker (point))))))))
+            (set-marker marker (point))))
+        (error "Missing reminder transcript insertion marker")))))
 
 (defun mevedel-reminders--handle-inject (fsm)
   "Inject staged and same-turn reminders into FSM's request payload.
@@ -675,11 +621,8 @@ for the next turn."
          (data (plist-get info :data))
          (initial (plist-get info :mevedel-reminder-entries))
          (staged-commits (plist-get info :mevedel-reminder-commits))
-         ;; Before the request's first WAIT the last message is the
-         ;; user's prompt, so blocks may inject in front of it.  At a
-         ;; later WAIT the last message carries tool results, and a
-         ;; message injected before it would split the tool call from
-         ;; its result; everything must append instead.
+         ;; Delivery and its durable record both follow the current prompt
+         ;; or complete tool results.  Never split calls from their results.
          (turn-start (not (plist-get info :mevedel-reminders-wait-seen))))
     (when (and data (buffer-live-p buffer))
       (let* ((events (mevedel-reminders--stage-turn-events buffer))
@@ -695,11 +638,16 @@ for the next turn."
                                        (mevedel-reminders-format-block
                                         (plist-get entry :body)))
                                      entries "\n")))))))
-            (gptel--inject-prompt
-             backend data message (and initial turn-start -1))
-            (with-demoted-errors "mevedel: injection record failed: %S"
-              (mevedel-reminders--write-injection-record
-               info buffer entries (if turn-start 'turn-start 'mid-turn)))
+            (let ((previous (copy-sequence data)))
+              (condition-case err
+                  (progn
+                    (gptel--inject-prompt backend data message)
+                    (mevedel-reminders--write-injection-record
+                     info buffer entries (if turn-start 'turn-start 'mid-turn)))
+                (error
+                 (setcar data (car previous))
+                 (setcdr data (cdr previous))
+                 (signal (car err) (cdr err)))))
             (dolist (commit (plist-get events :commits))
               (with-demoted-errors "mevedel: reminder commit failed: %S"
                 (funcall commit)))))
@@ -1330,346 +1278,6 @@ workspace file cache refuses those paths (see
      :interval nil)))
 
 
-;;
-;;; Specialist tool availability
-
-(defconst mevedel-reminders--xref-tool-names
-  '("XrefReferences" "XrefDefinitions")
-  "Tool names that provide xref-backed code navigation.")
-
-(defconst mevedel-reminders--imenu-tool-names
-  '("Imenu")
-  "Tool names that provide file-local symbol outlines.")
-
-(defconst mevedel-reminders--treesitter-tool-names
-  '("Treesitter")
-  "Tool names that provide syntax-tree inspection.")
-
-(defconst mevedel-reminders--elisp-introspection-tool-names
-  '("function_source" "variable_source" "function_documentation"
-    "variable_documentation" "library_source" "manual_node_contents"
-    "symbol_manual_section")
-  "Routine Emacs Lisp introspection tools safe to recommend.
-`variable_value' is intentionally omitted because values can contain
-sensitive runtime state.")
-
-(defun mevedel-reminders--deferred-tool-name-p (session names)
-  "Return non-nil when SESSION has any deferred tool named in NAMES."
-  (cl-some (lambda (entry)
-             (member (cadr (car entry)) names))
-           (and (mevedel-session-p session)
-                (mevedel-session-deferred-set session))))
-
-(defun mevedel-reminders--loaded-tool-name-p (session names)
-  "Return non-nil when SESSION has any currently injected tool named in NAMES."
-  (cl-some (lambda (entry)
-             (member (car entry) names))
-           (and (mevedel-session-p session)
-                (mevedel-session-deferred-injected session))))
-
-(defun mevedel-reminders--tool-search-sentence (session names query)
-  "Return a ToolSearch sentence for SESSION NAMES with QUERY."
-  (when (mevedel-reminders--deferred-tool-name-p session names)
-    (format " If the tool is not callable yet, use `ToolSearch(query=\"%s\", load=true)'; after ToolSearch returns, call the loaded tool in your next tool call."
-            query)))
-
-(defun mevedel-reminders--tags-table-available-p ()
-  "Return non-nil when an etags backend has a readable tags table."
-  (or (and (boundp 'tags-file-name)
-           tags-file-name
-           (file-readable-p tags-file-name))
-      (and (boundp 'tags-table-list)
-           (cl-some (lambda (path)
-                      (and (stringp path) (file-readable-p path)))
-                    tags-table-list))))
-
-(defun mevedel-reminders--xref-backend-kind (backend)
-  "Return a coarse symbol describing XREF BACKEND."
-  (let ((name (downcase (format "%S" backend))))
-    (cond
-     ((or (eq backend 'eglot) (string-match-p "eglot" name)) 'eglot)
-     ((or (eq backend 'lsp) (string-match-p "lsp" name)) 'lsp)
-     ((or (eq backend 'etags) (string-match-p "etags" name)) 'etags)
-     ((or (eq backend 'elisp) (string-match-p "elisp" name)) 'elisp)
-     (backend 'other))))
-
-(defun mevedel-reminders--xref-available-in-buffer-p ()
-  "Return non-nil when current buffer has a useful xref backend."
-  (condition-case nil
-      (let ((kind (mevedel-reminders--xref-backend-kind
-                   (xref-find-backend))))
-        (pcase kind
-          ((or 'eglot 'lsp 'elisp) t)
-          ('etags (mevedel-reminders--tags-table-available-p))
-          (_ nil)))
-    (error nil)))
-
-(defun mevedel-reminders--imenu-available-in-buffer-p ()
-  "Return non-nil when current buffer exposes a non-empty Imenu index."
-  (condition-case nil
-      (progn
-        (imenu--make-index-alist t)
-        (cl-some (lambda (item)
-                   (and (consp item)
-                        (stringp (car item))
-                        (not (string-prefix-p "*" (car item)))))
-                 imenu--index-alist))
-    (error nil)))
-
-(defun mevedel-reminders--treesitter-available-in-buffer-p ()
-  "Return non-nil when current buffer has an active tree-sitter parser."
-  (and (fboundp 'treesit-available-p)
-       (treesit-available-p)
-       (fboundp 'treesit-parser-list)
-       (condition-case nil
-           (treesit-parser-list)
-         (error nil))))
-
-(defun mevedel-reminders--elisp-buffer-p ()
-  "Return non-nil when current buffer is an Emacs Lisp buffer."
-  (derived-mode-p 'emacs-lisp-mode 'lisp-interaction-mode))
-
-(defun mevedel-reminders-specialist-capabilities (session)
-  "Return plist of specialist capabilities visible for SESSION.
-Keys are `:xref', `:imenu', `:treesitter', and `:elisp-introspection'.
-Only live workspace buffers are inspected; this function never opens
-files solely to probe editor integrations."
-  (let (xref imenu treesitter elisp-buffer)
-    (dolist (buf (mevedel-workspace-file-buffers
-                  (mevedel-session-workspace session)))
-      (with-current-buffer buf
-        (setq xref (or xref (mevedel-reminders--xref-available-in-buffer-p)))
-        (setq imenu (or imenu (mevedel-reminders--imenu-available-in-buffer-p)))
-        (setq treesitter
-              (or treesitter
-                  (mevedel-reminders--treesitter-available-in-buffer-p)))
-        (setq elisp-buffer (or elisp-buffer (mevedel-reminders--elisp-buffer-p)))))
-    (list :xref xref
-          :imenu imenu
-          :treesitter treesitter
-          :elisp-introspection
-          (and elisp-buffer
-               (or (mevedel-reminders--deferred-tool-name-p
-                    session mevedel-reminders--elisp-introspection-tool-names)
-                   (mevedel-reminders--loaded-tool-name-p
-                    session mevedel-reminders--elisp-introspection-tool-names))))))
-
-(defun mevedel-reminders-make-xref-available ()
-  "Create the one-shot `xref-available' reminder."
-  (mevedel-reminder-create
-   :type 'xref-available
-   :recipe '(xref-available)
-   :trigger (lambda (session)
-              (plist-get (mevedel-reminders-specialist-capabilities session)
-                         :xref))
-   :content (lambda (session)
-              (concat
-               "Symbol-aware xref is available for workspace buffers. Prefer `XrefReferences' for precise symbol references/callers and `XrefDefinitions' for definitions or name discovery instead of `Grep' when working with code symbols."
-               (or (mevedel-reminders--tool-search-sentence
-                    session mevedel-reminders--xref-tool-names "xref")
-                   "")))
-   :interval 'one-shot))
-
-(defun mevedel-reminders-make-imenu-available ()
-  "Create the one-shot `imenu-available' reminder."
-  (mevedel-reminder-create
-   :type 'imenu-available
-   :recipe '(imenu-available)
-   :trigger (lambda (session)
-              (plist-get (mevedel-reminders-specialist-capabilities session)
-                         :imenu))
-   :content (lambda (session)
-              (concat
-               "Imenu symbol outlines are available for workspace buffers. Prefer `Imenu' when you need the functions, classes, variables, or sections in one known code file instead of reading or grepping the whole file for structure."
-               (or (mevedel-reminders--tool-search-sentence
-                    session mevedel-reminders--imenu-tool-names "imenu")
-                   "")))
-   :interval 'one-shot))
-
-(defun mevedel-reminders-make-treesitter-available ()
-  "Create the one-shot `treesitter-available' reminder."
-  (mevedel-reminder-create
-   :type 'treesitter-available
-   :recipe '(treesitter-available)
-   :trigger (lambda (session)
-              (plist-get (mevedel-reminders-specialist-capabilities session)
-                         :treesitter))
-   :content (lambda (session)
-              (concat
-               "Tree-sitter syntax data is available for workspace buffers. Prefer `Treesitter' for syntax-node, AST, parent/child, or structural code questions where text search would be imprecise."
-               (or (mevedel-reminders--tool-search-sentence
-                    session mevedel-reminders--treesitter-tool-names
-                    "treesitter")
-                   "")))
-   :interval 'one-shot))
-
-(defun mevedel-reminders-make-elisp-introspection-available ()
-  "Create the one-shot `elisp-introspection-available' reminder."
-  (mevedel-reminder-create
-   :type 'elisp-introspection-available
-   :recipe '(elisp-introspection-available)
-   :trigger (lambda (session)
-              (plist-get (mevedel-reminders-specialist-capabilities session)
-                         :elisp-introspection))
-   :content (lambda (session)
-              (concat
-               "Emacs Lisp introspection tools are available. For loaded Emacs Lisp state, prefer `function_source', `variable_source', documentation/manual tools, and `library_source' over static file reads when you need what is actually loaded. Do not use `variable_value' routinely; it can expose sensitive runtime state."
-               (or (mevedel-reminders--tool-search-sentence
-                    session mevedel-reminders--elisp-introspection-tool-names
-                    "elisp")
-                   "")))
-   :interval 'one-shot))
-
-
-;;
-;;; Deferred tools integration
-
-(defun mevedel-reminders--format-deferred-roster (entries)
-  "Format ENTRIES as a roster reminder body listing discoverable tools.
-ENTRIES is an alist like `mevedel-session-deferred-set' -- each
-element is a cons ((CATEGORY NAME) . SUMMARY).  SUMMARY is an
-optional ultra-short one-liner the tool definition supplied via
-`:summary'.  Tools without a summary list as just \"- NAME\" so
-the reminder stays concise; some wrapped tools (gptel introspection
-helpers, web tools) carry multi-paragraph docstrings as their
-:description, which would otherwise dominate the reminder body."
-  (concat "The following tools are discoverable via lazy loading but \
-are not currently callable. Do not call these tool names directly. \
-Call `ToolSearch' (query=EXACT_NAME_OR_KEYWORDS, load=true) first; \
-after ToolSearch reports the tool loaded, call the newly available \
-tool on the next model turn. Loaded tools stay available for a few \
-turns; calling them resets the timer.\n\n"
-          (mapconcat
-           (lambda (entry)
-             (let ((name (cadr (car entry)))
-                   (summary (cdr entry)))
-               (if (and (stringp summary) (not (string-empty-p summary)))
-                   (format "- %s: %s" name summary)
-                 (format "- %s" name))))
-           entries "\n")))
-
-(defun mevedel-reminders-make-deferred-tools-roster ()
-  "Create the `deferred-tools-roster' reminder.
-
-Fires once per session (interval `one-shot') when the session has a
-non-empty deferred tool set.  Its body lists every tool the preset
-declared as deferred, along with a usage hint for ToolSearch, so the
-model learns which capabilities it can lazily load."
-  (mevedel-reminder-create
-   :type 'deferred-tools-roster
-   :recipe '(deferred-tools-roster)
-   :trigger (lambda (session)
-              (and (mevedel-session-deferred-set session) t))
-   :content (lambda (session)
-              (mevedel-reminders--format-deferred-roster
-               (mevedel-session-deferred-set session)))
-   :interval 'one-shot))
-
-(defun mevedel-reminders--format-deferred-expired (names)
-  "Format NAMES as a reminder body announcing expired deferred tools."
-  (concat "The following deferred tools have expired and are no \
-longer callable: "
-          (mapconcat #'identity names ", ")
-          ". Do not call these tool names directly. Call \
-`ToolSearch' (query=EXACT_NAME_OR_KEYWORDS, load=true) to re-activate \
-them before using them again."))
-
-(defun mevedel-reminders-make-deferred-tools-expired ()
-  "Create the `deferred-tools-expired' reminder.
-
-Fires on turns where the WAIT handler evicted one or more deferred
-tools on the previous turn.  Cites the expired tool names and tells
-the model how to recover them via ToolSearch.  Fires every turn there
-is something to report; consumes `deferred-expired' as a side effect
-so the same names are not re-reported."
-  (mevedel-reminder-create
-   :type 'deferred-tools-expired
-   :recipe '(deferred-tools-expired)
-   :trigger (lambda (session)
-              (and (mevedel-session-deferred-expired session) t))
-   :content (lambda (session)
-              (let ((names (mevedel-session-deferred-expired session)))
-                (list :body (mevedel-reminders--format-deferred-expired names)
-                      :commit
-                      (lambda ()
-                        (setf (mevedel-session-deferred-expired session)
-                              nil)))))
-   :interval nil))
-
-(defun mevedel-reminders-make-agent-deferred-tools-roster ()
-  "Create the agent-scoped `deferred-tools-roster' reminder.
-
-Mirror of `mevedel-reminders-make-deferred-tools-roster' but reads
-from a `mevedel-agent-invocation' context instead of a session.
-Added by `mevedel-agent-invocation-create' to any agent whose
-resolved `:tools' include deferred entries."
-  (mevedel-reminder-create
-   :type 'deferred-tools-roster
-   :recipe '(agent-deferred-tools-roster)
-   :trigger (lambda (inv)
-              (and (mevedel-agent-invocation-deferred-set inv) t))
-   :content (lambda (inv)
-              (mevedel-reminders--format-deferred-roster
-               (mevedel-agent-invocation-deferred-set inv)))
-   :interval 'one-shot))
-
-(defun mevedel-reminders-make-agent-deferred-tools-expired ()
-  "Create the agent-scoped `deferred-tools-expired' reminder.
-
-Mirror of `mevedel-reminders-make-deferred-tools-expired' but reads
-from a `mevedel-agent-invocation' context.  Consumes the invocation's
-`deferred-expired' slot so the same names are not re-reported."
-  (mevedel-reminder-create
-   :type 'deferred-tools-expired
-   :recipe '(agent-deferred-tools-expired)
-   :trigger (lambda (inv)
-              (and (mevedel-agent-invocation-deferred-expired inv) t))
-   :content (lambda (inv)
-              (let ((names (mevedel-agent-invocation-deferred-expired inv)))
-                (list :body (mevedel-reminders--format-deferred-expired names)
-                      :commit
-                      (lambda ()
-                        (mevedel-agent-invocation-set-deferred-expired
-                         inv nil)))))
-   :interval nil))
-
-(defun mevedel-reminders-make-verifier-read-only ()
-  "Create the every-turn critical read-only reminder for the verifier agent.
-
-Reinforces that the verifier CANNOT edit, write, or create files and
-that its only deliverable is a report.  Fires every turn so the
-model cannot drift into implementation mode between messages."
-  (mevedel-reminder-create
-   :type 'verifier-read-only
-   :recipe '(verifier-read-only)
-   :trigger (lambda (_ctx) t)
-   :content (lambda (_ctx)
-              "CRITICAL: This is a VERIFICATION-ONLY task. You CANNOT edit, \
-write, or create files. Your job is to try to BREAK the \
-implementation, not confirm it works. Report findings — do not patch \
-them. You MUST end with exactly one of: VERDICT: PASS, VERDICT: FAIL, \
-or VERDICT: PARTIAL. PARTIAL is only for environmental limitations, \
-not unfinished feasible checks.")
-   :interval nil))
-
-(defun mevedel-reminders-make-reviewer-read-only ()
-  "Create the every-turn critical read-only reminder for the reviewer agent.
-
-Reinforces that the reviewer CANNOT edit, write, or create files and
-that its only deliverable is a strict JSON review report.  Fires every
-turn so the model cannot drift into implementation mode between
-messages."
-  (mevedel-reminder-create
-   :type 'reviewer-read-only
-   :recipe '(reviewer-read-only)
-   :trigger (lambda (_ctx) t)
-   :content (lambda (_ctx)
-              "CRITICAL: This is a REVIEW-ONLY task. You CANNOT edit, \
-write, or create files. Inspect the code and report review findings — \
-do not patch them. Return only the strict JSON review object requested \
-by the reviewer prompt, with findings and overall correctness fields.")
-   :interval nil))
-
 (defun mevedel-reminders-make-task-nudge (&optional interval)
   "Create the task-nudge reminder.
 
@@ -1701,20 +1309,25 @@ been written for INTERVAL turns.  INTERVAL defaults to 8 turns."
    :interval nil))
 
 (defun mevedel-reminders-make-verification-suggestion ()
-  "Create the every-turn nudge to consider running the verifier.
+  "Suggest verification after a recent file modification.
 
-Fires after the main session has touched files this turn.  Reminds
-the assistant to consider spawning the verifier before declaring
-non-trivial work complete."
+Only modifications in the latest committed turn or the active turn
+qualify.  Reads and older edits do not establish implementation work.
+Delivery remains throttled to once every ten turns."
   (mevedel-reminder-create
    :type 'verification-suggestion
    :recipe '(verification-suggestion)
    :trigger (lambda (session)
               (and (mevedel-session-p session)
                    (mevedel-session-touched-files session)
-                   (> (hash-table-count
-                       (mevedel-session-touched-files session))
-                      0)))
+                   (cl-some
+                    (lambda (entry)
+                      (when-let* ((modified
+                                   (mevedel-file-interaction-modified-turn entry)))
+                        (>= modified
+                            (or (mevedel-session-turn-count session) 0))))
+                    (hash-table-values
+                     (mevedel-session-touched-files session)))))
    :content (lambda (session)
               (concat
                "Consider spawning the verifier agent before reporting \
@@ -1741,19 +1354,12 @@ reminder names its own type, so the guard needs no second list."
   (let ((existing (mapcar #'mevedel-reminder-type
                           (mevedel-session-reminders session))))
     (dolist (make (list #'mevedel-reminders-make-pending-events
-                        #'mevedel-reminders-make-date-change
                         #'mevedel-reminders-make-compaction-available
                         #'mevedel-reminders-make-token-usage
                         #'mevedel-reminders-make-agent-listing-delta
-                        #'mevedel-reminders-make-xref-available
-                        #'mevedel-reminders-make-imenu-available
-                        #'mevedel-reminders-make-treesitter-available
-                        #'mevedel-reminders-make-elisp-introspection-available
                         #'mevedel-reminders-make-mode-constraints
                         #'mevedel-reminders-make-plan-mode
                         #'mevedel-reminders-make-edited-file
-                        #'mevedel-reminders-make-deferred-tools-roster
-                        #'mevedel-reminders-make-deferred-tools-expired
                         #'mevedel-reminders-make-task-nudge
                         #'mevedel-reminders-make-verification-suggestion
                         #'mevedel-reminders-make-plan-reference

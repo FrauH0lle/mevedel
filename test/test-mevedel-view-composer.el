@@ -2794,7 +2794,6 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    :authority-mode 'pid-lock
                    :name "main"
                    :working-directory root
-                   :skills-snapshot :uninitialized
                    :turn-count 0))
          source-file
          request-data)
@@ -3885,6 +3884,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                   (gptel-make-fsm
                    :state 'TOOL
                    :info (list :buffer data-buf :backend backend :data data
+                               :position (with-current-buffer data-buf (point-marker))
                                :history '(TRET)
                                :mevedel-request-id "request-file")))
             (setq request

@@ -70,7 +70,8 @@ DATA-BUF and SOURCE-START attach each record's exact source range."
          (lambda (span)
            (let ((record (plist-get span :record)))
              (unless (and (null type)
-                          (eq (plist-get record :type) 'fork-point))
+                          (memq (plist-get record :type)
+                                '(fork-point provider-tool-batch-start provider-tool-batch)))
                (if (and (buffer-live-p data-buf) source-start)
                    (append
                     record

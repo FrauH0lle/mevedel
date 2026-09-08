@@ -277,9 +277,9 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     permission-rules resource-grants permission-mode sandbox-mode plan-mode
     directive-planning preset-name model-provider
     reasoning-effort turn-count reminders last-observed-date
-    agent-types-snapshot skills-snapshot pending-reminders
-    specialist-nudge-state deferred-set deferred-pending deferred-injected
-    deferred-used deferred-expired messages agent-registry agent-reservations
+    agent-types-snapshot pending-reminders
+    tool-catalog
+    messages agent-registry agent-reservations
     agent-root-activity agent-root-waiter agent-turn-capacity pending-steering
     pending-follow-ups pending-input-next-id pending-input-paused
     pending-input-failure-paused dropped-file-grants active-dropped-file-grants
@@ -365,16 +365,9 @@ The identity and timestamp keywords describe the new materialized child."
            :last-observed-date (mevedel-session-last-observed-date session)
            :agent-types-snapshot
            (copy-tree (mevedel-session-agent-types-snapshot session) t)
-           :skills-snapshot
-           (copy-tree (mevedel-session-skills-snapshot session) t)
            :pending-reminders nil
-           :specialist-nudge-state nil
-           :deferred-set
-           (copy-tree (mevedel-session-deferred-set session) t)
-           :deferred-pending nil
-           :deferred-injected nil
-           :deferred-used nil
-           :deferred-expired nil
+           :tool-catalog
+           (copy-tree (mevedel-session-tool-catalog session) t)
            :messages (unless fork-p
                        (copy-tree (mevedel-session-messages session) t))
            :agent-registry (unless fork-p

@@ -192,6 +192,7 @@ callers reverse it only when delivering the mailbox as FIFO."
            :description description
            :tools (copy-tree tools)
            :system-prompt system-prompt
+           :context-components (copy-sequence (mevedel-agent-context-components agent))
            :max-turns max-turns
            :reminders
            (mevedel-reminders-serialize-agent-templates
@@ -360,13 +361,18 @@ succeed after silently losing an addressable agent."
          (description (and name (plist-get agent-data :description)))
          (tools (and name (plist-get agent-data :tools)))
          (system-prompt (and name (plist-get agent-data :system-prompt)))
+         (context-components (plist-get agent-data :context-components))
          (max-turns (and name (plist-get agent-data :max-turns)))
          (reminders-data (and name (plist-get agent-data :reminders)))
          (hook-rules (and name (plist-get agent-data :hook-rules)))
          (locals-data (and (proper-list-p persisted)
                            (plist-get persisted :request-locals))))
     (unless
-        (and (stringp name) (equal name role)
+        (and (proper-list-p context-components)
+             (cl-every (lambda (entry)
+                         (memq entry mevedel-system-retained-components))
+                       context-components)
+             (stringp name) (equal name role)
              (stringp description)
              (proper-list-p tools) (mevedel--plain-data-p tools)
              (or (null system-prompt) (stringp system-prompt))
@@ -387,6 +393,7 @@ succeed after silently losing an addressable agent."
              :description description
              :tools (copy-tree tools)
              :system-prompt system-prompt
+             :context-components context-components
              :max-turns max-turns
              :reminders
              (mevedel-reminders-restore-agent-templates reminders-data)

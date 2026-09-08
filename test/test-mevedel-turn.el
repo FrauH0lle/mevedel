@@ -544,7 +544,7 @@
             (mevedel--turn-autosave fsm))
           (should (equal (list (list session chat-buf t)) saved)))
       (kill-buffer chat-buf)))
-  :doc "restores settled ToolScript checkpoints when the co-commit fails"
+  :doc "restores settled ToolCall checkpoints when the co-commit fails"
   (let* ((session
           (mevedel-session--create
            :name "failed-save"

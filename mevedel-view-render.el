@@ -1587,7 +1587,7 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
 ;;    :initially-collapsed-p BOOL)
 ;;
 ;; `:child-calls' belongs to compound tools that run other tools
-;; (ToolScript).  Each entry is a plist (:id ID :tool NAME :args PLIST :result STRING :status SYM
+;; (ToolCall).  Each entry is a plist (:id ID :tool NAME :args PLIST :result STRING :status SYM
 ;; :render-data DATA) and is rendered by that tool's own registered renderer,
 ;; so a nested Grep row gets Grep's header and `grep-mode' body.  Rows are
 ;; inserted only while the owning block is expanded, and each row is its own
@@ -1763,45 +1763,61 @@ The renderer receives RENDER-DATA as-is (possibly nil): data-driven
 renderers like the ApplyPatch summary can check for their kind
 and opt out; output-driven renderers (Grep, Bash, Read, ...) work
 straight off ARGS and RESULT without needing render-data."
-  (let* ((explicit-status
-          (and (memq (plist-get render-data :status) '(success error))
-               (plist-get render-data :status)))
-         (renderer (and tool (mevedel-tool-renderer tool)))
-         (status (mevedel-view--tool-render-status result render-data))
-         (fn (and renderer
-                  (mevedel-view--renderer-for-status renderer status))))
-    (when renderer
-      (let ((tool-label (or (and tool (mevedel-tool-name tool)) "tool")))
-        (cond
-         ((not fn)
-          (when (mevedel-view--renderer-malformed-p renderer status)
-            (mevedel--warn-once
-             (list 'view-render-renderer-uncallable tool-label)
-             "Renderer for %s is not callable for status %s"
-             tool-label status))
-          nil)
-         (t
-          (condition-case err
-              (let ((plist (funcall fn tool-label args result render-data)))
-                (cond
-                 ((null plist) nil)
-                 ((mevedel-view--rendering-plist-p plist)
-                  (if (or explicit-status (eq status 'error))
-                      (plist-put (copy-sequence plist)
-                                 :status status)
-                    plist))
-                 (t
-                  (mevedel--warn-once
-                   (list 'view-render-renderer-malformed tool-label)
-                   "Renderer for %s returned malformed plist: %S"
-                   tool-label plist)
-                  nil)))
-            (error
-             (mevedel--warn-once
-              (list 'view-render-renderer-failed tool-label)
-              "Renderer for %s failed: %s"
-              tool-label (error-message-string err))
-             nil))))))))
+  (if-let* ((name (and (equal (and tool (mevedel-tool-name tool)) "ToolCall")
+                       (plist-get render-data :direct-tool)
+                       (not (plist-get render-data :live-p))
+                       (memq (plist-get render-data :outcome)
+                             '(completed tool-error))
+                       (plist-get render-data :direct-tool)))
+            (child (car (plist-get render-data :calls)))
+            (_ (not (and (eq (plist-get render-data :status) 'error)
+                         (not (eq (plist-get child :status) 'error))))))
+      (let ((underlying (mevedel-tool-for-call name))
+            (data (plist-put (copy-sequence (plist-get child :render-data))
+                             :status (plist-get child :status))))
+        (or (mevedel-view--invoke-renderer underlying data
+                                           (plist-get child :args) result)
+            (mevedel-view--generic-tool-rendering
+             name (plist-get child :args) result nil data)))
+    (let* ((explicit-status
+            (and (memq (plist-get render-data :status) '(success error))
+		 (plist-get render-data :status)))
+           (renderer (and tool (mevedel-tool-renderer tool)))
+           (status (mevedel-view--tool-render-status result render-data))
+           (fn (and renderer
+                    (mevedel-view--renderer-for-status renderer status))))
+      (when renderer
+	(let ((tool-label (or (and tool (mevedel-tool-name tool)) "tool")))
+          (cond
+           ((not fn)
+            (when (mevedel-view--renderer-malformed-p renderer status)
+              (mevedel--warn-once
+               (list 'view-render-renderer-uncallable tool-label)
+               "Renderer for %s is not callable for status %s"
+               tool-label status))
+            nil)
+           (t
+            (condition-case err
+		(let ((plist (funcall fn tool-label args result render-data)))
+                  (cond
+                   ((null plist) nil)
+                   ((mevedel-view--rendering-plist-p plist)
+                    (if (or explicit-status (eq status 'error))
+			(plist-put (copy-sequence plist)
+                                   :status status)
+                      plist))
+                   (t
+                    (mevedel--warn-once
+                     (list 'view-render-renderer-malformed tool-label)
+                     "Renderer for %s returned malformed plist: %S"
+                     tool-label plist)
+                    nil)))
+              (error
+               (mevedel--warn-once
+		(list 'view-render-renderer-failed tool-label)
+		"Renderer for %s failed: %s"
+		tool-label (error-message-string err))
+               nil)))))))))
 
 (defun mevedel-view--tool-result-line-count (result)
   "Return the number of non-empty lines in RESULT."
@@ -3834,9 +3850,15 @@ Empty string when the turn contains only whitespace or markers."
         (insert body)
         (goto-char (point-min))
         (while (re-search-forward
-                "<hook-event[ \t\n]+name=\"\\([^\"]+\\)\">" nil t)
+                (concat "<hook-event[ \t\n]+name=\"\\([^\"]+\\)\""
+                        "\\(?: source=\"\\([^\"]*\\)\"\\)?"
+                        "\\(?: file=\"\\([^\"]*\\)\"\\)?"
+                        "\\(?: plugin=\"\\([^\"]*\\)\"\\)?>") nil t)
           (let ((event (mevedel-view--hook-context-unescape
                         (match-string 1)))
+                (source (match-string 2))
+                (source-file (match-string 3))
+                (plugin-name (match-string 4))
                 (body-start (point)))
             (when (search-forward "</hook-event>" nil t)
               (let ((event-body
@@ -3844,7 +3866,17 @@ Empty string when the turn contains only whitespace or markers."
                       (buffer-substring-no-properties
                        body-start (match-beginning 0)))))
                 (unless (string-empty-p event-body)
-                  (push (list :event event :body event-body) events)))))))
+                  (let ((entry (list :event event :body event-body)))
+                    (dolist (field (list (cons :source source)
+                                         (cons :source-file source-file)
+                                         (cons :plugin-name plugin-name)))
+                      (when (cdr field)
+                        (setq entry
+                              (plist-put
+                               entry (car field)
+                               (mevedel-view--hook-context-unescape
+                                (cdr field))))))
+                    (push entry events))))))))
       (nreverse events))))
 
 (defun mevedel-view--hook-context-events-from-text (text)
@@ -3920,10 +3952,13 @@ Empty string when the turn contains only whitespace or markers."
                       (let ((body (string-trim
                                    (format "%s" (plist-get entry :body)))))
                         (unless (string-empty-p body)
-                          (list :event (format "%s"
-                                               (or (plist-get entry :event)
-                                                   "UserPromptSubmit"))
-                                :body body)))))
+                          (let ((copy (copy-sequence entry)))
+                            (setq copy
+                                  (plist-put
+                                   copy :event
+                                   (format "%s" (or (plist-get entry :event)
+                                                    "UserPromptSubmit"))))
+                            (plist-put copy :body body))))))
                   value)))))
 
 (defun mevedel-view--format-hook-context-block (events expanded)
@@ -3938,6 +3973,13 @@ When EXPANDED is non-nil, include each event name and body."
           (let ((body (plist-get entry :body)))
             (concat
              "    " (plist-get entry :event) "\n"
+             (mapconcat
+              (lambda (field)
+                (when-let* ((value (plist-get entry (car field))))
+                  (format "    %s: %s\n" (cdr field) value)))
+              '((:source . "source") (:source-file . "file")
+                (:plugin-name . "plugin"))
+              "")
              (mapconcat (lambda (line) (concat "    " line))
                         (split-string body "\n")
                         "\n")

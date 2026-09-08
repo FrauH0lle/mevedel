@@ -30,6 +30,13 @@ by skill discovery and cockpit refresh.
 
 ## Skill flow
 
+Reading `SKILL.md` through `Read` returns source text. It does not perform
+argument substitution, dependency preparation, configured fork dispatch or
+invocation policy handling. A user can ask the model to consult textual guidance
+without invoking a workflow; that is distinct from prepared Skill execution.
+A retained instruction or marker in the transcript proves neither invocation
+nor current hook/permission state.
+
 ```mermaid
 flowchart TD
     A[Scan skill directories] --> B[Parse SKILL.md frontmatter]
@@ -52,7 +59,11 @@ flowchart TD
 
 Skills are scanned from configured user/project/managed/plugin dirs plus
 bundled skills under `skills/` when `mevedel-skills-include-bundled` is
-non-nil. The default search order is `.mevedel/skills/`,
+non-nil. The bundled `frontend` skill preserves product UI guidance outside
+the shared baseline. Its description is discoverable with the other skills;
+the body loads through `Skill(name="frontend")` or an explicit `/frontend`
+invocation, without automatically activating for every source-file read.
+The default search order is `.mevedel/skills/`,
 `.agents/skills/`, `~/.mevedel/skills/`, then `~/.agents/skills/`.
 Unique names stay unqualified. When non-plugin skills from different
 sources share a name, all colliding entries are exposed with the shortest
@@ -401,6 +412,43 @@ what the skill does and when the model should use it.
 model-side invocation by name can still run the skill subject to the
 user/model invocation gates.
 
+The host distinguishes explicit user invocation from optional discovery.
+Matching a description or a `paths` pattern does not compel a workflow.
+Prepared bodies already in context remain usable for their applicable task;
+there is no automatic one-message lifetime. User direction and authored
+applicability determine when guidance ends or is replaced. Missing or changed
+guidance must be retrieved before relying on its omitted details. This policy
+does not rewrite skill authors' instructions or grant additional authority.
+
+The retained current catalog includes enabled model-invocable skills without `paths`
+restrictions. Path-scoped skills remain outside it even after matching file
+activity: optional path notices and ListSkills deliver their discovery facts
+later, without changing the system prefix ahead of conversation history.
+ListSkills without a query includes active path-scoped skills; a query also
+searches dormant ones. Explicit invocation is independent of path activity.
+Authored configuration changes deliver a fresh retained catalog update.
+
+The model-aware roster budget shortens descriptions before omitting names.
+Its stable usage contract always advertises `ListSkills(query)`, including when
+no names fit. There is no separate budget reminder to repeat that instruction
+or consume a notice before dispatch.
+
+Path activity may expand the shared catalogue, but a notice belongs to the
+conversation that observed the path. Each Skill-capable conversation gets its
+own optional notice, even if a sibling already discovered the same skill.
+Per-skill keys preserve matches across multi-file calls. Notices acknowledge
+delivery only after the request payload exists; cancellation allows a later
+matching observation to retry. Path notices never change the shared non-path catalog. Agent delivery cannot
+acknowledge for the root or another agent. Retained catalog observations are
+acknowledged only when their trusted messages are present in the outgoing payload.
+
+The optional notice throttle lasts for a live conversation; changed name,
+source, description, or path metadata can rearm it. Compaction alone does not
+repeat these hints; fresh resumed buffers start a new throttle. ListSkills
+remains available for rediscovery. A path notice does not load the skill body
+or enforce required instructions before editing: project-wide/scoped guidance
+and explicitly invoked skills retain their separate delivery boundaries.
+
 ## Invocation
 
 Invocation role and origin are independent. Roles are `command` and
@@ -648,19 +696,19 @@ planning and review phases deny tools in the native `edit` group before skill
 allow grants are considered. Bash and Eval still follow normal permission
 policy in those phases.
 
-## ToolScript Primitives
+## ToolCall Primitives
 
-`ptc-primitives` narrows the nested tools visible to ToolScript for a command
+`ptc-primitives` narrows the nested tools visible to ToolCall for a command
 skill. Omitting the field leaves the request roster unchanged; an explicit
 empty list allows no nested tools. Stacked commands intersect their lists, so
 adding a skill can only remove authority. The result is intersected again with
-the configured ToolScript allowlist and the request's active/deferred tools; it
+the request's native and discoverable capabilities; it
 never grants or activates a tool. Instruction occurrences ignore this field
 because they do not own the consuming request. Retained agents carry
-ToolScript through their own role tools; prepared fork metadata neither grants
+ToolCall through their own role tools; prepared fork metadata neither grants
 nor narrows it, so `ptc-primitives` applies only to the request that owns the
-skill, and a child invocation's nested roster comes from the configured
-allowlist intersected with the child's own active tools.
+skill, and a child invocation's callable roster comes from its own native and
+discoverable tools. Composition admission is a separate restriction.
 
 ## Hooks
 
@@ -793,5 +841,29 @@ authors must quote or escape interpolated values correctly before using
 them inside shell scripts or elisp strings.
 
 Each invocation records a `mevedel-skill-invocation-record` on the
-session so compaction/replay can preserve the prepared body even if the
-source `SKILL.md` changes later.
+live session. Compaction includes the recorded prepared body and source
+identity as historical evidence even if `SKILL.md` changes later. The record
+does not assert that the skill is still applicable: task completion, authored
+scope, replacement, and explicit user deactivation govern its lifetime.
+The record list is not serialized in the session sidecar; cold resume relies
+on the restored transcript and retained summary. See [compaction](compaction.md)
+for evidence selection and input-size limits.
+Restored `Skill` results, including direct ToolCall invocations, retain their complete instruction text in summary
+evidence; the ordinary tool-output cap does not discard trailing obligations.
+
+Path discovery runs at the shared post-tool pipeline hook, so native and
+ToolCall child operations use the same recipient and delivery acknowledgement.
+Hook metadata retains the tool category; equal names on different servers do
+not select another tool's path extractor. Failed path attempts can also suggest
+optional guidance. A notice requires an available native Skill or an effective
+Skill capability through ToolCall.
+
+## Catalog delivery
+
+Canonical names and short purposes arrive as retained current-context updates.
+Purposes use the first sentence/line capped at 160 characters; detailed authored
+descriptions remain searchable through ListSkills, and Skill retrieves bodies.
+A stable system component owns invocation syntax, optionality and guidance
+lifetime, including when the catalog is empty. Catalog changes no longer rewrite
+the system prefix or require a separate persisted skills-delta acknowledgement.
+See [retained instruction context](architecture.md#retained-instruction-context).

@@ -438,9 +438,9 @@ fire-count and payload."
      '(:backend frozen-backend :model frozen-model :effort high))
     (should (equal '(frozen-backend . frozen-model) seen)))
 
-  :doc "keeps ToolScript in the retained-agent request snapshot"
-  (let* ((ptc (gptel-make-tool :name "ToolScript" :function #'ignore
-                                :description "ToolScript" :args nil))
+  :doc "keeps ToolCall in the retained-agent request snapshot"
+  (let* ((ptc (gptel-make-tool :name "ToolCall" :function #'ignore
+                                :description "ToolCall" :args nil))
          (read (gptel-make-tool :name "Read" :function #'ignore
                                  :description "Read" :args nil))
          (gptel-tools (list ptc read))
@@ -554,7 +554,7 @@ fire-count and payload."
           (mevedel-agent--create
            :name "freeze_dynamic"
            :description "Freeze dynamic request config"
-           :tools '((:tool "ToolScript"))
+           :tools '((:tool "ToolCall"))
            :system-prompt
            (lambda ()
              (format "%d/%s/%s/%s"
@@ -578,7 +578,7 @@ fire-count and payload."
             (mevedel-agent-configuration-request-locals configuration))))
       (should (= 1 prompt-calls))
       (should (string-prefix-p "1/frozen-backend/frozen-model/" prompt))
-      (should (string-match-p "ToolScript" prompt))
+      (should (string-match-p "ToolCall" prompt))
       (should-not (string-match-p "Read" prompt))
       (should (equal prompt (mevedel-agent-system-prompt frozen-agent)))))
 

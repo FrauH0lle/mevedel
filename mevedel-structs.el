@@ -214,14 +214,8 @@ workspace."
   reminders         ; list of active mevedel-reminder structs
   last-observed-date ; YYYY-MM-DD string last advertised to the model
   agent-types-snapshot ; alist or :uninitialized: last advertised agents
-  skills-snapshot   ; alist or :uninitialized: last advertised skill roster
   pending-reminders ; transient FIFO of model-visible reminder bodies
-  specialist-nudge-state ; transient plist: nudge family -> (:count N :turn T)
-  deferred-set      ; alist: (CATEGORY NAME) -> SHORT-DESCRIPTION
-  deferred-pending  ; list of gptel-tool structs queued for injection
-  deferred-injected ; alist: tool-name -> TTL counter
-  deferred-used     ; list of tool-name strings used during current turn
-  deferred-expired  ; list of tool-name strings expired on last turn
+  tool-catalog      ; alist: (CATEGORY NAME) -> SHORT-DESCRIPTION
   messages          ; list of inbound-message plists queued for next turn
   agent-registry    ; alist: canonical path -> retained `mevedel-agent-record'
   agent-reservations ; transient alist of unpublished agent records
@@ -274,7 +268,7 @@ workspace."
   worktree-base-commit ; full HEAD commit used to create a Worktree Fork
   prompt-index      ; alist: (segment-number . list of prompt plists) for picker
   file-snapshots    ; alist: (turn-number . file-map alist) for file-history restore
-  ptc-checkpoints   ; durable unfinished/settled ToolScript envelopes; never guest state
+  ptc-checkpoints   ; durable unfinished/settled ToolCall envelopes; never guest state
   ;; Transient cache of the committed sidecar's `:first-user-message'.  The
   ;; field never changes once a session has a first turn, and reading it back
   ;; out of the published sidecar costs a target round trip plus a SHA-256
@@ -543,7 +537,6 @@ workspace root and is kept stable for the lifetime of the session."
        'best-effort)
      :last-observed-date (format-time-string "%F")
      :agent-types-snapshot :uninitialized
-     :skills-snapshot :uninitialized
      :turn-count 0)))
 
 (defun mevedel-session-pending-inputs (session category)

@@ -39,10 +39,11 @@ such controls would promise persistence this document does not provide.
    leaves the placeholders in the finished page.
 3. Take a pass on styling and content. The body structure is a default, not a
    requirement - cut the sections this document doesn't need, and retune the
-   token values where the subject calls for it. Change them in **all three**
-   scopes that declare them (the light `:root`, the
-   `prefers-color-scheme: dark` block, and `@media print`), or the value snaps
-   back in dark mode or on paper. Keep text contrast accessible in both.
+   token values where the subject calls for it. Change them in **every**
+   scope that declares them (the light `:root`, the
+   `prefers-color-scheme: dark` block, the `:root[data-theme="dark"]` block,
+   and `@media print`), or the value snaps back in one theme or on paper.
+   Keep text contrast accessible in both.
 4. Self-check before writing the file: no `SLOT` markers left, no placeholder
    text left, no color declared only inside the dark or print block.
 5. Write the file into the session artifacts directory with ApplyPatch, per the
@@ -59,7 +60,9 @@ current HTML directly - don't re-read or re-apply this template.
 | `KIND` | What this document is: `Memo`, `Proposal`, `Spec`, `Meeting notes`. Delete the line when it adds nothing. |
 | `TITLE_H1` | The same name as `TITLE`, as the page's heading. |
 | `PURPOSE` | One sentence: what the document is for, and what the reader should do with it. |
-| `BODY` | The document itself - `h2` sections a reader can scan, short paragraphs, lists where structure helps, a `blockquote` for the one callout a skimmer must not miss. |
+| `TAKEAWAYS` | 3-5 one-line bullets, each a single clause with its number or specific - what a skimmer reads instead of the document. Delete the aside for a short memo. |
+| `CONTENTS` | One link per `h2` section, pointing at the section's `id`. Fill it from the headings you actually wrote; a script rebuilds it on screen, the static list serves readers without scripts. Delete the nav when the document fits one screen. |
+| `BODY` | The document itself - one `<section id="...">` per `h2` a reader can scan, short paragraphs, lists where structure helps, a `blockquote` for the one callout a skimmer must not miss. |
 | `OPEN_QUESTIONS` | Every unresolved item, each with a named owner. Delete the section when there are none. |
 
 ## Writing it
@@ -69,9 +72,8 @@ sentence whether this concerns them. Keep paragraphs short - this is a document
 someone skims before they read. Name an owner for every open item; an
 unassigned question is a question nobody answers.
 
-For a long document, add concise takeaways and a static `<nav aria-label="Contents">`
-linking to stable heading IDs when they help readers navigate. Omit them for a
-short memo; no automatic contents runtime is needed. Check long URLs, inline
+The takeaways aside and the contents nav are for documents long enough to
+skim; a short memo deletes both. Check long URLs, inline
 code, and tables at a narrow width and in print. Tables may span pages with
 repeated headers; do not hide columns or trap printed content in a scroll box.
 

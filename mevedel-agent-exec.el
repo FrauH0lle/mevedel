@@ -155,8 +155,6 @@
                   "mevedel-reminders" (fsm))
 
 ;; `mevedel-tool-ptc'
-(declare-function mevedel-tool-ptc--handle-description
-                  "mevedel-tool-ptc" (fsm))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-agent-roster-inject
@@ -313,7 +311,6 @@ the terminal event through the request callback's exactly-once retry gate."
   `((WAIT ,#'mevedel-tools--handle-agent-roster-inject
      ,#'mevedel-tools--handle-message-inject
      ,#'mevedel-tools--handle-plan-tool-filter
-     ,#'mevedel-tool-ptc--handle-description
      ,#'mevedel-agent-exec--handle-wait-activity
      ,#'mevedel--compact-handle-agent-wait)
     (TPRE ,#'gptel--handle-token-usage

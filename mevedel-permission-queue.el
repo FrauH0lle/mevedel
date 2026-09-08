@@ -211,7 +211,7 @@ Return non-nil when this call delivered or consumed the outcome."
      ((eq source 'ptc)
       (let ((parent (plist-get entry :parent-tool-use-id))
             (child (plist-get entry :tool-use-id)))
-        (format "ToolScript %s%s"
+        (format "ToolCall %s%s"
                 (or parent "script")
                 (if child (format " (child %s)" child) ""))))
      ((not (equal origin "/root")) origin))))

@@ -164,8 +164,6 @@ publication."
                  :updated-at "2026-04-23T18:20:00+0200")
             ("main" :note "Agent status" :updated-turn 4
              :updated-at "2026-04-23T18:21:00+0200")))
-    (setf (mevedel-session-skills-snapshot session)
-          '(("alpha" . "Alpha helper")))
     (setf (mevedel-session-workspace-instruction-hashes session)
           (list (cons (list "/root" (file-name-concat root "AGENTS.md"))
                       (make-string 64 ?a))))
@@ -349,7 +347,6 @@ publication."
                :reasoning-effort nil
                :last-observed-date "2026-01-01"
                :agent-types-snapshot :uninitialized
-               :skills-snapshot :uninitialized
                :additional-roots nil
                :tasks nil
                :prompt-index nil

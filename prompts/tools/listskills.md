@@ -1,30 +1,31 @@
-List active model-invocable skills, optionally filtered by query.
+Discover enabled model-invocable skills by name or purpose.
 
 ### When to use `ListSkills`
 
-- Checking whether a skill exists for the task before invoking one
+- Finding a useful skill for a task, including one omitted from the roster
 - Recalling the exact name or purpose of an available skill
 
 ### When NOT to use `ListSkills`
 
 - You already know the exact skill name from the roster or the user ->
   call `Skill` directly
-- Browsing repeatedly in one turn; the listing does not change mid-turn
+- Repeating an unchanged query without a change in need or available skills
 
 ### How to use `ListSkills`
 
-- `query` is an optional case-insensitive search over skill name and
-  description; omit it to list everything
-- Names returned here are the valid `name` values for the `Skill` tool
+- A nonempty `query` searches enabled model-invocable skills, including dormant
+  path-scoped skills. Matching is case-insensitive over names and descriptions.
+- Without a query, list currently active model-invocable skills. Results are
+  capped and report omitted matches; narrow the query when needed.
+- Returned canonical names can be passed to `Skill`. Discovery does not invoke
+  a skill or make its workflow mandatory. User-only and disabled skills are
+  excluded; a missing result is not permission to guess a name.
 
 ### Examples of good usage
 
 <example>
-ListSkills()
-</example>
-
-<example>
 ListSkills(query="review")
+-> Inspect matching skills before choosing one.
 </example>
 
 ### Examples of bad usage
@@ -34,13 +35,5 @@ ListSkills(query="please list all skills that could help with testing")
 <reasoning>
 The query is a substring match over names and descriptions, not a
 natural-language request. Use a short keyword such as "test".
-</reasoning>
-</example>
-
-<example>
-ListSkills() followed by Skill(name="some-skill") for a name it did not return
-<reasoning>
-Only listed names are invocable; a missing name means the skill is not
-active in this session.
 </reasoning>
 </example>

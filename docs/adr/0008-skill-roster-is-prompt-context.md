@@ -1,5 +1,25 @@
 # Skill Roster Is Prompt Context
 
+Status: delivery placement and snapshot acknowledgement superseded by
+[ADR 0115](0115-retain-delivered-conversation-fragments.md), dynamic-context
+extension (2026-09-08). Discovery, canonical names, scope, optionality and
+invocation decisions below remain applicable.
+
+The current design keeps skill dispatch policy in the stable system prompt and
+delivers a compact catalog through retained current-context updates. Each entry
+has its canonical name and first sentence/line (at most 160 characters); full
+authored descriptions remain searchable with ListSkills. Trusted observations
+actually present in the outgoing payload acknowledge delivery. The separate
+session `skills-snapshot` and skill-delta reminder have been removed.
+
+The source audit showed that ordinary catalog changes still changed the system
+prefix ahead of all history. Tail placement addressed neither that invalidation
+nor frozen worker freshness. Retained updates preserve earlier messages while
+reporting additions, removals and empty catalogs. This is the reason for
+reversing the placement and acknowledgement decisions recorded below.
+
+## Historical decision and continuing discovery contract
+
 The model-facing skill roster should be rendered as request-time prompt context,
 not as an every-turn system reminder. Skills are baseline capabilities like
 tools and environment context, while reminders are reserved for runtime nudges
@@ -10,32 +30,42 @@ and it should replace the old recurring skill roster reminder instead of
 running in parallel with it. The same prompt section applies to main sessions
 and sub-agents, rendered from the effective skill set for that invocation.
 
-The skill-use contract belongs with the skills prompt section, under a short
-`How to use skills` subsection modeled after Codex's trigger rules. It should
-say that if the user names a skill with `$skill` syntax or plain text, or the
-task clearly matches a listed skill description, the model must call
-`Skill(name=...)` for that turn before proceeding. It should also tell the model
-to call `ListSkills(query)` with a short search term when unsure which skill
-applies, and to choose the minimal applicable skill set and state the order when
-multiple skills apply. The model should call the minimal obvious set up front;
-when uncertain, it may call `ListSkills(query)` or one skill first and decide
-from the result. Skill trigger decisions do not carry across turns unless the
-skill is re-mentioned or newly matched. User wording such as `$foo off` or
-`don't use foo` is request-scoped instruction, not persistent skill disabling;
-persistent workspace-scoped disabling stays explicit through `/skills disable`
-or the skills UI. Skills remain enabled by default in each workspace, and the
-workspace denylist applies to every visible project, user, bundled, managed,
-and enabled-plugin skill without changing path-scoped active/dormant state.
-Do not copy Codex's file-reading progressive-disclosure instructions: mevedel
-models use the `Skill` tool, and the tool owns loading/preparing skill bodies.
-The dynamic roster belongs at the
-tail of the request-time
-prompt, after the more stable dynamic sections, so provider prefix caching keeps
-the stable prompt prefix useful even when available skills change. The roster is
-rendered fresh from the session's effective skill set on each request rather
-than cached independently. Unlike Codex, mevedel's always-on roster should not
+The skill-use contract belongs with the skills prompt section. Explicit user
+requests and already prepared dependencies are honored. Other skills are
+optional guidance selected for their useful scope and approach; description
+and path matches are discovery signals, not compulsory workflow. Reuse relevant
+loaded guidance for its task and authored applicability. A new message alone
+does not end it, and user direction can extend, end, or replace it. Missing or
+changed guidance is retrieved when needed. User wording such as `$foo off`
+retains the scope the user gave it; persisted workspace disabling is a distinct
+operation through `/skills disable` or the skills UI.
+
+This replaces the former mandatory match-and-invoke, ordering announcement,
+and one-turn lifetime rules. Captured system and Skill descriptions repeated
+those rules while disagreeing about task versus turn scope. The replacement
+reduces those competing obligations without rewriting skill authors' policy.
+Skills remain enabled by default; the workspace denylist applies to every
+visible project, user, bundled, managed, and enabled-plugin skill without
+changing path-scoped catalogue state. `Skill` owns body preparation; models
+need not read source files to invoke an already discovered skill.
+
+The roster belongs at the tail of the request-time system prompt, after the
+more stable sections. It includes active model-invocable skills without path
+restrictions, rendered fresh from the session rather than cached independently.
+Path-scoped skills remain outside this system roster regardless of file activity;
+their discovery uses later optional notices and ListSkills results. Authored
+configuration changes still refresh the roster, including enable/disable changes.
+
+The 2026-09-07 lifecycle measurements found that merely placing a dynamic roster
+last in the system prompt was insufficient: Luna and Sol root follow-ups added
+an entire Skills section after matching file activity, then fresh restore removed
+it. All conversation history followed that changed prefix despite fixed native
+tool schemas. Excluding path-scoped entries from the system roster removes this
+observed invalidation without freezing configuration or adding persisted state.
+
+Unlike Codex, mevedel's always-on roster should not
 include skill source paths; `Skill`, `ListSkills`, and `/skills help` remain the
-places to inspect skill details. If there are no active model-invocable skills,
+places to inspect skill details. If there are no eligible skills without paths,
 the prompt omits the skills section entirely rather than paying for empty
 instructions. Disabled skills are omitted rather than shown as unavailable.
 Roster entries use only the canonical invocation name plus description;
@@ -47,8 +77,8 @@ existing budget
 machinery but default to 2% of the context window, matching Codex's known-window
 policy. When the roster exceeds budget, shrink descriptions first so skill names
 remain visible; omit whole entries only when name-only entries still cannot fit.
-In `mevedel-system.el`, register the dynamic skills prompt section after
-environment, at order 50, with no cache. The producer reads the current
+In `mevedel-system.el`, the ordered main profile places skills after
+environment with no component cache; see ADR 0070. The producer reads the current
 session's effective skills when the session matches the prompt workspace and
 working directory; otherwise it returns nil.
 
@@ -64,8 +94,6 @@ roster. Discovery-only skill access is avoided because an agent that cannot
 invoke skills has no useful reason to inspect them.
 
 Main presets should expose skill tools for `discuss` and `implement`.
-The `revise` preset can stay narrow; avoid special-casing it unless existing
-tool inheritance already exposes skill tools.
 
 The `Skill` tool remains `read-only-p`: invoking a skill prepares prompt text or
 dispatches controlled sub-agent work, while any concrete writes inside that work
@@ -85,41 +113,50 @@ behavior.
 `Skill` tool results remain model-visible as the full prepared body, while the
 view keeps them collapsed to avoid transcript noise for the user.
 
-Skill-related reminders may still exist, but only as event-shaped nudges:
-roster omitted or truncated, available skills changed, or dormant path-scoped
-skills became relevant after file/tool activity. They should point to
+Skill-related reminders report catalogue changes or optional path matches.
+There is no separate budget notice: the stable roster contract advertises
+`ListSkills(query)` even when no names fit, and cannot lose that instruction
+through cancelled reminder staging. They should point to
 `ListSkills(query)` or an exact `Skill(name=...)` when known, not repeat the
 full roster.
 
-`ListSkills` with no query should mirror the active roster and stay capped.
+`ListSkills` with no query lists active model-invocable skills and stays capped,
+including active path-scoped skills absent from the system roster.
 `ListSkills(query)` searches all enabled model-invocable skills, including
-dormant path-scoped skills absent from the active roster. Query results should
+dormant path-scoped skills absent from the default listing. Query results should
 mark dormant path-scoped skills so the model can tell why they were absent from
-the active roster. Exact `Skill(name=...)` or `$skill` invocation of a dormant
-path-scoped skill runs it once without activating it into the session roster;
-persistent activation remains tied to file/tool activity matching `paths`.
-One-shot dormant invocations do not emit skill-change reminders because the
-active roster did not change.
+the default listing. Exact `Skill(name=...)` or `$skill` invocation of a dormant
+path-scoped skill runs it once without activating its default-listing visibility;
+that activation remains tied to file/tool activity matching `paths`.
+Neither path activity nor one-shot dormant invocation changes the system roster
+or emits its change delta.
 
-Available-skill changes should use a session `skills-snapshot`, mirroring the
-existing agent roster delta pattern, so the first snapshot is silent and later
-changes are reported once. The snapshot uses the same candidate set as the
-dynamic roster: enabled, model-invocable, active skills. Added entries include
-name and description; removed entries include name only. The snapshot is
-persisted with session sidecar state, like the existing agent roster snapshot,
-so resumed sessions do not report all known skills as newly added. Manual skill
-enable/disable commands use the same change path as plugin, hot reload, and
-path activation changes. Dormant path-scoped activation reminders should name
-the activated skill and the path that made it relevant when both are known.
-They fire on the next prompt after activation even though the skill also appears
-in the new roster, because the reminder explains why the roster changed. This
-specific path-activation reminder replaces the generic skill-change delta for
-that activation so the model does not receive duplicate change messages. If one
-path activates multiple dormant skills, list the activated names with the
-triggering path, cap the list, and point to `ListSkills(query)` for the rest.
-The activation reminder lists at most five skill names before using an
-`and N more` suffix, and omits descriptions because the roster already carries
-them.
+Available-skill changes use the root session's `skills-snapshot`. The first
+snapshot is silent; its acknowledgement commits only when the request payload
+exists. Later additions/removals are reported once, with the same candidate
+set as the root roster, and commit by the same delivery mechanism. Persisting
+the snapshot prevents cold resume from treating known skills as new.
+
+Path matching changes shared catalogue eligibility, not instructions or
+recipient acknowledgement. Each conversation with callable Skill access gets
+an optional notice for matching skill facts it has not been shown. Per-skill
+event keys preserve discoveries across multiple paths and tool calls. Delivery
+commits a buffer-local fact (name, source, description, paths), so cancelling
+before dispatch permits a later matching observation to retry. An agent does
+not acknowledge for its parent or siblings. Path notice delivery never mutates
+the system-roster snapshot: its entries exclude path-scoped skills, so there is
+no corresponding delta to suppress.
+
+This replaces immediate shared snapshot mutation: a child could previously
+suppress the parent's discovery, and a cancelled notice could suppress its
+own retry. Frozen agent prompts also made the claim that their roster had
+changed false. Notices now describe optional relevance and offer Skill or
+ListSkills; they make no invocation or pre-action enforcement claim. Delivery
+is once per live conversation and matching fact; a changed fact can rearm it.
+Compaction alone does not repeat optional discovery. Cold resume starts a new
+buffer throttle. The always-callable ListSkills contract remains the fallback
+when a notice has left context; required skill-body fidelity is a separate
+compaction responsibility.
 
 Generic skill-change deltas cap added and removed lists at ten entries each,
 then use an `and N more; use ListSkills(query)` suffix.
