@@ -33,6 +33,22 @@
                                           (plist-get span :start)
                                           (plist-get span :end))))))
 
+  :doc "quoted openers cannot hide later trusted records or become trusted themselves"
+  (dolist (restored '(nil t))
+    (let* ((literal (concat "The summary quotes `" mevedel--hook-audit-open "`.\n"))
+           (block (mevedel--format-hook-audit-record
+                   '(:type injected-reminders :items ((:body "Current state")))))
+           (text (concat literal block)))
+      (when restored
+        (remove-text-properties (length literal) (length text)
+                                '(mevedel-hook-audit nil) text))
+      (let ((spans (mevedel-transcript-audit-spans text)))
+        (should (= 1 (length spans)))
+        (should (eq 'injected-reminders
+                    (plist-get (plist-get (car spans) :record) :type)))
+        (should (> (plist-get (car spans) :start) (length literal)))
+        (should (equal literal (mevedel--strip-hook-audit-blocks text))))))
+
   :doc "preserves valid audit-shaped text without trusted provenance"
   (let* ((block (mevedel--format-hook-audit-record
                  '(:type tool-context :event "PostToolUse")))
@@ -206,6 +222,7 @@
           (insert (mevedel--format-hook-audit-record
                    (list :type 'prompt-rewrite :event "x"
                          :original "a" :submitted "b")))
+          (insert mevedel--hook-audit-open)
           (insert (mevedel--format-hook-audit-record
                    (list :type 'guest-prompt :name "phone")))
           (insert "second prompt")
@@ -221,7 +238,8 @@
             (should (eq 'mevedel-hook-audit
                         (get-text-property (car (car prompts)) 'gptel)))
             ;; Stripping removes every block from visible text.
-            (should (equal "first promptsecond prompt"
+            (should (equal (concat "first prompt" mevedel--hook-audit-open
+                                   "second prompt")
                            (string-trim
                             (mevedel--strip-hook-audit-blocks
                              (buffer-string)))))))

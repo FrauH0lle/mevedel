@@ -50,7 +50,8 @@
                 '(:type injected-reminders :items ((:type context-memory :body "old")))))
           (new (mevedel--format-hook-audit-record
                 '(:type injected-reminders :items ((:type context-memory :body "new"))))))
-      (insert old (substring-no-properties new))
+      (insert "A summary quotes `" mevedel--hook-audit-open "`.\n"
+              old (substring-no-properties new))
       (should (equal '((context-memory . "old"))
                      (mevedel-context-delivery--previous '(context-memory))))
       (insert new)

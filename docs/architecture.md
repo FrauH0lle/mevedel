@@ -556,6 +556,9 @@ they do not own a growing conversation prefix.
 ### Acknowledgement and context loss
 
 The trusted `injected-reminders` transcript record remains the source of truth.
+Scanners check an opening marker's provenance before seeking its closing marker,
+so quoted audit syntax cannot hide a later trusted record. The complete record
+must still have trusted provenance before it is decoded or replayed.
 An incremental buffer-local index avoids repeatedly decoding old tool-response
 records. Edits before its cursor invalidate the index; character-generation
 checks also catch replacements that inhibit edit hooks. A fresh process rebuilds

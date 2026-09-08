@@ -96,7 +96,8 @@ attributes is the nearest user turn ending at or before POSITION."
         (while (search-forward mevedel--hook-audit-open nil t)
           (let ((start (match-beginning 0))
                 (record-start (point)))
-            (when (search-forward mevedel--hook-audit-close nil t)
+            (when (and (mevedel-transcript-audit-trusted-range-p start record-start)
+                       (search-forward mevedel--hook-audit-close nil t))
               (when-let* (((mevedel-transcript-audit-trusted-range-p
                             start (point)))
                           (record (mevedel--read-hook-audit-record
@@ -122,8 +123,11 @@ render allocation."
           open spans)
       (while (setq open (string-search mevedel--hook-audit-open text search))
         (let* ((record-start (+ open open-length))
-               (close (string-search mevedel--hook-audit-close
-                                     text record-start)))
+               ;; A quoted opener must not consume a later real record's close.
+               (close (and (mevedel-transcript-audit-trusted-range-p
+                            open record-start text)
+                           (string-search mevedel--hook-audit-close
+                                          text record-start))))
           (if (not close)
               (setq search record-start)
             (let ((end (+ close close-length)))
