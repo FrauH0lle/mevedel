@@ -147,6 +147,29 @@ shapes the projection already produces, which `json-encode' accepts."
 (defconst mevedel-collaboration--backoff-max 30)
 (defconst mevedel-collaboration--keepalive-seconds 30)
 
+(defvar mevedel-collaboration--dialing nil
+  "Transport being created during a call to `websocket-open'.")
+
+(defun mevedel-collaboration--transport-handshake
+    (original url conn key protocols extensions headers nowait)
+  "Send this transport's handshake only after CONN finishes connecting.
+ORIGINAL is `websocket-ensure-handshake'; remaining arguments are its inputs.
+Websocket's async path sends while the process is still `connect', which
+makes `process-send-string' wait for TCP/TLS.  Tag our connection during
+creation so its later sentinel also uses the established-connection path.
+Other websocket clients retain their own behavior."
+  (if (or (process-get conn 'mevedel-collaboration)
+          (and mevedel-collaboration--dialing
+               (equal url (plist-get mevedel-collaboration--dialing :url))))
+      (progn
+        (unless (process-get conn 'mevedel-collaboration)
+          (process-put conn 'mevedel-collaboration 'pending))
+        (when (and (memq (process-status conn) '(open run))
+                   (not (eq (process-get conn 'mevedel-collaboration) 'sent)))
+          (process-put conn 'mevedel-collaboration 'sent)
+          (funcall original url conn key protocols extensions headers nil)))
+    (funcall original url conn key protocols extensions headers nowait)))
+
 (defun mevedel-collaboration--transport-open (url key &rest callbacks)
   "Open a reconnecting sealed transport to the relay room at URL.
 
@@ -164,9 +187,12 @@ unibyte room key.  CALLBACKS is a plist:
   :headers    an alist of extra handshake headers, resent on every
               reconnect.  The relay may require one to create a room.
 
-Return the transport handle.  The connection retries with bounded
-exponential backoff until stopped; undecryptable or malformed input is
-dropped silently."
+Return the transport handle without waiting for TCP/TLS connection setup.
+TLS uses Emacs' configured certificate and hostname verification policy.
+The connection retries with bounded exponential backoff until stopped;
+undecryptable or malformed input is dropped silently."
+  (advice-add 'websocket-ensure-handshake :around
+              #'mevedel-collaboration--transport-handshake)
   (let ((transport (list :url url
                          :key key
                          :headers (plist-get callbacks :headers)
@@ -219,31 +245,36 @@ deadline, which websocket.el cannot report without patching it."
     (funcall callback state)))
 
 (defun mevedel-collaboration--transport-dial (transport)
-  "Dial TRANSPORT's relay URL and install the socket callbacks."
+  "Dial TRANSPORT's relay URL asynchronously and install socket callbacks."
   (plist-put transport :reconnect-timer nil)
   (condition-case nil
       (plist-put
        transport :ws
-       (websocket-open
-        (plist-get transport :url)
-        :custom-header-alist (plist-get transport :headers)
-        :on-open
-        (lambda (_ws)
-          (plist-put transport :state 'open)
-          (plist-put transport :backoff
-                     mevedel-collaboration--backoff-initial)
-          (mevedel-collaboration--transport-notify transport 'open))
-        :on-message
-        (lambda (_ws frame)
-          (mevedel-collaboration--transport-receive transport frame))
-        :on-close
-        (lambda (ws)
-          (mevedel-collaboration--transport-down transport ws))
-        :on-error
-        (lambda (_ws _type _error)
-          ;; Callback errors must not leak into websocket.el's filter;
-          ;; a broken connection surfaces through on-close.
-          nil)))
+       (let ((mevedel-collaboration--dialing transport))
+         (websocket-open
+          (plist-get transport :url)
+          :nowait t
+          :custom-header-alist (plist-get transport :headers)
+          :on-open
+          (lambda (ws)
+            (when (and (eq ws (plist-get transport :ws))
+                       (eq (plist-get transport :state) 'connecting))
+              (plist-put transport :state 'open)
+              (plist-put transport :backoff
+			 mevedel-collaboration--backoff-initial)
+              (mevedel-collaboration--transport-notify transport 'open)))
+          :on-message
+          (lambda (ws frame)
+            (when (eq ws (plist-get transport :ws))
+              (mevedel-collaboration--transport-receive transport frame)))
+          :on-close
+          (lambda (ws)
+            (mevedel-collaboration--transport-down transport ws))
+          :on-error
+          (lambda (_ws _type _error)
+            ;; Callback errors must not leak into websocket.el's filter;
+            ;; a broken connection surfaces through on-close.
+            nil))))
     ;; A synchronous dial failure (DNS, refused) retries like a drop.
     (error (mevedel-collaboration--transport-down transport nil))))
 
