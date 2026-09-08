@@ -73,7 +73,8 @@ cache; cold restore and compaction reconstruct solely from retained records."
     (goto-char (car mevedel-context-delivery--cache))
     (while (search-forward mevedel--hook-audit-open nil t)
       (let ((start (match-beginning 0)) (payload (point)))
-        (when (search-forward mevedel--hook-audit-close nil t)
+        (when (and (mevedel-transcript-audit-trusted-range-p start payload)
+                   (search-forward mevedel--hook-audit-close nil t))
           (when-let* (((mevedel-transcript-audit-trusted-range-p start (point)))
                       (record (mevedel--read-hook-audit-record
                                (buffer-substring-no-properties payload (match-beginning 0))))

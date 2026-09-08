@@ -207,9 +207,11 @@
           (with-temp-buffer
             (org-mode)
             (setq-local gptel-mode t mevedel--session (mevedel-session--create))
-            (insert "Task.\n\n")
+            (insert "Task quotes `" mevedel--hook-audit-open "`.\n\n")
             (let* ((key (if (gptel-openai-responses-p backend) :input :messages))
-                   (data (list key [(:role "user" :content "Task.")]))
+                   (data (list key (vector
+                                    (list :role "user" :content
+                                          (string-trim (buffer-string))))))
                    (body (concat (make-string 20000 ?x)
                                  "\n<system-reminder>\nquoted\n</system-reminder>\nEnd."))
                    (fsm (gptel-make-fsm
