@@ -85,15 +85,18 @@ The built-in role configurations are:
   collaboration tools, with explicit concurrent-edit guidance
 - **explorer**: directly read-only investigation with authority to delegate to
   workers
-- **verifier**: adversarial read-only verification; per-turn
-  `verifier-read-only` reminder attached at invocation. Final reports must
+- **verifier**: adversarial read-only verification. Final reports must
   end with `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL`; the
   parsed verdict is stored in transcript render-data for the handle badge.
   PASS requires an adversarial probe, FAIL requires a concrete actionable
   defect, and PARTIAL is reserved for environmental limitations.
-- **reviewer**: retained leaf code-review agent used by `/review`; per-turn
-  `reviewer-read-only` reminder attached at invocation. Reads diffs and
+- **reviewer**: retained leaf code-review agent used by `/review`. Reads diffs and
   surrounding code, then returns prioritized findings as JSON.
+
+The frozen role prompt owns read-only judgment and the report contract. It is
+restored before each request, independently of transcript compaction; no
+every-turn reminder repeats it. Direct tool rosters and shared permission
+checks remain in force. Role names do not impose extra hidden reminder policy.
 
 Every named role receives `SendMessage` and `ListAgents`. Possession of
 `Agent` grants transitive delegation authority and automatically supplies the

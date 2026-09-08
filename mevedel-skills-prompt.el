@@ -16,11 +16,15 @@
 (require 'mevedel-tool-registry)
 
 ;; `gptel'
-(defvar gptel-post-tool-call-functions)
+(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
+(defvar gptel-tools)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
+
+;; `mevedel-hooks'
+(defvar mevedel-post-tool-use-functions)
 
 ;; `mevedel-models'
 (declare-function mevedel-model-effective-context-window "mevedel-models"
@@ -52,6 +56,9 @@
 ;; `mevedel-structs'
 (defvar mevedel--session)
 
+;; `mevedel-tool-ptc'
+(declare-function mevedel-tool-ptc--roster "mevedel-tool-ptc" ())
+
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
@@ -70,29 +77,11 @@
 ;;
 ;;; Skills prompt roster and reminders
 
-(defun mevedel-skills--buffer-for-session (session)
-  "Return a live buffer whose `mevedel--session' is SESSION, or nil."
-  (catch 'found
-    (dolist (buffer (buffer-list))
-      (when (and (buffer-live-p buffer)
-                 (local-variable-p 'mevedel--session buffer)
-                 (eq (buffer-local-value 'mevedel--session buffer) session))
-        (throw 'found buffer)))))
-
-(defun mevedel-skills--current-reminder-buffer (session)
-  "Return the chat buffer whose skills should be refreshed for SESSION."
-  (let ((buffer mevedel-reminders--current-chat-buffer))
-    (if (and (buffer-live-p buffer)
-             (local-variable-p 'mevedel--session buffer)
-             (eq (buffer-local-value 'mevedel--session buffer) session))
-        buffer
-      (mevedel-skills--buffer-for-session session))))
-
 (defcustom mevedel-skills-listing-budget 0.02
   "Fraction of the context window allotted to the model-facing skills roster.
 
-The dynamic prompt roster enumerates active, model-invocable skills so
-the model can call them by name via the `Skill' tool.  This fraction of
+The prompt roster enumerates active, model-invocable skills without path
+restrictions.  Path-scoped skills use notices and ListSkills.  This fraction of
 the active model's context window, or of `mevedel-model-context-limit'
 when the model declares none (converted to characters at four chars per
 token), caps the roster so it cannot crowd out the user's conversation
@@ -110,6 +99,16 @@ before the transforms apply either; assumes ~4 characters per token."
                 (plist-get (mevedel-skills-request-model-policy) :model))))
     (max 0 (floor (* mevedel-skills-listing-budget limit 4)))))
 
+(defun mevedel-skills--short-purpose (skill)
+  "Return a one-line purpose for SKILL; full descriptions remain searchable."
+  (let* ((description (mevedel-skills--entry-description skill))
+         (line (car (split-string description "[\n\r]" t))))
+    (mevedel-skills--truncate-text
+     (if (and line (string-match "[.!?]\\(?: \\|$\\)" line))
+         (substring line 0 (1+ (match-beginning 0)))
+       (or line ""))
+     160)))
+
 (defun mevedel-skills--format-listing-result (skills)
   "Return structured budgeted active roster data for SKILLS.
 
@@ -119,7 +118,11 @@ omitted only when name-only entries cannot fit in
 :text and :status, where :status is nil, `truncated', or `omitted'."
   (let* ((budget (mevedel-skills--listing-budget-chars))
          (header "### Available skills")
-         (full-lines (mapcar #'mevedel-skills--listing-describe skills)))
+         (full-lines
+          (mapcar (lambda (skill)
+                    (concat (mevedel-skills--entry-base skill) " "
+                            (mevedel-skills--short-purpose skill)))
+                  skills)))
     (cl-labels
         ((body (lines &optional notes)
            (string-join
@@ -152,7 +155,7 @@ omitted only when name-only entries cannot fit in
                 (index 0)
                 (shortened nil))
             (dolist (skill skills)
-              (let* ((desc (mevedel-skills--entry-description skill))
+              (let* ((desc (mevedel-skills--short-purpose skill))
                      (remaining (- budget used)))
                 (cond
                  ((string-empty-p desc))
@@ -199,17 +202,12 @@ omitted only when name-only entries cannot fit in
   "Format SKILLS as the budgeted active roster."
   (plist-get (mevedel-skills--format-listing-result skills) :text))
 
-(defun mevedel-skills--listing-budget-status (skills)
-  "Return budget status for SKILLS, or nil when the full roster fits."
-  (plist-get (mevedel-skills--format-listing-result skills) :status))
-
-(defconst mevedel-skills--prompt-contract
-  "### How to use skills
-- Trigger rules: If the user names a listed skill with unquoted `$SkillName` syntax or plain text, or the task clearly matches a listed skill description, call `Skill(name=...)` before proceeding. Quoted, escaped, or Markdown-code `$SkillName` text is literal and must not trigger a skill.
-- Discovery: If unsure which skill applies, call `ListSkills(query)` with a short search term.
-- Coordination: Choose the minimal applicable skill set. When multiple skills apply, state the order you will use them.
-- Scope: Do not carry skill decisions across turns unless re-mentioned or newly matched."
-  "Concise model-facing instructions for using mevedel skills.")
+(defun mevedel-skills--system-roster-candidates (session)
+  "Return SESSION's active model-visible skills without path restrictions.
+Path-scoped skills use discovery notices and ListSkills results so file
+activity does not rewrite the system prefix ahead of conversation history."
+  (cl-remove-if #'mevedel-skill-path-patterns
+                (mevedel-skills--listing-candidates session)))
 
 (defun mevedel-skills-prompt-section (session &optional buffer)
   "Return the dynamic skills prompt section for SESSION.
@@ -217,7 +215,7 @@ BUFFER, when non-nil, is used to refresh dirty skill roots before
 rendering."
   (when (and buffer (buffer-live-p buffer))
     (mevedel-skills-ensure-fresh buffer session))
-  (when-let* ((skills (mevedel-skills--listing-candidates session)))
+  (when-let* ((skills (mevedel-skills--system-roster-candidates session)))
     (let* ((listing-result (mevedel-skills--format-listing-result skills))
            (listing (plist-get listing-result :text)))
       (when (fboundp 'mevedel-telemetry-record)
@@ -229,204 +227,83 @@ rendering."
          :omitted-count (plist-get listing-result :omitted)
          :roster-chars (length listing)))
       (concat "## Skills\n"
-              "A skill is a reusable prompt recipe available through the `Skill` tool. The active skills for this session are listed below by canonical invocation name.\n\n"
+              "A skill is a reusable prompt recipe. Discover Skill and ListSkills through ToolSearch; invoke them through ToolCall. Skills without path restrictions are listed below by canonical invocation name; path-scoped skills are discoverable through matching-path notices and ListSkills.\n\n"
               listing
-              "\n\n"
-              mevedel-skills--prompt-contract))))
-
-(defun mevedel-skills--skill-snapshot (session)
-  "Return SESSION's current active model-visible skill snapshot."
-  (mapcar (lambda (skill)
-            (cons (mevedel-skill-name skill)
-                  (or (mevedel-skill-description skill) "")))
-          (mevedel-skills--listing-candidates session)))
-
-(defun mevedel-skills--roster-budget-status (session)
-  "Return SESSION's current prompt-roster budget status."
-  (when-let* ((skills (mevedel-skills--listing-candidates session)))
-    (mevedel-skills--listing-budget-status skills)))
-
-(defun mevedel-skills--format-roster-budget-reminder (status)
-  "Return reminder text for roster budget STATUS."
-  (pcase status
-    ('omitted
-     "The skills roster in the system prompt omitted some active skills because of budget. Use `ListSkills(query)` to search the full enabled model-invocable skill set.")
-    ('truncated
-     "The skills roster in the system prompt shortened some descriptions because of budget. Use `ListSkills(query)` to search for complete skill details.")
-    (_ nil)))
-
-(defun mevedel-skills--format-delta-list (entries with-descriptions)
-  "Return a capped bullet list for ENTRIES.
-When WITH-DESCRIPTIONS is non-nil, include descriptions from ENTRIES."
-  (mapconcat
-   (lambda (entry)
-     (if with-descriptions
-         (format "  - %s: %s" (car entry) (cdr entry))
-       (format "  - %s" (car entry))))
-   (cl-subseq entries 0 (min 10 (length entries)))
-   "\n"))
-
-(defun mevedel-skills--format-delta (added removed)
-  "Return a model reminder for ADDED and REMOVED skill snapshot entries."
-  (let ((parts (list "Available skills changed.")))
-    (when added
-      (push (concat "Added skills:\n"
-                    (mevedel-skills--format-delta-list added t))
-            parts)
-      (when (> (length added) 10)
-        (push (format "and %d more; use ListSkills(query)"
-                      (- (length added) 10))
-              parts)))
-    (when removed
-      (push (concat "Removed skills:\n"
-                    (mevedel-skills--format-delta-list removed nil))
-            parts)
-      (when (> (length removed) 10)
-        (push (format "and %d more; use ListSkills(query)"
-                      (- (length removed) 10))
-              parts)))
-    (string-join (nreverse parts) "\n\n")))
-
-(defun mevedel-reminders-make-skills-delta ()
-  "Create the `skills-delta' reminder.
-
-The first snapshot is silent.  Later active model-visible skill changes
-are reported once and become the new snapshot."
-  (let (delta)
-    (mevedel-reminder-create
-     :type 'skills-delta
-     :trigger (lambda (session)
-                (setq delta nil)
-                (when-let* ((buffer (mevedel-skills--current-reminder-buffer
-                                     session)))
-                  (mevedel-skills-ensure-fresh buffer session))
-                (let* ((current (mevedel-skills--skill-snapshot session))
-                       (previous (mevedel-session-skills-snapshot session)))
-                  (if (eq previous :uninitialized)
-                      (progn
-                        (setf (mevedel-session-skills-snapshot session)
-                              current)
-                        nil)
-                    (let ((added (cl-remove-if
-                                  (lambda (entry)
-                                    (assoc (car entry) previous))
-                                  current))
-                          (removed (cl-remove-if
-                                    (lambda (entry)
-                                      (assoc (car entry) current))
-                                    previous)))
-                      (when (or added removed)
-                        (setq delta (list :added added :removed removed))
-                        t)))))
-     :content (lambda (session)
-                ;; Captured here: the snapshot reader needs the buffer the
-                ;; prompt transform binds, which is gone by commit time.
-                (let ((current (mevedel-skills--skill-snapshot session))
-                      (reported delta))
-                  (list :body
-                        (mevedel-skills--format-delta
-                         (plist-get reported :added)
-                         (plist-get reported :removed))
-                        :commit
-                        (lambda ()
-                          (setf (mevedel-session-skills-snapshot session)
-                                current)
-                          (setq delta nil)))))
-     :interval nil)))
-
-(defun mevedel-reminders-make-skills-roster-budget ()
-  "Create the `skills-roster-budget' reminder.
-
-Emits once when the active prompt roster is truncated or omits entries,
-and again if that budget status changes."
-  (let ((last-status :uninitialized)
-        status)
-    (mevedel-reminder-create
-     :type 'skills-roster-budget
-     :trigger (lambda (session)
-                (when-let* ((buffer (mevedel-skills--current-reminder-buffer
-                                     session)))
-                  (mevedel-skills-ensure-fresh buffer session))
-                (setq status (mevedel-skills--roster-budget-status session))
-                (let ((changed (not (eq status last-status))))
-                  (setq last-status status)
-                  (and status changed)))
-     :content (lambda (_session)
-                (mevedel-skills--format-roster-budget-reminder status))
-     :interval nil)))
+              "\n\nSearch ListSkills by purpose for full descriptions; invoke Skill to load its instructions."))))
 
 ;;
 ;;; Conditional activation reminders
 
-(defun mevedel-skills--activation-reminder (path skills)
-  "Return a compact reminder that SKILLS activated because of PATH."
-  (let* ((names (mapcar #'mevedel-skill-name skills))
-         (shown (cl-subseq names 0 (min 5 (length names))))
-         (more (- (length names) (length shown))))
-    (format
-     "Dormant path-scoped skills became relevant after `%s`: %s%s. They are now in the active skills roster. Use `Skill(name=...)` if applicable; use `ListSkills(query)` to search."
-     path
-     (mapconcat #'identity shown ", ")
-     (if (> more 0)
-         (format ", and %d more" more)
-       ""))))
+(defvar-local mevedel-skills--path-notices-seen nil
+  "Skill discovery facts delivered to this conversation buffer.
+Entries are (NAME SOURCE DESCRIPTION PATH-PATTERNS).  This is a live optional
+notice throttle, not skill activation, invocation, or authority state.")
+
+(defun mevedel-skills--activation-reminder (path skill)
+  "Return an optional discovery notice for SKILL matching PATH."
+  (format
+   "Optional skill `%s` matches the path `%s` from your tool call: %s\nUse ToolCall expression `(Skill :name \"...\")` if its guidance helps; ToolCall expression `(ListSkills :query \"...\")` gives details. This notice does not invoke the skill."
+   (mevedel-skill-name skill) path
+   (mevedel-skills--entry-description skill)))
+
+(defun mevedel-skills--commit-path-notice (buffer session fact)
+  "Acknowledge delivered skill FACT in BUFFER if it still owns SESSION."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (eq session mevedel--session)
+        (setq mevedel-skills--path-notices-seen
+              (cons fact (assoc-delete-all
+                          (car fact) mevedel-skills--path-notices-seen)))))))
 
 (defun mevedel-skills--queue-activation-reminder (buffer session path skills)
-  "Queue a path activation reminder for BUFFER, SESSION, and SKILLS."
-  (when-let* ((visible (cl-remove-if-not
-                        (lambda (skill)
-                          (mevedel-skills--model-visible-p skill t))
-                        skills)))
-    (mevedel-reminders-queue-turn-event
-     buffer 'skill-activation
-     (mevedel-skills--activation-reminder path visible))
-    (setf (mevedel-session-skills-snapshot session)
-          (mevedel-skills--skill-snapshot session))))
+  "Queue optional discovery of SKILLS matching PATH in BUFFER's SESSION.
+Each skill has its own coalescing key, so observing another path cannot erase
+a different skill's notice.  Acknowledgement belongs to BUFFER and commits
+only after delivery.  Path notices do not change the system-roster snapshot."
+  (with-current-buffer buffer
+    (when (or (cl-find "Skill" gptel-tools :key #'gptel-tool-name :test #'equal)
+              (and (cl-find "ToolCall" gptel-tools :key #'gptel-tool-name :test #'equal)
+                   (member "Skill" (mevedel-tool-ptc--roster))))
+      (dolist (skill skills)
+        (let ((fact (list (mevedel-skill-name skill)
+                          (mevedel-skill-source-file skill)
+                          (mevedel-skill-description skill)
+                          (mevedel-skill-path-patterns skill))))
+          (when (and (mevedel-skills--model-visible-p skill t)
+                     (not (member fact mevedel-skills--path-notices-seen)))
+            (mevedel-reminders-queue-turn-event
+             buffer (cons 'skill-activation (mevedel-skill-name skill))
+             (mevedel-skills--activation-reminder path skill)
+             (lambda ()
+               (mevedel-skills--commit-path-notice buffer session fact)))))))))
 
 (defun mevedel-skills--post-tool-activate (info)
-  "Post-tool-call hook: activate conditional skills on every touched path.
-
-INFO is the plist passed by `gptel-post-tool-call-functions'.  Every
-path the tool declares is forwarded to `mevedel-skills-maybe-activate'.
-A tool that touches several paths at once declares them together, and
-ApplyPatch is the only tool that does, so reading one path activated on
-the reads around an edit but never on the edit."
+  "Discover optional path skills after a pipeline tool event INFO.
+Catalogue activation is shared.  Notices are evaluated for this recipient
+even if another conversation previously activated the same skill.  Post-tool
+discovery cannot enforce required pre-action instructions.  Failed path
+attempts can also make optional guidance discoverable."
   (when-let* ((session (or (and (boundp 'mevedel--session) mevedel--session)
                            (when-let* ((inv (mevedel-skills--current-invocation)))
                              (mevedel-agent-invocation-parent-session inv))))
-              (tool-name (plist-get info :name))
-              (args (plist-get info :args))
-              (tool (mevedel-tool-get tool-name)))
+              (tool-name (plist-get info :tool-name))
+              (args (plist-get info :tool-input))
+              (tool (mevedel-tool-get tool-name (plist-get info :tool-category))))
     (dolist (path (mevedel-tool-permission-paths tool args))
+      (mevedel-skills-maybe-activate session path)
       (mevedel-skills--queue-activation-reminder
        (current-buffer) session path
-       (mevedel-skills-maybe-activate session path))))
+       (cl-remove-if-not
+        (lambda (skill)
+          (mevedel-skills--path-matches-p path (mevedel-skill-path-patterns skill)))
+        (mevedel-session-skills session)))))
   nil)
 
 ;;;###autoload
 (defun mevedel-skills-install-activation-hook ()
-  "Install the buffer-local post-tool-call activation hook."
-  (add-hook 'gptel-post-tool-call-functions
+  "Install discovery at the shared native/nested post-tool pipeline boundary."
+  (add-hook 'mevedel-post-tool-use-functions
             #'mevedel-skills--post-tool-activate nil t))
-
-;;
-;;; Reminder installation
-
-;;;###autoload
-(defun mevedel-skills-install-reminder (session)
-  "Add the skills event reminders to SESSION if not already present.
-Idempotent."
-  (unless (cl-find 'skills-roster-budget
-                   (mevedel-session-reminders session)
-                   :key #'mevedel-reminder-type)
-    (mevedel-session-add-reminder
-     session (mevedel-reminders-make-skills-roster-budget)))
-  (unless (cl-find 'skills-delta
-                   (mevedel-session-reminders session)
-                   :key #'mevedel-reminder-type)
-    (mevedel-session-add-reminder
-     session (mevedel-reminders-make-skills-delta)))
-  session)
 
 (provide 'mevedel-skills-prompt)
 ;;; mevedel-skills-prompt.el ends here

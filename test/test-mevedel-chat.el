@@ -618,7 +618,7 @@
 				   ((symbol-function 'mevedel-skills-install)
 				    #'ignore)
 				   ((symbol-function
-				     'mevedel-skills-install-reminder)
+				     'mevedel-skills-install-activation-hook)
 				    #'ignore)
 				   ((symbol-function
 				     'mevedel-skills-install-activation-hook)
@@ -714,12 +714,9 @@
 				   ((symbol-function 'display-warning)
 				    (lambda (&rest _args) (set-buffer other)))
 				   ((symbol-function
-				     'mevedel-skills-install-reminder)
-				    (lambda (actual)
-				      (setq reminder-session actual)))
-				   ((symbol-function
 				     'mevedel-skills-install-activation-hook)
-				    #'ignore)
+				    (lambda ()
+				      (setq reminder-session mevedel--session)))
 				   ((symbol-function 'mevedel-view--ensure)
 				    (lambda (actual)
 				      (setq ensured-buffer actual)))
@@ -792,7 +789,7 @@
 			 (should
 			  (equal (mevedel-session-hook-context-pending session)
 				 '((:event "SessionStart"
-				    :body "startup context")))))
+				    :body "startup context" :source user)))))
 		     (delete-directory root t)
 		     (delete-directory user-dir t)))
 

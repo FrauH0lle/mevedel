@@ -62,6 +62,19 @@
 (mevedel-deftest mevedel-compact-estimation-estimate-tokens ()
   ,test
   (test)
+  :doc "counts retained guidance but not encoded provider fragments after a baseline"
+  (with-temp-buffer
+    (insert "Task")
+    (let ((marker (point-marker)))
+      (insert (mevedel--format-hook-audit-record
+               '(:type injected-reminders :items ((:type fixture :body "keep")))))
+      (insert (mevedel--format-hook-audit-record
+               (list :type 'provider-tool-batch :messages (make-string 10000 ?x))))
+      (should (= 11 (mevedel-compact-estimation-estimate-tokens)))
+      (setq-local mevedel-compact-estimation--known-token-baseline
+                  (list :tokens 100 :position marker))
+      (should (= 110 (mevedel-compact-estimation-estimate-tokens)))))
+
   :doc "counts tokens without file-local variables"
   (with-temp-buffer
     (insert "Hello world")  ; 11 chars / 4 = 2 tokens

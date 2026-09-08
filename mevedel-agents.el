@@ -20,6 +20,7 @@
 
 (require 'mevedel-tool-registry)
 (require 'mevedel-models)
+(require 'mevedel-system)
 
 ;; `cl-seq'
 (declare-function cl-delete-duplicates "cl-seq" (cl-seq &rest cl-keys))
@@ -59,26 +60,12 @@
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-clone-list "mevedel-reminders" (reminders))
-(declare-function mevedel-reminders-make-agent-deferred-tools-expired
-                  "mevedel-reminders" ())
-(declare-function mevedel-reminders-make-agent-deferred-tools-roster
-                  "mevedel-reminders" ())
 (declare-function mevedel-reminders-make-max-turns-warning "mevedel-reminders"
                   (&optional threshold))
-(declare-function mevedel-reminders-make-reviewer-read-only
-                  "mevedel-reminders" ())
-(declare-function mevedel-reminders-make-verifier-read-only
-                  "mevedel-reminders" ())
 (declare-function mevedel-reminders-serialize-agent-templates
                   "mevedel-reminders" (reminders))
 (autoload 'mevedel-reminders-clone-list "mevedel-reminders")
-(autoload 'mevedel-reminders-make-agent-deferred-tools-expired
-  "mevedel-reminders")
-(autoload 'mevedel-reminders-make-agent-deferred-tools-roster
-  "mevedel-reminders")
 (autoload 'mevedel-reminders-make-max-turns-warning "mevedel-reminders")
-(autoload 'mevedel-reminders-make-reviewer-read-only "mevedel-reminders")
-(autoload 'mevedel-reminders-make-verifier-read-only "mevedel-reminders")
 (autoload 'mevedel-reminders-serialize-agent-templates "mevedel-reminders")
 
 ;; `mevedel-structs'
@@ -97,6 +84,7 @@
 (defvar mevedel--session)
 
 ;; `mevedel-system'
+(defvar mevedel-system-retained-components)
 (declare-function mevedel-system-build-prompt
                   "mevedel-system" (profile &rest keys))
 (autoload 'mevedel-system-build-prompt "mevedel-system")
@@ -111,6 +99,7 @@
   (description nil :type string)
   (tools nil :type list)
   (system-prompt nil :type (or string function))
+  (context-components nil :type list)
   (max-turns nil :type (or null integer))
   (reminders nil :type list)
   (hook-rules nil :type list)
@@ -184,22 +173,22 @@ When COMPLETE is non-nil, require every request-local key exactly once."
 
 Each entry is (AGENT-SYMBOL . SPEC-LIST) where SPEC-LIST uses the same
 forms accepted by `mevedel-define-agent''s :tools keyword (bare
-symbols, (:group X), (:tool X), (:deferred X)).
+symbols, (:group X), (:tool X), (:discoverable X)).
 
 Merged into the role's resolved tool list before a retained agent freezes its
 configuration. Active entries flow into the sub-agent's gptel tool set and
-deferred entries seed the invocation's `deferred-set' so ToolSearch running
+deferred entries seed the invocation's `tool-catalog' so ToolSearch running
 inside the agent can discover them."
   :group 'mevedel
   :type '(alist :key-type symbol :value-type (repeat sexp)))
 
 (defconst mevedel-agent--communication-tool-specs
-  '((:tool "SendMessage") (:tool "ListAgents"))
+  '((:discoverable (:tool "SendMessage")) (:discoverable (:tool "ListAgents")))
   "Tools available to every named role.")
 
 (defconst mevedel-agent--control-tool-specs
-  '((:tool "FollowupAgent") (:tool "WaitAgent")
-    (:tool "InterruptAgent"))
+  '((:discoverable (:tool "FollowupAgent")) (:discoverable (:tool "WaitAgent"))
+    (:discoverable (:tool "InterruptAgent")))
   "Tools added to every named role that possesses Agent.")
 
 (defun mevedel-agent--specs-contain-tool-p (specs name)
@@ -207,7 +196,8 @@ inside the agent can discover them."
   (when-let* ((resolved (ignore-errors (mevedel-tool-resolve specs))))
     (cl-some (lambda (tool)
                (equal name (mevedel-tool-name tool)))
-             (plist-get resolved :active))))
+             (append (plist-get resolved :active)
+                     (plist-get resolved :discoverable)))))
 
 (defun mevedel-agent--declared-specs (agent)
   "Return AGENT's declared tool specs with user extras appended."
@@ -231,6 +221,7 @@ the built-in set stays stable; user extras are appended."
         base
       (cl-delete-duplicates
        (append base
+               '((:tool "ToolSearch") (:tool "ToolCall"))
                mevedel-agent--communication-tool-specs
                (when (mevedel-agent--specs-contain-tool-p base "Agent")
                  mevedel-agent--control-tool-specs))
@@ -319,6 +310,7 @@ Creates a `mevedel-agent' struct and registers it in
                (mevedel-system-build-prompt
                 (list :workspace-aware t
                       :components ,system-components)
+                :retained t
                 :workspace (and mevedel--session
                                 (mevedel-session-workspace mevedel--session))
                 :working-directory
@@ -331,6 +323,9 @@ Creates a `mevedel-agent' struct and registers it in
                    :description ,(plist-get keys :description)
                    :tools ',tool-specs
                    :system-prompt ,system-prompt-form
+                   :context-components
+                   (cl-intersection ,system-components
+                                    mevedel-system-retained-components)
                    :max-turns ,(plist-get keys :max-turns)
                    :reminders ,(plist-get keys :reminders)
                    :hook-rules
@@ -378,12 +373,7 @@ and render-data markers are runtime-only caches for cheap live updates."
   (agent nil :type mevedel-agent)
   (reminders nil :type list)
   (turn-count 0 :type integer)
-  (deferred-set nil :type list)
-  (deferred-pending nil :type list)
-  (deferred-injected nil :type list)
-  (deferred-used nil :type list)
-  (deferred-expired nil :type list)
-  (specialist-nudge-state nil :type list)
+  (tool-catalog nil :type list)
   (plan-read-only nil :type boolean)
   ;; Persistence
   (agent-id nil :type (or null string))
@@ -461,14 +451,6 @@ and render-data markers are runtime-only caches for cheap live updates."
              (mevedel-agent-invocation-agent-id invocation)))
     path))
 
-(defun mevedel-agent-invocation-set-specialist-nudge-state (invocation state)
-  "Set INVOCATION's specialist nudge STATE."
-  (setf (mevedel-agent-invocation-specialist-nudge-state invocation) state))
-
-(defun mevedel-agent-invocation-set-deferred-expired (invocation value)
-  "Set INVOCATION's deferred-expired slot to VALUE."
-  (setf (mevedel-agent-invocation-deferred-expired invocation) value))
-
 (defun mevedel-agent-invocation-create (agent)
   "Create a fresh `mevedel-agent-invocation' for AGENT.
 
@@ -478,41 +460,31 @@ has a `max-turns' cap, a one-shot max-turns-warning reminder is
 prepended automatically so the agent gets a single nudge near the turn
 limit without any per-agent declaration.
 
-The agent's `:tools' spec is resolved; the `:deferred' portion seeds the
-invocation's `deferred-set' so ToolSearch running inside the spawned
-sub-agent can discover the agent's own lazy tools.  When the deferred set
-is non-empty, invocation-scoped roster and expiry reminders are added so
-the sub-agent learns which tools it can activate without polluting the
-main session's reminder list."
+The agent's `:tools' spec is resolved; the `:discoverable' portion seeds the
+invocation's `tool-catalog' so ToolSearch retrieves the agent's own
+specialist contracts for ToolCall.  Their native descriptions explain
+discovery without adding an availability reminder."
+  (mevedel-tool-ensure "ToolSearch")
+  (mevedel-tool-ensure "ToolCall")
   (let* ((reminders (mevedel-reminders-clone-list
                      (mevedel-agent-reminders agent)))
-         (resolved (mevedel-tool-resolve (mevedel-agent--declared-specs agent)))
-         (deferred-tools (plist-get resolved :deferred))
-         (deferred-set
+         (resolved (mevedel-tool-resolve (mevedel-agent--effective-specs agent)))
+         (deferred-tools (plist-get resolved :discoverable))
+         (tool-catalog
           (mapcar (lambda (tool)
                     (cons (list (mevedel-tool-category tool)
                                 (mevedel-tool-name tool))
-                          ;; Tool-supplied one-liner if any; nil means the
-                          ;; roster reminder lists just the name. Full
-                          ;; descriptions are too long for the roster (some
-                          ;; wrapped tools carry multi-paragraph docstrings).
+                          ;; ToolSearch uses summaries for broad results.
                           (mevedel-tool-summary tool)))
                   deferred-tools)))
     (when (mevedel-agent-max-turns agent)
       (push (mevedel-reminders-make-max-turns-warning) reminders))
-    (when (equal (mevedel-agent-name agent) "verifier")
-      (push (mevedel-reminders-make-verifier-read-only) reminders))
-    (when (equal (mevedel-agent-name agent) "reviewer")
-      (push (mevedel-reminders-make-reviewer-read-only) reminders))
-    (when deferred-set
-      (push (mevedel-reminders-make-agent-deferred-tools-expired) reminders)
-      (push (mevedel-reminders-make-agent-deferred-tools-roster) reminders))
     (mevedel-agent-invocation--create
      :agent agent
      :reminders reminders
      :hook-rules (copy-sequence (mevedel-agent-hook-rules agent))
      :turn-count 0
-     :deferred-set deferred-set
+     :tool-catalog tool-catalog
      ;; stamp wall-clock at invocation creation so the completed-handle badge
      ;; can compute elapsed time.
      :started-at (current-time))))
@@ -547,23 +519,35 @@ Returns a cons (NAME . PLIST) suitable for the request-local role roster."
 (mevedel-define-agent worker
   :description "Implementation agent with broad repository tools and recursive
 delegation authority."
-  :tools (read edit code eval
-          (:tool "Ask")
-          (:tool "Skill") (:tool "ListSkills")
-          (:tool "ToolScript")
-          (:tool "ToolSearch")
-          (:tool "TaskCreate") (:tool "TaskUpdate")
-          (:tool "TaskList") (:tool "TaskGet") (:tool "TaskNote")
-          (:tool "Agent")
-          (:deferred web)
-          (:deferred elisp))
+  :tools (read edit (:tool "Bash") (:tool "ToolCall") (:tool "ToolSearch")
+          (:discoverable code)
+          (:discoverable web)
+          (:discoverable elisp)
+          (:discoverable (:tool "Eval"))
+          (:discoverable (:tool "WriteStdin"))
+          (:discoverable (:tool "ListExecutions"))
+          (:discoverable (:tool "StopExecution"))
+          (:discoverable (:tool "Ask"))
+          (:discoverable (:tool "Skill"))
+          (:discoverable (:tool "ListSkills"))
+          (:discoverable (:tool "TaskCreate"))
+          (:discoverable (:tool "TaskUpdate"))
+          (:discoverable (:tool "TaskList"))
+          (:discoverable (:tool "TaskGet"))
+          (:discoverable (:tool "TaskNote"))
+          (:discoverable (:tool "Agent")))
   :system-components
   '((role :file "agents/worker.md")
+    task-policy
     report-tone
+    memory-policy
+    memory-save-policy
     tool-orchestration
+    resources
     workspace-config
     memory
     environment
+    skill-policy
     skills)
   :max-turns 50)
 
@@ -572,23 +556,28 @@ delegation authority."
 needed, web research.  Caller specifies the thoroughness level
 (quick/moderate/thorough) in the prompt.  Returns a structured report -- never
 modifies files."
-  :tools (read
-          (:tool "Ask")
-          (:tool "Skill") (:tool "ListSkills")
-          (:tool "ToolScript")
-          (:tool "ToolSearch")
-          (:tool "TaskCreate") (:tool "TaskUpdate")
-          (:tool "TaskList") (:tool "TaskGet") (:tool "TaskNote")
-          (:tool "Agent")
-          (:deferred code)
-          (:deferred web)
-          (:deferred elisp))
+  :tools (read (:tool "ToolCall") (:tool "ToolSearch")
+          (:discoverable code)
+          (:discoverable web)
+          (:discoverable elisp)
+          (:discoverable (:tool "Ask"))
+          (:discoverable (:tool "Skill"))
+          (:discoverable (:tool "ListSkills"))
+          (:discoverable (:tool "TaskCreate"))
+          (:discoverable (:tool "TaskUpdate"))
+          (:discoverable (:tool "TaskList"))
+          (:discoverable (:tool "TaskGet"))
+          (:discoverable (:tool "TaskNote"))
+          (:discoverable (:tool "Agent")))
   :system-components
   '((role :file "agents/explorer.md")
+    task-policy
     report-tone
     tool-orchestration
+    resources
     workspace-config
     environment
+    skill-policy
     skills)
   :max-turns 30)
 
@@ -596,16 +585,17 @@ modifies files."
   :description "Adversarial verification specialist.  Read-only -- \
 tries to break implementations through edge cases, tests, and code \
 review.  Cannot edit, write, or create files."
-  :tools (read code
-          (:tool "Bash") (:tool "Eval")
-          (:tool "Ask")
-          (:tool "ToolScript")
-          (:tool "ToolSearch")
-          (:deferred elisp))
+  :tools (read (:tool "Bash") (:tool "ToolCall") (:tool "ToolSearch")
+          (:discoverable code)
+          (:discoverable elisp)
+          (:discoverable (:tool "Eval"))
+          (:discoverable (:tool "Ask")))
   :system-components
   '((role :file "agents/verifier.md")
+    task-policy
     report-tone
     tool-orchestration
+    resources
     workspace-config
     environment)
   :max-turns 20)
@@ -613,10 +603,13 @@ review.  Cannot edit, write, or create files."
 (mevedel-define-agent reviewer
   :description "Dedicated code review agent.  Read-only -- inspects diffs and \
 returns prioritized structured findings as JSON."
-  :tools (read code (:tool "Bash") (:tool "ToolScript"))
+  :tools (read (:tool "Bash") (:tool "ToolCall") (:tool "ToolSearch")
+          (:discoverable code))
   :system-components
   '((role :file "agents/reviewer.md")
+    task-policy
     tool-orchestration
+    resources
     workspace-config
     environment)
   :max-turns 12)

@@ -1,5 +1,32 @@
 # Tools
 
+## Model-facing descriptions and manuals
+
+Native tool schemas own parameter names, types, required fields, and basic
+constraints. Descriptions retain suitability, ordinary usage, essential limits,
+and one or two worked examples, using the existing When to use / When NOT to
+use / How to use / good and bad example sections. Avoid repeating a workflow
+policy across tools; suitability should explain this tool's actual behavior.
+
+Tools with meaningful advanced behavior point to packaged Markdown and name
+the cases that need it. Read, Glob, and Grep share
+[`tools/files.md`](tools/files.md); ApplyPatch uses
+[`tools/applypatch.md`](tools/applypatch.md); Bash uses
+[`tools/execution.md`](tools/execution.md); ToolCall uses
+[`ptc-dialect.md`](ptc-dialect.md). Models retrieve these through Read at stable
+`mevedel://` addresses, with no mandatory full-manual load for ordinary calls.
+Simple tools do not need manuals. Keep consequential prerequisites, authority
+boundaries, irreversible effects, and ordinary grammar visible in descriptions.
+
+Every built-in role exposing these tools also has Read. Manual retrieval uses
+the installed `docs/` tree, including `docs/tools/` in Eask packages, and needs
+no source checkout or session-specific address. Missing guidance is an ordinary
+Read failure; use only the known contract or report the missing manual. A
+manual read adds later result context without rewriting the tool description.
+Update manuals with the implementation, and retrieve needed detail again after
+context loss or a manual change. Static manuals do not list dynamic capabilities:
+ToolSearch delivers current contracts; the dialect manual lists pure operations.
+
 ## Tool pipeline
 
 All tools share one execution pipeline. Provider calls enter through
@@ -25,7 +52,7 @@ flowchart TD
     I --> J[PostToolUse or failure hooks]
     J --> K{Consumer}
     K -- Structured nested call --> L[Canonical status, value, media, identity]
-    K -- Provider --> M[Append repair reminder, queue specialist nudges]
+    K -- Provider --> M[Append repair reminder]
     M --> N[Persist oversized result]
     N --> O[Queue Goal budget warning when crossed]
     O --> P[Attach render-data]
@@ -41,7 +68,11 @@ persistence.
 The structured outcome boundary is not a second pipeline. It captures status,
 canonical result, raw result, render-data, media, tool-use identity, parent
 identity, and call source after common execution. Provider-only projection text
-never becomes input to a ToolScript guest. The call returns a cancellation
+never becomes input to a ToolCall guest. Text-only metadata stripping preserves
+non-string result values, including nil, for hooks and nested callers. Provider
+projection uses gptel's normal text conversion when attaching display metadata,
+so numeric and other non-text results retain their underlying tool renderer.
+The call returns a cancellation
 thunk that settles its current pipeline continuation exactly once;
 already-started tool-specific effects remain cancellable only when their owner
 exposes that capability.
@@ -50,31 +81,94 @@ Handler-owned cleanup registers before the outer pipeline canceller, so a
 compound async tool can cancel and audit its active children before its own
 provider-facing result settles.
 
+### Tool-call identity in transcripts
+
+Mevedel renders completed calls from gptel's authoritative `:tool-use` records,
+which contain the original ID, final arguments and result. For each record, the
+adapter supplies gptel's existing renderer with that single call and its tool
+specification. It restores the complete request call list even if insertion
+fails and keeps the normal insertion markers, result-inclusion settings and
+callback contract. This applies to main and agent conversation buffers carrying
+a mevedel session; unrelated gptel conversations keep their own rendering path.
+
+Results appear in the model's call order, independently of asynchronous
+completion order. Distinct invocations with identical arguments or results
+retain their own IDs. The callback's tool specification is located by name;
+call identity, arguments and output always come from the authoritative record,
+never a name/argument guess or text inside the result.
+
+This replaces the narrower repair that scanned trusted render metadata after
+insertion. Plain results need the same identity guarantee. The installed gptel
+renderer otherwise looks up the first call with a matching tool name, assigning
+that ID to repeated calls. Mevedel uses its renderer without changing the
+upstream callback format or maintaining another history store. The resulting
+properties are preserved through normal transcript normalization and save/restore.
+Already-corrupted transcripts are not migrated: original IDs are not generally
+recoverable from plain result text.
+
+### Retained provider history
+
+`mevedel-history.el` records the provider message fragment for each fully
+rendered tool response and its results. It records neither the system prompt nor
+the native schemas, transport headers or keys. This is a fragment per completed
+response, not a growing full-conversation snapshot. It duplicates response
+content in local storage so reconstruction can preserve grouping, preambles,
+result whitespace and opaque fields such as reasoning signatures.
+
+A fragment has a provider/endpoint fingerprint, model and cache policy, paired
+trusted boundaries, and a digest of the covered rendered text and meaningful role boundaries. Replay requires
+the same provider/model/policy and complete unchanged source. Prompt preparation
+maps verified spans through gptel's Org conversion; a second digest includes role
+properties so later text edits or filtering invalidate replay. Context selection
+must retain both boundaries. Omitted results are never recovered from hidden
+metadata. Model or provider switches use the new backend's normal serialization.
+
+The adapter applies only to mevedel conversations and their prepared prompt
+copies. Other gptel buffers retain their normal behavior. Decoded reminders keep
+separate message boundaries, and the backend's current explicit cache annotation
+is applied to the assembled messages. Stable reconstruction enables cache reuse;
+it cannot guarantee that a provider retains or serves a cache entry.
+
+The view continues to render the normal transcript and grouped reminder rows;
+provider fragments stay hidden. Compaction uses displayed evidence and decoded
+reminder bodies, excludes encoded provider metadata, and removes records with
+retired history. Source edits, partial selection, compaction and deliberate
+provider/model/policy changes can still change the cached prefix. Previously
+saved conversations without complete fragments are not migrated.
+
 ### Programmatic Tool Calling
 
-`ToolScript` runs one fresh orchestration script in the closed machine
-documented by its request-local tool description. `mevedel-tool-ptc.el` owns
+`ToolCall` runs one fresh orchestration script in the closed machine
+documented by its static description and on-demand dialect manual. `mevedel-tool-ptc.el` owns
 that description, the request roster, registration, and aggregate rendering;
 `mevedel-ptc-driver.el` owns nested pipeline orchestration and exposes one
 execution entry to the tool adapter; `mevedel-ptc-interpreter.el` remains the
 pipeline-independent guest machine. Nested calls retain the normal validation,
 hook, permission, snapshot, cancellation, and telemetry behavior. They are
 shown as one live aggregate row and one settled ordered audit, not as invented
-provider transcript messages. Child identities use `ToolScript-ID/N` and source
+provider transcript messages. Child identities use `ToolCall-ID/N` and source
 `ptc`; those facts reach hooks, permission logs, pipeline telemetry, and the
 child audit. The live row reports active tools, terminal completion counts,
-failures, denials, and permission waits. Child outputs that fit the guest value
+failures, denials, and permission waits. In composed expressions, child outputs that fit the guest value
 budget stay in the user-visible settled audit but are never copied into
 provider history. An oversized child value becomes a bounded guest error before
 the audit or its checkpoint retains it. The cumulative retained-value budget is
 also charged before parallel results enter either durable surface.
 
-The ToolScript envelope is available to the root session and to retained
+The ToolCall envelope is available to the root session and to retained
 agents; every built-in role declares it. An agent-run script differs in one
 way: it never writes the durable envelope checkpoint, because an agent buffer
 resolves to the parent session, whose checkpoint recovery reconciles into the
 root transcript. After a restart an interrupted agent script settles through
 the agent's own interrupted-turn handling instead.
+
+A syntactically direct expression renders using the underlying tool's normal
+renderer and status, while retaining the ToolCall envelope and child IDs in the
+transcript audit. Its result and supported media reach the model unchanged
+apart from ordinary output limits and pipeline guidance. Ask, Skill, WaitAgent
+and UpdateGoal are standalone-only; unclassified wrapped tools default to that
+route. `mevedel-ptc-composable-tools` admits additional names for composition.
+A program that transforms one child result still renders as a script.
 
 The settled envelope's own body carries only what the script returned. On a
 successful completion, a returned value longer than
@@ -101,7 +195,7 @@ state is ephemeral: cancellation or restart interrupts it and it is never
 resumed from session storage. Before child effects, the session sidecar records
 the envelope. Child audit changes are journaled in memory and become durable on
 an unrelated autosave or the settlement write, avoiding one full publication
-per child. A restart reconstructs one interrupted ToolScript row from the last
+per child. A restart reconstructs one interrupted ToolCall row from the last
 durable checkpoint and consumes it with the repaired segment. Synchronous child callbacks are admitted
 in bounded timer turns so one batch cannot monopolize Emacs. Provider
 projection records whether the envelope output was inline, truncated, or
@@ -329,26 +423,43 @@ proposals, or `Eval`. See
 [`address-to-resource.md`](address-to-resource.md) for canonical grammar,
 freshness, and lifecycle contracts.
 
-Tools carry `:groups`. `(:deferred GROUP)` in a preset's or agent's tool
-list pulls every tool tagged with GROUP into the session's deferred set.
-The implementation preset defers `code`, `web`, `elisp`, `Eval`, and the
-`tasks` and `agents` families. Task tracking and retained-agent
-coordination are idle on most turns, and their eleven schemas cost as much
-as the base system prompt, so they load through `ToolSearch` on demand and
-expire again after the deferred-tool TTL.
-`mevedel-preset-extra-tool-specs` / `mevedel-agent-extra-tool-specs` add
-specs without redefining the preset/agent.
+## Discovery and stable native tools
 
-`ToolSearch(load=true)` queues matching deferred tools for the next tool
-payload update and reports them as available now so the model calls the
-newly loaded tool in its next tool call. Only entries the registry
-resolves are reported that way; a match it cannot resolve is reported
-unavailable and dropped from the deferred set for the rest of the
-request, so the roster and the unknown-tool guidance stop sending the
-model back to load it. The next request re-seeds the set from the
-preset. Search terms can be exact tool names (`XrefReferences`,
-`Imenu`, `function_source`) or capability families (`xref`, `imenu`,
-`treesitter`, `elisp`, `web`).
+Tools carry `:groups`. `(:discoverable GROUP)` in a preset or agent tool list
+adds that group to its ToolSearch/ToolCall catalog. The implementation native
+list is Read, Bash, Glob, Grep, ApplyPatch, ToolSearch and ToolCall. Other roles
+use the permitted core subset. Their other capabilities, including implicit
+agent communication tools and configured wrapped tools, remain discoverable.
+User extras use `mevedel-preset-extra-tool-specs` and
+`mevedel-agent-extra-tool-specs`; an explicitly native extra remains native.
+
+ToolSearch performs case-insensitive OR matching over names, summaries,
+categories and groups. One to three matches return all contracts, arguments,
+signatures and manual references. Broader queries return at most 20 names and
+summaries, total/truncation information, and a request to narrow to one or two
+exact names. An exact name selects only that name for its term. Responses deduplicate identities; repeated
+searches return contracts again, including after compaction.
+Queries with no matches suggest at most 20 sorted categories/groups from the
+current callable catalog. An empty catalog produces no suggestions. This
+recovery guidance appears only in the failed search result.
+
+Search does not load native schemas. Each session or retained invocation keeps
+only a `tool-catalog`, not pending/loaded/injected lists or a TTL. Search results
+are ordinary later transcript content. The native ToolSearch/ToolCall
+descriptions own discovery guidance; no duplicate availability reminder is
+prepended to task history. Calls use the current owner's catalog and request
+restrictions; search is not authorization. Wrapped tools use `category/name`
+identities, while built-ins use their short names. Unsupported category
+separators and language-name collisions require native exposure.
+
+Native schema additions can invalidate a cached prefix containing much more
+than the changed tool. Role/configuration changes can still alter schemas;
+ToolSearch and ToolCall do not. Provider cache hit guarantees remain separate
+from payload stability.
+
+Plan filtering retains the shared payload writer and the cache boundary chosen
+by gptel's serializer. Anthropic `cache_control` and Bedrock `cachePoint` retain
+their backend-specific meaning. Discovery no longer invokes this writer.
 
 ### Interaction tool ownership
 
@@ -394,87 +505,9 @@ The session cockpit `t Tools` row opens the native `*mevedel tools*` surface
 for the current main session. `/tools` and `/tools list` open the same
 surface. The buffer is read-only UI chrome, not transcript content.
 
-The tools surface shows active tools, deferred tools, temporarily loaded
-deferred tools, expired loaded tools, and the deferred-tool TTL. It also
-offers session-local lifecycle operations:
-
-- defer an active tool for the current session;
-- activate a deferred tool for the current session;
-- load a deferred tool temporarily, matching `ToolSearch(load=true)` behavior;
-- inspect loaded or expired deferred tools.
-
-Manual tool changes do not mutate presets or global configuration, and they
-do not rewrite already-running child agent tool state.
-
-Tool descriptions live in `prompts/tools/*.md` and are loaded via
-`mevedel-define-tool`'s `:prompt-file` keyword. Every file follows one
-template: an unheaded intro, then `### When to use \`X\``, `### When NOT
-to use \`X\``, `### How to use \`X\`` (tool-specific reference material
-goes in `####` subsections there), `### Examples of good usage`, and
-`### Examples of bad usage` with `<example>`/`<reasoning>` blocks. New
-tools get a file with all six parts.
-
-### Hook boundaries
-
-`PreToolUse` runs after validation so hooks see normalized args. It runs
-before permission so policy hooks can deny, force an ask, add context, or
-replace args before the permission resolver and handler see the call.
-
-`PermissionRequest` runs whenever generic, Bash, Eval, or sandbox-authority
-resolution produces `ask`, immediately before shared queue admission. It can
-allow, deny, or leave the kind-specific card in place. Queue display,
-redraw, and rule-driven re-evaluation do not rerun it. `PermissionDenied`
-runs once after a final denial, carries its original provenance, and can add
-model-facing feedback or context without reopening the tool call.
-
-Post-tool hooks run after initial oversized-result persistence and specialist
-nudges, but before final render-data attachment. The specialist-nudge step is a
-thin pipeline delegation to `mevedel-specialist-nudges.el`, which owns all
-`Read`/`Grep` eligibility, family throttling, deferred `ToolSearch` guidance,
-and reminder text; nudges are queued as ephemeral turn events delivered at the
-same WAIT rather than appended to the result. Post-tool hooks receive both the
-raw handler output and the exact model-visible result. They can replace
-feedback or add context, but they cannot undo tool side effects that
-already happened. For capped tools, a second persistence/truncation pass
-runs after post-tool hooks so `updated_result` cannot reintroduce an
-oversized model-visible result.
-
-Post-use hooks imply handler execution. A successful handler emits only
-`PostToolUse`; an explicit error result, invalid return, or handler signal is
-normalized and emits only `PostToolUseFailure`. Validation failures,
-permission failures, and aborted permission interactions emit neither event.
-
-For an attributed root Goal turn, crossing 100% of the cumulative
-provider-reported input plus output budget queues one ephemeral turn event.
-The reminder injector delivers it at the same WAIT as the tool result, after
-oversized-result persistence, without changing the result or making the
-warning permanent history. Delivery commits the one-shot guard; a failed
-injection leaves settlement free to queue its fallback warning. It is
-advisory: the current request and tool pipeline continue.
-
-### Hazard: post-handler steps must read from context, not buffer-local
-
-Pipeline steps that run **after** the handler must read session,
-workspace, and any other chat-buffer state from the pipeline context
-plist — not from `(current-buffer)` or buffer-local variables.
-
-Tool handlers may invoke the async callback from process sentinels,
-temporary buffers, or other non-chat-buffer contexts. Because steps are
-chained via callbacks, anything that runs after the handler executes in
-the callback's current buffer — often a process output or temp buffer —
-where `mevedel--session` and `mevedel--workspace` may have no
-buffer-local binding and silently fall back to `nil`. That has produced
-concrete bugs (e.g. result persistence skipped because
-`mevedel--workspace` came back `nil` inside a temp buffer).
-
-Rules of thumb:
-- Capture session/workspace once at `mevedel-pipeline-run-tool` entry
-  and thread them through the context plist.
-- Steps that run **before** the handler (validate, permission,
-  snapshot) are safe to use `current-buffer` — they run in the caller's
-  buffer.
-- When adding a step, check its position relative to the handler before
-  deciding whether buffer-local reads are safe.
+The tools surface lists native and discoverable tools. It supports contract
+search (`s`), details, and opening the gptel configuration menu. Obsolete
+activate/defer/load/unload controls are removed.
 
 ## Tool renderers
 
@@ -526,7 +559,7 @@ Well-formed tool segments always render through a registered renderer
 or the generic fallback. Malformed or unparseable tool segments keep the
 older safe fallback behavior.
 
-Renderers that remove appended specialist nudges or system reminders from
+Renderers that remove appended system reminders from
 their display body must strip only an explicit trailing appended block.
 Tool output may legitimately contain marker-shaped text, especially Read
 output with line prefixes, so renderer cleanup should first check for the

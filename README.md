@@ -544,6 +544,33 @@ the patch before applying it.
 | `mevedel-highlighted-instruction-tint-intensity` | Intensity for highlighted instruction tint       |
 | `mevedel-subinstruction-tint-coefficient`        | Coefficient applied to nested instruction tints  |
 
+### Command index
+
+- `mevedel-create-reference` / `mevedel-create-directive` /
+  `mevedel-convert-instructions`
+- `mevedel-save-instructions` / `mevedel-load-instructions`
+- `mevedel-implement-directive` / `mevedel-discuss-directive` /
+  `mevedel-request-directive-changes` / `mevedel-retry-directive`
+- `mevedel`
+- `mevedel-rewind` / `mevedel-redo` / `mevedel-save-session` /
+  `mevedel-rename-session`
+- `mevedel-take-control` / `mevedel-release-control` /
+  `mevedel-toggle-follow` / `mevedel-refresh-session`
+- `mevedel-process-directives`, `mevedel-next/previous-instruction`
+- `mevedel-diff-apply-buffer`
+- `mevedel-compact`
+- `mevedel-review` / `mevedel-verify`
+- `/plan` / `/plan PROMPT` / `mevedel-retry-plan-implementation`
+- `/btw` / `/btw PROMPT`
+- `mevedel-add/remove/list-project-roots`
+- `mevedel-toggle-tasks`
+- `mevedel-buddy-mode` / `mevedel-buddy-global-mode` /
+  `mevedel-buddy-review` / `mevedel-buddy-guide`
+- `mevedel-buddy-dismiss-note` / `mevedel-buddy-dismiss-notes` /
+  `mevedel-buddy-abort`
+- `mevedel-retry-plan-implementation`
+
+
 ## Tools & Agents
 
 mevedel comes with its own set of tools which are used by the LLM to process the
@@ -1003,7 +1030,6 @@ Useful commands:
 | Custom Variable                            | Variable Description                                                     |
 |--------------------------------------------|--------------------------------------------------------------------------|
 | `mevedel-inline-preview-threshold`         | Ratio of chat buffer height to use for inline preview threshold.         |
-| `mevedel-deferred-tool-ttl`                | Turns a ToolSearch-loaded deferred tool stays active after last use.     |
 | `mevedel-permission-rules`                 | Unified permission rules (path / pattern / domain / name specifiers).    |
 | `mevedel-permission-mode`                  | Default permission mode (`ask` / `edits` / `full-auto`).                  |
 | `mevedel-sandbox-mode`                     | Child confinement (`best-effort` / `required` / `off`).                   |

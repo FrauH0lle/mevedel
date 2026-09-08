@@ -7,6 +7,19 @@
     + 'content="default-src \'none\'; style-src \'unsafe-inline\'; '
     + 'img-src data: blob:; media-src data: blob:; font-src data:; '
     + 'script-src \'unsafe-inline\'">';
+  // The frame is sandboxed without allow-same-origin, so the artifact cannot
+  // read the viewer's root stamp. This prelude bakes the theme in force when
+  // the frame is built and follows later toggles over postMessage; a page
+  // themes itself off html[data-theme] alongside prefers-color-scheme.
+  function themePrelude(theme) {
+    return '<script>(() => {const root = document.documentElement;'
+      + 'const set = t => {if (t === "light" || t === "dark") '
+      + 'root.setAttribute("data-theme", t); '
+      + 'else root.removeAttribute("data-theme");};'
+      + `set(${JSON.stringify(theme)});`
+      + 'addEventListener("message", e => {if (e.source === parent && e.data '
+      + '&& e.data.t === "theme") set(e.data.theme);});})()<\/script>';
+  }
 
   function create({send, el, flash, summarize}) {
     const nav = document.getElementById('artifacts');
@@ -20,8 +33,9 @@
     const closeButton = document.getElementById('artifact-close');
     const body = document.getElementById('artifact-body');
     const view = {id: null, name: null, reqId: 0, staging: null,
-                  meta: null, bytes: null, urls: []};
+                  meta: null, bytes: null, urls: [], frames: []};
     let requestSequence = 0;
+    let theme = null;
 
     function note(text) {
       if (!body) return;
@@ -32,8 +46,21 @@
       const frame = doc.createElement('iframe');
       frame.setAttribute('sandbox', 'allow-scripts');
       frame.className = 'artifact-frame';
-      frame.srcdoc = CSP + html;
+      frame.srcdoc = CSP + themePrelude(theme) + html;
+      view.frames.push(frame);
       return frame;
+    }
+
+    // The viewer's explicit theme ('light' | 'dark') or null for system.
+    function setTheme(next) {
+      theme = next === 'light' || next === 'dark' ? next : null;
+      view.frames = view.frames.filter(frame => frame.isConnected !== false);
+      for (const frame of view.frames) {
+        const target = frame.contentWindow;
+        if (target && typeof target.postMessage === 'function') {
+          target.postMessage({t: 'theme', theme}, '*');
+        }
+      }
     }
 
     function text() {
@@ -47,6 +74,7 @@
       view.meta = null;
       view.bytes = null;
       view.urls.splice(0).forEach(url => URL.revokeObjectURL(url));
+      view.frames = [];
       if (panel) panel.hidden = true;
       if (body) body.replaceChildren();
       if (tab) tab.hidden = true;
@@ -203,7 +231,7 @@
     if (closeButton) closeButton.addEventListener('click', close);
     if (tab) tab.addEventListener('click', openTab);
     if (download) download.addEventListener('click', downloadFile);
-    return Object.freeze({open, render, handle, close});
+    return Object.freeze({open, render, handle, close, setTheme});
   }
 
   window.mevedelArtifactView = Object.freeze({create});

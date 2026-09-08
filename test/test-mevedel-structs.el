@@ -292,8 +292,6 @@
             (should (= 3 (mevedel-session-agent-turn-capacity session)))
             (should (null (mevedel-session-tasks session)))
             (should (null (mevedel-session-reminders session)))
-            (should (null (mevedel-session-deferred-pending session)))
-            (should (null (mevedel-session-deferred-injected session)))
             (should (eq 'ask (mevedel-session-permission-mode session)))
             (should (eq 'best-effort
                         (mevedel-session-sandbox-mode session)))

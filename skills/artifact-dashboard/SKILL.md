@@ -34,8 +34,8 @@ default arrangement, not a fixed structure.
    you stop; the card, chart, and table styles are components to build with.
    Keep the base styling so the result reads as one coherent design.
 4. Self-check before writing the file: no `SLOT` markers left, no placeholder
-   or invented values, and every custom color routed through a token so it
-   survives both themes.
+   or invented values, and every custom color routed through a token declared
+   in every scope (light, both dark blocks, print) so it survives both themes.
 5. Write the file into the session artifacts directory with ApplyPatch, per the
    artifact rules above.
 

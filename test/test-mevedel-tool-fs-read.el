@@ -454,6 +454,37 @@
               (should-not (string-match-p "old documentation" result))
               (should-not (string-match-p (regexp-quote root) result)))))
       (delete-directory root t)))
+  :doc "retrieves installed tool manuals and fails when one is unavailable"
+  (let* ((source mevedel-resource--source-dir)
+         (root (make-temp-file "mevedel-read-manuals-" t))
+         (docs (file-name-concat root "docs"))
+         (mevedel-resource--source-dir root))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat docs "tools") t)
+          (with-temp-file (file-name-concat root "mevedel-resource.el")
+            (insert ";; Installed package.\n"))
+          (dolist (name '("ptc-dialect.md" "tools/files.md"
+                          "tools/applypatch.md" "tools/execution.md"))
+            (let* ((file (file-name-concat docs name))
+                   (address (concat "mevedel://" name)))
+              (copy-file (file-name-concat source "docs" name) file)
+              (let* ((attempt (mevedel-resource-prepare 'read address nil))
+                     (mevedel-resource-current-attempts
+                      (list (cons address attempt)))
+                     (text (plist-get
+                            (mevedel-tool-fs-read (list :file_path address))
+                            :result)))
+                (should (string-match-p "1\11# " text))
+                (should-not (string-match-p (regexp-quote root) text)))
+              ;; The source checkout still has the same manual. An installed
+              ;; copy missing it must not silently read that other version.
+              (delete-file file)
+              (let* ((attempt (mevedel-resource-prepare 'read address nil))
+                     (mevedel-resource-current-attempts
+                      (list (cons address attempt))))
+                (should-error (mevedel-tool-fs-read (list :file_path address)))))))
+      (delete-directory root t)))
   :doc "rejects binary and media reads through memory addresses"
   (let* ((workspace-root (make-temp-file "mevedel-memory-media-" t))
          (memory-root (file-name-concat workspace-root "memory"))
@@ -500,7 +531,8 @@
                      :models '(test)))
            (data (list :messages [(:role "user" :content "task")]))
            (fsm (gptel-make-fsm
-                 :info (list :buffer data-buf :backend backend :data data))))
+                 :info (list :buffer data-buf :backend backend :data data
+                             :position (with-current-buffer data-buf (point-marker))))))
       (unwind-protect
           (progn
             (make-directory deeper t)
@@ -1263,7 +1295,7 @@
             (should (string-match-p "unchanged since last read"
                                     after-agent))))
       (delete-file tmp)))
-  :doc "ToolScript nested reads neither consult nor record dedup state"
+  :doc "ToolCall nested reads neither consult nor record dedup state"
   (let* ((tmp (make-temp-file "mevedel-test-" nil ".txt" "ptc content\n"))
          (ws (mevedel-workspace--create
               :type 'file :id "read-ptc-dedup"

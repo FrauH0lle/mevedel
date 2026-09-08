@@ -215,6 +215,8 @@
     const root = document.documentElement;
     if (theme === 'system') root.removeAttribute('data-theme');
     else root.setAttribute('data-theme', theme);
+    // Artifacts render in an opaque-origin frame: the stamp is forwarded.
+    artifacts.setTheme(theme === 'system' ? null : theme);
     if (themeButton) {
       themeButton.textContent = THEME_GLYPH[theme];
       themeButton.setAttribute('aria-label', THEME_LABEL[theme]);

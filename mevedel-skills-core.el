@@ -561,7 +561,7 @@ entries are filtered out so they cannot shadow `$0'/`$1'/etc."
                   names)))
 
 (defun mevedel-skills--parse-ptc-primitives (plist source-file)
-  "Return PLIST's closed ToolScript primitive restriction for SOURCE-FILE."
+  "Return PLIST's closed ToolCall primitive restriction for SOURCE-FILE."
   (if (not (plist-member plist :ptc-primitives))
       :unrestricted
     (let ((value (plist-get plist :ptc-primitives)))
@@ -577,7 +577,7 @@ entries are filtered out so they cannot shadow `$0'/`$1'/etc."
       (delete-dups (copy-sequence value)))))
 
 (defun mevedel-skills-intersect-ptc-primitives (left right)
-  "Intersect ToolScript primitive restrictions LEFT and RIGHT.
+  "Intersect ToolCall primitive restrictions LEFT and RIGHT.
 The sentinel `:unrestricted' is the identity; nil is an explicit empty set."
   (cond
    ((eq left :unrestricted) right)

@@ -1,68 +1,40 @@
-Ask the user one or more questions and wait for their responses.
-
-Use this when you need clarification or user input to proceed with a
-task. Supports multiple questions in a single call with navigation
-between them.
-
-Each question MUST provide predefined answer options. Users can always
-provide custom input.
+Present questions in one form and wait for the user's answers.
 
 ### When to use `Ask`
 
-- You need user input or clarification to proceed
-- Multiple implementation approaches exist and user should decide
-- Gathering user preferences or requirements
-- Making decisions that affect the outcome significantly
-- User needs to choose between trade-offs
+- Missing information or a preference materially affects correctness, scope,
+  authorization, or the result the user wants.
 
 ### When NOT to use `Ask`
 
-- You can make a reasonable default choice
-- The question is trivial or has an obvious answer
-- You're overthinking and should just proceed
+- A routine, reversible decision has a reasonable default within the user's scope.
+- Requesting a tool's built-in permission grant; use its permission fields instead.
 
 ### How to use `Ask`
 
-- Can ask multiple related questions in one call (better than separate
-  calls)
-- Each question MUST provide predefined answer options
-- Options may be plain strings or objects with `label`, `description`,
-  and `sample` fields. Object options still return the selected label
-  as the answer.
-- The tool automatically presents a custom input option to users; do
-  NOT include a "custom", "other" or similar choice in your options list
-- Every question is shown at once in a single form. Users move freely
-  between them, change an answer by moving back to its question, and
-  submit the form when they are done. A question left unanswered is
-  submitted as an explicit "no preference" rather than being blocked.
-- Format questions clearly and make options concise
-- Provide 2-4 good default options per question
-- Mark exactly one option per question as recommended by appending
-  ` (Recommended)` to that option label. Do not add a separate
-  recommendation field.
-- Use `description` for a short trade-off note and `sample` only when
-  the user needs to compare proposed output before selecting an option.
-  A `sample` opens a side frame beside the option list and updates as
-  the user moves between options, so give one to every option of that
-  question or to none of them -- an option without a sample closes the
-  frame. Do not use samples for simple preference questions where
-  labels and descriptions suffice.
+- Group related questions. Each needs concise predefined options; custom input is
+  always available, so do not add an "Other" option. Prefer 2-4 useful choices.
+- Mark exactly one option per question with ` (Recommended)` in its label.
+  Options can be strings or objects with `label`, `description`, and `sample`.
+  Object options return the selected label.
+- Use `description` for a short trade-off. Use `sample` when comparing proposed
+  output helps the choice; supply it for every option in that question or none.
+  The current option's sample appears in a side frame.
+- The user can revise answers before submitting the form. An unanswered question
+  is submitted as "no preference"; it is not authorization. Cancellation returns
+  an error indicating that no answer was submitted.
 
 ### Examples of good usage
 
 <example>
-Ask(questions=[{question: "Which authentication method should we use?", options: ["JWT (Recommended)", "Session cookies", "OAuth2"]}])
-</example>
-
-<example>
-Ask(questions=[{question: "Which files should I write?", options: [{label: "Project AGENTS.md (Recommended)", description: "Shared repo guidance.", sample: "# Repository Guidelines\n- Use pnpm.\n- Run focused tests."}, {label: "Personal AGENTS.local.md", description: "Private checkout notes.", sample: "# Local notes\n- Skip the slow suite."}]}])
+Ask(questions=[{question: "Where should this guidance apply?", options: [{label: "This repository (Recommended)", description: "Shared with contributors."}, {label: "My checkout", description: "Private local guidance."}]}])
 </example>
 
 ### Examples of bad usage
 
 <example>
-Ask(questions=[{question: "Should I continue?", options: ["Yes", "No"]}])
+Ask(questions=[{question: "Should I continue the implementation you requested?", options: ["Yes (Recommended)", "No"]}])
 <reasoning>
-Just proceed instead of asking for permission to continue.
+Continue authorized work when no material choice or blocker needs the user's input.
 </reasoning>
 </example>

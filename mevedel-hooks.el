@@ -1158,17 +1158,36 @@ stubs or user code, so the boundary stays defensive at one owner."
   (if (symbolp event) (symbol-name event) (format "%s" event)))
 
 (defun mevedel-hooks-context-entries (decision event)
-  "Return normalized additional-context entries for DECISION and EVENT."
+  "Return DECISION's added context for EVENT with known host provenance.
+Attribution comes from the runner's side table, never from handler-returned
+metadata.  Unattributed decisions retain the event label alone."
   (when-let* ((decision (mevedel-hooks--safe-decision decision))
               (additional (plist-get decision :additional-context)))
-    (delq nil
-          (mapcar (lambda (item)
-                    (when (and item
-                               (not (and (listp item)
-                                         (keywordp (car-safe item)))))
-                      (list :event (mevedel-hooks-event-display-name event)
-                            :body (format "%s" item))))
-                  additional))))
+    (let ((sources
+           (cl-loop for contribution in
+                    (gethash decision mevedel-hooks--context-handler-table)
+                    append
+                    (mapcar (lambda (body) (cons body contribution))
+                            (plist-get contribution :contexts)))))
+      ;; A caller can change a decision after the runner returns.  Do not
+      ;; attach old attribution to replacement or reordered context.
+      (unless (equal additional (mapcar #'car sources))
+        (setq sources nil))
+      (delq nil
+            (mapcar
+             (lambda (item)
+               (let ((source (cdr (pop sources))))
+                 (when (and item
+                            (not (and (listp item)
+                                      (keywordp (car-safe item)))))
+                   (let ((entry
+                          (list :event (mevedel-hooks-event-display-name event)
+                                :body (format "%s" item))))
+                     (dolist (key '(:source :source-file :plugin-name))
+                       (when (plist-member source key)
+                         (setq entry (plist-put entry key (plist-get source key)))))
+                     entry))))
+             additional)))))
 
 (defun mevedel-hooks--context-xml-escape (text &optional attribute)
   "Escape TEXT for hook context XML-ish content.
@@ -1187,24 +1206,28 @@ When ATTRIBUTE is non-nil, also escape double quotes."
       text)))
 
 (defun mevedel-hooks-format-context (entries)
-  "Return model-visible hook context XML for normalized ENTRIES."
-  (let ((entries (delq nil
-                       (mapcar (lambda (entry)
-                                 (when-let* ((body (plist-get entry :body)))
-                                   (list :event (plist-get entry :event)
-                                         :body body)))
-                               entries))))
+  "Return model-visible hook context with known source attribution for ENTRIES."
+  (let ((entries (seq-filter (lambda (entry) (plist-get entry :body)) entries)))
     (when entries
       (concat
        "<hook-context>\n"
        (mapconcat
         (lambda (entry)
-          (format "<hook-event name=\"%s\">\n%s\n</hook-event>"
-                  (mevedel-hooks--context-xml-escape
-                   (format "%s" (plist-get entry :event))
-                   t)
-                  (mevedel-hooks--context-xml-escape
-                   (format "%s" (plist-get entry :body)))))
+          (format
+           "<hook-event name=\"%s\"%s>\n%s\n</hook-event>"
+           (mevedel-hooks--context-xml-escape
+            (format "%s" (plist-get entry :event)) t)
+           (mapconcat
+            (lambda (field)
+              (when-let* ((value (plist-get entry (car field))))
+                (format " %s=\"%s\"" (cdr field)
+                        (mevedel-hooks--context-xml-escape
+                         (format "%s" value) t))))
+            '((:source . "source") (:source-file . "file")
+              (:plugin-name . "plugin"))
+            "")
+           (mevedel-hooks--context-xml-escape
+            (format "%s" (plist-get entry :body)))))
         entries
         "\n")
        "\n</hook-context>"))))
@@ -1298,6 +1321,7 @@ slot unchanged and returns nil."
     (append
      base
      (list :tool-name (and tool (mevedel-tool-name tool))
+           :tool-category (and tool (mevedel-tool-category tool))
            :tool-use-id (plist-get context :tool-use-id)
            :parent-tool-use-id (plist-get context :parent-tool-use-id)
            :call-source (plist-get context :call-source)
@@ -1504,8 +1528,13 @@ EVENT labels each generated hook event block."
   "Return HANDLER attribution for DECISION's added context."
   (when-let* ((decision (mevedel-hooks--normalize-decision decision))
               (contexts (plist-get decision :additional-context)))
-    (let ((contribution (list :contexts contexts)))
-      (dolist (key '(:source :plugin-name :description :function :command))
+    (let ((contribution
+           (list :contexts
+                 (mapcar (lambda (value)
+                           (if (stringp value) (copy-sequence value)
+                             (copy-tree value t)))
+                         contexts))))
+      (dolist (key '(:source :source-file :plugin-name :description :function :command))
         (when (plist-member handler key)
           (setq contribution
                 (plist-put contribution key (plist-get handler key)))))
@@ -1527,7 +1556,7 @@ record only that context was added, without duplicating the body."
              (mapcar
               (lambda (contribution)
                 (let (handler)
-                  (dolist (key '(:source :plugin-name :description :function
+                  (dolist (key '(:source :source-file :plugin-name :description :function
                                 :command :reason))
                     (when (plist-member contribution key)
                       (setq handler

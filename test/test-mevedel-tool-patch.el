@@ -689,10 +689,10 @@
                               "A complete *** Begin Patch / *** End Patch patch."))
                      (mevedel-tool-args tool)))
       (dolist (text '("Standalone or sticky Plan mode"
-                      "every source and destination target is a non-bare `local://` descendant"
-                      "Ordinary paths, mixed local/ordinary proposals, other-scheme addresses, and malformed or bare endpoints are denied before materialization"
+                      "every source and destination is a non-bare `local://` descendant"
+                      "Disallowed or malformed targets are denied before materialization"
                       "Directive Planning remains read-only"
-                      "Outside Plan mode, mixed local and ordinary operations remain one atomic proposal"))
+                      "Outside Plan mode, local and ordinary paths may share one atomic proposal"))
         (should (string-match-p
                  (mapconcat #'regexp-quote (split-string text " " t)
                             "[[:space:]]+")

@@ -994,6 +994,44 @@ for effects despite reusable authority"
                    "You review Bash commands for security risk"
                    captured-prompt))))
 
+  :doc "real request serialization isolates guardian policy and tools from a coding buffer"
+  (let* ((gptel--known-backends nil)
+         (backend (gptel-make-openai "guardian-payload" :key "test"
+                                     :models '(guardian-payload)))
+         (request-function (symbol-function 'gptel-request))
+         captured result)
+    (with-temp-buffer
+      (setq-local gptel-system-prompt "SESSION CODING PROMPT"
+                  gptel-use-tools t
+                  gptel-use-context t
+                  gptel-tools
+                  (list (gptel-make-tool
+                         :name "ForbiddenCodingTool" :function #'ignore
+                         :description "Coding only" :args nil :category "test")))
+      (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                 (lambda (&rest _) (list :backend backend :model 'guardian-payload)))
+                ((symbol-function 'gptel-request)
+                 (lambda (prompt &rest args)
+                   (setq captured
+                         (gptel-fsm-info
+                          (apply request-function prompt
+                                 (append args '(:dry-run t)))))
+                   (funcall (plist-get args :callback)
+                            "{\"risk\":\"low\",\"recommendation\":\"proceed\",\"reason\":\"Reads status.\"}"
+                            nil))))
+        (mevedel-bash-policy--bash-guardian-model-async
+         "git status --short" nil (lambda (value) (setq result value))))
+      (should (eq (plist-get result :risk) 'low))
+      (should (eq (plist-get captured :backend) backend))
+      (should (eq (plist-get captured :model) 'guardian-payload))
+      (let ((payload (gptel--json-encode (plist-get captured :data))))
+        (should (string-search "You review Bash commands for security risk" payload))
+        (should (string-search "git status --short" payload))
+        (should-not (string-search "SESSION CODING PROMPT" payload))
+        (should-not (string-search "ForbiddenCodingTool" payload)))
+      (should (equal gptel-system-prompt "SESSION CODING PROMPT"))
+      (should gptel-use-tools)))
+
   :doc "unsupported guardian effort fails open before dispatch"
   (let ((requested nil)
         (guidance :unset)

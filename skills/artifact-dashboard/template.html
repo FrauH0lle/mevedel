@@ -5,32 +5,57 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><!-- SLOT: TITLE - e.g. "Q2 Revenue" --></title>
 <style>
+  /* Shared artifact palette: warm neutrals with a blue accent; semantic good
+     and bad sit apart from the accent. Change a token in every scope that
+     declares it (the light :root, both dark blocks, and print) or the value
+     snaps back. */
   :root {
     color-scheme: light dark;
-    --ink:       #16181d;
-    --ink-soft:  #646b78;
-    --bg:        #f6f7f9;
-    --card:      #ffffff;
-    --rule:      #e3e6ea;
-    --accent:    #2f6f8f;
-    --good:      #1d7a4d;
-    --bad:       #b1382f;
-    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --bg:          #f9f9f7;
+    --card:        #fcfcfb;
+    --ink:         #0b0b0b;
+    --ink-soft:    #52514e;
+    --rule:        rgba(11, 11, 11, 0.1);
+    --rule-strong: rgba(11, 11, 11, 0.2);
+    --hover:       rgba(11, 11, 11, 0.04);
+    --accent:      #184f95;
+    --good:        #1d7a4d;
+    --bad:         #b1382f;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   }
-
+  /* Dark on both axes: the OS preference, unless the viewer pinned light, and
+     the viewer's own data-theme stamp. :where() keeps the media block at :root
+     specificity so an explicit stamp wins in either direction. */
   @media (prefers-color-scheme: dark) {
-    :root {
-      --ink:       #e6e8ec;
-      --ink-soft:  #949cab;
-      --bg:        #131519;
-      --card:      #1b1e23;
-      --rule:      #2c3038;
-      --accent:    #6fb2d2;
-      --good:      #4cb98a;
-      --bad:       #e0796f;
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --bg:          #141412;
+      --card:        #1d1d1b;
+      --ink:         #ededea;
+      --ink-soft:    #b3b1a9;
+      --rule:        rgba(255, 255, 255, 0.12);
+      --rule-strong: rgba(255, 255, 255, 0.22);
+      --hover:       rgba(255, 255, 255, 0.05);
+      --accent:      #6da7ec;
+      --good:        #4cb98a;
+      --bad:         #e0796f;
     }
   }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg:          #141412;
+    --card:        #1d1d1b;
+    --ink:         #ededea;
+    --ink-soft:    #b3b1a9;
+    --rule:        rgba(255, 255, 255, 0.12);
+    --rule-strong: rgba(255, 255, 255, 0.22);
+    --hover:       rgba(255, 255, 255, 0.05);
+    --accent:      #6da7ec;
+    --good:        #4cb98a;
+    --bad:         #e0796f;
+  }
+  :root[data-theme="light"] { color-scheme: light; }
 
   * { box-sizing: border-box; }
 
@@ -52,13 +77,13 @@
     gap: 1.5rem;
   }
 
-  header h1 { font-size: 1.6rem; margin: 0 0 0.25rem; font-weight: 600; }
+  header h1 { font-size: 1.5rem; margin: 0 0 0.25rem; font-weight: 600; letter-spacing: -0.01em; }
   header p  { margin: 0; color: var(--ink-soft); font-size: 0.95rem; }
 
   .card {
     background: var(--card);
     border: 1px solid var(--rule);
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 1.1rem 1.25rem;
   }
 
@@ -110,7 +135,7 @@
   #chart-tooltip {
     position: fixed; z-index: 2; pointer-events: none;
     max-width: min(24rem, calc(100vw - 1rem)); padding: 0.5rem 0.75rem;
-    background: var(--card); color: var(--ink); border: 1px solid var(--ink-soft);
+    background: var(--card); color: var(--ink); border: 1px solid var(--rule-strong); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
     border-radius: 4px; font-size: 0.85rem; overflow-wrap: anywhere;
   }
   #chart-table caption { text-align: left; font-weight: 600; }
@@ -144,15 +169,18 @@
   }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   td.num { white-space: nowrap; }
+  tbody tr:hover { background: var(--hover); }
   tbody tr:last-child td { border-bottom: none; }
 
   footer { color: var(--ink-soft); font-size: 0.82rem; }
 
+  /* Print is always light, whatever the OS scheme or the viewer stamp. */
   @media print {
-    :root {
+    :root, :root[data-theme="dark"] {
       color-scheme: light;
-      --ink: #16181d; --ink-soft: #4b5360; --bg: #ffffff; --card: #ffffff;
-      --rule: #c2c8d0; --accent: #2f6f8f; --good: #1d7a4d; --bad: #b1382f;
+      --bg: #fff; --card: #fff; --ink: #0b0b0b; --ink-soft: #444;
+      --rule: #bbb; --rule-strong: #888; --hover: #fff;
+      --accent: #184f95; --good: #1d7a4d; --bad: #b1382f;
     }
     .wrap { max-width: none; padding: 0; }
     #chart-tooltip, #chart-values summary, #chart-status[data-state="ready"] { display: none; }

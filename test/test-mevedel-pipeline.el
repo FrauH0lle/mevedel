@@ -689,11 +689,9 @@ cover, so the permission step's warning about it is captured here."
 		       (progn
 			 (with-current-buffer dispatch-buffer
 			   (setq-local default-directory "/captured-dispatch/"))
-			 (cl-letf (((symbol-function 'mevedel-pipeline--record-use)
-				    #'ignore))
-			   (with-temp-buffer
-			     (mevedel-pipeline--step-handler
-			      ctx (lambda (value) (setq result-ctx value)) #'ignore)))
+			 (with-temp-buffer
+			   (mevedel-pipeline--step-handler
+			    ctx (lambda (value) (setq result-ctx value)) #'ignore))
 			 (should (equal (plist-get result-ctx :result)
 					"/captured-dispatch/")))
 		     (kill-buffer dispatch-buffer)))
@@ -1283,7 +1281,8 @@ cover, so the permission step's warning about it is captured here."
                       (lambda (ctx) (setq after-hooks ctx))
                       #'ignore))
                    (should (equal "visible" (plist-get after-hooks :result)))
-                   (should (equal '((:event "PostToolUse" :body "hook note"))
+                   (should (equal '((:event "PostToolUse" :body "hook note"
+                                           :source native))
                                   (plist-get after-hooks
                                              :hook-additional-context)))
                    (let ((record (car (plist-get after-hooks
@@ -1405,30 +1404,6 @@ cover, so the permission step's warning about it is captured here."
 			 (should (equal result "ok")))
 		     (when (buffer-live-p buffer)
 		       (kill-buffer buffer)))))
-
-
-;;
-;;; Specialist nudges
-
-(mevedel-deftest mevedel-pipeline--step-specialist-nudges ()
-  ,test
-  (test)
-  :doc "delegates generic context fields and forwards the policy result"
-  (let* ((tool (mevedel-tool--create :name "AnyTool"))
-         (session (mevedel-session--create :name "main"))
-         (invocation 'invocation)
-         (context (list :tool tool :args '(:value 1) :result "original"
-                        :session session :invocation invocation))
-         seen
-         out)
-    (cl-letf (((symbol-function 'mevedel-specialist-nudges-apply)
-               (lambda (actual-context)
-                 (setq seen actual-context)
-                 (plist-put actual-context :result "guided"))))
-      (mevedel-pipeline--step-specialist-nudges
-       context (lambda (next-context) (setq out next-context)) #'ignore))
-    (should (eq context seen))
-    (should (equal "guided" (plist-get out :result)))))
 
 
 ;;
@@ -1810,6 +1785,37 @@ cover, so the permission step's warning about it is captured here."
     (mevedel-pipeline-run-tool
      tool (lambda (value) (setq result value)) '(:msg "hello"))
     (should (equal result "hello")))
+
+  :doc "ordinary code reads do not queue unsolicited navigation workflows"
+  (let* ((root (make-temp-file "mevedel-read-discovery-" t))
+         (path (file-name-concat root "sample.el"))
+         (workspace (mevedel-workspace--create :root root))
+         (session (mevedel-session--create
+                   :name "read-discovery" :workspace workspace
+                   :tool-catalog '((("mevedel" "Imenu") . "outline")
+                                   (("mevedel" "XrefReferences") . "references")
+                                   (("mevedel" "Treesitter") . "syntax")
+                                   (("mevedel" "function_source") . "source"))))
+         (tool (mevedel-tool--create
+                :name "Read" :read-only-p t
+                :args '((file_path string :required "Path"))
+                :handler (lambda (args)
+                           (with-temp-buffer
+                             (insert-file-contents (plist-get args :file_path))
+                             (list :result (buffer-string))))))
+         result)
+    (unwind-protect
+        (progn
+          (write-region "(defun sample () nil)\n" nil path nil 'silent)
+          (with-temp-buffer
+            (setq-local mevedel--session session
+                        mevedel--current-request
+                        (mevedel-request--create :id "read-discovery" :session session))
+            (mevedel-pipeline-run-tool
+             tool (lambda (value) (setq result value)) (list :file_path path))
+            (should (equal "(defun sample () nil)\n" result))
+            (should-not (plist-get mevedel-reminders--turn-events :items))))
+      (delete-directory root t)))
 
   :doc "unknown remote outcome blocks mutation but permits read-only tools"
   (let* ((root (file-name-as-directory
@@ -4321,12 +4327,17 @@ cover, so the permission step's warning about it is captured here."
 		     (should marker)
 		     (should (equal tool-prop (get-text-property marker 'gptel r)))
 		     (should (eq t (get-text-property marker 'invisible r)))))
-		 :doc "non-string result with render-data is passed through unchanged"
-		 (let ((ctx (list :result nil :render-data '(:kind diff)))
-		       out)
-		   (mevedel-pipeline--step-attach-render-data
-		    ctx (lambda (c) (setq out c)) #'ignore)
-		   (should (null (plist-get out :result))))
+                 :doc "non-string results retain metadata in provider projection"
+                 (dolist (raw '(37 nil t (:count 3) [1 2]))
+                   (let ((ctx (list :result raw :tool-use-id "scalar"
+                                    :render-data '(:kind probe)))
+                         out)
+                     (mevedel-pipeline--step-attach-render-data
+                      ctx (lambda (c) (setq out c)) #'ignore)
+                     (let ((parsed (mevedel-tool-render-data-extract
+                                    (plist-get out :result) nil "scalar")))
+                       (should (equal (gptel--to-string raw) (car parsed)))
+                       (should (eq 'probe (plist-get (cdr parsed) :kind))))))
 		 :doc "serializes explicit handler status with render-data"
 		 (let ((ctx (list :result "failed"
 				  :tool-use-id "toolu_1"
@@ -4733,7 +4744,6 @@ cover, so the permission step's warning about it is captured here."
             #'mevedel-pipeline--step-post-tool-hooks
             #'mevedel-pipeline--step-hook-side-channel
             #'mevedel-pipeline--step-repair-reminder
-            #'mevedel-pipeline--step-specialist-nudges
             #'mevedel-pipeline--step-goal-budget-warning
             #'mevedel-pipeline--step-attach-render-data
             #'mevedel-pipeline--step-attach-media-data))))
@@ -4759,7 +4769,7 @@ cover, so the permission step's warning about it is captured here."
                   (lambda (step)
                     (eq step #'mevedel-pipeline--step-persist))
                   steps)))
-    (should (< (cl-position #'mevedel-pipeline--step-specialist-nudges steps)
+    (should (< (cl-position #'mevedel-pipeline--step-repair-reminder steps)
                (cl-position #'mevedel-pipeline--step-persist steps)))
     (should (< (cl-position #'mevedel-pipeline--step-persist steps)
                (cl-position #'mevedel-pipeline--step-goal-budget-warning steps))))
@@ -4771,7 +4781,6 @@ cover, so the permission step's warning about it is captured here."
     (should (eq #'mevedel-pipeline--step-post-tool-hooks (car (last steps))))
     (dolist (step (list #'mevedel-pipeline--step-repair-reminder
                         #'mevedel-pipeline--step-hook-side-channel
-                        #'mevedel-pipeline--step-specialist-nudges
                         #'mevedel-pipeline--step-persist
                         #'mevedel-pipeline--step-goal-budget-warning
                         #'mevedel-pipeline--step-attach-render-data

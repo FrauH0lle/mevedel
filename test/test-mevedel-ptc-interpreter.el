@@ -1,8 +1,8 @@
-;;; test-mevedel-ptc-interpreter.el -- Tests for the ToolScript guest interpreter -*- lexical-binding: t -*-
+;;; test-mevedel-ptc-interpreter.el -- Tests for the ToolCall guest interpreter -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Exercises the closed ToolScript guest language, budgets, and machine.
+;; Exercises the closed ToolCall guest language, budgets, and machine.
 
 ;;; Code:
 
@@ -783,6 +783,66 @@ dispatched), and `:pauses'."
                                "(defun count (n) (if (< n 500) (count (+ n 1)) n))
                                 (count 0)")
                               :outcome)))))
+
+(mevedel-deftest mevedel-ptc--direct-tool ()
+  ,test
+  (test)
+
+  :doc "marks only syntactically direct calls and rejects standalone composition before execution"
+  (dolist (case '(("(Probe :value 1)" "Probe")
+                  ("(progn (Probe :value 1))" nil)
+                  ("(Probe :value (Other))" nil)
+                  ("(Probe :value (funcall 'Other))" nil)
+                  ("(Probe :value (apply 'Other nil))" nil)
+                  ("(Probe :value '(Other))" "Probe")
+                  ("(Probe :value (concat \"a\" \"b\"))" "Probe")
+                  ("(Probe) 42" nil)))
+    (let ((state (mevedel-ptc-start (car case) '("Probe" "Other"))))
+      (should (equal (cadr case) (mevedel-ptc-state-direct-tool state)))
+      (mevedel-ptc-close state)))
+  (dolist (expression '("(progn (Other) (Probe))"
+                        "(parallel (Other) (Probe))"
+                        "(Other :value (Probe))"
+                        "(Other :value (funcall 'Probe))"
+                        "(Other :value (apply 'Probe nil))"))
+    (should-error (mevedel-ptc-start expression '("Probe" "Other") '("Probe")))))
+
+(mevedel-deftest mevedel-ptc--pure-argument-p ()
+  ,test
+  (test)
+  :doc "proves literal and pure arguments without treating quoted tools as calls"
+  (dolist (case '(("'(Skill)" t) ("(list 1 2)" t)
+                  ("(funcall 'Skill)" nil) ("(if t 1 2)" nil)))
+    (let* ((form (cadr (car (mevedel-ptc--read (car case)))))
+           (actual (mevedel-ptc--pure-argument-p form)))
+      (should (eq (not (null actual)) (cadr case))))))
+
+(mevedel-deftest mevedel-ptc-tool-name-p ()
+  ,test
+  (test)
+  :doc "rejects operators and reader syntax while admitting qualified tools"
+  (dolist (name '("Imenu" "mcp/server-Probe"))
+    (should (mevedel-ptc-tool-name-p name)))
+  (dolist (name '("nil" "t" "quote" "list" "defmacro" "ToolSearch" "ToolCall"
+                  ":keyword" "two names" "a) (b" "123"))
+    (should-not (mevedel-ptc-tool-name-p name))))
+
+(mevedel-deftest mevedel-ptc-standalone-boundary ()
+  ,test
+  (test)
+  :doc "allows quoted names as data and rejects macro-generated prohibited calls before dispatch"
+  (let ((state (mevedel-ptc-start "(progn '(Skill :name x) 1)" '("Skill") '("Skill"))))
+    (unwind-protect
+        (should (equal '(:done 1) (mevedel-ptc-step state)))
+      (mevedel-ptc-close state)))
+  (let ((state (mevedel-ptc-start
+                "(defmacro late () (list 'Skill)) (Probe) (late)"
+                '("Probe" "Skill") '("Skill"))))
+    (unwind-protect
+        (progn
+          (should (equal '(:tool "Probe" nil) (mevedel-ptc-step state)))
+          (should (eq :error (car (mevedel-ptc-step state "done")))))
+      (mevedel-ptc-close state))))
 
 (provide 'test-mevedel-ptc-interpreter)
 ;;; test-mevedel-ptc-interpreter.el ends here

@@ -183,7 +183,7 @@
    (with-current-buffer view-buf
      (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
             (rendering
-             '(:header "ToolScript: 1 call (completed)"
+             '(:header "ToolCall: 1 call (completed)"
                :body "Returned:\nfinal value\n"
                :initially-collapsed-p nil
                :child-calls ((:id "ptc/1" :tool "Read" :status success
@@ -206,13 +206,13 @@
          (mevedel-view-toggle-section)
          (let ((text (buffer-substring-no-properties
                       (point-min) mevedel-view--input-marker)))
-           (should (string-match-p "ToolScript: 1 call" text))
+           (should (string-match-p "ToolCall: 1 call" text))
            (should-not (string-match-p "final value" text))
            (should-not (string-match-p "Read: a\\.el" text)))
          ;; Expanding again brings them back, and the envelope keeps its
          ;; own identity instead of inheriting a row's.
          (goto-char (point-min))
-         (search-forward "ToolScript: 1 call")
+         (search-forward "ToolCall: 1 call")
          (mevedel-view-toggle-section)
          (let ((text (buffer-substring-no-properties
                       (point-min) mevedel-view--input-marker)))

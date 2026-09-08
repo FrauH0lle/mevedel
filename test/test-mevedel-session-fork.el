@@ -16,7 +16,7 @@
 (mevedel-deftest mevedel-session-fork-clone-session
   (:doc "covers every session slot and isolates both clone policies")
   (progn
-    (should (= 90
+    (should (= 84
              (length
               (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -61,13 +61,7 @@
            :reminders (list reminder)
            :last-observed-date "2026-08-13"
            :agent-types-snapshot '(("worker" . "Worker"))
-           :skills-snapshot '(("skill" . "Skill"))
-           :specialist-nudge-state '(:count 1)
-           :deferred-set '(((:tool "Read") . "Read"))
-           :deferred-pending '(pending)
-           :deferred-injected '(("Read" . 1))
-           :deferred-used '("Read")
-           :deferred-expired '("Old")
+           :tool-catalog '(((:tool "Read") . "Read"))
            :messages '((:type RESULT :payload "message"))
            :agent-registry '(("/root/worker" :state (:nested source)))
            :agent-reservations '((reserved))
@@ -138,11 +132,6 @@
       (dolist (value
                (list (mevedel-session-directive-planning candidate)
                      (mevedel-session-pending-reminders candidate)
-                     (mevedel-session-specialist-nudge-state candidate)
-                     (mevedel-session-deferred-pending candidate)
-                     (mevedel-session-deferred-injected candidate)
-                     (mevedel-session-deferred-used candidate)
-                     (mevedel-session-deferred-expired candidate)
                      (mevedel-session-agent-reservations candidate)
                      (mevedel-session-agent-root-waiter candidate)
                      (mevedel-session-pending-steering candidate)
@@ -187,8 +176,7 @@
                       mevedel-session-permission-rules
                       mevedel-session-resource-grants
                       mevedel-session-agent-types-snapshot
-                      mevedel-session-skills-snapshot
-                      mevedel-session-deferred-set
+                      mevedel-session-tool-catalog
                       mevedel-session-messages
                       mevedel-session-agent-registry
                       mevedel-session-skills
@@ -281,14 +269,6 @@
                         (list source-reminder)
                         (mevedel-session-pending-reminders session)
                         '("pending once")
-                        (mevedel-session-deferred-pending session)
-                        '(deferred-tool)
-                        (mevedel-session-deferred-injected session)
-                        '(("Deferred" . 2))
-                        (mevedel-session-deferred-used session)
-                        '("Deferred")
-                        (mevedel-session-deferred-expired session)
-                        '("Expired")
                         (mevedel-session-skills session)
                         (list source-skill)
                         (mevedel-session-invoked-skills session)
@@ -362,10 +342,6 @@
           (should-not (mevedel-session-messages child))
           (should-not (mevedel-session-execution-state child))
           (should-not (mevedel-session-pending-reminders child))
-          (should-not (mevedel-session-deferred-pending child))
-          (should-not (mevedel-session-deferred-injected child))
-          (should-not (mevedel-session-deferred-used child))
-          (should-not (mevedel-session-deferred-expired child))
           (should-not (mevedel-session-dropped-file-grants child))
           (should-not (mevedel-session-active-dropped-file-grants child))
           (should-not (mevedel-session-hook-context-pending child))

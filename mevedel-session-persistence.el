@@ -37,7 +37,7 @@
 ;;    :file-snapshots ((TURN-N . ((PATH . (:backup-name STR-OR-NIL
 ;;                                          :pre-backup-name STR-OR-NIL
 ;;                                          :version INT :gap STR-OR-NIL)) ...)) ...))
-;;    :ptc-checkpoints ((:id ID :args (:script SCRIPT) :state STATE
+;;    :ptc-checkpoints ((:id ID :args (:expression SCRIPT) :state STATE
 ;;                       :result RESULT :render-data DATA) ...))
 ;;
 ;; Hash-table-valued slots on the session struct (`touched-files',

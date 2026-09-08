@@ -62,20 +62,35 @@
         (should (eq t (mevedel-tool-read-only-p tool)))
         (should (memq 'elisp (mevedel-tool-groups tool))))))
 
-  :doc "(:deferred elisp) pulls in all 16 wrapped tools"
+  :doc "(:discoverable elisp) pulls in all 16 wrapped tools"
   (progn
     (mevedel-tool-introspect--register)
-    (let* ((resolved (mevedel-tool-resolve '((:deferred elisp))))
-           (deferred (plist-get resolved :deferred))
+    (let* ((resolved (mevedel-tool-resolve '((:discoverable elisp))))
+           (deferred (plist-get resolved :discoverable))
            (names (mapcar #'mevedel-tool-name deferred)))
       (dolist (expected test-mevedel-tool-introspect--expected-tools)
         (should (member expected names)))))
 
   :doc "upstream introspection entries remain untouched"
-  (progn
+  (let ((before (mapcar
+                 (lambda (name)
+                   (let ((source (gptel-get-tool (list "introspection" name))))
+                     (list name (gptel-tool-description source)
+                           (copy-tree (gptel-tool-args source) t))))
+                 test-mevedel-tool-introspect--expected-tools)))
     (mevedel-tool-introspect--register)
-    (dolist (name test-mevedel-tool-introspect--expected-tools)
-      (should (gptel-get-tool (list "introspection" name)))))
+    (dolist (entry before)
+      (let* ((name (car entry))
+             (source (gptel-get-tool (list "introspection" name)))
+             (wrapped (mevedel-tool-get name "mevedel-introspection"))
+             (provenance (mevedel-tool-prompt-source wrapped)))
+        (should (equal (nth 1 entry) (gptel-tool-description source)))
+        (should (equal (nth 2 entry) (gptel-tool-args source)))
+        (should (eq 'file (plist-get provenance :kind)))
+        (should (equal (mevedel-tool-prompt wrapped)
+                       (with-temp-buffer
+                         (insert-file-contents (plist-get provenance :path))
+                         (buffer-string)))))))
 
   :doc "variable_value check-permission returns ask unconditionally"
   (progn

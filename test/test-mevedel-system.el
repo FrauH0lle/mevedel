@@ -30,10 +30,40 @@
   "Return a workspace-aware test profile with ROLE."
   `(:workspace-aware t
     :components ((role :text ,role)
-                 workspace-config memory environment skills)))
+                 memory-policy workspace-config memory environment skill-policy skills)))
 
 ;;
 ;;; Built-in profiles
+
+(mevedel-deftest mevedel-system--provider-tool-schema ()
+  ,test
+  (test)
+  :doc "uses provider JSON semantics for keyword properties and empty objects"
+  (let* ((gptel--known-backends nil)
+         (gptel--known-tools nil)
+         (backend (gptel-make-openai "schema-inspector" :key "test" :models '(test)))
+         (tools (list (gptel-make-tool
+                       :name "Example" :description "Inspect a value"
+                       :args '((:name "expression" :type string
+                                      :description "A tool expression")
+                               (:name "options" :type object :properties nil
+                                      :optional t :description "Options")))))
+         (actual (mevedel-system--provider-tool-schema backend tools))
+         (parsed (json-parse-string actual :object-type 'hash-table))
+         (properties (gethash "properties"
+                              (gethash "parameters" (aref parsed 0)))))
+    (should (equal (gptel--json-encode (gptel--parse-tools backend tools)) actual))
+    (should (hash-table-p properties))
+    (should (hash-table-p (gethash "properties" (gethash "options" properties))))))
+
+(mevedel-deftest mevedel-system-build-prompt/retained ()
+  ,test
+  (test)
+  :doc "preserves authored inline components with names matching dynamic components"
+  (let ((profile '(:workspace-aware nil
+                   :components ((memory :text "Authored inline context")))))
+    (should (equal "Authored inline context"
+                   (mevedel-system-build-prompt profile :retained t)))))
 
 (mevedel-deftest mevedel-system-build-prompt/buddy
   (:doc "the buddy profiles render without a session")
@@ -47,12 +77,21 @@
     (should (string-match-p "read_buffer" prompt))
     (should (string-match-p "## Environment" prompt)))
 
+  :doc "save guidance is delivered to main but not passive Buddy profiles"
+  (let ((mevedel-memory-dirs nil))
+    (should (string-search "## How to save memories"
+                           (mevedel-system-build-prompt 'main)))
+    (dolist (profile '(buddy buddy-guide))
+      (let ((prompt (mevedel-system-build-prompt profile)))
+        (should (string-search "Persistent memory" prompt))
+        (should-not (string-search "## How to save memories" prompt)))))
+
   :doc "the guidance profile differs from the review profile in its role"
   (let ((review (mevedel-system-build-prompt 'buddy :session nil))
         (guide (mevedel-system-build-prompt 'buddy-guide :session nil)))
     (should (string-match-p "asking you what to build" guide))
-    (should (string-match-p "This is not a review" guide))
-    (should-not (string-match-p "This is not a review" review))
+    (should (string-match-p "Help develop the selected idea" guide))
+    (should-not (string-match-p "Help develop the selected idea" review))
     (should-not (string-match-p "asking you what to build" review))
     ;; Only the role differs; the shared components are in both.
     (should (string-match-p "## Environment" guide))))
@@ -73,15 +112,7 @@
       (should (string-match-p "Resource addresses" prompt))
       (should (string-match-p "Read`, `Glob`, `Grep" prompt))
       (should (string-match-p "permitted `ApplyPatch`" prompt))
-      (should (string-match-p
-               (regexp-quote "Skill(name=...)")
-               prompt))
-      (should (string-match-p
-               (regexp-quote "Agent(...)")
-               prompt))
-      (should (string-match-p "SendMessage" prompt))
-      (should (string-match-p "short notifications" prompt))
-      (should (string-match-p "not an attachment,[[:space:]]+invocation, or delegation"
+      (should (string-match-p "not an attachment, skill invocation, or delegation"
                              prompt))
       (should (string-match-p "user-composer syntax and[[:space:]]+do not execute"
                              prompt))
@@ -137,6 +168,9 @@
          (external
           (gptel-make-tool :name "ExternalInspect" :category "external"
                            :description "External full description"))
+         (_loaded
+          (gptel-make-tool :name "LoadedInspect" :category "external"
+                           :description "Loaded full description"))
          (data (generate-new-buffer " *mevedel-prompt-inspector-data*"))
          inspector)
     (unwind-protect
@@ -147,7 +181,9 @@
             (setq-local mevedel--workspace workspace)
             (setf (mevedel-session-preset-name session) 'mevedel-implement
                   (mevedel-session-permission-mode session) 'edits
-                  (mevedel-session-sandbox-mode session) 'best-effort)
+                  (mevedel-session-sandbox-mode session) 'best-effort
+                  (mevedel-session-tool-catalog session)
+                  '((("external" "LoadedInspect") . "Inspect loaded state")))
             (setq-local gptel-system-prompt (lambda () "EXACT LIVE PROMPT"))
             (setq-local gptel-tools (list native-gptel external))
             (setq inspector (mevedel-inspect-effective-prompt)))
@@ -159,6 +195,7 @@
               (should (string-search "EXACT LIVE PROMPT" text))
               (should (string-search "/prompts/native.md" text))
               (should (string-search "External full description" text))
+              (should-not (string-search "Loaded full description" text))
               (should (string-search "external gptel tool" text))
               (should (string-search "Estimated total" text)))))
       (when (buffer-live-p inspector) (kill-buffer inspector))
@@ -328,15 +365,15 @@
          (prompt (cl-letf (((symbol-function 'mcp-hub-get-servers)
                             (lambda () nil)))
                    (let ((gptel-tools nil))
-                     (mevedel-system--tool-orchestration-prompt context)))))
+                     (mevedel-system--join-parts (mevedel-system--tool-orchestration-prompt context) (mevedel-system--resource-roster context))))))
     (should (string-match-p "Tool orchestration" prompt))
     (should (string-match-p "local://" prompt))
     (should (string-match-p "artifact://" prompt))
     (should-not (string-match-p "{{RESOURCE_ROSTER}}" prompt))
-    (should-not (string-match-p "ToolScript" prompt))
+    (should-not (string-match-p "ToolCall" prompt))
     (should-not (string-match-p "{{PTC_GUIDANCE}}" prompt)))
 
-  :doc "promotes ToolScript when the request has the tool active"
+  :doc "keeps earlier orchestration bytes stable when ToolCall becomes active"
   (let* ((workspace (mevedel-workspace-get-or-create
                      'project root-dir root-dir "tool-orchestration"))
          (session (mevedel-session-create "main" workspace root-dir))
@@ -344,20 +381,19 @@
     (unwind-protect
         (cl-letf (((symbol-function 'mcp-hub-get-servers)
                    (lambda () nil)))
-          (with-current-buffer buffer
-            (setq-local gptel-tools
-                        (list (gptel-make-tool :name "ToolScript"
-                                               :function #'ignore
-                                               :description "test"))))
-          (let ((prompt (mevedel-system--tool-orchestration-prompt
-                         (mevedel-system-context--create
-                          :workspace workspace
-                          :working-directory root-dir
-                          :session session
-                          :refresh-buffer buffer))))
-            (should (string-match-p "prefer a single `ToolScript` call"
-                                    prompt))
-            (should-not (string-match-p "{{PTC_GUIDANCE}}" prompt))))
+          (let* ((context (mevedel-system-context--create
+                           :workspace workspace
+                           :working-directory root-dir
+                           :session session
+                           :refresh-buffer buffer))
+                 (before (mevedel-system--join-parts (mevedel-system--tool-orchestration-prompt context) (mevedel-system--resource-roster context))))
+            (with-current-buffer buffer
+              (setq-local gptel-tools
+                          (list (gptel-make-tool :name "ToolCall"
+                                                 :function #'ignore
+                                                 :description "test"))))
+            (should (equal before
+                           (mevedel-system--join-parts (mevedel-system--tool-orchestration-prompt context) (mevedel-system--resource-roster context))))))
       (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-system-build-prompt
@@ -455,7 +491,7 @@
              (env-pos (string-match-p "## Environment" prompt))
              (skills-pos (string-match-p "## Skills" prompt)))
         (should (string-match-p "^- review-spec: Review a spec$" prompt))
-        (should (string-match-p "Skill(name=\\.\\.\\.)" prompt))
+        (should (string-match-p "(Skill :name" prompt))
         (should (and env-pos skills-pos))
         (should (< env-pos skills-pos)))))
 
@@ -651,17 +687,45 @@
 ;;
 ;;; Persistent memory
 
-(mevedel-deftest mevedel-system--human-time-age
-  (:doc "`mevedel-system--human-time-age' formats today/yesterday/day counts")
-  (let ((now (encode-time 0 0 12 8 5 2026)))
+(mevedel-deftest mevedel-system-build-prompt/memory
+  (:vars* ((root (file-name-as-directory (make-temp-file "mevedel-memory-flow-" t)))
+           (mevedel-memory-dirs '(".agents/memory/"))
+           (index (file-name-concat root ".agents/memory/MEMORY.md"))
+           (workspace (mevedel-workspace--create
+                       :type 'project :id root :root root :name "memory")))
+   :after-each (delete-directory root t))
+  ,test
+  (test)
+  :doc "unchanged memory context stays identical across calendar days"
+  (let ((now (encode-time 0 0 12 8 5 2026)) first second)
+    (make-directory (file-name-directory index) t)
+    (with-temp-file index (insert "- [Release](release.md) - release coordination\n"))
+    (set-file-times index now)
     (cl-letf (((symbol-function 'current-time) (lambda () now)))
-      (should (equal "today" (mevedel-system--human-time-age now)))
-      (should (equal "yesterday"
-                     (mevedel-system--human-time-age
-                      (time-subtract now (days-to-time 1)))))
-      (should (equal "4 days ago"
-                     (mevedel-system--human-time-age
-                      (time-subtract now (days-to-time 4))))))))
+      (let ((mevedel-system--prompt-component-cache (make-hash-table :test #'equal)))
+        (setq first (mevedel-system-build-prompt
+                     '(:workspace-aware nil :components (memory)) :workspace workspace)))
+      (setq now (time-add now (days-to-time 1)))
+      ;; Fresh memoization makes this a rendered-content check, not a cache hit.
+      (let ((mevedel-system--prompt-component-cache (make-hash-table :test #'equal)))
+        (setq second (mevedel-system-build-prompt
+                      '(:workspace-aware nil :components (memory)) :workspace workspace))))
+    (should (equal first second))
+    (should (string-search "2026-05-08" second)))
+
+  :doc "changed index refreshes context without rewriting earlier save guidance"
+  (let ((mevedel-system--prompt-component-cache (make-hash-table :test #'equal))
+        (profile '(:workspace-aware nil :components (memory-policy memory-save-policy memory)))
+        first second)
+    (make-directory (file-name-directory index) t)
+    (with-temp-file index (insert "- [Release](release.md) - old coordination\n"))
+    (setq first (mevedel-system-build-prompt profile :workspace workspace))
+    (with-temp-file index (insert "- [Release](release.md) - revised release coordination\n"))
+    (setq second (mevedel-system-build-prompt profile :workspace workspace))
+    (should (string-search "revised release coordination" second))
+    (should-not (string-search "old coordination" second))
+    (should (equal (substring first 0 (string-search "## Memory context" first))
+                   (substring second 0 (string-search "## Memory context" second))))))
 
 (mevedel-deftest mevedel-system--memory-content
   (:before-each (mevedel-workspace-clear-registry)
@@ -673,14 +737,14 @@
                  (delete-directory root-dir t)))
   ,test
   (test)
-  :doc "returns empty index guidance when MEMORY.md is absent"
+  :doc "reports absent indexes without inventing a save task"
   (let* ((ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj"))
          (content (mevedel-system--memory-content ws)))
     (should (string-match-p "memory indexes are currently empty" content))
-    (should (string-match-p "separate topic files" content)))
+    (should-not (string-match-p "save" content)))
 
-  :doc "adds age metadata and truncates MEMORY.md to 200 lines"
+  :doc "adds an absolute modification date and truncates MEMORY.md to 200 lines"
   (let* ((memory-dir (file-name-concat root-dir ".mevedel" "memory"))
          (memory-file (file-name-concat memory-dir "MEMORY.md"))
          (ws (mevedel-workspace-get-or-create
@@ -691,7 +755,7 @@
         (insert (format "line-%03d\n" (1+ i)))))
     (let ((content (mevedel-system--memory-content ws)))
       (should (string-match-p
-               "<!-- Last updated: [0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\} (today) -->"
+               "<!-- Last updated: [0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\} -->"
                content))
       (should (string-match-p "line-001" content))
       (should (string-match-p "line-200" content))
@@ -728,7 +792,7 @@
       (should (< local-agents-pos global-mevedel-pos))
       (should (< global-mevedel-pos global-agents-pos)))))
 
-(mevedel-deftest mevedel-system--memory-prompt
+(mevedel-deftest mevedel-system--memory-context-prompt
   (:before-each (mevedel-workspace-clear-registry)
    :vars* ((root-dir (file-name-as-directory
                       (make-temp-file "mevedel-memory-prompt-" t)))
@@ -738,10 +802,10 @@
                  (delete-directory root-dir t)))
   ,test
   (test)
-  :doc "includes memory root routing rules and configured roots"
+  :doc "includes configured roots and index state separately from save policy"
   (let* ((ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj"))
-         (prompt (funcall mevedel-system--memory-prompt ws)))
+         (prompt (mevedel-system--memory-context-prompt ws)))
     (should (string-match-p (regexp-quote
                              (file-name-concat root-dir
                                                ".mevedel" "memory"))
@@ -750,11 +814,8 @@
                              (file-name-concat root-dir
                                                ".agents" "memory"))
                             prompt))
-    (should (string-match-p "If an existing memory covers the topic" prompt))
-    (should (string-match-p "global memory unless the user asks" prompt))
-    (should (string-match-p "local memory unless the user asks" prompt))
-    (should (string-match-p "Prefer `.agents/memory/`" prompt))
-    (should (string-match-p "Use `.mevedel/memory/`" prompt))))
+    (should (string-search "memory indexes are currently empty" prompt))
+    (should-not (string-search "How to save memories" prompt))))
 
 (mevedel-deftest mevedel-system--memory-cache-key
   (:before-each (mevedel-workspace-clear-registry)
@@ -766,22 +827,17 @@
                  (delete-directory root-dir t)))
   ,test
   (test)
-  :doc "includes the current date so age metadata refreshes daily"
+  :doc "keys configured index metadata and the context template without calendar state"
   (let* ((ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj"))
          (context (mevedel-system-context--create
                    :workspace ws
                    :working-directory root-dir))
-         key-one key-two)
-    (cl-letf (((symbol-function 'mevedel-system--current-date)
-               (lambda () "2026-05-08")))
-      (setq key-one (mevedel-system--memory-cache-key context)))
-    (cl-letf (((symbol-function 'mevedel-system--current-date)
-               (lambda () "2026-05-09")))
-      (setq key-two (mevedel-system--memory-cache-key context)))
-    (should-not (equal key-one key-two))
-    (should (= 2 (length (plist-get key-one :files))))
-    (should (member :date key-one))))
+         (key (mevedel-system--memory-cache-key context)))
+    (should (= 2 (length (plist-get key :files))))
+    (should (string-suffix-p "prompts/system/memory-context.md"
+                            (plist-get (plist-get key :template) :file)))
+    (should-not (plist-member key :date))))
 
 
 ;;

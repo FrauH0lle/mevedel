@@ -1,45 +1,38 @@
-Search for functions, variables, or classes by name pattern across your project.
-Helps you discover code elements when you know part of the name.
+Find symbol definitions by name pattern using the file's xref backend.
 
 ### When to use `XrefDefinitions`
 
-- Discovering functions or variables with names matching a pattern
-- Finding related symbols when you know part of the name
-- Exploring API surface area by naming convention
-- Locating symbol definitions by partial name
+- Discover definitions when you know a name or part of one.
 
 ### When NOT to use `XrefDefinitions`
 
-- Searching for specific text in files -> use Grep
-- Finding exact symbol references/usage -> use XrefReferences
-- Searching across many files without symbol focus -> delegate
-- Pattern is too vague and will return many results -> delegate
+- Searching source text or finding uses of a symbol.
+- Remote workspaces: definition lookup is currently unsupported.
 
 ### How to use `XrefDefinitions`
 
-- Provide a pattern (substring or regex) to match symbol names
-- Works with indexed symbols (LSP, TAGS, elisp definitions)
-- Returns symbol definitions (not all references)
-- Useful for discovering what is available in a codebase
+- `file_path` must name an existing file that selects the language/project
+  context. It is not a directory or a search-result filter.
+- The pattern is passed to the backend's symbol search. Pattern syntax,
+  indexing, and search scope depend on that backend; this is not a universal
+  project-wide text search.
+- Returns `file:line: summary` locations, or a no-results/missing-backend
+  diagnostic. An unavailable index is not evidence that no definition exists.
+  Large output is persisted with a bounded preview and retrieval address.
 
 ### Examples of good usage
 
 <example>
-- Find all authentication-related symbols
 XrefDefinitions(pattern="auth", file_path="src/app.ts")
-</example>
-
-<example>
-- Find symbols with 'config' in name
-XrefDefinitions(pattern="config", file_path="src/settings.py")
+-> Ask that file's backend for matching symbol definitions.
 </example>
 
 ### Examples of bad usage
 
 <example>
-XrefDefinitions(pattern="error_message", file_path=".")
+XrefDefinitions(pattern="config", file_path="src/")
 <reasoning>
-Looking for text occurrences.
-Use Grep to search for text strings, not symbol definitions.
+A directory cannot select the file's language backend. Use an existing source
+file, for example file_path="src/settings.py".
 </reasoning>
 </example>

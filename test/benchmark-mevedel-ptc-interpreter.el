@@ -1,8 +1,8 @@
-;;; benchmark-mevedel-ptc-interpreter.el --- ToolScript evaluator measurements -*- lexical-binding: t -*-
+;;; benchmark-mevedel-ptc-interpreter.el --- ToolCall evaluator measurements -*- lexical-binding: t -*-
 
 ;;; Commentary:
 ;;
-;; Repeatable, non-ERT measurements for comparing ToolScript evaluator
+;; Repeatable, non-ERT measurements for comparing ToolCall evaluator
 ;; implementations.  Timing is reported rather than asserted because it
 ;; depends on the host and current Emacs load.
 ;;
@@ -75,7 +75,7 @@
           :result result)))
 
 (defun benchmark-mevedel-ptc--event-loop-drive (script expected)
-  "Run SCRIPT through the ToolScript driver, requiring EXPECTED.
+  "Run SCRIPT through the ToolCall driver, requiring EXPECTED.
 Measure timer service while the driver runs."
   (garbage-collect)
   (let* ((started (float-time))
@@ -101,14 +101,14 @@ Measure timer service while the driver runs."
           (while (and (not done) (< (float-time) deadline))
             (accept-process-output nil 0.01))
           (unless done
-            (error "ToolScript driver benchmark timed out")))
+            (error "ToolCall driver benchmark timed out")))
       (when (timerp probe-timer)
         (cancel-timer probe-timer)))
     (setq max-probe-gap
           (max max-probe-gap (- (float-time) last-probe)))
     (unless (and (eq (plist-get result :status) 'success)
                  (equal (plist-get result :result) expected))
-      (error "ToolScript driver workload returned %S" result))
+      (error "ToolCall driver workload returned %S" result))
     (list :seconds (- (float-time) started)
           :max-probe-gap-ms (* 1000 max-probe-gap)
           :probes (or probes 0)
@@ -183,7 +183,7 @@ Measure timer service while the driver runs."
     (cons script (string-join (nreverse lines) "\n"))))
 
 (defun benchmark-mevedel-ptc-run ()
-  "Run and print the ToolScript evaluator comparison workloads."
+  "Run and print the ToolCall evaluator comparison workloads."
   (let* ((small-script (benchmark-mevedel-ptc--loop-script 320))
          (stress-script (benchmark-mevedel-ptc--loop-script 71427))
          (recorded (benchmark-mevedel-ptc--recorded-workload))

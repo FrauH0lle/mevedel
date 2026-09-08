@@ -3096,12 +3096,35 @@
   (test)
   :doc "incremental redraw preserves a multiline leading-> composer draft"
   (mevedel-view-test--with-buffers
-    (let ((draft "> quoted\nsecond line")
+    (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry))
+          (gptel--known-tools (copy-tree gptel--known-tools))
+          (draft "> quoted\nsecond line")
           data-turn-start)
       (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
       (with-current-buffer data-buf
         (setq data-turn-start (copy-marker (point-max) nil)))
       (mevedel-view-test--insert-data data-buf "Assistant text.\n" 'response)
+      (mevedel-tool-ptc--register)
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat "(:name \"ToolCall\" :args (:expression \"(Read :file_path \\\"x\\\")\"))\n\nread result"
+               (mevedel-tool-render-data-format
+                '(:kind ptc :direct-tool "Read" :outcome completed
+                  :calls ((:id "draft-envelope/1" :tool "Read" :args (:file_path "x")
+                           :status success :result "read result"))) "draft-envelope"))
+       '(tool . "draft-envelope"))
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat
+        (mevedel--format-hook-audit-record
+         '(:type provider-tool-batch-start :id "draft-envelope"))
+        (mevedel--format-hook-audit-record
+         '(:type provider-tool-batch :id "draft-envelope"
+           :messages [(:opaque "hidden provider representation")]))
+        (mevedel--format-hook-audit-record
+         '(:type injected-reminders :phase mid-turn
+           :items ((:type fixture :body "Retained guidance.")))))
+       'mevedel-hook-audit)
       (with-current-buffer view-buf
         (setq mevedel-view--data-turn-start data-turn-start)
         (setq mevedel-view--in-flight-turn-start
@@ -3111,6 +3134,7 @@
         (goto-char (+ (mevedel-view--input-start) 4))
         (mevedel-view-render-live-update data-buf)
         (should (string= draft (mevedel-view--input-text)))
+        (should-not (string-search "hidden provider representation" (buffer-string)))
         (should (= (point) (+ (mevedel-view--input-start) 4)))
         (should-not (get-text-property (mevedel-view--input-start)
                                        'read-only)))))
@@ -3852,6 +3876,34 @@
 (mevedel-deftest mevedel-view--invoke-renderer ()
   ,test
   (test)
+  :doc "renders a direct expression as its specialist while preserving script rendering"
+  (let ((mevedel-tool--registry (copy-hash-table mevedel-tool--registry)))
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "DisplayProbe" :category "mevedel"
+      :renderer (lambda (name args result data)
+                  (list :header (concat name ": " (plist-get args :value))
+                        :body result :status (plist-get data :status)))))
+    (let* ((tool (mevedel-tool--create :name "ToolCall"
+                                     :renderer #'mevedel-tool-ptc--render))
+           (audit '(:kind ptc :outcome completed :direct-tool "DisplayProbe"
+                    :calls ((:id "envelope/1" :tool "DisplayProbe"
+                             :args (:value "input") :status success :result "answer"))))
+           (rendered (mevedel-view--invoke-renderer tool audit nil "answer")))
+      (should (equal "DisplayProbe: input" (plist-get rendered :header)))
+      (should (equal "answer" (plist-get rendered :body)))
+      (should (equal "envelope/1" (plist-get (car (plist-get audit :calls)) :id)))
+      (let ((failed (plist-put (copy-sequence audit) :outcome 'script-error)))
+        (setq failed (plist-put failed :status 'error))
+        (let ((failure (mevedel-view--invoke-renderer tool failed nil "Error: checkpoint failed")))
+          (should (eq 'error (plist-get failure :status)))
+          (should (string-search "checkpoint failed" (plist-get failure :body)))))
+      (let ((live (plist-put (copy-sequence audit) :live-p t)))
+        (should (string-prefix-p "ToolCall:"
+                                 (plist-get (mevedel-view--invoke-renderer tool live nil "") :header))))
+      (setq audit (plist-put (copy-sequence audit) :direct-tool nil))
+      (should (string-prefix-p "ToolCall: 1 call"
+                               (plist-get (mevedel-view--invoke-renderer tool audit nil "answer") :header)))))
   :doc "returns the renderer's plist on success"
   (let* ((tool (mevedel-tool--create
                 :name "R1"
@@ -4385,18 +4437,18 @@
   (progn
     (mevedel-tool-register
      (mevedel-tool--create
-      :name "ToolScript"
+      :name "ToolCall"
       :category "mevedel"
       :renderer (lambda (_name _args result _data)
-                  (list :header "ToolScript: 1 call (completed)"
+                  (list :header "ToolCall: 1 call (completed)"
                         :body result
                         :child-calls '((:id "x" :tool "Read"))
                         :coalesce-key "ptc"
                         :initially-collapsed-p t))))
     (let ((rendering
            (mevedel-view--child-call-rendering
-            '(:id "ptc/1" :tool "ToolScript" :status success
-              :args (:script "(Read :file_path \"a\")")
+            '(:id "ptc/1" :tool "ToolCall" :status success
+              :args (:expression "(Read :file_path \"a\")")
               :result "inner value"))))
       (should (equal '((:id "x" :tool "Read"))
                      (plist-get rendering :child-calls)))
@@ -4497,7 +4549,7 @@
     (mevedel-view-mode)
     (let ((inhibit-read-only t))
       (mevedel-view--render-expanded-body
-       '(:header "ToolScript: 2 calls (completed)"
+       '(:header "ToolCall: 2 calls (completed)"
          :body "Returned:\nfinal"
          :child-calls ((:id "ptc/1" :tool "Read" :status success
                         :args (:file_path "a.el") :result "first")
@@ -4505,7 +4557,7 @@
                         :args (:file_path "b.el") :result "second")))
        (cons 1 10)))
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "ToolScript: 2 calls" text))
+      (should (string-match-p "ToolCall: 2 calls" text))
       (should (string-match-p "Read: a\\.el" text))
       (should (string-match-p "Read: b\\.el" text))
       ;; Collapsed rows show headers only.
@@ -4528,7 +4580,7 @@
     (mevedel-view-mode)
     (let ((inhibit-read-only t))
       (mevedel-view--render-expanded-body
-       '(:header "ToolScript: 2 calls (completed)"
+       '(:header "ToolCall: 2 calls (completed)"
          :body "Returned:\nfinal"
          :child-calls ((:id "ptc/1" :tool "Read" :status success
                         :args (:file_path "a.el") :result "first output")
@@ -4556,14 +4608,14 @@
     (mevedel-view-mode)
     (let ((inhibit-read-only t))
       (mevedel-view--insert-rendered-tool
-       '(:header "ToolScript: 1 call (completed)"
+       '(:header "ToolCall: 1 call (completed)"
          :body "Returned:\nfinal"
          :initially-collapsed-p t
          :child-calls ((:id "ptc/1" :tool "Read" :status success
                         :args (:file_path "a.el") :result "first")))
        (cons 1 10)))
     (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-      (should (string-match-p "ToolScript: 1 call" text))
+      (should (string-match-p "ToolCall: 1 call" text))
       (should-not (string-match-p "Read" text))))
 
   :doc "draws a concurrent gutter and keeps it across a toggle"
@@ -4571,7 +4623,7 @@
     (mevedel-view-mode)
     (let ((inhibit-read-only t))
       (mevedel-view--render-expanded-body
-       '(:header "ToolScript: 3 calls (completed)"
+       '(:header "ToolCall: 3 calls (completed)"
          :body "Returned:\nfinal"
          :child-calls ((:id "ptc/1" :tool "Grep" :status success
                         :args (:pattern "x") :result "hit")
@@ -5544,15 +5596,19 @@
         (should (string-match-p "Prompt context" text))
         (should-not (string-match-p "<hook-event" text)))))
 
-  :doc "escaped hook context preserves delimiter-looking body text"
+  :doc "attributed hook context preserves escaped text and the composer draft"
   (mevedel-view-test--with-buffers
-    (let ((body "literal </hook-event> & <tag>"))
+    (let ((body "literal </hook-event> & <tag>")
+          (source-file "/tmp/hook \"quoted\" & <local>.el")
+          (plugin-name "test & <plugin>"))
       (mevedel-view-test--insert-data
        data-buf
        (concat
         "Real user prompt here.\n\n"
         (mevedel-hooks-format-context
          (list (list :event "UserPromptSubmit"
+                     :source 'plugin :source-file source-file
+                     :plugin-name plugin-name
                      :body body)))
         "\n")
        nil)
@@ -5561,7 +5617,9 @@
           (should (string-match-p "&lt;/hook-event&gt;" text))
           (should-not (string-match-p "literal </hook-event>" text))))
       (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft "> draft\nsecond line" 3)
         (mevedel-view--full-rerender)
+        (should (equal "> draft\nsecond line" (mevedel-view--input-text)))
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Real user prompt" text))
@@ -5573,8 +5631,13 @@
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "UserPromptSubmit" text))
+          (should (string-match-p "source: plugin" text))
+          (should (string-match-p (regexp-quote source-file) text))
+          (should (string-match-p (regexp-quote plugin-name) text))
           (should (string-match-p (regexp-quote body) text))
-          (should-not (string-match-p "&lt;/hook-event&gt;" text)))))))
+          (should-not (string-match-p "&lt;/hook-event&gt;" text)))
+        (should (equal "> draft\nsecond line"
+                       (mevedel-view--input-text)))))))
 
 (mevedel-deftest mevedel-view--visible-response-text ()
   ,test

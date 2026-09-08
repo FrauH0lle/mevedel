@@ -1,42 +1,38 @@
-Find where a function, variable, or class is used throughout your codebase.
-Perfect for understanding code dependencies and impact analysis.
+Find references to an identifier using the context file's xref support.
 
 ### When to use `XrefReferences`
 
-- Finding all callers of a function before modifying it
-- Understanding where a variable is read/written
-- Impact analysis before refactoring
-- Tracing data flow through a codebase
-- Verifying that dead code is truly unused
+- Investigate symbol usage or the likely impact of a change.
 
 ### When NOT to use `XrefReferences`
 
-- Searching for text patterns -> use Grep
-- Looking for file names -> use Glob
-- Getting an overview of a file -> use Imenu
-- Complex multi-step searches -> delegate
+- Searching arbitrary text or filename patterns.
+- Treating an empty result as proof that code is unused; backend coverage varies.
 
 ### How to use `XrefReferences`
 
-- Provide the exact identifier name (case-sensitive)
-- Specify a file in the project for context (affects which xref backend is
-  used)
-- Works best with language servers (LSP), TAGS files, or built-in elisp xref
-- More precise than grep for finding actual references vs. string matches
+- Pass the exact identifier and an existing source file for language/project
+  context. Results are `file:line: summary` locations, or a diagnostic.
+- The backend determines scope and precision. Emacs Lisp uses symbol-boundary
+  text matches in project files, which can include comments or strings;
+  results are not a guaranteed semantic call graph.
+- Remote support currently covers that Emacs Lisp project-file search only.
+  Other remote backends, missing indexes, and failed searches report limitations.
+- Large output is persisted with a bounded preview and retrieval address.
 
 ### Examples of good usage
 
 <example>
-- Find all calls to authenticate_user function
 XrefReferences(identifier="authenticateUser", file_path="src/auth.ts")
+-> Inspect the returned locations and the backend's coverage when assessing impact.
 </example>
 
 ### Examples of bad usage
 
 <example>
-XrefReferences(identifier="user", file_path=".")
+XrefReferences(identifier="auth.*", file_path="src/auth.ts")
 <reasoning>
-Too generic, might not be indexed as expected.
-Use Grep for simple text searches instead.
+This expects an identifier, not a text-search regular expression. Use the
+actual symbol name for a reference lookup.
 </reasoning>
 </example>

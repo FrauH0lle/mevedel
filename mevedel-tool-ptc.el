@@ -5,7 +5,7 @@
 ;; The model-facing Programmatic Tool Calling adapter.  This module constructs
 ;; the request-local callable roster and prompt, delegates execution to the
 ;; closed driver in `mevedel-ptc-driver', renders aggregate results, and
-;; registers the ToolScript envelope with the ordinary tool registry.
+;; registers the ToolCall envelope with the ordinary tool registry.
 ;;
 ;; Nested calls are not provider-origin tool calls.  The envelope owns one
 ;; aggregate audit record listing each call, its arguments, and its outcome;
@@ -24,142 +24,104 @@
 (defvar gptel-tools)
 
 ;; `gptel-request'
-(declare-function gptel--make-tool "ext:gptel-request" (&rest spec))
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
-(declare-function gptel-tool-args "ext:gptel-request" (tool))
-(declare-function gptel-tool-async "ext:gptel-request" (tool))
 (declare-function gptel-tool-category "ext:gptel-request" (tool))
-(declare-function gptel-tool-confirm "ext:gptel-request" (tool))
-(declare-function gptel-tool-function "ext:gptel-request" (tool))
-(declare-function gptel-tool-include "ext:gptel-request" (tool))
 (declare-function gptel-tool-name "ext:gptel-request" (tool))
-
-;; `help-fns'
-(declare-function help-function-arglist
-                  "help-fns" (function &optional preserve-names))
 
 ;; `mevedel-ptc-driver'
 (declare-function mevedel-ptc-driver-run
-                  "mevedel-ptc-driver" (callback script roster))
+                  "mevedel-ptc-driver" (callback script roster &optional standalone-tools))
 
-;; `mevedel-ptc-interpreter'
-(defvar mevedel-ptc-pure-primitives)
+(autoload 'mevedel-ptc-driver-run "mevedel-ptc-driver")
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-ptc-primitives
                   "mevedel-structs" (request))
 (defvar mevedel--current-request)
 
-;; `mevedel-system'
-(declare-function mevedel-system-render-template
-                  "mevedel-system" (template replacements))
-
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-args "mevedel-tool-registry" (tool))
+(declare-function mevedel-tool-call-name "mevedel-tool-registry" (tool))
+(declare-function mevedel-tool-callable-p "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-description "mevedel-tool-registry" (tool))
-(declare-function mevedel-tool-ensure
-                  "mevedel-tool-registry" (name &optional category))
-(declare-function mevedel-tool-name "mevedel-tool-registry" (tool))
-(declare-function mevedel-tool-prompt "mevedel-tool-registry" (tool))
+(declare-function mevedel-tool-for-call "mevedel-tool-registry" (name))
+(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
+(declare-function mevedel-tool-groups "mevedel-tool-registry" (tool))
+(declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (tool))
 (declare-function mevedel-tool-summary "mevedel-tool-registry" (tool))
-(defvar mevedel-tool-registry--source-dir)
 
 ;; `mevedel-tools'
-(declare-function mevedel-tools--ctx-deferred-set "mevedel-tools" (ctx))
-(declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
-(declare-function mevedel-tools--request-data-set-tools "mevedel-tools" (info))
+(declare-function mevedel-tools--ctx-tool-catalog "mevedel-tools" (ctx))
+(declare-function mevedel-tools--current-context "mevedel-tools" ())
 (defvar mevedel-tools--current-fsm)
 
 
 ;;;; Roster
 
-(defcustom mevedel-ptc-primitive-tools
-  '("Read" "Glob" "Grep" "Bash"
-    "XrefReferences" "XrefDefinitions" "Imenu" "Treesitter")
-  "Tools a script may call, subject to also being active in the request.
-
-An allowlist rather than an exclusion list, so a newly registered tool is
-never a script primitive by accident.  Deliberately absent: ApplyPatch,
-Eval, Ask, the Agent family, and every other interaction-owning tool.
-ToolScript itself is absent, so scripts do not nest."
+(defcustom mevedel-ptc-composable-tools
+  '("Read" "Glob" "Grep" "Bash" "ApplyPatch" "Eval"
+    "XrefReferences" "XrefDefinitions" "Imenu" "Treesitter"
+    "WebSearch" "WebFetch" "ListSkills"
+    "TaskCreate" "TaskUpdate" "TaskNote" "TaskList" "TaskGet"
+    "Agent" "FollowupAgent" "ListAgents" "InterruptAgent" "SendMessage"
+    "WriteStdin" "ListExecutions" "StopExecution")
+  "Tools allowed in composed expressions, subject to current capabilities.
+Other available tools support standalone invocation.  Instruction-producing
+and interaction tools require a model turn to consume their result."
   :type '(repeat string)
   :group 'mevedel)
 
+(defun mevedel-tool-ptc--composable-p (name)
+  "Return non-nil if expression tool NAME permits composition."
+  (or (member name mevedel-ptc-composable-tools)
+      (when-let* ((tool (mevedel-tool-for-call name)))
+        (and (mevedel-tool-read-only-p tool)
+             (memq 'elisp (mevedel-tool-groups tool))))))
+
 (defcustom mevedel-ptc-parallelism 4
-  "Maximum number of nested calls one ToolScript batch may run concurrently."
+  "Maximum number of nested calls one ToolCall batch may run concurrently."
   :type 'natnum
   :group 'mevedel)
 
-(defvar mevedel-tool-ptc--pure-primitive-reference-cache nil
-  "Cached guest signatures for the closed pure-primitive table.")
-
-(defun mevedel-tool-ptc--format-arglist (arglist)
-  "Return guest-facing arguments for Emacs ARGLIST."
-  (let (optional rest rendered)
-    (dolist (arg arglist (string-join (nreverse rendered) " "))
-      (pcase arg
-        ('&optional (setq optional t))
-        ('&rest (setq rest t))
-        (_
-         (let ((name (downcase (symbol-name (if (consp arg) (car arg) arg)))))
-           (push (cond
-                  (rest (concat name "..."))
-                  (optional (format "[%s]" name))
-                  (t name))
-                 rendered)
-           (setq rest nil)))))))
-
-(defun mevedel-tool-ptc--pure-primitive-reference ()
-  "Return cached signatures for every allowed pure primitive."
-  (or mevedel-tool-ptc--pure-primitive-reference-cache
-      (progn
-        (require 'mevedel-ptc-interpreter)
-        (setq mevedel-tool-ptc--pure-primitive-reference-cache
-              (string-join
-               (mapcar
-                (lambda (entry)
-                  (let ((args (mevedel-tool-ptc--format-arglist
-                               (help-function-arglist (cdr entry) t))))
-                    (format "- (%s%s)"
-                            (car entry)
-                            (if (string-empty-p args) "" (concat " " args)))))
-                mevedel-ptc-pure-primitives)
-               "\n")))))
-
 (defun mevedel-tool-ptc--active-tool-names ()
-  "Return the names of tools active in the current request."
+  "Return canonical names of registered tools active in the current request."
   (let* ((fsm (bound-and-true-p mevedel-tools--current-fsm))
          (tools (or (and fsm (plist-get (gptel-fsm-info fsm) :tools))
                     (bound-and-true-p gptel-tools))))
-    (delete-dups
-     (delq nil (mapcar (lambda (tool) (ignore-errors (gptel-tool-name tool)))
-                       tools)))))
+    (delq nil
+          (mapcar (lambda (tool)
+                    (when-let* ((registered (mevedel-tool-get
+                                            (gptel-tool-name tool)
+                                            (gptel-tool-category tool))))
+                      (when (mevedel-tool-callable-p registered)
+                        (mevedel-tool-call-name registered))))
+                  tools))))
 
-(defun mevedel-tool-ptc--deferred-tool-names ()
-  "Return the names of tools deferred for the current request."
-  (unless (fboundp 'mevedel-tools--current-deferred-context)
-    (require 'mevedel-tools))
-  (when-let* ((ctx (ignore-errors (mevedel-tools--current-deferred-context))))
-    (delq nil (mapcar (lambda (entry) (and (consp (car entry)) (cadr (car entry))))
-                      (mevedel-tools--ctx-deferred-set ctx)))))
+(defun mevedel-tool-ptc--catalog-tool-names ()
+  "Return canonical names in the current owner's discoverable catalog."
+  (when-let* ((ctx (mevedel-tools--current-context)))
+    (delq nil
+          (mapcar (lambda (entry)
+                    (when-let* ((tool (mevedel-tool-get (cadr (car entry))
+                                                       (car (car entry)))))
+                      (when (mevedel-tool-callable-p tool)
+                        (mevedel-tool-call-name tool))))
+                  (mevedel-tools--ctx-tool-catalog ctx)))))
 
 (defun mevedel-tool-ptc--roster ()
-  "Return the tool names this script may call.
-
-Deferred tools count as available.  Deferral is a prompt-budget decision,
-not an authority or availability one: the pipeline never consults it, so
-a deferred tool executes normally."
-  (let ((available (append (mevedel-tool-ptc--active-tool-names)
-                           (mevedel-tool-ptc--deferred-tool-names)))
+  "Return callable names allowed by the current role and request."
+  (let ((available (delete-dups
+                    (append (mevedel-tool-ptc--active-tool-names)
+                            (mevedel-tool-ptc--catalog-tool-names))))
         (restriction
          (if (bound-and-true-p mevedel--current-request)
              (mevedel-request-ptc-primitives mevedel--current-request)
            :unrestricted)))
     (seq-filter (lambda (name)
-                  (and (member name available)
+                  (and (not (member name '("ToolCall" "ToolSearch")))
                        (or (eq restriction :unrestricted)
                            (member name restriction))))
-                mevedel-ptc-primitive-tools)))
+                available)))
 
 (defun mevedel-tool-ptc--arg-type-name (type)
   "Return the compact guest-facing name for argument TYPE."
@@ -169,8 +131,8 @@ a deferred tool executes normally."
     (_ (format "%s" type))))
 
 (defun mevedel-tool-ptc--tool-declaration (name)
-  "Return one compact ToolScript declaration for tool NAME."
-  (let* ((tool (mevedel-tool-ensure name))
+  "Return one compact ToolCall declaration for tool NAME."
+  (let* ((tool (mevedel-tool-for-call name))
          (args
           (mapcar
            (lambda (spec)
@@ -186,61 +148,35 @@ a deferred tool executes normally."
             (if args (concat " " (string-join args " ")) "")
             (if summary (concat " - " (string-trim summary)) ""))))
 
-(defun mevedel-tool-ptc--request-description (fsm)
-  "Return the ToolScript description for FSM's effective callable roster."
-  (let* ((mevedel-tools--current-fsm fsm)
-         (tool (mevedel-tool-ensure "ToolScript"))
-         (roster (mevedel-tool-ptc--roster)))
-    (concat (mevedel-system-render-template
-             (mevedel-tool-prompt tool)
-             `(("PTC_DIALECT_MANUAL_PATH" .
-                ,(file-name-concat mevedel-tool-registry--source-dir
-                                   "docs" "ptc-dialect.md"))))
-            "\n\n## Pure data operations\n\n"
-            (mevedel-tool-ptc--pure-primitive-reference)
-            "\n\n## Tools available in this request\n\n"
-            (if roster
-                (string-join (mapcar #'mevedel-tool-ptc--tool-declaration roster)
-                             "\n")
-              "No nested tools are available."))))
-
-(defun mevedel-tool-ptc--handle-description (fsm)
-  "WAIT-state handler: give FSM's ToolScript tool its effective nested roster."
-  (let* ((info (gptel-fsm-info fsm))
-         (tools (plist-get info :tools))
-         (ptc (seq-find (lambda (tool)
-                          (equal (gptel-tool-name tool) "ToolScript"))
-                        tools)))
-    (when ptc
-      (let ((copy
-             (gptel--make-tool
-              :function (gptel-tool-function ptc)
-              :name (gptel-tool-name ptc)
-              :description (mevedel-tool-ptc--request-description fsm)
-              :args (copy-tree (gptel-tool-args ptc) t)
-              :async (gptel-tool-async ptc)
-              :category (gptel-tool-category ptc)
-              :confirm (gptel-tool-confirm ptc)
-              :include (gptel-tool-include ptc))))
-        (plist-put info :tools
-                   (mapcar (lambda (tool) (if (eq tool ptc) copy tool)) tools))
-        (mevedel-tools--request-data-set-tools info)))))
-
+(defun mevedel-tool-ptc--call-template (name)
+  "Return a single-call template for NAME with required argument placeholders."
+  (concat "(" name
+          (mapconcat
+           (lambda (spec)
+             (if (not (eq (nth 2 spec) :required)) ""
+               (format " :%s %s" (car spec)
+                       (pcase (cadr spec)
+                         ((or 'number 'integer) "0")
+                         ('boolean "t")
+                         ('array "[]")
+                         ('object "'()")
+                         (_ (prin1-to-string (format "<%s>" (car spec))))))))
+           (mevedel-tool-args (mevedel-tool-for-call name)) "")
+          ")"))
 
 ;;;; Driver adapter
 
 (defun mevedel-tool-ptc--handler (callback args)
   "Run the script in ARGS through the current request's nested tool roster."
-  (unless (fboundp 'mevedel-ptc-driver-run)
-    (require 'mevedel-ptc-driver))
   (mevedel-ptc-driver-run
-   callback (plist-get args :script) (mevedel-tool-ptc--roster)))
+   callback (plist-get args :expression) (mevedel-tool-ptc--roster)
+   (seq-remove #'mevedel-tool-ptc--composable-p (mevedel-tool-ptc--roster))))
 
 
 ;;;; Rendering
 
 (defcustom mevedel-tool-ptc-result-collapse-line-threshold 10
-  "ToolScript returned values longer than this many lines fold to a row.
+  "ToolCall returned values longer than this many lines fold to a row.
 The folded `Returned' row follows the nested call rows, defaults to
 collapsed, and expands to the complete returned value.  Zero keeps
 every returned value inline in the block body."
@@ -248,7 +184,7 @@ every returned value inline in the block body."
   :group 'mevedel)
 
 (defun mevedel-tool-ptc--render (_name _args result render-data)
-  "Render a settled ToolScript call.
+  "Render a settled ToolCall call.
 
 The body carries only what the script returned.  Every nested call
 becomes a `:child-calls' row that the view renders through that tool's
@@ -280,7 +216,7 @@ nested-row machinery."
                  (> (length (split-string returned-value "\n"))
                     mevedel-tool-ptc-result-collapse-line-threshold))))
       (list :header (if live-p
-                        (format "ToolScript: %d%s completed%s%s%s"
+                        (format "ToolCall: %d%s completed%s%s%s"
                                 (or (plist-get render-data :completed-count)
                                     (length calls))
                                 (if known-total (format "/%d" known-total) "")
@@ -294,7 +230,7 @@ nested-row machinery."
                                     (format ", awaiting permission for %s"
                                             (string-join permission-waits ", "))
                                   ""))
-                      (format "ToolScript: %d call%s%s%s (%s)"
+                      (format "ToolCall: %d call%s%s%s (%s)"
                               (length calls)
                               (if (= (length calls) 1) "" "s")
                               (if (numberp elapsed)
@@ -327,12 +263,12 @@ nested-row machinery."
 (defun mevedel-tool-ptc--register ()
   "Register the Programmatic Tool Calling tool."
   (mevedel-define-tool
-   :name "ToolScript"
-   :description "Run an orchestration script that calls other tools."
-   :summary "Orchestrate several tool calls in one turn with a small Lisp script."
+   :name "ToolCall"
+   :description "Call one or more tools using the calling expressions supplied by ToolSearch."
+   :summary "Call a specialist or compose tool calls in a closed Lisp expression."
    :prompt-file "prompts/tools/ptc.md"
    :handler #'mevedel-tool-ptc--handler
-   :args ((script string :required
+   :args ((expression string :required
                   "The orchestration script. See the tool description for the accepted dialect."))
    :async-p t
    :category "mevedel"

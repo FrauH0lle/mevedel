@@ -1,54 +1,47 @@
 Invoke a reusable prompt recipe (skill) by name.
 
-A skill packages instructions for a particular kind of task. Invoking
-one returns its prepared body as the tool result; follow those
-instructions in place of your default approach.
+A skill supplies task-specific instructions or a configured agent workflow.
 
 ### When to use `Skill`
 
-- The task at hand is one a listed skill covers; invoke it before
-  improvising your own approach
-- The user asks for a skill by name
+- The user requests the skill and its prepared guidance is not already present.
+- An available skill's scope and approach would help the task. A description
+  match alone does not require invocation.
 
 ### When NOT to use `Skill`
 
-- The name is not in the active skills listing; do not guess names
-- You only want to know what skills exist -> use `ListSkills`
-- The skill's instructions are already loaded this turn; follow them
-  instead of invoking again
+- You need to discover a name or purpose; use `ListSkills(query)`.
+- The relevant prepared guidance is already in context and unchanged; reuse it.
 
 ### How to use `Skill`
 
-- `name` is the exact skill name as shown in the skills listing
-- `arguments` is an optional argument string passed through to the
-  skill
-- The result is the skill body with any argument substitution applied;
-  treat it as instructions for the current task
+- `Read` inspects a skill's source; `Skill` runs its preparation and configured
+  workflow. Reading the file does not invoke the skill.
+- Use the exact canonical name from the user, roster, or ListSkills result,
+  including a namespace when present. Queried dormant skills can be invoked;
+  user-only or disabled skills cannot be invoked by this tool.
+- `arguments` is a string interpreted by the skill. Preparation applies
+  substitutions and required dependencies; errors report missing prerequisites.
+- An inline skill returns prepared guidance. A skill configured to fork runs
+  in its own agent context and returns its outcome. The result reports any
+  policy fields that could not apply to the current request.
+- Keep guidance within user scope and its authored applicability. A new
+  message alone does not end an ongoing skill; completed or superseded work
+  does. Retrieve guidance again if needed detail is absent or its source changed.
 
 ### Examples of good usage
 
 <example>
-Skill(name="review")
-</example>
-
-<example>
 Skill(name="analyze-log", arguments="~/logs/session.log")
+-> Run the discovered log-analysis skill with this argument.
 </example>
 
 ### Examples of bad usage
 
 <example>
-Skill(name="deploy")
-<reasoning>
-Guessed name that is not in the skills listing; the call fails with an
-unknown-skill error. Check ListSkills first.
-</reasoning>
-</example>
-
-<example>
 Skill(name="review") called again immediately after its body loaded
 <reasoning>
-The instructions are already in context. Follow them; re-invoking adds
-nothing.
+Reuse the loaded guidance unless new arguments or changed instructions require
+another invocation.
 </reasoning>
 </example>

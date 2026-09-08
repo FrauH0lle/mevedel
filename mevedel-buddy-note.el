@@ -740,8 +740,8 @@ persistence, and nothing outside a Buddy review may call them."
                currentp #'mevedel-buddy-note-read-buffer)
     :description
     (concat "Read numbered lines from a buffer in the current review. "
-            "Use it when the diff does not give you enough context to be "
-            "certain about a problem. Both bounds are required. The lines "
+            "Use it when the supplied region leaves a relevant question "
+            "unanswered. Both bounds are required. The lines "
             "you read back can carry notes, like the ones in the diff.")
     :args '((:name "buffer_name" :type string
              :description "Name of the buffer to read.")
@@ -762,7 +762,7 @@ persistence, and nothing outside a Buddy review may call them."
             (:name "line_number" :type integer
              :description "Line to annotate, from the diff or from a read.")
             (:name "note" :type string
-             :description "The remark.  One sentence.")
+             :description "The concise remark.")
             (:name "severity" :type string
              :enum ["trivial" "significant" "critical"]
              :description "How much this matters."))
@@ -776,7 +776,7 @@ persistence, and nothing outside a Buddy review may call them."
     :args '((:name "note_id" :type integer
              :description "The note_id from the note list.")
             (:name "note" :type string
-             :description "Replacement text.  One sentence."))
+             :description "Replacement remark text."))
     :category "buddy")
    (gptel-make-tool
     :name "remove_note"

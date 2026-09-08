@@ -1,77 +1,38 @@
-Update the status or fields of an existing task.
-
-Use this to mark a task as `in_progress` when you start it and
-`completed` when you finish. When a task is marked completed, its ID
-is automatically removed from the `blockedBy` list of every task that
-depended on it, so downstream tasks become unblocked.
+Update an existing task's fields or status.
 
 ### When to use `TaskUpdate`
 
-- You are starting work on a pending task — set status to
-  `"in_progress"`
-- You just finished a task — set status to `"completed"`
-- You need to revise a task's subject, description, owner, or
-  dependencies as the plan evolves
-- You discover a new dependency between existing tasks
+- Record progress or revise a tracked task's scope, ownership, or dependencies.
 
 ### When NOT to use `TaskUpdate`
 
-- The work item does not exist yet -> use `TaskCreate`
-- You only want to post progress context without changing any task
-  field -> use `TaskNote`
+- Creating a work item; TaskCreate supplies a new ID.
+- Posting only a status note; TaskNote leaves task fields unchanged.
 
 ### How to use `TaskUpdate`
 
-- `id` — **required** integer task ID to update
-- `subject` — optional new non-blank subject line
-- `description` — optional new description (empty string clears it)
-- `status` — optional `"pending"`, `"in_progress"`, or `"completed"`
-- `owner` — optional retained agent path such as `/root/worker_2`, or a
-  deliberate user-defined bucket; empty string assigns the task to Main.
-  Prefer subjects/descriptions for workstream names and use the actual retained
-  path instead of inventing a proxy owner for an agent.
-- `blockedBy` — optional full replacement of the blocked-by list.
-  IDs that are unknown or already completed are dropped from it
-- `metadata` — optional replacement of the metadata object
-- `note` — optional visible status note for an owner group; empty
-  string intentionally clears it
-- `noteOwner` — optional owner for `note`; omit for the current caller,
-  or pass an empty string for Main
-
-Unspecified fields are left untouched.
-
-Only pass `note=""` when intentionally tearing down or replacing the
-visible status note; ordinary completion updates should omit `note`
-unless they need to change the status line.
+- Address the task by its integer `id`. Omitted fields stay unchanged; supplied
+  `blockedBy` and `metadata` replace those fields rather than merging them.
+  Unknown or completed dependency IDs are dropped.
+- Completing a task removes its ID from dependent tasks' `blockedBy` lists.
+  Track actual work state; the status does not itself prove verification.
+- Use the retained agent path for agent ownership, or a deliberate user-defined
+  bucket. Empty `owner` selects Main; empty `description` clears the description.
+- `note` changes an owner group's visible status, independently of task ownership.
+  `noteOwner` defaults to the caller; empty string selects Main. Omit `note` to
+  keep it unchanged; `note=""` clears it. Notes show only above open work.
 
 ### Examples of good usage
-
-<example>
-TaskUpdate(id=2, status="in_progress", note="Working through validation")
-</example>
 
 <example>
 TaskUpdate(id=2, status="completed")
 </example>
 
-<example>
-TaskUpdate(id=3, owner="/root/worker_2", blockedBy=[1, 2])
-</example>
-
 ### Examples of bad usage
 
 <example>
-TaskUpdate(id=2, status="completed", note="")
+TaskUpdate(id=2, blockedBy=[3]) intending to add 3 while keeping existing dependencies
 <reasoning>
-Passing note="" clears the visible status note as a side effect.
-Ordinary completion updates should omit note entirely.
-</reasoning>
-</example>
-
-<example>
-TaskUpdate(id=99, subject="Write migration script")
-<reasoning>
-Trying to add new work through an update. New work items are created
-with TaskCreate; TaskUpdate only modifies existing IDs.
+This replaces the list. Include every dependency that should remain.
 </reasoning>
 </example>

@@ -1,14 +1,34 @@
-# ToolScript dialect manual
+# ToolCall dialect manual
 
-ToolScript lets a model make a data-dependent sequence of ordinary mevedel
+ToolCall lets a model make a data-dependent sequence of ordinary mevedel
 tool calls inside one model turn. The script is interpreted by mevedel; it is
 never evaluated as Emacs Lisp. Every nested tool call still goes
 through normal validation, hooks, permissions, snapshots, telemetry, and
 rendering.
 
-Use ToolScript for orchestration and light result shaping. Use the ordinary
-tool directly for one call, and use Grep or another purpose-built tool for bulk
-text processing.
+Pass one call or a composed program in ToolCall's `expression` argument.
+Retrieve specialist contracts with ToolSearch. Native core tools can also be
+called directly. Use Grep or another purpose-built tool for bulk processing.
+
+Tools marked standalone-only must be the entire expression, without nested
+calls in their arguments or surrounding forms. This includes Ask, Skill,
+WaitAgent, UpdateGoal, and wrapped tools not explicitly admitted for
+composition. Direct-call arguments may be literals, quoted data or direct pure
+primitive applications. Other argument expressions use the composed path.
+Read-only Elisp introspection tools support composition.
+
+A direct call returns the underlying tool's result and supported media, and
+renders as that tool in the view. Composed expressions return the last value
+and retain their expandable script/child-call display. Hook context and repair
+feedback are delivered even when an intermediate result is discarded.
+
+For object arguments use keyword plists, arrays use vectors or lists, JSON
+false uses `:json-false` (or nil for a boolean argument), and JSON null uses
+`:null`. Declared object keys are converted to the native adapter's keys.
+Wrapped tools use the qualified `category/name` shown by ToolSearch; this
+prevents collisions across servers. The installed MCP text adapter exposes
+text content only. ToolCall cannot recover media or error metadata discarded
+upstream by that adapter.
 
 ## Values and evaluation
 
@@ -22,14 +42,13 @@ The evaluator resolves a call's operator before evaluating its arguments. An
 unknown function therefore fails without running tool calls hidden in its
 arguments.
 
-Operators additionally preflight before execution: the whole parsed script is
-walked once, and every operator outside the closed tables is reported in one
-error with nearest-match suggestions, before any nested tool runs. Because
-operators never resolve through the lexical environment, this static check is
-exact for evaluated positions; unknown names in never-taken branches are
-rejected too. Quoted data, binding names, and lambda parameter lists are
-skipped. Literal regexp arguments to the regexp primitives are validated in
-the same pass.
+Static operators additionally preflight before execution, including literal
+indirect references to standalone-only tools. Unknown names in never-taken
+branches are rejected too. Quoted data, binding names, lambda parameter lists
+and unexpanded user-macro arguments are skipped. Literal regexps are checked
+in the same pass. Runtime-generated calls are checked against the same closed
+roster before dispatch; they cannot always be rejected before earlier tools
+run. Earlier authorized effects remain recorded and are not rolled back.
 
 `let` evaluates all initializer expressions in the surrounding environment:
 
@@ -73,15 +92,96 @@ Closed, macro-shaped conveniences:
 The dialect has no `macrolet`, `cl-loop`, generalized places, or
 guest-visible macro expansion.
 
-The ToolScript tool description generates exact signatures for every pure data
-primitive from the interpreter's closed table. Beyond those, only a script's
-own top-level definitions are callable. The
-table includes the syntactic path helpers (`file-name-nondirectory`,
-`file-name-directory`, `file-name-concat`, `file-name-extension`,
-`file-name-sans-extension`, `file-name-base` — file-name handlers are disabled
-so they never touch remote state), `take`, and a fixed-comparator `sort` that
-copies its list and orders ascending with `value<`. Guest closures cannot be
-comparators.
+## Pure data operations
+
+The closed primitive table supports these signatures. `&optional` marks the
+remaining optional arguments, and `&rest` marks repeated arguments. Beyond
+these operations, calls resolve only to discovered tools or the program's own
+definitions. Path helpers are syntactic and do not access the filesystem.
+`sort` copies its list and uses a fixed ascending comparator.
+
+```text
+(car list)
+(cdr list)
+(caar x)
+(cadr x)
+(cdar x)
+(cddr x)
+(cons car cdr)
+(list &rest objects)
+(append &rest sequences)
+(length sequence)
+(nth n list)
+(nthcdr n list)
+(last list &optional n)
+(take n list)
+(reverse seq)
+(sort list)
+(member elt list)
+(memq elt list)
+(assoc key alist &optional testfn)
+(assq key alist)
+(plist-get plist prop &optional predicate)
+(plist-member plist prop &optional predicate)
+(concat &rest sequences)
+(format string &rest objects)
+(substring string &optional from to)
+(split-string string &optional separators omit-nulls trim)
+(string-join strings &optional separator)
+(file-name-nondirectory filename)
+(file-name-directory filename)
+(file-name-concat directory &rest components)
+(file-name-extension filename &optional period)
+(file-name-sans-extension filename)
+(file-name-base &optional filename)
+(string-trim string &optional trim-left trim-right)
+(string-prefix-p prefix string &optional ignore-case)
+(string-suffix-p suffix string &optional ignore-case)
+(string-match-p regexp string &optional start)
+(string-search needle haystack &optional start-pos)
+(regexp-quote string)
+(upcase obj)
+(downcase obj)
+(capitalize obj)
+(number-to-string number)
+(string-to-number string &optional base)
+(+ &rest numbers-or-markers)
+(- &optional number-or-marker &rest more-numbers-or-markers)
+(* &rest numbers-or-markers)
+(/ number &rest divisors)
+(% x y)
+(mod x y)
+(abs arg)
+(max number-or-marker &rest numbers-or-markers)
+(min number-or-marker &rest numbers-or-markers)
+(float arg)
+(truncate arg &optional divisor)
+(round arg &optional divisor)
+(floor arg &optional divisor)
+(ceiling arg &optional divisor)
+(= number-or-marker &rest numbers-or-markers)
+(/= num1 num2)
+(< number-or-marker &rest numbers-or-markers)
+(> number-or-marker &rest numbers-or-markers)
+(<= number-or-marker &rest numbers-or-markers)
+(>= number-or-marker &rest numbers-or-markers)
+(eq obj1 obj2)
+(eql obj1 obj2)
+(equal o1 o2)
+(null object)
+(not object)
+(atom object)
+(consp object)
+(listp object)
+(stringp object)
+(numberp object)
+(integerp object)
+(floatp object)
+(symbolp object)
+(sequencep object)
+(identity argument)
+(gensym &optional prefix)
+```
 
 ## Definitions
 
@@ -177,8 +277,7 @@ separator uses a fixed whitespace regexp; it never reads Emacs configuration.
 
 ## Tool calls
 
-The bottom of each ToolScript tool description lists the tools available for
-that request and their exact keyword arguments:
+ToolSearch returns current tool contracts and their exact keyword arguments:
 
 ```elisp
 (Read :file_path "mevedel.el" :offset 1 :limit 80)
@@ -207,7 +306,7 @@ Scripts can inspect that value and continue:
     (list path (length result))))
 ```
 
-Permission denial is different: it aborts the whole ToolScript call. Completed
+Permission denial is different: it aborts the whole ToolCall call. Completed
 nested calls remain visible in the audit, but the script cannot catch the
 denial.
 
@@ -239,7 +338,7 @@ Use sequential forms when a later call depends on an earlier result.
 
 ## Limits and performance
 
-ToolScript bounds script bytes, syntax nodes, nesting depth, evaluation steps,
+ToolCall bounds script bytes, syntax nodes, nesting depth, evaluation steps,
 wall time, nested-call count, recursion depth, transformed syntax size, regexp
 work, numeric size, individual values, and cumulative retained values. Errors name the
 exceeded budget. Final rendering counts repeated references at their serialized
@@ -258,7 +357,7 @@ wide searches before mapping over their results.
 
 The interpreter yields between short computation slices, so Emacs remains
 interactive. Scripts in flight are runtime state: if Emacs exits or the session
-is recovered, the ToolScript call settles as interrupted and does not resume.
+is recovered, the ToolCall call settles as interrupted and does not resume.
 For root-session scripts, only the envelope call and its bounded ordered child
 audit are checkpointed, and the checkpoint is written durably twice: once
 before the first nested call and once at settlement. Retained-agent scripts
@@ -269,7 +368,7 @@ opportunistically) — per-child sidecar writes dominated script runtime,
 serialized parallel batches, and cost one remote round-trip each on TRAMP
 targets. A crash mid-script therefore recovers the child audit as of the last
 autosave, not the last child. Recovery turns the surviving checkpoint into an
-ordinary ToolScript tool row, marks queued or running children interrupted,
+ordinary ToolCall tool row, marks queued or running children interrupted,
 and consumes the checkpoint with the repaired segment; no lexical environment,
 stack, timer, or continuation is serialized.
 
@@ -277,7 +376,7 @@ stack, timer, or continuation is serialized.
 
 Guest identifiers are read into a private symbol table. Calls resolve against
 closed tables of special forms, audited syntax transformers, pure primitives,
-the script's own top-level definitions, and the request's ToolScript tool
+the script's own top-level definitions, and the request's ToolCall tool
 roster. Unknown names fail closed.
 
 The guest cannot evaluate host Lisp or access buffers, processes, files,

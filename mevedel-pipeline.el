@@ -6,7 +6,7 @@
 ;; invocation first runs the canonical pipeline: validate -> pre-tool-hooks ->
 ;; normalize-paths -> prepare-resources -> permission -> capture-coverage ->
 ;; snapshot -> handler -> render-transform -> post-tool-hooks.  Provider-facing
-;; calls then append hook context, repair feedback, specialist nudges,
+;; calls then append hook context, repair feedback,
 ;; oversized-result persistence, Goal budget guidance, render data, and media.
 ;; Interactive handlers own any confirmation needed after the pipeline's
 ;; permission and snapshot steps.
@@ -28,6 +28,7 @@
 (require 'mevedel-tool-repair)
 
 ;; `gptel-request'
+(declare-function gptel--to-string "ext:gptel-request" (s))
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 (defvar gptel-backend)
 
@@ -94,10 +95,6 @@
                   "mevedel-session-persistence" (session buffer))
 (autoload 'mevedel-session-persistence-shallow-ensure-files
   "mevedel-session-persistence")
-
-;; `mevedel-specialist-nudges'
-(declare-function mevedel-specialist-nudges-apply
-                  "mevedel-specialist-nudges" (context))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-directive-uuid "mevedel-structs" (cl-x) t)
@@ -174,8 +171,7 @@
                   (entry result &optional outcome result-classification))
 
 ;; `mevedel-tools'
-(declare-function mevedel-tools--ctx-record-used "mevedel-tools" (ctx name))
-(declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
+(declare-function mevedel-tools--current-context "mevedel-tools" ())
 (defvar mevedel-tools--current-fsm)
 
 ;; `mevedel-transport'
@@ -209,7 +205,6 @@
 (require 'mevedel-execution-target)
 (require 'mevedel-execution-telemetry)
 (require 'mevedel-resource)
-(require 'mevedel-specialist-nudges)
 (require 'mevedel-telemetry)
 (require 'mevedel-tool-media)
 (require 'mevedel-tool-permission)
@@ -221,7 +216,7 @@
 
 (defvar mevedel-pipeline--active-call-source nil
   "Call source dynamically visible while a handler starts its work.
-`ptc' names a ToolScript nested call, whose result reaches the script
+`ptc' names a ToolCall nested call, whose result reaches the script
 instead of the provider transcript.")
 
 (defvar mevedel-pipeline--auto-apply-edit-p nil
@@ -1094,20 +1089,6 @@ Missing files are stored as nil; unreadable paths retain a diagnostic gap."
          "Tool execution can modify files outside exact path snapshots")))
     (funcall next context)))
 
-(defun mevedel-pipeline--record-use (tool)
-  "Record that TOOL was invoked on the current turn.
-
-Pushes the tool's name onto the current deferred context's
-`deferred-used' slot so that the WAIT handler can reset the TTL for
-any tool the model called since the previous turn.  The context is
-either a `mevedel-session' (main chat) or a
-`mevedel-agent-invocation' (spawned sub-agent), resolved via
-`mevedel-tools--current-deferred-context'.  The entry is stored
-regardless of whether the tool is deferred; the WAIT handler filters
-against the injected set."
-  (when-let* ((ctx (mevedel-tools--current-deferred-context)))
-    (mevedel-tools--ctx-record-used ctx (mevedel-tool-name tool))))
-
 (defun mevedel-pipeline--handler-return-p (value)
   "Return non-nil when VALUE is a proper handler return plist.
 
@@ -1187,6 +1168,14 @@ buffer."
                       (setq updated
                             (plist-put updated :status
                                        (plist-get raw :status))))
+                    (dolist (key '(:hook-additional-context :hook-audit-records :input-repairs))
+                      (when (plist-get raw key)
+                        (setq updated (plist-put updated key
+                                                 (append (plist-get updated key)
+                                                         (plist-get raw key))))))
+                    (when (plist-member raw :result-limit)
+                      (setq updated (plist-put updated :result-limit
+                                               (plist-get raw :result-limit))))
                     (plist-put updated :media (plist-get raw :media)))))
          (finish
           (lambda (raw)
@@ -1219,7 +1208,6 @@ buffer."
                   (mevedel-execution-telemetry-summary-cell
                    (plist-get context :sandbox-summary-cell)))
               (mevedel-tool-repair-mark-executed repair-entry)
-              (mevedel-pipeline--record-use tool)
               (condition-case err
                   (if (mevedel-tool-async-p tool)
                       (funcall handler finish args)
@@ -1316,9 +1304,11 @@ FAIL is unused; transform failures warn and leave CONTEXT unchanged."
 (defun mevedel-pipeline--step-attach-render-data (context next _fail)
   "Embed render-data from CONTEXT, then call NEXT.
 
-When CONTEXT holds render-data or an explicit handler status and the
-`:result' is a string, append a hidden delimiter-wrapped block carrying
-the serialized data.  Explicit status is stored under `:status' for renderer
+When CONTEXT holds render-data or an explicit handler status, append a
+hidden delimiter-wrapped block carrying the serialized data.  Non-text
+results use gptel's normal result conversion at this provider-only step;
+canonical outcomes and nested callers retain their typed values.
+Explicit status is stored under `:status' for renderer
 dispatch.  The block is propertized `invisible' for the data-buffer display
 and recognised by the view interpreter via its delimiters.  An `:around'
 advice on `gptel--parse-tool-results' strips the block on the LLM path only;
@@ -1345,11 +1335,11 @@ When neither was produced, passes CONTEXT through unchanged."
           (if status
               (plist-put (copy-sequence render-data) :status status)
             render-data)))
-    (if (and render-data (stringp result))
+    (if render-data
         (progn
           (funcall next
                    (plist-put context :result
-                              (concat result
+                              (concat (gptel--to-string result)
                                       (mevedel-tool-render-data-format
                                        render-data tool-use-id)))))
       (funcall next context))))
@@ -1397,7 +1387,9 @@ CONTEXT must contain :tool and :result.  NEXT is called with the
 possibly-updated context."
   (let* ((tool (plist-get context :tool))
          (result (plist-get context :result))
-         (max-size (mevedel-tool-max-result-size tool))
+         (max-size (if (plist-member context :result-limit)
+                       (plist-get context :result-limit)
+                     (mevedel-tool-max-result-size tool)))
          (effective (when max-size
                       (min max-size mevedel-pipeline--default-max-result-size)))
          (deliver
@@ -1536,13 +1528,6 @@ history."
 
 
 ;;
-;;; Specialist tool nudges
-
-(defun mevedel-pipeline--step-specialist-nudges (context next _fail)
-  "Apply specialist-tool prompting policy to CONTEXT, then call NEXT."
-  (funcall next (mevedel-specialist-nudges-apply context)))
-
-;;
 ;;; Step list builder
 
 (defun mevedel-pipeline--build-steps (tool &optional outcome-only-p)
@@ -1560,8 +1545,8 @@ Returns a list of step functions based on TOOL's behavioral flags:
   9. render-transform    -- always included; no-op when tool has none
   10. post-tool-hooks    -- always included
 
-Provider projection then appends hook context, repair feedback, and specialist
-nudges, persists oversized output when declared, adds a Goal warning, and
+Provider projection then appends hook context and repair feedback,
+persists oversized output when declared, adds a Goal warning, and
 attaches render-data and media.  Outcome-only consumers stop at the canonical
 common boundary."
   (let ((common
@@ -1582,8 +1567,7 @@ common boundary."
       (append
        common
        (list #'mevedel-pipeline--step-hook-side-channel
-             #'mevedel-pipeline--step-repair-reminder
-             #'mevedel-pipeline--step-specialist-nudges)
+             #'mevedel-pipeline--step-repair-reminder)
        (when (mevedel-tool-max-result-size tool)
          (list #'mevedel-pipeline--step-persist))
        (list #'mevedel-pipeline--step-goal-budget-warning

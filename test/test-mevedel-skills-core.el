@@ -412,6 +412,8 @@ paths:
   :doc "bundled learn, remember, and git-worktree skills are discoverable by default"
   (mevedel-tool-clear-registry)
   (let* ((skills (mevedel-skills-scan nil nil))
+         (frontend (cl-find "frontend" skills
+                            :key #'mevedel-skill-name :test #'equal))
          (worktree (cl-find "git-worktree" skills
                             :key #'mevedel-skill-name :test #'equal))
          (remember (cl-find "remember" skills
@@ -421,6 +423,13 @@ paths:
          (body (and worktree (mevedel-skill-load-body worktree)))
          (remember-body (and remember (mevedel-skill-load-body remember)))
          (learn-body (and learn (mevedel-skill-load-body learn))))
+    (should frontend)
+    (should (eq 'bundled (mevedel-skill-source frontend)))
+    (should (mevedel-skill-user-invocable-p frontend))
+    (should (mevedel-skill-model-invocable-p frontend))
+    (should-not (mevedel-skill-path-patterns frontend))
+    (should (string-search "mobile and desktop"
+                           (mevedel-skill-load-body frontend)))
     (should learn)
     (should (eq 'bundled (mevedel-skill-source learn)))
     (should (mevedel-skill-user-invocable-p learn))

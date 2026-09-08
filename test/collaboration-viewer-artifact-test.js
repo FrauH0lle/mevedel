@@ -97,6 +97,18 @@ assert.equal(frame.attributes.sandbox, 'allow-scripts');
 assert.match(frame.srcdoc, /^<meta http-equiv="Content-Security-Policy"/);
 assert.match(frame.srcdoc, /default-src 'none'/);
 assert.match(frame.srcdoc, /<h1>Mockup<\/h1>/);
+// The viewer theme is baked into the frame prelude and follows toggles by
+// postMessage, since the opaque-origin frame cannot read the viewer's root.
+assert.match(frame.srcdoc, /<script>[^]*set\(null\)[^]*<\/script><h1>Mockup/);
+assert.match(frame.srcdoc, /addEventListener\("message"/);
+const posted = [];
+frame.contentWindow = {postMessage: (data, origin) => posted.push({data, origin})};
+controller.setTheme('dark');
+assert.equal(posted.length, 1);
+assert.deepEqual({...posted[0].data}, {t: 'theme', theme: 'dark'});
+assert.equal(posted[0].origin, '*');
+controller.setTheme('system');
+assert.deepEqual({...posted[1].data}, {t: 'theme', theme: null});
 assert.equal(nodes['artifact-tab'].hidden, false);
 assert.equal(nodes['artifact-download'].hidden, false);
 
@@ -104,6 +116,10 @@ nodes['artifact-tab'].dispatch('click');
 assert.equal(opened[0].document.title, 'mockup.html');
 assert.equal(opened[0].document.body.children[0].attributes.sandbox,
              'allow-scripts');
+controller.setTheme('dark');
+nodes['artifact-tab'].dispatch('click');
+assert.match(opened[1].document.body.children[0].srcdoc, /set\("dark"\)/);
+controller.setTheme(null);
 blockPopup = true;
 nodes['artifact-tab'].dispatch('click');
 assert.match(flashes[0], /Popup blocked/);

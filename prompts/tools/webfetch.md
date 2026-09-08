@@ -1,50 +1,35 @@
-Fetch and read the text content of a URL.
-
-Returns the text content of the URL (not raw HTML) formatted for
-reading. HTML is converted to readable text.
-
-For a YouTube video URL it returns the video description and transcript
-(timestamped paragraphs) instead.
-
-Request times out after 30 seconds.
+Fetch readable text from a URL, or a YouTube video's description and transcript.
 
 ### When to use `WebFetch`
 
-- Reading documentation from a known URL
-- Fetching content from URLs found via `WebSearch`
-- Reading blog posts, articles, or static web pages
-- Accessing online resources referenced in code
-- Reading a YouTube video's description and transcript
+- Read an online source whose URL is known, including a web search result.
 
 ### When NOT to use `WebFetch`
 
-- Searching for URLs -> use `WebSearch` first
-- JavaScript-heavy single-page applications (may not render)
-- Large files or binary content
+- Discovering an unknown URL; WebSearch can find candidate sources.
+- Downloading binary files or interacting with a site's JavaScript application.
 
 ### How to use `WebFetch`
 
-- Provide full URL including protocol (https://)
-- Works best with static HTML pages
-- Content returned as formatted text, not HTML
-- May fail on sites requiring JavaScript to render
+- Pass a complete URL including its protocol. HTML becomes readable text rather
+  than raw markup; script-rendered or authenticated content may be unavailable.
+- YouTube retrieval depends on available video metadata and captions. A missing
+  transcript or failed fetch does not establish what the video says.
+- Underlying fetches have a 30-second timeout; a multi-stage retrieval can take
+  longer. Large returned text is persisted with a bounded preview and retrieval
+  address. The extracted text may omit parts of the original page.
 
 ### Examples of good usage
 
 <example>
-- Read documentation page:
-WebFetch(url="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise")
-</example>
-
-<example>
-- Read a video's transcript:
-WebFetch(url="https://www.youtube.com/watch?v=H2qJRnV8ZGA")
+WebFetch(url="https://docs.python.org/3/library/json.html")
 </example>
 
 ### Examples of bad usage
 
 <example>
-- Trying to fetch without knowing URL:
-WebFetch(url="emacs documentation")
-<reasoning>Use WebSearch to find the URL first</reasoning>
+WebFetch(url="Python json documentation")
+<reasoning>
+This is a search query, not a URL. Use WebSearch to discover the address.
+</reasoning>
 </example>

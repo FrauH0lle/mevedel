@@ -273,13 +273,13 @@ instead would destroy the built-in agents later suites depend on."
   (when (eq mevedel-test--builtin-agent-registry 'unset)
     (error "Capture the agent registry before restoring it"))
   (setq mevedel-agent--registry
-        (copy-sequence mevedel-test--builtin-agent-registry)))
+        (copy-alist mevedel-test--builtin-agent-registry)))
 
 (defun mevedel-test--capture-agent-registry ()
   "Capture the built-in agent registry once, before a test mutates it."
   (when (eq mevedel-test--builtin-agent-registry 'unset)
     (setq mevedel-test--builtin-agent-registry
-          (copy-sequence mevedel-agent--registry))))
+          (copy-alist mevedel-agent--registry))))
 
 (defun mevedel-test--cancel-stray-lease-timers ()
   "Cancel portable lease renewal and deferred transport timers a test left.

@@ -1,35 +1,28 @@
-Navigate and explore a file's structure by listing all its functions, classes,
-and variables with their locations.
+List a file's symbol outline using its Emacs major mode's Imenu index.
 
 ### When to use `Imenu`
 
-- Getting a structural overview of a single file's organization
-- Listing all functions, classes, methods in a file
-- Understanding file structure before making changes
-- Quickly finding what symbols are defined in a file
+- Find named definitions or sections and their locations in one file.
 
 ### When NOT to use `Imenu`
 
-- Searching across multiple files -> use Grep or delegate
-- Finding where a symbol is used (references) -> use XrefReferences
-- Reading actual code implementation -> use Read
-- The file is very large and you only need specific content -> use Read with
-  line ranges
+- Searching multiple files or finding references to a symbol.
+- Reading implementation text; an outline contains names and locations only.
 
 ### How to use `Imenu`
 
-- Provide the file path to analyze
-- Returns a hierarchical list of symbols (functions, classes, methods, etc.)
-- Language-aware (uses major mode's imenu support)
-- Useful as a first step before diving into specific functions
-- Shows structure without full file content (more efficient than reading
-  entire file)
+- Pass one existing file path, not a directory or glob. An existing visiting
+  buffer is used, including its unsaved contents.
+- Results are location lines with hierarchical symbol names. Coverage depends
+  on the file's major mode and index; an empty index does not prove the file
+  contains no definitions. Missing support or a failed lookup is reported.
+- Large results are persisted with a bounded preview and a retrieval address.
 
 ### Examples of good usage
 
 <example>
-- Get overview of authentication module structure
 Imenu(file_path="src/auth.js")
+-> Inspect the outline and locations provided by this file's major mode.
 </example>
 
 ### Examples of bad usage
@@ -37,15 +30,7 @@ Imenu(file_path="src/auth.js")
 <example>
 Imenu(file_path="**/*.py")
 <reasoning>
-Cannot analyze multiple files.
-Use Glob to find files, then Imenu on individual files.
-</reasoning>
-</example>
-
-<example>
-Imenu(file_path="README.md")
-<reasoning>
-Looking for content in documentation.
-Use Read to actually see the content of documentation files.
+The tool accepts one file. Discover the paths first, then inspect the relevant
+file's outline.
 </reasoning>
 </example>

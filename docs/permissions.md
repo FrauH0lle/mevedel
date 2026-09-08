@@ -336,7 +336,7 @@ permission rules, and resource grants. A child may exercise that existing
 authority but cannot broaden it independently. Permission prompts from the
 complete tree are therefore queued on the root session, not displayed as
 independent blocking overlays, and carry the requesting agent's canonical path
-for attribution. Nested ToolScript asks instead show their envelope and child
+for attribution. Nested ToolCall asks instead show their envelope and child
 tool-use identities, including for root-owned requests.
 `mevedel-permission-queue.el` owns a heterogeneous FIFO with four entry kinds:
 

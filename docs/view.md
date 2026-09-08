@@ -1002,7 +1002,11 @@ renders HTML in an `<iframe sandbox="allow-scripts">` (never
 `allow-same-origin`, which beside `allow-scripts` would hand the
 artifact the viewer's origin -- the decrypted transcript and the room
 key) with a prepended CSP of `default-src 'none'`, so a self-contained
-page runs fully and nothing can phone home; Markdown goes through the
+page runs fully and nothing can phone home. Because the frame's origin is
+opaque, the viewer's colour-theme choice cannot be read from it: a prelude
+script bakes the current `data-theme` stamp onto the artifact's root and
+follows later toggles over `postMessage`, so an artifact themes off
+`html[data-theme]` beside `prefers-color-scheme`. Markdown goes through the
 DOM-built XSS-safe renderer, images display inline, plain text shows as
 text, and anything else is offered as a download. "Open in tab" puts an
 HTML artifact beside the conversation: a same-origin shell opened
@@ -1628,7 +1632,8 @@ disclosure:
   ◇ hook context added
 ```
 
-Expanding it shows the contributing hook event names and injected context.
+Expanding it shows the contributing hook event names, known source, source file
+and plugin attribution, and injected context.
 When multiple hooks contribute context to the same prompt, the view renders
 one combined disclosure for that prompt, preserving contribution order in
 the expanded details.  This keeps successful context injection quiet by
@@ -1642,7 +1647,8 @@ rerendered transcript exposes it through the same disclosure; it does not run
 the prompt hook again.
 
 The renderer builds hook audit surfaces from hook audit records.  For
-context injection, it reads ordered `<hook-event name="...">` entries
+context injection, it reads ordered `<hook-event name="..." ...>` entries,
+including optional `source`, `file`, and `plugin` attributes,
 inside a `<hook-context>` block; new persisted hook context does not need
 a plain-body fallback.
 

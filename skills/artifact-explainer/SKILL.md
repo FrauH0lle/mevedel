@@ -33,7 +33,7 @@ prose, so an explainer that is mostly text is underusing it.
 4. Self-check before writing the file: no `SLOT` markers left, one flavor only,
    no placeholder text, and no hardcoded color anywhere in an SVG. Check labels
    at a narrow displayed width, not just their authored SVG size, and check
-   print output. Retune palette tokens in light, dark, and print scopes.
+   print output. Retune palette tokens in the light, both dark, and print scopes.
 5. Write the file into the session artifacts directory with ApplyPatch, per the
    artifact rules above.
 

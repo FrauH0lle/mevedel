@@ -12,11 +12,13 @@ $ARGUMENTS
 
 # Data-table artifacts
 
-A text-column filter, a dense sortable table, and a live row count. The dataset
-is embedded as JSON and the bundled renderer draws it. Filtering is a
-case-insensitive substring search across text columns only, never numeric
-columns. Printing keeps the current filtered rows, count, and filter description
-so a subset cannot be mistaken for the whole dataset.
+A text-column filter, a dense sortable table under a header that stays put
+while the rows scroll, and a live row count. The dataset is embedded as JSON
+and the bundled renderer draws it. Filtering is a case-insensitive substring
+search across text columns only, never numeric columns; while a filter is
+active a scope line names it. Printing keeps the current filtered rows, count,
+and that scope line - shown in print even when unfiltered - so a subset cannot
+be mistaken for the whole dataset.
 
 ## How to use
 
@@ -95,14 +97,17 @@ These are where a table goes wrong quietly, so follow them exactly.
 
 The template's value is its mechanics - layout, sorting, filtering. The styling
 is a clean default, not a house style: restyle the whole `<style>` block when
-the subject calls for it. Change a palette token in **all three** scopes that
-declare it (the light `:root`, the `prefers-color-scheme: dark` block, and
-`@media print`), or it snaps back in dark mode or on paper.
+the subject calls for it. Change a palette token in **every** scope that
+declares it (the light `:root`, the `prefers-color-scheme: dark` block, the
+`:root[data-theme="dark"]` block, and `@media print`), or it snaps back in one
+theme or on paper.
 
 Keep intact: the theming structure, table markup, `<script>` blocks, and the
 ids and classes used by the renderer and styles - `dt`, `dt-filter`, `dt-count`,
-`dt-filter-context`, `dt-columns`, `dt-rows`, `arrow`, `sorted`, `num`, `empty`,
-`dt-none`, `table-wrap`. Preserve native sorting buttons inside `th scope="col"`,
+`dt-filter-context`, `dt-columns`, `dt-rows`, `arrow`, `sorted`, `filtered`,
+`num`, `empty`, `dt-none`, `table-wrap`. Keep `.table-wrap` a height-capped
+scroll container: the sticky header only works inside a box that scrolls.
+Preserve native sorting buttons inside `th scope="col"`,
 header `aria-sort`, decorative arrows hidden from assistive technology, visible
 keyboard focus, and the polite live count. Keep cell and query output as
 `textContent`, never HTML. Retain wrapping controls and horizontal scrolling

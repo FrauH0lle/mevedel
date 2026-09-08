@@ -1,132 +1,56 @@
-Execute Bash commands.
-
-This tool provides access to a Bash shell with GNU coreutils (or
-equivalents) available. Use this to inspect system state, run builds,
-tests or other development or system administration tasks.
-
-IMPORTANT: Do NOT use this for file operations, finding, reading or
-editing files. Use the provided file tools instead: `Read`, `ApplyPatch`,
-`Glob`, `Grep`.
+Execute Bash commands for builds, tests, version control, and system operations.
 
 ### When to use `Bash`
 
-- System commands: git, make, compiler commands, etc.
-- Commands that truly require shell execution
-- Running tests or builds
+- A task needs a shell command, executable, or command-line development tool.
 
 ### When NOT to use `Bash`
 
-- File operations -> use dedicated file tools instead
-- Finding files -> use `Glob`
-- Searching contents -> use `Grep`
-- Reading files -> use `Read`
-- Editing or creating files -> use `ApplyPatch`
-- Communication with user -> output text directly
+- Ordinary text reads/searches/edits are better served by Read, Grep, Glob,
+  and ApplyPatch, which provide integrated results and review.
+- Communicating with the user: write the response directly.
 
 ### How to use `Bash`
 
-- Commands run from the session working directory by default
-- Commands run with filesystem and process confinement and without network by
-  default when the platform sandbox is available
-- Request every capability already known to be necessary in one invocation.
-  Do not copy capabilities merely because an earlier command used them;
-  mevedel reapplies a user-approved session/workspace profile when the command
-  matches it
-- Bash waits up to `yield_time_ms` (10 seconds by default) and returns an
-  `execution_id` when the command is still running. Use `WriteStdin` with empty
-  `chars` to poll unread output, `ListExecutions` to list your yielded commands,
-  and `StopExecution` to stop one
-- Managed commands have no automatic timeout. Use the native `timeout` command
-  when a command itself needs a deadline
-- Pipe-mode stdin is closed. Set `tty=true` only for prompts, REPLs, or commands
-  whose terminal behavior is required; PTY stdin stays writable
-- `WriteStdin` sends ordinary input only to PTY executions. A single Ctrl-C
-  character interrupts the process group in either PTY or pipe mode
-- Do not use shell-native backgrounding (`&`). Lower `yield_time_ms` when a
-  command should yield quickly
-- Quote file paths with spaces using double quotes
-- Chain dependent commands with `&&` (or `;` if failures are OK)
-- Use absolute paths instead of `cd` when possible
-- For parallel commands, make multiple `Bash` calls in one message
-- Execution facts preserve the raw exit code and distinguish `no-match` for a
-  simple `grep`/`rg`, `different` for `diff`, and `false` for `test`/`[`. These
-  outcomes are expected command results, not execution failures
-- Run tests, check your work or otherwise close the loop to verify changes you make
-- Do NOT use newlines to separate commands (newlines are ok in quoted strings)
-
-#### Network escalation
-
-Start with the default sandbox. If an important command fails with a likely
-network or sandbox error, decide whether the operation is still needed. When it
-is, make a new Bash call with:
-
-- `sandbox_permissions="with_additional_permissions"`
-- `additional_permissions={"network":true}`
-- a concise, user-facing `justification`
-
-Request permission in the tool call itself; do not ask separately in prose.
-The new call is a distinct invocation and is never an automatic replay. Network
-access is the only requested change; the selected filesystem and process
-profile remains unchanged. If confinement is unavailable, the result discloses
-that execution was unrestricted.
-
-#### Filesystem escalation
-
-If a confined command fails because it needs a protected path, make a new Bash
-call with `sandbox_permissions="with_additional_permissions"`, a concise
-`justification`, and only the exact absolute paths needed:
-
-- `additional_permissions={"file_system":{"read":["/exact/path"]}}`
-- `additional_permissions={"file_system":{"write":["/exact/path"]}}`
-
-Request the access in the tool call, not separately in prose. Read and write
-are distinct; write also permits reading the same path. Approval reopens only
-the named resource. Its parent, siblings, other protected paths, network, and
-process confinement remain unchanged. Filesystem approval does not authorize
-the Bash command itself, which is checked independently. Network and exact
-filesystem permissions may be requested together when both are necessary.
-
-#### Full execution escalation
-
-Start confined and request only additive authority when that is sufficient. If
-an important command still fails because the sandbox itself prevents the
-operation, make a new Bash call with
-`sandbox_permissions="require_escalated"` and a concise, user-facing
-`justification`. Request approval in the tool call; do not ask separately in
-prose.
-
-This is a complete confinement bypass, not a larger additive grant. The command
-runs directly as the user with unrestricted filesystem, network, and process
-access. The new call is a distinct invocation and is never an automatic replay.
-Do not request full escalation merely to avoid a normal command permission
-prompt or before a relevant confined failure.
+- Commands start in the session working directory. Quote shell arguments
+  correctly; command substitution still executes inside double quotes.
+- Execution is confined without network by default when the sandbox is
+  available. Request known necessary capabilities together in the tool call;
+  approval for one operation does not grant unrelated command authority.
+- Use `sandbox_permissions="with_additional_permissions"`, a `justification`,
+  and `additional_permissions` for network or exact absolute filesystem paths.
+  Read and write grants are distinct. Ask through these fields, not a separate
+  prose approval question. Retry a still-needed sandbox/network failure with
+  the specific missing capability; the new call is a distinct invocation.
+- `sandbox_permissions="require_escalated"` bypasses all confinement. Request it
+  only after a relevant confined failure when additive authority is insufficient,
+  with a justification; it does not bypass command approval. Unavailable
+  confinement is disclosed in the result.
+- For grant shapes, escalation troubleshooting, or interactive process control,
+  read `mevedel://tools/execution.md`. If unavailable, use the known contract
+  or report missing guidance instead of guessing authority fields.
+- After `yield_time_ms` (10 seconds by default), a running command returns an
+  `execution_id`. Poll unread output with WriteStdin and empty `chars`;
+  ListExecutions lists your commands and StopExecution stops one. Commands have
+  no automatic timeout; use the native `timeout` command for a deadline.
+- Pipe stdin is closed. Use `tty=true` for interactive input or required terminal
+  behavior. Avoid shell backgrounding (`&`); lower `yield_time_ms` to yield early.
+- Results preserve exit codes. Simple grep/rg no-match, diff differences, and
+  test/[ false are classified as expected command outcomes, not execution failures.
 
 ### Examples of good usage
 
 <example>
-- Building the project:
+- Build, then test only if the build succeeds:
 Bash(command="make build && make test")
-</example>
-
-<example>
-- Checking git status:
-Bash(command="git status")
+If it yields an execution_id, poll that execution to obtain completion and remaining output.
 </example>
 
 ### Examples of bad usage
 
 <example>
-- Using echo for communication:
 Bash(command="echo 'Processing complete'")
 <reasoning>
-Should output text directly instead of using bash echo.
-</reasoning>
-</example>
-
-<example>
-- Reading file contents:
-Bash(command="cat config.yml")
-<reasoning>
-Should use Read tool instead for better integration.
+A shell result is not communication. Tell the user directly what completed.
 </reasoning>
 </example>

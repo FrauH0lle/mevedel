@@ -269,19 +269,19 @@
   ,test
   (test)
   :doc "keeps only bounded read-safe checkpoint records"
-  (let* ((valid '(:id "p" :state running :args (:script "(+ 1 2)")
+  (let* ((valid '(:id "p" :state running :args (:expression "(+ 1 2)")
                   :result nil :render-data (:kind ptc :calls nil)
                   :unknown "discard me"))
-         (unsafe '(:id "bad" :state running :args (:script "1")
+         (unsafe '(:id "bad" :state running :args (:expression "1")
                    :render-data #s(hash-table)))
-         (wrong-state '(:id "old" :state paused :args (:script "1")))
+         (wrong-state '(:id "old" :state paused :args (:expression "1")))
          (result
           (mevedel-session-codec--sanitize-ptc-checkpoints
            (list valid unsafe wrong-state))))
     (should (= 1 (length result)))
     (should (equal "p" (plist-get (car result) :id)))
     (should (equal "(+ 1 2)"
-                   (plist-get (plist-get (car result) :args) :script)))
+                   (plist-get (plist-get (car result) :args) :expression)))
     (should-not (plist-member (car result) :unknown))))
 
 
@@ -362,8 +362,6 @@
           (should (equal "Ship Y" (plist-get plist :latest-user-message)))
           (should (equal '(("alt" . "/tmp/alt"))
                          (plist-get plist :additional-roots)))
-          (should (equal '(("alpha" . "Alpha helper"))
-                         (plist-get plist :skills-snapshot)))
           (should (equal (mevedel-session-workspace-instruction-hashes session)
                          (plist-get plist :workspace-instruction-hashes)))
           (should (= 3 (length (plist-get plist :permission-rules))))
@@ -667,8 +665,6 @@
                       (mevedel-session-reasoning-effort session)))
           (should (= 5 (mevedel-session-turn-count session)))
           (should (= 4 (mevedel-session-last-task-write-turn session)))
-          (should (equal '(("alpha" . "Alpha helper"))
-                         (mevedel-session-skills-snapshot session)))
           (should (equal
                    (mevedel-session-workspace-instruction-hashes source)
                    (mevedel-session-workspace-instruction-hashes session)))

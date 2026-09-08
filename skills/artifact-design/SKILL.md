@@ -76,16 +76,31 @@ unconsidered; a grey with a slight hue bias toward the page's accent reads as
 chosen. Pure white and near-black are fine grounds when they suit the subject -
 the point is that the neutral was picked, not inherited.
 
-**Design both themes.** The artifact renders in its own sandboxed document, so
-the only thing it can observe is `prefers-color-scheme` - there is no theme
-attribute to read and no host stylesheet to inherit. Structure the CSS at the
-token level: the bare `:root` block defines the complete light palette, and a
-single `@media (prefers-color-scheme: dark)` block redefines only those tokens.
-Style every component through the tokens, never with a color declared directly
-inside the media block - a color whose only definition sits there never applies
-in light mode, and the page renders one theme's text on the other theme's
-ground. Scan the finished stylesheet for that before publishing; it is the
-classic unreadable-artifact bug.
+**Design both themes.** The artifact renders in its own sandboxed document
+and can observe two theme signals: the OS preference through
+`prefers-color-scheme`, and the viewer's explicit choice, which the viewer
+forwards as `data-theme="light"` or `"dark"` on the artifact's root element
+(absent when the viewer follows the system). Structure the CSS at the token
+level so both axes resolve the same way: the bare `:root` block defines the
+complete light palette; `@media (prefers-color-scheme: dark) {
+:root:where(:not([data-theme="light"])) { ... } }` redefines only those tokens
+for a dark OS unless the viewer pinned light; `:root[data-theme="dark"]`
+repeats the same dark values so the toggle wins on a light OS; and
+`:root[data-theme="light"] { color-scheme: light; }` pins the UA chrome. The
+`:where()` wrapper keeps the media block at `:root` specificity, so the
+attribute scopes beat it in either direction. Style every component through
+the tokens, never with a color declared directly inside a theme block - a
+color whose only definition sits there never applies in the other theme, and
+the page renders one theme's text on the other theme's ground. Scan the
+finished stylesheet for that before publishing; it is the classic
+unreadable-artifact bug.
+
+The bundled templates share one token vocabulary - `--bg`, `--card`, `--ink`,
+`--ink-soft`, `--rule`, `--rule-strong`, `--accent`, `--accent-soft` - and one
+default palette of warm neutrals with a blue accent. Keep the names when you
+restyle so diagrams and components from one artifact read correctly in
+another; derive `--accent-soft` from `--accent` with `color-mix()` so tuning
+the accent alone keeps the tint in step.
 
 Two rules keep each theme resolving as a set. `body` must set an explicit
 `background` from a token: the page is composited inside a frame whose own

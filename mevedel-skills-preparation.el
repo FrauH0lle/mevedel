@@ -471,7 +471,7 @@ original shell-injection marker used in diagnostics."
      (t
       (condition-case err
           (progn
-            (unless (fboundp 'mevedel-tools--current-deferred-context)
+            (unless (fboundp 'mevedel-tools--current-context)
               (require 'mevedel-tools))
             (mevedel-pipeline-run-tool
              tool
@@ -518,7 +518,7 @@ original elisp-injection marker used in diagnostics."
      (t
       (condition-case err
           (progn
-            (unless (fboundp 'mevedel-tools--current-deferred-context)
+            (unless (fboundp 'mevedel-tools--current-context)
               (require 'mevedel-tools))
             (mevedel-pipeline-run-tool
              tool

@@ -47,6 +47,7 @@
     :description "Persisted default agent"
     :tools '((:tool "Read"))
     :system-prompt "Frozen instructions"
+    :context-components '(environment skills)
     :max-turns 12
     :hook-rules nil
     :frozen-p t)
@@ -132,6 +133,8 @@
           (mevedel-agent-persistence-test--configuration))))
     (should (equal "default"
                    (plist-get (plist-get encoded :agent) :name)))
+    (should (equal '(environment skills)
+                   (plist-get (plist-get encoded :agent) :context-components)))
     (should (assq 'gptel-backend
                   (plist-get encoded :request-locals))))
   :doc "rejects a missing frozen configuration"
@@ -218,6 +221,9 @@
           (mevedel-agent-persistence--decode-configuration
            encoded "default")))
     (should (mevedel-agent-configuration-p decoded))
+    (should (equal '(environment skills)
+                   (mevedel-agent-context-components
+                    (mevedel-agent-configuration-agent decoded))))
     (should
      (equal "default"
             (mevedel-agent-name
@@ -458,7 +464,7 @@
          (_ (setf
              (mevedel-agent-reminders
               (mevedel-agent-configuration-agent configuration))
-             (list (mevedel-reminders-make-verifier-read-only))))
+             (list (mevedel-reminders-make-pending-events))))
          (record
           (mevedel-agent-record--create
            :id "opaque-id" :path "/root/task" :parent-path "/root"
@@ -476,7 +482,7 @@
              :name "default"
              :description "Redefined role"
              :reminders
-             (list (mevedel-reminders-make-reviewer-read-only))))
+             (list (mevedel-reminders-make-date-change))))
            (restored
             (mevedel-agent-persistence-deserialize-registry raw))
            (result (cdar restored))
@@ -499,7 +505,7 @@
       (should (equal '("/tmp/plain.el" ("/tmp/durable.el"))
                      (alist-get 'gptel-context locals)))
       (should
-       (equal '(verifier-read-only)
+       (equal '(pending-events)
               (mapcar #'mevedel-reminder-type
                       (mevedel-agent-reminders restored-agent))))))
 
@@ -539,7 +545,7 @@
          (raw (mevedel-agent-persistence-serialize-registry source))
          (agent-data
           (plist-get (plist-get (car raw) :configuration) :agent)))
-    (setf (plist-get agent-data :reminders) '((verifier-read-only 1)))
+    (setf (plist-get agent-data :reminders) '((pending-events 1)))
     (mevedel-test--with-captured-diagnostics nil
       (should-not
        (mevedel-agent-persistence-deserialize-registry raw))))

@@ -1,8 +1,8 @@
-;;; test-mevedel-ptc-checkpoint.el -- Durable ToolScript checkpoint tests -*- lexical-binding: t -*-
+;;; test-mevedel-ptc-checkpoint.el -- Durable ToolCall checkpoint tests -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Tests the compact ToolScript checkpoint lifecycle and transcript recovery.
+;; Tests the compact ToolCall checkpoint lifecycle and transcript recovery.
 
 ;;; Code:
 
@@ -123,12 +123,12 @@
 (mevedel-deftest mevedel-ptc-checkpoint--insert ()
   ,test
   (test)
-  :doc "appends a parseable interrupted ToolScript tool block"
+  :doc "appends a parseable interrupted ToolCall tool block"
   (with-temp-buffer
     (mevedel-ptc-checkpoint--insert
-     '(:id "p" :args (:script "(+ 1 2)") :state running
+     '(:id "p" :args (:expression "(+ 1 2)") :state running
        :render-data (:kind ptc :outcome running :calls nil)))
-    (should (string-match-p "^#\\+begin_tool (ToolScript recovered"
+    (should (string-match-p "^#\\+begin_tool (ToolCall recovered"
                             (buffer-string)))
     (should (string-match-p "script interrupted by Emacs restart"
                             (buffer-string)))
@@ -139,7 +139,7 @@
   :doc "escapes settled results that contain Org block terminators"
   (with-temp-buffer
     (mevedel-ptc-checkpoint--insert
-     '(:id "p" :args (:script "1") :state settled
+     '(:id "p" :args (:expression "1") :state settled
        :result "before\n#+end_tool\nafter"
        :render-data (:kind ptc :outcome completed :calls nil)))
     (goto-char (point-min))
@@ -153,9 +153,9 @@
   :doc "inserts only missing rows and consumes every checkpoint"
   (let ((session
          (test-mevedel-ptc-checkpoint--session
-          '((:id "present" :args (:script "1") :state settled
+          '((:id "present" :args (:expression "1") :state settled
              :result "1" :render-data (:kind ptc :outcome completed :calls nil))
-            (:id "missing" :args (:script "2") :state running
+            (:id "missing" :args (:expression "2") :state running
              :render-data (:kind ptc :outcome running :calls nil))))))
     (with-temp-buffer
       (insert (propertize "existing" 'gptel '(tool . "present")))
@@ -166,7 +166,7 @@
   :doc "consumes a checkpoint whose row is already present"
   (let ((session
          (test-mevedel-ptc-checkpoint--session
-          '((:id "present" :args (:script "1") :state settled
+          '((:id "present" :args (:expression "1") :state settled
              :result "1" :render-data (:kind ptc :outcome completed))))))
     (with-temp-buffer
       (insert (propertize "existing" 'gptel '(tool . "present")))

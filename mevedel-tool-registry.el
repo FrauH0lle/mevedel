@@ -26,6 +26,9 @@
 (declare-function gptel-tool-p "ext:gptel-request" (object))
 (defvar gptel--known-tools)
 
+;; `mevedel-ptc-interpreter'
+(autoload 'mevedel-ptc-tool-name-p "mevedel-ptc-interpreter")
+
 ;; `mevedel-utilities'
 (declare-function mevedel--truncate-display
                   "mevedel-utilities" (text width &optional ellipsis))
@@ -130,7 +133,7 @@ created as a side effect of registration and handles serialization."
     ("Glob" "Grep" "Read"
      mevedel-tool-fs mevedel-tool-fs--register)
     ("ApplyPatch" mevedel-tool-patch mevedel-tool-patch-register)
-    ("ToolScript" mevedel-tool-ptc mevedel-tool-ptc--register)
+    ("ToolCall" mevedel-tool-ptc mevedel-tool-ptc--register)
     ("UpdateGoal" mevedel-tool-goal mevedel-tool-goal--register)
     ("Imenu" "Treesitter" "XrefDefinitions" "XrefReferences"
      mevedel-tool-code mevedel-tool-code--register)
@@ -155,6 +158,20 @@ CATEGORY is nil, search all entries for the first matching NAME."
                mevedel-tool--registry)
       found)))
 
+(defun mevedel-tool-call-name (tool)
+  "Return the unambiguous expression name for TOOL."
+  (if (equal (mevedel-tool-category tool) "mevedel")
+      (mevedel-tool-name tool)
+    (concat (mevedel-tool-category tool) "/" (mevedel-tool-name tool))))
+
+(defun mevedel-tool-for-call (name)
+  "Resolve expression NAME without ambiguous cross-category lookup."
+  (let ((separator (string-search "/" name)))
+    (if separator
+        (mevedel-tool-get (substring name (1+ separator))
+                          (substring name 0 separator))
+      (mevedel-tool-get name "mevedel"))))
+
 (defun mevedel-tool-ensure (name)
   "Return tool NAME, loading its built-in registrar when necessary."
   (or (mevedel-tool-get name)
@@ -167,6 +184,13 @@ CATEGORY is nil, search all entries for the first matching NAME."
         (require feature)
         (funcall registrar)
         (mevedel-tool-get name))))
+
+(defun mevedel-tool-callable-p (tool)
+  "Return non-nil if TOOL has an unambiguous route through ToolCall."
+  (let ((name (mevedel-tool-call-name tool)))
+    (and (mevedel-ptc-tool-name-p name)
+         (not (string-search "/" (mevedel-tool-category tool)))
+         (eq tool (mevedel-tool-for-call name)))))
 
 (defun mevedel-tool-register (tool)
   "Register TOOL in the mevedel tool registry.
@@ -302,10 +326,9 @@ SPECS is a list where each element is one of:
   - (:group GROUP)  expand group from registry
   - (:tool NAME)    look up tool by name string or (CATEGORY NAME)
                     path
-  - (:deferred X)   mark X as deferred (returns nil, collects into
-                    second value)
+  - (:discoverable X)   expose X through ToolSearch/ToolCall
 
-Returns a plist (:active TOOLS :deferred TOOLS) where each TOOLS is a
+Returns a plist (:active TOOLS :discoverable TOOLS) where each TOOLS is a
 list of mevedel-tool structs.  Result is memoized on SPECS `equal' --
 resolution is a hot path (every sub-agent spawn re-resolves) and the
 tool registry is stable between register/clear events.  The cache is
@@ -317,8 +340,8 @@ and `mevedel-tool-clear-registry'."
       (let (active deferred)
         (dolist (spec specs)
           (cond
-           ;; (:deferred X) -> resolve X, add to deferred list
-           ((and (listp spec) (eq :deferred (car spec)))
+           ;; (:discoverable X) -> resolve X, add to deferred list
+           ((and (listp spec) (eq :discoverable (car spec)))
             (let ((inner (cadr spec)))
               (dolist (tool (mevedel-tool--resolve-one inner))
                 (push tool deferred))))
@@ -326,8 +349,14 @@ and `mevedel-tool-clear-registry'."
            (t
             (dolist (tool (mevedel-tool--resolve-one spec))
               (push tool active)))))
-        (let ((result (list :active (nreverse active)
-                            :deferred (nreverse deferred))))
+        (setq active (delete-dups (nreverse active))
+              deferred (cl-remove-if (lambda (tool) (memq tool active))
+                                     (delete-dups (nreverse deferred))))
+        (dolist (tool deferred)
+          (unless (mevedel-tool-callable-p tool)
+            (error "Tool %s cannot be discovered through ToolCall; expose it natively"
+                   (mevedel-tool-call-name tool))))
+        (let ((result (list :active active :discoverable deferred)))
           (puthash specs result mevedel-tool--resolve-cache)
           result)))))
 
@@ -372,10 +401,10 @@ SPEC is one of:
 
 Convenience wrapper around `mevedel-tool-resolve' that extracts the
 `gptel-tool' back-references.  Returns a plist (:active GPTEL-TOOLS
-:deferred GPTEL-TOOLS)."
+:discoverable GPTEL-TOOLS)."
   (let ((resolved (mevedel-tool-resolve specs)))
     (list :active (mapcar #'mevedel-tool-gptel-tool (plist-get resolved :active))
-          :deferred (mapcar #'mevedel-tool-gptel-tool (plist-get resolved :deferred)))))
+          :discoverable (mapcar #'mevedel-tool-gptel-tool (plist-get resolved :discoverable)))))
 
 
 ;;

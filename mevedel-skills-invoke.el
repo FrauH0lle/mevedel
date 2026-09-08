@@ -392,7 +392,7 @@ ORIGIN selects the install path:
 PERMISSION-RULES is a list of parsed mevedel rules to append.
 MODEL is a selector plist or nil.  EFFORT is an opaque gptel value or nil.
 HOOK-RULES is a list of normalized hook rules.  PTC-PRIMITIVES narrows the
-request's nested ToolScript roster; `:unrestricted' is the identity.
+request's nested ToolCall roster; `:unrestricted' is the identity.
 INVOKED-SKILL
 is a `mevedel-skill-invocation-record' to record on the session for
 compaction/replay."

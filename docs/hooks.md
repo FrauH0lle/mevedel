@@ -378,6 +378,9 @@ Decision plist fields:
 - `:system-message`: user-visible warning/status.
 - `:additional-context`: developer/model context to inject into the next
   request or current tool feedback, depending on event.
+  For `PreToolUse`, delivery is in the eventual tool result, after the current
+  attempt. Use deny/ask/input rewriting when the current action must change;
+  a textual instruction cannot retroactively constrain execution.
 - `:permission-decision`: `allow`, `deny`, or `ask` for pre-tool and
   permission events.
 - `:permission-reason`: model-facing reason for deny/ask feedback.
@@ -474,16 +477,24 @@ retry.  If a prepared WaitAgent steering attempt loses its waiter race, mevedel
 transfers the approved context into the queued prompt. Earlier FIFO entries
 cannot consume it, draining does not rerun `UserPromptSubmit`, and editing or
 clearing the queue restores the context for the next user submission.
-Hook audit records for persisted `<hook-context>` blocks contain ordered `<hook-event
-name="...">` entries so resume, rewind, and full rerender can recover
-which hook events contributed context:
+Model-visible and persisted `<hook-context>` blocks contain ordered
+`<hook-event name="...">` entries. When known, their `source`, `file`, and
+`plugin` attributes identify the contributing handler's configuration source.
+Attribution comes from the host runner, not handler-returned claims. A decision
+whose context was changed after the runner returned keeps only its event label,
+so replacement text does not inherit stale attribution. Attribute values and
+bodies are escaped; authored obligations and repeated contributions remain
+intact rather than being summarized or silently deduplicated. These source
+labels support conflict assessment; they introduce no new precedence rule.
+
+Resume, rewind, and full rerender retain the recorded context:
 
 ```xml
 <hook-context>
-<hook-event name="SessionStart">
-PONYTAIL MODE ACTIVE - level: full
+<hook-event name="SessionStart" source="plugin" plugin="project-workflow">
+Project workflow context.
 </hook-event>
-<hook-event name="UserPromptSubmit">
+<hook-event name="UserPromptSubmit" source="project-file" file="/project/.agents/hooks.el">
 Project-specific prompt policy.
 </hook-event>
 </hook-context>

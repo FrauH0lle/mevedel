@@ -49,7 +49,7 @@
 (require 'cl-lib)
 (require 'lisp-mode)
 
-(define-error 'mevedel-ptc-error "ToolScript error")
+(define-error 'mevedel-ptc-error "ToolCall error")
 
 ;; `lisp-mode'
 (defvar emacs-lisp-mode-syntax-table)
@@ -179,7 +179,7 @@ form returns.  DEFS holds the script's top-level definitions as an alist
 of (NAME KIND . CLOSURE), where NAME is a string and KIND is `function'
 or `macro'.  MODE is `eval', `return', `waiting', `done', `error', or
 `closed'."
-  roster obarray control env stack defs value error-kind (mode 'eval)
+  roster direct-tool obarray control env stack defs value error-kind (mode 'eval)
   (steps 0) (tool-calls 0) (transitions 0) (next-pause 0)
   (retained-bytes 0) batch-building slice-deadline deadline)
 
@@ -1400,7 +1400,7 @@ matches are suppressed rather than guessed."
          argument nil
          (and (equal name "split-string") (= index 1)))))))
 
-(defun mevedel-ptc--preflight (form roster &optional fn-names macro-names)
+(defun mevedel-ptc--preflight (form roster &optional fn-names macro-names forbidden-tools)
   "Reject FORM when it names operators outside the closed tables.
 
 The evaluator resolves every compound form's operator against the same
@@ -1417,6 +1417,10 @@ skipped, because only the macro decides which of them are code.
 Backquote templates are walked through their real expansion, so a
 malformed template fails here with the transformer's own message.
 
+FORBIDDEN-TOOLS names standalone tools unavailable in a composed expression.
+Literal indirect references are checked too; generated calls remain subject
+to the same runtime roster before dispatch.
+
 All unknown operators are collected and reported in one error, each with
 the nearest known name from ROSTER and the closed tables."
   (let ((unknown nil))
@@ -1430,6 +1434,15 @@ the nearest known name from ROSTER and the closed tables."
                (cond
                 ((null name) (walk-all form))
                 ((equal name "quote") nil)
+                ((or (member name forbidden-tools)
+                     (and (member name '("funcall" "apply" "mapcar"))
+                          (consp (car args))
+                          (equal (mevedel-ptc--operator-name (car args)) "quote")
+                          (symbolp (cadr (car args)))
+                          (member (symbol-name (cadr (car args))) forbidden-tools)))
+                 (mevedel-ptc--fail
+                  'preflight
+                  "Standalone-only tools require one direct call as the entire expression"))
                 ((equal name "`")
                  (walk (mevedel-ptc--tx-quasiquote form)))
                 ((member name '("," ",@"))
@@ -1527,14 +1540,53 @@ definition, so nothing is ever shadowed."
 
 ;;;; Public interface
 
-(defun mevedel-ptc-start (script roster)
+;;;###autoload
+(defun mevedel-ptc-tool-name-p (name)
+  "Return non-nil if NAME can identify a tool in the closed language."
+  (and (stringp name)
+       (not (member name '("ToolCall" "ToolSearch" "defun" "defmacro" "nil" "t")))
+       (not (member name mevedel-ptc--special-form-names))
+       (not (assoc name mevedel-ptc--transformers))
+       (not (assoc name mevedel-ptc-pure-primitives))
+       (condition-case nil
+           (let* ((parsed (car (mevedel-ptc--read (concat "(" name ")"))))
+                  (form (cadr parsed)))
+             (and (= (length parsed) 2) (consp form) (null (cdr form))
+                  (symbolp (car form))
+                  (not (mevedel-ptc-keyword-p (car form)))
+                  (equal name (symbol-name (car form)))))
+         (error nil))))
+
+(defun mevedel-ptc--pure-argument-p (form)
+  "Return non-nil when FORM provably cannot invoke a tool.
+Only literals, quoted data and direct pure primitive applications qualify.
+Indirect calls and control forms retain the normal script execution path."
+  (or (atom form)
+      (equal (mevedel-ptc--operator-name form) "quote")
+      (and (assoc (mevedel-ptc--operator-name form)
+                  mevedel-ptc-pure-primitives)
+           (cl-every #'mevedel-ptc--pure-argument-p (cdr form)))))
+
+(defun mevedel-ptc--direct-tool (forms roster)
+  "Return the direct tool name when FORMS is precisely one invocation."
+  (let ((form (car forms)))
+    (and (null (cdr forms)) (consp form) (symbolp (car form))
+         (member (symbol-name (car form)) roster)
+         (cl-every #'mevedel-ptc--pure-argument-p (cdr form))
+         (symbol-name (car form)))))
+
+(defun mevedel-ptc-start (script roster &optional standalone-tools)
   "Begin interpreting SCRIPT with tool primitives named in ROSTER.
 ROSTER is a list of tool-name strings.  Return an opaque state for
 `mevedel-ptc-step', or signal if SCRIPT cannot be read or names
 operators outside the closed tables.
 
+STANDALONE-TOOLS may only occur as the entire direct invocation.
 Guest state is fresh for every call: nothing persists between scripts."
   (let* ((parsed (mevedel-ptc--read script))
+         (direct (mevedel-ptc--direct-tool (cdr (car parsed)) roster))
+         (roster (if direct roster
+                   (cl-set-difference roster standalone-tools :test #'equal)))
          (split (mevedel-ptc--collect-definitions (cdr (car parsed)) roster))
          (defs (car split))
          (body (cdr split))
@@ -1550,10 +1602,12 @@ Guest state is fresh for every call: nothing persists between scripts."
     (dolist (def defs)
       (mevedel-ptc--preflight
        (cons 'progn (mevedel-ptc-closure-body (cddr def)))
-       roster fn-names macro-names))
-    (mevedel-ptc--preflight (cons 'progn body) roster fn-names macro-names)
+       roster fn-names macro-names (unless direct standalone-tools)))
+    (mevedel-ptc--preflight (cons 'progn body) roster fn-names macro-names
+                            (unless direct standalone-tools))
     (mevedel-ptc--make-state
      :roster roster
+     :direct-tool direct
      :obarray (cdr parsed)
      :control (cons 'progn body)
      :defs defs

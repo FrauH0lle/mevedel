@@ -484,7 +484,7 @@
                          (with-current-buffer agent-buf
                            (should (memq
                                     #'mevedel-skills--post-tool-activate
-                                    gptel-post-tool-call-functions))))
+                                    mevedel-post-tool-use-functions))))
                      (when (buffer-live-p agent-buf)
                        (kill-buffer agent-buf))
                      (when (buffer-live-p parent-buf)

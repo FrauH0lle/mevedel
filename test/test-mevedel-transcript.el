@@ -13,6 +13,7 @@
           "helpers"))
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-audit)
+(require 'mevedel-transcript-restore)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-media)
 (require 'mevedel-tool-render-data)
@@ -1104,8 +1105,8 @@ still my prompt
   ;; well-formed block look malformed, which fell back to raw rendering.
   (with-temp-buffer
     (org-mode)
-    (insert "#+begin_tool (ToolScript ...)\n")
-    (insert "(:name \"ToolScript\" :args (:script \"(Grep :pattern \\\"^[(]defcustom\\\")\"))\n")
+    (insert "#+begin_tool (ToolCall ...)\n")
+    (insert "(:name \"ToolCall\" :args (:expression \"(Grep :pattern \\\"^[(]defcustom\\\")\"))\n")
     (insert "result\n")
     (insert "#+end_tool\n")
     (let ((parts (mevedel-transcript--org-tool-block-parts (point-min) (point-max))))
@@ -1642,6 +1643,61 @@ TOOL-PROP."
 (mevedel-deftest mevedel-transcript-project-evidence ()
   ,test
   (test)
+  :doc "includes retained guidance but excludes provider reconstruction metadata"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Task.\n"
+            (mevedel--format-hook-audit-record
+             '(:type injected-reminders :phase turn-start
+               :items ((:type fixture :body "Keep this relevant instruction."))))
+            (mevedel--format-hook-audit-record
+             '(:type provider-tool-batch :messages [(:secret "opaque-provider-data")]))
+            (propertize "Answer.\n" 'gptel 'response))
+    (let ((evidence (mevedel-transcript-project-evidence
+                     (list (cons (point-min) (point-max))))))
+      (should (string-search "Keep this relevant instruction." evidence))
+      (should (string-search "provenance: system-reminder" evidence))
+      (should-not (string-search "opaque-provider-data" evidence))))
+
+  :doc "retains saved Skill instructions and later retirement without live invocation records"
+  (dolist (call '("(:name \"Skill\" :args (:name \"careful-edit\"))"
+                   "(:name \"ToolCall\" :args (:expression \"(Skill :name \\\"careful-edit\\\")\"))"))
+   (let* ((file (make-temp-file "mevedel-skill-evidence-" nil ".org"))
+         (body (concat (make-string 200 ?x)
+                       "\nKeep the user's existing changes intact.")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (org-mode)
+            (insert "#+begin_tool\n")
+            (let ((start (point)))
+              (insert call "\n\n" body)
+              (put-text-property start (point) 'gptel '(tool . "call-skill")))
+            (insert "\n#+end_tool\n"
+                    "The task is complete; stop using careful-edit now.\n"
+                    "#+begin_tool\n")
+            (let ((start (point)))
+              (insert "(:name \"Read\" :args (:file_path \"output.txt\"))\n\n"
+                      (make-string 200 ?y))
+              (put-text-property start (point) 'gptel '(tool . "call-read")))
+            (insert "\n#+end_tool\n")
+            (gptel--save-state))
+          (with-temp-buffer
+            (org-mode)
+            (insert-file-contents file)
+            (mevedel-transcript-restore-properties)
+            (let ((evidence
+                   (mevedel-transcript-project-evidence
+                    (list (cons (point-min) (point-max))) :tool-output-max 20)))
+              (should (string-search body evidence))
+              (should (string-search "stop using careful-edit now" evidence))
+              (should (string-search "provenance: tool-result" evidence))
+              (should (string-search "tool output truncated" evidence))
+              (should-not (string-search (make-string 21 ?y) evidence))
+              (should-not
+               (text-property-not-all 0 (length evidence) 'gptel nil evidence)))))
+      (delete-file file))))
+
   :doc "projects model-visible transcript roles as immutable neutral evidence"
   (with-temp-buffer
     (org-mode)
@@ -1746,6 +1802,17 @@ TOOL-PROP."
     (should-not (mevedel-transcript--tool-block-call-readable-before-p
                  (point-min) (point-max)))
     (should (= (point-max) (point)))))
+
+(mevedel-deftest mevedel-transcript--instruction-tool-p ()
+  ,test
+  (test)
+  :doc "recognizes only Skill calls whose instruction result reaches the model"
+  (should (mevedel-transcript--instruction-tool-p '(:name "Skill")))
+  (should (mevedel-transcript--instruction-tool-p
+           '(:name "ToolCall" :args (:expression "(Skill :name \"x\")"))))
+  (dolist (expression '("'(Skill)" "(progn (Skill) 1)" "(Read)" "("))
+    (should-not (mevedel-transcript--instruction-tool-p
+                 (list :name "ToolCall" :args (list :expression expression))))))
 
 (provide 'test-mevedel-transcript)
 ;;; test-mevedel-transcript.el ends here

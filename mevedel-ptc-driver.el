@@ -1,4 +1,4 @@
-;;; mevedel-ptc-driver.el --- ToolScript driver -*- lexical-binding: t -*-
+;;; mevedel-ptc-driver.el --- ToolCall driver -*- lexical-binding: t -*-
 
 ;;; Commentary:
 ;;
@@ -41,7 +41,7 @@
 (declare-function mevedel-ptc-close "mevedel-ptc-interpreter" (state))
 (declare-function mevedel-ptc-intern "mevedel-ptc-interpreter" (state name))
 (declare-function mevedel-ptc-keyword-p "mevedel-ptc-interpreter" (value))
-(declare-function mevedel-ptc-start "mevedel-ptc-interpreter" (script roster))
+(declare-function mevedel-ptc-start "mevedel-ptc-interpreter" (script roster &optional standalone-tools))
 (declare-function mevedel-ptc-step
                   "mevedel-ptc-interpreter"
                   (state &optional resume-value resume-retained-p))
@@ -101,10 +101,41 @@
 ;;;; Nested calls
 
 (defvar mevedel-ptc-driver--next-envelope-id 0
-  "Fallback identity counter for ToolScript calls lacking a tool-use id.")
+  "Fallback identity counter for ToolCall calls lacking a tool-use id.")
 
 (defconst mevedel-ptc-driver--preview-length 200
   "Maximum characters of a nested result kept in the audit record.")
+
+(defun mevedel-ptc-driver--argument-value (value schema)
+  "Convert guest VALUE using the trusted argument SCHEMA.
+Declared object keys become host keywords; undeclared keys remain private.
+JSON booleans and null use the same representations as native tool calls."
+  (cond
+   ((and (symbolp value) (member (symbol-name value) '(":null" ":json-false")))
+    (intern (symbol-name value)))
+   ((and (null value) (eq (plist-get schema :type) 'boolean)) :json-false)
+   ((eq (plist-get schema :type) 'object)
+    (if (null value) (make-hash-table :test #'equal)
+      (let ((rest value) (properties (plist-get schema :properties)) result)
+        (while (consp rest)
+          (let* ((key (pop rest))
+                 (_ (unless (and rest (mevedel-ptc-keyword-p key))
+                      (error "Object arguments require keyword/value pairs")))
+                 (name (symbol-name key))
+                 (declared (cl-find name properties :test #'equal
+                                    :key (lambda (item) (and (symbolp item) (symbol-name item)))))
+                 (property-schema (and declared (plist-get properties declared))))
+            (setq result
+                  (append result (list (or declared key)
+                                       (mevedel-ptc-driver--argument-value
+                                        (pop rest) property-schema))))))
+        (when rest (error "Object arguments must be proper lists"))
+        result)))
+   ((eq (plist-get schema :type) 'array)
+    (vconcat (mapcar (lambda (item)
+                      (mevedel-ptc-driver--argument-value item (plist-get schema :items)))
+                    value)))
+   (t value)))
 
 (defun mevedel-ptc-driver--convert-args (tool guest-args)
   "Convert GUEST-ARGS into a host keyword plist validated against TOOL.
@@ -114,6 +145,7 @@ Guest keywords live in the script's private symbol universe and are not
 declared arguments and only then interned.  An undeclared argument is an
 error naming what the tool does accept, which is also the script's
 earliest chance to learn it got the contract wrong."
+  (mevedel-ptc-check-value nil guest-args nil nil t)
   (let ((declared (mapcar (lambda (spec) (symbol-name (car spec)))
                           (mevedel-tool-args tool)))
         (name (mevedel-tool-name tool))
@@ -130,8 +162,12 @@ earliest chance to learn it got the contract wrong."
           (unless (member bare declared)
             (error "%s has no argument `%s'; it accepts: %s"
                    name bare (string-join declared ", ")))
-          (setq out (append out (list (intern (concat ":" bare)) value))))))
-    (mevedel-ptc-check-value nil out nil nil t)
+          (let* ((spec (cl-find bare (mevedel-tool-args tool)
+                                :key (lambda (arg) (symbol-name (car arg)))
+                                :test #'equal))
+                 (schema (append (list :type (cadr spec)) (nthcdr 4 spec))))
+            (setq out (append out (list (intern (concat ":" bare))
+                                       (mevedel-ptc-driver--argument-value value schema))))))))
     out))
 
 (defun mevedel-ptc-driver--preview (text)
@@ -293,8 +329,8 @@ ERROR-KIND is the interpreter's typed failure category when available."
 
 ;;;; Driver
 
-(defun mevedel-ptc-driver-run (callback script roster)
-  "Run SCRIPT with ROSTER, delivering its outcome to CALLBACK."
+(defun mevedel-ptc-driver-run (callback script roster &optional standalone-tools)
+  "Run SCRIPT with ROSTER and STANDALONE-TOOLS, delivering to CALLBACK."
   (let* ((data-buffer (current-buffer))
          (started-at (float-time))
          (envelope-id
@@ -316,7 +352,15 @@ ERROR-KIND is the interpreter's typed failure category when available."
             (mevedel-telemetry-start
              session 'ptc-script :tool-use-id envelope-id))))
     (condition-case err
-        (let* ((state (mevedel-ptc-start script roster))
+        (let* ((state (mevedel-ptc-start script roster standalone-tools))
+               (direct (mevedel-ptc-state-direct-tool state))
+               (direct-result-limit
+                (when-let* ((tool (and direct (mevedel-tool-for-call direct))))
+                  (mevedel-tool-max-result-size tool)))
+               (direct-outcome nil)
+               (forwarded-context nil)
+               (forwarded-audits nil)
+               (forwarded-repairs nil)
                (child-number 0)
                (audit nil)
                (permission-waits nil)
@@ -330,17 +374,17 @@ ERROR-KIND is the interpreter's typed failure category when available."
           (when checkpoint-session
             (unless (mevedel-ptc-checkpoint-start
                      checkpoint-session data-buffer envelope-id script)
-              (error "ToolScript audit checkpoint could not be persisted")))
+              (error "ToolCall audit checkpoint could not be persisted")))
           (letrec
               ((progress
-               (lambda (type active-tool &optional known-total)
+		(lambda (type active-tool &optional known-total)
                   (ignore-errors
                     (when (fboundp 'mevedel-view-stream-handle-tool-progress)
                       (mevedel-view-stream-handle-tool-progress
                        (list :type type :data-buffer data-buffer
                              :tool-use-id envelope-id
                              :facts
-                             (list :kind 'ptc :live-p (eq type 'progress)
+                             (list :kind 'ptc :direct-tool direct :live-p (eq type 'progress)
                                    :active-tool active-tool
                                    :completed-count
                                    (mevedel-ptc-driver--completed-count audit)
@@ -354,7 +398,7 @@ ERROR-KIND is the interpreter's typed failure category when available."
                   (unless settled
                     (setq settled t)
                     (let ((render-data
-                           (list :kind 'ptc :outcome outcome
+                           (list :kind 'ptc :direct-tool direct :outcome outcome
                                  :elapsed-seconds (- (float-time) started-at)
                                  :nested-call-count (length audit)
                                  :calls audit))
@@ -370,7 +414,7 @@ ERROR-KIND is the interpreter's typed failure category when available."
                                          (list :state 'settled :result result
                                                :render-data render-data))))
                               (error
-                               "ToolScript final audit could not be persisted")))
+                               "ToolCall final audit could not be persisted")))
                         (error (setq finalization-error err)))
                       (when finalization-error
                         (setq result
@@ -396,8 +440,15 @@ ERROR-KIND is the interpreter's typed failure category when available."
                         (mevedel-ptc-driver--finish-telemetry
                          telemetry-span outcome (length audit) error-kind))
                       (funcall callback
-                               (list :result result :status status
-                                     :render-data render-data))))))
+                               (append
+                                (list :result result :status status
+                                      :render-data render-data
+                                      :media (plist-get direct-outcome :media)
+                                      :hook-additional-context forwarded-context
+                                      :hook-audit-records forwarded-audits
+                                      :input-repairs forwarded-repairs)
+                                (when direct
+                                  (list :result-limit direct-result-limit))))))))
                ;; In-memory only: per-child sidecar writes dominated script
                ;; runtime, serialized parallel batches, and cost one remote
                ;; round-trip each on TRAMP targets.  Durable writes are the
@@ -407,7 +458,7 @@ ERROR-KIND is the interpreter's typed failure category when available."
                   (mevedel-ptc-checkpoint-note
                    checkpoint-session envelope-id
                    (list :render-data
-                         (list :kind 'ptc :outcome 'running
+                         (list :kind 'ptc :direct-tool direct :outcome 'running
                                :elapsed-seconds
                                (- (float-time) started-at)
                                :nested-call-count (length audit)
@@ -416,21 +467,23 @@ ERROR-KIND is the interpreter's typed failure category when available."
                 (lambda (task status result &optional outcome)
                   (let* ((id (plist-get task :id))
                          (entry
-                         (list :id id
-                               :order (plist-get task :order)
-                               :tool (or (plist-get task :name)
-                                         (plist-get task :tool))
-                               :args
-                               (mevedel-ptc-driver--child-args
-                                (or (plist-get task :plist)
-                                    (plist-get task :args)))
-                               :status status
-                               :result result
-                               :batch (plist-get task :batch)
-                               :render-data
-                               (mevedel-ptc-driver--child-render-data
-                                (plist-get outcome :render-data))))
-                        (media (plist-get outcome :media)))
+                          (list :id id
+				:order (plist-get task :order)
+				:tool (or (plist-get task :name)
+                                          (plist-get task :tool))
+				:args
+				(let ((args (or (plist-get task :plist)
+						(plist-get task :args))))
+                                  (if direct args
+                                    (mevedel-ptc-driver--child-args args)))
+				:status status
+				:result result
+				:batch (plist-get task :batch)
+				:render-data
+				(if direct (plist-get outcome :render-data)
+                                  (mevedel-ptc-driver--child-render-data
+                                   (plist-get outcome :render-data)))))
+                         (media (plist-get outcome :media)))
                     (when media
                       (setq entry
                             (plist-put
@@ -531,11 +584,7 @@ ERROR-KIND is the interpreter's typed failure category when available."
                   (let ((name (plist-get task :name))
                         (child-id (plist-get task :id)))
                     (condition-case call-error
-                        (let* ((_ (unless
-                                      (fboundp
-                                       'mevedel-tools--current-deferred-context)
-                                    (require 'mevedel-tools)))
-                               (tool (mevedel-tool-ensure name))
+                        (let* ((tool (mevedel-tool-for-call name))
                                (_ (unless tool
                                     (error "Tool %s is unavailable" name)))
                                (plist
@@ -552,6 +601,12 @@ ERROR-KIND is the interpreter's typed failure category when available."
                                 (funcall
                                  guard
                                  (lambda ()
+                                   (setq forwarded-context
+                                         (append forwarded-context (plist-get outcome :hook-additional-context))
+                                         forwarded-audits
+                                         (append forwarded-audits (plist-get outcome :hook-audit-records))
+                                         forwarded-repairs
+                                         (append forwarded-repairs (plist-get outcome :input-repairs)))
                                    (setq permission-waits
                                          (assoc-delete-all
                                           child-id permission-waits))
@@ -577,8 +632,12 @@ ERROR-KIND is the interpreter's typed failure category when available."
                                                 (type-of raw-result)))))
                                    (pcase-let
                                        ((`(,status ,result ,guest-value)
-                                         (mevedel-ptc-driver--classify-outcome
-                                          state outcome)))
+                                         (if direct
+                                             (list (if (eq (plist-get outcome :reason) 'permission-denied)
+                                                       'denied (plist-get outcome :status))
+                                                   (plist-get outcome :result) nil)
+                                           (mevedel-ptc-driver--classify-outcome
+                                            state outcome))))
                                      (funcall complete task status result
                                               guest-value outcome)))))
                               plist
@@ -633,7 +692,12 @@ ERROR-KIND is the interpreter's typed failure category when available."
                                        name result)
                                (mevedel-ptc-driver--partial-summary audit))
                               'error 'denied)
-                           (funcall resume guest-value))))))))
+                           (if (equal direct name)
+                               (progn
+                                 (setq direct-outcome outcome)
+                                 (funcall finish result status
+                                          (if (eq status 'error) 'tool-error 'completed)))
+                             (funcall resume guest-value)))))))))
                (dispatch-batch
                 (lambda (calls)
                   (let* ((total (length calls))

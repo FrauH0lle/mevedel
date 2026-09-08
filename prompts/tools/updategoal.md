@@ -1,37 +1,27 @@
-Update the active goal. Use only to mark it achieved or genuinely
-blocked. You cannot pause, resume, or re-budget a goal; the user
-controls those.
+Mark the active goal complete or blocked.
 
 ### When to use `UpdateGoal`
 
-- The objective is achieved and no required work remains: set
-  `status="complete"`
-- The same blocking condition has recurred for at least three
-  consecutive goal turns and only user input or an external change can
-  resolve it: set `status="blocked"` with a `summary`
+- `complete`: the objective is achieved and no required work remains.
+- `blocked`: the same condition has recurred for at least three consecutive goal
+  turns, and progress requires user input or an external change.
 
 ### When NOT to use `UpdateGoal`
 
-- Work is hard, slow, uncertain, or incomplete; that is not blocked
-- The budget is nearly exhausted or you are stopping; that is not
-  complete
-- Reporting ordinary progress -> use the task tools or plain output
+- Work is difficult, slow, uncertain, or unfinished, or you are stopping because
+  the budget is nearly spent. These do not establish completion or a blocker.
+- Pausing, resuming, or changing the budget; those controls belong to the user.
 
 ### How to use `UpdateGoal`
 
-- `status` is required: `"complete"` or `"blocked"`
-- `summary` is required for blocked: name the recurring condition and
-  the exact input or external change needed
+- Select the status based on the actual objective and evidence. For `blocked`,
+  `summary` must name the recurring condition and the specific input or external
+  change needed. Ordinary progress belongs in the response or task tracking.
 
 ### Examples of good usage
 
 <example>
-UpdateGoal(status="complete")
-</example>
-
-<example>
-UpdateGoal(status="blocked",
-           summary="Three consecutive turns failed at the same point: pushing needs credentials for the private registry. Provide a token or make the registry reachable.")
+UpdateGoal(status="complete") after verifying every requirement of the objective
 </example>
 
 ### Examples of bad usage
@@ -39,16 +29,7 @@ UpdateGoal(status="blocked",
 <example>
 UpdateGoal(status="blocked", summary="The refactor is bigger than expected.")
 <reasoning>
-Hard or slow work is not blocked. Blocked requires the same condition
-recurring for three consecutive goal turns and a needed external
-change.
-</reasoning>
-</example>
-
-<example>
-UpdateGoal(status="complete") because the token budget is nearly spent
-<reasoning>
-Complete means the objective is achieved with no required work
-remaining, never that you are stopping.
+Difficulty is not a blocker. Continue useful work; blocked requires a recurring
+condition that cannot be resolved without user input or an external change.
 </reasoning>
 </example>

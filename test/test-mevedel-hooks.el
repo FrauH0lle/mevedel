@@ -1628,7 +1628,7 @@
          (session (mevedel-hooks-test--session root))
          (mevedel-hook-rules nil))
     (setf (mevedel-session-hook-rules session)
-          '((SubagentStart
+          `((SubagentStart
              ((:matcher "explorer"
                :hooks ((:type elisp
                         :function mevedel-hooks-test--first-context-fn
@@ -1637,6 +1637,7 @@
                        (:type elisp
                         :function mevedel-hooks-test--second-context-fn
                         :source project-file
+                        :source-file ,(file-name-concat root "hooks.el")
                         :description "Inject project conventions")))))))
     (unwind-protect
         (let* ((decision
@@ -1649,6 +1650,17 @@
                (handlers (plist-get (car audits) :handlers)))
           (should (equal '("first" "second-a" "second-b")
                          (plist-get decision :additional-context)))
+          (let* ((entries (mevedel-hooks-context-entries decision 'SubagentStart))
+                 (rendered (mevedel-hooks-format-context entries)))
+            (should (equal "ponytail" (plist-get (car entries) :plugin-name)))
+            (dolist (entry (cdr entries))
+              (should (equal (file-name-concat root "hooks.el")
+                             (plist-get entry :source-file))))
+            (should (string-search "source=\"plugin\"" rendered))
+            (should (string-search "plugin=\"ponytail\"" rendered))
+            (should (string-search (file-name-concat root "hooks.el") rendered))
+            (should (string-search "second-a" rendered))
+            (should (string-search "second-b" rendered)))
           (should-not (plist-member decision :hook-context-handlers))
           (should (= 1 (length audits)))
           (should (= 2 (length handlers)))
@@ -1663,7 +1675,11 @@
           (should (equal 'project-file
                          (plist-get (cadr handlers) :source)))
           (should-not (plist-member (cadr handlers) :reason))
-          (should-not (plist-member (car audits) :context)))
+          (should-not (plist-member (car audits) :context))
+          (setcar (last (plist-get decision :additional-context)) "changed later")
+          (dolist (entry (mevedel-hooks-context-entries decision 'SubagentStart))
+            (should-not (plist-get entry :source))
+            (should-not (plist-get entry :source-file))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/session-start-log-source

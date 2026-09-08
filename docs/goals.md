@@ -129,6 +129,14 @@ Goal. It accepts exactly:
 The tool reports only the status transition. Canonical turn settlement still
 persists the final accounting.
 
+The installed `prompts/goals/active-context.md` supplies the active root with
+the current objective, accepted-plan reference, accounting, and completion
+contract. It requires evidence for the full requested outcome; passing a
+narrower set of checks does not establish completion. A model-reported block
+requires the same impasse across at least three consecutive Goal turns with
+no meaningful independent progress possible. These are judgment obligations,
+not claims that the tool mechanically verifies completion or classifies blockers.
+
 ## Commands and UI
 
 - `/goal <objective>` starts a Goal and schedules its first turn.
@@ -179,3 +187,12 @@ elapsed time, and accepted-plan reference. The cockpit header carries the
 objective, status, turn count, and token accounting; `i` opens the Goal record
 panel with the blocked reason, elapsed time, and accepted-plan reference. Their
 redraws preserve the active composer draft.
+
+## Context delivery
+
+Active root Goal facts (objective, accepted-plan reference, counters and budget)
+are retained current-context updates. Changed counters do not rewrite the system
+prefix. Goal execution policy is delivered separately on activation/context loss,
+so counter updates do not repeat its full instructions. New state supersedes
+older observations; leaving the active state delivers an explicit inactive
+observation. Retained workers do not inherit the root Goal.

@@ -198,7 +198,7 @@
   :doc "bare symbol resolves as group"
   (let ((result (mevedel-tool-resolve '(read))))
     (should (= 2 (length (plist-get result :active))))
-    (should (null (plist-get result :deferred))))
+    (should (null (plist-get result :discoverable))))
 
   :doc "bare symbol falls back to tool name"
   (let ((result (mevedel-tool-resolve '(Bash))))
@@ -219,16 +219,33 @@
     (should (= 1 (length (plist-get result :active))))
     (should (equal "Edit" (mevedel-tool-name (car (plist-get result :active))))))
 
-  :doc "(:deferred X) collects into deferred list"
-  (let ((result (mevedel-tool-resolve '(read (:deferred edit)))))
+  :doc "(:discoverable X) collects into deferred list"
+  (let ((result (mevedel-tool-resolve '(read (:discoverable edit)))))
     (should (= 2 (length (plist-get result :active))))
-    (should (= 1 (length (plist-get result :deferred))))
-    (should (equal "Edit" (mevedel-tool-name (car (plist-get result :deferred))))))
+    (should (= 1 (length (plist-get result :discoverable))))
+    (should (equal "Edit" (mevedel-tool-name (car (plist-get result :discoverable))))))
 
   :doc "mixed list resolves correctly"
-  (let ((result (mevedel-tool-resolve '(read (:tool "Bash") (:deferred edit)))))
+  (let ((result (mevedel-tool-resolve '(read (:tool "Bash") (:discoverable edit)))))
     (should (= 3 (length (plist-get result :active))))
-    (should (= 1 (length (plist-get result :deferred)))))
+    (should (= 1 (length (plist-get result :discoverable)))))
+
+  :doc "rejects uncallable discoverable names after native precedence"
+  (progn
+   (dolist (name '("ToolCall" "ToolSearch" "list" "bad name"))
+    (mevedel-tool-register (mevedel-tool--create :name name :category "mevedel"))
+    (should-error (mevedel-tool-resolve `((:discoverable (:tool ,name))))))
+  (let ((resolved (mevedel-tool-resolve '((:tool "ToolCall")
+                                         (:discoverable (:tool "ToolCall"))))))
+    (should (= 1 (length (plist-get resolved :active))))
+    (should-not (plist-get resolved :discoverable))))
+
+  :doc "rejects ambiguous category separators instead of dispatching another identity"
+  (progn
+    (mevedel-tool-register (mevedel-tool--create :name "Probe" :category "server/team"))
+    (mevedel-tool-register (mevedel-tool--create :name "team/Probe" :category "server"))
+    (should-error
+     (mevedel-tool-resolve '((:discoverable (:tool ("server/team" "Probe")))))))
 
   :doc "unknown bare symbol signals error"
   (should-error (mevedel-tool-resolve '(nonexistent)) :type 'error)
@@ -837,6 +854,17 @@
         (should (equal "1 file"
                        (mevedel-tool-display-string "Calm" '(:patch "x")))))
     (mevedel-tool-clear-registry)))
+
+(mevedel-deftest mevedel-tool-callable-p ()
+  ,test
+  (test)
+  :doc "native-only exceptions cannot enter ToolCall through a colliding identity"
+  (let ((mevedel-tool--registry (make-hash-table :test #'equal)))
+    (dolist (spec '(("Good" "server" t) ("Probe" "server/team" nil)
+                    ("team/Probe" "server" t) ("list" "mevedel" nil)))
+      (let ((tool (mevedel-tool--create :name (car spec) :category (cadr spec))))
+        (mevedel-tool-register tool)
+        (should (eq (not (null (mevedel-tool-callable-p tool))) (nth 2 spec)))))))
 
 (provide 'test-mevedel-tool-registry)
 ;;; test-mevedel-tool-registry.el ends here

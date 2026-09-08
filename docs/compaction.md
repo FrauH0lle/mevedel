@@ -121,12 +121,14 @@ warns once and lets the request proceed normally.
 
 Before a request is sent, mevedel still needs a local estimate. It uses
 the historic chars/4 scan when no API baseline is available, ignoring
-regions marked `gptel 'ignore` and excluding file-local variables.
+regions marked `gptel 'ignore` and excluding file-local variables. Complete
+retained reminder bodies count as model-visible content; their encoded records
+and provider reconstruction metadata do not.
 
 After ordinary non-summary requests, API-reported token usage from
 gptel is recorded by the estimation owner as a buffer-local baseline.
-Future estimates start from that measured baseline and add chars/4 only for text added
-after the recorded marker. Context-summary requests are explicitly excluded
+Future estimates start from that measured baseline and add chars/4 only for model-visible text added
+after the recorded marker, using the same metadata exclusions. Context-summary requests are explicitly excluded
 from this baseline so generation never pollutes chat usage
 estimates.
 
@@ -182,7 +184,7 @@ proceed. If eligible, it leaves steering pending, compacts the active persisted
 segment, rebuilds `info :data`, injects the pending steering into that
 post-compaction provider boundary, and then calls the shared provider wrapper.
 That wrapper injects and commits reminders only after any rebuild, immediately
-before calling the original wait handler, so ephemeral events cannot be
+before calling the original wait handler, so staged events cannot be
 committed into a payload that compaction later discards.
 
 Continuation compaction supports the active persisted session segment and a
@@ -337,6 +339,11 @@ user, assistant, reasoning, tool-call, and tool-result evidence. It excludes
 hidden UI and audit data, caps tool content while keeping structures balanced,
 and replaces native media with textual kind/MIME/path placeholders. Transcript
 text and hook additions remain untrusted evidence below the fixed prompt.
+`Skill` results (native or direct ToolCall) are exempt from the ordinary output cap: they carry authored
+instructions that must remain available as evidence after cold resume loses
+the live invocation records. Later user retirement/correction remains in its
+original conversation order. Full instruction results count toward the existing
+generator input-size gate; they are not promoted to summarizer instructions.
 
 On first compaction the prompt asks the model to create a new anchored
 summary. On later compactions it provides the previous leading summary
@@ -358,8 +365,19 @@ carry-forward path for raw or injected user
 messages. Recent-tail preservation is unchanged.
 
 Relevant skill invocation records from the target conversation are appended as
-provenance evidence so summaries can preserve user-side and model-side
-methodology without activating the skill for the generator.
+provenance evidence, including their recorded prepared bodies, source paths,
+and conversation identities. Compaction does not reread a possibly changed
+`SKILL.md`. Invocation records describe history, not current activation: the
+summary must preserve applicable obligations and later user corrections or
+deactivation without reviving completed or retired guidance. Missing bodies or
+uncertain applicability remain explicit gaps.
+
+These records supplement the transcript in a live session; the record list is
+not persisted in the session sidecar. After cold resume, retention depends on
+the restored transcript and its existing summary. Prepared bodies are not
+silently truncated to fit; they count toward the generator's existing input
+size gate, which can reject an oversized request. This preserves evidence for
+the generator but does not mechanically guarantee a model's summary fidelity.
 
 Compaction neither snapshots Goal state into the segment nor queues a static
 Goal reminder. The durable Goal record remains the sole authority and is

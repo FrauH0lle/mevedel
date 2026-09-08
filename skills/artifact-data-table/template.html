@@ -5,29 +5,54 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><!-- SLOT: TITLE - e.g. "Product catalog" --></title>
 <style>
+  /* Shared artifact palette: warm neutrals with a blue accent. The styling is
+     a clean default, not a house style - restyle freely, but change a token
+     in every scope that declares it (the light :root, both dark blocks, and
+     print) or the value snaps back. */
   :root {
     color-scheme: light dark;
-    --ink:      #16181d;
-    --ink-soft: #646b78;
-    --bg:       #f6f7f9;
-    --card:     #ffffff;
-    --stripe:   #fafbfc;
-    --rule:     #e3e6ea;
-    --accent:   #2f6f8f;
-    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --bg:          #f9f9f7;
+    --card:        #fcfcfb;
+    --ink:         #0b0b0b;
+    --ink-soft:    #52514e;
+    --rule:        rgba(11, 11, 11, 0.1);
+    --rule-strong: rgba(11, 11, 11, 0.2);
+    --stripe:      rgba(11, 11, 11, 0.03);
+    --hover:       rgba(11, 11, 11, 0.06);
+    --accent:      #184f95;
+    --accent-soft: color-mix(in srgb, var(--accent) 18%, transparent);
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   }
-
+  /* Dark on both axes: the OS preference, unless the viewer pinned light, and
+     the viewer's own data-theme stamp. :where() keeps the media block at :root
+     specificity so an explicit stamp wins in either direction. */
   @media (prefers-color-scheme: dark) {
-    :root {
-      --ink:      #e6e8ec;
-      --ink-soft: #949cab;
-      --bg:       #131519;
-      --card:     #1b1e23;
-      --stripe:   #1f232a;
-      --rule:     #2c3038;
-      --accent:   #6fb2d2;
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --bg:          #141412;
+      --card:        #1d1d1b;
+      --ink:         #ededea;
+      --ink-soft:    #b3b1a9;
+      --rule:        rgba(255, 255, 255, 0.12);
+      --rule-strong: rgba(255, 255, 255, 0.22);
+      --stripe:      rgba(255, 255, 255, 0.03);
+      --hover:       rgba(255, 255, 255, 0.07);
+      --accent:      #6da7ec;
     }
   }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg:          #141412;
+    --card:        #1d1d1b;
+    --ink:         #ededea;
+    --ink-soft:    #b3b1a9;
+    --rule:        rgba(255, 255, 255, 0.12);
+    --rule-strong: rgba(255, 255, 255, 0.22);
+    --stripe:      rgba(255, 255, 255, 0.03);
+    --hover:       rgba(255, 255, 255, 0.07);
+    --accent:      #6da7ec;
+  }
+  :root[data-theme="light"] { color-scheme: light; }
 
   * { box-sizing: border-box; }
 
@@ -36,49 +61,72 @@
     background: var(--bg);
     color: var(--ink);
     font-family: var(--sans);
-    font-size: 15px;
+    font-size: 14px;
+    line-height: 1.5;
   }
 
-  .wrap { max-width: 72rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  .wrap { max-width: 80rem; margin: 0 auto; padding: 2rem 1.5rem 3.5rem; }
 
-  h1 { font-size: 1.5rem; margin: 0 0 0.25rem; font-weight: 600; }
-  .scope { margin: 0 0 1.5rem; color: var(--ink-soft); font-size: 0.95rem; }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.25rem 1rem;
+    margin-bottom: 1rem;
+  }
+  h1 { font-size: 1.4rem; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  .scope { margin: 0; color: var(--ink-soft); font-size: 0.9rem; }
 
   .dt-controls {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 0.75rem;
-    margin-bottom: 1rem;
+    margin-bottom: 0.75rem;
   }
 
+  /* Explicit background and color: the UA's default control surface sits off
+     the card tokens in dark mode. */
   #dt-filter {
     flex: 1 1 16rem;
+    max-width: 24rem;
     min-width: 0;
-    padding: 0.5rem 0.7rem;
+    padding: 0.5rem 0.75rem;
     font: inherit;
     color: var(--ink);
     background: var(--card);
-    border: 1px solid var(--rule);
-    border-radius: 7px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 6px;
   }
-  #dt-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #dt-filter:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
 
-  #dt-count { color: var(--ink-soft); font-size: 0.85rem; white-space: nowrap; }
-  #dt-filter-context { color: var(--ink-soft); font-size: 0.85rem; overflow-wrap: anywhere; }
+  #dt-count { color: var(--ink-soft); font-size: 0.85rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  /* The scope line earns its space only when a filter narrows the view; print
+     always shows it so a printed subset never passes for the whole dataset. */
+  #dt-filter-context { color: var(--ink-soft); font-size: 0.85rem; margin: 0 0 0.75rem; overflow-wrap: anywhere; }
+  #dt-filter-context:not(.filtered) { display: none; }
 
+  /* The table scrolls inside its own box, both ways: sideways for wide rows,
+     and vertically under a header that stays put. Without the height cap the
+     sticky header has nothing to stick to. */
   .table-wrap {
-    overflow-x: auto;
+    overflow: auto;
+    max-height: 72vh;
     background: var(--card);
     border: 1px solid var(--rule);
-    border-radius: 10px;
+    border-radius: 8px;
   }
 
-  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
 
   th, td {
     text-align: left;
-    padding: 0.5rem 0.9rem;
+    padding: 0.55rem 0.9rem;
     border-bottom: 1px solid var(--rule);
     white-space: nowrap;
   }
@@ -86,9 +134,11 @@
   th {
     position: sticky;
     top: 0;
+    z-index: 1;
     background: var(--card);
+    border-bottom: 1px solid var(--rule-strong);
     font-size: 0.72rem;
-    letter-spacing: 0.07em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--ink-soft);
     font-weight: 600;
@@ -105,42 +155,51 @@
     text-align: inherit;
     cursor: pointer;
   }
+  th button:hover { color: var(--ink); }
   th button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   th.sorted { color: var(--accent); }
   th .arrow { opacity: 0; margin-left: 0.3rem; }
+  th button:hover .arrow { opacity: 0.5; }
   th.sorted .arrow { opacity: 1; }
 
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.num, th.num { text-align: right; }
   td.empty { color: var(--ink-soft); }
 
   tbody tr:nth-child(even) { background: var(--stripe); }
+  tbody tr:hover { background: var(--hover); }
   tbody tr:last-child td { border-bottom: none; }
 
-  .dt-none { padding: 2rem; text-align: center; color: var(--ink-soft); }
+  .dt-none { padding: 2rem; text-align: center; color: var(--ink-soft); white-space: normal; }
 
-  footer { margin-top: 1.25rem; color: var(--ink-soft); font-size: 0.82rem; }
+  footer { margin-top: 1rem; color: var(--ink-soft); font-size: 0.82rem; }
 
+  /* Print is always light, whatever the OS scheme or the viewer stamp. */
   @media print {
-    :root {
+    :root, :root[data-theme="dark"] {
       color-scheme: light;
-      --ink: #000; --ink-soft: #444; --bg: #fff; --card: #fff;
-      --stripe: #fff; --rule: #bbb; --accent: #000;
+      --bg: #fff; --card: #fff; --ink: #000; --ink-soft: #444;
+      --rule: #bbb; --rule-strong: #888; --stripe: #fff; --hover: #fff;
+      --accent: #000; --accent-soft: transparent;
     }
     .wrap { max-width: none; padding: 0; }
     #dt-filter { display: none; }
+    #dt-filter-context:not(.filtered) { display: block; }
     .table-wrap { overflow: visible; max-height: none; border-radius: 0; }
     table { table-layout: fixed; }
     th, td { white-space: normal; overflow-wrap: anywhere; }
     th { position: static; }
     th button:focus-visible { outline: none; }
+    tbody tr:hover { background: var(--stripe); }
   }
 </style>
 </head>
 <body>
 <div class="wrap">
 
-  <h1><!-- SLOT: TITLE (again, as the visible heading) -->Table title</h1>
-  <p class="scope"><!-- SLOT: SCOPE - what this dataset covers and as of when. -->What this covers, and as of when.</p>
+  <header>
+    <h1><!-- SLOT: TITLE (again, as the visible heading) -->Table title</h1>
+    <p class="scope"><!-- SLOT: SCOPE - what this dataset covers and as of when. -->What this covers, and as of when.</p>
+  </header>
 
   <div class="dt-controls">
     <input id="dt-filter" type="search" placeholder="Filter text columns" aria-label="Filter text columns">
@@ -345,6 +404,7 @@
         : `${rows.length} rows`;
     }
     if (filterContext) {
+      filterContext.classList.toggle('filtered', Boolean(query));
       filterContext.textContent = query
         ? `Filtered view: text columns contain "${query}". Only matching rows are shown and printed.`
         : 'All rows shown. Filter searches text columns only.';

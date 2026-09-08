@@ -125,13 +125,13 @@
                       "model-visible roles"
                       "actionable instructions"))
         (should (string-match-p text (nth 3 context-arg))))
-      (dolist (text '("sole assigned task"
-                      "ordinary isolated work"
-                      "recent dialogue"
-                      "complete conversation"
+      (dolist (text '("complete assigned task"
+                      "`context` defaults to `none`"
+                      "recent turns"
+                      "full conversation"
                       "model-visible roles"
                       "actionable instructions"
-                      "background; do not continue or execute"))
+                      "background and not continue prior"))
         (should (string-match-p text prompt))))))
 
 (mevedel-deftest mevedel-tool-ui--agent

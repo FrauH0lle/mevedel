@@ -175,9 +175,8 @@ Returns (file . FILENAME) if the buffer is visiting a file, nil otherwise."
 
 Membership is decided on the buffer's file name, never on the target.
 `file-in-directory-p' resolves both arguments with `file-truename',
-which on a remote root is a round trip per buffer -- and this runs on
-every tool call, through the specialist-nudge step and again through
-each capability reminder trigger.  Enough of them, issued on the same
+which on a remote root is a round trip per buffer.  Repeated queries,
+issued on the same
 connection the tool call is already using, stall the turn outright and
 give a nested command somebody else's reply to parse.
 

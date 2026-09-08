@@ -170,7 +170,7 @@ add more, and we don't want to act on actions we don't understand).")
     :permission-mode :sandbox-mode :plan-mode :permission-rules :resource-grants
     :preset-name :model-provider :reasoning-effort
     :last-observed-date
-    :agent-types-snapshot :skills-snapshot :workspace-instruction-hashes
+    :agent-types-snapshot :workspace-instruction-hashes
     :additional-roots :tasks
     :prompt-index :file-snapshots :ptc-checkpoints :agent-transcripts :agent-registry
     :agent-turn-capacity :plan-metadata :goal :messages)
@@ -600,7 +600,6 @@ The resulting plist is round-trippable via
    :reasoning-effort       (mevedel-session-reasoning-effort session)
    :last-observed-date     (mevedel-session-last-observed-date session)
    :agent-types-snapshot   (mevedel-session-agent-types-snapshot session)
-   :skills-snapshot        (mevedel-session-skills-snapshot session)
    :workspace-instruction-hashes
    (copy-tree (mevedel-session-workspace-instruction-hashes session) t)
    :additional-roots       additional-roots
@@ -653,12 +652,12 @@ the round trip but are ignored when rendered."
     (nreverse out)))
 
 (defun mevedel-session-codec--sanitize-ptc-checkpoints (raw)
-  "Return closed, read-safe ToolScript checkpoints from sidecar value RAW."
+  "Return closed, read-safe ToolCall checkpoints from sidecar value RAW."
   (cl-loop
    for checkpoint in (and (proper-list-p raw) raw)
    for id = (and (proper-list-p checkpoint) (plist-get checkpoint :id))
    for args = (and (proper-list-p checkpoint) (plist-get checkpoint :args))
-   for script = (and (proper-list-p args) (plist-get args :script))
+   for script = (and (proper-list-p args) (plist-get args :expression))
    for state = (and (proper-list-p checkpoint)
                     (plist-get checkpoint :state))
    for result = (and (proper-list-p checkpoint)
@@ -670,7 +669,7 @@ the round trip but are ignored when rendered."
              (stringp script) (<= (length script) (* 64 1024))
              (or (null result) (stringp result))
              (or (null render-data) (mevedel--plain-data-p render-data)))
-   collect (list :id id :args (list :script script) :state state
+   collect (list :id id :args (list :expression script) :state state
                  :result result
                  :render-data (copy-tree render-data t))))
 
@@ -828,7 +827,6 @@ their hygiene filters."
                      :last-observed-date (plist-get plist :last-observed-date)
                      :agent-types-snapshot
                      (plist-get plist :agent-types-snapshot)
-                     :skills-snapshot (plist-get plist :skills-snapshot)
                      :workspace-instruction-hashes
                      (mevedel-session-codec--sanitize-workspace-instruction-hashes
                       (plist-get plist :workspace-instruction-hashes))

@@ -10,6 +10,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-models)
+(require 'mevedel-transcript-audit)
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
@@ -219,23 +220,12 @@ excludes file-local variables block."
             (pos (if (markerp position) (marker-position position) position))
             ((<= (point-min) pos))
             ((<= pos (point-max))))
-      (+ tokens (/ (- (point-max) pos) 4))
-    (let ((pos (point-min))
-          (total 0)
-          (flv-start (mevedel-compact-estimation--file-local-variables-start)))
-      (while (< pos (point-max))
-        (let* ((next (next-single-property-change pos 'gptel nil (point-max)))
-               (prop (get-text-property pos 'gptel)))
-          (unless (memq prop
-                        '(ignore mevedel-render-data mevedel-hook-audit))
-            ;; Only count if not in file-local-variables region
-            (when (or (null flv-start) (< pos flv-start))
-              (setq total (+ total (- (if (and flv-start (> next flv-start))
-                                          flv-start
-                                        next)
-                                      pos)))))
-          (setq pos next)))
-      (/ total 4))))
+      (+ tokens
+         (/ (save-restriction
+              (narrow-to-region pos (point-max))
+              (mevedel-compact-estimation-model-visible-chars))
+            4))
+    (/ (mevedel-compact-estimation-model-visible-chars) 4)))
 
 (defun mevedel-compact-estimation-model-visible-chars ()
   "Return model-visible character count in the current buffer."
@@ -245,11 +235,20 @@ excludes file-local variables block."
     (while (< pos (point-max))
       (let* ((next (next-single-property-change pos 'gptel nil (point-max)))
              (end (if (and flv-start (> next flv-start)) flv-start next)))
-        (when (and (not (memq (get-text-property pos 'gptel)
-                              '(ignore mevedel-render-data
-                                       mevedel-hook-audit)))
-                   (or (null flv-start) (< pos flv-start)))
-          (cl-incf total (- end pos)))
+        (when (or (null flv-start) (< pos flv-start))
+          (pcase (get-text-property pos 'gptel)
+            ('mevedel-hook-audit
+             (dolist (record (mevedel-transcript-audit-records
+                              (buffer-substring pos end) 'injected-reminders))
+               (cl-incf total
+                        (length
+                         (mapconcat
+                          (lambda (entry)
+                            (format "<system-reminder>\n%s\n</system-reminder>"
+                                    (plist-get entry :body)))
+                          (plist-get record :items) "\n")))))
+            ((or 'ignore 'mevedel-render-data))
+            (_ (cl-incf total (- end pos)))))
         (setq pos next)))
     total))
 

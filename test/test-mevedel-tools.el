@@ -6,6 +6,9 @@
 
 (require 'gptel)
 (require 'gptel-request)
+(require 'gptel-anthropic)
+(require 'gptel-bedrock)
+(require 'gptel-gemini)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'mevedel-permissions)
@@ -114,9 +117,69 @@
            (data (list :toolConfig config))
            (info (list :data data :backend 'backend :tools '(one))))
       (mevedel-tools--request-data-set-tools info)
-      (should (equal '(:parsed t) (plist-get config :tools))))))
+      (should (equal '(:parsed t) (plist-get config :tools)))))
 
-(mevedel-deftest mevedel-tools--ctx-deferred-set
+  :doc "keeps native cache boundaries when tools are refreshed, added, or removed"
+  (let ((gptel--known-backends nil))
+    (dolist (backend
+             (list (gptel-make-anthropic
+                    "cache-anthropic" :key "test"
+                    :models '((cache-test :capabilities (tool-use cache))))
+                   (gptel-make-bedrock
+                    "cache-bedrock"
+                    :models '((cache-test :capabilities (tool-use cache))))
+                   (gptel-make-openai
+                    "cache-openai" :key "test"
+                    :models '((cache-test :capabilities (tool-use cache))))
+                   (gptel-make-openai
+                    "cache-chat-completions" :host "localhost" :key "test"
+                    :models '((cache-test :capabilities (tool-use cache))))
+                   (gptel-make-gemini
+                    "cache-gemini" :key "test"
+                    :models '((cache-test :capabilities (tool-use cache))))))
+      (dolist (cache '(t nil (system)))
+        (with-temp-buffer
+          (setq-local gptel-backend backend
+                      gptel-model 'cache-test
+                      gptel-cache cache
+                      gptel-use-tools t
+                      gptel-use-context nil
+                      gptel-system-prompt "Stable task policy."
+                      gptel-tools
+                      (list (mevedel-tools-test--make-fake-gptel-tool "Read")))
+          (let* ((fsm (gptel-request "Inspect a file." :dry-run t))
+                 (info (gptel-fsm-info fsm))
+                 (original (copy-tree (plist-get info :data) t)))
+            ;; Realize the request through gptel, then use the same writer
+            ;; called by ToolCall, deferred loading, and Plan filtering.
+            (mevedel-tools--request-data-set-tools info)
+            (should (equal original (plist-get info :data)))
+            (dolist (names '(("Read" "Imenu") ("Read") nil ("Read")))
+              (let* ((tools (mapcar #'mevedel-tools-test--make-fake-gptel-tool names))
+                     (gptel-tools tools)
+                     (expected (gptel--request-data backend nil))
+                     (data (plist-get info :data))
+                     (key (if (plist-member data :toolConfig) :toolConfig :tools)))
+                (plist-put info :tools tools)
+                ;; An unrelated callback buffer's settings cannot change
+                ;; the cache policy captured in this realized request.
+                (let ((gptel-cache (not cache)))
+                  (mevedel-tools--request-data-set-tools info))
+                (if names
+                    (should (equal (plist-get expected key) (plist-get data key)))
+                  (let ((serialized (if (eq key :tools) (plist-get data :tools)
+                                      (plist-get (plist-get data key) :tools))))
+                    (should (equal (gptel--parse-tools backend nil) serialized))))
+                ;; Tool changes leave the existing system and messages intact.
+                (should (equal (plist-get original :system) (plist-get data :system)))
+                (should (equal (plist-get original :systemInstruction)
+                               (plist-get data :systemInstruction)))
+                (should (equal (plist-get original :contents) (plist-get data :contents)))
+                (should (equal (plist-get original :input) (plist-get data :input)))
+                (should (equal (plist-get original :messages)
+                               (plist-get data :messages)))))))))))
+
+(mevedel-deftest mevedel-tools--ctx-tool-catalog
   (:before-each (mevedel-test--capture-agent-registry)
    :after-each (mevedel-workspace-clear-registry))
   ,test
@@ -124,19 +187,19 @@
 
   :doc "reads from a `mevedel-session'"
   (let ((session (mevedel-tools-test--make-session)))
-    (setf (mevedel-session-deferred-set session)
+    (setf (mevedel-session-tool-catalog session)
           '((("mevedel" "X") . "x")))
     (should (equal '((("mevedel" "X") . "x"))
-                   (mevedel-tools--ctx-deferred-set session))))
+                   (mevedel-tools--ctx-tool-catalog session))))
 
   :doc "reads from a `mevedel-agent-invocation'"
   (let* ((_ (mevedel-define-agent a1 :description "a" :tools nil))
          (agent (mevedel-agent-get "a1"))
          (inv (mevedel-agent-invocation-create agent)))
-    (setf (mevedel-agent-invocation-deferred-set inv)
+    (setf (mevedel-agent-invocation-tool-catalog inv)
           '((("mevedel" "Y") . "y")))
     (should (equal '((("mevedel" "Y") . "y"))
-                   (mevedel-tools--ctx-deferred-set inv)))
+                   (mevedel-tools--ctx-tool-catalog inv)))
     (mevedel-test--restore-agent-registry))
 
   :doc "setf writes to the correct underlying slot per struct"
@@ -144,41 +207,22 @@
          (agent (mevedel-agent-get "a2"))
          (inv (mevedel-agent-invocation-create agent))
          (session (mevedel-tools-test--make-session)))
-    (setf (mevedel-tools--ctx-deferred-set session) '((("x" "a") . "1")))
-    (setf (mevedel-tools--ctx-deferred-set inv) '((("y" "b") . "2")))
+    (setf (mevedel-tools--ctx-tool-catalog session) '((("x" "a") . "1")))
+    (setf (mevedel-tools--ctx-tool-catalog inv) '((("y" "b") . "2")))
     (should (equal '((("x" "a") . "1"))
-                   (mevedel-session-deferred-set session)))
+                   (mevedel-session-tool-catalog session)))
     (should (equal '((("y" "b") . "2"))
-                   (mevedel-agent-invocation-deferred-set inv)))
+                   (mevedel-agent-invocation-tool-catalog inv)))
     (mevedel-test--restore-agent-registry)))
 
 
-(mevedel-deftest mevedel-tools--ctx-deferred-injected
-  (:before-each (mevedel-test--capture-agent-registry)
-   :after-each (mevedel-workspace-clear-registry))
-  ,test
-  (test)
 
-  :doc "setf through accessor pushes onto session injected alist"
-  (let ((session (mevedel-tools-test--make-session)))
-    (push (cons "Foo" 5) (mevedel-tools--ctx-deferred-injected session))
-    (should (equal '(("Foo" . 5))
-                   (mevedel-session-deferred-injected session))))
-
-  :doc "setf through accessor pushes onto invocation injected alist"
-  (let* ((_ (mevedel-define-agent a3 :description "a" :tools nil))
-         (agent (mevedel-agent-get "a3"))
-         (inv (mevedel-agent-invocation-create agent)))
-    (push (cons "Bar" 3) (mevedel-tools--ctx-deferred-injected inv))
-    (should (equal '(("Bar" . 3))
-                   (mevedel-agent-invocation-deferred-injected inv)))
-    (mevedel-test--restore-agent-registry)))
 
 
 ;;
 ;;; Deferred context resolution
 
-(mevedel-deftest mevedel-tools--deferred-context-for
+(mevedel-deftest mevedel-tools--context-for
   (:before-each (mevedel-test--capture-agent-registry)
    :after-each (progn (mevedel-workspace-clear-registry)
                       (mevedel-test--restore-agent-registry)))
@@ -191,7 +235,7 @@
          (inv (mevedel-agent-invocation-create agent))
          (fsm (gptel-make-fsm
                :info (list :mevedel-agent-invocation inv))))
-    (should (eq inv (mevedel-tools--deferred-context-for fsm))))
+    (should (eq inv (mevedel-tools--context-for fsm))))
 
   :doc "falls back to buffer-local session when no overlay is attached"
   (let* ((session (mevedel-tools-test--make-session))
@@ -200,7 +244,7 @@
         (let ((fsm (with-current-buffer buf
                      (setq-local mevedel--session session)
                      (gptel-make-fsm :info (list :buffer buf)))))
-          (should (eq session (mevedel-tools--deferred-context-for fsm))))
+          (should (eq session (mevedel-tools--context-for fsm))))
       (kill-buffer buf)))
 
   :doc "agent buffers prefer their invocation over inherited session"
@@ -214,14 +258,14 @@
                      (setq-local mevedel--session session)
                      (setq-local mevedel--agent-invocation inv)
                      (gptel-make-fsm :info (list :buffer buf)))))
-          (should (eq inv (mevedel-tools--deferred-context-for fsm))))
+          (should (eq inv (mevedel-tools--context-for fsm))))
       (kill-buffer buf)))
 
   :doc "returns nil when FSM has neither overlay nor live buffer"
   (let ((fsm (gptel-make-fsm :info nil)))
-    (should-not (mevedel-tools--deferred-context-for fsm))))
+    (should-not (mevedel-tools--context-for fsm))))
 
-(mevedel-deftest mevedel-tools--current-deferred-context
+(mevedel-deftest mevedel-tools--current-context
   (:before-each (mevedel-test--capture-agent-registry)
    :after-each (progn (mevedel-workspace-clear-registry)
                       (mevedel-test--restore-agent-registry)))
@@ -239,7 +283,7 @@
           (setq-local mevedel--session session)
           (setq-local mevedel--agent-invocation inv)
           (let ((mevedel-tools--current-fsm nil))
-            (should (eq inv (mevedel-tools--current-deferred-context)))))
+            (should (eq inv (mevedel-tools--current-context)))))
       (kill-buffer buf))))
 
 
@@ -767,43 +811,17 @@ function returning the states entered by test handlers."
     (unwind-protect
         (let ((inhibit-message t)
               (gptel-confirm-tool-calls nil))
-          (setf (mevedel-session-deferred-set session)
+          (setf (mevedel-session-tool-catalog session)
                 '((("mevedel" "Imenu") . "File outline")))
           (gptel--handle-tool-use fsm)
           (let ((result (mevedel-tools-test--tool-use-result fsm "Imenu")))
-            (should (string-match-p "Tool Imenu is not currently loaded" result))
+            (should (string-match-p "Specialist is available through ToolCall: Imenu" result))
             (should (string-match-p
-                     "ToolSearch(query=\\\"Imenu\\\", load=true)"
+                     "ToolSearch(query=\\\"Imenu\\\")"
                      result))
             (should (equal result
                            (mevedel-tools-test--tool-result-string
                             fsm "Imenu"))))
-          (should (equal '(TRET) (funcall transitions))))
-      (kill-buffer buf)))
-
-  :doc "unknown expired deferred tool returns ToolSearch guidance"
-  (let* ((session (mevedel-tools-test--make-session))
-         (tool-use (list (list :name "ExpiredImenu"
-                               :args nil
-                               :id "call_expired")))
-         (fixture (mevedel-tools-test--make-tool-use-fsm
-                   tool-use nil session))
-         (buf (plist-get fixture :buffer))
-         (fsm (plist-get fixture :fsm))
-         (transitions (plist-get fixture :transitions)))
-    (unwind-protect
-        (let ((inhibit-message t)
-              (gptel-confirm-tool-calls nil))
-          (setf (mevedel-session-deferred-expired session) '("ExpiredImenu"))
-          (gptel--handle-tool-use fsm)
-          (let ((result (mevedel-tools-test--tool-use-result
-                         fsm "ExpiredImenu")))
-            (should (string-match-p
-                     "Tool ExpiredImenu is not currently loaded"
-                     result))
-            (should (string-match-p
-                     "ToolSearch(query=\"ExpiredImenu\", load=true)"
-                     result)))
           (should (equal '(TRET) (funcall transitions))))
       (kill-buffer buf)))
 
@@ -819,17 +837,17 @@ function returning the states entered by test handlers."
          (orig-result nil))
     (unwind-protect
         (let ((inhibit-message t))
-          (setf (mevedel-session-deferred-set session)
+          (setf (mevedel-session-tool-catalog session)
                 '((("mevedel" "Imenu") . "File outline")))
           (mevedel-tools--handle-tool-use-advice
            (lambda (_fsm)
              (setq orig-result
                    (mevedel-tools-test--tool-use-result fsm "Imenu")))
            fsm)
-          (should (string-match-p "Tool Imenu is not currently loaded"
+          (should (string-match-p "Specialist is available through ToolCall: Imenu"
                                   orig-result))
           (should (string-match-p
-                   "ToolSearch(query=\\\"Imenu\\\", load=true)"
+                   "ToolSearch(query=\\\"Imenu\\\")"
                    orig-result)))
       (kill-buffer buf)))
 
@@ -966,7 +984,7 @@ function returning the states entered by test handlers."
 ;;
 ;;; Deferred search
 
-(mevedel-deftest mevedel-tools--search-deferred
+(mevedel-deftest mevedel-tools--search-catalog
   (:before-each (mevedel-test--capture-agent-registry)
    :after-each (mevedel-workspace-clear-registry))
   ,test
@@ -974,44 +992,59 @@ function returning the states entered by test handlers."
 
   :doc "matches on tool name substring, case-insensitive"
   (let ((session (mevedel-tools-test--make-session)))
-    (setf (mevedel-session-deferred-set session)
+    (setf (mevedel-session-tool-catalog session)
           '((("mevedel" "XrefReferences") . "Find references to a symbol")
             (("mevedel" "Edit") . "Replace text in a file")))
-    (let ((matches (mevedel-tools--search-deferred session "xref")))
+    (let ((matches (mevedel-tools--search-catalog session "xref")))
       (should (= 1 (length matches)))
       (should (equal '("mevedel" "XrefReferences") (car (car matches))))))
 
   :doc "matches on description substring"
   (let ((session (mevedel-tools-test--make-session)))
-    (setf (mevedel-session-deferred-set session)
+    (setf (mevedel-session-tool-catalog session)
           '((("mevedel" "XrefReferences") . "Find references to a symbol")
             (("mevedel" "Edit") . "Replace text in a file")))
-    (let ((matches (mevedel-tools--search-deferred session "replace")))
+    (let ((matches (mevedel-tools--search-catalog session "replace")))
       (should (= 1 (length matches)))
       (should (equal '("mevedel" "Edit") (car (car matches))))))
 
   :doc "OR semantics: any term may match"
   (let ((session (mevedel-tools-test--make-session)))
-    (setf (mevedel-session-deferred-set session)
+    (setf (mevedel-session-tool-catalog session)
           '((("mevedel" "XrefReferences") . "Find references to a symbol")
             (("mevedel" "Edit") . "Replace text in a file")
             (("mevedel" "Bash") . "Run a shell command")))
-    (let ((matches (mevedel-tools--search-deferred session "xref shell")))
+    (let ((matches (mevedel-tools--search-catalog session "xref shell")))
       (should (= 2 (length matches)))))
+
+  :doc "exact terms narrow separately and deduplicate by identity"
+  (let ((session (mevedel-tools-test--make-session)))
+    (setf (mevedel-session-tool-catalog session)
+          '((("mevedel" "Agent") . "Spawn an agent")
+            (("mevedel" "Agent") . "Duplicate summary")
+            (("mevedel" "ListAgents") . "List agents")
+            (("mcp" "Agent") . "Remote agent")
+            (("mevedel" "Imenu") . "Symbols")))
+    (should (equal '(("mevedel" "Agent") ("mcp" "Agent"))
+                   (mapcar #'car (mevedel-tools--search-catalog session "Agent"))))
+    (should (equal '(("mevedel" "Agent") ("mevedel" "Imenu"))
+                   (mapcar #'car (mevedel-tools--search-catalog session "mevedel/agent symbols"))))
+    (should (equal '("mevedel" "Imenu")
+                   (caar (mevedel-tools--search-catalog session "Imenu e")))))
 
   :doc "no match returns empty list"
   (let ((session (mevedel-tools-test--make-session)))
-    (setf (mevedel-session-deferred-set session)
+    (setf (mevedel-session-tool-catalog session)
           '((("mevedel" "Edit") . "Replace text in a file")))
-    (should (null (mevedel-tools--search-deferred session "nothing"))))
+    (should (null (mevedel-tools--search-catalog session "nothing"))))
 
   :doc "works on an agent-invocation ctx via polymorphic accessor"
   (let* ((_ (mevedel-define-agent search-a :description "a" :tools nil))
          (agent (mevedel-agent-get "search-a"))
          (inv (mevedel-agent-invocation-create agent)))
-    (setf (mevedel-agent-invocation-deferred-set inv)
+    (setf (mevedel-agent-invocation-tool-catalog inv)
           '((("mevedel" "Edit") . "Replace text in a file")))
-    (let ((matches (mevedel-tools--search-deferred inv "edit")))
+    (let ((matches (mevedel-tools--search-catalog inv "edit")))
       (should (= 1 (length matches))))
     (mevedel-test--restore-agent-registry)))
 
@@ -1019,158 +1052,11 @@ function returning the states entered by test handlers."
 ;;
 ;;; ToolSearch tool entry point
 
-(mevedel-deftest mevedel-tools--tool-search
-  (:before-each
-   (progn
-     (mevedel-tool-clear-registry)
-     ;; Register a fake tool so gptel-get-tool can resolve it.
-     (let ((tool (mevedel-tool--create
-                  :name "Edit"
-                  :category "mevedel"
-                  :gptel-tool (mevedel-tools-test--make-fake-gptel-tool "Edit"))))
-       (mevedel-tool-register tool)
-       ;; Also register under gptel's known-tools so `gptel-get-tool' works.
-       (setf (alist-get "Edit"
-                        (alist-get "mevedel" gptel--known-tools nil nil #'equal)
-                        nil nil #'equal)
-             (mevedel-tool-gptel-tool tool)))
-     (let ((tool (mevedel-tool--create
-                  :name "function_source"
-                  :category "mevedel-introspection"
-                  :summary "Read source"
-                  :groups '(elisp)
-                  :gptel-tool (mevedel-tools-test--make-fake-gptel-tool
-                               "function_source"
-                               "mevedel-introspection"))))
-       (mevedel-tool-register tool)
-       (setf (alist-get
-              "function_source"
-              (alist-get "mevedel-introspection"
-                         gptel--known-tools nil nil #'equal)
-              nil nil #'equal)
-             (mevedel-tool-gptel-tool tool))))
-   :after-each
-   (progn
-     (mevedel-tool-clear-registry)
-     (setf (alist-get "mevedel" gptel--known-tools nil t #'equal) nil)
-     (setf (alist-get "mevedel-introspection" gptel--known-tools nil t #'equal)
-           nil)
-     (mevedel-workspace-clear-registry)))
-  ,test
-  (test)
 
-  :doc "returns search text without queueing when load is nil"
-  (let* ((session (mevedel-tools-test--make-session))
-         (mevedel--session session)
-         (result nil))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel" "Edit") . "Replace text in a file")))
-    (mevedel-tools--tool-search (lambda (s) (setq result s)) "edit" nil)
-    (should (string-match-p "Found 1 tool" result))
-    (should (string-match-p "Edit" result))
-    (should (string-match-p "exact tool name" result))
-    (should (null (mevedel-session-deferred-pending session))))
-
-  :doc "queues matched tools onto deferred-pending when load is t"
-  (let* ((session (mevedel-tools-test--make-session))
-         (mevedel--session session)
-         (result nil))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel" "Edit") . "Replace text in a file")))
-    (mevedel-tools--tool-search (lambda (s) (setq result s)) "edit" t)
-    (should (string-match-p "available now" result))
-    (should (= 1 (length (mevedel-session-deferred-pending session))))
-    (should (equal "Edit"
-                   (gptel-tool-name
-                    (car (mevedel-session-deferred-pending session))))))
-
-  :doc "reports an unresolvable tool as unavailable and drops it"
-  (let* ((session (mevedel-tools-test--make-session))
-         (mevedel--session session)
-         (result nil))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel" "Ghost") . "A tool whose registration went away")))
-    (mevedel-tools--tool-search (lambda (s) (setq result s)) "ghost" t)
-    (should-not (string-match-p "available now" result))
-    (should (string-match-p "Ghost" result))
-    (should-not (mevedel-session-deferred-pending session))
-    ;; Left in the deferred set it would keep being advertised by the roster
-    ;; and by the unknown-tool guidance, which sends the model back here.
-    (should-not (mevedel-session-deferred-set session)))
-
-  :doc "reports only the resolvable half of a mixed match"
-  (let* ((session (mevedel-tools-test--make-session))
-         (mevedel--session session)
-         (result nil))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel" "Edit") . "Replace text in a file")
-            (("mevedel" "Ghost") . "Replace text in a vanished file")))
-    (mevedel-tools--tool-search (lambda (s) (setq result s)) "replace" t)
-    (should (string-match-p "available now" result))
-    (should (= 1 (length (mevedel-session-deferred-pending session))))
-    (should (equal "Edit"
-                   (gptel-tool-name
-                    (car (mevedel-session-deferred-pending session)))))
-    (should (string-match-p "Ghost" result))
-    (should (equal '((("mevedel" "Edit") . "Replace text in a file"))
-                   (mevedel-session-deferred-set session))))
-
-  :doc "loads deferred tools when the query matches their registered group"
-  (let* ((session (mevedel-tools-test--make-session))
-         (mevedel--session session)
-         (result nil))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel-introspection" "function_source") . "Read source")))
-    (mevedel-tools--tool-search (lambda (s) (setq result s)) "elisp" t)
-    (should (string-match-p "available now" result))
-    (should (= 1 (length (mevedel-session-deferred-pending session))))
-    (should (equal "function_source"
-                   (gptel-tool-name
-                    (car (mevedel-session-deferred-pending session))))))
-
-  :doc "treats :json-false as nil load"
-  (let* ((session (mevedel-tools-test--make-session))
-         (mevedel--session session)
-         (result nil))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel" "Edit") . "Replace text in a file")))
-    (mevedel-tools--tool-search (lambda (s) (setq result s)) "edit" :json-false)
-    (should (string-match-p "ToolSearch again with load=true" result))
-    (should (null (mevedel-session-deferred-pending session))))
-
-  :doc "includes usage hints for known specialist tools"
-  (let* ((session (mevedel-tools-test--make-session))
-         (mevedel--session session)
-         (result nil))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel" "XrefReferences") . "Find references")))
-    (mevedel-tools--tool-search (lambda (s) (setq result s)) "xref" nil)
-    (should (string-match-p "XrefReferences(identifier, file_path)" result)))
-
-  :doc "ToolSearch load argument says loaded tools are available now"
-  (progn
-    (mevedel-tool-ui--register)
-    (let* ((tool (mevedel-tool-get "ToolSearch" "mevedel"))
-           (load-arg (assoc 'load (mevedel-tool-args tool)))
-           (description (nth 3 load-arg)))
-      (should tool)
-      (should (string-match-p "available now" description))
-      (should (string-match-p "next tool call" description))
-      (should-not (string-match-p "next model turn" description))))
-
-  :doc "no matches returns the empty-result message"
-  (let* ((session (mevedel-tools-test--make-session))
-         (mevedel--session session)
-         (result nil))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel" "Edit") . "Replace text in a file")))
-    (mevedel-tools--tool-search (lambda (s) (setq result s)) "bogus" t)
-    (should (string-match-p "No matching tools found" result))
-    (should (null (mevedel-session-deferred-pending session)))))
 
 
 ;;
-;;; WAIT handler -- TTL lifecycle
+;;; WAIT handler -- loaded capability lifecycle
 
 (defun mevedel-tools-test--make-fsm-with-ctx (ctx)
   "Build a minimal FSM whose info carries CTX.
@@ -1401,92 +1287,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                  (plist-get (gptel-fsm-info fsm) :tools)))))
       (kill-buffer buf))))
 
-(mevedel-deftest mevedel-tools--handle-deferred-inject
-  (:before-each (mevedel-test--capture-agent-registry)
-   :after-each (progn (mevedel-workspace-clear-registry)
-                      (mevedel-test--restore-agent-registry)))
-  ,test
-  (test)
 
-  :doc "injects pending tools with initial TTL and adds them to payload"
-  (let* ((session (mevedel-tools-test--make-session))
-         (buf+fsm (mevedel-tools-test--make-fsm-with-ctx session))
-         (buf (car buf+fsm))
-         (fsm (cdr buf+fsm))
-         (tool (mevedel-tools-test--make-fake-gptel-tool "Edit")))
-    (unwind-protect
-        (progn
-          (setf (mevedel-session-deferred-pending session) (list tool))
-          (mevedel-tools--handle-deferred-inject fsm)
-          (let ((injected (mevedel-session-deferred-injected session))
-                (active (plist-get (gptel-fsm-info fsm) :tools)))
-            (should (equal (list (cons "Edit" mevedel-deferred-tool-ttl))
-                           injected))
-            (should (= 1 (length active)))
-            (should (equal "Edit" (gptel-tool-name (car active))))
-            ;; pending cleared after injection
-            (should (null (mevedel-session-deferred-pending session)))))
-      (kill-buffer buf)))
 
-  :doc "resets TTL for tools that were used since the last turn"
-  (let* ((session (mevedel-tools-test--make-session))
-         (buf+fsm (mevedel-tools-test--make-fsm-with-ctx session))
-         (buf (car buf+fsm))
-         (fsm (cdr buf+fsm))
-         (tool (mevedel-tools-test--make-fake-gptel-tool "Edit")))
-    (unwind-protect
-        (progn
-          ;; Pretend Edit was injected two turns ago with TTL=3 and was
-          ;; used this turn.
-          (plist-put (gptel-fsm-info fsm) :tools (list tool))
-          (setf (mevedel-session-deferred-injected session) '(("Edit" . 3)))
-          (setf (mevedel-session-deferred-used session) '("Edit"))
-          (mevedel-tools--handle-deferred-inject fsm)
-          (should (equal (list (cons "Edit" mevedel-deferred-tool-ttl))
-                         (mevedel-session-deferred-injected session)))
-          ;; used slot cleared
-          (should (null (mevedel-session-deferred-used session))))
-      (kill-buffer buf)))
 
-  :doc "decrements TTL for tools that were not used this turn"
-  (let* ((session (mevedel-tools-test--make-session))
-         (buf+fsm (mevedel-tools-test--make-fsm-with-ctx session))
-         (buf (car buf+fsm))
-         (fsm (cdr buf+fsm))
-         (tool (mevedel-tools-test--make-fake-gptel-tool "Edit")))
-    (unwind-protect
-        (progn
-          (plist-put (gptel-fsm-info fsm) :tools (list tool))
-          (setf (mevedel-session-deferred-injected session) '(("Edit" . 3)))
-          (mevedel-tools--handle-deferred-inject fsm)
-          (should (equal '(("Edit" . 2))
-                         (mevedel-session-deferred-injected session))))
-      (kill-buffer buf)))
-
-  :doc "expires tools at TTL 0, removes them from payload, records expired"
-  (let* ((session (mevedel-tools-test--make-session))
-         (buf+fsm (mevedel-tools-test--make-fsm-with-ctx session))
-         (buf (car buf+fsm))
-         (fsm (cdr buf+fsm))
-         (tool (mevedel-tools-test--make-fake-gptel-tool "Edit")))
-    (unwind-protect
-        (progn
-          (plist-put (gptel-fsm-info fsm) :tools (list tool))
-          (setf (mevedel-session-deferred-injected session) '(("Edit" . 1)))
-          (mevedel-tools--handle-deferred-inject fsm)
-          ;; removed from active payload
-          (should (null (plist-get (gptel-fsm-info fsm) :tools)))
-          ;; no longer tracked as injected
-          (should (null (mevedel-session-deferred-injected session)))
-          ;; recorded on expired slot for reminder
-          (should (equal '("Edit")
-                         (mevedel-session-deferred-expired session))))
-      (kill-buffer buf)))
-
-  :doc "is a no-op when FSM has no deferred context"
-  (let ((fsm (gptel-make-fsm :info (list :tools nil :data (list :tools nil)))))
-    ;; Should not error
-    (mevedel-tools--handle-deferred-inject fsm)))
 
 
 ;;
@@ -1701,7 +1504,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
     (should (= 1 (length (plist-get data :messages))))))
 
 
-(mevedel-deftest mevedel-tools--handle-agent-roster-inject ()
+(mevedel-deftest mevedel-tools--handle-agent-roster-inject
+  (:vars ((gptel--known-backends nil)))
   ,test
   (test)
   :doc "injects each new direct child once and never exposes grandchildren"
@@ -1709,7 +1513,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
          (buffer (generate-new-buffer " *mt-agent-roster*"))
          (data (list :messages (vector)))
          (fsm (gptel-make-fsm
-               :info (list :buffer buffer :backend nil :data data))))
+               :info (list :buffer buffer :backend (gptel-make-openai "roster-test" :key "test" :host "example.test" :models '(test)) :data data
+                           :position (with-current-buffer buffer (point-marker))))))
     (unwind-protect
         (progn
           (with-current-buffer buffer
@@ -1726,6 +1531,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         :parent-path "/root/worker"
                         :role "reviewer" :activity 'running))))
           (mevedel-tools--handle-agent-roster-inject fsm)
+          (when (= 0 (length (plist-get data :messages)))
+            (should (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries)))
+          (mevedel-reminders--handle-inject fsm)
           (should (= 1 (length (plist-get data :messages))))
           (let ((content
                  (plist-get (aref (plist-get data :messages) 0) :content)))
@@ -1733,6 +1541,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should (string-match-p "/root/worker.*worker" content))
             (should-not (string-match-p "/root/worker/review" content)))
           (mevedel-tools--handle-agent-roster-inject fsm)
+          (mevedel-reminders--handle-inject fsm)
           (should (= 1 (length (plist-get data :messages))))
           (push
            (cons "/root/explore"
@@ -1741,6 +1550,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                   :role "explorer" :activity 'idle))
            (mevedel-session-agent-registry session))
           (mevedel-tools--handle-agent-roster-inject fsm)
+          (mevedel-reminders--handle-inject fsm)
           (should (= 2 (length (plist-get data :messages))))
           (should
            (string-match-p
@@ -1760,7 +1570,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
            (buffer (generate-new-buffer " *mt-agent-roster-fresh*"))
            (data (list :messages (vector)))
            (fsm (gptel-make-fsm
-                 :info (list :buffer buffer :backend nil :data data
+                 :info (list :buffer buffer :backend (gptel-make-openai "roster-test" :key "test" :host "example.test" :models '(test)) :data data
+                           :position (with-current-buffer buffer (point-marker))
                              :mevedel-agent-invocation invocation))))
       (setf (mevedel-agent-invocation-parent-session invocation) session)
       (unwind-protect
@@ -1768,6 +1579,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (with-current-buffer buffer
               (setq-local mevedel--session session))
             (mevedel-tools--handle-agent-roster-inject fsm)
+          (mevedel-reminders--handle-inject fsm)
             (should (= 0 (length (plist-get data :messages)))))
         (kill-buffer buffer)))))
 ;;
@@ -1781,6 +1593,101 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 
 
 
+
+(mevedel-deftest mevedel-tools--tool-search
+  (:before-each (mevedel-tool-clear-registry)
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+
+  :doc "delivers all narrow contracts, bounds broad results, and repeats without schema mutation"
+  (with-temp-buffer
+    (setq-local mevedel--session (mevedel-session--create :name "search"))
+    (dotimes (i 21)
+      (let ((name (format "Probe%02d" i)))
+        (mevedel-tool-register
+         (mevedel-tool--create
+          :name name :category "mevedel" :summary "Probe summary"
+          :description "Complete contract body" :groups '(probes)
+          :args '((value string :required "A required probe value"))))
+        (push (cons (list "mevedel" name) "Probe summary")
+              (mevedel-session-tool-catalog mevedel--session))))
+    (setf (mevedel-session-tool-catalog mevedel--session)
+          (nreverse (mevedel-session-tool-catalog mevedel--session)))
+    (let* ((native (copy-tree gptel-tools t))
+           (catalog (copy-tree (mevedel-session-tool-catalog mevedel--session)))
+           result repeat)
+      (mevedel-tools--tool-search (lambda (s) (setq result s)) "Probe00 Probe01")
+      (should (string-search "Probe00" result))
+      (should (string-search "Probe01" result))
+      (should (= 3 (length (split-string result "Complete contract body" t))))
+      (should (string-search "A required probe value" result))
+      (should (string-search "Standalone only" result))
+      (mevedel-tools--tool-search (lambda (s) (setq repeat s)) "Probe00 Probe01")
+      (should (equal result repeat))
+      (mevedel-tools--tool-search (lambda (s) (setq result s)) "probes")
+      (should (string-search "Found 21 tools; showing the first 20" result))
+      (should-not (string-search "Complete contract body" result))
+      (should-not (string-search "Probe20" result))
+      (should (string-search "one or two exact names" result))
+      (mevedel-tools--tool-search (lambda (s) (setq result s)) "Probe00 Probe01 Probe02")
+      (should (string-search "Complete contract body" result))
+      (mevedel-tools--tool-search (lambda (s) (setq result s)) "Probe00 Probe01 Probe02 Probe03")
+      (should-not (string-search "Complete contract body" result))
+      (mevedel-tools--tool-search (lambda (s) (setq result s)) "absent")
+      (should (string-search "No matching tools found." result))
+      (should (string-search "mevedel, probes" result))
+      (should-not (string-search "Complete contract body" result))
+      (mevedel-tools--tool-search (lambda (s) (setq result s)) "probes")
+      (should (string-search "Found 21 tools" result))
+      (should (equal native gptel-tools))
+      (should (equal catalog (mevedel-session-tool-catalog mevedel--session)))))
+
+  :doc "filters current request restrictions and omits unregistered catalog entries"
+  (with-temp-buffer
+    (mevedel-tool-register
+     (mevedel-tool--create :name "Probe" :category "mevedel" :description "Probe contract"))
+    (setq-local mevedel--session
+                (mevedel-session--create
+                 :tool-catalog '((("mevedel" "Probe") . "probe")
+                                 (("mevedel" "Ghost") . "ghost")))
+                mevedel--current-request (mevedel-request--create :ptc-primitives nil))
+    (let (result)
+      (mevedel-tools--tool-search (lambda (s) (setq result s)) "Probe Ghost")
+      (should (equal "No matching tools found." result))))
+
+  :doc "miss suggestions use only callable catalog entries and stay bounded"
+  (let (entries)
+   (with-temp-buffer
+    (dotimes (i 22)
+      (let ((name (format "Allowed%02d" i))
+            (category (format "category%02d" i)))
+        (mevedel-tool-register
+         (mevedel-tool--create :name name :category category
+                              :description "Allowed contract"))
+        (push (cons (list category name) "Allowed summary") entries)))
+    (mevedel-tool-register
+     (mevedel-tool--create :name "Forbidden" :category "private"
+                          :groups '(secret) :description "Forbidden contract"))
+    (setq-local mevedel--session
+                (mevedel-session--create
+                 :tool-catalog (append entries '((("private" "Forbidden") . "hidden")
+                                                 (("ghost" "Ghost") . "missing"))))
+                mevedel--current-request
+                (mevedel-request--create
+                 :ptc-primitives (mapcar (lambda (entry) (mapconcat #'identity (car entry) "/"))
+                                         entries)))
+    (let (result repeat)
+      (mevedel-tools--tool-search (lambda (s) (setq result s)) "absent")
+      (mevedel-tools--tool-search (lambda (s) (setq repeat s)) "absent")
+      (should (equal result repeat))
+      (should (string-search "category00, category01" result))
+      (should (string-search "category19" result))
+      (should (string-search "first 20 of 22" result))
+      (dolist (hidden '("category20" "category21" "private" "secret" "ghost" "contract"))
+        (should-not (string-search hidden result)))
+      (mevedel-tools--tool-search (lambda (s) (setq result s)) "category00")
+      (should (string-search "Allowed contract" result))))))
 
 (provide 'test-mevedel-tools)
 ;;; test-mevedel-tools.el ends here

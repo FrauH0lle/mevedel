@@ -57,7 +57,7 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--tool-search
-                  "mevedel-tools" (callback query &optional load))
+                  "mevedel-tools" (callback query))
 
 
 ;; `mevedel-turn'
@@ -163,14 +163,10 @@
                 :path path))))
 
 (defun mevedel-tool-ui--tool-search (callback args)
-  "Search for deferred tools described by ARGS and call CALLBACK."
-  (let ((query (plist-get args :query))
-        (load (plist-get args :load)))
-    (unless (stringp query)
-      (error "Parameter query is required"))
-    (mevedel-tools--tool-search
-     (apply-partially #'mevedel-tool-ui--deliver-result callback)
-     query load)))
+  "Retrieve tool contracts described by ARGS and call CALLBACK."
+  (mevedel-tools--tool-search
+   (apply-partially #'mevedel-tool-ui--deliver-result callback)
+   (plist-get args :query)))
 
 (defun mevedel-tool-ui--send-message (args)
   "Queue the SendMessage described by ARGS."
@@ -425,13 +421,11 @@
     :renderer #'mevedel-tool-ui--render-interrupt-agent)
   (mevedel-define-tool
     :name "ToolSearch"
-    :description "Search for and load deferred tools before using them."
+    :description "Find specialist tool contracts and calling expressions."
     :prompt-file "prompts/tools/toolsearch.md"
     :handler #'mevedel-tool-ui--tool-search
     :args ((query string :required
-                  "Search query: tool name or capability description.")
-           (load boolean :optional
-                 "Set true when you intend to call the matched tool; a tool the registry can resolve becomes available now for your next tool call, and the result names any match it could not."))
+                  "One or more tool names or capability terms; matches any term."))
     :async-p t
     :read-only-p t
     :groups (util)

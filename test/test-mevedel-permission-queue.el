@@ -805,9 +805,9 @@
     (should (equal origin
                    (mevedel-permission-queue--attribution-origin entry))))
 
-  :doc "root ToolScript calls identify the envelope and child"
+  :doc "root ToolCall calls identify the envelope and child"
   (should
-   (equal "ToolScript ptc-1 (child ptc-1/2)"
+   (equal "ToolCall ptc-1 (child ptc-1/2)"
           (mevedel-permission-queue--attribution-origin
            '(:origin "/root" :call-source ptc
              :tool-use-id "ptc-1/2" :parent-tool-use-id "ptc-1")))))
@@ -817,7 +817,7 @@
   ,test
   (test)
 
-  :doc "ToolScript prompts show the envelope and child identity"
+  :doc "ToolCall prompts show the envelope and child identity"
   (let* ((session (test-pq--make-session))
          (entry (list :kind 'generic :tool-name "Read"
                       :origin "/root" :call-source 'ptc
@@ -830,7 +830,7 @@
                (lambda (_tool _path _always origin _cont _count _entry)
                  (setq attribution origin))))
       (mevedel-permission-queue--render-generic entry))
-    (should (equal "ToolScript ptc-1 (child ptc-1/2)" attribution)))
+    (should (equal "ToolCall ptc-1 (child ptc-1/2)" attribution)))
 
   :doc "no-workspace entries still render through the generic prompt adapter"
   (let* ((session (test-pq--make-session))

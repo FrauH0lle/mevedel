@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(require 'mevedel-context-delivery)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'gptel))
@@ -14,6 +16,7 @@
 (require 'mevedel-compact-evidence)
 (require 'mevedel-compact-run)
 (require 'mevedel-compact-target)
+(require 'mevedel-history)
 (require 'mevedel-transcript)
 
 ;; `gptel'
@@ -183,7 +186,9 @@
     ;; This is the final dispatch seam for both ordinary and rebuilt
     ;; continuation payloads.  Committing reminders any earlier lets
     ;; successful auto-compaction discard their injected message.
+    (mevedel-context-delivery-stage fsm)
     (mevedel-reminders--handle-inject fsm)
+    (mevedel-history-note-dispatch info)
     (gptel--handle-wait fsm)))
 
 

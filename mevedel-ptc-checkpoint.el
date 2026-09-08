@@ -1,11 +1,11 @@
-;;; mevedel-ptc-checkpoint.el --- Durable ToolScript audit checkpoints -*- lexical-binding: t -*-
+;;; mevedel-ptc-checkpoint.el --- Durable ToolCall audit checkpoints -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Persists only the model-authored call and its child audit while a ToolScript
+;; Persists only the model-authored call and its child audit while a ToolCall
 ;; envelope is open.  Interpreter continuations remain process-local.  Restore
 ;; turns any surviving checkpoint into an ordinary interrupted or settled
-;; ToolScript tool row and never resumes the guest machine.
+;; ToolCall tool row and never resumes the guest machine.
 
 ;;; Code:
 
@@ -65,7 +65,7 @@
           (progn
             (mevedel-ptc-checkpoint--put
              session
-             (list :id id :args (list :script script) :state 'running
+             (list :id id :args (list :expression script) :state 'running
                    :render-data
                    (list :kind 'ptc :outcome 'running :calls nil)))
             ;; The first save both materializes a fresh session and records
@@ -94,7 +94,7 @@ Return non-nil when the checkpoint exists."
 (defun mevedel-ptc-checkpoint-note (session id updates)
   "Merge UPDATES into SESSION checkpoint ID in memory only.
 No sidecar write happens here: per-child durability cost dominated
-ToolScript runtime and serialized parallel batches, so intra-script
+ToolCall runtime and serialized parallel batches, so intra-script
 audit progress is journaled in memory and any unrelated autosave
 captures it opportunistically.  The durable writes are the start and
 settlement checkpoints.  Return non-nil when SESSION is nil or the
@@ -121,7 +121,7 @@ Return non-nil when the checkpoint is durable or SESSION is nil."
          (signal (car err) (cdr err)))))))
 
 (defun mevedel-ptc-checkpoint-clear-settled (session)
-  "Remove settled ToolScript checkpoints from SESSION in memory.
+  "Remove settled ToolCall checkpoints from SESSION in memory.
 The completed-turn save commits this change together with the final tool row."
   (when session
     (setf (mevedel-session-ptc-checkpoints session)
@@ -161,7 +161,7 @@ The completed-turn save commits this change together with the final tool row."
               (plist-get checkpoint :render-data)
             (mevedel-ptc-checkpoint--interrupted-render-data checkpoint)))
          (call (prin1-to-string
-                (list :name "ToolScript" :args (plist-get checkpoint :args))))
+                (list :name "ToolCall" :args (plist-get checkpoint :args))))
          (body
           (org-escape-code-in-string
            (concat call "\n\n" result
@@ -170,7 +170,7 @@ The completed-turn save commits this change together with the final tool row."
          (body-end nil))
     (goto-char (point-max))
     (unless (bolp) (insert "\n"))
-    (insert "\n#+begin_tool (ToolScript recovered after restart)\n")
+    (insert "\n#+begin_tool (ToolCall recovered after restart)\n")
     (setq body-start (point))
     (insert body)
     (setq body-end (point))
@@ -178,7 +178,7 @@ The completed-turn save commits this change together with the final tool row."
     (put-text-property body-start body-end 'gptel (cons 'tool id))))
 
 (defun mevedel-ptc-checkpoint-reconcile (session)
-  "Settle surviving SESSION ToolScript checkpoints in the current transcript.
+  "Settle surviving SESSION ToolCall checkpoints in the current transcript.
 Return (INSERTED . CONSUMED), counting transcript rows and checkpoints."
   (let* ((checkpoints (mevedel-session-ptc-checkpoints session))
          (inserted 0))

@@ -16,7 +16,11 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-media)
 (require 'mevedel-transcript-audit)
+(require 'mevedel-history)
 (require 'mevedel-utilities)
+
+;; `gptel'
+(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -239,10 +243,13 @@ Nil EXPECTED-TOOL-USE-ID removes only unbound blocks."
 (defun mevedel-tool-render-data-strip-non-media
     (string &optional expected-tool-use-id)
   "Remove trusted non-media side channels from STRING.
-Render data must belong to EXPECTED-TOOL-USE-ID; nil selects unbound data."
-  (mevedel--strip-hook-audit-blocks
-   (mevedel-tool-render-data-strip
-    string expected-tool-use-id)))
+Render data must belong to EXPECTED-TOOL-USE-ID; nil selects unbound data.
+Non-string tool results pass through unchanged."
+  (if (stringp string)
+      (mevedel--strip-hook-audit-blocks
+       (mevedel-tool-render-data-strip
+        string expected-tool-use-id))
+    string))
 
 (defun mevedel-tool-render-data-find-agent-block (agent-id)
   "Return bounds of the first render-data block for AGENT-ID.
@@ -322,90 +329,36 @@ result."
             (setq block (propertize block 'gptel surrounding-gptel)))
           (insert block))))))
 
-(defun mevedel-tool-render-data--tool-property-bounds (position)
-  "Return (START END . ID) for the tool property run covering POSITION.
-
-The run holding POSITION is the answer while the transcript is live, where
-gptel propertized the whole tool payload -- render-data block included --
-as one run.  After a restore the grammar splits the payload, so the tool
-run is the one ending where POSITION\='s run begins."
-  (let ((candidates (list position)))
-    (let ((start (or (previous-single-property-change
-                      (min (1+ position) (point-max)) 'gptel)
-                     (point-min))))
-      (when (> start (point-min))
-        (push (1- start) candidates)))
-    (catch 'found
-      (dolist (candidate candidates)
-        (let ((value (get-text-property candidate 'gptel)))
-          (when (and (consp value) (eq (car value) 'tool))
-            (throw 'found
-                   (list (or (previous-single-property-change
-                              (min (1+ candidate) (point-max)) 'gptel)
-                             (point-min))
-                         (or (next-single-property-change candidate 'gptel)
-                             (point-max))
-                         (cdr value)))))))))
-
-(defun mevedel-tool-render-data-repair-owner-properties
-    (&optional beg end)
-  "Restamp tool ids in BEG..END from mevedel\='s own render-data owners.
-
-gptel resolves the id it stamps on a tool block by tool name -- a
-`cl-find-if' over `:tool-use' matching only `:name' -- so two calls to the
-same tool in one turn both receive the first match\='s id.  The block whose
-id was taken then disagrees with the owner mevedel wrote inside it, its
-render data reads as unauthorized, and the raw side-channel text renders as
-the tool\='s output.
-
-mevedel knows the true id: it stamped it into the block itself.  Only a
-block mevedel wrote carries the `mevedel-render-data' property, so a tool
-result that merely contains the delimiters cannot steer the id and the
-authority check keeps its meaning.  Return how many runs were restamped."
-  (let ((position (or beg (point-min)))
-        (limit (or end (point-max)))
-        (repaired 0))
-    (while (< position limit)
-      (let ((next (or (next-single-property-change
-                       position 'mevedel-render-data nil limit)
-                      limit)))
-        (when (eq t (get-text-property position 'mevedel-render-data))
-          (when-let* ((block (car (mevedel-tool-render-data-blocks
-                                   (buffer-substring-no-properties
-                                    position next))))
-                      (owner (plist-get (caddr block) :mevedel-tool-use-id))
-                      ((stringp owner))
-                      (bounds (mevedel-tool-render-data--tool-property-bounds
-                               position))
-                      ((not (equal owner (caddr bounds)))))
-            (put-text-property (car bounds) (cadr bounds)
-                               'gptel (cons 'tool owner))
-            (cl-incf repaired)))
-        (setq position next)))
-    repaired))
-
 (defun mevedel-tool-render-data--display-results-advice
     (orig-fun tool-results info)
-  "Call ORIG-FUN, then repair ids in the TOOL-RESULTS inserted for INFO."
-  (let* ((boundary (or (plist-get info :tool-marker)
-                       (plist-get info :tracking-marker)
-                       (plist-get info :position)))
-         (start (and (markerp boundary)
-                     (marker-buffer boundary)
-                     (copy-marker boundary nil))))
-    (unwind-protect
-        (prog1 (funcall orig-fun tool-results info)
-          (when-let* ((start-buffer (and start (marker-buffer start)))
-                      ((buffer-live-p start-buffer))
-                      (end (plist-get info :tool-marker))
-                      ((markerp end))
-                      ((eq start-buffer (marker-buffer end))))
-            (with-current-buffer start-buffer
-              (let ((inhibit-read-only t))
-                (mevedel-tool-render-data-repair-owner-properties
-                 start end)))))
-      (when start
-        (set-marker start nil)))))
+  "Render TOOL-RESULTS from INFO's authoritative call records via ORIG-FUN.
+
+gptel's display callback omits call IDs and its renderer recovers them by
+name, confusing repeated calls to one tool.  For mevedel conversations,
+render each completed call with its own ID, arguments and result from
+`:tool-use'.  Restrict that lookup to the current call while reusing the
+original renderer and mutable insertion state.  Display order follows the
+model's call order, independently of asynchronous completion order."
+  (if (not (when-let* ((buffer (plist-get info :buffer))
+                      ((buffer-live-p buffer)))
+             (buffer-local-value 'mevedel--session buffer)))
+      (funcall orig-fun tool-results info)
+    (let ((calls (plist-get info :tool-use)))
+      (unwind-protect
+          (dolist (call calls)
+            (let* ((name (plist-get call :name))
+                   (tool (car (cl-find name tool-results :test #'equal
+                                       :key (lambda (entry)
+                                              (gptel-tool-name (car entry)))))))
+              (unless tool
+                (error "Missing display result for tool: %s" name))
+              (plist-put info :tool-use (list call))
+              (funcall orig-fun
+                       (list (list tool (plist-get call :args)
+                                   (plist-get call :result)))
+                       info)))
+        (plist-put info :tool-use calls))
+      (mevedel-history-record-tool-batch info))))
 
 (defun mevedel-tool-render-data-segment-bounds (tool-use-id)
   "Return current-buffer bounds carrying TOOL-USE-ID, or nil."
@@ -701,6 +654,7 @@ the view parser, persistence) keeps seeing the full block."
 (defun mevedel-tool-render-data-install-provider-adapter ()
   "Install gptel interop advice for tool-result continuation paths."
   (require 'gptel-request)
+  (mevedel-history-install)
   (advice-add 'gptel--parse-tool-results :around
               #'mevedel-tool-render-data--provider-advice)
   (advice-add 'gptel--display-tool-results :around
@@ -708,6 +662,7 @@ the view parser, persistence) keeps seeing the full block."
 
 (defun mevedel-tool-render-data-uninstall-provider-adapter ()
   "Remove gptel interop advice for tool-result continuation paths."
+  (mevedel-history-uninstall)
   (advice-remove 'gptel--parse-tool-results
                  #'mevedel-tool-render-data--provider-advice)
   (advice-remove 'gptel--display-tool-results

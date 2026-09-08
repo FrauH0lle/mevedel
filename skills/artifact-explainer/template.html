@@ -5,29 +5,50 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><!-- SLOT: TITLE - the question the reader has, e.g. "How does a Bloom filter work?" --></title>
 <style>
+  /* Shared artifact palette: warm neutrals with a blue accent. Retune for the
+     subject in every scope that declares the token - the light :root, both
+     dark blocks, and print - or the value snaps back. --accent-soft derives
+     from --accent, so tuning the accent alone keeps the tint in step. */
   :root {
     color-scheme: light dark;
-    --ink:      #1a1c21;
-    --ink-soft: #666d79;
-    --bg:       #fbfaf8;
-    --card:     #ffffff;
-    --rule:     #e4e1da;
-    --accent:   #37618a;
+    --bg:          #f9f9f7;
+    --card:        #fcfcfb;
+    --ink:         #0b0b0b;
+    --ink-soft:    #52514e;
+    --rule:        rgba(11, 11, 11, 0.1);
+    --rule-strong: rgba(11, 11, 11, 0.2);
+    --accent:      #184f95;
+    --accent-soft: color-mix(in srgb, var(--accent) 12%, var(--bg));
     --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
-    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   }
-
+  /* Dark on both axes: the OS preference, unless the viewer pinned light, and
+     the viewer's own data-theme stamp. :where() keeps the media block at :root
+     specificity so an explicit stamp wins in either direction. */
   @media (prefers-color-scheme: dark) {
-    :root {
-      --ink:      #e8e6e1;
-      --ink-soft: #9a978f;
-      --bg:       #15161a;
-      --card:     #1d1f24;
-      --rule:     #2f3138;
-      --accent:   #86b3dd;
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --bg:          #141412;
+      --card:        #1d1d1b;
+      --ink:         #ededea;
+      --ink-soft:    #b3b1a9;
+      --rule:        rgba(255, 255, 255, 0.12);
+      --rule-strong: rgba(255, 255, 255, 0.22);
+      --accent:      #6da7ec;
     }
   }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg:          #141412;
+    --card:        #1d1d1b;
+    --ink:         #ededea;
+    --ink-soft:    #b3b1a9;
+    --rule:        rgba(255, 255, 255, 0.12);
+    --rule-strong: rgba(255, 255, 255, 0.22);
+    --accent:      #6da7ec;
+  }
+  :root[data-theme="light"] { color-scheme: light; }
 
   * { box-sizing: border-box; }
 
@@ -38,72 +59,93 @@
     font-family: var(--serif);
     font-size: 17px;
     line-height: 1.65;
+    font-synthesis: none;
     overflow-wrap: break-word;
   }
 
-  .wrap { max-width: 44rem; margin: 0 auto; padding: 3.5rem 1.25rem 5rem; }
+  .wrap { max-width: 46rem; margin: 0 auto; padding: 3.5rem 1.25rem 5rem; }
 
+  header { margin-bottom: 3rem; }
   h1 {
     font-size: clamp(1.8rem, 5vw, 2.4rem);
     line-height: 1.15;
+    letter-spacing: -0.015em;
     text-wrap: balance;
     margin: 0 0 1rem;
-    font-weight: 600;
+    font-weight: 700;
   }
 
   .lede {
     font-size: 1.1rem;
     color: var(--ink-soft);
-    margin: 0 0 3rem;
-    padding-bottom: 2rem;
-    border-bottom: 1px solid var(--rule);
+    margin: 0;
+    max-width: 60ch;
     text-wrap: pretty;
   }
 
   p, li { text-wrap: pretty; }
-  p { margin: 0 0 1rem; }
+  p { margin: 0 0 1rem; max-width: 64ch; }
   a { color: var(--accent); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
-  /* Steps flavor: a numbered progression the reader follows start to finish. */
+  /* Steps flavor: a numbered progression the reader follows start to finish.
+     The number hangs in a gutter as a tinted disc; hairlines separate steps. */
   ol.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
-
-  .step { margin-bottom: 3.25rem; }
-  .step > h2 {
+  .step {
     counter-increment: step;
-    font-size: 1.25rem;
-    font-weight: 600;
-    margin: 0 0 0.75rem;
-    text-wrap: balance;
-    display: flex;
-    align-items: baseline;
-    gap: 0.7rem;
+    position: relative;
+    padding: 1.75rem 0 1.75rem 3.5rem;
+    border-top: 1px solid var(--rule);
   }
-  .step > h2::before {
-    content: counter(step, decimal-leading-zero);
-    font-family: var(--sans);
-    font-size: 0.8rem;
-    font-weight: 600;
-    letter-spacing: 0.06em;
+  .step:first-child { border-top: none; padding-top: 0; }
+  .step::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 1.75rem;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 50%;
+    background: var(--accent-soft);
     color: var(--accent);
-    flex: none;
+    font-family: var(--sans);
+    font-size: 1rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .step:first-child::before { top: 0; }
+  /* The heading's line-height matches the disc so their centres align on the
+     first line; a wrapped title keeps the same leading. */
+  .step > h2 {
+    font-size: 1.3rem;
+    line-height: 2.25rem;
+    font-weight: 700;
+    margin: 0 0 0.5rem;
+    text-wrap: balance;
   }
 
   /* Sections flavor: a looser tour where code carries more weight. */
-  .topic { margin-bottom: 3rem; }
+  .topic { padding: 1.75rem 0; border-top: 1px solid var(--rule); }
+  .topic:first-child { border-top: none; padding-top: 0; }
   .topic > h2 {
-    font-size: 1.25rem;
-    font-weight: 600;
+    font-size: 1.3rem;
+    line-height: 1.3;
+    font-weight: 700;
     margin: 0 0 0.75rem;
+    padding-left: 0.85rem;
+    border-left: 3px solid var(--accent);
     text-wrap: balance;
   }
 
   .visual {
-    margin: 1.5rem 0;
+    margin: 1.25rem 0 0.5rem;
     padding: 1.25rem;
     background: var(--card);
     border: 1px solid var(--rule);
-    border-radius: 10px;
+    border-radius: 8px;
     overflow-x: auto;
   }
   .visual figure { margin: 0; }
@@ -121,14 +163,13 @@
   pre {
     font-family: var(--mono);
     font-size: 0.85rem;
-    line-height: 1.5;
+    line-height: 1.55;
     margin: 0;
     overflow-x: auto;
   }
   code { font-family: var(--mono); font-size: 0.87em; }
   p code, li code {
-    background: var(--card);
-    border: 1px solid var(--rule);
+    background: var(--accent-soft);
     padding: 0.08em 0.32em;
     border-radius: 3px;
     overflow-wrap: anywhere;
@@ -136,34 +177,51 @@
   pre code { overflow-wrap: normal; }
 
   .callout {
-    margin: 1.25rem 0 0;
-    padding-left: 1rem;
-    border-left: 3px solid var(--accent);
+    margin: 0.75rem 0 0;
+    font-family: var(--sans);
+    font-size: 0.9rem;
     color: var(--ink-soft);
-    font-size: 0.95rem;
   }
 
+  /* The recap sits in a tinted panel so the page visibly lands. */
   .recap {
-    margin-top: 3.5rem;
-    padding-top: 2rem;
-    border-top: 1px solid var(--rule);
+    margin-top: 3rem;
+    padding: 1.5rem 1.75rem;
+    background: var(--accent-soft);
+    border-radius: 10px;
   }
-  .recap h2 { font-size: 1.1rem; margin: 0 0 0.75rem; }
+  .recap h2 {
+    font-family: var(--sans);
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 0.75rem;
+  }
   .recap ul { margin: 0; padding-left: 1.35rem; }
   .recap li { margin-bottom: 0.45rem; }
+  .recap li:last-child { margin-bottom: 0; }
 
+  @media (max-width: 640px) {
+    .wrap { padding: 2.5rem 1.1rem 4.5rem; }
+    .step { padding-left: 3rem; }
+    .step::before { width: 2rem; height: 2rem; font-size: 0.9rem; }
+    .step > h2 { line-height: 2rem; }
+  }
+
+  /* Print is always light, whatever the OS scheme or the viewer stamp. */
   @media print {
-    :root {
+    :root, :root[data-theme="dark"] {
       color-scheme: light;
-      --ink: #000; --ink-soft: #444; --bg: #fff;
-      --card: #fff; --rule: #bbb; --accent: #000;
+      --bg: #fff; --card: #fff; --ink: #000; --ink-soft: #444;
+      --rule: #bbb; --rule-strong: #888; --accent: #000; --accent-soft: #f2f2f2;
     }
     body { font-size: 11pt; }
     .wrap { max-width: none; padding: 0; }
     :focus-visible { outline: none; }
     h1, h2, h3 { break-after: avoid; }
     p, li { widows: 3; orphans: 3; }
-    figure, tr { break-inside: avoid; }
+    figure, tr, .step::before { break-inside: avoid; }
     .visual, .diagram-scroll, pre { overflow: visible; }
     .diagram-scroll svg { min-width: 0; }
     pre, pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -176,10 +234,11 @@
 <body>
 <div class="wrap">
 
-  <h1><!-- SLOT: TITLE (again, as the visible heading) -->What are we explaining?</h1>
-
-  <p class="lede"><!-- SLOT: LEDE - two or three sentences: what the reader
-       will understand by the end, and why it matters. -->What the reader will understand by the end, and why it matters.</p>
+  <header>
+    <h1><!-- SLOT: TITLE (again, as the visible heading) -->What are we explaining?</h1>
+    <p class="lede"><!-- SLOT: LEDE - two or three sentences: what the reader
+         will understand by the end, and why it matters. -->What the reader will understand by the end, and why it matters.</p>
+  </header>
 
   <!-- SLOT: STEPS - keep this list for the steps flavor and delete the
        <section class="topic"> block below; or delete this list and keep that
@@ -232,7 +291,7 @@
   </section>
 
   <section class="recap">
-    <h2>Recap</h2>
+    <h2>In short</h2>
     <!-- SLOT: RECAP - the core takeaways, restated in the reader's new
          vocabulary. -->
     <ul>

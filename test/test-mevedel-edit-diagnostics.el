@@ -37,7 +37,8 @@
                    :models '(test)))
          (data (list :messages [(:role "user" :content "task")]))
          (fsm (gptel-make-fsm
-               :info (list :buffer chat :backend backend :data data)))
+               :info (list :buffer chat :backend backend :data data
+                           :position (with-current-buffer chat (point-marker)))))
          (old nil)
          (fixed nil)
          (new nil))

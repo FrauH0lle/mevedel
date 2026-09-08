@@ -1,60 +1,33 @@
-Queue one interim plain-text message for any retained agent in this root
-session tree.
+Queue interim information for a retained agent without starting a turn.
 
 ### When to use `SendMessage`
 
-- Passing new information a running agent should see before its next
-  model sample, without starting or steering a turn
-- Notifying your parent or a sibling of an interim finding they should
-  factor in
+- Share a relevant finding with your parent, a sibling, or another retained agent.
 
 ### When NOT to use `SendMessage`
 
-- The target must start or steer work -> use `FollowupAgent`
-- Reporting your own final verdict -> put it in your terminal response
-  so it is delivered as RESULT
-- Resending an agent's completed response when its canonical RESULT
-  delivery already carries that response
+- Assigning work; FollowupAgent starts or steers a turn.
+- Duplicating a final verdict; the terminal response is delivered as RESULT.
 
 ### How to use `SendMessage`
 
-`target` accepts a canonical path such as `/root` or `/root/spec_review`, or a
-relative descendant path beneath the caller. Sending never starts or resumes a
-turn. The recipient receives the message before its next model sample, in FIFO
-order with any other unread mail.
-
-Success returns an empty result. MAIL is interim and may arrive in a later
-root turn; agents should put their final verdict in their terminal response so
-it is delivered as RESULT.
+- `target` accepts a canonical path, including `/root`, or a relative descendant
+  path. Success returns an empty result.
+- Mail arrives before the recipient's next model sample in FIFO order with other
+  unread mail. Sending does not start or resume a turn; an idle recipient may
+  receive it in a later turn. Final results belong in the terminal response.
 
 ### Examples of good usage
 
 <example>
-SendMessage(target="/root/worker_1",
-            message="The codec moved to mevedel-session-codec.el; adjust your search paths.")
-</example>
-
-<example>
-SendMessage(target="/root",
-            message="Interim finding: the lease file is written twice per save; continuing the audit.")
+SendMessage(target="/root", message="Interim finding: the codec writes the lease twice; checking the second caller.")
 </example>
 
 ### Examples of bad usage
 
 <example>
-SendMessage(target="/root/worker_1",
-            message="Also refactor the persistence layer when done.")
+SendMessage(target="/root/worker_1", message="Now implement the agreed codec change.") to an idle agent
 <reasoning>
-This assigns work. Mail never starts or steers a turn; use
-FollowupAgent for tasks.
-</reasoning>
-</example>
-
-<example>
-SendMessage(target="/root", message="Final verdict: the rule is sound.")
-as the last act of a turn
-<reasoning>
-Final verdicts belong in the terminal response so they arrive as
-RESULT; duplicate mail may land in a later root turn.
+Mail does not start work. Use FollowupAgent for the assignment.
 </reasoning>
 </example>

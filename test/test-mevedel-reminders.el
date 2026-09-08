@@ -71,13 +71,13 @@ this collapses both shapes to the delivered text."
             :trigger (lambda (_) t)
             :content (lambda (_) "hello")
             :interval 3
-            :recipe '(verifier-read-only))))
+            :recipe '(pending-events))))
     (should (eq 'demo (mevedel-reminder-type r)))
     (should (functionp (mevedel-reminder-trigger r)))
     (should (functionp (mevedel-reminder-content r)))
     (should (equal 3 (mevedel-reminder-interval r)))
     (should (null (mevedel-reminder-last-fired r)))
-    (should (equal '(verifier-read-only)
+    (should (equal '(pending-events)
                    (mevedel-reminder-recipe r))))
 
   :doc "`mevedel-reminder-create' accepts nil interval"
@@ -257,7 +257,7 @@ this collapses both shapes to the delivered text."
          (content (lambda (_) "x"))
          (r (mevedel-reminder-create
              :type 'a :trigger trigger :content content :interval 7
-             :recipe '(verifier-read-only)))
+             :recipe '(pending-events)))
          (_  (setf (mevedel-reminder-last-fired r) 42))
          (clone (mevedel-reminder-clone r)))
     (should (eq 'a (mevedel-reminder-type clone)))
@@ -265,7 +265,7 @@ this collapses both shapes to the delivered text."
     (should (eq content (mevedel-reminder-content clone)))
     (should (equal 7 (mevedel-reminder-interval clone)))
     (should (null (mevedel-reminder-last-fired clone)))
-    (should (equal '(verifier-read-only)
+    (should (equal '(pending-events)
                    (mevedel-reminder-recipe clone))))
 
   :doc "`mevedel-reminder-clone' produces independent last-fired state"
@@ -313,10 +313,10 @@ this collapses both shapes to the delivered text."
   (test)
   :doc "accepts only trusted constructors with valid argument contracts"
   (should (mevedel-reminders--recipe-p '(mode-constraints 9)))
-  (should (mevedel-reminders--recipe-p '(verifier-read-only)))
+  (should (mevedel-reminders--recipe-p '(pending-events)))
   (should-not (mevedel-reminders--recipe-p '(unknown-recipe)))
   (should-not (mevedel-reminders--recipe-p '(mode-constraints . 9)))
-  (should-not (mevedel-reminders--recipe-p '(verifier-read-only 1)))
+  (should-not (mevedel-reminders--recipe-p '(pending-events 1)))
   (should-not (mevedel-reminders--recipe-p '(mode-constraints "often")))
   (should-not (mevedel-reminders--recipe-p '(max-turns-warning 2.0)))
   (should-not (mevedel-reminders--recipe-p '(token-usage 0.9 -1)))
@@ -352,8 +352,8 @@ this collapses both shapes to the delivered text."
   (let ((recipes
          (mevedel-reminders-serialize-agent-templates
           (list (mevedel-reminders-make-mode-constraints 9)
-                (mevedel-reminders-make-verifier-read-only)))))
-    (should (equal '((mode-constraints 9) (verifier-read-only)) recipes)))
+                (mevedel-reminders-make-pending-events)))))
+    (should (equal '((mode-constraints 9) (pending-events)) recipes)))
   (should-error
    (mevedel-reminders-serialize-agent-templates
     (list (mevedel-reminder-create
@@ -368,8 +368,8 @@ this collapses both shapes to the delivered text."
   :doc "rebuilds frozen templates only through trusted recipe factories"
   (let ((restored
          (mevedel-reminders-restore-agent-templates
-          '((mode-constraints 9) (verifier-read-only)))))
-    (should (equal '(mode-constraints verifier-read-only)
+          '((mode-constraints 9) (pending-events)))))
+    (should (equal '(mode-constraints pending-events)
                    (mapcar #'mevedel-reminder-type restored)))
     (should (= 9 (mevedel-reminder-interval (car restored)))))
   (should-error
@@ -377,7 +377,7 @@ this collapses both shapes to the delivered text."
     '((erase-buffer))))
   (should-error
    (mevedel-reminders-restore-agent-templates
-    '((verifier-read-only 1))))
+    '((pending-events 1))))
   (should-error
    (mevedel-reminders-restore-agent-templates
     '((max-turns-warning 4.0))))
@@ -488,19 +488,11 @@ this collapses both shapes to the delivered text."
                  (mevedel-reminders--injection-record
                   '((:type a :body "one") (:type b :body "two"))
                   'turn-start)))
-  :doc "caps oversized bodies with a truncation note"
-  (let* ((mevedel-reminders--record-body-limit 8)
+  :doc "retains complete large UTF-8 bodies for later reconstruction"
+  (let* ((body (concat (make-string 20000 ?x) "€ complete tail"))
          (record (mevedel-reminders--injection-record
-                  '((:type big :body "0123456789")) 'mid-turn))
-         (body (plist-get (car (plist-get record :items)) :body)))
-    (should (equal "01234567\n[... truncated for record]" body)))
-  :doc "caps UTF-8 bytes without splitting a multibyte character"
-  (let* ((mevedel-reminders--record-body-limit 5)
-         (record (mevedel-reminders--injection-record
-                  '((:type big :body "ab€c")) 'mid-turn))
-         (body (plist-get (car (plist-get record :items)) :body)))
-    (should (equal "ab€\n[... truncated for record]" body))
-    (should (= 5 (string-bytes (car (split-string body "\n")))))))
+                  (list (list :type 'big :body body)) 'mid-turn)))
+    (should (equal body (plist-get (car (plist-get record :items)) :body)))))
 
 (mevedel-deftest mevedel-reminders--write-injection-record
   ()
@@ -523,12 +515,13 @@ this collapses both shapes to the delivered text."
       ;; Later response insertion at the marker lands after the record.
       (should (= (marker-position marker) (point-max)))
       (should-not (string-match-p "<system-reminder>" (buffer-string)))))
-  :doc "skips the record when no live marker exists"
+  :doc "rejects delivery when no live transcript marker exists"
   (with-temp-buffer
     (insert "user prompt\n")
-    (mevedel-reminders--write-injection-record
-     (list :position nil) (current-buffer)
-     '((:type demo :body "REMIND")) 'mid-turn)
+    (should-error
+     (mevedel-reminders--write-injection-record
+      (list :position nil) (current-buffer)
+      '((:type demo :body "REMIND")) 'mid-turn))
     (should (equal "user prompt\n" (buffer-string)))))
 
 (mevedel-deftest mevedel-reminders-stage-entry
@@ -687,7 +680,7 @@ this collapses both shapes to the delivered text."
    :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "injects staged reminders before the untouched current user message"
+  :doc "appends retained reminders after the untouched current user message"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
          (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
@@ -717,11 +710,11 @@ this collapses both shapes to the delivered text."
           (let ((messages (plist-get data :messages)))
             (should (= 3 (length messages)))
             (should (equal "actual task"
-                           (plist-get (aref messages 2) :content)))
+                           (plist-get (aref messages 1) :content)))
             (should
              (equal
               "<system-reminder>\none\n</system-reminder>\n<system-reminder>\ntwo\n</system-reminder>"
-              (plist-get (aref messages 1) :content))))
+              (plist-get (aref messages 2) :content))))
           (should-not (plist-get (gptel-fsm-info fsm)
                                  :mevedel-reminder-entries))
           ;; The chat buffer records what was injected as one hidden
@@ -775,6 +768,10 @@ this collapses both shapes to the delivered text."
           (cl-letf (((symbol-function 'gptel--inject-prompt)
                      (lambda (&rest _) (error "Injection failed"))))
             (should-error (mevedel-reminders--handle-inject fsm)))
+          ;; A successful payload injection without a transcript marker must
+          ;; roll back too, preserving both payload and pending state.
+          (should-error (mevedel-reminders--handle-inject fsm))
+          (should (equal data '(:messages [(:role "user" :content "actual task")])))
           ;; Nothing reached the model, so nothing may be consumed.
           (should (equal '("EVENT")
                          (mevedel-session-pending-reminders session)))
@@ -800,7 +797,8 @@ this collapses both shapes to the delivered text."
                    :models '(test)))
          (data (list :messages [(:role "user" :content "actual task")]))
          (fsm (gptel-make-fsm
-               :info (list :buffer chat-buf :backend backend :data data)))
+               :info (list :buffer chat-buf :backend backend :data data
+                           :position (with-current-buffer chat-buf (point-marker)))))
          (reminder (mevedel-reminders-make-pending-events)))
     (unwind-protect
         (progn
@@ -904,6 +902,7 @@ this collapses both shapes to the delivered text."
                       (:role "user" :parts [(:text "actual task")])]))
          (fsm (gptel-make-fsm
                :info (list :buffer chat-buf :backend backend :data data
+                           :position (with-current-buffer chat-buf (point-marker))
                            :mevedel-reminder-entries
                            '((:type ctx :body "context"))))))
     (unwind-protect
@@ -915,7 +914,7 @@ this collapses both shapes to the delivered text."
                                                  :session session)))
           (mevedel-reminders--handle-inject fsm)
           (let* ((contents (plist-get data :contents))
-                 (reminder (aref contents 1)))
+                 (reminder (aref contents 2)))
             (should (= 3 (length contents)))
             (should-not (plist-member reminder :content))
             (should
@@ -940,7 +939,8 @@ this collapses both shapes to the delivered text."
                    :models '(test)))
          (data (list :messages [(:role "user" :content "task")]))
          (fsm (gptel-make-fsm
-               :info (list :buffer chat-buf :backend backend :data data)))
+               :info (list :buffer chat-buf :backend backend :data data
+                           :position (with-current-buffer chat-buf (point-marker)))))
          committed)
     (unwind-protect
         (with-current-buffer chat-buf
@@ -1016,36 +1016,11 @@ this collapses both shapes to the delivered text."
     (should (equal 0 (mevedel-reminder-last-fired clone-a)))
     (should (null (mevedel-reminder-last-fired clone-b))))
 
-  :doc "reviewer invocation gets the read-only reminder attached"
-  (let* ((_ (mevedel-define-agent reviewer
-              :description "Reviewer test"
-              :tools nil))
-         (agent (mevedel-agent-get "reviewer"))
-         (inv (mevedel-agent-invocation-create agent))
-         (types (mapcar #'mevedel-reminder-type
-                        (mevedel-agent-invocation-reminders inv))))
-    (should (memq 'reviewer-read-only types)))
-
-  :doc "verifier invocation still gets the read-only reminder attached"
-  (let* ((_ (mevedel-define-agent verifier
-              :description "Verifier test"
-              :tools nil))
-         (agent (mevedel-agent-get "verifier"))
-         (inv (mevedel-agent-invocation-create agent))
-         (types (mapcar #'mevedel-reminder-type
-                        (mevedel-agent-invocation-reminders inv))))
-    (should (memq 'verifier-read-only types)))
-
-  :doc "ordinary agents do not get reviewer or verifier read-only reminders"
-  (let* ((_ (mevedel-define-agent ordinary-agent
-              :description "Ordinary test"
-              :tools nil))
-         (agent (mevedel-agent-get "ordinary-agent"))
-         (inv (mevedel-agent-invocation-create agent))
-         (types (mapcar #'mevedel-reminder-type
-                        (mevedel-agent-invocation-reminders inv))))
-    (should-not (memq 'reviewer-read-only types))
-    (should-not (memq 'verifier-read-only types))))
+  :doc "role names do not impose undeclared reminder policy"
+  (dolist (name '("reviewer" "verifier" "custom"))
+    (let* ((agent (mevedel-agent--create :name name :tools nil))
+           (inv (mevedel-agent-invocation-create agent)))
+      (should-not (mevedel-agent-invocation-reminders inv)))))
 
 
 
@@ -1215,60 +1190,31 @@ this collapses both shapes to the delivered text."
     (should (eq 'one-shot (mevedel-reminder-interval r)))))
 
 
-(mevedel-deftest mevedel-reminders-make-verifier-read-only
-  ()
-  ,test
-  (test)
-
-  :doc "type is verifier-read-only"
-  (let ((r (mevedel-reminders-make-verifier-read-only)))
-    (should (eq 'verifier-read-only (mevedel-reminder-type r))))
-
-  :doc "trigger fires unconditionally"
-  (let ((r (mevedel-reminders-make-verifier-read-only)))
-    (should (funcall (mevedel-reminder-trigger r) nil))
-    (should (funcall (mevedel-reminder-trigger r) 'anything)))
-
-  :doc "content mentions read-only and verification"
-  (let* ((r (mevedel-reminders-make-verifier-read-only))
-         (body (funcall (mevedel-reminder-content r) nil)))
-    (should (string-match-p "CANNOT edit" body))
-    (should (string-match-p "VERIFICATION" body))
-    (should (string-match-p "environmental limitations" body))))
-
-(mevedel-deftest mevedel-reminders-make-reviewer-read-only
-  ()
-  ,test
-  (test)
-
-  :doc "type is reviewer-read-only"
-  (let ((r (mevedel-reminders-make-reviewer-read-only)))
-    (should (eq 'reviewer-read-only (mevedel-reminder-type r))))
-
-  :doc "trigger fires unconditionally"
-  (let ((r (mevedel-reminders-make-reviewer-read-only)))
-    (should (funcall (mevedel-reminder-trigger r) nil))
-    (should (funcall (mevedel-reminder-trigger r) 'anything)))
-
-  :doc "content mentions read-only JSON review reporting"
-  (let* ((r (mevedel-reminders-make-reviewer-read-only))
-         (body (funcall (mevedel-reminder-content r) nil)))
-    (should (string-match-p "REVIEW-ONLY" body))
-    (should (string-match-p "CANNOT edit" body))
-    (should (string-match-p "write, or create files" body))
-    (should (string-match-p "do not patch" body))
-    (should (string-match-p "strict JSON" body))
-    (should (string-match-p "findings" body)))
-
-  :doc "fires every turn"
-  (let ((r (mevedel-reminders-make-reviewer-read-only)))
-    (should (null (mevedel-reminder-interval r)))))
-
-
 (mevedel-deftest mevedel-reminders-make-verification-suggestion
   (:after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
+
+  :doc "does not suggest implementation verification after reading a file"
+  (let* ((file (make-temp-file "mevedel-verifier-read-" nil ".el" "(provide 'fixture)\n"))
+         (session (mevedel-session--create
+                   :turn-count 1 :touched-files (make-hash-table :test #'equal)))
+         (reminder (mevedel-reminders-make-verification-suggestion)))
+    (unwind-protect
+        (progn
+          (mevedel-session-record-interaction session file 'read 0)
+          (should-not (mevedel-reminders--should-fire-p reminder 1 session)))
+      (delete-file file)))
+
+  :doc "does not revive old modifications during later read-only turns"
+  (let* ((session (mevedel-session--create
+                   :turn-count 12 :touched-files (make-hash-table :test #'equal)))
+         (reminder (mevedel-reminders-make-verification-suggestion)))
+    (mevedel-session-record-interaction session "/tmp/example.el" 'modify 1)
+    (mevedel-session-record-interaction session "/tmp/example.el" 'read 12)
+    (should-not (mevedel-reminders--should-fire-p reminder 12 session))
+    (mevedel-session-record-interaction session "/tmp/example.el" 'modify 12)
+    (should (mevedel-reminders--should-fire-p reminder 12 session)))
 
   :doc "does not fire when session has no touched files"
   (let* ((tmp (make-temp-file "mevedel-vs-" t))
@@ -1279,19 +1225,19 @@ this collapses both shapes to the delivered text."
          (r (mevedel-reminders-make-verification-suggestion)))
     (should-not (funcall (mevedel-reminder-trigger r) session)))
 
-  :doc "fires once session has touched at least one file"
+  :doc "fires after the latest turn modified a file"
   (let* ((tmp (make-temp-file "mevedel-vs-" t))
          (ws (mevedel-workspace-get-or-create
               'project (file-name-as-directory tmp)
               (file-name-as-directory tmp) "vs"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-verification-suggestion)))
-    (puthash "/tmp/example.el" t (mevedel-session-touched-files session))
+    (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
     (should (funcall (mevedel-reminder-trigger r) session))
     (should (string-match-p "verifier"
                             (funcall (mevedel-reminder-content r) session))))
 
-  :doc "still fires after accepted-plan verification is cleared"
+  :doc "keeps generic verification guidance for recent edits after plan verification"
   (let* ((tmp (make-temp-file "mevedel-vs-" t))
          (ws (mevedel-workspace-get-or-create
               'project (file-name-as-directory tmp)
@@ -1300,7 +1246,7 @@ this collapses both shapes to the delivered text."
          (r (mevedel-reminders-make-verification-suggestion)))
     (setf (mevedel-session-plan-metadata session)
           '(:status accepted :verification-pending nil))
-    (puthash "/tmp/example.el" t (mevedel-session-touched-files session))
+    (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
     (should (funcall (mevedel-reminder-trigger r) session))
     (should-not (string-match-p
                  "accepted plan"
@@ -1313,7 +1259,7 @@ this collapses both shapes to the delivered text."
               (file-name-as-directory tmp) "vs"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-verification-suggestion)))
-    (puthash "/tmp/example.el" t (mevedel-session-touched-files session))
+    (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
     (dolist (status '(rejected cancelled presented))
       (setf (mevedel-session-plan-metadata session)
             (list :status status :verification-pending t))
@@ -1322,7 +1268,7 @@ this collapses both shapes to the delivered text."
                    "accepted plan"
                    (funcall (mevedel-reminder-content r) session)))))
 
-  :doc "fires for touched files while accepted-plan verification is pending"
+  :doc "adds accepted-plan guidance after a recent modification"
   (let* ((tmp (make-temp-file "mevedel-vs-" t))
          (ws (mevedel-workspace-get-or-create
               'project (file-name-as-directory tmp)
@@ -1331,7 +1277,7 @@ this collapses both shapes to the delivered text."
          (r (mevedel-reminders-make-verification-suggestion)))
     (setf (mevedel-session-plan-metadata session)
           '(:status accepted :verification-pending t))
-    (puthash "/tmp/example.el" t (mevedel-session-touched-files session))
+    (mevedel-session-record-interaction session "/tmp/example.el" 'modify 0)
     (should (funcall (mevedel-reminder-trigger r) session))
     (should (string-match-p "plan"
                             (funcall (mevedel-reminder-content r) session)))))
@@ -1755,122 +1701,6 @@ this collapses both shapes to the delivered text."
       (delete-directory tmp-root t))))
 
 
-(mevedel-deftest mevedel-reminders-make-deferred-tools-roster
-  (:after-each (mevedel-workspace-clear-registry))
-  ,test
-  (test)
-
-  :doc "does not fire when the session's deferred-set is empty"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-deferred-tools-roster)))
-    (should-not (mevedel-reminders--should-fire-p r 0 session)))
-
-  :doc "fires once (`one-shot') listing every entry with a ToolSearch hint"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-deferred-tools-roster)))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel" "XrefReferences") . "Find references to a symbol")
-            (("mevedel" "Edit") . "Replace text in a file")))
-    (should (mevedel-reminders--should-fire-p r 0 session))
-    (let ((body (funcall (mevedel-reminder-content r) session)))
-      (should (string-match-p "XrefReferences" body))
-      (should (string-match-p "Edit" body))
-      (should (string-match-p "ToolSearch" body))
-      (should (string-match-p "load=true" body))
-      (should (string-match-p "not currently callable" body))
-      (should (string-match-p "Do not call these tool names directly" body)))
-    ;; Simulate firing bookkeeping and verify one-shot prevents re-fire.
-    (setf (mevedel-reminder-last-fired r) 0)
-    (should-not (mevedel-reminders--should-fire-p r 5 session)))
-
-  :doc "name-only entries (nil summary) render without a colon"
-  ;; Default for tools that did not supply :summary -- the deferred-set
-  ;; entry's cdr is nil and the roster lists just "- NAME", keeping the
-  ;; system reminder concise even when wrapped tools (introspection,
-  ;; web) have multi-paragraph descriptions.
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-deferred-tools-roster)))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel-introspection" "function_source") . nil)
-            (("mevedel-introspection" "variable_value") . nil)))
-    (let ((body (funcall (mevedel-reminder-content r) session)))
-      (should (string-match-p "^- function_source$" body))
-      (should (string-match-p "^- variable_value$" body))
-      (should-not (string-match-p "function_source:" body))
-      (should-not (string-match-p "variable_value:" body))))
-
-  :doc "summary entries render as `- NAME: SUMMARY'"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-deferred-tools-roster)))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel" "Bash") . "Run a shell command.")))
-    (let ((body (funcall (mevedel-reminder-content r) session)))
-      (should (string-match-p "- Bash: Run a shell command\\." body))))
-
-  :doc "empty-string summary falls through to name-only rendering"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-deferred-tools-roster)))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel" "Whatever") . "")))
-    (let ((body (funcall (mevedel-reminder-content r) session)))
-      (should (string-match-p "^- Whatever$" body))
-      (should-not (string-match-p "Whatever:" body)))))
-
-(mevedel-deftest mevedel-reminders-make-deferred-tools-expired
-  (:after-each (mevedel-workspace-clear-registry))
-  ,test
-  (test)
-
-  :doc "does not fire when no tools expired"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-deferred-tools-expired)))
-    (should-not (mevedel-reminders--should-fire-p r 0 session)))
-
-  :doc "fires listing expired tool names and consumes the slot"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-deferred-tools-expired)))
-    (setf (mevedel-session-deferred-expired session)
-          '("XrefReferences" "XrefDefinitions"))
-    (should (mevedel-reminders--should-fire-p r 1 session))
-    (let ((body (test-mevedel-reminders--content r session)))
-      (should (string-match-p "XrefReferences" body))
-      (should (string-match-p "XrefDefinitions" body))
-      (should (string-match-p "ToolSearch" body))
-      (should (string-match-p "load=true" body))
-      (should (string-match-p "no longer callable" body))
-      (should (string-match-p "Do not call these tool names directly" body)))
-    ;; Content function consumed the list, so the reminder no longer fires.
-    (should-not (mevedel-session-deferred-expired session))
-    (should-not (mevedel-reminders--should-fire-p r 2 session))))
-
-
-(mevedel-deftest mevedel-reminders-make-agent-deferred-tools-expired
-  ()
-  ,test
-  (test)
-
-  :doc "fires listing expired agent tool names and consumes the invocation slot"
-  (let* ((agent (mevedel-agent--create :name "explorer"))
-         (inv (mevedel-agent-invocation--create
-               :agent agent
-               :deferred-expired '("Imenu" "Treesitter")))
-         (r (mevedel-reminders-make-agent-deferred-tools-expired)))
-    (should (mevedel-reminders--should-fire-p r 1 inv))
-    (let ((body (test-mevedel-reminders--content r inv)))
-      (should (string-match-p "Imenu" body))
-      (should (string-match-p "Treesitter" body))
-      (should (string-match-p "ToolSearch" body)))
-    (should-not (mevedel-agent-invocation-deferred-expired inv))
-    (should-not (mevedel-reminders--should-fire-p r 2 inv))))
-
-
 (mevedel-deftest mevedel-reminders-make-pending-events
   (:after-each (mevedel-workspace-clear-registry))
   ,test
@@ -1999,116 +1829,6 @@ this collapses both shapes to the delivered text."
       (kill-buffer buf))))
 
 
-(mevedel-deftest mevedel-reminders-specialist-capabilities
-  (:after-each (mevedel-workspace-clear-registry))
-  ,test
-  (test)
-
-  :doc "xref availability accepts eglot, lsp, elisp, and readable etags backends"
-  (dolist (backend '(eglot lsp elisp))
-    (cl-letf (((symbol-function 'xref-find-backend)
-               (lambda () backend)))
-      (should (mevedel-reminders--xref-available-in-buffer-p))))
-  (let ((tags-file-name nil)
-        (tags-table-list nil))
-    (cl-letf (((symbol-function 'xref-find-backend)
-               (lambda () 'etags)))
-      (should-not (mevedel-reminders--xref-available-in-buffer-p))))
-  (let ((tags-file-name (make-temp-file "mevedel-tags-"))
-        (tags-table-list nil))
-    (unwind-protect
-        (cl-letf (((symbol-function 'xref-find-backend)
-                   (lambda () 'etags)))
-          (should (mevedel-reminders--xref-available-in-buffer-p)))
-      (delete-file tags-file-name)))
-
-  :doc "Imenu availability requires a non-empty user-visible index"
-  (let ((imenu--index-alist nil))
-    (cl-letf (((symbol-function 'imenu--make-index-alist)
-               (lambda (&optional _noerror)
-                 (setq imenu--index-alist '(("*Rescan*" . ignore)
-                                            ("thing" . 1))))))
-      (should (mevedel-reminders--imenu-available-in-buffer-p))))
-  (let ((imenu--index-alist nil))
-    (cl-letf (((symbol-function 'imenu--make-index-alist)
-               (lambda (&optional _noerror)
-                 (setq imenu--index-alist nil))))
-      (should-not (mevedel-reminders--imenu-available-in-buffer-p))))
-
-  :doc "Treesitter availability requires an active parser"
-  (cl-letf (((symbol-function 'treesit-available-p)
-             (lambda () t))
-            ((symbol-function 'treesit-parser-list)
-             (lambda (&optional _buffer _language) '(parser))))
-    (should (mevedel-reminders--treesitter-available-in-buffer-p)))
-
-  :doc "Elisp introspection capability is gated by live elisp workspace buffers and tools"
-  (let* ((root (file-name-as-directory
-                (make-temp-file "mevedel-specialist-" t)))
-         (file (file-name-concat root "sample.el"))
-         (ws (mevedel-workspace-get-or-create 'project root root "specialist"))
-         (session (mevedel-session-create "main" ws))
-         (buf nil))
-    (unwind-protect
-        (progn
-          (write-region "(defun sample () nil)\n" nil file nil 'silent)
-          (setq buf (find-file-noselect file))
-          (with-current-buffer buf
-            (emacs-lisp-mode))
-          (setf (mevedel-session-deferred-set session)
-                '((("mevedel" "function_source") . "source")))
-          (cl-letf (((symbol-function
-                      'mevedel-reminders--xref-available-in-buffer-p)
-                     (lambda () nil))
-                    ((symbol-function
-                      'mevedel-reminders--imenu-available-in-buffer-p)
-                     (lambda () nil))
-                    ((symbol-function
-                      'mevedel-reminders--treesitter-available-in-buffer-p)
-                     (lambda () nil)))
-            (should (plist-get
-                     (mevedel-reminders-specialist-capabilities session)
-                     :elisp-introspection))))
-      (when (buffer-live-p buf)
-        (kill-buffer buf))
-      (delete-directory root t))))
-
-
-(mevedel-deftest mevedel-reminders-make-specialist-availability
-  (:after-each (mevedel-workspace-clear-registry))
-  ,test
-  (test)
-
-  :doc "xref reminder fires from specialist capabilities and includes ToolSearch hint when deferred"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/sp/" "/tmp/sp/" "sp"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-xref-available)))
-    (setf (mevedel-session-deferred-set session)
-          '((("mevedel" "XrefReferences") . "refs")))
-    (cl-letf (((symbol-function 'mevedel-reminders-specialist-capabilities)
-               (lambda (_) '(:xref t))))
-      (should (mevedel-reminders--should-fire-p r 0 session))
-      (let ((body (funcall (mevedel-reminder-content r) session)))
-        (should (string-match-p "XrefReferences" body))
-        (should (string-match-p "ToolSearch" body)))))
-
-  :doc "Imenu and Treesitter reminders are one-shot specialist reminders"
-  (dolist (maker '(mevedel-reminders-make-imenu-available
-                   mevedel-reminders-make-treesitter-available))
-    (let ((r (funcall maker)))
-      (should (eq 'one-shot (mevedel-reminder-interval r)))))
-
-  :doc "Elisp introspection reminder excludes variable_value from routine guidance"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/el/" "/tmp/el/" "el"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-elisp-introspection-available)))
-    (cl-letf (((symbol-function 'mevedel-reminders-specialist-capabilities)
-               (lambda (_) '(:elisp-introspection t))))
-      (let ((body (funcall (mevedel-reminder-content r) session)))
-        (should (string-match-p "function_source" body))
-        (should-not (string-match-p "variable_value`" body))))))
-
-
 (mevedel-deftest mevedel-reminders-install-defaults
   (:after-each (mevedel-workspace-clear-registry))
   ,test
@@ -2121,20 +1841,15 @@ this collapses both shapes to the delivered text."
     (let ((types (mapcar #'mevedel-reminder-type
                          (mevedel-session-reminders session))))
       (should (memq 'pending-events types))
-      (should (memq 'date-change types))
+      (should-not (memq 'date-change types))
       (should (memq 'compaction-available types))
       (should (memq 'token-usage types))
       (should (memq 'agent-listing-delta types))
-      (should (memq 'xref-available types))
-      (should (memq 'imenu-available types))
-      (should (memq 'treesitter-available types))
-      (should (memq 'elisp-introspection-available types))
       (should (memq 'mode-constraints types))
       (should (memq 'plan-mode types))
       (should-not (memq 'diagnostics types))
       (should (memq 'edited-file types))
-      (should (memq 'deferred-tools-roster types))
-      (should (memq 'deferred-tools-expired types))
+      (should-not (memq 'tool-discovery types))
       (should (memq 'task-nudge types))
       (should (memq 'plan-reference types))))
 
@@ -2150,31 +1865,19 @@ this collapses both shapes to the delivered text."
            (compact-count (cl-count 'compaction-available types))
            (token-count (cl-count 'token-usage types))
            (agent-count (cl-count 'agent-listing-delta types))
-           (xref-count (cl-count 'xref-available types))
-           (imenu-count (cl-count 'imenu-available types))
-           (treesitter-count (cl-count 'treesitter-available types))
-           (elisp-count (cl-count 'elisp-introspection-available types))
            (mode-count (cl-count 'mode-constraints types))
            (plan-mode-count (cl-count 'plan-mode types))
            (edit-count (cl-count 'edited-file types))
-           (roster-count (cl-count 'deferred-tools-roster types))
-           (expired-count (cl-count 'deferred-tools-expired types))
            (nudge-count (cl-count 'task-nudge types))
            (plan-count (cl-count 'plan-reference types)))
       (should (= 1 pending-count))
-      (should (= 1 date-count))
+      (should (= 0 date-count))
       (should (= 1 compact-count))
       (should (= 1 token-count))
       (should (= 1 agent-count))
-      (should (= 1 xref-count))
-      (should (= 1 imenu-count))
-      (should (= 1 treesitter-count))
-      (should (= 1 elisp-count))
       (should (= 1 mode-count))
       (should (= 1 plan-mode-count))
       (should (= 1 edit-count))
-      (should (= 1 roster-count))
-      (should (= 1 expired-count))
       (should (= 1 nudge-count))
       (should (= 1 plan-count)))))
 

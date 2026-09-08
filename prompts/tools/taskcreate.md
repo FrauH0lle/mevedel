@@ -1,83 +1,45 @@
-Create one or more tasks in the session task list.
-
-Tasks are the unified tracking system for planning and progress: they
-work as a flat checklist for simple sessions, and as a dependency
-graph for agent trees. Each task gets an auto-assigned
-integer ID that you can reference later from `TaskUpdate`, `TaskGet`,
-or from other tasks via `blockedBy`.
+Create tracked work items in the session task list.
 
 ### When to use `TaskCreate`
 
-- You are about to work on a non-trivial task with multiple distinct
-  steps
-- You need to plan a batch of work items up front so you can track
-  progress
-- You are coordinating work across multiple sub-agents and need to
-  track ownership and dependencies
-- The user explicitly asks you to use the task system
+- Tracking status, ownership, or dependencies helps carry out the task, or the
+  user asks for a checklist.
 
 ### When NOT to use `TaskCreate`
 
-- The work is a single trivial edit or a direct answer
-- You would create only one pending task and never update it
+- The tracking adds no useful information for a direct answer or small edit.
+- Assigning work to an agent; an owner label does not start an agent turn.
 
 ### How to use `TaskCreate`
 
-Pass `tasks` as an array. Each task object may contain:
-
-- `subject` — **required** short one-line summary; must be non-blank
-- `description` — optional longer notes
-- `status` — optional `"pending"`, `"in_progress"`, or `"completed"`
-  (defaults to `"pending"`)
-- `owner` — optional retained agent path such as `/root/worker_1`, or a
-  deliberate user-defined bucket. Omit it for your own tasks. Use
-  subjects/descriptions for workstream names; use the actual retained path
-  instead of inventing a proxy owner for an agent.
-- `blockedBy` — optional array of task IDs that must complete first.
-  IDs that are unknown or already completed are dropped, so the created
-  task comes back unblocked rather than waiting on finished work
-- `metadata` — optional free-form object for extra data
-
-Top-level `note` may be passed with the create call to update the
-visible status note for an owner group. It is shown only while that
-owner has open tasks. `noteOwner` selects the owner; omit it for the
-current caller, or pass an empty string for Main.
-
-Use `in_progress` for tasks that are actually being worked on now.
-Multiple tasks may be `in_progress` when work is genuinely concurrent,
-especially across sub-agents.
+- Pass an array of task objects with nonblank `subject` strings. Optional fields
+  are `description`, `status`, `owner`, `blockedBy`, and `metadata`; the result
+  supplies assigned integer IDs for later calls.
+- Status defaults to `pending`; use `in_progress` for work underway and
+  `completed` for finished work. Concurrent work can have several active items.
+- Omitted owner means the caller. An agent owner is its actual retained path,
+  such as `/root/worker_1`; deliberate user-defined buckets are also supported.
+  Workstream names belong in subjects/descriptions.
+- `blockedBy` contains prerequisite task IDs. Unknown and completed IDs are
+  dropped, so use actual returned IDs when establishing dependencies.
+- Optional `note` updates the visible status above an owner's open tasks;
+  `noteOwner` defaults to the caller and an empty string selects Main. The note
+  has no visible row when that group has no open work.
 
 ### Examples of good usage
 
 <example>
-TaskCreate(tasks=[
-  {"subject": "Parse config file", "status": "completed"},
-  {"subject": "Validate parsed values", "status": "in_progress"},
-  {"subject": "Emit validated config", "status": "pending"}
-], note="Validating parsed values")
-</example>
-
-<example>
-TaskCreate(tasks=[
-  {"subject": "Implement module A", "owner": "/root/worker_1"},
-  {"subject": "Implement module B", "owner": "/root/worker_2", "blockedBy": [1]}
-], note="Module B waits for module A", noteOwner="/root/worker_2")
+TaskCreate(tasks=[{"subject": "Validate parsed configuration", "status": "in_progress"},
+                  {"subject": "Document accepted options"}],
+           note="Checking validation behavior")
 </example>
 
 ### Examples of bad usage
 
 <example>
-TaskCreate(tasks=[{"subject": "Fix the typo in README"}])
+TaskCreate(tasks=[{"subject": "Write tests", "blockedBy": [99]}]) before task 99 exists
 <reasoning>
-A single trivial edit that will never be updated. Just do the work.
-</reasoning>
-</example>
-
-<example>
-TaskCreate(tasks=[{"subject": "Implement module A", "owner": "backend work"}])
-<reasoning>
-Invents a proxy owner for an agent. Use the actual retained path such
-as "/root/worker_1", or omit owner for your own tasks; workstream names
-belong in subjects and descriptions.
+Unknown dependencies are dropped. Create the prerequisite, then use its returned
+ID instead of guessing an ID for future work.
 </reasoning>
 </example>
