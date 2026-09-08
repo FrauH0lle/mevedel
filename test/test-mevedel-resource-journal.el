@@ -153,7 +153,12 @@
                                         :type (if (eq mutation 'symlink)
                                                   'mevedel-resource-error
                                                 'mevedel-resource-unavailable))))
-                (should-not (string-match-p (regexp-quote root) (error-message-string error)))))))
+                (should-not (string-match-p (regexp-quote root) (error-message-string error)))
+                (should (string-search address (cadr error)))
+                (when (eq mutation 'corrupt)
+                  (should (string-search "Invalid frontmatter" (cadr error))))
+                (when (eq mutation 'delete)
+                  (should (string-search "not found" (cadr error))))))))
       (mevedel-resource-discard-attempts (car cell))
       (delete-directory root t))))
 

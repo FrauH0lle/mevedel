@@ -68,5 +68,42 @@
      (mevedel-resource-execute
       (mevedel-resource-prepare 'read "mcp://unknown" nil)))))
 
+(mevedel-deftest mevedel-resource-execute/mcp-diagnostics ()
+  ,test
+  (test)
+  :doc "connection and provider failures identify the authored resource"
+  (let* ((address "mcp://server/resource")
+         (mcp-server-connections (make-hash-table :test #'equal))
+         servers)
+    (cl-letf (((symbol-function 'mcp-hub-get-servers) (lambda () servers))
+              ((symbol-function 'mcp-read-resource) (lambda (&rest _) (error "Provider failure"))))
+      (dolist (entry '((nil "Unknown MCP server")
+                       (((:name "server" :status disconnected)) "not connected")
+                       (((:name "server" :status connected)) "No active MCP connection")))
+        (setq servers (car entry))
+        (let ((failure (should-error
+                        (mevedel-resource-execute (mevedel-resource-prepare 'read address nil)))))
+          (should (string-search (cadr entry) (cadr failure)))
+          (should (string-search address (cadr failure)))))
+      (puthash "server" t mcp-server-connections)
+      (let ((failure (should-error
+                      (mevedel-resource-execute (mevedel-resource-prepare 'read address nil)))))
+        (should (string-search "Provider failure" (cadr failure)))
+        (should (string-search address (cadr failure))))))
+  :doc "successful empty and non-text MCP responses explain the text-only surface"
+  (let ((mcp-server-connections (make-hash-table :test #'equal)) response)
+    (puthash "server" t mcp-server-connections)
+    (cl-letf (((symbol-function 'mcp-hub-get-servers)
+               (lambda () '((:name "server" :status connected))))
+              ((symbol-function 'mcp-read-resource) (lambda (&rest _) response)))
+      (dolist (entry '(((:contents []) "returned no content")
+                       ((:contents [(:blob "AAAA")]) "exposes text content only")))
+        (setq response (car entry))
+        (let ((text (plist-get
+                     (mevedel-resource-execute
+                      (mevedel-resource-prepare 'read "mcp://server/resource" nil)) :result)))
+          (should (string-search (cadr entry) text))
+          (should (string-search "mcp://server/resource" text)))))))
+
 (provide 'test-mevedel-resource-mcp)
 ;;; test-mevedel-resource-mcp.el ends here

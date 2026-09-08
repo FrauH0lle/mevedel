@@ -1249,7 +1249,7 @@ content, not a read failure.\n</system-reminder>"
               (mevedel-tool-fs-read--media-transform-requested-p args))
       (error "Virtual resources only support text Read options"))
     (unless (stringp text)
-      (error "Resource %s did not return text" address))
+      (error "Internal resource error: %s did not return text" address))
     (if (string-empty-p text)
         ""
       (when (and (null offset) (null limit)
@@ -1282,7 +1282,7 @@ content, not a read failure.\n</system-reminder>"
           (plist-get path :result) args address)
        (progn
            (unless (and (stringp path) (file-exists-p path))
-             (error "Resource %s is not available for file reading" address))
+             (error "File not found: %s" address))
            (when (and (string-prefix-p "memory://" address)
                       (mevedel-tool-fs-read-media-mime-type path))
              (error "Memory resources only support text reads"))

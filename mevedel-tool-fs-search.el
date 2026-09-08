@@ -22,6 +22,8 @@
                   (callback name command read-paths writable-roots &rest keys))
 
 ;; `mevedel-resource'
+(declare-function mevedel-resource-error-message "mevedel-resource"
+                  (failure &optional address private-paths))
 (declare-function mevedel-resource-execute
                   "mevedel-resource" (attempt &optional executor options))
 
@@ -70,7 +72,7 @@ remote media conversion, this processes an already transferred copy locally."
          (address (plist-get descriptor :address))
          (directory (make-temp-file "mevedel-resource-search-" t))
          (cleanup (lambda () (ignore-errors (delete-directory directory t)))))
-    (condition-case nil
+    (condition-case err
         (let ((default-directory (file-name-as-directory directory))
               (mevedel--session nil)
               (mevedel-tool-fs-search--resource-dispatching t)
@@ -82,7 +84,7 @@ remote media conversion, this processes an already transferred copy locally."
                          (equal (car document) (file-name-nondirectory (car document)))
                          (not (member (car document) '("" "." "..")))
                          (stringp (cdr document)))
-              (error "Invalid resource document"))
+              (error "Internal resource error: invalid search document"))
             (let ((coding-system-for-write 'utf-8-unix))
               (write-region (cdr document) nil
                             (file-name-concat directory (car document))
@@ -99,7 +101,8 @@ remote media conversion, this processes an already transferred copy locally."
                    native))
       (error
        (funcall cleanup)
-       (error "Could not search resource %s" address)))))
+       (error "Could not search resource %s: %s" address
+              (mevedel-resource-error-message err address (list directory)))))))
 
 (defun mevedel-tool-fs-search--visible-path (path)
   "Return PATH in the current search operation's visible domain."
@@ -321,7 +324,7 @@ SEPARATOR describe the ripgrep output shape."
         copy)
     result))
 
-(defun mevedel-tool-fs-search-render-grep (name args result _render-data)
+(defun mevedel-tool-fs-search-render-grep (name args result render-data)
   "Rendering plist for the Grep tool.
 NAME is \"Grep\".  ARGS carries `:pattern' (the search regex).  RESULT
 is the raw matches output.  Header shows the pattern and match count
@@ -331,18 +334,19 @@ back to text verbatim if activation fails."
   (when (stringp result)
     (let* ((pattern (or (plist-get args :pattern) ""))
            (visible (mevedel-tool-fs-strip-system-reminders result))
-           (matches (if (or (string-prefix-p "No matches found" visible)
-                            (string-prefix-p "Error:" visible))
-                        0
-                      (length (seq-filter (lambda (l) (not (string-empty-p l)))
-                                          (split-string visible "\n"))))))
+           (matches (or (plist-get render-data :count)
+                        (if (or (string-prefix-p "No matches found" visible)
+                                (string-prefix-p "Error:" visible))
+                            0
+                          (length (seq-filter (lambda (l) (not (string-empty-p l)))
+                                              (split-string visible "\n")))))))
       (list :header (format "%s: %s (%d matches)"
                             (or name "Grep") pattern matches)
             :body result
             :body-mode 'grep-mode
             :initially-collapsed-p t))))
 
-(defun mevedel-tool-fs-search-render-glob (name args result _render-data)
+(defun mevedel-tool-fs-search-render-glob (name args result render-data)
   "Rendering plist for the Glob tool.
 NAME is \"Glob\".  ARGS carries `:pattern'.  RESULT is a newline-separated
 list of matching files.  Header shows pattern and file count."
@@ -350,13 +354,14 @@ list of matching files.  Header shows pattern and file count."
     (let* ((pattern (or (plist-get args :pattern) ""))
            (lines (seq-filter (lambda (l) (not (string-empty-p l)))
                               (split-string result "\n")))
-           (files (if (or (string-prefix-p "No files found" result)
-                          (string-prefix-p "Error:" result))
-                      0
-                    (length (seq-filter
-                             (lambda (line)
-                               (not (string-prefix-p "... Results truncated" line)))
-                             lines)))))
+           (files (or (plist-get render-data :count)
+                      (if (or (string-prefix-p "No files found" result)
+                              (string-prefix-p "Error:" result))
+                          0
+                        (length (seq-filter
+                                 (lambda (line)
+                                   (not (string-prefix-p "... Results truncated" line)))
+                                 lines))))))
       (list :header (format "%s: %s (%d files)"
                             (or name "Glob") pattern files)
             :body result
@@ -560,10 +565,10 @@ and optional :path."
                  (mevedel-tool-fs-search-glob callback native-args))
              (if (and (listp path) (plist-get path :virtual))
                  (funcall callback
-                          (mevedel-tool-fs-handler-result
-                           (plist-get path :result)))
+                          (list :result (plist-get path :result)
+                                :render-data (plist-get path :render-data)))
                (unless (and (stringp path) (file-exists-p path))
-                 (error "Resource %s is not available for Glob" authored))
+                 (error "Search target not found: %s" authored))
                (let ((native-args (copy-sequence args))
                      (mevedel-tool-fs-search--resource-address authored)
                      (mevedel-tool-fs-search--resource-dispatching t))
@@ -605,7 +610,8 @@ and optional :path."
                                         mevedel-tool-fs-search--resource-address)
                                 (list "--null"))
                               (mevedel-tool-fs-resource-rg-exclusions
-                               (plist-get args :path))
+                               (or (plist-get args :path)
+                                   mevedel-tool-fs-search--resource-address))
                               mevedel-tool-fs-search--rg-vcs-exclusions
                               paths)))
                 (mevedel-execution-start-helper
@@ -700,10 +706,10 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                  (mevedel-tool-fs-search-grep callback native-args))
              (if (and (listp path) (plist-get path :virtual))
                  (funcall callback
-                          (mevedel-tool-fs-handler-result
-                           (plist-get path :result)))
+                          (list :result (plist-get path :result)
+                                :render-data (plist-get path :render-data)))
                (unless (and (stringp path) (file-exists-p path))
-                 (error "Resource %s is not available for Grep" authored))
+                 (error "Search target not found: %s" authored))
                (let ((native-args (copy-sequence args))
                      (mevedel-tool-fs-search--resource-address authored)
                      (mevedel-tool-fs-search--resource-dispatching t))
@@ -826,7 +832,8 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                             (partial-warning
                              (plist-get settlement :partial-warning))
                             (pageable-output-p
-                             (plist-get settlement :pageable-p)))
+                             (plist-get settlement :pageable-p))
+                            range-error-p)
                        (when resource-roots
                          (let ((rewritten
                                 (mevedel-tool-fs-search--scrub-resource-search-output
@@ -848,9 +855,10 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                            ;; and about nothing else.
                            (if (and (> offset 0) (>= offset total-lines))
                                (progn
+                                 (setq range-error-p t)
                                  (erase-buffer)
                                  (insert
-                                  (format "Offset %d starts after the last of %d output lines.  Lower :offset or repeat the search."
+                                  (format "Error: Offset %d starts after the last of %d output lines.  Lower :offset or repeat the search."
                                           offset total-lines)))
                              (when (> offset 0)
                                (forward-line offset)
@@ -868,13 +876,15 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                        (mevedel-tool-fs-search--truncate-output-buffer
                         mevedel-tool-fs-search--grep-max-output-bytes
                         "Narrow your search with :glob, :type, or a more specific :pattern.")
-                       (funcall
-                        callback
-                        (mevedel-tool-fs-handler-result
-                         (mevedel-tool-fs-search--prepend-partial-warning
-                          partial-warning
-                          (buffer-string)
-                          mevedel-tool-fs-search--grep-max-output-bytes))))))
+                       (let ((result
+                              (mevedel-tool-fs-handler-result
+                               (mevedel-tool-fs-search--prepend-partial-warning
+                                partial-warning (buffer-string)
+                                mevedel-tool-fs-search--grep-max-output-bytes))))
+                         (when range-error-p
+                           (setq result (plist-put result :status 'error))
+                           (setq result (plist-put result :render-data '(:count 0))))
+                         (funcall callback result)))))
                  "mevedel-grep" (cons "rg" rg-args) search-roots nil
                  :session session :owner (mevedel-current-origin)
                  :teardown-callback mevedel-tool-fs-search--teardown

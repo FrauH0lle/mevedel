@@ -47,6 +47,18 @@ This supports one address family and unstructured shared-default working notes.
 Shared storage is outside session persistence so cleanup of one session cannot
 remove another session's working files. Separate workspace roots remain isolated.
 
+A first-use session exposed a mismatch between lazy storage and discovery:
+`Read(work://shared)` reported an unavailable resource before the first write,
+although the root was usable. The diagnostic audit also reproduced failed
+empty artifact searches, an internal empty-memory descriptor returned to the
+model, and a zero-file result rendered as one file. Read/Glob/Grep now treat
+unused discovery roots as successful empty results without materializing them.
+Missing explicit descendants and unavailable owners remain errors. Search
+empty-result counts travel in render data, independently of explanatory text.
+Errors identify their authored target and distinguish syntax, unsupported
+operations, missing selections, unavailable owners, and content readiness;
+underlying safe causes are retained without exposing private backing paths.
+
 Explicit memory-root descendants now admit ApplyPatch through the same native
 transaction. Shared and memory writes expose their prepared backing paths only
 to filesystem permission policy, retain address presentation, and reject root
