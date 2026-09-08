@@ -58,10 +58,10 @@
           :args '((file_path path :required "Path")))))
     (should-not
      (mevedel-tool-repair-validate
-      resource-tool '(:file_path "local://notes.md")))
+      resource-tool '(:file_path "work://notes.md")))
     (let ((issues
            (mevedel-tool-repair-validate
-            path-tool '(:file_path "local://notes.md"))))
+            path-tool '(:file_path "work://notes.md"))))
       (should (equal '(resource-address)
                      (mapcar (lambda (issue) (plist-get issue :kind))
                              issues)))

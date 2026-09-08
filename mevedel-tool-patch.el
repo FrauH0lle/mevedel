@@ -126,31 +126,33 @@
   (or (plist-get operation :physical-move-path)
       (plist-get operation :move-path)))
 
-(defun mevedel-tool-patch--local-source-p (operation)
-  "Return non-nil when OPERATION's source is session-local."
-  (plist-get operation :local-path-p))
+(defun mevedel-tool-patch--resource-source-p (operation)
+  "Return non-nil when OPERATION's source is a resource."
+  (plist-get operation :resource-path-p))
 
-(defun mevedel-tool-patch--local-destination-p (operation)
-  "Return non-nil when OPERATION's destination is session-local."
-  (plist-get operation :local-move-path-p))
+(defun mevedel-tool-patch--resource-destination-p (operation)
+  "Return non-nil when OPERATION's destination is a resource."
+  (plist-get operation :resource-move-path-p))
 
 (defun mevedel-tool-patch-sanitize-error (message proposal)
-  "Replace private local paths in MESSAGE with authored operands.
+  "Replace private resource paths in MESSAGE with authored operands.
 PROPOSAL is the prepared proposal whose physical fields are private."
   (dolist (operation (and proposal (plist-get proposal :operations)) message)
-    (dolist (entry '((:physical-path :rel-path :local-path-p)
+    (dolist (entry '((:permission-path :rel-path :resource-path-p)
+                     (:permission-move-path :move-rel-path :resource-move-path-p)
+                     (:physical-path :rel-path :resource-path-p)
                      (:physical-move-path :move-rel-path
-                                          :local-move-path-p)))
+                                          :resource-move-path-p)))
       (let ((physical (plist-get operation (nth 0 entry)))
             (authored (plist-get operation (nth 1 entry)))
-            (local-p (plist-get operation (nth 2 entry))))
-        (when (and local-p physical authored)
+            (resource-p (plist-get operation (nth 2 entry))))
+        (when (and resource-p physical authored)
           (setq message
                 (replace-regexp-in-string
                  (regexp-quote physical) authored message t t)))))))
 
-(defun mevedel-tool-patch--ensure-local-session ()
-  "Return the current durable session for a local ApplyPatch operand."
+(defun mevedel-tool-patch--ensure-work-session ()
+  "Return the current durable session for a session-owned work operand."
   (let ((session (and (boundp 'mevedel--session) mevedel--session))
         (request (and (boundp 'mevedel--current-request)
                       mevedel--current-request)))
@@ -173,35 +175,34 @@ PROPOSAL is the prepared proposal whose physical fields are private."
 The authored operands stay in the regular operation fields.  Resolved
 filesystem targets are kept in private fields consumed by the existing patch
 transaction, so review and result data continue to use authored addresses.
-When MATERIALIZE is non-nil, establish the durable local-resource directory
+When MATERIALIZE is non-nil, establish the durable session work directory
 and resolve its physical targets.  Preparation used by the pipeline leaves
 local sessions untouched until permission and plan checks have completed."
-  (let (operands local-p session (local-only-p t))
+  (let (operands session-work-p session (session-only-p t))
     (dolist (operation (plist-get proposal :operations))
       (dolist (address (delq nil (list (plist-get operation :rel-path)
                                        (plist-get operation :move-rel-path))))
-        (unless (and (string-prefix-p "local://" address)
-                     (> (length address) (length "local://")))
-          (setq local-only-p nil)))
+        (unless (mevedel-resource-session-work-p address)
+          (setq session-only-p nil)))
       (dolist (entry '((:rel-path :physical-path :resource-attempt-path
-                        :local-path-p)
+                        :resource-path-p)
                        (:move-rel-path :physical-move-path
                                        :resource-attempt-move-path
-                                       :local-move-path-p)))
+                                       :resource-move-path-p)))
         (let ((address (plist-get operation (nth 0 entry))))
           (when (mevedel-tool-patch-resource-address-p address)
-            (when (string-prefix-p "local://" address)
-              (setq local-p t))
+            (when (mevedel-resource-session-work-p address)
+              (setq session-work-p t))
             (push (list operation address (nth 1 entry) (nth 2 entry)
                         (nth 3 entry))
                   operands)))))
-    (unless (and operands local-only-p)
-      (setq local-only-p nil))
+    (unless (and operands session-only-p)
+      (setq session-only-p nil))
     (setq session (and (boundp 'mevedel--session) mevedel--session))
-    (when (and local-p materialize)
-      (setq session (mevedel-tool-patch--ensure-local-session)))
+    (when (and session-work-p materialize)
+      (setq session (mevedel-tool-patch--ensure-work-session)))
     (dolist (entry operands)
-      (pcase-let ((`(,operation ,address ,physical-key ,attempt-key ,local-key)
+      (pcase-let ((`(,operation ,address ,physical-key ,attempt-key ,resource-key)
                    entry))
         (let* ((attempt
                 (mevedel-resource-prepare
@@ -211,6 +212,10 @@ local sessions untouched until permission and plan checks have completed."
                                        (mevedel-session-workspace session)))))
                physical)
           (plist-put operation attempt-key attempt)
+          (plist-put operation
+                     (if (eq physical-key :physical-path)
+                         :resource-check-path :resource-check-move-path)
+                     (mevedel-resource-attempt-write-check attempt))
           (when materialize
             (mevedel-resource-execute
              attempt (lambda (path _authored) (setq physical path)))
@@ -218,22 +223,23 @@ local sessions untouched until permission and plan checks have completed."
               (error "Resource has no writable filesystem target: %s" address))
             (plist-put operation physical-key physical)
             (plist-put operation attempt-key nil))
-          (let ((local-p (string-prefix-p "local://" address)))
-            (plist-put operation local-key local-p)
-            (plist-put operation :local-resource-p
-                       (or (plist-get operation :local-resource-p)
-                           local-p))))))
-    (plist-put proposal :local-only-p local-only-p)))
+          (plist-put operation resource-key t)
+          (plist-put operation
+                     (if (eq physical-key :physical-path)
+                         :permission-path :permission-move-path)
+                     (unless materialize
+                       (mevedel-resource-attempt-write-path attempt))))))
+    (plist-put proposal :session-only-p session-only-p)))
 
 (defun mevedel-tool-patch--materialize-resources (proposal)
   "Materialize prepared resource attempts in PROPOSAL after authorization."
-  (let (local-p)
+  (let (session-work-p)
     (dolist (operation (plist-get proposal :operations))
-      (when (or (plist-get operation :local-path-p)
-                (plist-get operation :local-move-path-p))
-        (setq local-p t)))
-    (when local-p
-      (mevedel-tool-patch--ensure-local-session))
+      (when (or (mevedel-resource-session-work-p (plist-get operation :rel-path))
+                (mevedel-resource-session-work-p (plist-get operation :move-rel-path)))
+        (setq session-work-p t)))
+    (when session-work-p
+      (mevedel-tool-patch--ensure-work-session))
     (dolist (operation (plist-get proposal :operations))
       (dolist (entry '((:resource-attempt-path :physical-path)
                        (:resource-attempt-move-path :physical-move-path)))
@@ -855,8 +861,13 @@ Returns nil when the two contents hold the same lines."
 (defun mevedel-tool-patch-planned-changes (proposal)
   "Validate PROPOSAL and return its selected filesystem changes."
   (let ((operations (plist-get proposal :operations))
+        (checks (cl-mapcan (lambda (operation)
+                             (delq nil (list (plist-get operation :resource-check-path)
+                                             (plist-get operation :resource-check-move-path))))
+                           (plist-get proposal :operations)))
         changes)
     (mevedel-tool-patch--validate-distinct-paths operations)
+    (mapc #'funcall checks)
     (dolist (operation operations)
       (pcase (plist-get operation :kind)
         ('add
@@ -865,9 +876,9 @@ Returns nil when the two contents hold the same lines."
              (when (file-exists-p path)
                (error "Cannot add existing file: %s" path))
              (push (append (list :action 'write :path path)
-                           (and (mevedel-tool-patch--local-source-p
+                           (and (mevedel-tool-patch--resource-source-p
                                  operation)
-                                '(:local-p t))
+                                '(:resource-p t))
                            (list :content (plist-get operation :content)))
                    changes))))
         ('delete
@@ -875,9 +886,9 @@ Returns nil when the two contents hold the same lines."
            (when (plist-get operation :selected)
              (mevedel-tool-patch--read-file path)
              (push (append (list :action 'delete :path path)
-                           (and (mevedel-tool-patch--local-source-p
+                           (and (mevedel-tool-patch--resource-source-p
                                  operation)
-                                '(:local-p t)))
+                                '(:resource-p t)))
                    changes))))
         ('update
          (let ((path (mevedel-tool-patch-physical-path operation))
@@ -898,9 +909,9 @@ Returns nil when the two contents hold the same lines."
                            (mevedel-tool-patch-apply-hunks
                             content hunks path)))
                (push (append (list :action 'write :path path)
-                             (and (mevedel-tool-patch--local-source-p
+                             (and (mevedel-tool-patch--resource-source-p
                                    operation)
-                                  '(:local-p t))
+                                  '(:resource-p t))
                              (list :content updated
                                    :bytes
                                    (encode-coding-string updated coding)))
@@ -915,14 +926,14 @@ Returns nil when the two contents hold the same lines."
                (when (file-exists-p destination)
                  (error "Cannot move to existing file: %s" destination))
                (push (append (list :action 'delete :path path)
-                             (and (mevedel-tool-patch--local-source-p
+                             (and (mevedel-tool-patch--resource-source-p
                                    operation)
-                                  '(:local-p t)))
+                                  '(:resource-p t)))
                      changes)
                (push (append (list :action 'write :path destination)
-                             (and (mevedel-tool-patch--local-destination-p
+                             (and (mevedel-tool-patch--resource-destination-p
                                    operation)
-                                  '(:local-p t))
+                                  '(:resource-p t))
                              (let ((updated
                                     (if-let* ((hunks
                                                (plist-get operation :hunks)))
@@ -934,6 +945,11 @@ Returns nil when the two contents hold the same lines."
                                      :bytes
                                      (encode-coding-string updated coding))))
                      changes)))))))
+    ;; Every change of a proposal commits together, so one merged freshness
+    ;; check guards each change; commit folds the shared closure into `currentp'.
+    (when checks
+      (let ((check (lambda () (cl-every #'funcall checks))))
+        (dolist (change changes) (plist-put change :resource-check check))))
     (nreverse changes)))
 
 (defun mevedel-tool-patch--snapshot (path)
@@ -953,17 +969,39 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
   (mevedel--write-file-atomically
    path content (and literal-p 'no-conversion) mode))
 
-(defun mevedel-tool-patch--restore-snapshots (snapshots)
-  "Restore filesystem SNAPSHOTS and return failed path/error pairs."
+(defun mevedel-tool-patch--same-snapshot-p (left right)
+  "Return non-nil when LEFT and RIGHT name the same bytes, absence, and mode."
+  (and left right
+       (cl-every (lambda (key) (equal (plist-get left key) (plist-get right key)))
+                 '(:path :exists :bytes :mode))))
+
+(defun mevedel-tool-patch--assert-current (currentp)
+  "Signal unless CURRENTP, when non-nil, still confirms the caller's authority."
+  (when (and currentp (not (funcall currentp)))
+    (error "Patch ownership is unavailable")))
+
+(defun mevedel-tool-patch--restore-snapshots (snapshots expected &optional currentp mutate)
+  "Restore SNAPSHOTS only from their transaction-owned EXPECTED after-state.
+Return failed path/error pairs. Skip unattempted paths and already restored
+files. CURRENTP, when supplied, must still authorize each rollback mutation.
+MUTATE, when supplied, performs each before/after snapshot replacement."
   (let (failures)
     (dolist (snapshot snapshots (nreverse failures))
-      (let ((path (plist-get snapshot :path)))
-        (condition-case err
-            (if (plist-get snapshot :exists)
-                (mevedel-tool-patch--write-file
-                 path (plist-get snapshot :bytes) (plist-get snapshot :mode) t)
-              (when (file-exists-p path) (delete-file path)))
-          (error (push (cons path err) failures)))))))
+      (let* ((path (plist-get snapshot :path))
+             (after (seq-find (lambda (item) (equal path (plist-get item :path))) expected)))
+        (when after
+          (condition-case err
+              (unless (mevedel-tool-patch--same-snapshot-p snapshot (mevedel-tool-patch--snapshot path))
+                (mevedel-tool-patch--assert-current currentp)
+                (unless (mevedel-tool-patch--same-snapshot-p after (mevedel-tool-patch--snapshot path))
+                  (error "File changed after the transaction write: %s" path))
+                (if mutate
+                    (funcall mutate after snapshot)
+                  (if (plist-get snapshot :exists)
+                    (mevedel-tool-patch--write-file
+                     path (plist-get snapshot :bytes) (plist-get snapshot :mode) t)
+                    (delete-file path))))
+            (error (push (cons path err) failures))))))))
 
 (defun mevedel-tool-patch-missing-parent-directories (path)
   "Return missing parent directories for PATH, outermost first."
@@ -974,10 +1012,25 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
             (file-name-directory (directory-file-name directory))))
     missing))
 
-(defun mevedel-tool-patch-commit (changes)
-  "Commit CHANGES as one filesystem and visited-buffer transaction."
+(defun mevedel-tool-patch-commit (changes &optional currentp mutate)
+  "Commit CHANGES as one filesystem and visited-buffer transaction.
+Each change may include :before, a snapshot whose bytes/absence/mode must still
+match before any write. Recheck snapshots before individual writes. CURRENTP,
+when supplied, must authorize writes, synchronization, and rollback mutations.
+MUTATE, when supplied, replaces the default filesystem mutation. It receives
+before/after snapshots and must check freshness and fence the replacement on
+the target; the same callback handles rollback. Buffer synchronization stays
+inside this transaction.
+Rollback never overwrites an intervening edit; it reports incomplete recovery."
   (require 'mevedel-directive)
   (require 'mevedel-overlays)
+  (let ((owner-current-p currentp)
+        (checks (delete-dups (delq nil (mapcar (lambda (change) (plist-get change :resource-check))
+                                               changes)))))
+    (when checks
+      (setq currentp (lambda ()
+                       (and (or (null owner-current-p) (funcall owner-current-p))
+                            (cl-every #'funcall checks))))))
   (dolist (change changes)
     (when-let* (((eq (plist-get change :action) 'write))
                 (buffer (find-buffer-visiting (plist-get change :path)))
@@ -1065,10 +1118,12 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
                 (goto-char (plist-get snapshot :point))
                 (set-visited-file-modtime (plist-get snapshot :modtime))
                 (set-buffer-modified-p (plist-get snapshot :modified))))))))
+    (mevedel-tool-patch--assert-current currentp)
     (let* ((snapshots (mapcar (lambda (change)
                                 (mevedel-tool-patch--snapshot
                                  (plist-get change :path)))
                               changes))
+           (expected nil)
            (created-directories
             (delete-dups
              (cl-mapcan
@@ -1083,22 +1138,36 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
                    (lambda (change)
                      (when-let* ((buffer (find-buffer-visiting
                                           (plist-get change :path))))
-                       (buffer-snapshot buffer)))
+                       (append (buffer-snapshot buffer)
+                               (list :path (plist-get change :path)
+                                     :expected-content (plist-get change :content)))))
                    changes))))
+      (cl-loop for change in changes for snapshot in snapshots do
+               (when (and (plist-member change :before)
+                          (not (mevedel-tool-patch--same-snapshot-p (plist-get change :before) snapshot)))
+                 (error "File changed before the transaction: %s" (plist-get change :path))))
       (dolist (snapshot buffer-snapshots)
         (when-let* ((group (plist-get snapshot :group)))
           (with-current-buffer (plist-get snapshot :buffer)
             (activate-change-group group))))
       (condition-case err
           (progn
-            (dolist (change changes)
-              (pcase (plist-get change :action)
+            (cl-loop for change in changes for snapshot in snapshots do
+              (mevedel-tool-patch--assert-current currentp)
+              (unless (mevedel-tool-patch--same-snapshot-p snapshot (mevedel-tool-patch--snapshot (plist-get change :path)))
+                (error "File changed before its transaction write: %s" (plist-get change :path)))
+              (push (list :path (plist-get change :path) :exists (eq (plist-get change :action) 'write)
+                          :bytes (when (eq (plist-get change :action) 'write)
+                                   (if (plist-member change :bytes) (plist-get change :bytes)
+                                     (encode-coding-string (plist-get change :content) 'utf-8-unix)))
+                          :mode (when (eq (plist-get change :action) 'write)
+                                  (or (plist-get change :mode) (plist-get snapshot :mode) (default-file-modes))))
+                    expected)
+              (if mutate
+                  (funcall mutate snapshot (car expected))
+                (pcase (plist-get change :action)
                 ('write
                  (let* ((path (plist-get change :path))
-                        (snapshot (seq-find
-                                   (lambda (item)
-                                     (equal path (plist-get item :path)))
-                                   snapshots))
                         (literal-p (plist-member change :bytes)))
                    (mevedel-tool-patch--write-file
                     path (if literal-p
@@ -1109,8 +1178,9 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
                         (default-file-modes))
                     literal-p)))
                 ('delete
-                 (delete-file (plist-get change :path)))))
+                 (delete-file (plist-get change :path))))))
             (dolist (change changes)
+              (mevedel-tool-patch--assert-current currentp)
               (when-let* ((buffer (find-buffer-visiting
                                    (plist-get change :path))))
                 (with-current-buffer buffer
@@ -1128,30 +1198,52 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
                                 (insert (plist-get change :content)))
                               (set-visited-file-modtime)
                               (replace-region-contents (point-min) (point-max) source)
+                              (unless (equal (buffer-substring-no-properties (point-min) (point-max))
+                                             (plist-get change :content))
+                                (error "Buffer changed during the transaction: %s" (plist-get change :path)))
                               (set-visited-file-modtime)
                               (set-buffer-modified-p nil))
                           (kill-buffer source))))))))
+            (mevedel-tool-patch--assert-current currentp)
+            (dolist (after expected)
+              (unless (mevedel-tool-patch--same-snapshot-p after (mevedel-tool-patch--snapshot (plist-get after :path)))
+                (error "File changed during the transaction: %s" (plist-get after :path))))
             (dolist (snapshot buffer-snapshots)
               (when-let* ((group (plist-get snapshot :group)))
                 (with-current-buffer (plist-get snapshot :buffer)
                   (accept-change-group group)))))
-        (error
-         (let ((rollback-failures
-                (mevedel-tool-patch--restore-snapshots snapshots)))
+        ((error quit)
+         (let* ((inhibit-quit t)
+                (rollback-failures
+                (mevedel-tool-patch--restore-snapshots snapshots expected currentp mutate)))
+           (dolist (snapshot buffer-snapshots)
+             (when-let* ((buffer (plist-get snapshot :buffer)) ((buffer-live-p buffer)))
+               (let ((path (plist-get snapshot :path))
+                     (text (with-current-buffer buffer
+                             (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max))))))
+                 (when (or (assoc path rollback-failures)
+                           (not (or (equal text (plist-get snapshot :content))
+                                    (equal text (plist-get snapshot :expected-content)))))
+                   (plist-put snapshot :preserve t)
+                   (unless (assoc path rollback-failures)
+                     (push (cons path '(error "Buffer changed during the transaction")) rollback-failures))))))
            (dolist (snapshot (reverse buffer-snapshots))
              (when-let* ((group (plist-get snapshot :group)))
                (with-current-buffer (plist-get snapshot :buffer)
                  (let ((inhibit-modification-hooks t)
                        (inhibit-read-only t))
-                   (cancel-change-group group)))))
+                   (if (plist-get snapshot :preserve)
+                       (progn (accept-change-group group) (set-buffer-modified-p t))
+                     (cancel-change-group group))))))
            (dolist (snapshot buffer-snapshots)
-             (restore-buffer snapshot))
+             (unless (plist-get snapshot :preserve) (restore-buffer snapshot)))
            (dolist (directory (reverse created-directories))
-             (when (and (file-directory-p directory)
-                        (null (directory-files
-                               directory nil
-                               directory-files-no-dot-files-regexp)))
-               (delete-directory directory)))
+             (condition-case failure
+                 (when (and (file-directory-p directory)
+                            (null (directory-files directory nil directory-files-no-dot-files-regexp)))
+                   (mevedel-tool-patch--assert-current currentp)
+                   (delete-directory directory))
+               (error (push (cons directory failure) rollback-failures))))
            (if rollback-failures
                (signal 'mevedel-tool-patch-partial-rollback
                        (list err (mapcar #'car rollback-failures)))
@@ -1170,7 +1262,7 @@ When LITERAL-P is non-nil, write CONTENT as literal bytes."
 Refresh file tracking immediately and diagnostics before continuation."
   (mevedel-tool-patch--assert-buffers-unmodified changes)
   (dolist (change changes)
-    (unless (plist-get change :local-p)
+    (unless (plist-get change :resource-p)
       (mevedel-edit-diagnostics-before-edit
        data-buffer (plist-get change :path))))
   (mevedel-tool-patch-commit changes)
@@ -1178,14 +1270,14 @@ Refresh file tracking immediately and diagnostics before continuation."
                             (buffer-local-value 'mevedel--session
                                                 data-buffer))))
     (dolist (change changes)
-      (unless (plist-get change :local-p)
+      (unless (plist-get change :resource-p)
         (ignore-errors
           (mevedel-session-record-file-access
            session (plist-get change :path) 'modify)))))
   (cl-labels
       ((finish (remaining)
          (let ((remaining
-                (cl-remove-if (lambda (change) (plist-get change :local-p))
+                (cl-remove-if (lambda (change) (plist-get change :resource-p))
                               remaining)))
            (if remaining
                (mevedel-edit-diagnostics-after-edit
@@ -1596,22 +1688,26 @@ file buttons, rewritten links, or inline images."
    (mevedel-tool-patch-parse (plist-get args :patch))))
 
 (defun mevedel-tool-patch-get-paths-from-proposal (proposal)
-  "Return ordinary filesystem paths affected by prepared PROPOSAL.
+  "Return the filesystem paths whose write policy governs prepared PROPOSAL.
 
-Authored resource operands are deliberately excluded even when preparation
-has added private physical paths to their operation records."
+Ordinary operands contribute their paths.  Authored resource operands are
+already authorized by their resource attempt, so they contribute only the
+backing path preparation recorded for a writable resource, if any."
   (delete-dups
    (cl-mapcan
     (lambda (operation)
       (delq nil
             (cl-mapcar
-             (lambda (address path)
-               (unless (mevedel-tool-patch-resource-address-p address)
+             (lambda (address path permission)
+               (if (mevedel-tool-patch-resource-address-p address)
+                   permission
                  path))
              (list (plist-get operation :rel-path)
                    (plist-get operation :move-rel-path))
              (list (mevedel-tool-patch-physical-path operation)
-                   (mevedel-tool-patch--physical-move-path operation)))))
+                   (mevedel-tool-patch--physical-move-path operation))
+             (list (plist-get operation :permission-path)
+                   (plist-get operation :permission-move-path)))))
     (plist-get proposal :operations))))
 
 (defun mevedel-tool-patch--file-heading (file)

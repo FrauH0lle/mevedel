@@ -164,7 +164,7 @@ provider/model/effort metadata, not the generated summary text.
 
 ## Session-owned local state
 
-`local/` is created lazily when the first durable write to `local://` succeeds.
+`local/` is created lazily when the first durable write to a session-owned `work://` descendant succeeds.
 It is shared by the root and its retained-agent tree, survives save, resume,
 and rename, and is removed when its owning session is cleaned up. A Conversation
 or Worktree Fork copies it into independent child state; Rewind leaves it
@@ -173,8 +173,11 @@ discovery, LSP inputs, directive patch captures, or Git summary inputs. An
 ephemeral request without durable session ownership cannot create or mutate it.
 
 `local/plans/` is the shared durable plan namespace. The parent and retained
-agents use `local://plans/...` for current and accepted plans alongside shared
-notes, findings, contracts, and handoffs. Accepted archives are always canonical
+agents use `work://plans/...` for current and accepted plans. Working
+notes, findings, contracts, and handoffs default to workspace-owned
+`work://shared/`, outside session persistence. These shared files survive session
+cleanup and are not copied by Fork; sessions in the same workspace use the same
+files. Separate workspace roots have separate shared areas. Accepted archives are always canonical
 `accepted-TIMESTAMP.md` names, so every managed plan is addressable. The layout
 is intentionally current: there is no migration or compatibility reader for an
 older top-level `plans/` directory or persisted plan format.
@@ -185,11 +188,11 @@ plan state rather than free-form local content. A Fork drops the copied
 accepted at the fork point, after re-verifying its recorded hash. The child
 therefore starts without an inherited current-plan draft.
 
-Session-owned `local://`, `artifact://`, `agent://`, and `history://` addresses
+Session-owned `work://` descendants, `artifact://`, `agent://`, and `history://` addresses
 belong to the session's execution target. Client-local skill and memory roots
 retain their origin, while MCP addresses use the current configured connection;
 no resource address changes a session's target. See
-[`address-to-resource.md`](address-to-resource.md#local).
+[`address-to-resource.md`](address-to-resource.md#work).
 
 The workspace identity is one opaque 64-character lowercase hexadecimal value
 stored in `.mevedel/workspace-id` when the first session is materialized.  The
@@ -693,7 +696,7 @@ Collection is a mark-and-sweep, never an age cap, because manifests are
 chained: a committed manifest carries unchanged entries forward verbatim rather
 than copying their bytes, so a retained head resolves artifacts through the
 generations that first wrote them.  Deleting by age would break the current
-head.  Three kinds of generation are retained: one per distinct settled turn
+head.  Retained roots include journal capture pins, one per distinct settled turn
 state, which is what a restore targets; the newest
 `mevedel-session-publication-keep-recent-generations` regardless; and the
 reference closure of both.  A generation captured mid-turn is not a settled
@@ -707,7 +710,8 @@ retained blobs keep their original directories alive.  Making it exactly one
 directory per turn would mean rewriting each retained head as self-contained,
 which is the copying that carry-forward exists to avoid.
 
-`ponytail:` collection has no read pins.  The grace window covers the race it
+`ponytail:` ordinary transcript readers have no read pins; journal captures
+have explicit durable pins. The grace window covers the reader race it
 replaces them for -- a follower re-reads the owner's current head rather than
 pinning it, and the newest generations are retained regardless -- but a reader
 that resolved an older non-boundary head can still lose its bytes, and will see
@@ -1298,7 +1302,7 @@ revalidates resolved workspace containment immediately before Git mutation.
 Renaming a materialized session preserves live execution ownership. Retained
 client-local spool paths and target-native remote recovery paths are retargeted
 in their own domains immediately after the session directory moves, before
-process filters can append further output. Session-relative `local://`
+process filters can append further output. Session-relative `work://`
 addresses remain valid within the renamed session even when no new output
 arrives after the move.
 
@@ -1410,6 +1414,35 @@ deletes a newer owner's generation.  Retry can normalize the same client's
 still-live publishing generation back to active before reserving a new window.
 
 ### Auto-cleanup
+
+Workspace journal expiry runs before session-cleanup eligibility checks, so
+disabling session expiry or using a TRAMP workspace does not disable it.
+`mevedel-journal-max-age-days` independently defaults to 365 (nil disables it).
+An hourly opportunity expires up to 50 unreferenced digests through recoverable
+accepted manifests. Pending captures, review evidence pins, and capture coverage
+survive; see [memory](memory.md) for the journal retention contract.
+
+Pending journal capture pins under a session's `.journal-pins/` prevent that
+session from expiring. Publication-generation collection also retains each
+pinned head and every generation referenced by its manifest. Pins survive
+independently of a live buffer; publication or explicit discard must release
+them. An unreadable pin blocks generation collection, and even a malformed
+pin keeps its session from expiring. Completed root-turn autosave now creates
+these pins before generation collection. A checkpoint containing all of an
+unsealed predecessor's turns replaces that predecessor's pin only after its
+own pin and ready marker are durable. Compaction success, root-buffer close,
+and Emacs exit seal completed checkpoints. Turn completion, successful root
+compaction, and session close queue background processing; Emacs exit cancels
+queued/active processing and starts no inference. Accepted digest outcomes
+recover on the next processing opportunity before replacement inference.
+Workspace activation also queues abandoned-checkpoint recovery before processing.
+It repairs unready captures and seals frozen completed work under temporary source
+authority, without resuming a conversation or retaining authority during inference.
+Live or foreign PID holders, unreadable locks, live portable leases, publishing
+leases, unresolved mutation, and reserved transfers are left for normal session
+recovery. Expired ordinary portable owners are fenced through generation election;
+the committed session head is preserved. Recovery completes interrupted superseded
+pin release only after checking the successor's retained turn coverage.
 
 `mevedel-session-max-age-days` (default 30) deletes expired sessions from the
 `mevedel` session chooser and from `kill-emacs-hook`, including sessions whose sidecars

@@ -58,6 +58,49 @@
 (defvar mevedel-tool-fs-search--resource-dispatching nil
   "Non-nil while dispatching a resource attempt into a search handler.")
 
+(defvar mevedel-tool-fs-search--teardown nil
+  "Optional cleanup for copied virtual documents if the helper is torn down.")
+
+(defun mevedel-tool-fs-search--documents (callback args descriptor operation)
+  "Search validated virtual documents from DESCRIPTOR with OPERATION.
+Reuse ordinary search options in ARGS and send the normal result to CALLBACK.
+Only the authorized document snapshots enter the helper's read scope.  Like
+remote media conversion, this processes an already transferred copy locally."
+  (let* ((documents (plist-get descriptor :resource-search-documents))
+         (address (plist-get descriptor :address))
+         (directory (make-temp-file "mevedel-resource-search-" t))
+         (cleanup (lambda () (ignore-errors (delete-directory directory t)))))
+    (condition-case nil
+        (let ((default-directory (file-name-as-directory directory))
+              (mevedel--session nil)
+              (mevedel-tool-fs-search--resource-dispatching t)
+              (mevedel-tool-fs-search--resource-address address)
+              (mevedel-tool-fs-search--teardown cleanup)
+              (native (copy-sequence args)))
+          (dolist (document documents)
+            (unless (and (stringp (car document))
+                         (equal (car document) (file-name-nondirectory (car document)))
+                         (not (member (car document) '("" "." "..")))
+                         (stringp (cdr document)))
+              (error "Invalid resource document"))
+            (let ((coding-system-for-write 'utf-8-unix))
+              (write-region (cdr document) nil
+                            (file-name-concat directory (car document))
+                            nil 'silent)))
+          (plist-put native :path nil)
+          (plist-put native :resource-roots
+                     (list (list :path directory
+                                 :address (format "%s://"
+                                                  (plist-get descriptor :scheme)))))
+          (plist-put native :resource-address address)
+          (funcall operation
+                   (lambda (result)
+                     (unwind-protect (funcall callback result) (funcall cleanup)))
+                   native))
+      (error
+       (funcall cleanup)
+       (error "Could not search resource %s" address)))))
+
 (defun mevedel-tool-fs-search--visible-path (path)
   "Return PATH in the current search operation's visible domain."
   (mevedel-tool-fs-visible-path path
@@ -79,6 +122,7 @@ filename is not mistaken for a line-number delimiter."
          (directory (file-name-as-directory root)))
     (cond
      ((string= line root) (length line))
+     ((and (string-prefix-p directory line) (string-search "\0" line)))
      ((and (string-prefix-p root line)
            (< (length root) (length line))
            (= (aref line (length root)) ?:))
@@ -99,12 +143,13 @@ filename is not mistaken for a line-number delimiter."
               address)))
 
 (defun mevedel-tool-fs-search--rewrite-resource-search-output
-    (output root address &optional path-list-p)
+    (output root address &optional path-list-p separator)
   "Replace private search paths in OUTPUT with logical ADDRESS paths.
 
 Only path prefixes emitted by ripgrep are rewritten.  Match text and
 context lines remain untouched.  PATH-LIST-P selects NUL-delimited file-list
-output, used by Glob; content output keeps its match suffixes."
+output, used by Glob.  SEPARATOR replaces each NUL path delimiter in other
+output: a newline for headings, or a colon for counts."
   (if (or (null output) (null root) (null address))
       output
     (if (string-search "\0" output)
@@ -131,6 +176,7 @@ output, used by Glob; content output keeps its match suffixes."
                 (push (mevedel-tool-fs-search--resource-search-rewrite-path
                        address root path)
                       pieces)
+                (push separator pieces)
                 (setq copy-start (1+ nul)
                       scan (1+ nul))))
             (push (substring output copy-start) pieces)
@@ -156,12 +202,13 @@ output, used by Glob; content output keeps its match suffixes."
          lines "\n")))))
 
 (defun mevedel-tool-fs-search--rewrite-resource-search-roots
-    (output roots &optional path-list-p)
+    (output roots &optional path-list-p separator)
   "Replace private paths in multi-root resource OUTPUT.
 
 ROOTS are plists with `:path', `:address-prefix', and optional `:label'.
 The same path-prefix and containment checks as single-root rewriting apply
-before a logical address is emitted."
+before a logical address is emitted.  PATH-LIST-P selects file lists;
+otherwise SEPARATOR replaces the NUL path delimiter."
   (if (or (null output) (null roots))
       output
     (let ((roots
@@ -205,13 +252,17 @@ before a logical address is emitted."
                        (plist-get root-data :address))
                    root candidate
                    (plist-get root-data :address-prefix)))
+             for nul-p = (and candidate-end
+                              (< candidate-end (length line))
+                              (= (aref line candidate-end) 0))
              if candidate-end
              return
              (if logical
                  (concat logical
                          (when-let* ((label (plist-get root-data :label)))
                            (concat "\t" label))
-                         (substring line candidate-end))
+                         (and nul-p separator)
+                         (substring line (if nul-p (1+ candidate-end) candidate-end)))
                (format "Error: Resource search returned an unsafe path")))
             line))
          (split-string output "\n" nil)
@@ -252,10 +303,11 @@ addresses."
           (setq output "Error: Resource search returned an unsafe path"))))))
 
 (defun mevedel-tool-fs-search--rewrite-resource-handler-result
-    (result root address &optional path-list-p)
+    (result root address &optional path-list-p separator)
   "Return RESULT with private search paths rewritten for ADDRESS.
 
-Scrub ROOT wherever helper diagnostics include it."
+Scrub ROOT wherever helper diagnostics include it.  PATH-LIST-P and
+SEPARATOR describe the ripgrep output shape."
   (if (and (proper-list-p result)
            (plist-member result :result)
            (stringp (plist-get result :result)))
@@ -264,7 +316,7 @@ Scrub ROOT wherever helper diagnostics include it."
          copy :result
          (mevedel-tool-fs-search--scrub-resource-search-output
           (mevedel-tool-fs-search--rewrite-resource-search-output
-           (plist-get result :result) root address path-list-p)
+           (plist-get result :result) root address path-list-p separator)
           (list (list :path root :address address))))
         copy)
     result))
@@ -496,7 +548,9 @@ and optional :path."
         (mevedel-resource-execute
          attempt
          (lambda (path authored)
-           (if (mevedel-tool-fs-search--resource-search-roots path)
+           (if (and (listp path) (plist-member path :resource-search-documents))
+               (mevedel-tool-fs-search--documents callback args path #'mevedel-tool-fs-search-glob)
+             (if (mevedel-tool-fs-search--resource-search-roots path)
                (let ((native-args (copy-sequence args))
                      (mevedel-tool-fs-search--resource-address authored)
                      (mevedel-tool-fs-search--resource-dispatching t))
@@ -520,7 +574,7 @@ and optional :path."
                      callback
                      (mevedel-tool-fs-search--rewrite-resource-handler-result
                       result path authored t)))
-                  native-args))))))
+                  native-args)))))))
       (let* ((pattern (plist-get args :pattern))
              (path (plist-get args :path))
              (resource-roots (plist-get args :resource-roots)))
@@ -580,6 +634,7 @@ and optional :path."
                                       mevedel-tool-fs-search--glob-max-output-bytes))))))))
                  "mevedel-glob" (cons "rg" rg-args) paths nil
                  :session session :owner (mevedel-current-origin)
+                 :teardown-callback mevedel-tool-fs-search--teardown
                  :timeout mevedel-tool-fs-search-timeout))
             (let ((path (car paths)))
               (if-let* ((normalized
@@ -614,6 +669,7 @@ and optional :path."
                                         mevedel-tool-fs-search--glob-max-output-bytes)))))))
                      "mevedel-glob" (cons "rg" rg-args) (list path) nil
                      :session session :owner (mevedel-current-origin)
+                     :teardown-callback mevedel-tool-fs-search--teardown
                      :timeout mevedel-tool-fs-search-timeout))
                 (funcall callback
                          (mevedel-tool-fs-handler-result
@@ -631,7 +687,9 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
         (mevedel-resource-execute
          attempt
          (lambda (path authored)
-           (if (mevedel-tool-fs-search--resource-search-roots path)
+           (if (and (listp path) (plist-member path :resource-search-documents))
+               (mevedel-tool-fs-search--documents callback args path #'mevedel-tool-fs-search-grep)
+             (if (mevedel-tool-fs-search--resource-search-roots path)
                (let ((native-args (copy-sequence args))
                      (mevedel-tool-fs-search--resource-address authored)
                      (mevedel-tool-fs-search--resource-dispatching t))
@@ -652,11 +710,13 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                  (plist-put native-args :path path)
                  (mevedel-tool-fs-search-grep
                   (lambda (result)
-                    (funcall
-                     callback
-                     (mevedel-tool-fs-search--rewrite-resource-handler-result
-                      result path authored)))
-                  native-args))))))
+                    (let ((mode (mevedel-tool-string-arg args :output_mode "files_with_matches")))
+                      (funcall
+                       callback
+                       (mevedel-tool-fs-search--rewrite-resource-handler-result
+                        result path authored (equal mode "files_with_matches")
+                        (if (equal mode "content") "\n" ":")))))
+                  native-args)))))))
       (let* ((pattern (plist-get args :pattern))
              (path (mevedel-tool-string-arg args :path "."))
              (resource-roots (plist-get args :resource-roots))
@@ -713,7 +773,7 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                                    path file-glob))))
             (when vcs-metadata-p
               (setq path nil))
-            (when (and path file-glob (file-directory-p path))
+            (when (and (null resource-roots) path file-glob (file-directory-p path))
               (if normalized
                   (setq path (car normalized)
                         file-glob (cdr normalized))
@@ -771,7 +831,9 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                          (let ((rewritten
                                 (mevedel-tool-fs-search--scrub-resource-search-output
                                  (mevedel-tool-fs-search--rewrite-resource-search-roots
-                                  (buffer-string) resource-roots)
+                                  (buffer-string) resource-roots
+                                  (equal output-mode "files_with_matches")
+                                  (if (equal output-mode "content") "\n" ":"))
                                  resource-roots)))
                            (erase-buffer)
                            (insert rewritten)))
@@ -815,6 +877,7 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                           mevedel-tool-fs-search--grep-max-output-bytes))))))
                  "mevedel-grep" (cons "rg" rg-args) search-roots nil
                  :session session :owner (mevedel-current-origin)
+                 :teardown-callback mevedel-tool-fs-search--teardown
                  :timeout mevedel-tool-fs-search-timeout)))))))))
 
 (provide 'mevedel-tool-fs-search)

@@ -60,11 +60,6 @@
 (autoload 'mevedel-telemetry-current-session "mevedel-telemetry")
 (autoload 'mevedel-telemetry-record "mevedel-telemetry")
 
-;; `diff'
-(declare-function diff-no-select "diff"
-                  (old new &optional switches no-async buf))
-(autoload 'diff-no-select "diff")
-
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace--project-workspace "mevedel-workspace" ())
@@ -380,36 +375,6 @@ are still valid when their turn comes."
           (insert old-text)))
       (buffer-string))))
 
-(defun mevedel-buddy--unified-diff (original current)
-  "Return the unified diff hunks between ORIGINAL and CURRENT, or nil."
-  (let ((original-buffer (generate-new-buffer " *mevedel-buddy-original*"))
-        (current-buffer (generate-new-buffer " *mevedel-buddy-current*"))
-        (output-buffer (generate-new-buffer " *mevedel-buddy-diff*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer original-buffer (insert original))
-          (with-current-buffer current-buffer (insert current))
-          ;; Six lines of context rather than diff's default three: a
-          ;; review covers the region around a change, so that region has
-          ;; to reach the model, not just the changed lines.
-          (diff-no-select original-buffer current-buffer "-U6" t
-                          output-buffer)
-          (with-current-buffer output-buffer
-            (goto-char (point-min))
-            (when (re-search-forward "^@@" nil t)
-              (beginning-of-line)
-              ;; `diff-no-select' appends its own completion notice; the
-              ;; hunks end where that notice begins.
-              (let ((start (point))
-                    (end (if (re-search-forward "^Diff finished" nil t)
-                             (match-beginning 0)
-                           (point-max))))
-                (string-trim-right
-                 (buffer-substring-no-properties start end))))))
-      (kill-buffer original-buffer)
-      (kill-buffer current-buffer)
-      (kill-buffer output-buffer))))
-
 (defun mevedel-buddy--number-diff-lines (diff)
   "Return DIFF with current buffer line numbers on its live lines.
 
@@ -449,7 +414,11 @@ changed.  Edits that cancel out yield no section at all."
                          (buffer-substring-no-properties
                           (point-min) (point-max))))
               ((not (string= original current)))
-              (diff (mevedel-buddy--unified-diff original current)))
+              (diff
+               ;; Six lines of context rather than diff's default three: a
+               ;; review covers the region around a change, so that region
+               ;; has to reach the model, not just the changed lines.
+               (mevedel--unified-diff original current 6)))
     (concat (format "=== Buffer: %s  Mode: %s  Scope: %s  Cursor: line %d ===\n"
                     buffer-name
                     (plist-get (car records) :mode)

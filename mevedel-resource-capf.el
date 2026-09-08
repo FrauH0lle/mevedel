@@ -317,6 +317,14 @@ History candidates include the root and retained conversations."
                   (push entry entries)))))))
     (nreverse entries)))
 
+(defun mevedel-resource-capf--journal (tail metadata)
+  "Complete published journal filenames matching TAIL from METADATA."
+  (let (entries)
+    (dolist (entry (plist-get metadata :journal) (nreverse entries))
+      (let ((file (mevedel-resource-encode-component (plist-get entry :file))))
+        (when (string-prefix-p tail file)
+          (push (cons (concat "journal://" file) " [journal] dated evidence") entries))))))
+
 (defun mevedel-resource-capf--mcp (tail metadata)
   "Complete MCP servers and advertised resource metadata for TAIL."
   (let ((servers (plist-get metadata :mcp-servers))
@@ -384,7 +392,7 @@ History candidates include the root and retained conversations."
             (push (cons address (format " [%s] resource" scheme)) entries))))
       (mevedel-resource-capf--result start end (nreverse entries)))
      ((string-match
-       "\\`\\(local\\|artifact\\|skill\\|agent\\|history\\|memory\\|mcp\\|mevedel\\)://\\(.*\\)\\'"
+       "\\`\\(work\\|artifact\\|skill\\|agent\\|history\\|memory\\|journal\\|mcp\\|mevedel\\)://\\(.*\\)\\'"
        token)
       (let* ((scheme (intern (match-string 1 token)))
              (tail (match-string 2 token))
@@ -392,7 +400,20 @@ History candidates include the root and retained conversations."
                         (list :session session) scheme)))
         (setq entries
               (pcase scheme
-                ((or 'local 'artifact 'mevedel)
+                ('work
+                 (if (string-prefix-p (concat mevedel-resource--shared-work-component "/") tail)
+                     (mevedel-resource-capf--path-entries
+                      'work (plist-get metadata :shared-root)
+                      (substring tail (1+ (length mevedel-resource--shared-work-component)))
+                      metadata mevedel-resource-shared-work-address)
+                   (append
+                    (when (and (plist-get metadata :shared-root)
+                               (string-prefix-p tail mevedel-resource--shared-work-component))
+                      (list (cons mevedel-resource-shared-work-address " [workspace working files]")))
+                    (mevedel-resource-capf--path-entries
+                     'work (cdr (assq 'work (plist-get metadata :roots)))
+                     tail metadata))))
+                ((or 'artifact 'mevedel)
                  (mevedel-resource-capf--path-entries
                   scheme (cdr (assq scheme (plist-get metadata :roots)))
                   tail metadata))
@@ -400,6 +421,7 @@ History candidates include the root and retained conversations."
                 ('agent (mevedel-resource-capf--agents tail metadata))
                 ('history (mevedel-resource-capf--agents tail metadata t))
                 ('memory (mevedel-resource-capf--memory tail metadata))
+                ('journal (mevedel-resource-capf--journal tail metadata))
                 ('mcp (mevedel-resource-capf--mcp tail metadata)))))
         (mevedel-resource-capf--result start end entries)))))
 

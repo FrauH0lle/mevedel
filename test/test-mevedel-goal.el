@@ -163,7 +163,7 @@
           ;; Goal context names the plan by address, never by storage path.
           (let ((line (cdr (assoc "plan-reference-line" replacements))))
             (should (string-match-p
-                     "local://plans/accepted-20260813-120000\\.md" line))
+                     "work://plans/accepted-20260813-120000\\.md" line))
             (should-not (string-match-p (regexp-quote root) line))))
       (delete-directory root t)))))
 

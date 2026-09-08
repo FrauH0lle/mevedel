@@ -394,11 +394,12 @@ handler instead of leaving a stale `gptel-tool` captured by an older preset.
 
 ## Resource addresses in filesystem-shaped tools
 
-The closed resource resolver accepts the eight documented `scheme://` families
+The closed resource resolver accepts the nine documented `scheme://` families
 without adding a model-facing tool. The operation matrix is deliberately
-narrow: `Read` accepts every family; `Glob` and `Grep` accept `local://`,
-`artifact://`, `skill://`, `memory://`, and `mevedel://`; `ApplyPatch` accepts
-`local://` and ordinary filesystem paths. Unsupported combinations fail
+narrow: `Read` accepts every family; `Glob` and `Grep` accept `work://`,
+`artifact://`, `skill://`, `memory://`, `journal://`, and `mevedel://`;
+`ApplyPatch` accepts `work://`, explicit memory file descendants, and ordinary
+filesystem paths. Unsupported combinations fail
 explicitly. Bare addresses list only when the family defines a discovery
 listing. `mevedel://` is always available, including without a session, and
 exposes only packaged Markdown documentation.
@@ -424,11 +425,11 @@ roots stay private. Directory-backed resource searches use the existing
 confined helper boundary with exact read roots; virtual resources stay
 in-process. A mixed local/ordinary `ApplyPatch` remains one proposal and one
 atomic review transaction outside standalone/sticky Plan mode. Standalone/sticky
-Plan mode keeps all-local `ApplyPatch` available, including proposals from
-retained agents, but rejects any ordinary, non-local, or bare endpoint before
+Plan mode keeps session-only `ApplyPatch` available, including proposals from
+retained agents, but rejects any ordinary, shared, memory, or bare endpoint before
 local materialization. Mixed local/ordinary and ordinary-only proposals
 therefore fail before either side is touched. Directive Planning remains
-strictly read-only and does not allow `ApplyPatch`, including all-local
+strictly read-only and does not allow `ApplyPatch`, including session-only
 proposals, or `Eval`. See
 [`address-to-resource.md`](address-to-resource.md) for canonical grammar,
 freshness, and lifecycle contracts.
@@ -688,6 +689,11 @@ terminal outcome.
 Native tool implementations launch short-lived external helpers through the
 `mevedel-execution.el` facade, backed by the same opaque process owner used by
 Bash and batch Eval.
+The external-helper execution boundary returns an idempotent cancellation
+function. Sessionless request owners can stop their own helper children while
+preserving normal terminal delivery and cleanup. Glob/Grep return this handle
+when they launch a helper; synchronous no-match paths settle directly.
+
 The caller supplies a structured argv, authorized read paths, and explicit
 writable artifact directories. The facade adds a private scratch working
 directory, applies `mevedel-sandbox-mode`, and removes the scratch directory

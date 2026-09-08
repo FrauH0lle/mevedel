@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Generates validated continuation and handoff context summaries from frozen,
-;; neutrally projected evidence.  Consumers own evidence selection, retries,
+;; Generates validated continuation, handoff, and journal digest text from
+;; frozen, neutrally projected evidence.  Consumers own evidence selection, retries,
 ;; lifecycle hooks, persistence, and application.
 
 ;;; Code:
@@ -26,13 +26,18 @@
 (defvar gptel-use-tools)
 
 ;; `gptel-request'
+(declare-function gptel--handle-wait "ext:gptel-request" (fsm))
 (declare-function gptel-abort "ext:gptel-request" (buf))
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(declare-function gptel-make-fsm "ext:gptel-request" (&rest slots))
 (declare-function gptel-request "ext:gptel-request")
+(defvar gptel-request--handlers)
 
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
+(declare-function mevedel-model-supported-efforts "mevedel-models" (model))
 (declare-function mevedel-model-usable-input-tokens "mevedel-models" (policy))
 
 ;; `mevedel-structs'
@@ -62,20 +67,60 @@
     "Critical Context"
     "Relevant Files"
     "Skills Invoked")
-  "Ordered headings shared by every context-summary purpose.")
+  "Ordered headings shared by continuation and handoff summaries.")
 
 (defconst mevedel-context-summary--guidance-max 4000
   "Maximum caller-guidance length in characters.")
 
+(defconst mevedel-context-summary--digest-max-bytes 16384
+  "Maximum UTF-8 byte size of a journal digest.")
+
+;;;###autoload
+(defun mevedel-context-summary-digest-policy (policy)
+  "Freeze digest defaults in newly resolved summarization POLICY.
+Keep explicit reasoning choices.  When supported, disable unspecified
+reasoning so it cannot consume the entire short digest output allowance.
+Callers load `mevedel-models' at their request or capture boundary."
+  (let ((policy (copy-sequence policy)))
+    (unless (plist-get policy :effort)
+      (let ((efforts (mevedel-model-supported-efforts (plist-get policy :model))))
+        (when-let* ((effort (or (and (memq 'disabled efforts) 'disabled)
+                               (and (memq 'none efforts) 'none))))
+          (setq policy (plist-put policy :effort effort)))))
+    (plist-put policy :max-tokens (min 4000 (or (plist-get policy :max-tokens) 4000)))))
+
 (defun mevedel-context-summary--headings (purpose)
   "Return the required ordered heading names for PURPOSE."
-  (append mevedel-context-summary--common-headings
-          (when (eq purpose 'continuation) '("Next Steps"))))
+  (if (eq purpose 'digest)
+      '("Done" "Learned" "Surprised" "Unfinished")
+    (append mevedel-context-summary--common-headings
+            (when (eq purpose 'continuation) '("Next Steps")))))
 
 (defun mevedel-context-summary--validate-output (summary purpose)
   "Return trimmed SUMMARY when its headings match PURPOSE exactly."
   (unless (and (stringp summary) (not (string-blank-p summary)))
     (error "Context summary response is empty"))
+  (when (eq purpose 'digest)
+    (when (> (string-bytes summary) mevedel-context-summary--digest-max-bytes)
+      (error "Digest exceeds %d bytes" mevedel-context-summary--digest-max-bytes))
+    (let (section bullet)
+      (dolist (line (split-string summary "\n"))
+        (cond
+         ((string-blank-p line))
+         ((string-prefix-p "## " line)
+          (when (and section (not bullet))
+            (error "Digest section has no bullets"))
+          (setq section t bullet nil))
+         ((and section (string-match-p "\\`- \\S-" line))
+          (when (or (eq bullet 'empty)
+                    (and bullet (equal line "- none")))
+            (error "Digest empty marker must be the section's only bullet"))
+          (setq bullet (if (equal line "- none") 'empty t)))
+         ((and (eq bullet t) (string-match-p "\\`  +\\S-" line)
+               (not (string-match-p "\\`[ \t]*\\(?:```\\|~~~\\)" line))))
+         (t (error "Digest contains text outside its bullet lists"))))
+      (unless bullet
+        (error "Digest section has no bullets"))))
   (let ((fenced nil)
         headings)
     ;; Only top-level headings count; a summary may legitimately quote
@@ -94,21 +139,23 @@
 
 (defun mevedel-context-summary--prompt (purpose)
   "Return the fixed system prompt for context-summary PURPOSE."
-  (mevedel-system-render-prompt-file
-   "prompts/context-summary/summary.md"
-   `(("PURPOSE_RULE" .
-      ,(if (eq purpose 'continuation)
+  (if (eq purpose 'digest)
+      (mevedel-system-render-prompt-file "prompts/context-summary/digest.md")
+    (mevedel-system-render-prompt-file
+     "prompts/context-summary/summary.md"
+     `(("PURPOSE_RULE" .
+        ,(if (eq purpose 'continuation)
+             (concat
+              "This is a continuation context summary. Preserve unresolved "
+              "work as actionable context and emit the final Next Steps section.")
            (concat
-            "This is a continuation context summary. Preserve unresolved "
-            "work as actionable context and emit the final Next Steps section.")
-         (concat
-          "This is a handoff context summary. Filter evidence for the "
-          "separately supplied focus task. Do not restate that task, assign "
-          "work, or emit Next Steps.")))
-     ("NEXT_STEPS_STRUCTURE" .
-      ,(if (eq purpose 'continuation)
-           "\n## Next Steps\n- [ordered next actions or \"(none)\"]"
-         "")))))
+            "This is a handoff context summary. Filter evidence for the "
+            "separately supplied focus task. Do not restate that task, assign "
+            "work, or emit Next Steps.")))
+       ("NEXT_STEPS_STRUCTURE" .
+        ,(if (eq purpose 'continuation)
+             "\n## Next Steps\n- [ordered next actions or \"(none)\"]"
+           ""))))))
 
 (defun mevedel-context-summary--input
     (source purpose previous-summary focus guidance)
@@ -171,21 +218,44 @@ current buffer."
       (buffer-list))
      (error "Context summary session buffer is unavailable"))))
 
+(defun mevedel-context-summary--limit-digest-request (fsm limit)
+  "Bound FSM's supported provider output limits to LIMIT before dispatch.
+Providers without a token control retain the client's byte and time bounds.
+Copy the data because gptel merges shared model and backend parameter lists."
+  (let* ((info (gptel-fsm-info fsm))
+         (data (copy-tree (plist-get info :data))))
+    (dolist (params (list data
+                          (plist-get data :generationConfig)
+                          (plist-get data :inferenceConfig)
+                          (plist-get data :options)))
+      (dolist (key '(:max_tokens :max_completion_tokens :max_output_tokens
+                     :maxOutputTokens :maxTokens :num_predict))
+        (when (plist-member params key)
+          (let ((value (plist-get params key)))
+            (unless (and (integerp value) (> value 0))
+              (error "Digest provider output limit is not a positive integer"))
+            (plist-put params key (min limit value))))))
+    (plist-put info :data data)))
+
 (cl-defun mevedel-context-summary-generate
     (source purpose callback
             &key session previous-summary focus guidance policy)
   "Generate one context summary from frozen SOURCE for PURPOSE.
 
-PURPOSE is `continuation' or `handoff'.  CALLBACK receives one plist with
+PURPOSE is `continuation', `handoff', or `digest'.
+CALLBACK receives one plist with
 `:outcome' equal to `success', `error', or `aborted'.  Success also carries
-`:summary'; errors carry `:error' and `:error-class'.  The return value is a
+`:summary'; errors carry `:error' and `:error-class'.  Available provider usage
+is returned as `:input-tokens', `:cached-tokens', and `:output-tokens',
+including without SESSION.  Input and cached token counts are exclusive.
+The return value is a
 zero-argument cancellation thunk.  SESSION is used only for model policy and
 telemetry ownership.  PREVIOUS-SUMMARY is valid only for continuation.  FOCUS
 and bounded GUIDANCE influence relevance without changing the output contract.
 POLICY, when non-nil, is a previously resolved summarization model policy."
   (unless (and (stringp source) (not (string-blank-p source)))
     (user-error "Context summary source must be non-empty text"))
-  (unless (memq purpose '(continuation handoff))
+  (unless (memq purpose '(continuation handoff digest))
     (user-error "Unknown context summary purpose: %S" purpose))
   (unless (functionp callback)
     (error "Context summary callback must be a function"))
@@ -219,42 +289,53 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
          (settled nil)
          (request-started nil)
          (chunks nil)
+         (output-bytes 0)
          span
          (settle
           (lambda (result &optional info)
             (unless settled
-              (setq settled t)
-              (when span
-                (mevedel-telemetry-finish
-                 span
-                 :outcome (plist-get result :outcome)
-                 :error-class (plist-get result :error-class)
-                 :input-tokens
-                 (and (listp (plist-get info :tokens))
-                      (plist-get (plist-get info :tokens) :input))
-                 :output-tokens
-                 (and (listp (plist-get info :tokens))
-                      (plist-get (plist-get info :tokens) :output))))
-              (when (buffer-live-p request-buffer)
-                (kill-buffer request-buffer))
-              (with-current-buffer (if (buffer-live-p caller-buffer)
-                                       caller-buffer
-                                     (current-buffer))
-                (funcall callback
-                         (append
-                          result
-                          (list :backend (plist-get policy :backend)
-                                :model (plist-get policy :model)
-                                :effort (plist-get policy :effort))))))))
+              (setq settled t chunks nil)
+              (let* ((tokens (and (listp (plist-get info :tokens)) (plist-get info :tokens)))
+                     (usage (list :input-tokens (plist-get tokens :input)
+                                  :cached-tokens (plist-get tokens :cached)
+                                  :output-tokens (plist-get tokens :output))))
+                (when span
+                  (apply #'mevedel-telemetry-finish
+                         span
+                         :outcome (plist-get result :outcome)
+                         :error-class (plist-get result :error-class)
+                         usage))
+                (when (buffer-live-p request-buffer)
+                  (kill-buffer request-buffer))
+                (with-current-buffer (if (buffer-live-p caller-buffer)
+                                         caller-buffer
+                                       (current-buffer))
+                  (funcall callback
+                           (append
+                            result
+                            (list :backend (plist-get policy :backend))
+                            usage
+                            (list :model (plist-get policy :model)
+                                  :effort (plist-get policy :effort)))))))))
          (provider-callback
           (lambda (response info)
             (pcase response
+              ((guard settled))
               (`(reasoning . ,_))
               ('abort
                (funcall settle '(:outcome aborted) info))
               ((and (pred stringp)
                     (guard (plist-get info :stream)))
-               (push response chunks))
+               (setq output-bytes (+ output-bytes (string-bytes response)))
+               (if (and (eq purpose 'digest)
+                        (> output-bytes mevedel-context-summary--digest-max-bytes))
+                   (progn
+                     ;; Settle first: gptel-abort calls this callback again.
+                     (funcall settle
+                              (list :outcome 'error :error-class 'validation
+                                    :error "Digest exceeds its byte limit") info)
+                     (ignore-errors (gptel-abort request-buffer)))
+                 (push response chunks)))
               ((or 't (pred stringp))
                (let ((text (if (stringp response)
                                response
@@ -296,6 +377,10 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
                     ;; a resolved :max-tokens or :request-params.
                     (append (mevedel-model-resolve-workload 'summarization)
                             '(:max-tokens nil :request-params nil)))))
+          ;; A frozen digest policy was already bounded at capture; applying
+          ;; the same idempotent defaults keeps every digest request clamped.
+          (when (eq purpose 'digest)
+            (setq policy (mevedel-context-summary-digest-policy policy)))
           (setq span
                 (and session
                      (fboundp 'mevedel-telemetry-start)
@@ -333,7 +418,12 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
                 (setq-local gptel-backend (plist-get policy :backend)
                             gptel-model (plist-get policy :model)
                             gptel-reasoning-effort (plist-get policy :effort)
-                            gptel-max-tokens (plist-get policy :max-tokens)
+                            ;; Codex OAuth has no server token control. Keep
+                            ;; the policy reserve for admission, but do not
+                            ;; pass a setting gptel must warn about discarding.
+                            gptel-max-tokens
+                            (unless (eq (type-of gptel-backend) 'gptel-openai-oauth)
+                              (plist-get policy :max-tokens))
                             gptel--request-params
                             (plist-get policy :request-params)
                             gptel-system-prompt system
@@ -356,6 +446,27 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
                  :transforms nil
                  :context
                  (list :mevedel-context-summary t :purpose purpose)
+                 :fsm
+                 (if (eq purpose 'digest)
+                     (gptel-make-fsm
+                      :handlers
+                      (cons
+                       (list
+                        'WAIT
+                        (lambda (fsm)
+                          (condition-case err
+                              (progn
+                                (mevedel-context-summary--limit-digest-request
+                                 fsm (plist-get policy :max-tokens))
+                                (gptel--handle-wait fsm))
+                            (error
+                             (funcall settle
+                                      (list :outcome 'error
+                                            :error-class 'provider
+                                            :error (error-message-string err)))))))
+                       (assq-delete-all 'WAIT
+                                        (copy-tree gptel-request--handlers))))
+                   (gptel-make-fsm))
                  :callback provider-callback)))))
       (error
        (funcall

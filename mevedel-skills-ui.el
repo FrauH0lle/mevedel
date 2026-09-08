@@ -121,6 +121,10 @@
 (autoload 'mevedel-goal-set-budget "mevedel-goal")
 (autoload 'mevedel-goal-start "mevedel-goal")
 
+;; `mevedel-memory-list'
+(declare-function mevedel-remember "mevedel-memory-list" (&optional focus context))
+(autoload 'mevedel-remember "mevedel-memory-list")
+
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-ranges
                   "mevedel-mention-bindings" (text))
@@ -308,6 +312,7 @@
     ("tokens" . " [command] no args; estimate tokens")
     ("model" . " [command] model name")
     ("compact" . " [command] optional summary guidance")
+    ("remember" . " [command] optional focus; review workspace memory")
     ("goal" . " [command] objective | budget N|none | edit OBJECTIVE | pause | resume [steering] | clear")
     ("plan" . " [command] optional prompt; enter Plan mode")
     ("prompt" . " [command] no args; inspect the effective prompt and tools")
@@ -366,6 +371,11 @@ current buffer belongs to a live session pair."
 (defun mevedel-cmd--compact (args)
   "Run `mevedel-compact' on the current chat buffer with ARGS."
   (mevedel-compact nil args))
+
+(defun mevedel-cmd--remember (args)
+  "Run workspace memory consolidation with optional focus ARGS."
+  (mevedel-remember args)
+  nil)
 
 (defun mevedel-cmd--mode (args)
   "Show or set `mevedel-permission-mode' for the current chat buffer.
@@ -826,6 +836,7 @@ Routes through the lifecycle-aware permission transition path."
     ("tokens"  . mevedel-cmd--tokens)
     ("model"   . mevedel-cmd--model)
     ("compact" . mevedel-cmd--compact)
+    ("remember" . mevedel-cmd--remember)
     ("goal"    . mevedel-cmd--goal)
     ("plan"    . mevedel-cmd--plan)
     ("prompt"  . mevedel-cmd--prompt)
@@ -848,7 +859,7 @@ Handlers have access to the buffer-local `mevedel--session'.")
 
 (defun mevedel-skills-local-command-active-request-p (name args)
   "Return non-nil when local command NAME with ARGS may run mid-request."
-  (or (member name '("btw" "collab" "ps" "stop"))
+  (or (member name '("btw" "collab" "ps" "stop" "remember"))
       (and (string= name "goal")
            (member (car (split-string (or args "") "[ \t\n]+" t))
                    '("pause" "edit")))))

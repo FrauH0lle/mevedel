@@ -1464,12 +1464,12 @@ cover, so the permission step's warning about it is captured here."
          tool (lambda (value) (setq result value))
          (list :patch (string-join
                        '("*** Begin Patch"
-                         "*** Add File: local://notes/../bad.txt"
+                         "*** Add File: work://notes/../bad.txt"
                          "+bad"
                          "*** End Patch")
                        "\n")))))
     (should (string-match-p "Error:" result))
-    (should (string-match-p "local://notes/../bad.txt" result))
+    (should (string-match-p "work://notes/../bad.txt" result))
     (should-not permission-called)
     (should-not handler-called)
     (should-not post-called))
@@ -1486,7 +1486,7 @@ cover, so the permission step's warning about it is captured here."
                    "@@"
                    "-old"
                    "+new"
-                   "*** Add File: local://notes/new.txt"
+                   "*** Add File: work://notes/new.txt"
                    "+created"
                    "*** End Patch")
                  "\n"))
@@ -1522,7 +1522,7 @@ cover, so the permission step's warning about it is captured here."
                        (mevedel-tool-permission-paths
                         tool (list :patch patch) prepared-context)))
         (should-not (plist-get (plist-get prepared-context :patch-proposal)
-                               :local-only-p))
+                               :session-only-p))
         (should (eq parsed-proposal
                     (plist-get prepared-context :patch-proposal)))))
 
@@ -1538,7 +1538,7 @@ cover, so the permission step's warning about it is captured here."
                    "@@"
                    "-old"
                    "+new"
-                   "*** Add File: local://notes/new.txt"
+                   "*** Add File: work://notes/new.txt"
                    "+created"
                    "*** End Patch")
                  "\n"))
@@ -1616,7 +1616,7 @@ cover, so the permission step's warning about it is captured here."
                          "@@"
                          "-does-not-match"
                          "+should-not-apply"
-                         "*** Add File: local://notes/new.txt"
+                         "*** Add File: work://notes/new.txt"
                          "+bad"
                          "*** End Patch")
                        "\n")))))
@@ -1658,7 +1658,7 @@ cover, so the permission step's warning about it is captured here."
          tool (lambda (value) (setq result value))
          (list :patch (string-join
                        '("*** Begin Patch"
-                         "*** Add File: local://notes/denied.txt"
+                         "*** Add File: work://notes/denied.txt"
                          "+denied"
                          "*** End Patch")
                        "\n")))))
@@ -1668,7 +1668,7 @@ cover, so the permission step's warning about it is captured here."
     (should-not (file-exists-p (file-name-concat root "local" "notes"
                                                  "denied.txt"))))
 
-  :doc "Plan permits and applies an all-local add update delete and move"
+  :doc "Plan permits add update delete and move within session-owned working files"
   (let* ((tool (mevedel-tool-ensure "ApplyPatch"))
          (local-root (file-name-concat save-path "local"))
          (update-path (file-name-concat local-root "notes" "update.txt"))
@@ -1691,15 +1691,15 @@ cover, so the permission step's warning about it is captured here."
        (list :patch
              (string-join
               (list "*** Begin Patch"
-                    "*** Update File: local://notes/update.txt"
+                    "*** Update File: work://notes/update.txt"
                     "@@"
                     "-old"
                     "+new"
-                    "*** Add File: local://notes/add.txt"
+                    "*** Add File: work://notes/add.txt"
                     "+added"
-                    "*** Delete File: local://notes/delete.txt"
-                    "*** Update File: local://notes/move.txt"
-                    "*** Move to: local://notes/moved.txt"
+                    "*** Delete File: work://notes/delete.txt"
+                    "*** Update File: work://notes/move.txt"
+                    "*** Move to: work://notes/moved.txt"
                     "*** End Patch")
               "\n"))))
     (should (string-match-p "Applied patch" result))
@@ -1728,19 +1728,23 @@ cover, so the permission step's warning about it is captured here."
               "-old" "+ordinary" "*** End Patch") "\n")
            (string-join
             '("*** Begin Patch" "*** Update File: ordinary.txt" "@@"
-              "-old" "+mixed" "*** Add File: local://notes/mixed.txt"
+              "-old" "+mixed" "*** Add File: work://notes/mixed.txt"
               "+mixed" "*** End Patch") "\n")
            (string-join
-            '("*** Begin Patch" "*** Add File: local://notes/../bad.txt"
+            '("*** Begin Patch" "*** Add File: work://notes/../bad.txt"
               "+bad" "*** End Patch") "\n")
            (string-join
             '("*** Begin Patch"
-              "*** Update File: local://notes/bare-source.txt"
-              "*** Move to: local://" "*** End Patch") "\n")
+              "*** Update File: work://notes/bare-source.txt"
+              "*** Move to: work://" "*** End Patch") "\n")
            (string-join
             '("*** Begin Patch" "*** Add File: artifact://notes/bad.txt"
               "+bad" "*** End Patch") "\n")))
+         (mevedel-memory-dirs '(".mevedel/memory"))
          result)
+    (dolist (address '("work://shared/correction.md" "memory://local-mevedel/lesson.md"))
+      (push (format "*** Begin Patch\n*** Add File: %s\n+denied\n*** End Patch" address) patches)
+      (push (format "*** Begin Patch\n*** Update File: work://plans/current.md\n*** Move to: %s\n*** End Patch" address) patches))
     (setf (mevedel-session-plan-mode session) t
           (mevedel-session-save-path session) nil)
     (dolist (patch patches)
@@ -2030,7 +2034,7 @@ cover, so the permission step's warning about it is captured here."
       (with-temp-buffer
         (mevedel-pipeline-run-tool
          tool (lambda (value) (setq result value))
-         '(:file_path "local://notes/../secret"))))
+         '(:file_path "work://notes/../secret"))))
     (should (string-match-p "Error:" result))
     (should-not permission-called)
     (should-not post-called)
@@ -2062,7 +2066,7 @@ cover, so the permission step's warning about it is captured here."
                      (if (eq event 'PreToolUse)
                          (funcall callback
                                   '(:updated-input
-                                    (:file_path "local://rewritten.txt")))
+                                    (:file_path "work://rewritten.txt")))
                        (funcall callback nil))))
                   ((symbol-function
                     'mevedel-check-permission-async-with-metadata)
@@ -2073,7 +2077,7 @@ cover, so the permission step's warning about it is captured here."
             (setq-local mevedel--session session)
             (mevedel-pipeline-run-tool
              tool (lambda (value) (setq result value))
-             '(:file_path "local://original.txt")))
+             '(:file_path "work://original.txt")))
           (should (string-prefix-p "prepared" result))
           (should attempt-seen)))
       (delete-directory save-path t)))

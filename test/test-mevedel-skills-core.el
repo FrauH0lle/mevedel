@@ -409,7 +409,7 @@ paths:
             (should (mevedel-skill-model-invocable-p skill))))
       (delete-directory dir t)))
 
-  :doc "bundled learn, remember, and git-worktree skills are discoverable by default"
+  :doc "bundled workflows are discoverable, while remember is a command"
   (mevedel-tool-clear-registry)
   (let* ((skills (mevedel-skills-scan nil nil))
          (frontend (cl-find "frontend" skills
@@ -421,7 +421,6 @@ paths:
          (learn (cl-find "learn" skills
                          :key #'mevedel-skill-name :test #'equal))
          (body (and worktree (mevedel-skill-load-body worktree)))
-         (remember-body (and remember (mevedel-skill-load-body remember)))
          (learn-body (and learn (mevedel-skill-load-body learn))))
     (should frontend)
     (should (eq 'bundled (mevedel-skill-source frontend)))
@@ -430,21 +429,19 @@ paths:
     (should-not (mevedel-skill-path-patterns frontend))
     (should (string-search "mobile and desktop"
                            (mevedel-skill-load-body frontend)))
+    (let ((cleanup (cl-find "clean-work" skills :key #'mevedel-skill-name :test #'equal)))
+      (should cleanup)
+      (should (mevedel-skill-user-invocable-p cleanup))
+      (should-not (mevedel-skill-model-invocable-p cleanup)))
     (should learn)
     (should (eq 'bundled (mevedel-skill-source learn)))
     (should (mevedel-skill-user-invocable-p learn))
     (should (equal "[focus]" (mevedel-skill-argument-hint learn)))
     (should (string-match-p "applicable `AGENTS.md`" learn-body))
     (should (string-match-p "existing `user` or" learn-body))
-    (should (string-match-p "Do not create a third" learn-body))
+    (should (string-match-p "not a substitute for curated memory" learn-body))
     (should-not (string-match-p "CLAUDE\\.md" learn-body))
-    (should remember)
-    (should (eq 'bundled (mevedel-skill-source remember)))
-    (should (mevedel-skill-user-invocable-p remember))
-    (should (equal "[focus]" (mevedel-skill-argument-hint remember)))
-    (should (string-match-p "each configured memory root" remember-body))
-    (should (string-match-p "\\.agents/memory/" remember-body))
-    (should-not (string-match-p "CLAUDE\\.md" remember-body))
+    (should-not remember)
     (should worktree)
     (should-not (cl-find "using-git-worktrees" skills
                          :key #'mevedel-skill-name :test #'equal))
@@ -527,12 +524,12 @@ paths:
     (unwind-protect
         (progn
           (mevedel-skills-test--write-skill
-           dir "remember" "description: User remember\n" "Body")
-          (let ((skill (cl-find "bundled:remember"
+           dir "learn" "description: User learn\n" "Body")
+          (let ((skill (cl-find "bundled:learn"
                                 (mevedel-skills-scan nil nil)
                                 :key #'mevedel-skill-name :test #'equal)))
             (should skill)
-            (should (equal "remember" (mevedel-skill-raw-name skill)))
+            (should (equal "learn" (mevedel-skill-raw-name skill)))
             (should-not (mevedel-skill-plugin-name skill))))
       (delete-directory dir t)))
 
@@ -777,21 +774,21 @@ description: Plugin skill
     (unwind-protect
         (progn
           (mevedel-skills-test--write-skill
-           plugin-skills "remember"
-           "name: remember
-description: Plugin remember
+           plugin-skills "learn"
+           "name: learn
+description: Plugin learn
 " "Body")
           (mevedel-plugins-enable "demo" workspace)
           (let* ((skills (mevedel-skills-scan nil nil workspace))
-                 (remember (cl-find "remember" skills
+                 (learn (cl-find "learn" skills
                                     :key #'mevedel-skill-name
                                     :test #'equal))
-                 (plugin (cl-find "demo:remember" skills
+                 (plugin (cl-find "demo:learn" skills
                                   :key #'mevedel-skill-name
                                   :test #'equal)))
-            (should remember)
+            (should learn)
             (should plugin)
-            (should (eq 'bundled (mevedel-skill-source remember)))
+            (should (eq 'bundled (mevedel-skill-source learn)))
             (should (eq 'plugin (mevedel-skill-source plugin)))))
       (delete-directory root t)))
   (let* ((mevedel-skills-include-bundled nil)

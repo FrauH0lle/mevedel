@@ -13,6 +13,12 @@ interrupted. Every entry has schema version 1, an ISO wall time,
 process-relative elapsed milliseconds, a process-local sequence number, the
 session and turn, and any current preset and Goal identity.
 
+Sessionless background work uses the same envelope and privacy filter at
+`WORKSPACE/.mevedel/diagnostics/telemetry-log.el`, through target-native control
+operations on local and TRAMP workspaces. It has no session identity or Goal
+and does not manufacture a conversation. It follows the same enable switch;
+disabled telemetry creates no diagnostic state.
+
 On Linux, elapsed milliseconds and span durations use the kernel monotonic
 clock exposed by `/proc/uptime`. Other systems fall back to process-relative
 wall time and clamp emitted elapsed values so they never move backwards. Use
@@ -121,6 +127,31 @@ cancellation releases the fence and leaves the machine retryable.
 - agent dispatch, provider send, first response, settlement, waits, and UI
   status ownership transitions;
 - queued user messages with enqueue/dequeue events and dwell time;
+- `journal-capture-queued` when a checkpoint first becomes ready, carrying its
+  capture identity, checkpoint trigger, and frozen input byte count; no evidence
+  body is logged;
+- `journal-digest-written` and `journal-digest-failed` in workspace diagnostics,
+  with capture identity, trigger, attempt generation, publication/failure outcome,
+  body byte count, and available provider uncached-input, cached-input, and
+  output token counts. Input and cached counts are exclusive. Recovery
+  can report publication without provider usage when those counts were not
+  retained. Retries and failed publication remain diagnostic events; logs are
+  not used as completion or review-coverage authority;
+- `memory-consolidation-fired`, `memory-consolidation-completed`,
+  `memory-consolidation-failed`, and `memory-consolidation-killed` in workspace
+  diagnostics. Each pass carries its identity, ownership generation, frozen
+  mode, general/focused scope, and buddy workload. Terminal events add duration,
+  available provider usage, published proposal/review counts, consumed coverage,
+  and the frozen eligible backlog remaining. Focused passes consume no general
+  coverage; failed or cancelled passes leave the selected batch in the backlog.
+  Auto completion also records `updated-file-count`, the distinct paths newly
+  confirmed written by that run, without exposing those paths or claiming that
+  the resulting memory is better.
+  Cancellation retains usage already reported, and late callbacks do not emit
+  another terminal event. Storage failures retain received usage too. Failure
+  classes are categorical; focus text, evidence, proposal bodies, credentials,
+  and arbitrary error messages are excluded. Unreported provider usage remains
+  unknown, so these events do not establish a billing ceiling;
 - compaction threshold inputs, hook work, segment-save stages, publication,
   and total duration, plus context-summary purpose, provider/model/effort,
   outcome, and token usage without raw evidence, focus data, or generated text;

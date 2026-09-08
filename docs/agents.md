@@ -1,5 +1,12 @@
 # Multi-agent system
 
+Main and worker prompts ask for short attributed lessons in `work://shared/`
+only when the current request permits local writes. Explorer, verifier, and
+reviewer report observations and hypotheses through existing results or an
+available SendMessage; they receive no extra write authority. Reviewer lessons
+stay within its existing JSON response schema. Only the main prompt receives
+the recent journal map; all roles may use permitted journal reads on demand.
+
 The model-facing `Agent` tool starts a retained child asynchronously. It
 accepts a lowercase `task_name` path segment, a complete `message`, and
 optional `role`, `context`, `model`, and `effort` controls, then returns the
@@ -407,11 +414,11 @@ transcript views remain inspection-only. A turn blocked on either queue remains
 active and consumes tree capacity. Interrupting that turn cancels only its own
 queued entries.
 
-The retained-agent tree shares the root session's `local://` namespace,
-including `local/plans/` for durable plans, notes, findings, contracts, and
-handoffs. Standalone/sticky Plan mode keeps all-local `ApplyPatch` available to
+The retained-agent tree shares the root session's `work://` namespace,
+with session-owned `work://plans/` and workspace-owned `work://shared/`
+for notes, findings and handoffs across sessions. Standalone/sticky Plan mode keeps session-only `ApplyPatch` available to
 retained agents.
-It rejects any ordinary, non-local, or bare endpoint before local
+It rejects any ordinary, shared, memory, or bare endpoint before local
 materialization, including mixed local/ordinary and ordinary-only calls, while
 other edit tools and `Eval` remain unavailable.
 
@@ -421,7 +428,7 @@ Those agents retain Plan tool and Bash restrictions after the root workflow
 advances to approval or implementation; mutable session phase is not an
 authority boundary. Unlike standalone/sticky Plan mode, directive Planning
 remains strictly read-only: its requests and retained agents cannot use
-`ApplyPatch`, including all-local proposals, or `Eval`.
+`ApplyPatch`, including session-only proposals, or `Eval`.
 
 Delegated invocation/request rules may narrow authority and may allow ordinary
 known-safe commands, but they cannot authorize dangerous or complex Bash, live

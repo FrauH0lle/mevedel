@@ -7,6 +7,10 @@
 
 ;;; Code:
 
+(defun mevedel-workspace-identity-client ()
+  "Return a restart-stable opaque identity for this client's host and user."
+  (secure-hash 'sha256 (format "%s\0%s" (system-name) (user-login-name))))
+
 (defconst mevedel-workspace-identity--regexp
   "\\`[0-9a-f]\\{64\\}\n\\'"
   "Exact on-disk format of a workspace identity.")

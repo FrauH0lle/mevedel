@@ -14,6 +14,19 @@
 (require 'mevedel-structs)
 (require 'tramp)
 
+;; Module-focused fixtures do not create journal jobs unless the journal
+;; integration test explicitly enables the feature for its temporary workspace.
+(defvar mevedel-journal-enabled)
+(setq mevedel-journal-enabled nil)
+(defvar mevedel-journal-max-age-days)
+(setq mevedel-journal-max-age-days nil)
+(defvar mevedel-journal-process--inhibit-scheduling)
+(setq mevedel-journal-process--inhibit-scheduling t)
+(defvar mevedel-memory-decision--inhibit-recovery)
+(setq mevedel-memory-decision--inhibit-recovery t)
+(defvar mevedel-memory-pass--inhibit-scheduling)
+(setq mevedel-memory-pass--inhibit-scheduling t)
+
 ;; `gptel'
 (declare-function gptel-make-openai "gptel")
 (defvar gptel-backend)

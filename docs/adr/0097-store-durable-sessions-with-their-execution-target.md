@@ -44,7 +44,14 @@ callbacks.  Pre-commit failure retains one local retry transaction.  A
 successful head commit is terminal even if later lease normalization
 fails, avoiding republishing already committed bytes.  Expired publishing
 takeover warns that a write may still be in flight and requires confirmation
-that the prior client is stopped.  Immutable publication generations remain
+that the prior client is stopped. Frozen journal checkpoint recovery is a
+separate storage-only operation: it may fence an expired ordinary lease without
+resuming the session, running tools, or changing the publication head. Requiring
+interactive conversation takeover here would strand completed evidence after
+a crash. Recovery still refuses publishing leases, unsettled mutation, live
+owners, and reserved control transfers, and releases its bounded reservation
+before inference. See [ADR 0117](0117-publish-journal-results-from-fenced-outcomes.md).
+Immutable publication generations remain
 until session-directory cleanup; v1 deliberately has no garbage collection or
 read-pin protocol.
 

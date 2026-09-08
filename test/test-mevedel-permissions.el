@@ -400,7 +400,7 @@
                :session-rules `((,name :action allow))
                :mode mode)
               'deny)))))))
-  :doc "Plan allows only an already-prepared all-local ApplyPatch proposal"
+  :doc "Plan allows only a prepared ApplyPatch over session-owned work descendants"
   (let* ((mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
          (session (mevedel-session--create :name "plan" :plan-mode t))
@@ -412,19 +412,19 @@
        (eq 'allow
            (mevedel-check-permission
             "ApplyPatch" :tool-struct tool :session session :mode mode
-            :patch-local-only-p t)))
+            :patch-session-only-p t)))
       (should
        (eq 'deny
            (mevedel-check-permission
             "ApplyPatch" :tool-struct tool :session session :mode mode
-            :patch-local-only-p nil))))
+            :patch-session-only-p nil))))
     (should
      (eq 'deny
          (mevedel-check-permission
           "ApplyPatch" :tool-struct tool :session session :mode 'full-auto
-          :patch-local-only-p t
+          :patch-session-only-p t
           :session-rules '(("ApplyPatch" :action deny))))))
-  :doc "directive planning keeps all-local ApplyPatch denied"
+  :doc "directive planning denies ApplyPatch even over session-owned work descendants"
   (let* ((mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
          (session (mevedel-session--create
@@ -441,7 +441,7 @@
      (eq 'deny
          (mevedel-check-permission
           "ApplyPatch" :tool-struct tool :session session :mode 'full-auto
-          :patch-local-only-p t))))
+          :patch-session-only-p t))))
   :doc "read-only tool allowed in ask mode"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)

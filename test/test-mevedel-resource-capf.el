@@ -45,14 +45,14 @@
 ;;; Completion
 
 (mevedel-deftest mevedel-resource-capf-prefixes
-  (:doc "offers the eight canonical scheme prefixes without a session")
+  (:doc "offers the canonical scheme prefixes without a session")
   (with-temp-buffer
     (let ((mevedel--session nil))
       (insert "")
       (let ((result (mevedel-resource-capf)))
         (should (equal
-                 '("agent://" "artifact://" "history://" "local://"
-                   "mcp://" "memory://" "mevedel://" "skill://")
+                 '("agent://" "artifact://" "history://" "journal://"
+                   "mcp://" "memory://" "mevedel://" "skill://" "work://")
                  (sort (mevedel-resource-capf-test--candidates result)
                        #'string-lessp)))
         (dolist (candidate (mevedel-resource-capf-test--candidates result))
@@ -81,25 +81,25 @@
             (insert "# Managed plan"))
           (with-temp-buffer
             (setq mevedel--session session)
-            (insert "local://")
+            (insert "work://")
             (let ((candidates
                    (mevedel-resource-capf-test--candidates
                     (mevedel-resource-capf))))
-              (should (member "local://space%20name.md" candidates))
-              (should (member "local://nested" candidates))
-              (should-not (member "local://nested/note.md" candidates))))
+              (should (member "work://space%20name.md" candidates))
+              (should (member "work://nested" candidates))
+              (should-not (member "work://nested/note.md" candidates))))
           (with-temp-buffer
             (setq mevedel--session session)
-            (insert "local://plans/")
+            (insert "work://plans/")
             (should
-             (member "local://plans/current.md"
+             (member "work://plans/current.md"
                      (mevedel-resource-capf-test--candidates
                       (mevedel-resource-capf)))))
           (with-temp-buffer
             (setq mevedel--session session)
-            (insert "local://nested/")
+            (insert "work://nested/")
             (should
-             (member "local://nested/note.md"
+             (member "work://nested/note.md"
                      (mevedel-resource-capf-test--candidates
                       (mevedel-resource-capf)))))
           (with-temp-buffer
@@ -122,7 +122,7 @@
                          (error "Remote directory was listed"))))
               (with-temp-buffer
                 (setq mevedel--session remote-session)
-                (insert "local://")
+                (insert "work://")
                 (should-not (mevedel-resource-capf))))))
       (delete-directory save-path t))))
 
@@ -450,10 +450,10 @@
                  (setq session-create-called t)
                  (error "resource completion must not create a session"))))
       (with-temp-buffer
-        (insert "local://")
+        (insert "work://")
         (should-not (mevedel-resource-capf))
         (should-not session-create-called)
-        (should (equal "local://" (buffer-string)))))))
+        (should (equal "work://" (buffer-string)))))))
 
 (provide 'test-mevedel-resource-capf)
 ;;; test-mevedel-resource-capf.el ends here

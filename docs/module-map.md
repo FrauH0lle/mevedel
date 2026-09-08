@@ -10,7 +10,30 @@ Data model
   mevedel-turn.el             request admission/cancellation and terminal settlement
   mevedel-workspace.el        workspace detection, registry, and state lookup
   mevedel-workspace-identity.el project-owned durable workspace identity
+  mevedel-journal-store.el     immutable workspace digest, review, and decision publication
+  mevedel-journal-index.el     disposable journal discovery and bounded main prompt map
+  mevedel-journal-claim.el     bounded journal work ownership and durable outcomes
+  mevedel-journal-cleanup.el   accepted expiry manifests and retained turn coverage
+  mevedel-journal-capture.el   completed-turn checkpoints and lifecycle sealing
+  mevedel-journal-process.el   bounded digest requests, outcome recovery, and scheduling
+  mevedel-journal-recovery.el  abandoned checkpoint recovery through source authority
+  mevedel-journal-discard.el   accepted omissions and recoverable source-pin release
+  mevedel-journal-jobs.el      pending journal inspection, retry, and discard commands
+  mevedel-journal-evidence.el  frozen completed transcript and bounded local-note evidence
+  mevedel-journal-pins.el      source-session and publication retention for captures
   mevedel-models.el           model tier/provider resolution, context budget
+  mevedel-memory-proposal.el  bounded consolidation reply and captured-scope validation
+  mevedel-memory-scope.el     bounded memory/instruction before-state and original target checks
+  mevedel-memory-reference.el bounded, dated workspace-path reference observations
+  mevedel-memory-investigation.el request-local Read/Glob/Grep scope, budgets, and cancellation
+  mevedel-memory-review.el    bounded sessionless consolidation request and validated reply
+  mevedel-memory-pass.el      consolidation gates, admission, settlement, and checked auto apply
+  mevedel-memory-store.el     private pass evidence, accepted proposals, and review publication
+  mevedel-memory-cleanup.el   completed-review retention dependencies and expiry candidates
+  mevedel-memory-decision.el  immutable decisions, application, activation recovery, and rejection evidence
+  mevedel-memory-apply.el     complete topic/index and instruction transaction preparation
+  mevedel-memory-write.el     durable before/after intents, shared-root ownership, and checked rollback
+  mevedel-memory-list.el      proposal cockpit, captured diffs, decisions, and recovery actions
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
   mevedel-prompt-submission.el accepted prompt + lifecycle-context transaction
   mevedel-bash-analysis.el    conservative shell parsing and normalized command facts
@@ -74,7 +97,7 @@ Chat / view
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
   mevedel-transcript-audit.el hidden audit record encoding and structural parsing
   mevedel-transcript-restore.el  transcript property restoration via the canonical grammar
-  mevedel-context-summary.el  stateless validated continuation/handoff summary generation
+  mevedel-context-summary.el  stateless validated continuation/handoff/digest summary generation
   mevedel-view.el             view mode, zones, and session coordination
   mevedel-view-agent.el       agent transcript inspection, status rows, refresh
   mevedel-view-composer.el    composer geometry, submission, root dispatch, fork/send flow

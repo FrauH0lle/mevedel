@@ -383,7 +383,7 @@
          (artifact-root (file-name-concat save-path "tool-results" "part one"))
          (local-file (file-name-concat local-root "notes.md"))
          (artifact-file (file-name-concat artifact-root "result.txt"))
-         (local-address "local://src/notes.md")
+         (local-address "work://src/notes.md")
          (artifact-address "artifact://part%20one/result.txt"))
     (unwind-protect
         (progn

@@ -35,7 +35,7 @@
 (declare-function mevedel-session-control-fs-physical-path
                   "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-read-file
-                  "mevedel-session-control-fs" (path &optional coding-system))
+                  "mevedel-session-control-fs" (path &optional coding-system max-bytes))
 (autoload 'mevedel-session-control-fs-physical-path
   "mevedel-session-control-fs")
 (autoload 'mevedel-session-control-fs-read-file "mevedel-session-control-fs")

@@ -11,6 +11,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
+(require 'mevedel-journal-pins)
 
 (defun test-mevedel-session-publication--with-published
     (host prefix client-id body)
@@ -153,6 +154,36 @@ and its segment path."
           ;; Collecting again finds nothing left to reclaim.
           (should (= 0 (mevedel-session-publication-collect-generations
                         session))))))))
+
+  :doc "retains captured evidence until its journal pin is released"
+  (let ((mevedel-session-publication-keep-recent-generations 1))
+    (test-mevedel-session-publication--with-published
+     "publication-journal-pin" "mevedel-publication-journal-pin-" ?a
+     (lambda (session session-dir segment)
+       (let ((capture (make-string 64 ?a))
+             heads)
+         (dotimes (index 4)
+           (push (test-mevedel-session-persistence--publish-generation
+                  session session-dir segment (format "Capture source %d\n" index) 1)
+                 heads))
+         (mevedel-journal-pins-retain session-dir capture heads)
+         (test-mevedel-session-persistence--publish-generation
+          session session-dir segment "Later turn\n" 2)
+         (mevedel-session-publication-collect-generations session)
+         (dolist (head heads)
+           (let* ((publication (mevedel-session-publication-read session-dir head))
+                  (artifact (cdr (assoc "segment-0001.chat.org"
+                                        (plist-get publication :artifacts)))))
+             (should (string-prefix-p
+                      "Capture source"
+                      (mevedel-session-control-fs-read-file
+                       (plist-get artifact :published))))))
+         (mevedel-journal-pins-release session-dir capture)
+         (should (= 3 (mevedel-session-publication-collect-generations session)))
+         (should (= 1 (length
+                       (seq-filter
+                        (lambda (head) (file-exists-p (file-name-concat session-dir head)))
+                        heads))))))))
 
   :doc "reads an immutable generation's manifest and facts once"
   (let ((reads 0))

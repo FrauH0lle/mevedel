@@ -319,6 +319,8 @@
                                 (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
                   (should (string-search "Documented project command" context))
                   (should (string-search "## Environment" context))
+                  (should (string-search "work://shared/" context))
+                  (should-not (string-search "context-journal" context))
                   (if (equal name "worker")
                       (should (string-search "Private remembered fact" context))
                     (should-not (string-search "Private remembered fact" context))))))))

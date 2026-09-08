@@ -121,7 +121,14 @@ No file changes before final submission. Application is one rollback-backed
 transaction across the selected changes, creates parent directories for added
 files, and refreshes visited unmodified buffers after success. If restoration
 itself fails, the tool reports a distinct incomplete-rollback error containing
-the original failure and every path it could not restore. `edits`,
+the original failure and every path it could not restore. Restoration compares
+each attempted path with the exact bytes, absence, and mode written by this
+transaction; intervening disk edits remain untouched. An intervening unsaved
+buffer edit is preserved and remains modified, also reported as incomplete
+recovery. Expected-before snapshots supplied by a consumer are checked for
+the entire batch before any write and again before each path's write.
+Consumers with target ownership can supply a current-owner predicate that
+also fences synchronization and rollback. `edits`,
 `full-auto`, and a direct allow rule covering every affected path skip the
 interactive review but use the same validation and transaction.
 

@@ -276,6 +276,47 @@ transport drops late work and returns nil."
       (funcall thunk))
     t))
 
+(defun mevedel-transport-schedule-idle (table key tag path thunk)
+  "Run THUNK once for KEY after the current command, when PATH's transport is idle.
+TABLE maps KEY to its pending timer until THUNK starts or the work is
+cancelled, so repeated calls coalesce into one opportunity.  TAG names the
+transport queue entry `(TAG PATH)'.  A superseded timer, a cancelled queue
+entry, or a disabled transport removes KEY without calling THUNK.  Return the
+timer, or nil when KEY already has pending work."
+  (unless (gethash key table)
+    (let (timer)
+      (setq timer
+            (run-at-time
+             0 nil
+             (lambda ()
+               (let ((forget (lambda ()
+                               (when (eq timer (gethash key table))
+                                 (remhash key table)))))
+                 (when (eq timer (gethash key table))
+                   (unless (mevedel-transport-run-when-idle
+                            (list tag path) path
+                            (lambda ()
+                              (when (eq timer (gethash key table))
+                                (funcall forget)
+                                (funcall thunk)))
+                            forget)
+                     (funcall forget)))))))
+      (puthash key timer table)
+      timer)))
+
+(defun mevedel-transport-cancel-idle (table tag &optional path-of-key)
+  "Cancel every timer in TABLE and its queued `(TAG PATH)' transport work.
+PATH-OF-KEY maps a TABLE key to its transport PATH; it defaults to identity."
+  (let (keys)
+    (maphash (lambda (key timer)
+               (cancel-timer timer)
+               (push key keys))
+             table)
+    (clrhash table)
+    (dolist (key keys)
+      (mevedel-transport-cancel-pending
+       (list tag (if path-of-key (funcall path-of-key key) key))))))
+
 (defun mevedel-transport-cancel-pending (&optional key)
   "Cancel deferred transport work for KEY, or all of it when KEY is nil."
   (if key

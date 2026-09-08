@@ -1060,7 +1060,7 @@ A skill is a reusable prompt package described by a `SKILL.md` file. Skills are
 discovered from `.mevedel/skills/`, `.agents/skills/`,
 `~/.mevedel/skills/`, `~/.agents/skills/`, and from the directories listed in
 `mevedel-skill-dirs`. mevedel ships a few bundled skills under `skills/`
-(for example `review`, `analyze-log`, `learn`, and `remember`); name conflicts are exposed with
+(for example `review`, `analyze-log`, `learn`, and `clean-work`); name conflicts are exposed with
 deterministic visible prefixes.
 
 A skill can:
@@ -1159,8 +1159,10 @@ memory roots are `.mevedel/memory/`,
 `.agents/memory/`, `~/.mevedel/memory/`, and `~/.agents/memory/`.
 `MEMORY.md` is an index; durable memory bodies live in linked topic files with
 frontmatter that classifies them as user, feedback, project, or reference
-memories. The bundled `$remember` skill reviews memory and proposes cleanup or
-promotion changes. Memory roots are independent of session sidecars.
+memories. The native `/remember [focus]` command reviews journal evidence and
+memory, then presents proposals for cleanup or promotion in the memory cockpit.
+Memory roots are independent of session sidecars. See the [memory guide](docs/memory.md)
+for automatic review modes, proposal decisions, and journal recovery.
 
 | Custom Variable | Variable Description |
 |-----------------|----------------------|

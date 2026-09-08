@@ -111,6 +111,8 @@
 ;; `mevedel-tool-patch'
 (declare-function mevedel-tool-patch-get-paths-from-proposal
                   "mevedel-tool-patch" (proposal))
+(declare-function mevedel-tool-patch-sanitize-error
+                  "mevedel-tool-patch" (message proposal))
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get-domain "mevedel-tool-registry" (cl-x) t)
@@ -300,6 +302,8 @@ MODEL-REASON and PROVENANCE are included in the hook event when available."
               (final-reason
                (or (plist-get decision :permission-reason)
                    reason)))
+         (when-let* ((proposal (plist-get updated :patch-proposal)))
+           (setq final-reason (mevedel-tool-patch-sanitize-error final-reason proposal)))
          (funcall fail final-reason updated 'permission-denied)))
      context session workspace
      (plist-get context :request)
@@ -482,8 +486,8 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
            :persistent-snapshot
            (plist-get context :persistent-permission-snapshot)
            :one-shot-mutations-p one-shot-mutations-p
-           :patch-local-only-p
-           (plist-get (plist-get context :patch-proposal) :local-only-p)
+           :patch-session-only-p
+           (plist-get (plist-get context :patch-proposal) :session-only-p)
            :buffer (plist-get context :buffer)
            :path (plist-get context :permission-path)
            :permission-request
@@ -542,9 +546,10 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
 (defun mevedel-tool-permission-paths (tool args &optional context)
   "Return every filesystem path declared by TOOL for ARGS.
 
-Addressed read-only operands are already authorized by their resource
-attempt and do not become permission paths.  Ordinary paths retain the
-existing path extraction behavior."
+Addressed resource operands are already authorized by their resource
+attempt; a prepared writable resource contributes only the backing path its
+proposal records.  Ordinary paths retain the existing path extraction
+behavior."
   (mevedel-tool-permission--initialize)
   (let* ((proposal (plist-get context :patch-proposal))
          (paths

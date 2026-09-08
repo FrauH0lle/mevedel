@@ -17,6 +17,7 @@
 (require 'mevedel-goal)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-workspace)
+(require 'mevedel-journal-index)
 (require 'gptel-openai)
 
 (mevedel-deftest mevedel-context-delivery--record-edit ()
@@ -149,22 +150,31 @@
                 (mevedel-skills-scan root nil workspace))
           (setq-local mevedel--session session)
           (insert "Current user task\n")
-          (let* ((data (list :messages [(:role "user" :content "Current user task")]))
+          (let* ((digest (mevedel-journal-store-publish-digest
+                          root
+                          (list :capture-id (make-string 64 ?a) :session "context-session"
+                                :session-name "Context" :workspace (make-string 64 ?b)
+                                :trigger 'session-end :segment 1 :source-revision (make-string 64 ?c)
+                                :turns '(1) :turn-ids (list (make-string 64 ?d))
+                                :created "2026-09-07T12:00:00Z" :model "provider:model")
+                          "## Done\n- none\n## Learned\n- Observed: journal lesson.\n## Surprised\n- none\n## Unfinished\n- none"))
+                 (data (list :messages [(:role "user" :content "Current user task")]))
                  (fsm (gptel-make-fsm :info (list :buffer (current-buffer)
                                                   :backend backend :data data
                                                   :position (point-marker))))
                  (system (mevedel-system-build-prompt 'main :retained t
                                                       :session session)))
             (mevedel-context-delivery-stage fsm)
-            (should (= 7 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
+            (should (= 8 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
             ;; Retrying undelivered staging neither acknowledges nor duplicates it.
             (mevedel-context-delivery-stage fsm)
-            (should (= 7 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
+            (should (= 8 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
             (mevedel-reminders--handle-inject fsm)
             (let ((body (plist-get (car (last (append (plist-get data :messages) nil)))
                                    :content)))
               (dolist (text '("## Environment\n" "## Active Goal\n" "## Skills\n"
-                              "## Memory\n" "## Resources\n" "<env>"
+                              "## Memory\n" "## Journal\n" "## Resources\n" "<env>"
+                              "Unreviewed digests: 1" "journal lesson"
                               "Inspect fixture state." "### Available indexes"))
                 (should (string-search text body)))
               (should-not (string-match-p "## [^\n]+\n+## " body))
@@ -226,6 +236,35 @@
                              (mapcar (lambda (entry) (plist-get entry :type)) entries)))
               (should (string-search "UPDATED-RULE" (plist-get (car entries) :body))))
             (mevedel-reminders--handle-inject fsm)
+            ;; Coverage changes update only journal, without rewriting the system.
+            (mevedel-journal-store-publish-review
+             root (list :pass-id (make-string 64 ?e) :workspace (make-string 64 ?b)
+                        :created "2026-09-08T12:00:00Z" :model "provider:model"
+                        :focus "" :digests (list (plist-get digest :id))
+                        :proposals nil :references nil))
+            (setf (mevedel-workspace-journal-observation workspace) nil)
+            (mevedel-context-delivery-stage fsm)
+            (let ((entries (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries)))
+              (should (equal '(context-journal)
+                             (mapcar (lambda (entry) (plist-get entry :type)) entries)))
+              (should (string-search "Unreviewed digests: 0" (plist-get (car entries) :body)))
+              (should (string-search "journal lesson" (plist-get (car entries) :body))))
+            (mevedel-reminders--handle-inject fsm)
+            (mevedel-context-delivery-stage fsm)
+            (should-not (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))
+            (should (equal system (mevedel-system-build-prompt 'main :retained t
+                                                             :session session)))
+            ;; Loss of the map explicitly clears the previous journal observation.
+            (delete-file (file-name-concat (mevedel-journal-store-directory root)
+                                          (plist-get digest :file)))
+            (setf (mevedel-workspace-journal-observation workspace) nil)
+            (mevedel-context-delivery-stage fsm)
+            (let ((entries (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries)))
+              (should (equal '(context-journal)
+                             (mapcar (lambda (entry) (plist-get entry :type)) entries)))
+              (should (string-search "None currently available or active."
+                                     (plist-get (car entries) :body))))
+            (mevedel-reminders--handle-inject fsm)
             ;; Completing a delivered Goal explicitly retires its facts and policy.
             (setf (mevedel-session-goal session)
                   (mevedel-goal--create :id "context-goal" :objective "Inspect the fixture"
@@ -254,19 +293,19 @@
             (let ((text (buffer-string)))
               (with-temp-buffer
                 (insert text)
-                (should (= 7 (length (mevedel-context-delivery--previous
+                (should (= 8 (length (mevedel-context-delivery--previous
                                       '(context-workspace-config context-goal-policy context-environment
-                                        context-active-goal context-skills context-memory context-resources)))))))
+                                        context-active-goal context-skills context-memory context-journal context-resources)))))))
             ;; Filtering payload history rearms delivery even if source is intact.
             (setf (plist-get data :messages) [(:role "user" :content "Selected new task")])
             (mevedel-context-delivery-stage fsm)
-            (should (= 7 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
+            (should (= 8 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
             (mevedel-reminders--handle-inject fsm)
             ;; Removing the retained observations (compaction or rewind) rearms delivery.
             (erase-buffer)
             (set-marker (plist-get (gptel-fsm-info fsm) :position) (point-max))
             (mevedel-context-delivery-stage fsm)
-            (should (= 7 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))))
+            (should (= 8 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))))
       (delete-directory root t)))
 
   :doc "agent delivery respects frozen component selection"

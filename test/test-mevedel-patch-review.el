@@ -1605,8 +1605,8 @@ adopt prompt.  Returns the messages the session produced."
            (session (mevedel-session--create
                      :name "rollback" :workspace workspace
                      :working-directory root :permission-mode 'ask))
-           (first-address "local://first/one.txt")
-           (second-address "local://second/two.txt")
+           (first-address "work://first/one.txt")
+           (second-address "work://second/two.txt")
            (patch (string-join
                    (list "*** Begin Patch"
                          (concat "*** Update File: " first-address)
@@ -1778,7 +1778,7 @@ adopt prompt.  Returns the messages the session produced."
            (session (mevedel-session--create
                      :name "local-visit" :workspace workspace
                      :working-directory root :permission-mode 'ask))
-           (address "local://notes/one.txt")
+           (address "work://notes/one.txt")
            (patch (string-join
                    (list "*** Begin Patch"
                          (concat "*** Update File: " address)

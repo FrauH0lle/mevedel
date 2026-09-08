@@ -1055,5 +1055,34 @@ rejects trailing binary operators"
   (should (equal "" (mevedel--truncate-display "" 10 "...")))
   (should-not (mevedel--truncate-display nil 10 "...")))
 
+(mevedel-deftest mevedel--truncate-bytes ()
+  ,test
+  (test)
+  :doc "returns fitting text untouched"
+  (should (equal "héllo" (mevedel--truncate-bytes "héllo" 6 "[..]")))
+  :doc "truncates on a character boundary and appends the marker within the budget"
+  (let ((bounded (mevedel--truncate-bytes "héllo wörld" 9 "[..]")))
+    (should (equal "héll[..]" bounded))
+    (should (<= (string-bytes bounded) 9)))
+  :doc "rejects a budget that cannot hold its marker"
+  (should-error (mevedel--truncate-bytes "text" 2 "[...]")))
+
+(mevedel-deftest mevedel--unified-diff ()
+  ,test
+  (test)
+  :doc "returns nil for identical text and hunks for a change"
+  (should-not (mevedel--unified-diff "same\n" "same\n"))
+  (let ((diff (mevedel--unified-diff "one\ntwo\n" "one\nthree\n")))
+    (should (string-prefix-p "@@" diff))
+    (should (string-match-p "^-two$" diff))
+    (should (string-match-p "^\\+three$" diff))
+    (should-not (string-match-p "Diff finished" diff)))
+  :doc "honours the requested context width"
+  (let ((original (mapconcat #'number-to-string (number-sequence 1 20) "\n"))
+        (changed (mapconcat (lambda (n) (if (= n 10) "x" (number-to-string n)))
+                            (number-sequence 1 20) "\n")))
+    (should (string-match-p "^ 4$" (mevedel--unified-diff original changed 6)))
+    (should-not (string-match-p "^ 4$" (mevedel--unified-diff original changed)))))
+
 (provide 'test-mevedel-utilities)
 ;;; test-mevedel-utilities.el ends here

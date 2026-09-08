@@ -42,6 +42,14 @@
                   (session buffer &optional settled force))
 (autoload 'mevedel-session-artifacts-save "mevedel-session-artifacts")
 
+;; `mevedel-session-control-fs'
+(declare-function mevedel-session-control-fs-append-file "mevedel-session-control-fs"
+                  (path content &optional coding-system))
+(declare-function mevedel-session-control-fs-make-directory "mevedel-session-control-fs"
+                  (path &optional parents))
+(autoload 'mevedel-session-control-fs-append-file "mevedel-session-control-fs")
+(autoload 'mevedel-session-control-fs-make-directory "mevedel-session-control-fs")
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-root-buffer-for-session
                   "mevedel-session-persistence" (session &optional buffer))
@@ -72,6 +80,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x))
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -142,13 +151,13 @@ profile file larger and cost a little more per sample."
   '(:abort-plan-approval :active-work-paused :additional-read-count
     :additional-write-count :admitted :approval-lifetime
     :agent-id :agent-path :agent-type :aggressive :artifacts-directory
-    :artifacts-local :backend :baseline-marker-position
+    :artifacts-local :attempt-generation :backend :baseline-marker-position
     :baseline-request-id :blocked :boundary :bubblewrap-available :bucket
     :budget-kind :budget-status :buffer-chars-model-visible :buffer-chars-total
-    :buffers :cache-identity :cached-tokens :call-source :captured-goal-id
+    :buffers :cache-identity :cached-tokens :call-source :capture-id :captured-goal-id
     :chosen-active-context-tokens :chosen-source :chunk-bytes
     :command-class :command-hash :context :context-chars
-    :context-deduplicated :continuation :conversation-scope
+    :context-deduplicated :continuation :conversation-scope :covered-count
     :cumulative-usage :cumulative-usage-tokens :dequeue-goal-id
     :dirty-content-hash :dirty-file-count :dirty-state-hash :duration-ms
     :effective-wait-ms :effort :emacs-version :enqueue-goal-id
@@ -158,32 +167,32 @@ profile file larger and cost a little more per sample."
     :git-head :goal-id :gptel-agent-commit :gptel-agent-file-hash
     :gptel-commit :gptel-file-hash :gptel-version :handler-count
     :handler-id :handler-source :handler-type :hook-event
-    :ineligible-reason :input-p :input-tokens :interaction-id :issue-count
+    :ineligible-reason :input-bytes :input-p :input-tokens :interaction-id :issue-count
     :kind :lane
     :message-chars :message-hash :mode :model :model-context-window :modes
     :native-resource-capture :native-resource-report-bytes :nested-call-count
     :network
     :new-count :new-segment :old-segment :omitted-count :origin :outcome
     :output-bytes :output-limit :output-tokens :overlap-count :owner
-    :parent-tool-use-id :parent-turn :pending-count :permission-id :permission-mode
+    :parent-tool-use-id :parent-turn :pass-id :pending-count :permission-id :permission-mode
     :permission-mode-base
     :permission-mode-effective :permission-via :preexisting-count :preparation-state
     :previous-owner :previous-status :proc :profile :profile-bytes-total
-    :profile-file-names :prompt-chars :prompt-function :prompt-hash
+    :profile-file-names :prompt-chars :prompt-function :prompt-hash :proposed-count
     :protected-path-count :provider-context-model :provider-context-status
     :provider-context-tokens :provider-context-usage
     :provider-context-window :provider-status :purpose :queue-depth
     :queue-depth-before :queue-duration-ms :read-only :reason
-    :reason-class :repair-count :report-bytes-total :report-file-names
+    :reason-class :remaining-count :repair-count :report-bytes-total :report-file-names
     :request-id :requested-yield-time-ms :resolved-count :resource-access
-    :restored :result-bytes :result-chars :retained :roster-chars :rounds
+    :restored :result-bytes :result-chars :retained :reviewed-count :roster-chars :rounds
     :sandbox :sandbox-mode :sandbox-permissions :scope :settled :settlement-source
     :skill-count :skill-name :skill-names :skip-gates :span-id
     :specifier-key :stage :status :step :summary-threshold
     :system-configuration :target-model :target-origin :target-pressure
     :target-threshold :termination :test-scope :threshold :threshold-ms
     :timed-out :timeout-ms :token-source :tokens-after :tokens-before
-    :tokens-used :tool-name :tool-use-id :trigger :tty :turns-run :via
+    :tokens-used :tool-name :tool-use-id :trigger :tty :turns-run :updated-file-count :via
     :workload :yield-time-ms)
   "Metadata keys telemetry may persist.
 
@@ -470,6 +479,25 @@ keys are always discarded.  Return the sanitized event plist."
       (error
        (message "mevedel: telemetry event failed: %s"
                 (error-message-string err))
+       nil))))
+
+;;;###autoload
+(defun mevedel-telemetry-record-workspace (workspace event &rest props)
+  "Append bounded EVENT and PROPS to WORKSPACE's target diagnostic stream.
+This uses the ordinary telemetry envelope and privacy filter without a session.
+Failures are diagnostic only and never alter the background operation."
+  (when (and mevedel-telemetry-enabled workspace)
+    (condition-case err
+        (let* ((directory (file-name-concat (mevedel-workspace-root workspace)
+                                          ".mevedel" "diagnostics"))
+               (entry (mevedel-telemetry--envelope nil event props)))
+          (mevedel-session-control-fs-make-directory directory t)
+          (mevedel-session-control-fs-append-file
+           (file-name-concat directory mevedel-telemetry-file-name)
+           (mevedel-telemetry--entry-text entry))
+          entry)
+      (error
+       (message "mevedel: workspace telemetry failed: %s" (error-message-string err))
        nil))))
 
 (defun mevedel-telemetry-forwarded-audit-p (session)

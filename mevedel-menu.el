@@ -98,6 +98,12 @@
                   "mevedel-gptel-bridge" (&optional context))
 (autoload 'mevedel-gptel-bridge-open "mevedel-gptel-bridge")
 
+;; `mevedel-memory-list'
+(declare-function mevedel-memory-list-open "mevedel-memory-list" (&optional context))
+(declare-function mevedel-memory-list-summary "mevedel-memory-list" (context &optional refresh))
+(autoload 'mevedel-memory-list-open "mevedel-memory-list")
+(autoload 'mevedel-memory-list-summary "mevedel-memory-list")
+
 ;; `mevedel-models'
 (declare-function mevedel-model-current-label "mevedel-models"
                   (&optional buffer))
@@ -206,6 +212,7 @@
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-memory-observation "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tools'
@@ -674,6 +681,17 @@ unavailable until it changes."
             (mevedel-menu--value (or current "default"))
             (mevedel-menu--inactive-value (or next "default")))))
 
+(defun mevedel-menu--memory-description ()
+  "Return cached memory alerts without reading target files during rendering."
+  (let* ((workspace (mevedel-cockpit-context-workspace (mevedel-menu--context)))
+         (counts (mevedel-workspace-memory-observation workspace))
+         (labels (cl-loop for (key label) in '((:pending "pending") (:recovery "recovery") (:unavailable "unavailable"))
+                          for count = (or (plist-get counts key) 0)
+                          when (> count 0) collect (format "%d %s" count label))))
+    (mevedel-menu--state-description "Memory" (string-join labels ", ")
+                                     (when (or (> (or (plist-get counts :recovery) 0) 0)
+                                               (> (or (plist-get counts :unavailable) 0) 0)) 'warning))))
+
 (defun mevedel-menu--tools-description ()
   "Return the top-level tools row description."
   (mevedel-menu--state-description
@@ -1101,6 +1119,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (let ((context (mevedel-menu--context)))
     (pcase area
       ('top
+       (mevedel-memory-list-summary context)
        (transient-setup 'mevedel-menu--top))
       ('navigate
        (transient-setup 'mevedel-menu--navigate))
@@ -1111,6 +1130,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
       ('permissions
        (mevedel-cockpit-call-in-data
         context #'mevedel-permissions-list-open context))
+      ('memory
+       (mevedel-cockpit-call-in-data context #'mevedel-memory-list-open context))
       ('model
        (mevedel-menu--open-model))
       ('goal
@@ -1270,6 +1291,11 @@ nothing to restore."
   "Open the permissions cockpit surface."
   (interactive)
   (mevedel-menu-open 'permissions))
+
+(defun mevedel-menu--open-memory ()
+  "Open the workspace memory proposals cockpit."
+  (interactive)
+  (mevedel-menu-open 'memory))
 
 (defun mevedel-menu--open-model ()
   "Open the model cockpit surface."
@@ -1433,7 +1459,7 @@ nothing to restore."
      "/mode MODE, /model MODEL"
      "/worktree create [NAME] [--for \"purpose\"] [--clean]"
      "/goal OBJECTIVE, /goal budget N|none, /goal edit|pause|resume|clear"
-     "/compact, /review, /verify, /edits, /clear, /init ..., /tokens"
+     "/compact, /remember [focus], /review, /verify, /edits, /clear, /init ..., /tokens"
      ""
      "Modes"
      "ask       Prompt for edits and uncertain execution."
@@ -1509,6 +1535,7 @@ nothing to restore."
                                        "none"))))]
    ["Cockpits"
     :pad-keys t
+    ("l" mevedel-menu--open-memory :description mevedel-menu--memory-description)
     ("t" mevedel-menu--open-tools
      :description mevedel-menu--tools-description)
     ("x" mevedel-menu--open-executions
@@ -1528,8 +1555,7 @@ nothing to restore."
     ("g" "gptel menu" mevedel-menu--open-gptel)
     ("?" "Help" mevedel-menu--open-help)]]
   (interactive)
-  (mevedel-menu--context)
-  (transient-setup 'mevedel-menu--top))
+  (mevedel-menu-open 'top))
 
 (transient-define-prefix mevedel-menu--control ()
   "Session control cockpit surface.

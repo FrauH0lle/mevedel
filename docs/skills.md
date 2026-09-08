@@ -150,11 +150,17 @@ Bundled skills currently include:
   isolation and mirroring the `/worktree` defaults when explicit
   model-driven fallback is needed.
 - `analyze-log` — user-invocable gptel HTTP log analysis helper.
+- `frontend` — guidance for complete frontend implementations across mobile
+  and desktop.
+- `clean-work` — user-only housekeeping for confirmed obsolete shared working
+  material, using normal ApplyPatch permissions and review.
 - `learn` — user-invocable durable write-back helper. Repository-derived
   contributor facts go to the nearest applicable `AGENTS.md`; stable personal,
   rationale, and external-reference findings use the existing memory types.
-- `remember` — user-invocable persistent-memory review and cleanup
-  proposal helper.
+  Relevant files discovered under `work://shared` and `journal://` digests supply additional
+  evidence; the skill retains attribution, verifies cheap claims, and acknowledges
+  relevant missing captures without treating repeated summaries as independent
+  evidence.
 - `artifact` — user-invocable base skill for session artifacts. Owns the
   artifacts directory lookup and the self-contained/size rules every artifact
   must obey; the other artifact skills attach it rather than restating them.
@@ -187,10 +193,12 @@ cases are covered by `test/artifact-templates-test.js` (`node
 test/artifact-templates-test.js`); like the viewer's JavaScript tests, it is
 not part of the ERT run.
 
-`remember` is intentionally report-only: it reviews configured memory
-roots, topic files, and applicable workspace configuration, then
-proposes cleanup or promotion changes. It should not edit memory unless
-the user explicitly approves the report.
+`/remember [focus]` is a local command that starts a bounded sessionless memory
+review and opens the proposals cockpit. `M-x mevedel-remember` does the same;
+a prefix argument asks for focus. In manual mode, proposals wait for explicit
+decisions through the captured-state application checks. The table provides
+full body/diff/evidence inspection, accept/reject, and checked recovery or
+reversal. The bundled `remember` skill has been removed. See [memory](memory.md).
 
 Raw skill names come from frontmatter `name` when valid, otherwise the
 containing directory name. Raw names must match `[a-z0-9-]+`; visible
@@ -237,7 +245,7 @@ remote stat per known skill at each pull check.
 ## Local Slash Commands
 
 Local slash commands are separate from `$skill` lookup. Built-ins include
-`/tokens`, `/model`, `/compact`, `/btw`, `/init`, `/prompt`, `/review`, `/verify`,
+`/tokens`, `/model`, `/compact`, `/remember`, `/btw`, `/init`, `/prompt`, `/review`, `/verify`,
 `/worktree`, `/mode`, `/skills`, `/tools`, `/edits`, `/clear`, `/plugin`,
 and `/help`. `/init` sends the repository bootstrap prompt that helps create
 or improve `AGENTS.md`, `AGENTS.local.md`, `.agents` skills and memory,
@@ -876,3 +884,8 @@ A stable system component owns invocation syntax, optionality and guidance
 lifetime, including when the catalog is empty. Catalog changes no longer rewrite
 the system prefix or require a separate persisted skills-delta acknowledgement.
 See [retained instruction context](architecture.md#retained-instruction-context).
+
+The bundled `/clean-work [focus]` workflow reviews `work://shared` for confirmed
+duplicates, superseded drafts and completed handoffs. It preserves unresolved
+work and uncertain material, checks surviving sources, and uses normal ApplyPatch
+permissions and review. It does not expire files by age or reorganize folders.

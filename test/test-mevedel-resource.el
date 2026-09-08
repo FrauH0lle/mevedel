@@ -29,26 +29,26 @@
   ,test
   (test)
   :doc "parses a canonical local address as a session-relative locator"
-  (let ((parsed (mevedel-resource-parse-address "local://notes%20one.md")))
-    (should (eq 'local (plist-get parsed :scheme)))
+  (let ((parsed (mevedel-resource-parse-address "work://notes%20one.md")))
+    (should (eq 'work (plist-get parsed :scheme)))
     (should (equal '("notes one.md")
                    (plist-get parsed :components)))
-    (should (equal "local://notes%20one.md"
+    (should (equal "work://notes%20one.md"
                    (plist-get parsed :canonical)))
     (should (eq 'session-relative (plist-get parsed :locator-class)))
     (should-not (plist-get parsed :dynamic-p)))
   :doc "classifies a bare local address as dynamic discovery"
-  (let ((parsed (mevedel-resource-parse-address "local://")))
-    (should (eq 'local (plist-get parsed :scheme)))
+  (let ((parsed (mevedel-resource-parse-address "work://")))
+    (should (eq 'work (plist-get parsed :scheme)))
     (should-not (plist-get parsed :components))
-    (should (equal "local://" (plist-get parsed :canonical)))
+    (should (equal "work://" (plist-get parsed :canonical)))
     (should (eq 'dynamic (plist-get parsed :locator-class)))
     (should (plist-get parsed :dynamic-p)))
   :doc "rejects malformed and noncanonical path components"
-  (dolist (address '("local://a//b" "local://a/../b" "local://a/./b"
-                     "local://a%2fb" "local://a%2Fb" "local://a%2eb"
-                     "local://a%2Eb" "local://a%ZZ" "local:///a"
-                     "local://a#fragment"))
+  (dolist (address '("work://a//b" "work://a/../b" "work://a/./b"
+                     "work://a%2fb" "work://a%2Fb" "work://a%2eb"
+                     "work://a%2Eb" "work://a%ZZ" "work:///a"
+                     "work://a#fragment"))
     (should-error (mevedel-resource-parse-address address)))
   :doc "rejects unknown scheme URLs instead of treating them as paths"
   (should-error (mevedel-resource-parse-address "https://example.test/a"))
@@ -87,15 +87,15 @@
 (mevedel-deftest mevedel-resource-supported-scheme-p
   (:doc "answers a scheme name with the scheme it names")
   (progn
-    (should (eq 'local (mevedel-resource-supported-scheme-p "LOCAL")))
-    (should (eq 'local (mevedel-resource-supported-scheme-p 'local)))
+    (should (eq 'work (mevedel-resource-supported-scheme-p "WORK")))
+    (should (eq 'work (mevedel-resource-supported-scheme-p 'work)))
     (should-not (mevedel-resource-supported-scheme-p "https"))))
 
 (mevedel-deftest mevedel-resource-locator-class ()
   ,test
   (test)
   :doc "recognizes supported schemes and ordinary native paths"
-  (dolist (scheme '(local artifact skill agent history memory mcp mevedel))
+  (dolist (scheme '(work artifact skill agent history memory journal mcp mevedel))
     (should (mevedel-resource-supported-scheme-p scheme)))
   (should-not (mevedel-resource-address-p "ordinary/path:with-colon"))
   (should (mevedel-resource-address-p "artifact://result.txt")))
@@ -139,7 +139,7 @@
                    "mcp://server/uri/extra"
                    "mcp://server/"
                    "agent://root/reviewer?query=1"
-                   "local://notes?query=1"
+                   "work://notes?query=1"
                    "agent://root/reviewer#not-a-pointer"
                    "agent://root/reviewer#/%7E0"
                    "agent://root/reviewer#/bad~2escape"))
@@ -197,7 +197,7 @@
                    :workspace workspace))
          (resource-root-function
           (symbol-function 'mevedel-resource--root)))
-    (dolist (scheme '(local artifact skill agent history memory mcp mevedel))
+    (dolist (scheme '(work artifact skill agent history memory journal mcp mevedel))
       (cl-letf (((symbol-function 'mevedel-resource--root)
                  (lambda (root-scheme owner)
                    (unless (eq root-scheme scheme)
@@ -224,7 +224,7 @@
           (should
            (equal (mapcar #'car (plist-get metadata :roots))
                   (pcase scheme
-                    ('local '(local))
+                    ('work '(work))
                     ('artifact '(artifact))
                     ('mevedel '(mevedel)))))))))
   :doc "drops remote skill and memory roots before identity lookup"
@@ -272,7 +272,7 @@
   (let* ((save-path (make-temp-file "mevedel-resource-session-" t))
          (local (file-name-concat save-path "local"))
          (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
-         (address "local://notes.md")
+         (address "work://notes.md")
          path seen-address)
     (unwind-protect
         (progn
@@ -307,7 +307,7 @@
                               (file-name-concat save-path "local" "escape"))
           (should-error
            (mevedel-resource-prepare
-            'read "local://escape/missing.txt" (list :session session))))
+            'read "work://escape/missing.txt" (list :session session))))
       (delete-directory save-path t)
       (delete-directory outside t))))
 
@@ -333,7 +333,7 @@
   :doc "prepares a new local ApplyPatch target without materializing its root"
   (let* ((save-path (make-temp-file "mevedel-resource-patch-" t))
          (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
-         (address "local://notes/new.txt")
+         (address "work://notes/new.txt")
          (local-root (file-name-concat save-path "local"))
          (expected (file-name-concat local-root "notes" "new.txt")))
     (unwind-protect
@@ -356,7 +356,7 @@
   :doc "includes the authored address without exposing session storage"
   (let* ((save-path (make-temp-file "mevedel-resource-validation-" t))
          (session (mevedel-session--create :authority-mode 'pid-lock :save-path save-path))
-         (address "local://notes/../bad.txt")
+         (address "work://notes/../bad.txt")
          message)
     (unwind-protect
         (condition-case err
@@ -381,7 +381,7 @@
          (artifact-root (file-name-concat save-path "tool-results"))
          (pending (file-name-concat artifact-root
                                     ".mevedel-pending-executions"))
-         (address "local://note.md")
+         (address "work://note.md")
          physical
          renamed-save)
     (unwind-protect
@@ -398,12 +398,12 @@
           (let ((listing
                  (mevedel-resource-execute
                   (mevedel-resource-prepare
-                   'read "local://" (list :session session))))
+                   'read "work://" (list :session session))))
                 (artifacts
                  (mevedel-resource-execute
                   (mevedel-resource-prepare
                    'read "artifact://" (list :session session)))))
-            (should (string-match-p "local://note.md"
+            (should (string-match-p "work://note.md"
                                     (plist-get listing :result)))
             (should-not (string-match-p "escape" (plist-get listing :result)))
             (should (string-match-p "artifact://published.log"
@@ -474,28 +474,29 @@
           (let ((local-read
                  (mevedel-resource-execute
                   (mevedel-resource-prepare
-                   'read "local://" (list :session session))))
+                   'read "work://" (list :session session))))
                 (artifact-read
                  (mevedel-resource-execute
                   (mevedel-resource-prepare
                    'read "artifact://" (list :session session))))
                 (grep-path nil))
-            (should (string-match-p "local://notes.md"
+            (should (string-match-p "work://notes.md"
                                     (plist-get local-read :result)))
-            (should (string-match-p "local://plans/current.md"
+            (should (string-match-p "work://plans/current.md"
                                     (plist-get local-read :result)))
             (should (string-match-p "artifact://answer.txt"
                                     (plist-get artifact-read :result)))
             (mevedel-resource-execute
-             (mevedel-resource-prepare 'grep "local://"
+             (mevedel-resource-prepare 'grep "work://"
                                         (list :session session))
              (lambda (path authored)
                (setq grep-path (list path authored))))
-            (should (equal (list local-root "local://") grep-path))
+            (should (equal (list (list :path local-root :address "work://"))
+                           (plist-get (car grep-path) :resource-search-roots)))
             ;; A bare listing address is never a patch endpoint.
             (should-error
              (mevedel-resource-prepare
-              'apply-patch "local://" (list :session session))
+              'apply-patch "work://" (list :session session))
              :type 'mevedel-resource-error)))
       (delete-directory save-path t))))
 
@@ -577,14 +578,14 @@
             (insert "shared note"))
           (mevedel-resource-execute
            (mevedel-resource-prepare
-            'read "local://shared.md" (list :session parent-session))
+            'read "work://shared.md" (list :session parent-session))
            (lambda (physical _authored) (setq parent-path physical)))
           ;; A retained agent conversation buffer owns the parent session, so
           ;; its context resolves the same physical root.
           (with-current-buffer agent-buffer
             (setq-local mevedel--session parent-session)
             (mevedel-resource-execute
-             (mevedel-resource-prepare 'read "local://shared.md" nil)
+             (mevedel-resource-prepare 'read "work://shared.md" nil)
              (lambda (physical _authored) (setq agent-path physical))))
           (should (equal (file-name-concat local-root "shared.md")
                          parent-path))

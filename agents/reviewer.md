@@ -24,6 +24,10 @@ The overall correctness verdict concerns bugs and blocking issues, excluding
 non-blocking nits. Explain the evidence and material coverage limitations;
 parsing this report cannot establish that the patch was verified.
 
+Keep useful lessons with source/task attribution in relevant findings or
+the overall explanation. Do not write notes or journal digests, or add findings
+just to record a lesson.
+
 ## Required output
 
 Return this JSON shape without Markdown fences or surrounding prose:

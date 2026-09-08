@@ -877,7 +877,7 @@
         (let ((draft (mevedel-view--input-text)))
           (should (string-match-p "Plan feedback:" draft))
           (should (string-match-p "complete replacement" draft))
-          (should (string-match-p "local://plans/current.md" draft))
+          (should (string-match-p "work://plans/current.md" draft))
           (should-not (string-match-p "local/plans/current.md" draft))
           (should-not (string-match-p "old draft" draft)))))))
 

@@ -34,6 +34,10 @@
 ;; `mevedel-goal'
 (declare-function mevedel-goal-active-context "mevedel-goal" (session))
 
+;; `mevedel-journal-index'
+(declare-function mevedel-journal-index-prompt "mevedel-journal-index" (workspace))
+(autoload 'mevedel-journal-index-prompt "mevedel-journal-index")
+
 ;; `mevedel-resource'
 (declare-function mevedel-resource-completion-metadata
                   "mevedel-resource" (context &optional scheme))
@@ -548,21 +552,19 @@ present."
                      (dolist (entry (plist-get metadata :agents))
                        (when (plist-get entry :record)
                          (throw 'found t)))))
-         (memory (catch 'found
-                   (dolist (entry (plist-get metadata :memory-roots))
-                     (when (file-directory-p
-                            (plist-get (plist-get entry :root) :dir))
-                       (throw 'found t)))))
+         (memory (plist-get metadata :memory-roots))
          (lines nil))
     (push (concat "- `mevedel://` - packaged documentation for Mevedel; use "
                   "Read, Glob, or Grep. This family is available without a "
                   "session and exposes no package source code.")
           lines)
     (when session
-      (push (concat "- `local://` - writable session scratchpad shared by the "
-                    "parent and retained agents. Use Read, Glob, and Grep to "
-                    "inspect it and ApplyPatch to keep notes, findings, "
-                    "contracts, and handoffs outside workspace source files.")
+      (push (concat "- `work://` - working files; use Read, Glob, Grep, and "
+                    "ApplyPatch. `work://plans/` is session-owned. "
+                    "`work://shared/` is workspace-owned and shared across sessions "
+                    "and agents. Put working notes and handoffs there; search first "
+                    "and update relevant existing files. Choose filenames and folders "
+                    "as needed. Shared writes require ordinary workspace edit authority.")
             lines))
     (when session
       (push (concat "- `artifact://` - session-owned persisted tool and "
@@ -590,11 +592,18 @@ present."
                     "`history://root/PATH` for a retained agent conversation.")
             lines))
     (when memory
-      (push (concat "- `memory://` - existing configured persistent-memory "
+      (push (concat "- `memory://` - configured persistent-memory "
                     "roots. `memory://root` reads the ordered union; a topic "
                     "is `memory://ROOT-KEY/RELATIVE-PATH`, where ROOT-KEY is "
                     "the readable key listings and search results disclose, "
-                    "such as `local-mevedel` or `global-agents`.")
+                    "such as `local-mevedel` or `global-agents`. Use ApplyPatch for explicit "
+                    "root descendants with normal edit permissions; `memory://root` "
+                    "and root-only addresses are not writable.")
+            lines))
+    (when (plist-get metadata :journal)
+      (push (concat "- `journal://` - published workspace digests; use Read, "
+                    "Glob, or Grep. These read-only records are dated evidence, "
+                    "not current instructions or permission to resume work.")
             lines))
     (when (plist-get metadata :mcp-servers)
       (push "- `mcp://` - configured MCP servers and their resources." lines))
@@ -657,6 +666,11 @@ present."
               (mevedel-system--memory-context-prompt
                (mevedel-system-context-workspace context))))
 
+(mevedel-define-prompt-component journal
+  :producer (lambda (context)
+              (mevedel-journal-index-prompt
+               (mevedel-system-context-workspace context))))
+
 (mevedel-define-prompt-component environment
   :producer (lambda (context)
               (let ((session (mevedel-system--context-session context)))
@@ -682,7 +696,7 @@ present."
                 (mevedel-system-render-prompt-file "prompts/goals/policy.md"))))
 
 (defconst mevedel-system-retained-components
-  '(workspace-config memory environment skills active-goal goal-policy resources)
+  '(workspace-config memory journal environment skills active-goal goal-policy resources)
   "Named observations delivered in conversation history for retained requests.")
 
 (mevedel-define-prompt-component resources
@@ -727,6 +741,7 @@ present."
                 skill-policy
                 workspace-config
                 memory
+                journal
                 environment
                 skills
                 active-goal

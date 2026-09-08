@@ -58,9 +58,13 @@ A move uses Update followed by Move to, with optional content hunks:
 ```
 
 The source and destination form one indivisible operation. Related operations
-can share one proposal; keep unrelated changes separate. Non-bare `local://`
-targets may mix with ordinary paths outside Plan mode. Standalone/sticky Plan
-mode permits only all-local proposals, and Directive Planning permits none.
+can share one proposal; keep unrelated changes separate. Working-file descendants
+and explicit `memory://ROOT-KEY/RELATIVE-PATH` targets may mix with ordinary paths
+outside Plan mode, subject to normal edit permissions and review. Bare, root-only,
+and union addresses are invalid targets; other resource families are read-only.
+Standalone/sticky Plan mode permits only session-owned `work://` descendants for
+every source and destination. `work://shared/...`, memory, and ordinary paths do
+not receive that exception. Directive Planning permits no patches.
 
 ## Failure and review
 

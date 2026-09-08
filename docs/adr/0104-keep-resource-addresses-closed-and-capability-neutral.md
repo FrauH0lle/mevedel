@@ -2,8 +2,8 @@
 
 Status: accepted
 
-Mevedel exposes one closed resolver for `local://`, `artifact://`, `skill://`,
-`agent://`, `history://`, `memory://`, `mcp://`, and `mevedel://`. A resource
+Mevedel exposes one closed resolver for `work://`, `artifact://`, `skill://`,
+`agent://`, `history://`, `memory://`, `journal://`, `mcp://`, and `mevedel://`. A resource
 address is a plain serialization of a canonical locator, not a grant:
 preparation validates and resolves an opaque attempt plus logical authority
 facts before permission, and authorized execution consumes that attempt without
@@ -11,7 +11,7 @@ reparsing or exposing backing paths. Existing `Read`, `Glob`, `Grep`, and
 reviewed `ApplyPatch`
 surfaces keep their operation-specific capabilities. Standalone and sticky Plan
 mode permit `ApplyPatch` only when every source and destination operand is a
-non-bare `local://` descendant, so durable plans and notes stay editable while
+non-bare session-owned `work://` descendant outside `work://shared/`, so durable plans and notes stay editable while
 workspace mutation remains denied tree-wide; Directive Planning stays fully
 read-only.
 
@@ -28,3 +28,27 @@ the authored alias. There is no unqualified name alias. `mevedel://` is the one
 always-advertised family and exposes only installed Markdown documentation
 through Read, Glob, and Grep; it adds no source browser, compression layer,
 registry, mutation path, or extra aliases.
+
+Workspace journals add cross-session evidence without exposing private capture
+state. `journal://` therefore admits only validated public records through Read,
+Glob, and Grep. Searches operate on validated document snapshots using the
+existing search helpers, so a private or malformed file cannot enter results
+through raw directory traversal. Authorized operations validate current storage;
+only prompt discovery uses a disposable, ten-second workspace observation.
+Completion consumes that observation without filesystem access. The observation
+does not confer permission or decide retention, and can be discarded at any time.
+
+Working files now use `work://` with a workspace-owned `shared/` subtree and
+session-owned descendants elsewhere. The scope evaluation found two missed
+cross-session corrections with Luna when publication from a private scratchpad
+was required; shared-default recovered all six cases. A follow-up freeform run
+recovered all six cases per model without prescribed filenames or directories.
+This supports one address family and unstructured shared-default working notes.
+Shared storage is outside session persistence so cleanup of one session cannot
+remove another session's working files. Separate workspace roots remain isolated.
+
+Explicit memory-root descendants now admit ApplyPatch through the same native
+transaction. Shared and memory writes expose their prepared backing paths only
+to filesystem permission policy, retain address presentation, and reject root
+rebinding. Neither can borrow the session-only Plan exception. Root discovery
+addresses and journal/artifact evidence remain non-writable.

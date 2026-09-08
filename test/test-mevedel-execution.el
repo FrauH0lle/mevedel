@@ -68,15 +68,16 @@
                (lambda (&rest args)
                  (apply original-make-process
                         (plist-put args :sentinel #'ignore)))))
-      (should-not
-       (mevedel-execution-start-one-shot
-        (lambda (child-result)
-          (setq result child-result
-                done t))
-        :name "mevedel-test-missed-sentinel"
-        :command '("sh" "-c" "printf recovered; exit 7")
-        :workdir temporary-file-directory
-        :writable-roots (list temporary-file-directory)))
+      (should
+       (functionp
+        (mevedel-execution-start-one-shot
+         (lambda (child-result)
+           (setq result child-result
+                 done t))
+         :name "mevedel-test-missed-sentinel"
+         :command '("sh" "-c" "printf recovered; exit 7")
+         :workdir temporary-file-directory
+         :writable-roots (list temporary-file-directory))))
       (with-timeout (2 (error "Missed sentinel was not recovered"))
         (while (not done)
           (accept-process-output nil 0.05)))

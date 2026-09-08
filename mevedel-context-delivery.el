@@ -136,7 +136,7 @@ Each section replaces only its earlier state; omitted sections stay applicable."
                        (replace-regexp-in-string "\\`## [^\n]+\n+" "" body))))))
    (cl-remove-if-not
     (lambda (name) (memq name names))
-    '(workspace-config goal-policy environment active-goal skills memory resources))))
+    '(workspace-config goal-policy environment active-goal skills memory journal resources))))
 
 (defun mevedel-context-delivery-stage (fsm)
   "Stage changed context sections for FSM as retained messages.

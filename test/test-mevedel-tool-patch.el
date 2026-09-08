@@ -10,6 +10,7 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-reminders)
 (require 'mevedel-tool-patch)
+(require 'mevedel-journal-claim)
 (require 'mevedel-view)
 (require 'mevedel-view-interaction)
 (require 'helpers
@@ -125,7 +126,7 @@
            (buffer (generate-new-buffer " *mevedel-apply-patch-resource*"))
            (patch (string-join
                    '("*** Begin Patch"
-                     "*** Add File: local://notes/new.txt"
+                     "*** Add File: work://notes/new.txt"
                      "+created"
                      "*** End Patch")
                    "\n"))
@@ -152,7 +153,7 @@
                      (with-temp-buffer
                        (insert-file-contents local-path)
                        (buffer-string))))
-      (should (string-match-p "local://notes/new.txt"
+      (should (string-match-p "work://notes/new.txt"
                               (plist-get result :result)))
       (should (= 0 (hash-table-count (mevedel-session-touched-files session)))))))
 
@@ -170,8 +171,8 @@
                    :working-directory root :permission-mode 'edits
                    :touched-files (make-hash-table :test #'equal)))
          (buffer (generate-new-buffer " *mevedel-apply-patch-mixed-move*"))
-         (local-source "local://notes/from-local.txt")
-         (local-target "local://notes/to-local.txt")
+         (local-source "work://notes/from-local.txt")
+         (local-target "work://notes/to-local.txt")
          (ordinary-source (file-name-concat root "from-ordinary.txt"))
          (ordinary-target (file-name-concat root "to-ordinary.txt"))
          result)
@@ -626,6 +627,138 @@
         (kill-buffer buffer))
       (when (file-directory-p root) (delete-directory root t))))
 
+  :doc "Preserves intervening disk edits when buffer synchronization fails"
+  (let* ((root (make-temp-file "mevedel-patch-intervening-" t))
+         (first (file-name-concat root "one.txt"))
+         (second (file-name-concat root "two.txt")) buffer)
+    (unwind-protect
+        (progn
+          (with-temp-file first (insert "old one\n"))
+          (with-temp-file second (insert "old two\n"))
+          (setq buffer (find-file-noselect second))
+          (with-current-buffer buffer
+            (add-hook 'before-change-functions
+                      (lambda (&rest _)
+                        (write-region "intervening edit\n" nil first nil 'silent)
+                        (error "Sync failure after external edit")) nil t))
+          (should-error
+           (mevedel-tool-patch-commit
+            (list (list :action 'write :path first :content "new one\n")
+                  (list :action 'write :path second :content "new two\n")))
+           :type 'mevedel-tool-patch-partial-rollback)
+          (should (equal "intervening edit\n" (mevedel-tool-patch--read-file first)))
+          (should (equal "old two\n" (mevedel-tool-patch--read-file second))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-directory root t)))
+
+  :doc "Expected before-state rejects changed bytes and unexpected creation before any write"
+  (let* ((root (make-temp-file "mevedel-patch-expected-" t))
+         (first (file-name-concat root "one.txt"))
+         (second (file-name-concat root "two.txt")))
+    (unwind-protect
+        (progn
+          (with-temp-file first (insert "old one\n"))
+          (let ((before (mevedel-tool-patch--snapshot first)))
+            (write-region "changed\n" nil first nil 'silent)
+            (should-error (mevedel-tool-patch-commit
+                           (list (list :action 'write :path second :content "new two\n")
+                                 (list :action 'write :path first :content "new one\n" :before before))))
+            (should-not (file-exists-p second))
+            (should (equal "changed\n" (mevedel-tool-patch--read-file first))))
+          (should-error (mevedel-tool-patch-commit
+                         (list (list :action 'write :path first :content "new one\n"
+                                     :before (list :path first :exists nil)))))
+          (should (equal "changed\n" (mevedel-tool-patch--read-file first))))
+      (delete-directory root t)))
+
+  :doc "Lost target ownership prevents rollback from undoing a successor's files"
+  (let* ((root (make-temp-file "mevedel-patch-owner-" t))
+         (first (file-name-concat root "one.txt"))
+         (second (file-name-concat root "two.txt"))
+         (key (file-name-concat root "claims"))
+         (claim (mevedel-journal-claim-acquire key 180))
+         successor buffer)
+    (unwind-protect
+        (progn
+          (with-temp-file first (insert "old one\n"))
+          (with-temp-file second (insert "old two\n"))
+          (setq buffer (find-file-noselect first))
+          (with-current-buffer buffer
+            (add-hook 'before-change-functions
+                      (lambda (&rest _)
+                        (mevedel-journal-claim-settle claim 'cancelled "")
+                        (setq successor (mevedel-journal-claim-acquire key 180))
+                        (write-region "successor edit\n" nil second nil 'silent)) nil t))
+          (should-error
+           (mevedel-tool-patch-commit
+            (list (list :action 'write :path first :content "new one\n")
+                  (list :action 'write :path second :content "new two\n"))
+            (lambda () (and (equal claim (mevedel-journal-claim-current key))
+                             (not (mevedel-journal-claim-outcome claim)))))
+           :type 'mevedel-tool-patch-partial-rollback)
+          (should successor)
+          (should-not (mevedel-journal-claim-outcome successor))
+          (should (equal "new one\n" (mevedel-tool-patch--read-file first)))
+          (should (equal "successor edit\n" (mevedel-tool-patch--read-file second))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (when successor (mevedel-journal-claim-settle successor 'cancelled ""))
+      (delete-directory root t)))
+
+  :doc "Preserves an intervening unsaved buffer edit when another synchronization fails"
+  (let* ((root (make-temp-file "mevedel-patch-buffer-intervening-" t))
+         (first (file-name-concat root "one.txt"))
+         (second (file-name-concat root "two.txt")) first-buffer second-buffer)
+    (unwind-protect
+        (progn
+          (with-temp-file first (insert "old one\n"))
+          (with-temp-file second (insert "old two\n"))
+          (setq first-buffer (find-file-noselect first) second-buffer (find-file-noselect second))
+          (with-current-buffer second-buffer
+            (add-hook 'before-change-functions
+                      (lambda (&rest _)
+                        (with-current-buffer first-buffer
+                          (goto-char (point-max)) (insert "user draft\n"))
+                        (error "Sync failure with a draft")) nil t))
+          (should-error
+           (mevedel-tool-patch-commit
+            (list (list :action 'write :path first :content "new one\n")
+                  (list :action 'write :path second :content "new two\n")))
+           :type 'mevedel-tool-patch-partial-rollback)
+          (with-current-buffer first-buffer
+            (should (equal "new one\nuser draft\n" (buffer-string)))
+            (should (buffer-modified-p)))
+          (should (equal "old one\n" (mevedel-tool-patch--read-file first)))
+          (should (equal "old two\n" (mevedel-tool-patch--read-file second))))
+      (dolist (buffer (list first-buffer second-buffer))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (delete-directory root t)))
+
+  :doc "A quit during buffer synchronization rolls back before propagating cancellation"
+  (let* ((root (make-temp-file "mevedel-patch-quit-" t))
+         (path (file-name-concat root "one.txt")) buffer cancelled)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "old\n"))
+          (setq buffer (find-file-noselect path))
+          (with-current-buffer buffer
+            (add-hook 'before-change-functions (lambda (&rest _) (signal 'quit nil)) nil t))
+          (condition-case nil
+              (mevedel-tool-patch-commit (list (list :action 'write :path path :content "new\n")))
+            (quit (setq cancelled t)))
+          (should cancelled)
+          (should (equal "old\n" (mevedel-tool-patch--read-file path)))
+          (should (equal "old\n" (with-current-buffer buffer (buffer-string)))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-directory root t)))
+
   :doc "Reports an incomplete rollback with the original failure and path"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-patch-partial-rollback-" t)))
@@ -689,10 +822,10 @@
                               "A complete *** Begin Patch / *** End Patch patch."))
                      (mevedel-tool-args tool)))
       (dolist (text '("Standalone or sticky Plan mode"
-                      "every source and destination is a non-bare `local://` descendant"
-                      "Disallowed or malformed targets are denied before materialization"
+                      "permits only session-owned `work://` descendants"
+                      "Shared, memory, ordinary, malformed, and root-only endpoints are denied before materialization"
                       "Directive Planning remains read-only"
-                      "Outside Plan mode, local and ordinary paths may share one atomic proposal"))
+                      "Outside Plan mode, resource and ordinary paths may share one atomic proposal"))
         (should (string-match-p
                  (mapconcat #'regexp-quote (split-string text " " t)
                             "[[:space:]]+")
@@ -1244,7 +1377,7 @@
           (mevedel-tool-patch--write-file path bytes nil t)
           (let ((snapshots (list (mevedel-tool-patch--snapshot path))))
             (mevedel-tool-patch--write-file path "new")
-            (mevedel-tool-patch--restore-snapshots snapshots)
+            (mevedel-tool-patch--restore-snapshots snapshots (list (mevedel-tool-patch--snapshot path)))
             (should
              (equal bytes
                     (with-temp-buffer
@@ -1273,7 +1406,7 @@
             (set-file-modes first-directory #o500)
             (set-file-modes second-directory #o500)
             (let ((failures
-                   (mevedel-tool-patch--restore-snapshots snapshots)))
+                   (mevedel-tool-patch--restore-snapshots snapshots (mapcar #'mevedel-tool-patch--snapshot (list first second)))))
               (should (equal (list first second) (mapcar #'car failures)))
               (dolist (failure failures)
                 (should (memq 'error
@@ -1502,7 +1635,7 @@
   (let ((default-directory temporary-file-directory))
     (should (equal (list (expand-file-name "ordinary.txt"))
                    (mevedel-tool-patch--get-paths
-                    '(:patch "*** Begin Patch\n*** Add File: local://scratch.txt\n+x\n*** Delete File: ordinary.txt\n*** End Patch"))))))
+                    '(:patch "*** Begin Patch\n*** Add File: work://scratch.txt\n+x\n*** Delete File: ordinary.txt\n*** End Patch"))))))
 
 (mevedel-deftest mevedel-tool-patch--render
   (:doc "Produces one collapsible aggregate with per-file diff blocks") ,test (test)
@@ -1611,6 +1744,13 @@
     (should (string-search "+line 20" preview))
     (should-not (string-search "+line 21" preview))
     (should (string-search "…" preview))))
+
+(mevedel-deftest mevedel-tool-patch--assert-current
+  (:doc "passes without a check or with a confirming one and fails a stale owner")
+  (progn
+    (should-not (mevedel-tool-patch--assert-current nil))
+    (should-not (mevedel-tool-patch--assert-current (lambda () t)))
+    (should-error (mevedel-tool-patch--assert-current (lambda () nil)))))
 
 (provide 'test-mevedel-tool-patch)
 ;;; test-mevedel-tool-patch.el ends here

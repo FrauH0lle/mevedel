@@ -1,0 +1,12 @@
+diff --git a/gptel-openai-extras.el b/gptel-openai-extras.el
+index f24c1d6..0eecb03 100644
+--- a/gptel-openai-extras.el
++++ b/gptel-openai-extras.el
+@@ -332,5 +332,6 @@ to either `high' or `max'."
+                                  (if (eq gptel-reasoning-effort 'disabled)
+                                      "disabled"
+                                    "enabled")))
+-      (plist-put plist :reasoning_effort (symbol-name gptel-reasoning-effort)))
++      (unless (eq gptel-reasoning-effort 'disabled)
++        (plist-put plist :reasoning_effort (symbol-name gptel-reasoning-effort))))
+     plist))

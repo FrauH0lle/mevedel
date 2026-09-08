@@ -2086,6 +2086,8 @@ foreground state.  Yielded terminal output still goes to its owner mailbox."
               additional-permissions sandbox-permissions session owner
               teardown-function)
   "Start one confined COMMAND and call CALLBACK with terminal facts.
+Return an idempotent cancellation function. Cancellation stops this call's
+child and delivers its ordinary terminal callback and cleanup.
 
 NAME identifies the operating-system process.  WORKDIR and WRITABLE-ROOTS
 describe its filesystem boundary; TEMPORARY-ROOT is the writable temporary
@@ -2109,6 +2111,7 @@ discards the process without invoking CALLBACK."
                  (secure-hash 'sha256 (format "%S" command)))))
          (attempt-recorded-p nil)
          (started-p nil)
+         child
          (current-facts nil)
          (preparation
           (mevedel-sandbox-prepare
@@ -2188,39 +2191,41 @@ discards the process without invoking CALLBACK."
            (mevedel-execution-telemetry-safe-facts
             (plist-get preparation :facts))))
          (setq started-p
-               (and
-                (mevedel-execution--start-process
-                 (lambda (child-result)
-                   (finish child-result (plist-get preparation :facts)))
-                 name (plist-get preparation :command) workdir timeout
-                 session owner #'teardown))))
+               (setq child
+                     (mevedel-execution--start-process
+                      (lambda (child-result)
+                        (finish child-result (plist-get preparation :facts)))
+                      name (plist-get preparation :command) workdir timeout
+                      session owner #'teardown))))
         ('confined
          (setq current-facts (plist-get preparation :facts))
          (setq
           started-p
-          (and
-           (mevedel-execution--start-process
-            (lambda (child-result)
-              (let ((launch-failed
-                     (mevedel-sandbox-launch-failed-p
-                      preparation child-result)))
-                (let ((facts
-                       (if launch-failed
-                           (mevedel-sandbox--record-launch-failure
-                            child-result workdir)
-                         (plist-get preparation :facts)))
-                      (clean-result
-                       (mevedel-sandbox-strip-marker
-                        preparation child-result)))
-                  (setq started-p (not launch-failed)
-                        current-facts facts)
-                  (mevedel-sandbox-cleanup preparation)
-                  (finish clean-result facts))))
-            name (plist-get preparation :command) workdir timeout session owner
-            #'teardown))))
+          (setq child
+                (mevedel-execution--start-process
+                 (lambda (child-result)
+                   (let ((launch-failed
+                          (mevedel-sandbox-launch-failed-p
+                           preparation child-result)))
+                     (let ((facts
+                            (if launch-failed
+                                (mevedel-sandbox--record-launch-failure
+                                 child-result workdir)
+                              (plist-get preparation :facts)))
+                           (clean-result
+                            (mevedel-sandbox-strip-marker
+                             preparation child-result)))
+                       (setq started-p (not launch-failed)
+                             current-facts facts)
+                       (mevedel-sandbox-cleanup preparation)
+                       (finish clean-result facts))))
+                 name (plist-get preparation :command) workdir timeout session owner
+                 #'teardown))))
         (_ (error "Unknown sandbox preparation state: %s"
                   (plist-get preparation :state))))
-      nil)))
+      (lambda ()
+        (when child
+          (mevedel-execution-process-stop child 'aborted))))))
 
 (defun mevedel-execution--owner-teardown-result ()
   "Return structured settlement for a synchronously discarded child."
@@ -2259,6 +2264,7 @@ All keyword arguments follow `mevedel-execution-start-one-shot'."
     (callback name command read-paths writable-roots
               &key timeout session owner teardown-callback)
   "Start external helper COMMAND and call CALLBACK when it settles.
+Return the helper's idempotent cancellation function.
 
 READ-PATHS are mounted read-only.  WRITABLE-ROOTS are explicit artifact
 directories.  A private writable scratch directory is the helper's working

@@ -567,7 +567,7 @@
             (dolist (prompt prompts)
               (let ((path-position
                      (string-search
-                      "local://plans/accepted-20260813-120000.md"
+                      "work://plans/accepted-20260813-120000.md"
                       prompt))
                     (plan-position (string-search body prompt))
                     (instruction-position
