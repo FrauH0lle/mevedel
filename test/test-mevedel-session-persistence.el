@@ -15,6 +15,12 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 (require 'mevedel-resource)
+(require 'mevedel-journal-pins)
+(require 'mevedel-journal-test-support
+         (file-name-concat
+          (file-name-directory
+           (or buffer-file-name load-file-name byte-compile-current-file))
+          "mevedel-journal-test-support"))
 
 
 (mevedel-deftest mevedel-session-persistence-write-current-buffer-atomically ()
@@ -2049,7 +2055,7 @@
                     'mevedel-session-persistence--read-lock)
                    (lambda (&rest _) nil))
                   ((symbol-function
-                    'mevedel-session-persistence--write-lock-atomic)
+                    'mevedel-session-persistence--change-lock)
                    (lambda (&rest _) nil)))
           (should-error
            (mevedel-session-persistence-lock-acquire
@@ -2217,6 +2223,32 @@
             (should (equal "other-host" (plist-get plist :hostname)))))
       (delete-directory tempdir t))))
 
+
+(mevedel-deftest mevedel-session-persistence--change-lock ()
+  ,test
+  (test)
+  :doc "compares holders under native mutation locking and preserves a changed record"
+  (let* ((directory (make-temp-file "mevedel-pid-mutation-" t))
+         (path (file-name-concat directory ".lock"))
+         (create-lockfiles t))
+    (unwind-protect
+        (progn
+          (should (mevedel-session-persistence--change-lock path nil "first"))
+          (let ((first (mevedel-session-persistence--read-lock path)))
+            (should-not (mevedel-session-persistence--change-lock path nil "contender"))
+            (lock-file path)
+            (unwind-protect
+                (should-not (mevedel-session-persistence--change-lock path first "reentrant"))
+              (unlock-file path))
+            (should (mevedel-session-persistence--change-lock path first "second"))
+            (should-not (mevedel-session-persistence--change-lock path first nil))
+            (should (equal "second" (plist-get (mevedel-session-persistence--read-lock path) :buffer)))
+            (should (mevedel-session-persistence--change-lock
+                     path (mevedel-session-persistence--read-lock path) nil))
+            (should-not (file-exists-p path))
+            (should-not (file-locked-p path))))
+      (unlock-file path)
+      (delete-directory directory t))))
 
 (mevedel-deftest mevedel-session-persistence-lock-release ()
   ,test
@@ -3896,6 +3928,39 @@
 (mevedel-deftest mevedel-session-persistence-cleanup-expired (:quiet t)
   ,test
   (test)
+  :doc "keeps a pinned file session until capture publication or discard"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let ((buffer (generate-new-buffer " *journal-pin-cleanup*"))
+          (session (mevedel-session-create "pinned" workspace))
+          (mevedel-session-max-age-days 7)
+          (mevedel-session-keep-recent-count nil)
+          (mevedel-session-persistence--cleanup-throttle (make-hash-table :test #'equal)))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer (org-mode) (insert "Saved source\n"))
+            (mevedel-session-artifacts-save session buffer)
+            (let* ((directory (mevedel-session-save-path session))
+                   (sidecar (mevedel-session-artifacts-sidecar-path directory))
+                   (metadata (mevedel-session-codec-read sidecar))
+                   (capture (make-string 64 ?a)))
+              (plist-put metadata :updated-at
+                         (format-time-string "%FT%H-%M-%S"
+                                             (time-subtract (current-time) (* 14 86400))))
+              (mevedel-session-codec-write sidecar metadata)
+              (mevedel-journal-pins-retain directory capture nil)
+              (mevedel-session-persistence-lock-release directory session)
+              (should (= 0 (mevedel-session-persistence-cleanup-expired workspace t)))
+              (should (file-directory-p directory))
+              (mevedel-journal-pins-release directory capture)
+              (should (= 1 (mevedel-session-persistence-cleanup-expired workspace t)))
+              (should-not (file-directory-p directory))))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer))
+        (delete-directory tempdir t)
+        (mevedel-workspace-clear-registry))))
+
   :doc "deletes sessions older than the cap"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -5241,6 +5306,69 @@
             (should-error
              (mevedel-session-persistence-resume-id workspace "../escape"))))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-session-persistence--pid-alive-p
+  (:doc "distinguishes a live process from an actually exited child")
+  (should (mevedel-session-persistence--pid-alive-p (emacs-pid)))
+  (let* ((child (make-process :name "session-dead-pid" :command '("true") :noquery t))
+         (pid (process-id child)))
+    (while (process-live-p child) (accept-process-output child 0.01))
+    (should (integerp pid))
+    (should-not (mevedel-session-persistence--pid-alive-p pid))))
+
+(mevedel-deftest mevedel-session-persistence-call-with-abandoned-lock ()
+  ,test
+  (test)
+  :doc "keeps live, foreign, and unreadable PID locks and releases temporary authority"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (mevedel-test-journal-capture--turn session buffer "Request" "Result")
+     (let* ((directory (mevedel-session-save-path session))
+            (path (file-name-concat directory ".lock"))
+            called)
+       (should-not (mevedel-session-persistence-call-with-abandoned-lock directory (lambda () (setq called t))))
+       (should-not called)
+       (dolist (text '("unreadable lock" "(:hostname \"another-host\" :pid 123)"))
+         (write-region text nil path nil 'silent)
+         (should-not (mevedel-session-persistence-call-with-abandoned-lock directory (lambda () (setq called t))))
+         (should (equal text (mevedel-session-control-fs-read-file path))))
+       (delete-file path)
+       (should-error
+        (mevedel-session-persistence-call-with-abandoned-lock
+         directory (lambda () (setq called t) (error "Injected callback failure"))))
+       (should called)
+       (should-not (file-exists-p path))
+       (let* ((process (make-process :name "journal-dead-holder" :command '("true") :noquery t))
+              (pid (process-id process)))
+         (while (process-live-p process) (accept-process-output process 0.01))
+         (should (integerp pid))
+         (with-temp-file path
+           (prin1 (list :pid pid :hostname (system-name)
+                        :emacs-invocation-time mevedel-session-persistence--emacs-invocation-time
+                        :buffer "old source") (current-buffer)))
+         (should (mevedel-session-persistence-call-with-abandoned-lock directory (lambda () t)))
+         (should-not (file-exists-p path))))))
+  :doc "a resume replacing the observed stale holder prevents abandoned recovery"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (mevedel-test-journal-capture--turn session buffer "Request" "Result")
+     (let* ((directory (mevedel-session-save-path session))
+            (path (file-name-concat directory ".lock"))
+            (stale (list :pid 99999999 :hostname (system-name) :buffer "stale"))
+            called)
+       (write-region (prin1-to-string stale) nil path nil 'silent)
+       (cl-letf (((symbol-function 'mevedel-session-persistence--same-host-lock-active-p)
+                  (lambda (_)
+                    ;; A normal resume wins after recovery observed stale
+                    ;; state, before recovery attempts its checked takeover.
+                    (mevedel-session-persistence--write-lock path "resumed" stale)
+                    nil)))
+         (should-not (mevedel-session-persistence-call-with-abandoned-lock
+                      directory (lambda () (setq called t)))))
+       (should-not called)
+       (should (equal "resumed" (plist-get (mevedel-session-persistence--read-lock path) :buffer)))
+       (should-not (mevedel-session-persistence--change-lock path stale nil))
+       (should (equal "resumed" (plist-get (mevedel-session-persistence--read-lock path) :buffer)))))))
 
 (provide 'test-mevedel-session-persistence)
 ;;; test-mevedel-session-persistence.el ends here

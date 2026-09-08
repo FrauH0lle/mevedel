@@ -8,6 +8,7 @@
 (require 'gptel-request)
 (require 'mevedel-context-summary)
 (require 'mevedel-models)
+(require 'gptel-openai-oauth)
 (require 'mevedel-structs)
 (require 'mevedel-agent-conversation)
 (require 'helpers
@@ -22,6 +23,31 @@
 (defvar gptel-stream)
 (defvar gptel-tools)
 (defvar gptel-use-tools)
+
+(mevedel-deftest mevedel-context-summary-digest-policy ()
+  ,test
+  (test)
+  :doc "defaults unspecified digest reasoning only when the model supports disabling it"
+  (let ((model (make-symbol "digest-policy-model")))
+    (put model :reasoning-effort '(member disabled high max))
+    (dolist (effort '(nil high max disabled))
+      (let* ((policy (list :model model :effort effort))
+             (resolved (mevedel-context-summary-digest-policy policy)))
+        (should (eq (or effort 'disabled) (plist-get resolved :effort)))
+        (should (eq effort (plist-get policy :effort)))))
+    (put model :reasoning-effort '(member low high))
+    (should-not (plist-get (mevedel-context-summary-digest-policy (list :model model)) :effort))
+    (put model :reasoning-effort '(member none low medium high))
+    (should (eq 'none (plist-get (mevedel-context-summary-digest-policy
+                                 (list :model model)) :effort)))
+    (should (eq 'high (plist-get (mevedel-context-summary-digest-policy
+                                 (list :model model :effort 'high)) :effort))))
+  :doc "retains smaller output caps and bounds unspecified or larger caps"
+  (dolist (limit '(nil 1000 9000))
+    (let* ((policy (list :max-tokens limit))
+           (resolved (mevedel-context-summary-digest-policy policy)))
+      (should (= (or (and (eql limit 1000) limit) 4000) (plist-get resolved :max-tokens)))
+      (should (equal limit (plist-get policy :max-tokens))))))
 
 (defconst test-mevedel-context-summary--continuation
   "## Scope
@@ -60,6 +86,16 @@
 - file.el
 ## Skills Invoked
 - tdd")
+
+(defconst test-mevedel-context-summary--digest
+  "## Done
+- Observed: targeted tests passed (segment 2, tool result 4).
+## Learned
+- User correction: use the project runner (segment 2, user turn 1).
+## Surprised
+- none
+## Unfinished
+- none")
 
 (mevedel-deftest mevedel-context-summary--headings ()
   ,test
@@ -143,6 +179,25 @@
 (mevedel-deftest mevedel-context-summary--validate-output ()
   ,test
   (test)
+  :doc "an empty digest section contains only its single none marker"
+  (dolist (replacement '("- none\n- Observed: another fact (turn 1)."
+                         "- Observed: another fact (turn 1).\n- none"
+                         "- none\n  extra content"
+                         "- none\n- none"))
+    (should-error
+     (mevedel-context-summary--validate-output
+      (string-replace "## Surprised\n- none"
+                      (concat "## Surprised\n" replacement)
+                      test-mevedel-context-summary--digest)
+      'digest)))
+  (dolist (replacement '("- none"
+                         "- Observed: first fact (turn 1).\n  More detail.\n- Observed: second fact (turn 2)."))
+    (let ((digest (string-replace
+                   "## Surprised\n- none"
+                   (concat "## Surprised\n" replacement)
+                   test-mevedel-context-summary--digest)))
+      (should (equal digest (mevedel-context-summary--validate-output
+                             digest 'digest)))))
   :doc "accepts only the exact ordered purpose-specific heading contract"
   (should (equal test-mevedel-context-summary--continuation
                  (mevedel-context-summary--validate-output
@@ -216,6 +271,8 @@
       (should (equal (plist-get callback-result :outcome) 'success)))
     (should (equal (plist-get callback-result :summary)
                    test-mevedel-context-summary--continuation))
+    (should (= 100 (plist-get callback-result :input-tokens)))
+    (should (= 20 (plist-get callback-result :output-tokens)))
     (should (string-match-p "frozen evidence" (plist-get captured :prompt)))
     (should (string-match-p "older retained state"
                             (plist-get captured :prompt)))
@@ -235,6 +292,189 @@
     (should-not (plist-get captured :tools))
     (should-not (plist-get captured :use-tools))
     (should-not (buffer-live-p (plist-get captured :buffer))))
+
+  :doc "digest generation uses the frozen policy with a bounded output reserve"
+  (dolist (limit '(nil 9000 1000 codex))
+    (let ((policy (list :backend (if (eq limit 'codex)
+                                   (gptel--make-openai-oauth)
+                                 'digest-backend)
+                        :model 'digest-model
+                        :max-tokens (unless (eq limit 'codex) limit)))
+          result request-buffer)
+      (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                 (lambda (&rest _) (ert-fail "Frozen policy was re-resolved")))
+                ((symbol-function 'mevedel-model-usable-input-tokens)
+                 (lambda (resolved)
+                   (should (= (plist-get resolved :max-tokens)
+                              (if (eql limit 1000) 1000 4000)))
+                   100000))
+                ((symbol-function 'gptel-request)
+                 (lambda (prompt &rest args)
+                   (setq request-buffer (plist-get args :buffer))
+                   (should (string-match-p "frozen untrusted evidence" prompt))
+                   (should (eq (plist-get (plist-get args :context) :purpose)
+                               'digest))
+                   (should (string-match-p "## Learned"
+                                           (plist-get args :system)))
+                   (should-not (string-match-p "## Next Steps"
+                                               (plist-get args :system)))
+                   (should (equal (buffer-local-value 'gptel-max-tokens
+                                                       request-buffer)
+                                  (unless (eq limit 'codex)
+                                    (if (eql limit 1000) 1000 4000))))
+                   (funcall (plist-get args :callback)
+                            test-mevedel-context-summary--digest nil))))
+        (with-temp-buffer
+          (mevedel-context-summary-generate
+           "User corrected the runner; the next test passed." 'digest
+           (lambda (value) (setq result value)) :policy policy)))
+      (should (eq (plist-get result :outcome) 'success))
+      (should (equal (plist-get result :summary)
+                     test-mevedel-context-summary--digest))
+      (should (eq (plist-get result :model) 'digest-model))
+      (should (equal (plist-get policy :max-tokens) (unless (eq limit 'codex) limit)))
+      (should-not (buffer-live-p request-buffer))))
+
+  :doc "digest output rejects malformed sections and excessive UTF-8 bytes"
+  (dolist (text
+           (list (concat "Preamble\n" test-mevedel-context-summary--digest)
+                 (replace-regexp-in-string "- none" "" test-mevedel-context-summary--digest)
+                 (replace-regexp-in-string "## Learned" "## Surprised"
+                                           test-mevedel-context-summary--digest)
+                 (concat test-mevedel-context-summary--digest "\n## Next Steps\n- Act")
+                 (concat test-mevedel-context-summary--digest "\n```\ntext\n```")
+                 (concat test-mevedel-context-summary--digest "\n- "
+                         (make-string 6000 ?\u4e16))))
+    (let (result request-buffer)
+      (cl-letf (((symbol-function 'mevedel-model-usable-input-tokens)
+                 (lambda (_policy) 100000))
+                ((symbol-function 'gptel-request)
+                 (lambda (_prompt &rest args)
+                   (setq request-buffer (plist-get args :buffer))
+                   (funcall (plist-get args :callback) text nil))))
+        (mevedel-context-summary-generate
+         "evidence" 'digest (lambda (value) (setq result value))
+         :policy '(:backend digest-backend :model digest-model)))
+      (should (eq (plist-get result :outcome) 'error))
+      (should (eq (plist-get result :error-class) 'validation))
+      (should-not (buffer-live-p request-buffer))))
+
+  :doc "digest streaming is bounded before terminal delivery and ignores late chunks"
+  (let (callback request-buffer cancel outcomes aborted)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-model-usable-input-tokens)
+                   (lambda (_policy) 100000))
+                  ((symbol-function 'gptel-request)
+                   (lambda (_prompt &rest args)
+                     (setq request-buffer (plist-get args :buffer)
+                           callback (plist-get args :callback))))
+                  ((symbol-function 'gptel-abort)
+                   (lambda (buffer)
+                     (setq aborted buffer)
+                     (funcall callback 'abort nil))))
+          (setq cancel
+                (mevedel-context-summary-generate
+                 "evidence" 'digest (lambda (value) (push value outcomes))
+                 :policy '(:backend digest-backend :model digest-model)))
+          (funcall callback "## Done\n- " '(:stream t))
+          (funcall callback (make-string 6000 ?\u4e16) '(:stream t))
+          (should (= (length outcomes) 1))
+          (should (eq (plist-get (car outcomes) :outcome) 'error))
+          (should (eq (plist-get (car outcomes) :error-class) 'validation))
+          (should (eq aborted request-buffer))
+          (should-not (buffer-live-p request-buffer))
+          (funcall callback "late chunk" '(:stream t))
+          (funcall callback t '(:stream t))
+          (funcall cancel)
+          (should (= (length outcomes) 1)))
+      (when cancel (funcall cancel))
+      (when (buffer-live-p request-buffer) (kill-buffer request-buffer))))
+
+  :doc "digest output limits survive provider overrides before network dispatch"
+  (dolist (entry '(((:messages []) . (:messages []))
+                   ((:max_tokens 9000) . (:max_tokens 4000))
+                   ((:max_output_tokens 9000) . (:max_output_tokens 4000))
+                   ((:max_completion_tokens 9000) . (:max_completion_tokens 4000))
+                   ((:generationConfig (:maxOutputTokens 9000)) .
+                    (:generationConfig (:maxOutputTokens 4000)))
+                   ((:options (:num_predict 9000)) . (:options (:num_predict 4000)))
+                   ((:inferenceConfig (:maxTokens 9000)) .
+                    (:inferenceConfig (:maxTokens 4000)))
+                   ((:max_tokens 500) . (:max_tokens 500))))
+    (let ((original (copy-tree (car entry))) result sent)
+      (cl-letf (((symbol-function 'mevedel-model-usable-input-tokens)
+                 (lambda (_policy) 100000))
+                ((symbol-function 'gptel--handle-wait)
+                 (lambda (fsm)
+                   (setq sent (plist-get (gptel-fsm-info fsm) :data))
+                   (funcall (plist-get (gptel-fsm-info fsm) :callback)
+                            test-mevedel-context-summary--digest nil)))
+                ((symbol-function 'gptel-request)
+                 (lambda (_prompt &rest args)
+                   (let ((fsm (or (plist-get args :fsm) (gptel-make-fsm))))
+                     (setf (gptel-fsm-info fsm)
+                           (list :data original :buffer (plist-get args :buffer)
+                                 :callback (plist-get args :callback)))
+                     (dolist (handler (cdr (assq 'WAIT (gptel-fsm-handlers fsm))))
+                       (funcall handler fsm))))))
+        (mevedel-context-summary-generate
+         "evidence" 'digest (lambda (value) (setq result value))
+         :policy '(:backend digest-backend :model digest-model)))
+      (should (equal sent (cdr entry)))
+      (should (equal original (car entry)))
+      (should (eq (plist-get result :outcome) 'success))))
+
+  :doc "digest providers with invalid output limits fail before sending"
+  (dolist (payload '((:max_tokens nil) (:options (:num_predict -1))))
+    (let (result sent)
+      (cl-letf (((symbol-function 'mevedel-model-usable-input-tokens)
+                 (lambda (_policy) 100000))
+                ((symbol-function 'gptel--handle-wait)
+                 (lambda (_fsm) (setq sent t)))
+                ((symbol-function 'gptel-request)
+                 (lambda (_prompt &rest args)
+                   (let ((fsm (plist-get args :fsm)))
+                     (setf (gptel-fsm-info fsm) (list :data payload))
+                     (dolist (handler (cdr (assq 'WAIT (gptel-fsm-handlers fsm))))
+                       (funcall handler fsm))))))
+        (mevedel-context-summary-generate
+         "evidence" 'digest (lambda (value) (setq result value))
+         :policy '(:backend digest-backend :model digest-model)))
+      (should-not sent)
+      (should (eq (plist-get result :outcome) 'error))
+      (should (eq (plist-get result :error-class) 'provider))))
+
+  :doc "a maximum-size streamed digest settles after the policy buffer dies"
+  (let* ((caller (generate-new-buffer " *digest-policy-caller*"))
+         (prefix (string-replace "## Unfinished\n- none" "## Unfinished\n- "
+                                 test-mevedel-context-summary--digest))
+         (digest (concat prefix (make-string (- 16384 (string-bytes prefix)) ?x)))
+         callback request-buffer cancel result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-model-usable-input-tokens)
+                   (lambda (_policy) 100000))
+                  ((symbol-function 'mevedel-model-resolve-workload)
+                   (lambda (&rest _) (ert-fail "Lost frozen model policy")))
+                  ((symbol-function 'gptel-request)
+                   (lambda (_prompt &rest args)
+                     (setq callback (plist-get args :callback)
+                           request-buffer (plist-get args :buffer)))))
+          (with-current-buffer caller
+            (setq cancel
+                  (mevedel-context-summary-generate
+                   "frozen evidence" 'digest (lambda (value) (setq result value))
+                   :policy '(:backend digest-backend :model digest-model))))
+          (kill-buffer caller)
+          (funcall callback (substring digest 0 100) '(:stream t))
+          (funcall callback (substring digest 100) '(:stream t))
+          (funcall callback t '(:stream t))
+          (should (eq (plist-get result :outcome) 'success))
+          (should (equal (plist-get result :summary) digest))
+          (should (eq (plist-get result :model) 'digest-model))
+          (should-not (buffer-live-p request-buffer)))
+      (when cancel (funcall cancel))
+      (when (buffer-live-p caller) (kill-buffer caller))
+      (when (buffer-live-p request-buffer) (kill-buffer request-buffer))))
 
   :doc "policy lives buffer-locally in the request buffer"
   ;; gptel snapshots request configuration from the :buffer with
@@ -463,7 +703,7 @@
                (lambda (_prompt &rest args)
                  (funcall (plist-get args :callback)
                           test-mevedel-context-summary--handoff
-                          '(:tokens (:input 41 :output 17))))))
+                          '(:tokens (:input 41 :cached 23 :output 17))))))
       (mevedel-context-summary-generate
        "PRIVATE-EVIDENCE" 'handoff
        (lambda (value) (setq result value))
@@ -475,7 +715,8 @@
                      :model summary-model :effort high)))
     (should (equal finished
                    '(summary-span :outcome success :error-class nil
-                     :input-tokens 41 :output-tokens 17)))
+                     :input-tokens 41 :cached-tokens 23 :output-tokens 17)))
+    (should (= 23 (plist-get result :cached-tokens)))
     (let ((telemetry (prin1-to-string (list started finished))))
       (should-not (string-match-p "PRIVATE-EVIDENCE" telemetry))
       (should-not (string-match-p "## Scope" telemetry))))

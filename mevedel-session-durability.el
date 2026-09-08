@@ -42,7 +42,7 @@
                   "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-read-file
                   "mevedel-session-control-fs"
-                  (path &optional coding-system))
+                  (path &optional coding-system max-bytes))
 (declare-function mevedel-session-control-fs-target-time
                   "mevedel-session-control-fs" (directory))
 (declare-function mevedel-session-control-fs-write-file
@@ -968,6 +968,38 @@ When SESSION is non-nil, record the resulting lease state on it."
            'foreign)
           (t 'expired))))
       (and owned t))))
+
+(defun mevedel-session-durability-call-with-abandoned-lease (session function)
+  "Call FUNCTION under temporary authority for abandoned SESSION storage.
+This is for recovering already frozen evidence, not resuming a conversation.
+Return nil without prompting for live owners, unresolved mutation, publishing
+leases, or a release reserved for control transfer.  Expired ordinary owners
+are fenced by the existing generation election.  Always release the temporary
+lease, including on nonlocal exit; never publish a new session head."
+  (unless (mevedel-session-durability--portable-session-p session)
+    (error "Portable recovery requires a portable project session"))
+  (let* ((session-dir (mevedel-session-save-path session))
+         (_ (mevedel-session-durability--assert-no-pid-lock session-dir))
+         (directory (mevedel-session-durability--lease-path session-dir))
+         (_ (mevedel-session-durability--ensure-lease-directory directory))
+         (existing (mevedel-session-durability--lease-head directory))
+         (now (mevedel-session-durability--target-time directory)))
+    (when (and existing (not (mevedel-session-durability--valid-lease-p existing)))
+      (error "Invalid portable session lease: %s" directory))
+    (when (or (null existing)
+              (and (not (plist-get existing :unsettled-mutation))
+                   (or (and (eq 'released (plist-get existing :status))
+                            (not (mevedel-session-transfer-release-fence
+                                  directory (plist-get existing :generation))))
+                       (and (memq (plist-get existing :status) '(active claiming))
+                            (<= (plist-get existing :expires-at) now)))))
+      (when-let* ((lease (mevedel-session-durability--claim-next
+                         directory existing "journal recovery")))
+        (unwind-protect
+            (progn
+              (mevedel-session-durability--bind-lease session lease 'owned)
+              (mevedel-session-durability-call-with-reserved-lease session function))
+          (mevedel-session-durability-lease-release session-dir session))))))
 
 (defun mevedel-session-durability--update-owned-lease
     (session accepted-status status seconds

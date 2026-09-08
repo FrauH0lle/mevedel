@@ -21,12 +21,13 @@ resource URI.
 
 | Address family | Canonical forms | Read | Glob | Grep | ApplyPatch |
 | --- | --- |:---:|:---:|:---:|:---:|
-| Session scratch | `local://`, `local://RELATIVE-PATH` | yes | yes | yes | yes |
+| Working files | `work://`, `work://RELATIVE-PATH`, `work://shared/RELATIVE-PATH` | yes | yes | yes | yes |
 | Persisted output | `artifact://`, `artifact://HANDLE` | yes | yes | yes | no |
 | Skill package | `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]` | yes | yes | yes | no |
 | Retained agent | `agent://`, `agent://root/PATH[#POINTER]` | yes | no | no | no |
 | Conversation history | `history://`, `history://root`, `history://root/PATH` | yes | no | no | no |
-| Persistent memory | `memory://root`, `memory://ROOT-KEY/RELATIVE-PATH` | yes | yes | yes | no |
+| Persistent memory | `memory://root`, `memory://ROOT-KEY/RELATIVE-PATH` | yes | yes | yes | explicit file descendants |
+| Workspace journal | `journal://`, `journal://FILE` | yes | yes | yes | no |
 | MCP resource | `mcp://`, `mcp://ENCODED-SERVER`, `mcp://ENCODED-SERVER/ENCODED-URI` | yes | no | no | no |
 | Packaged documentation | `mevedel://`, `mevedel://RELATIVE-PATH` | yes | yes | yes | no |
 
@@ -34,7 +35,7 @@ resource URI.
 
 The main and built-in agent prompts render a compact request-time roster.
 `mevedel://` is always advertised because packaged documentation needs no
-session. A valid request session advertises `local://` and `artifact://` as
+session. A valid request session advertises `work://` and `artifact://` as
 normal session capabilities: local state is materialized on its first write,
 and artifact output may arise during the request, so neither family requires
 an existing save path. The remaining families are advertised only when the
@@ -43,8 +44,10 @@ current resource metadata has a usable surface:
 - `skill://` requires at least one enabled, discoverable skill;
 - `agent://` requires at least one retained agent record;
 - `history://` requires a live root conversation or a retained agent conversation;
-- `memory://` requires at least one configured memory root directory that
-  exists; and
+- `memory://` requires at least one configured memory root; a first permitted
+  file write can create a missing directory;
+- `journal://` requires at least one validated published entry in the workspace;
+  private pending state alone does not qualify; and
 - `mcp://` requires at least one configured MCP server.
 
 With no valid request session, the roster still contains `mevedel://` but no
@@ -59,7 +62,7 @@ invocation, or mutation.
 
 ## Canonical addresses and locator classes
 
-Only the eight exact `scheme://` prefixes above are internal addresses. An
+Only the nine exact `scheme://` prefixes above are internal addresses. An
 unknown `scheme://` prefix, malformed known address, traversal, or containment
 failure is a validation error and is not treated as a filesystem path. Other
 strings containing a colon remain ordinary tool input.
@@ -73,7 +76,8 @@ never replaces the authoritative identity.
 
 The address forms have these identity rules:
 
-- `local://` is relative to the current durable root session.
+- `work://` discovers both working scopes. Descendants are session-relative,
+  except `work://shared/...`, which is relative to the current workspace root.
 - `artifact://` handles are session-relative names derived from existing
   persisted output; there is no artifact index or generated ID allocator.
 - `skill://NAME@SOURCE-KEY` uses the full lowercase SHA-256 digest of the
@@ -142,27 +146,43 @@ broadens roots, authorizes another tool, or bypasses permission mode.
 
 ## Family contracts
 
-### `local://`
+### `work://`
 
-`local://` is the writable session scratchpad for work that should not become
-workspace source. The session owns its lazily materialized `local/` directory.
-The empty address lists it; descendants are relative files beneath it. The root
-and every retained agent in the tree share the directory. Local content is
-available to `Read`, `Glob`, and `Grep`; `ApplyPatch` is the only mutation
-surface and may combine local and ordinary targets atomically.
+`work://` exposes working files through Read, Glob, Grep, and ApplyPatch.
+Bare Read lists both scopes and bare Glob/Grep searches both. Directory operands
+use canonical names without a trailing slash, such as `work://shared`; the
+`work://shared/` spelling denotes the prefix for its file descendants.
 
-The first local write materializes durable session persistence. Local state
-survives save, resume, and session rename. Session Fork copies it into an
-independent child; Rewind leaves it unchanged; session cleanup removes it with
-the owner. Local files are excluded from workspace snapshots, touched-file
-tracking, instruction discovery, LSP diagnostics, directive patch capture,
-and Git summaries. An ephemeral request without durable session ownership may
-inspect already available read-only resources but cannot create or mutate
-`local://` state.
+- `work://shared/...` maps to `WORKSPACE-ROOT/.mevedel/shared/`. All agents and
+  sessions in that workspace see the same files. The directory is created only
+  by a permitted write and has no prescribed children. Working notes, drafts,
+  findings and handoffs default here: search before creating and update relevant
+  existing files. Different workspace roots, including separate Git worktrees,
+  have separate shared areas; there is no cross-project publication mechanism.
+- Other descendants map to the session's lazily materialized `local/` directory.
+  The parent and retained agents share this session scope. First write establishes
+  durable session persistence. Save, resume and rename retain it; Fork copies it
+  independently, Rewind leaves it unchanged, and session cleanup removes it.
+  Ephemeral requests cannot create or mutate session-owned work files.
+
+Shared files survive session rename, fork, rewind and deletion, because they
+are workspace-owned. They are mutable working material, distinct from curated
+`memory://` and immutable dated `journal://` evidence. Neither scope participates
+in source snapshots, touched-file tracking, diagnostics or directive patch
+capture. Shared writes use the real backing path for normal filesystem edit
+permissions; they receive no session scratch exception in Plan mode.
+
+`/clean-work [focus]` explicitly reviews shared files and removes confirmed
+obsolete copies through normal ApplyPatch permissions and review. It preserves
+unresolved work and does not infer obsolescence from age or session deletion.
+There is no background expiry timer; `/learn` handles durable promotion.
+
+The former `local://` scheme is rejected; there is no alias or migration.
+The physical session directory remains named `local/` to describe its ownership.
 
 The `local/plans/` subtree is shared by the parent and retained agents for
-current and accepted plans, alongside durable notes, findings, contracts, and
-handoffs. It is addressed as `local://plans/...`; there is no compatibility
+current and accepted plans. Working notes, findings, contracts and handoffs
+default to `work://shared/`. It is addressed as `work://plans/...`; there is no compatibility
 migration from a separate top-level plans directory or older plan format.
 Accepted archives always use canonical `accepted-TIMESTAMP.md` names, so every
 managed plan is addressable. `local/plans/` is also the one part of `local/`
@@ -236,9 +256,43 @@ shadowed matches. Listed topics and disclosed search results use the readable
 root key when the configured roots make it unambiguous, and the digest key
 otherwise; the union query itself is never atomically bound.
 
-Memory reads are fresh against the configured roots. Addressing memory does
-not choose a write scope or resource family; memory mutation continues through
-explicit filesystem targets and existing memory policy.
+Memory reads are fresh against the configured roots. ApplyPatch accepts only
+explicit `memory://ROOT-KEY/RELATIVE-PATH` file descendants; neither the union nor
+a root-only address is writable. Add, Update, Move and Delete use the same
+transaction, review and conflict checks as ordinary patches. Filesystem edit
+permissions inspect the actual backing path, including protected paths and
+out-of-workspace global roots. A prepared shared or memory write fails if its
+owning root changes before execution; the previous approval cannot authorize a
+new destination. Authored addresses remain in patch results and review headings.
+
+### `journal://`
+
+The workspace owns `.mevedel/journal/` on its execution target. Bare Read lists
+validated published records newest first; an exact filename reads the full
+public Markdown with ordinary Read pagination. Timestamp colons use canonical
+`%3A` encoding in addresses. Private `state/`, nested names, traversal, malformed
+records, and symlink escapes are excluded. ApplyPatch is unsupported.
+Completed consolidation reviews are public records alongside digests; their
+metadata names examined digest IDs, focus, reference checks, and proposal IDs.
+Private proposal bodies and captured memory before-state are not public entries.
+Accepted expiry markers also exclude entries immediately, including when
+physical deletion is interrupted. Private capture coverage survives expiry
+without exposing old digest text through this address family.
+
+Glob and Grep use the ordinary options over freshly validated public document
+snapshots. The existing managed search helper processes the transferred snapshot
+locally, including for remote workspaces, and returns canonical journal addresses.
+Snapshots are deleted on completion, failed admission, or helper teardown. No
+private journal directory enters the helper's read scope. An explicit workspace
+supports these operations without constructing a session.
+
+Prompt discovery observes published entries at most once every ten seconds;
+local digest publication invalidates that observation. External additions and
+removals become visible at the next eligible observation. Completion uses only
+previously observed filenames, with no filesystem access. An initially cold
+composer can still insert `journal://`; request-time discovery populates its
+descendants. Authorized operations always validate current storage, independently
+of the discovery observation and whether automatic capture is enabled.
 
 ### `mcp://`
 
@@ -305,23 +359,23 @@ bare prefix remains usable until an explicit resource operation resolves it.
 
 ## Execution target and Plan mode
 
-Session-owned `local://`, `artifact://`, `agent://`, and `history://` resources
+Session-owned `work://` descendants, `artifact://`, `agent://`, and `history://` resources
 belong to the current session's execution target. Their addresses cannot cross
 sessions or targets. Client-local skills and memory roots retain their origin;
 their client pathname is not reinterpreted as a target-native workspace path.
 MCP authority remains with the configured connection. No address changes the
 session's target or turns a local path into cross-target authority.
 
-Standalone/sticky Plan mode keeps all-local `ApplyPatch` available, including
+Standalone/sticky Plan mode keeps session-only `ApplyPatch` available, including
 calls from retained agents, so plans and other durable local artifacts can be
 updated through the ordinary `ApplyPatch` path. Before materialization, the
-pipeline denies any proposal with an ordinary, non-local, or bare endpoint:
+pipeline denies any proposal with an ordinary, shared, memory, or bare endpoint:
 mixed local/ordinary and ordinary-only proposals are denied tree-wide, and no
 local directory or ordinary target is touched. Permission mode and allow rules
 cannot widen that boundary. Other edit tools and `Eval` remain unavailable;
 resource recognition does not reopen those capabilities. Directive Planning
 has a separate strictly read-only boundary and does not allow `ApplyPatch`,
-including all-local proposals, or `Eval`.
+including session-only proposals, or `Eval`.
 
 See [`tools.md`](tools.md#resource-addresses-in-filesystem-shaped-tools),
 [`mentions.md`](mentions.md#atomic-binding-lifecycle),

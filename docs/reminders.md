@@ -226,8 +226,8 @@ custom date reminders remain available. See
   This post-read discovery helps subsequent model decisions: it is not an edit
   gate and cannot affect another tool already scheduled in the same batch.
   The shared task policy therefore still requires inspecting applicable project
-  guidance before changing code. Resource reads such as session-scratch
-  `local://` addresses do not discover workspace policy.
+  guidance before changing code. Resource reads such as session working-file
+  `work://` addresses do not discover workspace policy.
 - **Recovery reconciliation:** cold resume and abort of a live root
   request queue one warning that processes or tool effects may be
   partial.

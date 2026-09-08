@@ -226,7 +226,7 @@ EXPLICIT takes precedence when non-nil."
           exact-allowed-paths invocation-rules request-rules session-rules
           persistent-rules persistent-snapshot resource-grants
           permission-request
-          one-shot-mutations-p patch-local-only-p warn-no-session-p)
+          one-shot-mutations-p patch-session-only-p warn-no-session-p)
   "Return normalized permission invocation context.
 
 The context concentrates facts shared by the permission decision
@@ -240,8 +240,8 @@ WARN-NO-SESSION-P provide the context facts.  PERSISTENT-SNAPSHOT is the
 invocation's already-refreshed `:rules' and `:resource-grants' plist,
 including when either value is nil.  ONE-SHOT-MUTATIONS-P defaults from
 REQUEST.
-PATCH-LOCAL-ONLY-P is the prepared ApplyPatch classification used by the Plan
-boundary.
+PATCH-SESSION-ONLY-P classifies prepared ApplyPatch proposals containing only
+session-owned work descendants for the Plan boundary.
 PERMISSION-REQUEST admits an interactive request at its hook boundary before
 it enters the shared queue."
   (setq tool (or tool
@@ -331,7 +331,7 @@ happen for a non-read-only tool."
            :exact-allowed-paths exact-allowed-paths
            :resource-grants resource-grants
            :one-shot-mutations-p one-shot-mutations-p
-           :patch-local-only-p patch-local-only-p))
+           :patch-session-only-p patch-session-only-p))
          (path (plist-get context :path))
          (pattern (plist-get context :pattern))
          (domain (plist-get context :domain))
@@ -399,7 +399,7 @@ happen for a non-read-only tool."
                invocation-rules request-rules session-rules persistent-rules
                mode session workspace-root allowed-roots exact-allowed-paths
                resource-access resource-grants one-shot-mutations-p
-               patch-local-only-p
+               patch-session-only-p
                normalized-context)
   "Return normalized permission facts and any decision before the tool slot.
 
@@ -417,7 +417,8 @@ mode.  WORKSPACE-ROOT, ALLOWED-ROOTS, EXACT-ALLOWED-PATHS, and
 RESOURCE-GRANTS define the filesystem boundary.  NORMALIZED-CONTEXT, when
 non-nil, is returned unchanged so a caller can reuse an invocation preflight.
 ONE-SHOT-MUTATIONS-P requires explicit approval for non-read-only tools.
-PATCH-LOCAL-ONLY-P is true only for a prepared all-local ApplyPatch proposal."
+PATCH-SESSION-ONLY-P is true only for a prepared ApplyPatch proposal containing
+session-owned work descendants; workspace-owned shared files are excluded."
   (if normalized-context
       normalized-context
     (setq mode (or mode mevedel-permission-mode))
@@ -463,7 +464,7 @@ PATCH-LOCAL-ONLY-P is true only for a prepared all-local ApplyPatch proposal."
                'deny 'deny-rule :bucket deny-bucket))
              ((and (mevedel-permission--plan-mode-p session)
                    (or (and (equal tool-name "ApplyPatch")
-                            (or (not patch-local-only-p)
+                            (or (not patch-session-only-p)
                                 (mevedel-plan-directive-p
                                  session request)))
                        (and (not (equal tool-name "ApplyPatch"))
@@ -485,7 +486,7 @@ PATCH-LOCAL-ONLY-P is true only for a prepared all-local ApplyPatch proposal."
             :resource-access resource-access
             :resource-grants resource-grants
             :request request
-            :patch-local-only-p patch-local-only-p
+            :patch-session-only-p patch-session-only-p
             :resource-granted-p resource-granted-p
             :protected-path-p
             (mevedel-permission-rules-path-protected-p
@@ -530,7 +531,8 @@ The decision chain:
   1. Extract specifier values via tool-struct getters when missing
   2. Resolve absolute decisions across all buckets:
        any bucket yields `deny' -> deny;
-       standalone/sticky Plan allows only a prepared all-local ApplyPatch;
+       standalone/sticky Plan allows only prepared ApplyPatch proposals
+       confined to session-owned work descendants;
        directive Planning denies all native edits, including that ApplyPatch,
        and Eval -> deny
   3. Call the tool checker, when present, to decide command authority

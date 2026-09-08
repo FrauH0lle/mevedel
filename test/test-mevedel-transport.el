@@ -337,6 +337,45 @@
           (should (= 1 cancels)))
       (mevedel-transport-cancel-pending))))
 
+(mevedel-deftest mevedel-transport-schedule-idle ()
+  ,test
+  (test)
+  :doc "coalesces repeated scheduling into one deferred run"
+  (let ((table (make-hash-table :test #'equal)) (runs 0))
+    (unwind-protect
+        (progn
+          (should (timerp (mevedel-transport-schedule-idle
+                           table "k" 'test-idle "/srv/project" (lambda () (cl-incf runs)))))
+          (should-not (mevedel-transport-schedule-idle
+                       table "k" 'test-idle "/srv/project" (lambda () (cl-incf runs))))
+          (should (= 1 (hash-table-count table)))
+          (with-timeout (2 (ert-fail "Deferred work never ran"))
+            (while (= 0 runs) (accept-process-output nil 0.01)))
+          (should (= 1 runs))
+          (should (= 0 (hash-table-count table))))
+      (mevedel-transport-cancel-idle table 'test-idle)))
+
+  :doc "cancellation fences a queued timer so its thunk never runs"
+  (let ((table (make-hash-table :test #'equal)) (runs 0))
+    (let* ((timer (mevedel-transport-schedule-idle
+                   table "k" 'test-idle "/srv/project" (lambda () (cl-incf runs))))
+           (function (timer--function timer)) (args (timer--args timer)))
+      (mevedel-transport-cancel-idle table 'test-idle)
+      (should (= 0 (hash-table-count table)))
+      (apply function args)
+      (should (= 0 runs))))
+
+  :doc "a disabled transport drops the entry without running"
+  (let ((table (make-hash-table :test #'equal)) (runs 0))
+    (unwind-protect
+        (let* ((timer (mevedel-transport-schedule-idle
+                       table "k" 'test-idle "/srv/project" (lambda () (cl-incf runs))))
+               (mevedel-transport--enabled-p nil))
+          (apply (timer--function timer) (timer--args timer))
+          (should (= 0 runs))
+          (should (= 0 (hash-table-count table))))
+      (mevedel-transport-cancel-idle table 'test-idle))))
+
 (provide 'test-mevedel-transport)
 
 ;;; test-mevedel-transport.el ends here

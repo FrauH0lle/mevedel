@@ -334,6 +334,26 @@ handoff evidence, not authoritative previous-summary state. Missing,
 duplicated, reordered, unexpected, or purpose-inappropriate headings fail
 validation.
 
+The same request generator also accepts purpose `digest`, using
+`prompts/context-summary/digest.md` and the four headings Done, Learned,
+Surprised, and Unfinished. Digests are factual bullet lists, bounded to 16 KiB
+of UTF-8 output, with at most 4,000 requested output tokens (or the configured
+lower limit). The output limit is checked on gptel's final provider payload;
+providers that expose no supported limit fail before dispatch. Oversized
+streaming output is aborted without retaining further chunks. Callers may
+supply frozen model policy and receive completion after their source buffer
+has died. Capture, persistence, timeouts, and retries remain caller-owned.
+Digest generation does not replace or weaken continuation compaction.
+
+Root compaction selects a durable completed-work checkpoint during preparation
+and seals that exact checkpoint only after successful summary application.
+The checkpoint contains pre-compaction evidence and local notes; sealing does
+not inspect the replacement summary. A failed attempt leaves the checkpoint
+unsealed. Agent compaction does not capture or seal root work. Journal storage
+failures report separately and do not fail compaction. Success queues a
+background digest opportunity after the caller returns; it does not wait for
+the digest before settling compaction.
+
 The transcript module preserves selected model-visible ordering as labelled
 user, assistant, reasoning, tool-call, and tool-result evidence. It excludes
 hidden UI and audit data, caps tool content while keeping structures balanced,

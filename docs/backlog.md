@@ -10,10 +10,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Inbox
 
-- Add a memory-verification slash command or skill that consolidates project
-  memories and checks whether they are still accurate; explore whether a
-  weekly automated check is useful. See also "/learn" command
-
 - Consider making mevedel's data buffers hidden
 
 ## Entry format
@@ -22,7 +18,37 @@ Each entry records its source, owed change, reason for deferral, current
 status, and blast radius. Keep entries terse and remove them when they
 become implemented, obsolete, or unjustified.
 
+## Memory
+
+### Recover root-session evidence across compaction
+
+- **Source:** User discussion of notes and retrieval across context windows.
+- **What's owed:** A bounded pre-compaction scratchpad reminder and ordinary
+  search over the owning root session's finalized historical segments, with
+  source locators and the existing resource permission boundary.
+- **Why deferred:** This follows the journal work; digests and raw historical
+  evidence have different retention and retrieval contracts.
+- **Status check:** `history://root` already reads the current root transcript,
+  but it does not traverse pre-compaction archives or support Grep. Journal
+  search retrieves published digests, not those original segments.
+- **Blast radius:** Historical retrieval must preserve session scope, bounded
+  output, and hidden-audit exclusion. Necessary continuation context cannot
+  be replaced by archive pointers while this capability remains unavailable.
+
 ## Request lifecycle
+
+### Keep the agent injection marker at the complete transcript end
+
+- **Source:** Full memory-lifecycle regression run and an unchanged master
+  (`13e12e6`) reproduction against the same installed dependencies.
+- **What's owed:** Diagnose the final newline/marker boundary after closing
+  reasoning and injecting consecutive agent messages.
+- **Why deferred:** Independent of journal and memory changes; the baseline
+  reproduces the identical failure.
+- **Status check:** `mevedel-tools--handle-message-inject/test@2` expects marker
+  318 but observes 317. Other message-injection cases pass.
+- **Blast radius:** Subsequent agent response placement after injected mail.
+
 
 ### Prevent system sleep during active requests
 

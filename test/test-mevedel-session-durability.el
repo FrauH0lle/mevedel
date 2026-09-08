@@ -2473,6 +2473,7 @@
     (should (mevedel-session-publication-logical-path-p path)))
   (dolist (path '(nil "" "/absolute" "../escape" "a/../escape"
                   ".lock" ".lease/0001.el" ".publications/generation/file"
+                  ".journal-pins" ".journal-pins/capture.json"
                   ".recovery/recovery-0001/bytes"
                   "/ssh:other:/session.meta.el" "~/session.meta.el"))
     (should-not (mevedel-session-publication-logical-path-p path))))
@@ -4482,6 +4483,70 @@
               (should (string-match-p "Lease: foreign" header)))))
       (when (file-directory-p root)
         (delete-directory root t)))))
+
+(mevedel-deftest mevedel-session-durability-call-with-abandoned-lease ()
+  ,test
+  (test)
+  :doc "capture recovery fences expired ordinary owners but preserves live or unresolved owners"
+  (dolist (case '((active -1000 nil t)
+                  (claiming -1000 nil t)
+                  (released -1000 nil t)
+                  (active 0 nil nil)
+                  (publishing -1000 nil nil)
+                  (active -1000 t nil)))
+    (let* ((root (make-temp-file "mevedel-abandoned-lease-" t))
+           (session (test-mevedel-session-durability--local-session root))
+           (directory (file-name-concat root "session"))
+           (lease-dir (file-name-concat directory ".lease"))
+           (foreign (make-string 64 ?f))
+           (mevedel-session-durability--client-id (make-string 64 ?a))
+           called)
+      (setf (mevedel-session-save-path session) directory)
+      (unwind-protect
+          (progn
+            (make-directory directory t)
+            (mevedel-session-durability--ensure-lease-directory lease-dir)
+            (let* ((now (mevedel-session-durability--target-time lease-dir))
+                   (record
+                    (let ((mevedel-session-durability--client-id foreign))
+                      (mevedel-session-durability--lease-record
+                       "old owner" 1 (nth 0 case) nil (nth 2 case)
+                       (+ now (nth 1 case))))))
+              (mevedel-session-durability--write-generation lease-dir record)
+              (cl-letf (((symbol-function 'y-or-n-p)
+                         (lambda (&rest _) (error "Recovery must not prompt"))))
+                (should (eq (nth 3 case)
+                            (mevedel-session-durability-call-with-abandoned-lease
+                             session (lambda () (setq called t))))))
+              (should (eq (nth 3 case) called))
+              (let ((head (mevedel-session-durability--lease-head lease-dir)))
+                (if called
+                    (progn
+                      (should (= 2 (plist-get head :generation)))
+                      (should (eq 'released (plist-get head :status)))
+                      (should (equal mevedel-session-durability--client-id (plist-get head :client-id))))
+                  (should (equal record head)))))
+            (should-not (mevedel-session-lease-renewal-timer session)))
+        (mevedel-session-durability-lease-release directory session)
+        (delete-directory root t))))
+
+  :doc "a callback failure releases new authority and leaves no renewal timer"
+  (let* ((root (make-temp-file "mevedel-abandoned-lease-" t))
+         (session (test-mevedel-session-durability--local-session root))
+         (directory (file-name-concat root "session"))
+         called)
+    (setf (mevedel-session-save-path session) directory)
+    (unwind-protect
+        (progn
+          (make-directory directory t)
+          (should-error
+           (mevedel-session-durability-call-with-abandoned-lease
+            session (lambda () (setq called t) (error "Injected recovery failure"))))
+          (should called)
+          (should (eq 'available (mevedel-session-durability-lease-state directory)))
+          (should-not (mevedel-session-lease-renewal-timer session)))
+      (mevedel-session-durability-lease-release directory session)
+      (delete-directory root t))))
 
 (provide 'test-mevedel-session-durability)
 ;;; test-mevedel-session-durability.el ends here

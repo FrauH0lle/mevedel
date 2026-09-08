@@ -92,7 +92,7 @@
          (mevedel-plan-handoff--implementation-prompt
           nil '(:path "local/plans/accepted-20260813-120000.md"
             :absolute-path "/tmp/accepted.md") "# Accepted")))
-    (should (string-match-p "local://plans/accepted-20260813-120000.md"
+    (should (string-match-p "work://plans/accepted-20260813-120000.md"
                             prompt))
     (should-not (string-match-p "/tmp/accepted.md" prompt))
     (should (string-match-p "# Accepted" prompt))
@@ -135,7 +135,7 @@
                      :absolute-path "/tmp/accepted.md"))
          (body "Free-form plan")
          (prompt (mevedel-plan-handoff--goal-kickoff-prompt nil artifact body)))
-    (should (< (string-search "local://plans/accepted-20260813-120000.md"
+    (should (< (string-search "work://plans/accepted-20260813-120000.md"
                               prompt)
                (string-search body prompt)
                (string-search "Begin the active Goal" prompt)))

@@ -1334,10 +1334,10 @@ this collapses both shapes to the delivered text."
     (should (funcall (mevedel-reminder-trigger r) session))
     (let ((content (funcall (mevedel-reminder-content r) session)))
       (should (string-match-p
-               "local://plans/accepted-20260813-120000.md"
+               "work://plans/accepted-20260813-120000.md"
                content))
       (should-not (string-match-p "local/plans/current.md" content))
-      (should-not (string-match-p "local://plans/current.md" content))
+      (should-not (string-match-p "work://plans/current.md" content))
       (should-not (string-match-p (regexp-quote tmp) content))
       (should (string-match-p "# Accepted" content))
       (should-not (string-match-p "# Current draft" content)))

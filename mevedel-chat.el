@@ -108,6 +108,18 @@
 		  (event event-plist callback &optional session
 			 workspace request invocation))
 
+;; `mevedel-journal-cleanup'
+(declare-function mevedel-journal-cleanup-schedule "mevedel-journal-cleanup" (workspace))
+(autoload 'mevedel-journal-cleanup-schedule "mevedel-journal-cleanup")
+
+;; `mevedel-journal-process'
+(declare-function mevedel-journal-process-schedule "mevedel-journal-process" (workspace &optional recover))
+(autoload 'mevedel-journal-process-schedule "mevedel-journal-process")
+
+;; `mevedel-memory-decision'
+(declare-function mevedel-memory-decision-schedule-recovery "mevedel-memory-decision" (workspace))
+(autoload 'mevedel-memory-decision-schedule-recovery "mevedel-memory-decision")
+
 ;; `mevedel-models'
 (declare-function mevedel-model-apply-session-policy
                   "mevedel-models" (session &optional buffer))
@@ -690,6 +702,9 @@ M-x mevedel-retry-plan-implementation resumes it")))
       (mevedel-plan-mode-restore-pending-approval mevedel--session buf))
     (when (fboundp 'mevedel-directive-plan-restore-pending)
       (mevedel-directive-plan-restore-pending mevedel--session buf))
+    (mevedel-journal-cleanup-schedule workspace)
+    (mevedel-journal-process-schedule workspace t)
+    (mevedel-memory-decision-schedule-recovery workspace)
     (unless inspection-p
       (mevedel--run-session-start-hooks source))))
 

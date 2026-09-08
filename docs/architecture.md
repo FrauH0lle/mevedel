@@ -76,6 +76,8 @@ invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
 
 - **`mevedel-workspace`**: type, id, root, name, file-cache, and the durable
   directive records shared by every session in the workspace.
+  Its journal and memory observations are disposable UI caches; memory counts
+  never authorize a proposal decision or application.
   Additional roots live in `mevedel-workspace-additional-roots`.
   `.mevedel/` is derived by
   `mevedel-workspace-state-dir`, not stored as a slot.
@@ -341,7 +343,10 @@ filter, or redisplay must not nest inside an in-flight TRAMP command, so
 callers route deferrable work through `mevedel-transport-run-when-idle`
 and it runs when the connection is quiet. Deferred work that owns an
 in-memory admission fence supplies cancellation cleanup so transport teardown
-cannot leave the session permanently busy.
+cannot leave the session permanently busy. Lifecycle events that may fire
+repeatedly (turn completion, activation, buffer kill) arm one coalesced
+opportunity per key through `mevedel-transport-schedule-idle`, which the
+journal processor, the memory pass, and memory recovery share.
 
 `mevedel-session-durability.el` owns portable project lease and storage
 primitives.  `mevedel-session-recovery.el` owns specialized recovery markers,
@@ -543,11 +548,11 @@ A retained conversation separates behavioral instructions from observations that
 change during work. Main and retained-agent system prompts keep role, authority,
 style, skill dispatch, memory-use policy and a short memory-manual retrieval
 requirement. Named workspace configuration, environment, memory indexes, skill
-catalogs, resource availability and root Goal context are delivered after current
-input through the existing reminder transaction.
+catalogs, resource availability, the main journal map and root Goal context are
+delivered after current input through the existing reminder transaction.
 
-Environment, active Goal, skills, memory and resource availability are retained
-as independent current-state sections. If one selected section changes, the next
+Environment, active Goal, skills, memory, journal and resource availability are
+retained as independent current-state sections. If one selected section changes, the next
 request appends that section's complete current contents. Its notice explicitly
 replaces only that section and says other previously supplied state remains
 applicable. Unchanged sections are not repeated; unchanged turns add no update.
@@ -556,8 +561,8 @@ change repeats neither their instructions nor the other fact sections.
 
 `mevedel-context-delivery.el` owns this delivery boundary. Only components selected
 by an agent's frozen definition reach that agent. Workers do not inherit the
-root Goal. An instruction-only recipient receives no fact sections. Authored
-inline components remain in the system prompt even when named like a built-in
+root Goal or the main journal map. An instruction-only recipient receives no fact
+sections. Authored inline components remain in the system prompt even when named like a built-in
 observation. Stateless buddy and guardian requests retain their current snapshot;
 they do not own a growing conversation prefix.
 
@@ -625,11 +630,11 @@ skill-snapshot and delta APIs have no compatibility aliases or migrations.
 
 ## Resource addressing
 
-Filesystem-shaped tools consume one closed set of eight resource-address
-families: `local://`, `artifact://`, `skill://`, `agent://`, `history://`,
-`memory://`, `mcp://`, and `mevedel://`. `Read` supports all eight; `Glob` and
-`Grep` support `local://`, `artifact://`, `skill://`, `memory://`, and
-`mevedel://`; `ApplyPatch` supports `local://` alongside ordinary filesystem
+Filesystem-shaped tools consume one closed set of nine resource-address
+families: `work://`, `artifact://`, `skill://`, `agent://`, `history://`,
+`memory://`, `journal://`, `mcp://`, and `mevedel://`. `Read` supports all nine; `Glob` and
+`Grep` support `work://`, `artifact://`, `skill://`, `memory://`, `journal://`, and
+`mevedel://`; `ApplyPatch` supports `work://` and explicit memory file descendants alongside ordinary filesystem
 paths. Addresses serialize canonical resource locators and do not replace
 target-native paths, mentions, or permissions. `mevedel://` is an always-
 available, read-only view of packaged Markdown documentation and exposes no
@@ -638,19 +643,22 @@ Elisp source.
 The resolver prepares an opaque attempt and logical authority facts after
 repair, final validation, and pre-use hooks, then permission and any review
 authorize it before execution consumes that attempt without reparsing. Content,
-backing paths, and helper roots remain behind the boundary. Local, artifact,
+backing paths, and helper roots remain behind the boundary. Session work, artifact,
 agent, and history resources belong to the session execution target; skills and
 memory retain client-local origin; MCP uses the current configured connection.
+Journal resources belong to the explicit workspace target and expose only
+validated published records; private capture state is excluded.
 Freshness and persistence remain owned by each family, while completion and
 atomic mention bindings preserve locator identity without side effects.
-Standalone/sticky Plan mode keeps all-local `ApplyPatch` available across the
-root and retained-agent tree. Any ordinary, non-local, or bare endpoint,
+Standalone/sticky Plan mode keeps session-only `ApplyPatch` available across the
+root and retained-agent tree. Any ordinary, shared, memory, or bare endpoint,
 including mixed and ordinary-only proposals, is rejected before local
 materialization. Other edit tools and `Eval` remain unavailable. Directive
 Planning remains strictly read-only and does not allow `ApplyPatch`, including
-all-local proposals, or `Eval`. The shared `local/plans/` namespace holds
-durable plans, notes, findings, contracts, and handoffs for the parent and
-retained agents. There is no migration or compatibility reader for an older
+session-only proposals, or `Eval`. The shared `local/plans/` namespace holds
+durable plans for the parent and retained agents. `work://shared/` maps to
+workspace-owned `.mevedel/shared/` for working notes and handoffs across sessions,
+with agent-chosen filenames and folders. There is no migration or compatibility reader for an older
 standalone plan layout.
 See [`address-to-resource.md`](address-to-resource.md) and
 [`ADR 0104`](adr/0104-keep-resource-addresses-closed-and-capability-neutral.md).
@@ -668,7 +676,14 @@ procedure. Unchanged indexes do not rewrite this section at midnight. Durable me
 same root, using `user`, `feedback`, `project`, or `reference`
 frontmatter. `MEMORY.md` should contain one-line links only.
 LLM-writable. See [`memory.md`](memory.md) for the full layout, save
-policy, staleness rules, and `$remember` review workflow.
+policy, staleness rules, and the `/remember` consolidation command and cockpit.
+
+Completed saved root turns offer automatic consolidation. A disposable
+workspace timing cache keeps the hot check free of target I/O, and the existing
+transport boundary defers the cold observation. The coordinator rechecks the
+24-hour/five-digest gate under target ownership after publication recovery.
+Propose is the default; auto applies memory changes through the same checked
+decision operation and holds instruction proposals for approval.
 
 ## Chat buffer formatting
 

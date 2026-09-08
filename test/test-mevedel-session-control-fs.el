@@ -118,6 +118,22 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(mevedel-deftest mevedel-session-control-fs-read-file
+  (:doc "bounds native reads by bytes before transferring data to Emacs")
+  (let* ((root (make-temp-file "mevedel-control-prefix-" t))
+         (path (file-name-concat root "notes"))
+         (bytes (encode-coding-string "a\u754cb" 'utf-8-unix)))
+    (unwind-protect
+        (progn
+          (mevedel-session-control-fs-create-file path bytes 'no-conversion)
+          (should (equal (substring bytes 0 3)
+                         (mevedel-session-control-fs-read-file path 'no-conversion 3)))
+          (should (equal "" (mevedel-session-control-fs-read-file path nil 0)))
+          (should (equal bytes (mevedel-session-control-fs-read-file path 'no-conversion 100)))
+          (should-error (mevedel-session-control-fs-read-file path nil -1))
+          (should-error (mevedel-session-control-fs-read-file path nil "4")))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-control-fs-append-file
   (:doc "appends deltas in order and refuses symlink leaves")
   (let* ((root (make-temp-file "mevedel-control-fs-append-" t))
@@ -810,6 +826,19 @@
         (delete-directory outside t))
       (when (buffer-live-p worker-buffer)
         (kill-buffer worker-buffer)))))
+
+(mevedel-deftest mevedel-session-control-fs-create-or-verify
+  (:doc "creates once, accepts an identical record, and rejects a different one")
+  (let* ((root (make-temp-file "mevedel-control-fs-verify-" t))
+         (path (file-name-concat root "marker")))
+    (unwind-protect
+        (progn
+          (should (mevedel-session-control-fs-create-or-verify path "ä/界"))
+          (should (mevedel-session-control-fs-create-or-verify path "ä/界"))
+          (should-not (mevedel-session-control-fs-create-or-verify path "ä/界 changed"))
+          (should-not (mevedel-session-control-fs-create-or-verify path "ä"))
+          (should (equal "ä/界" (mevedel-session-control-fs-read-file path))))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-session-control-fs)
 ;;; test-mevedel-session-control-fs.el ends here

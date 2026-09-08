@@ -65,6 +65,18 @@
 (autoload 'mevedel-hooks-event-plist "mevedel-hooks")
 (autoload 'mevedel-hooks-run-event "mevedel-hooks")
 
+;; `mevedel-journal-capture'
+(declare-function mevedel-journal-capture-checkpoint "mevedel-journal-capture" (session buffer))
+(autoload 'mevedel-journal-capture-checkpoint "mevedel-journal-capture")
+
+;; `mevedel-journal-process'
+(declare-function mevedel-journal-process-schedule "mevedel-journal-process" (workspace &optional recover))
+(autoload 'mevedel-journal-process-schedule "mevedel-journal-process")
+
+;; `mevedel-memory-pass'
+(declare-function mevedel-memory-pass-schedule "mevedel-memory-pass" (workspace))
+(autoload 'mevedel-memory-pass-schedule "mevedel-memory-pass")
+
 ;; `mevedel-pending-inputs'
 (declare-function mevedel-view--schedule-follow-up-drain
                   "mevedel-pending-inputs" (fsm))
@@ -520,6 +532,17 @@ Signal when the request is missing or its reservation is not the next turn."
              (setq-local mevedel-session--save-failed t)
              (force-mode-line-update)))
           (when saved
+            (condition-case err
+                (progn
+                  (mevedel-journal-capture-checkpoint mevedel--session chat-buffer)
+                  (mevedel-journal-process-schedule (mevedel-session-workspace mevedel--session)))
+              (error
+               (mevedel--warn-once
+                'journal-capture "Journal capture checkpoint failed: %s"
+                (error-message-string err))))
+            (when (and (eq chat-buffer (mevedel-session-root-buffer mevedel--session))
+                       (not (bound-and-true-p mevedel--agent-invocation)))
+              (mevedel-memory-pass-schedule (mevedel-session-workspace mevedel--session)))
             ;; A settled turn is where the generations this turn
             ;; published mid-stream stop being anyone's recovery state:
             ;; until settlement they are what a crashed owner resumes

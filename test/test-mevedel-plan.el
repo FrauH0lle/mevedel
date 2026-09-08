@@ -73,9 +73,9 @@
   (:doc "converts contained plan paths to canonical local resource addresses")
   ,test
   (test)
-  (should (equal "local://plans/current.md"
+  (should (equal "work://plans/current.md"
                  (mevedel-plan-resource-address "local/plans/current.md")))
-  (should (equal "local://plans/accepted-20260813-120000.md"
+  (should (equal "work://plans/accepted-20260813-120000.md"
                  (mevedel-plan-resource-address
                   "local/plans/accepted-20260813-120000.md")))
   (dolist (path '("../plans/current.md"
@@ -215,7 +215,7 @@
                      (file-name-concat save-dir (plist-get accepted :path))))
             ;; Every archive stays serializable as a canonical address.
             (should (string-prefix-p
-                     "local://plans/accepted-"
+                     "work://plans/accepted-"
                      (mevedel-plan-resource-address
                       (plist-get accepted :path))))
             ;; A second archive never overwrites the immutable first one.

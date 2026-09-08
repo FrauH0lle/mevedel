@@ -17,6 +17,9 @@
 (require 'mevedel-workspace)
 (require 'mevedel-utilities)
 (require 'mevedel-system)
+(require 'mevedel-agents)
+(require 'mevedel-journal-index)
+(require 'mevedel-context-delivery)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -118,8 +121,9 @@
                              prompt))
       (should (string-match-p "mevedel://" prompt))
       (should-not (string-match-p "mevedel://docs" prompt))
-      (dolist (scheme '("local://" "artifact://" "skill://" "agent://"
-                        "history://" "memory://" "mcp://"))
+      (should-not (string-search "- `work://`" prompt))
+      (dolist (scheme '("artifact://" "skill://" "agent://"
+                        "history://" "mcp://"))
         (should-not (string-match-p (regexp-quote scheme) prompt)))
       (should-not (string-match-p "omp://" prompt)))
     (should-error (mevedel-system-build-prompt 'revise))))
@@ -269,13 +273,13 @@
       (cl-letf (((symbol-function 'mcp-hub-get-servers)
                  (lambda () nil)))
         (let ((roster (mevedel-system--resource-roster context)))
-          (dolist (scheme '("local://" "artifact://"))
+          (dolist (scheme '("work://" "artifact://" "memory://"))
             (should (string-match-p (regexp-quote scheme) roster)))
-          (should (string-match-p "writable session scratchpad" roster))
+          (should (string-match-p "workspace-owned" roster))
           (should (string-match-p "ApplyPatch" roster))
           (should (string-match-p "mevedel://" roster))
           (dolist (scheme '("skill://" "agent://" "history://"
-                            "memory://" "mcp://"))
+                            "mcp://"))
             (should-not (string-match-p (regexp-quote scheme) roster)))))))
 
   :doc "advertises root history without retained agents or reading content"
@@ -330,7 +334,7 @@
                        :workspace workspace
                        :working-directory root-dir
                        :session session))))
-                (dolist (scheme '("local://" "artifact://" "skill://"
+                (dolist (scheme '("work://" "artifact://" "skill://"
                                   "memory://" "mcp://" "mevedel://"))
                   (should (string-match-p (regexp-quote scheme) roster)))
                 (dolist (alias '("skill://local-mevedel/SKILL"
@@ -367,7 +371,7 @@
                    (let ((gptel-tools nil))
                      (mevedel-system--join-parts (mevedel-system--tool-orchestration-prompt context) (mevedel-system--resource-roster context))))))
     (should (string-match-p "Tool orchestration" prompt))
-    (should (string-match-p "local://" prompt))
+    (should (string-match-p "work://" prompt))
     (should (string-match-p "artifact://" prompt))
     (should-not (string-match-p "{{RESOURCE_ROSTER}}" prompt))
     (should-not (string-match-p "ToolCall" prompt))
@@ -941,6 +945,53 @@
     (let ((warm (mevedel-system-prompt-component-report 'sample)))
       (should (plist-get (cadr warm) :cached))
       (should (= (plist-get (car warm) :chars) 9)))))
+
+(mevedel-deftest mevedel-system-build-prompt/journal ()
+  ,test
+  (test)
+  :doc "pushes the map only to main, while worker retains memory and read-only agents report lessons"
+  (let* ((root (make-temp-file "mevedel-journal-profile-" t))
+         (workspace (mevedel-workspace--create
+                     :root root :journal-observation
+                     (list :root root :time (float-time) :entries
+                           (list (list :kind 'digest :id (make-string 64 ?a)
+                                       :file (concat "2026-09-07T12:00:00Z-" (make-string 64 ?a) ".md")
+                                       :created "2026-09-07T12:00:00Z" :session-name "Source"
+                                       :body "## Done\n- none\n\n## Learned\n- User: Map-only lesson\n\n## Surprised\n- none\n\n## Unfinished\n- none")))))
+         (session (mevedel-session--create :workspace workspace :working-directory root)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (let ((prompt (mevedel-system-build-prompt 'main :workspace workspace
+                                                    :working-directory root :session session)))
+            (should (string-match-p "Recent journal evidence" prompt))
+            (should (string-match-p "Map-only lesson" prompt))
+            (should (string-match-p "work://shared/" prompt)))
+          (let ((prompt (mevedel-system-build-prompt 'main :retained t
+                                                    :workspace workspace :session session)))
+            (should-not (string-search "Map-only lesson" prompt)))
+          (dolist (name '("worker" "explorer" "verifier" "reviewer"))
+            (let* ((agent (mevedel-agent-freeze (mevedel-agent-get name)))
+                   (prompt (mevedel-agent-system-prompt agent))
+                   (fsm (gptel-make-fsm :info (list :buffer (current-buffer)))))
+              (setq-local mevedel--agent-invocation
+                          (mevedel-agent-invocation--create :agent agent))
+              (should-not (string-match-p "Recent journal evidence\\|Map-only lesson" prompt))
+              (should-not (memq 'journal (mevedel-agent-context-components agent)))
+              (mevedel-context-delivery-stage fsm)
+              (let ((context (prin1-to-string
+                              (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
+                (should (string-search "journal://" context))
+                (should-not (string-search "Map-only lesson" context))
+                (should (string-search "work://shared/" context)))
+              (if (equal name "worker")
+                  (should (string-search "Persistent memory" prompt))
+                (should (string-search "source/task attribution" prompt)))))
+          (dolist (profile '(bash-guardian buddy buddy-guide))
+            (let ((prompt (mevedel-system-build-prompt profile :workspace workspace
+                                                      :working-directory root :session session)))
+              (should-not (string-match-p "Recent journal evidence\\|Map-only lesson" prompt)))))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-system)
 ;;; test-mevedel-system.el ends here

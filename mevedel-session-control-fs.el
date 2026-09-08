@@ -92,7 +92,13 @@ before the operation ran."
   (concat
    "set -eu\n"
    "pause_file=$1\n"
-   "shift\n"
+   "lock_directory=$2\n"
+   "shift 2\n"
+   "if test -n \"$lock_directory\"; then\n"
+   "  exec 7<\"$lock_directory\" || exit 70\n"
+   "  test \"$(cd /proc/self/fd/7 && pwd -P)\" = \"$lock_directory\" || exit 70\n"
+   "  flock -x -w 20 7 || exit 79\n"
+   "fi\n"
    ;; Every operation opens its own parent and re-proves it, so one process
    ;; carrying a program is exactly as pinned as one process per operation.
    ;;
@@ -125,7 +131,14 @@ before the operation ran."
    "    read)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      test -e \"$leaf\" || exit 77\n"
-   "      (set -o pipefail; dd if=\"$leaf\" iflag=nofollow status=none | base64 -w0) || exit 67\n"
+   "      if test -n \"$payload\"; then\n"
+   "        limit=$(printf '%s' \"$payload\" | base64 -d) || exit 67\n"
+   "        [[ \"$limit\" =~ ^[0-9]+$ ]] || exit 67\n"
+   "        test -f \"$leaf\" || exit 68\n"
+   "        (set -o pipefail; dd if=\"$leaf\" iflag=nofollow,count_bytes,nonblock count=\"$limit\" status=none | base64 -w0) || exit 67\n"
+   "      else\n"
+   "        (set -o pipefail; dd if=\"$leaf\" iflag=nofollow status=none | base64 -w0) || exit 67\n"
+   "      fi\n"
    "      ;;\n"
    "    verify)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
@@ -135,11 +148,27 @@ before the operation ran."
    ;; line's physical lines stay short; the observation is unwrapped.
    "      test \"$observed\" = \"$(printf '%s' \"$payload\" | tr -d '\\n')\" || exit 72\n"
    "      ;;\n"
-   "    write)\n"
+   "    absent)\n"
+   "      test ! -e \"$leaf\" && test ! -L \"$leaf\" || exit 72\n"
+   "      ;;\n"
+   "    verify-mode)\n"
+   "      mode=$(printf '%s' \"$payload\" | base64 -d) || exit 67\n"
+   "      [[ \"$mode\" =~ ^[0-7]+$ ]] || exit 67\n"
+   "      test ! -L \"$leaf\" && test -f \"$leaf\" || exit 69\n"
+   "      test \"$(stat -c %a -- \"$leaf\")\" = \"$mode\" || exit 72\n"
+   "      ;;\n"
+   "    write|write-mode)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      temporary=$(mktemp -- .mevedel-control-fs-XXXXXX) || exit 66\n"
    "      trap 'rm -f -- \"$temporary\"' EXIT\n"
-   "      printf '%s' \"$payload\" | base64 -d >\"$temporary\" || exit 66\n"
+   "      if test \"$op\" = write-mode; then\n"
+   "        (set -o pipefail; printf '%s' \"$payload\" | base64 -d | {\n"
+   "          IFS= read -r mode || exit 66\n"
+   "          [[ \"$mode\" =~ ^[0-7]+$ ]] || exit 66\n"
+   "          cat >\"$temporary\" && chmod \"$mode\" -- \"$temporary\"; }) || exit 66\n"
+   "      else\n"
+   "        printf '%s' \"$payload\" | base64 -d >\"$temporary\" || exit 66\n"
+   "      fi\n"
    "      mv -fT -- \"$temporary\" \"$leaf\" || exit 67\n"
    "      trap - EXIT\n"
    "      ;;\n"
@@ -195,14 +224,21 @@ before the operation ran."
    "      test ! -L \"$leaf\" || exit 69\n"
    "      rm -rf -- \"$leaf\" || exit 67\n"
    "      ;;\n"
-   "    clock)\n"
+   "    clock|before-time)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      exec 8<\"$leaf\" || exit 67\n"
    "      test ! -L \"$leaf\" || exit 69\n"
    "      cd -- /proc/self/fd/8 || exit 70\n"
    "      temporary=$(mktemp -- .mevedel-control-clock-XXXXXX) || exit 66\n"
    "      trap 'rm -f -- \"$temporary\"' EXIT\n"
-   "      stat -c '%Y' -- \"$temporary\" | base64 -w0 || exit 67\n"
+   "      now=$(stat -c '%Y' -- \"$temporary\") || exit 67\n"
+   "      if test \"$op\" = clock; then\n"
+   "        printf '%s' \"$now\" | base64 -w0 || exit 67\n"
+   "      else\n"
+   "        deadline=$(printf '%s' \"$payload\" | base64 -d) || exit 67\n"
+   "        [[ \"$deadline\" =~ ^[0-9]+$ ]] || exit 67\n"
+   "        test \"$now\" -lt \"$deadline\" || exit 72\n"
+   "      fi\n"
    "      ;;\n"
    "    list)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
@@ -342,6 +378,10 @@ parent must not turn into a `Setting current directory' failure."
 (defconst mevedel-session-control-fs--program-verbs
   '((read . "read")
     (verify . "verify")
+    (absent . "absent")
+    (before-time . "before-time")
+    (write-mode . "write-mode")
+    (verify-mode . "verify-mode")
     (write . "write")
     (append . "append")
     (create . "create")
@@ -402,6 +442,11 @@ parent must not turn into a `Setting current directory' failure."
          ;; strips it before comparing.
          (payload
           (cond
+           ((plist-member op :max-bytes)
+            (unless (and (eq (plist-get op :op) 'read)
+                         (natnump (plist-get op :max-bytes)))
+              (error "Read byte limit must be a non-negative integer"))
+            (base64-encode-string (number-to-string (plist-get op :max-bytes))))
            ((null content) "")
            ((multibyte-string-p content)
             (base64-encode-string
@@ -568,14 +613,21 @@ report why."
          results)))
     (nreverse results)))
 
-(defun mevedel-session-control-fs-run-program (operations)
+(defun mevedel-session-control-fs-run-program (operations &optional lock-directory)
   "Run OPERATIONS as one pinned target program and return their results.
+
+LOCK-DIRECTORY, when non-nil, holds an exclusive target-side `flock' on its
+pinned directory descriptor for the entire program. Cooperating mutations must
+use the same physical directory. Process death releases the lock; waiting is
+bounded to 20 seconds. This requires the target's `flock' executable.
 
 OPERATIONS is a list of plists.  `:op' names one of
 `mevedel-session-control-fs--program-verbs', `:path' is the absolute target
 path it addresses, `:content' supplies bytes for a writing verb or the
 expected bytes for `verify', and `:coding' selects a non-default coding
-system.  `:optional' marks an operation whose failure the caller interprets
+system.  A `read' may carry `:max-bytes' to bound bytes on the target before
+transfer or decoding.  `:optional' marks an operation whose failure the caller
+interprets
 itself, such as ensuring a directory that may already exist, and which
 therefore does not end the program.
 
@@ -603,6 +655,10 @@ signal contract of the single-operation wrappers per operation."
                         :parent)))
                     operations))
            (remote (car parents)))
+      (when lock-directory
+        (setq lock-directory (mevedel-session-control-fs-physical-path lock-directory))
+        (unless (equal remote (file-remote-p lock-directory))
+          (error "Control lock crosses execution targets")))
       (dolist (other parents)
         (unless (equal other remote)
           (error "Control program crosses execution targets")))
@@ -652,6 +708,7 @@ signal contract of the single-operation wrappers per operation."
                          mevedel-session-control-fs--program-script
                          "mevedel-session-control-fs"
                          (or mevedel-session-control-fs--test-pause-file "")
+                         (if lock-directory (file-local-name lock-directory) "")
                          arguments)))
                      (text (with-current-buffer output (buffer-string))))
                 (unless (and (integerp status) (zerop status))
@@ -714,10 +771,25 @@ shared status vocabulary supplies the classification: `conflict' and
                        (and coding (list :coding coding))))))))
 
 (defun mevedel-session-control-fs-read-file
-    (path &optional coding-system)
+    (path &optional coding-system max-bytes)
   "Read target control file PATH through its pinned parent directory.
-CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes."
-  (mevedel-session-control-fs--run-1 'read path nil coding-system))
+CODING-SYSTEM defaults to UTF-8; use `no-conversion' for arbitrary bytes.
+MAX-BYTES, when non-nil, bounds the read on the target before transfer and
+decoding.  Use `no-conversion' when a prefix may split a multibyte character."
+  (mevedel-session-control-fs-program-value
+   (car (mevedel-session-control-fs-run-program
+         (list (append (list :op 'read :path path)
+                       (and coding-system (list :coding coding-system))
+                       (and max-bytes (list :max-bytes max-bytes))))))))
+
+(defun mevedel-session-control-fs-create-or-verify (path content &optional coding-system)
+  "Create target control file PATH with CONTENT, or accept an identical PATH.
+Return non-nil when PATH now holds exactly CONTENT, nil when another writer
+left different content.  CODING-SYSTEM defaults to UTF-8."
+  (or (mevedel-session-control-fs-create-file path content coding-system)
+      (equal content
+             (mevedel-session-control-fs-read-file
+              path coding-system (1+ (string-bytes content))))))
 
 (defun mevedel-session-control-fs-path-exists-p (path)
   "Return non-nil when target PATH exists as a non-symlink entry."

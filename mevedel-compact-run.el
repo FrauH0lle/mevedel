@@ -70,6 +70,13 @@
                   (event event-plist callback
                          &optional session workspace request invocation))
 
+;; `mevedel-journal-capture'
+(declare-function mevedel-journal-capture-checkpoint "mevedel-journal-capture" (session buffer))
+(declare-function mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture"
+                  (session buffer trigger &optional captures))
+(autoload 'mevedel-journal-capture-checkpoint "mevedel-journal-capture")
+(autoload 'mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture")
+
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
 
@@ -116,6 +123,7 @@
   focus
   instructions
   invocation
+  journal-captures
   old-content
   pending-text
   policy
@@ -215,6 +223,11 @@ the persistent failure counter unchanged."
          (session (mevedel-compact-run--state-session state))
          (workspace (mevedel-compact-run--state-workspace state))
          (target (mevedel-compact-run--state-target state)))
+    (when (and (not (mevedel-compact-run--state-invocation state))
+               (mevedel-compact-run--state-journal-captures state))
+      (mevedel-journal-capture-seal-and-schedule
+       session (mevedel-compact-run--state-chat-buffer state) 'compaction
+       (mevedel-compact-run--state-journal-captures state)))
     (message
      "mevedel: compaction complete (%dk -> %dk tokens, %d turns preserved)"
      (/ tokens-before 1000)
@@ -444,6 +457,19 @@ rather than escaping, because the caller may be an asynchronous hook."
      (and (not aggressive)
           (mevedel-compact-evidence-region-with-tool-output-cap
            tail-start limit mevedel-compact-evidence-tail-tool-output-max)))
+    ;; Freeze completed evidence before the attempt replaces the transcript.
+    ;; A failed attempt leaves only an unsealed checkpoint for later recovery.
+    (when (and (mevedel-compact-run--state-session state)
+               (not (plist-get target :invocation)))
+      (condition-case err
+          (when-let* ((capture (mevedel-journal-capture-checkpoint
+                                (mevedel-compact-run--state-session state)
+                                (mevedel-compact-run--state-chat-buffer state))))
+            (setf (mevedel-compact-run--state-journal-captures state) (list capture)))
+        (error
+         (display-warning 'mevedel
+                          (format "Journal capture checkpoint failed: %s" (error-message-string err))
+                          :warning))))
     state))
 
 (cl-defun mevedel-compact-run-start

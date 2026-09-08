@@ -138,7 +138,7 @@ below `local/plans/'."
             relative-path)
            (match-string 1 relative-path))
           (t (error "Plan artifact path is outside managed plan storage")))))
-    (concat "local://plans/" tail)))
+    (concat "work://plans/" tail)))
 
 (defun mevedel-plan-artifact-path-p (path)
   "Return non-nil when PATH is a normalized session-relative artifact path."

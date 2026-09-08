@@ -43,9 +43,9 @@ Single decision function `mevedel-check-permission`. Decision chain:
 1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /
    `get-name` slots
 2. Deny rules (across all buckets — see bucket precedence below)
-3. Active standalone Plan with a native edit tool other than an all-local
+3. Active standalone Plan with a native edit tool other than an session-only
    `ApplyPatch` or with `Eval`, active directive Planning with any native edit
-   tool or `Eval`, an `ApplyPatch` containing an ordinary, non-local, or bare
+   tool or `Eval`, an `ApplyPatch` containing an ordinary, shared, memory, or bare
    endpoint, or active Goal planning/review with a native edit tool -> deny
    regardless of allow rules or permission mode
 4. Tool's own `check-permission` slot decides command authority
@@ -103,14 +103,16 @@ and containment failures stop before permission and post-use hooks; a valid but
 missing, disconnected, stale, or unreadable resource follows ordinary handler
 failure handling.
 
-Read-only `artifact://`, `skill://`, `agent://`, `history://`, and `memory://`
+Read-only `artifact://`, `skill://`, `agent://`, `history://`, `memory://`, and `journal://`
 resources keep their intrinsic read capability and current freshness rules.
-`local://` mutation uses ordinary `ApplyPatch` permission and patch review;
+`work://` and explicit memory-file mutation use ordinary `ApplyPatch` permission
+and patch review. Shared and memory operands use their real backing paths for
+protected-path and workspace-boundary decisions;
 recognizing an address does not broaden roots or create a grant. Skill and
 memory addresses retain client-local origin, while MCP authority remains with
-the current configured connection. Standalone/sticky Plan mode allows all-local
+the current configured connection. Standalone/sticky Plan mode allows session-only
 `ApplyPatch`, including requests from retained agents, but denies any proposal
-containing an ordinary, non-local, or bare endpoint before local materialization
+containing an ordinary, shared, memory, or bare endpoint before local materialization
 or ordinary mutation. Mixed local/ordinary and ordinary-only proposals
 therefore fail tree-wide; permission modes and allow rules cannot reopen that
 boundary. See

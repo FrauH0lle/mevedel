@@ -132,6 +132,35 @@
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-flush-log "mevedel-hooks" (session))
 
+;; `mevedel-journal-capture'
+(declare-function mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture"
+                  (session buffer trigger &optional captures))
+(autoload 'mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture")
+
+;; `mevedel-journal-cleanup'
+(declare-function mevedel-journal-cleanup-expired "mevedel-journal-cleanup" (workspace &optional force))
+(autoload 'mevedel-journal-cleanup-expired "mevedel-journal-cleanup")
+
+;; `mevedel-journal-pins'
+(declare-function mevedel-journal-pins-present-p "mevedel-journal-pins" (session-dir))
+(autoload 'mevedel-journal-pins-present-p "mevedel-journal-pins")
+
+;; `mevedel-journal-process'
+(declare-function mevedel-journal-process-schedule "mevedel-journal-process" (workspace &optional recover))
+(declare-function mevedel-journal-process-stop-all "mevedel-journal-process" ())
+(defvar mevedel-journal-process--inhibit-scheduling)
+(autoload 'mevedel-journal-process-schedule "mevedel-journal-process")
+
+;; `mevedel-memory-decision'
+(declare-function mevedel-memory-decision-schedule-recovery "mevedel-memory-decision" (workspace))
+(declare-function mevedel-memory-decision-stop-recovery "mevedel-memory-decision" ())
+(defvar mevedel-memory-decision--inhibit-recovery)
+(autoload 'mevedel-memory-decision-schedule-recovery "mevedel-memory-decision")
+
+;; `mevedel-memory-pass'
+(declare-function mevedel-memory-pass-stop-all "mevedel-memory-pass" ())
+(defvar mevedel-memory-pass--inhibit-scheduling)
+
 ;; `mevedel-permission-log'
 (declare-function mevedel-permission-log-flush "mevedel-permission-log" (session))
 
@@ -198,8 +227,8 @@
 (declare-function mevedel-session-control-fs-path-exists-p "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-physical-path "mevedel-session-control-fs" (path))
 (declare-function mevedel-session-control-fs-program-value "mevedel-session-control-fs" (result))
-(declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs" (path &optional coding-system))
-(declare-function mevedel-session-control-fs-run-program "mevedel-session-control-fs" (operations))
+(declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs" (path &optional coding-system max-bytes))
+(declare-function mevedel-session-control-fs-run-program "mevedel-session-control-fs" (operations &optional lock-directory))
 (declare-function mevedel-session-control-fs-tree-sizes "mevedel-session-control-fs" (paths))
 (declare-function mevedel-session-control-fs-write-file "mevedel-session-control-fs" (path content))
 (autoload 'mevedel-session-control-fs-path-exists-p
@@ -986,46 +1015,45 @@ Stamped into `.lock' files as a forensic / tiebreaker field.")
   "Return the absolute path to SESSION-DIR's `.lock' file."
   (file-name-concat session-dir ".lock"))
 
-(defun mevedel-session-persistence--write-lock (lock-path buffer-name)
-  "Write or overwrite a lock file at LOCK-PATH naming BUFFER-NAME as holder.
-Prefer `mevedel-session-persistence--write-lock-atomic' when
-acquiring a fresh lock; this function is safe only when the caller
-already owns (or is replacing) an existing lock."
-  (let ((plist (list :pid (emacs-pid)
-                     :hostname (system-name)
-                     :emacs-invocation-time
-                     mevedel-session-persistence--emacs-invocation-time
-                     :buffer buffer-name)))
-    (with-temp-file lock-path
-      (let ((print-length nil) (print-level nil))
-        (prin1 plist (current-buffer))))))
+(defun mevedel-session-persistence--change-lock (lock-path expected buffer-name)
+  "Replace EXPECTED lock at LOCK-PATH with BUFFER-NAME, or delete for nil.
+Serialize the observed-holder check and mutation with Emacs's native file
+lock. Creation, replacement and release share that lock; a competing live
+holder causes a silent refusal, never a lock-breaking prompt. Return nil
+when another client changed the record or owns its mutation lock."
+  (let ((create-lockfiles t) locked temporary)
+    (condition-case nil
+        (unwind-protect
+            (cl-letf (((symbol-function 'ask-user-about-lock)
+                       (lambda (&rest _) (error "Session lock mutation is busy"))))
+              (when (eq (file-locked-p lock-path) t)
+                (error "Session lock mutation is reentrant"))
+              (lock-file lock-path)
+              (unless (eq (file-locked-p lock-path) t)
+                (error "Session lock mutation could not be locked"))
+              (setq locked t)
+              (when (and (or expected (not (file-exists-p lock-path)))
+                         (equal expected (mevedel-session-persistence--read-lock lock-path)))
+                (if buffer-name
+                    (progn
+                      (setq temporary (make-temp-file (file-name-concat (file-name-directory lock-path) ".mevedel-lock-")))
+                      (with-temp-file temporary
+                        (let ((print-length nil) (print-level nil))
+                          (prin1 (list :pid (emacs-pid) :hostname (system-name)
+                                       :emacs-invocation-time mevedel-session-persistence--emacs-invocation-time
+                                       :buffer buffer-name) (current-buffer))))
+                      (rename-file temporary lock-path t))
+                  (delete-file lock-path))
+                t))
+          (when (and temporary (file-exists-p temporary)) (delete-file temporary))
+          (when locked (unlock-file lock-path)))
+      (error nil))))
 
-(defun mevedel-session-persistence--write-lock-atomic (lock-path buffer-name)
-  "Atomically create LOCK-PATH for BUFFER-NAME with this Emacs as holder.
-Returns t on success, nil when LOCK-PATH already exists (race lost).
-
-Uses `add-name-to-file' which is POSIX link(2) and thus atomic: if
-the target already exists it signals `file-already-exists'.  Writes
-the payload into a unique temp file in the same directory first so
-partial payloads can never appear at LOCK-PATH."
-  (let* ((dir (file-name-directory (expand-file-name lock-path)))
-         (tmp (make-temp-file (expand-file-name ".mevedel-lock-" dir)))
-         (plist (list :pid (emacs-pid)
-                      :hostname (system-name)
-                      :emacs-invocation-time
-                      mevedel-session-persistence--emacs-invocation-time
-                      :buffer buffer-name)))
-    (unwind-protect
-        (progn
-          (with-temp-file tmp
-            (let ((print-length nil) (print-level nil))
-              (prin1 plist (current-buffer))))
-          (condition-case _
-              (progn
-                (add-name-to-file tmp lock-path nil)
-                t)
-            (file-already-exists nil)))
-      (when (file-exists-p tmp) (delete-file tmp)))))
+(defun mevedel-session-persistence--write-lock (lock-path buffer-name expected)
+  "Replace LOCK-PATH with BUFFER-NAME only while its EXPECTED holder remains.
+Signal on a competing replacement so a caller cannot assume ownership."
+  (unless (mevedel-session-persistence--change-lock lock-path expected buffer-name)
+    (error "Session lock changed before replacement")))
 
 (defun mevedel-session-persistence--read-lock (lock-path)
   "Return the plist read from LOCK-PATH, or nil if absent or unparseable."
@@ -1041,7 +1069,8 @@ partial payloads can never appear at LOCK-PATH."
   "Return non-nil if PID is a live process on the current host."
   (and pid (numberp pid)
        (condition-case _
-           (signal-process pid 0)
+           (or (zerop (signal-process pid 0))
+               (process-attributes pid))
          (error nil))))
 
 (defconst mevedel-session-persistence--lock-start-time-tolerance 2
@@ -1115,7 +1144,7 @@ PID-lock table.  File-workspace sessions use the following lock table:
       ;; beat us to it between the read above and this write, fall
       ;; through to the existing-lock branches.
       (cond
-       ((mevedel-session-persistence--write-lock-atomic lock-path buffer-name)
+       ((mevedel-session-persistence--change-lock lock-path nil buffer-name)
         t)
        ((mevedel-session-persistence--read-lock lock-path)
         (mevedel-session-persistence-lock-acquire
@@ -1139,7 +1168,7 @@ PID-lock table.  File-workspace sessions use the following lock table:
                  (plist-get existing :buffer))
                 '(?b ?r ?a))))
           (pcase response
-            (?b (mevedel-session-persistence--write-lock lock-path buffer-name)
+            (?b (mevedel-session-persistence--write-lock lock-path buffer-name existing)
                 t)
             (?r nil)
             (?a (user-error "Session resume aborted")))))
@@ -1149,7 +1178,7 @@ PID-lock table.  File-workspace sessions use the following lock table:
                      (plist-get existing :pid)
                      (plist-get existing :buffer)))
             (progn
-              (mevedel-session-persistence--write-lock lock-path buffer-name)
+              (mevedel-session-persistence--write-lock lock-path buffer-name existing)
               t)
           (user-error "Lock not broken")))))
      (t
@@ -1168,7 +1197,7 @@ PID-lock table.  File-workspace sessions use the following lock table:
                (plist-get existing :buffer))
               '(?b ?r ?a))))
         (pcase response
-          (?b (mevedel-session-persistence--write-lock lock-path buffer-name)
+          (?b (mevedel-session-persistence--write-lock lock-path buffer-name existing)
               t)
           (?r nil)
           (?a (user-error "Session resume aborted")))))))))
@@ -1186,7 +1215,24 @@ SESSION supplies the live lease owner when SESSION-DIR is portable."
       (when (and existing
                  (eq (plist-get existing :pid) (emacs-pid))
                  (equal (plist-get existing :hostname) (system-name)))
-        (delete-file lock-path)))))
+        (mevedel-session-persistence--change-lock lock-path existing nil)))))
+
+(defun mevedel-session-persistence-call-with-abandoned-lock (session-dir function)
+  "Call FUNCTION while holding abandoned file SESSION-DIR's PID lock.
+This uses the same stale-holder test as the session chooser.  Live, foreign,
+and unreadable locks remain untouched.  No prompt or conversation is created."
+  (unless (eq 'pid-lock (mevedel-session-codec-authority-mode-for-path session-dir))
+    (error "Abandoned PID-lock recovery requires a file session"))
+  (let* ((path (mevedel-session-persistence--lock-path session-dir))
+         (existing (mevedel-session-persistence--read-lock path)))
+    (when (and (or (not existing)
+                   (and (equal (plist-get existing :hostname) (system-name))
+                        (integerp (plist-get existing :pid))
+                        (> (plist-get existing :pid) 0)
+                        (not (mevedel-session-persistence--same-host-lock-active-p existing))))
+               (mevedel-session-persistence--change-lock path existing "journal recovery"))
+      (unwind-protect (funcall function)
+        (mevedel-session-persistence-lock-release session-dir)))))
 
 (defun mevedel-session-persistence--sweep-stale-locks (workspace)
   "Silently remove stale `.lock' files in WORKSPACE.
@@ -1212,7 +1258,7 @@ Called opportunistically from the `mevedel' session chooser."
                        (not (mevedel-session-persistence--same-host-lock-active-p
                              info)))
               (condition-case _
-                  (delete-file lock-path)
+                  (mevedel-session-persistence--change-lock lock-path info nil)
                 (error nil)))))))))
 
 (defun mevedel-session-persistence-release-on-kill ()
@@ -1220,6 +1266,7 @@ Called opportunistically from the `mevedel' session chooser."
   (when (and (boundp 'mevedel--session)
              mevedel--session)
     (when-let* ((dir (mevedel-session-save-path mevedel--session)))
+      (mevedel-journal-capture-seal-and-schedule mevedel--session (current-buffer) 'session-end)
       (condition-case _
           (mevedel-session-persistence-lock-release dir mevedel--session)
         (error nil)))))
@@ -2332,6 +2379,8 @@ expired lease is taken over."
   ;; Expired sessions and locks left behind by dead Emacsen are swept before
   ;; listing, so the chooser never offers a row that exists only because
   ;; nothing has cleaned up after a previous invocation.
+  (mevedel-journal-process-schedule workspace t)
+  (mevedel-memory-decision-schedule-recovery workspace)
   (mevedel-session-persistence-cleanup-expired workspace)
   (mevedel-session-persistence--sweep-stale-locks workspace)
   (let* ((enumeration
@@ -2671,13 +2720,15 @@ Portable project stores are not auto-cleaned.  The
 `mevedel-session-keep-recent-count' most-recently-updated sessions are
 never deleted regardless of age.  File-workspace cleanup skips
 sessions with an active lock.  Cross-host locks are active.
-Same-host locks are stale when their PID is dead or when the live
+Pending journal capture pins also prevent deletion.  Same-host locks are
+stale when their PID is dead or when the live
 process start time proves PID reuse.  Throttled to at most once per
 `(workspace-type . workspace-id)' per Emacs invocation; when FORCE is
 non-nil the throttle is bypassed.
 
 Returns the number of sessions deleted, or nil when the cap is nil, WORKSPACE
 uses portable authority, or the throttle has already fired."
+  (mevedel-journal-cleanup-expired workspace force)
   (let ((sessions-dir
          (mevedel-session-artifacts-sessions-dir workspace)))
     (when (and mevedel-session-max-age-days
@@ -2725,7 +2776,8 @@ uses portable authority, or the throttle has already fired."
                        (> (- now updated-secs) threshold-secs)
                        (not
                         (mevedel-session-persistence--active-lock-p
-                         save-path)))
+                         save-path))
+                       (not (mevedel-journal-pins-present-p save-path)))
               (delete-directory save-path t)
               (cl-incf deleted)))
           (when (> deleted 0)
@@ -2789,49 +2841,61 @@ uses portable authority, or the throttle has already fired."
 Runs unconditionally so that locks don't outlive the Emacs process
 that wrote them.  Best-effort: individual errors are swallowed so one
 bad buffer can't block exit."
-  (when (fboundp 'mevedel-execution-teardown-all)
-    (ignore-errors (mevedel-execution-teardown-all)))
-  ;; A debounced agent-state save left in its window would be lost, and
-  ;; registry mutations do not mark the root buffer modified, so the
-  ;; modified-only save loop below cannot cover them.
-  (maphash (lambda (session timer)
-             (cancel-timer timer)
-             (ignore-errors
-               (when-let* ((buffer (mevedel-session-root-buffer session))
-                           ((buffer-live-p buffer)))
-                 (mevedel-session-artifacts-save session buffer))))
-           mevedel-session-persistence--deferred-agent-saves)
-  (clrhash mevedel-session-persistence--deferred-agent-saves)
-  (let (lock-dirs)
-    (dolist (buf (buffer-list))
-      (when (buffer-live-p buf)
-        (with-current-buffer buf
-          (when (and (boundp 'mevedel--session)
-                     mevedel--session)
-            (when (buffer-modified-p)
-              (condition-case _
-                  (mevedel-session-artifacts-save mevedel--session buf)
-                (error nil)))
-            ;; An unmodified buffer still owes its queued diagnostics: a
-            ;; deferred remote flush never fires once Emacs is exiting.
-            (ignore-errors
-              (mevedel-session-persistence--flush-diagnostic-logs-now
-               mevedel--session))
-            (when-let* ((dir (mevedel-session-save-path mevedel--session)))
-              (cl-pushnew dir lock-dirs :test #'equal))))))
-    ;; Keep live locks through cleanup so an exit-save failure cannot expose
-    ;; an old session directory for deletion.
-    (when (and (boundp 'mevedel-workspace--registry)
-               (hash-table-p mevedel-workspace--registry))
-      (maphash
-       (lambda (_ workspace)
-         (ignore-errors
-           (mevedel-session-persistence-cleanup-expired workspace)))
-       mevedel-workspace--registry))
-    (dolist (dir lock-dirs)
-      (condition-case _
-          (mevedel-session-persistence-lock-release dir)
-        (error nil)))))
+  (let ((mevedel-journal-process--inhibit-scheduling t)
+        (mevedel-memory-decision--inhibit-recovery t)
+        (mevedel-memory-pass--inhibit-scheduling t))
+    (when (featurep 'mevedel-journal-process)
+      (mevedel-journal-process-stop-all))
+    (when (featurep 'mevedel-memory-decision)
+      (mevedel-memory-decision-stop-recovery))
+    (when (featurep 'mevedel-memory-pass)
+      (mevedel-memory-pass-stop-all))
+    (when (fboundp 'mevedel-execution-teardown-all)
+      (ignore-errors (mevedel-execution-teardown-all)))
+    ;; A debounced agent-state save left in its window would be lost, and
+    ;; registry mutations do not mark the root buffer modified, so the
+    ;; modified-only save loop below cannot cover them.
+    (maphash (lambda (session timer)
+               (cancel-timer timer)
+               (ignore-errors
+                 (when-let* ((buffer (mevedel-session-root-buffer session))
+                             ((buffer-live-p buffer)))
+                   (mevedel-session-artifacts-save session buffer))))
+             mevedel-session-persistence--deferred-agent-saves)
+    (clrhash mevedel-session-persistence--deferred-agent-saves)
+    (let (lock-dirs)
+      (dolist (buf (buffer-list))
+        (when (buffer-live-p buf)
+          (with-current-buffer buf
+            (when (and (boundp 'mevedel--session)
+                       mevedel--session)
+              (when (buffer-modified-p)
+                (condition-case _
+                    (mevedel-session-artifacts-save mevedel--session buf)
+                  (error nil)))
+              ;; Seal only the completed checkpoint, even if the exit save
+              ;; above included an unfinished response.  Exit starts no model.
+              (mevedel-journal-capture-seal-and-schedule mevedel--session buf 'session-end)
+              ;; An unmodified buffer still owes its queued diagnostics: a
+              ;; deferred remote flush never fires once Emacs is exiting.
+              (ignore-errors
+                (mevedel-session-persistence--flush-diagnostic-logs-now
+                 mevedel--session))
+              (when-let* ((dir (mevedel-session-save-path mevedel--session)))
+                (cl-pushnew dir lock-dirs :test #'equal))))))
+      ;; Keep live locks through cleanup so an exit-save failure cannot expose
+      ;; an old session directory for deletion.
+      (when (and (boundp 'mevedel-workspace--registry)
+                 (hash-table-p mevedel-workspace--registry))
+        (maphash
+         (lambda (_ workspace)
+           (ignore-errors
+             (mevedel-session-persistence-cleanup-expired workspace)))
+         mevedel-workspace--registry))
+      (dolist (dir lock-dirs)
+        (condition-case _
+            (mevedel-session-persistence-lock-release dir)
+          (error nil))))))
 
 ;; Install at file-load time so exit persistence runs even when the user
 ;; never called `mevedel-install' this Emacs (e.g. running `mevedel' to

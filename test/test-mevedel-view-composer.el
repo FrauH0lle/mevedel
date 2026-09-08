@@ -1735,10 +1735,10 @@
               (should (memq #'mevedel-resource-capf
                             completion-at-point-functions))
               (goto-char (mevedel-view--input-start))
-              (insert "local://")
+              (insert "work://")
               (let* ((result (mevedel-resource-capf))
                      (candidates (mevedel-view-test--capf-candidates result)))
-                (should (member "local://note.md" candidates))
+                (should (member "work://note.md" candidates))
                 (should-not (get-text-property
                              0 'mevedel-mention-binding
                              (car candidates)))))))

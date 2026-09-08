@@ -250,7 +250,7 @@ reactivated without scheduling because its caller owns the prepared kickoff."
   "Return GOAL's validated accepted-plan resource address in SESSION, or nil.
 
 The artifact is validated through its private session-owned path, but the
-returned value is the model-facing `local://plans/...' address so Goal context
+returned value is the model-facing `work://plans/...' address so Goal context
 never discloses session storage paths."
   (when-let* ((reference (mevedel-goal-plan-reference goal)))
     (unless (mevedel-goal--valid-plan-reference-p reference)

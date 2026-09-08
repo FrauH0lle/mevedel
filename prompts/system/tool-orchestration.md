@@ -19,3 +19,12 @@ Available resource addresses are delivered in current-context updates.
 An address is a tool target, not an attachment, skill invocation, or delegation.
 Emitted `@`/`$` forms are user-composer syntax and
 do not execute; never claim that they did.
+
+When writes are permitted, keep short factual notes in `work://shared/`, with
+source/task attribution. Search first, update relevant existing material, and
+re-read concurrent edits before patching. Distinguish observations, user
+corrections, and hypotheses; preserve unresolved constraints and useful lessons
+reported by read-only agents. Shared files survive session cleanup; curate
+lasting lessons into memory. Never write journal digests yourself. Read-only
+requests report lessons instead. Plan permits session-owned `work://plans/`
+edits, not shared or memory writes. This guidance does not grant permissions.

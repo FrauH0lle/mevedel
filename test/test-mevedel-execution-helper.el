@@ -61,6 +61,41 @@
                         (list (list :path input :access 'read)))
                   (plist-get captured :additional-permissions)))
           (should-not (file-exists-p (plist-get captured :workdir))))
+      (delete-directory root t)))
+  :doc "returns an idempotent canceller for a sessionless helper"
+  (let* ((mevedel-sandbox-mode 'off)
+         (root (make-temp-file "mevedel-helper-cancel-" t))
+         (marker (file-name-concat root "started"))
+         result (settlements 0) cancel scratch)
+    (unwind-protect
+        (progn
+          (setq cancel
+                (mevedel-execution-start-helper
+                 (lambda (value) (setq result value) (cl-incf settlements))
+                 "mevedel-test-helper-cancel"
+                 (list "sh" "-c" "pwd > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; exec sleep 30"
+                       "mevedel-test-helper-cancel" marker)
+                 nil nil))
+          (should (functionp cancel))
+          (with-timeout (5 (error "Helper did not start"))
+            (while (not (file-exists-p marker))
+              (accept-process-output nil 0.01)))
+          (setq scratch
+                (string-trim
+                 (with-temp-buffer
+                   (insert-file-contents marker)
+                   (buffer-string))))
+          (should (file-directory-p scratch))
+          (funcall cancel)
+          (funcall cancel)
+          (with-timeout (5 (error "Cancelled helper did not settle"))
+            (while (not result) (accept-process-output nil 0.01)))
+          (should (= settlements 1))
+          (should (eq 'aborted (plist-get result :termination)))
+          (should-not (file-exists-p scratch))
+          (funcall cancel)
+          (should (= settlements 1)))
+      (mevedel-execution-teardown-all)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-execution-run-helper ()

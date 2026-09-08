@@ -92,7 +92,7 @@
 (autoload 'mevedel-session-codec-write "mevedel-session-codec")
 
 ;; `mevedel-session-control-fs'
-(declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs" (path &optional coding-system))
+(declare-function mevedel-session-control-fs-read-file "mevedel-session-control-fs" (path &optional coding-system max-bytes))
 (autoload 'mevedel-session-control-fs-read-file "mevedel-session-control-fs")
 
 ;; `mevedel-session-control-transfer'

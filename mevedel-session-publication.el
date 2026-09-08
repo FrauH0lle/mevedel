@@ -14,6 +14,7 @@
 ;; filesystem, so its feature is a hard load-time dependency rather than a
 ;; lazily reachable one.
 (require 'mevedel-session-control-fs)
+(require 'mevedel-journal-pins)
 ;; Publication validates and reads through durability's shared primitives.
 ;; Durability reaches back into publication only from inside functions, so
 ;; this direction is the loadable one.
@@ -110,6 +111,8 @@
       (string-prefix-p ".lease/" path)
       (equal path ".publications")
       (string-prefix-p ".publications/" path)
+      (equal path ".journal-pins")
+      (string-prefix-p ".journal-pins/" path)
       (equal path ".recovery")
       (string-prefix-p ".recovery/" path)))
 
@@ -706,7 +709,8 @@ their bytes."
   "Delete SESSION's published generations no retained head needs.
 
 Retention is `mevedel-session-publication--retained-generations' plus
-the session's current head and everything it resolves through.  Only a
+the session's current head, journal capture pins, and everything those heads
+resolve through.  Only a
 portable session owning its lease may collect: the deletion is a target
 mutation, and the current head must not move underneath it.  Every
 collectible generation is deleted in one batched target program, so one
@@ -748,6 +752,18 @@ deleted."
                         (append
                          (list current-name)
                          (plist-get current-summary :references)
+                         (mapcan
+                          (lambda (head)
+                            (let ((manifest
+                                   (mevedel-session-publication--cached-manifest
+                                    session-dir head)))
+                              (unless manifest
+                                (error "Pinned journal source is unreadable: %s" head))
+                              (cons
+                               (file-name-nondirectory
+                                (directory-file-name (file-name-directory head)))
+                               (mevedel-session-publication--manifest-references manifest))))
+                          (mevedel-journal-pins-heads session-dir))
                          (mevedel-session-publication--retained-generations
                           summaries)))
                        (collectible

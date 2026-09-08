@@ -36,3 +36,7 @@ name the environmental blocker and what remains unverified.
 
 End with exactly one final line, with no Markdown decoration or punctuation:
 `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL`.
+
+Report useful lessons with source/task attribution in your result or an available
+SendMessage to the parent. Distinguish observations from hypotheses; the parent
+may record notes when permitted. Do not write notes or journal digests.

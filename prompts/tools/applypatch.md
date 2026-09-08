@@ -4,23 +4,27 @@ can be reviewed and applied together.
 ### When to use `ApplyPatch`
 
 - Create, edit, delete, move, or rename text files.
-- Edit session scratch content through a non-bare `local://` address.
+- Edit working files through `work://` or curated memory through explicit
+  `memory://ROOT-KEY/RELATIVE-PATH` addresses.
 
 ### When NOT to use `ApplyPatch`
 
 - Empty files or standalone directory creation: the patch grammar cannot express them.
-- Directive Planning remains read-only even for local proposals.
+- Directive Planning remains read-only even for session working files.
 - Re-proposing a rejected change unless the user's feedback asks for a revision.
 
 ### How to use `ApplyPatch`
 
-- Paths are absolute or relative to the session working directory. The only
-  writable resource family is `local://`; other schemes and bare addresses
-  are not patch targets. Keep authored addresses in patch markers.
-- Standalone or sticky Plan mode allows only proposals whose every source and
-  destination is a non-bare `local://` descendant. Outside Plan mode, local and
-  ordinary paths may share one atomic proposal, subject to permission/review.
-  Disallowed or malformed targets are denied before materialization.
+- Paths are absolute or relative to the session working directory. Writable
+  resources are `work://` descendants and explicit memory file descendants.
+  Bare, root-only, and union addresses and other schemes are not patch targets.
+  Keep authored addresses in patch markers.
+- Standalone or sticky Plan mode permits only session-owned `work://`
+  descendants, such as `work://plans/current.md`, for every source/destination.
+  Shared, memory, ordinary, malformed, and root-only endpoints are denied before
+  materialization. Outside Plan mode, resource and ordinary paths may share one
+  atomic proposal, subject to permission/review. `work://shared/...` belongs to
+  the workspace and follows normal edit permissions and review.
 - Understand the relevant contents before changing them. Unsaved buffer edits
   are rejected; existing user changes must be preserved.
 - The basic grammar is:

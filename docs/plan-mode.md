@@ -95,10 +95,10 @@ uses the shared `summarization` workload.
 
 ## Tool boundary
 
-Plan requests expose `ApplyPatch` for all-local `local://` descendants,
+Plan requests expose `ApplyPatch` for session-only `work://` descendants,
 including retained agents, so durable plans and notes can be updated through
 the ordinary `ApplyPatch` path. Before materialization, the pipeline denies any
-proposal with an ordinary, non-local, or bare endpoint tree-wide; this includes
+proposal with an ordinary, shared, memory, or bare endpoint tree-wide; this includes
 mixed local/ordinary and ordinary-only proposals, and neither local nor
 ordinary targets are touched. Permission modes and explicit allow rules cannot
 widen this workflow boundary. Other edit tools and `Eval` remain unavailable:
@@ -108,7 +108,7 @@ a child process. Resource-address completion remains side-effect free. See
 
 Directive Plan before implementation has a separate, stricter boundary: its
 planning requests remain read-only and do not expose or allow `ApplyPatch`,
-including all-local proposals, or `Eval`.
+including session-only proposals, or `Eval`.
 
 ## Proposal interaction
 

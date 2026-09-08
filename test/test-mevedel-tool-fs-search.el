@@ -8,6 +8,7 @@
 
 (require 'mevedel-tool-fs-search)
 (require 'mevedel-structs)
+(require 'mevedel-skills-core)
 (require 'mevedel-execution)
 (require 'mevedel-system)
 (require 'mevedel-resource)
@@ -31,11 +32,11 @@
           (make-directory nested)
           (should
            (equal
-            (format "rg: local://root/one: denied\nrg: artifact://nested/two: denied")
+            (format "rg: work://root/one: denied\nrg: artifact://nested/two: denied")
             (mevedel-tool-fs-search--scrub-resource-search-output
              (format "rg: %s/one: denied\nrg: %s/two: denied"
                      root nested)
-             (list (list :path root :address "local://root")
+             (list (list :path root :address "work://root")
                    (list :path nested :address "artifact://nested"))))))
       (delete-directory root t)))
   :doc "scrubs the target-native spelling of remote roots"
@@ -598,7 +599,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
                     #'mevedel-tool-fs-search-grep
                     (list :pattern "needle" :path address
                           :output_mode "content"))))
-              (should (string-match-p "mevedel://guide\\.md" result))
+              (should (string-match-p "mevedel://guide\\.md\n1:public needle" result))
               (should (string-match-p "1:public needle" result))
               (should-not (string-match-p "private needle" result))
               (should-not (string-match-p "ignored\\.txt" result))
@@ -630,7 +631,7 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
                    (list :pattern "needle" :path address
                          :output_mode "content"))))
             (should (string-match-p
-                     "skill://local-agents/demo/prompt\\.md" result))
+                     "skill://local-agents/demo/prompt\\.md\n1:public needle" result))
             (should-not (string-match-p (regexp-quote root) result))))
       (delete-directory root t)))
   :doc "runs ripgrep in a remote target and returns target-native paths"
@@ -1118,7 +1119,32 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
                        :context "5")))
           (should (string-match-p "hit" result))
           (should-not (string-match-p "Error" result)))
-      (delete-directory tmp-dir t))))
+      (delete-directory tmp-dir t)))
+
+  :doc "searches session and shared work with real helpers and address-only results"
+  (let* ((root (make-temp-file "mevedel-work-search-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (session (mevedel-session--create :workspace workspace :save-path root))
+         (local (file-name-concat root "local"))
+         (shared (mevedel-resource-work-shared-directory workspace)))
+    (unwind-protect
+        (progn
+          (make-directory local)
+          (make-directory shared t)
+          (with-temp-file (file-name-concat local "plan.md") (insert "needle private\n"))
+          (with-temp-file (file-name-concat shared "decision.md") (insert "needle shared\n"))
+          (dolist (operation '(glob grep))
+            (let* ((attempt (mevedel-resource-prepare operation "work://" (list :session session)))
+                   (mevedel-resource-current-attempts (list (cons "work://" attempt)))
+                   (result
+                    (test-mevedel-tool-fs-search--await-callback
+                     (if (eq operation 'glob) #'mevedel-tool-fs-search-glob #'mevedel-tool-fs-search-grep)
+                     (list :path "work://" :pattern (if (eq operation 'glob) "*.md" "needle")
+                           :output_mode "content"))))
+              (should (string-search "work://plan.md" result))
+              (should (string-search "work://shared/decision.md" result))
+              (should-not (string-search root result)))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-tool-fs-search-render-grep ()
   ,test

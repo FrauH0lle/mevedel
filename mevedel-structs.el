@@ -119,6 +119,10 @@ One workspace per project, shared by all sessions for that project."
   root              ; cached absolute path
   name              ; display name
   file-cache        ; mevedel-file-cache struct: LRU workspace file cache
+  journal-observation ; disposable public journal observation for prompt discovery
+  journal-cleanup-at ; client time of the last journal expiry opportunity
+  memory-observation ; disposable proposal counts for cockpit display
+  memory-schedule   ; disposable automatic-review timing and setting snapshot
   directives)       ; list of workspace-owned mevedel-directive structs
 
 

@@ -15,12 +15,13 @@ are not filesystem paths.
 
 | Family | Read | Glob / Grep | Target |
 |---|---|---|---|
-| `local://` | Yes | Yes | Shared session scratch files |
+| `work://` | Yes | Yes | Session working files and workspace shared files |
 | `artifact://` | Yes | Yes | Persisted tool/execution output |
 | `skill://` | Yes | Yes | Discovered skill packages |
 | `agent://` | Yes | No | Latest settled retained-agent results |
 | `history://` | Yes | No | Root and retained-agent conversations |
 | `memory://root` | Yes | Yes | Configured memory index/roots |
+| `journal://` | Yes | Yes | Validated published workspace journal records |
 | `mevedel://` | Yes | Yes | Installed Markdown documentation |
 | `mcp://` | Yes | No | Connected servers' advertised resources |
 
@@ -30,6 +31,14 @@ Read a bare family address to list current entries, except memory uses
 `history://root` reads the main conversation; it does not imply a corresponding
 `agent://root` result. Availability is checked at use time, and missing sources
 fail rather than being silently replaced.
+
+`work://RELATIVE-PATH` belongs to the root session; `work://shared/RELATIVE-PATH`
+belongs to the workspace and persists across sessions. Search before creating
+notes and update relevant existing files. Working-file descendants and explicit
+memory file descendants can be ApplyPatch targets subject to its permissions
+and Plan boundary. Bare, root-only, and memory union addresses are discovery
+surfaces, not patch targets. Journal records are dated evidence, not current
+instructions; they remain read-only. Private pending journal state is unavailable.
 
 Skill exact locators have the form `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]`,
 where SOURCE-KEY is the full lowercase SHA-256 source identity from discovery.

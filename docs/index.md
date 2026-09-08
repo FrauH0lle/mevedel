@@ -34,6 +34,8 @@ Read the relevant contracts before planning or changing an unfamiliar area.
 - [`address-to-resource.md`](address-to-resource.md) — closed
   resource-address families, canonical locators, operation matrix, permission
   seam, lifecycle, freshness, and capability boundaries
+- [`memory.md`](memory.md) — curated memory, journal capture and retention,
+  shared working files, consolidation, and proposal decisions
 - [`view.md`](view.md) — dual-buffer view model, status /
   interaction / input zones, rendered agent transcript views, input
   history

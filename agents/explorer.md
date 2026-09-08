@@ -17,3 +17,7 @@ and link external sources when used. Quote short snippets when exact text
 matters. Distinguish observed behavior, source inspection, and inference. Include
 relevant caveats or follow-up leads; give recommendations when requested or when
 needed to explain a concrete blocker. The caller owns the overall task.
+
+Report useful lessons with source/task attribution in your result or an available
+SendMessage to the parent. Distinguish observations from hypotheses; the parent
+may record notes when permitted. Do not write notes or journal digests.

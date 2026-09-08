@@ -13,6 +13,10 @@
 (require 'cl-lib)
 (require 'subr-x)
 
+;; `diff'
+(declare-function diff-no-select "diff"
+                  (old new &optional switches no-async buf))
+
 ;; `gptel'
 (declare-function gptel--display-reasoning-stream "ext:gptel" (text info))
 (defvar gptel-default-mode)
@@ -190,6 +194,45 @@ because a missing tool is looked up just as often as a present one."
 
 ;;
 ;;; Display text
+
+(defun mevedel--unified-diff (original current &optional context-lines)
+  "Return the unified diff hunks between ORIGINAL and CURRENT text, or nil.
+CONTEXT-LINES defaults to diff's three lines of context."
+  (let ((original-buffer (generate-new-buffer " *mevedel-diff-original*"))
+        (current-buffer (generate-new-buffer " *mevedel-diff-current*"))
+        (output-buffer (generate-new-buffer " *mevedel-diff-output*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer original-buffer (insert original))
+          (with-current-buffer current-buffer (insert current))
+          (diff-no-select original-buffer current-buffer
+                          (if context-lines (format "-U%d" context-lines) "-u")
+                          t output-buffer)
+          (with-current-buffer output-buffer
+            (goto-char (point-min))
+            (when (re-search-forward "^@@" nil t)
+              (beginning-of-line)
+              ;; `diff-no-select' appends its own completion notice; the
+              ;; hunks end where that notice begins.
+              (let ((start (point))
+                    (end (if (re-search-forward "^Diff finished" nil t)
+                             (match-beginning 0)
+                           (point-max))))
+                (string-trim-right
+                 (buffer-substring-no-properties start end))))))
+      (kill-buffer original-buffer)
+      (kill-buffer current-buffer)
+      (kill-buffer output-buffer))))
+
+(defun mevedel--truncate-bytes (text limit marker)
+  "Return TEXT within LIMIT UTF-8 bytes, ending in MARKER when truncated.
+Truncation never splits a multibyte character.  MARKER must fit LIMIT."
+  (if (<= (string-bytes text) limit)
+      text
+    (let ((available (- limit (string-bytes marker))))
+      (when (< available 0) (error "Byte budget cannot hold its omission marker"))
+      (concat (decode-coding-string (string-limit text available nil 'utf-8) 'utf-8)
+              marker))))
 
 (defun mevedel--truncate-display (text width &optional ellipsis)
   "Return TEXT truncated to WIDTH columns, ending with ELLIPSIS.

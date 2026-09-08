@@ -67,6 +67,8 @@
            :parent-tool-use-id "parent"
            :call-source 'ptc
            :outcome 'allow
+           :permission-id "permission-1" :permission-via 'resource
+           :settlement-source 'user
            :command "SECRET raw command"
            :origin "bounded\nvalue")
           (should (= 1 (length (mevedel-session-telemetry-pending session))))
@@ -84,6 +86,9 @@
             (should (equal "parent/1" (plist-get entry :tool-use-id)))
             (should (equal "parent" (plist-get entry :parent-tool-use-id)))
             (should (eq 'ptc (plist-get entry :call-source)))
+            (should (equal "permission-1" (plist-get entry :permission-id)))
+            (should (eq 'resource (plist-get entry :permission-via)))
+            (should (eq 'user (plist-get entry :settlement-source)))
             (should (eq 'active (plist-get entry :goal-status)))
             (should (= 21 (plist-get entry :goal-tokens-used)))
             (should (= 2 (plist-get entry :goal-turns-run)))
@@ -1012,6 +1017,51 @@
         (kill-buffer view-buffer))
       (setq mevedel-telemetry--profiler-session nil
             mevedel-telemetry--profiler-run-id nil)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-telemetry-record-workspace ()
+  ,test
+  (test)
+  :doc "appends sanitized workspace events on local and remote targets without creating a session"
+  (let ((root (make-temp-file "mevedel-workspace-telemetry-" t)))
+    (unwind-protect
+        (mevedel-test--with-local-shell-tramp '("journal-telemetry")
+          (dolist (path (list root (format "/mevedelmock:journal-telemetry:%s/" root)))
+            (let ((workspace (mevedel-workspace--create :root path)))
+              (mevedel-telemetry-record-workspace
+               workspace 'journal-digest-written :capture-id "capture"
+               :output-bytes 32 :input-tokens 10 :output-tokens 4
+               :input-bytes 128 :pass-id "pass-1" :reviewed-count 3
+               :attempt-generation 2 :evidence "SECRET evidence"
+               :prompt "SECRET prompt")))
+          (let* ((path (file-name-concat root ".mevedel" "diagnostics" "telemetry-log.el"))
+                 (events (test-mevedel-telemetry--read path)))
+            (should (= 2 (length events)))
+            (dolist (event events)
+              (should-not (plist-get event :session-id))
+              (should (equal "capture" (plist-get event :capture-id)))
+              (should (= 2 (plist-get event :attempt-generation)))
+              (should (= 10 (plist-get event :input-tokens)))
+              (should (= 128 (plist-get event :input-bytes)))
+              (should (equal "pass-1" (plist-get event :pass-id)))
+              (should (= 3 (plist-get event :reviewed-count)))
+              (should-not (plist-member event :prompt))
+              (should-not (string-match-p "SECRET" (prin1-to-string event))))))
+      (delete-directory root t)))
+
+  :doc "disabled telemetry creates no state, and storage failure is nonblocking"
+  (let* ((root (make-temp-file "mevedel-workspace-telemetry-" t))
+         (workspace (mevedel-workspace--create :root root)))
+    (unwind-protect
+        (progn
+          (let ((mevedel-telemetry-enabled nil))
+            (should-not (mevedel-telemetry-record-workspace workspace 'journal-digest-failed)))
+          (should-not (file-exists-p (file-name-concat root ".mevedel")))
+          (write-region "block directory creation" nil (file-name-concat root ".mevedel") nil 'silent)
+          (let (messages)
+            (mevedel-test--with-captured-messages messages
+              (should-not (mevedel-telemetry-record-workspace workspace 'journal-digest-failed)))
+            (should (string-match-p "workspace telemetry failed" messages))))
       (delete-directory root t))))
 
 (provide 'test-mevedel-telemetry)

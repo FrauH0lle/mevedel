@@ -62,6 +62,11 @@
                   "mevedel-executions-list" (&optional context))
 (autoload 'mevedel-executions-list-open "mevedel-executions-list")
 
+;; `mevedel-journal-capture'
+(declare-function mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture"
+                  (session buffer trigger &optional captures))
+(autoload 'mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture")
+
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
 (declare-function mevedel-menu-open "mevedel-menu" (area))
@@ -896,6 +901,13 @@ kill hook sees nil and exits without re-entering this function."
     (setq mevedel-view--control-transfer-torn-down-p t))
   (unless (mevedel-view-agent-handle-view-kill)
     (let ((view-buffer (current-buffer)))
+      ;; Both pair-kill orders pass here before root registration is cleared.
+      ;; The later data-buffer release hook can no longer identify that root.
+      (when (buffer-live-p mevedel--data-buffer)
+        (with-current-buffer mevedel--data-buffer
+          (when mevedel--session
+            (mevedel-journal-capture-seal-and-schedule
+             mevedel--session (current-buffer) 'session-end))))
       (mevedel-view-control-transfer-teardown)
       (mevedel-view--interaction-clear)
       (when-let* ((db mevedel--data-buffer)
