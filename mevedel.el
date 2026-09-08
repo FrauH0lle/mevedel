@@ -193,6 +193,10 @@
                   "mevedel-directive-request"
                   (directive preset prompt-fn callback &optional options))
 
+;; `mevedel-gptel-bridge'
+(declare-function mevedel-gptel-bridge-install "mevedel-gptel-bridge" ())
+(declare-function mevedel-gptel-bridge-uninstall "mevedel-gptel-bridge" ())
+
 ;; `mevedel-gptel-stream-bridge'
 (declare-function mevedel-gptel-stream-bridge-install
                   "mevedel-gptel-stream-bridge" ())
@@ -769,6 +773,7 @@ always prompt for the session name."
 
   ;; Install the gptel stream compatibility bridge.
   (mevedel-gptel-stream-bridge-install)
+  (mevedel-gptel-bridge-install)
 
   (message "mevedel installed successfully"))
 
@@ -835,6 +840,7 @@ always prompt for the session name."
   ;; Remove the gptel stream compatibility bridge.
   (when (featurep 'mevedel-gptel-stream-bridge)
     (mevedel-gptel-stream-bridge-uninstall))
+  (mevedel-gptel-bridge-uninstall)
 
   (message "mevedel uninstalled successfully"))
 

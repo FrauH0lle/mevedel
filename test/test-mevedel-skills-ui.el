@@ -1303,6 +1303,16 @@ spanning lines")))
 (mevedel-deftest mevedel-skills--gptel-send-advice ()
   ,test
   (test)
+  :doc "prefix-zero steering does not dispatch commands from transcript text"
+  (let ((session (mevedel-skills-test--make-session))
+        received)
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands `(("noop" . ,#'ert-fail))))
+        (insert "### /noop")
+        (mevedel-skills--gptel-send-advice
+         (lambda (&rest args) (setq received args)) 0)
+        (should (equal '(0) received)))))
+
   :doc "local command aborts the send (orig-fn not called)"
   ;; The advice is `:around', so we assert behavior by checking whether
   ;; the original send is called.

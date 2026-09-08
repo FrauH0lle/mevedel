@@ -108,7 +108,7 @@ Chat / view
   mevedel-view-table.el       rendered pipe tables and window realignment
   mevedel-cockpit.el          shared tabulated cockpit surface plumbing
   mevedel-menu.el             session cockpit transient and model selection
-  mevedel-gptel-bridge.el     view-launched gptel menu and restoration
+  mevedel-gptel-bridge.el     view-launched gptel menu, restoration, and steering routing
   mevedel-executions-list.el  session-wide live execution cockpit and user controls
   mevedel-artifacts-list.el   session artifacts cockpit: list, open, delete-as-unpublish
   mevedel-permissions-list.el remembered authority cockpit and per-row revoke

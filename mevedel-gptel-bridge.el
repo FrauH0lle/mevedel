@@ -9,11 +9,18 @@
 
 ;;; Code:
 
+;; `gptel'
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(defvar gptel--fsm-last)
+
 ;; `gptel-transient'
 (declare-function gptel--edit-directive "ext:gptel-transient"
                   (&optional sym &rest args))
 (declare-function gptel-menu "ext:gptel-transient" ())
 (defvar gptel--set-buffer-locally)
+
+;; `mevedel-agent-conversation'
+(defvar mevedel--agent-invocation)
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer
@@ -28,6 +35,17 @@
 (autoload 'mevedel-cockpit-context-origin-buffer "mevedel-cockpit")
 (autoload 'mevedel-cockpit-context-view-buffer "mevedel-cockpit")
 (autoload 'mevedel-cockpit-current-context "mevedel-cockpit")
+
+;; `mevedel-structs'
+(defvar mevedel--current-request)
+(defvar mevedel--session)
+(defvar mevedel--view-buffer)
+
+;; `mevedel-view-composer'
+(declare-function mevedel-view--send-root
+                  "mevedel-view-composer" (&optional steering-input))
+(autoload 'mevedel-view--send-root "mevedel-view-composer")
+(defvar mevedel-view--side-conversation-p)
 
 ;; `transient'
 (defvar transient--prefix)
@@ -44,6 +62,63 @@
 
 (defvar mevedel-gptel-bridge--return-window-snapshot nil
   "Window/buffer pairs captured before a view-launched gptel command.")
+
+(defun mevedel-gptel-bridge--steering-buffer (&optional info)
+  "Return the mevedel data buffer owning INFO or the current gptel request."
+  (let* ((info (or info (and (bound-and-true-p gptel--fsm-last)
+                             (gptel-fsm-info gptel--fsm-last))))
+         (buffer (or (plist-get info :buffer) (current-buffer))))
+    (when (and (buffer-live-p buffer)
+               (buffer-local-value 'mevedel--session buffer))
+      buffer)))
+
+(defun mevedel-gptel-bridge--steer-advice (orig-fn &rest args)
+  "Route ORIG-FN's native steering through the owning mevedel composer.
+Unrelated gptel requests pass ARGS to ORIG-FN unchanged."
+  (if-let* ((buffer (mevedel-gptel-bridge--steering-buffer)))
+      (with-current-buffer buffer
+        (when (bound-and-true-p mevedel--agent-invocation)
+          (user-error "Use FollowupAgent or SendMessage to steer a retained agent"))
+        (unless (buffer-live-p mevedel--view-buffer)
+          (user-error "Open the mevedel session view to steer"))
+        (let ((request mevedel--current-request)
+              (view mevedel--view-buffer))
+          (unless request
+            (user-error "No active root turn to steer"))
+          (with-current-buffer view
+            (when mevedel-view--side-conversation-p
+              (user-error "Steering is unavailable in a side conversation"))
+            (let ((input (read-string "Steering instructions for this turn: ")))
+              (unless (string-blank-p input)
+                (unless (and (buffer-live-p buffer) (buffer-live-p view)
+                             (eq request (buffer-local-value
+                                          'mevedel--current-request buffer)))
+                  (user-error "The root turn changed while entering steering"))
+                (mevedel-view--send-root input))))))
+    (apply orig-fn args)))
+
+(defun mevedel-gptel-bridge--tool-steer-advice
+    (orig-fn &optional calls overlay info)
+  "Keep ORIG-FN's CALLS rejection out of managed mevedel requests.
+OVERLAY and INFO identify the original gptel confirmation UI."
+  (if (mevedel-gptel-bridge--steering-buffer
+       (or info (and (overlayp overlay) (overlay-get overlay 'info))))
+      (user-error "Use mevedel's permission feedback or composer to steer")
+    (funcall orig-fn calls overlay info)))
+
+(defun mevedel-gptel-bridge-install ()
+  "Route native gptel steering through mevedel's accepted-input path."
+  (dolist (command '(gptel-send--steer gptel--suffix-steer))
+    (advice-add command :around #'mevedel-gptel-bridge--steer-advice))
+  (advice-add 'gptel--steer-tool-calls
+              :around #'mevedel-gptel-bridge--tool-steer-advice))
+
+(defun mevedel-gptel-bridge-uninstall ()
+  "Remove mevedel's native gptel steering routing."
+  (dolist (command '(gptel-send--steer gptel--suffix-steer))
+    (advice-remove command #'mevedel-gptel-bridge--steer-advice))
+  (advice-remove 'gptel--steer-tool-calls
+                 #'mevedel-gptel-bridge--tool-steer-advice))
 
 (defun mevedel-gptel-bridge--active-p ()
   "Return non-nil while a view-launched gptel bridge is restoring."

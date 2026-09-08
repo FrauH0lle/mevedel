@@ -3758,6 +3758,57 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (with-current-buffer data-buf
         (should (equal data-before (buffer-string)))))))
 
+(mevedel-deftest mevedel-view--send-root (:quiet t)
+  ,test
+  (test)
+  :doc "external steering prepares skill context and leaves an unrelated draft"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA EXTERNAL STEERING"))
+    (let* ((info (list :buffer data-buf :mevedel-request-id "external-steer"
+                       :backend (gptel--make-openai) :data (list :messages [])
+                       :history '(TRET)))
+           (fsm (gptel-make-fsm :state 'TOOL :info info))
+           (request (mevedel-request--create
+                     :id "external-steer" :session session :fsm fsm)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request request))
+      (with-current-buffer view-buf
+        (goto-char (point-max))
+        (insert "> unfinished\ncomposer draft")
+        (mevedel-view--send-root "Use $alpha")
+        (should (equal "> unfinished\ncomposer draft"
+                       (mevedel-view--input-text))))
+      (let ((entry (car (mevedel-session-pending-steering session))))
+        (should (string-match-p "ALPHA EXTERNAL STEERING"
+                                (plist-get entry :model-input)))
+        (should (eq 'reserved
+                    (mevedel-prompt-submission-state
+                     (plist-get entry :submission)))))
+      (mevedel-tools--handle-steering-inject fsm)
+      (should-not (mevedel-session-pending-steering session))
+      (should (string-match-p
+               "ALPHA EXTERNAL STEERING"
+               (format "%S" (plist-get (plist-get info :data) :messages))))))
+
+  :doc "external steering cannot become an idle turn, slash command, or scoped input"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :authority-mode 'pid-lock :name "main"))
+           (request (mevedel-request--create
+                     :id "steer" :session session
+                     :fsm (gptel-make-fsm :state 'TOOL))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (goto-char (point-max))
+        (insert "> untouched\ndraft")
+        (should-error (mevedel-view--send-root "idle") :type 'user-error)
+        (with-current-buffer data-buf
+          (setq-local mevedel--current-request request))
+        (should-error (mevedel-view--send-root "/goal done") :type 'user-error)
+        (let ((mevedel-view--composer-scope '(:directive-id "d1")))
+          (should-error (mevedel-view--send-root "scoped") :type 'user-error))
+        (should (equal "> untouched\ndraft" (mevedel-view--input-text)))))))
+
 (mevedel-deftest mevedel-view-send/pending-input (:quiet t)
   ,test
   (test)
