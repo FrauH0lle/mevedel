@@ -14,6 +14,13 @@
 (declare-function mevedel-collaboration--artifact-fields
                   "mevedel-collaboration-artifact-projection" (render-data))
 
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-for-call "mevedel-tool-registry" (name))
+
+;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-direct-call
+                  "mevedel-tool-render-data" (name data))
+
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
@@ -21,15 +28,19 @@
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--strip-hook-audit-blocks
                   "mevedel-transcript-audit" (text))
-
-;; `mevedel-utilities'
-(declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
 (declare-function mevedel-transcript-audit-guest-prompts
                   "mevedel-transcript-audit" ())
 (declare-function mevedel-transcript-buffer-directive-ranges
                   "mevedel-transcript-audit" (&optional allow-open))
 
+;; `mevedel-utilities'
+(declare-function mevedel--trim-tool-result "mevedel-utilities" (text))
+
 ;; `mevedel-view-render'
+(declare-function mevedel-view--generic-tool-rendering
+                  "mevedel-view-render" (name args result &optional collapsed-only render-data))
+(declare-function mevedel-view--invoke-renderer
+                  "mevedel-view-render" (tool render-data args result))
 (declare-function mevedel-view--tool-call-parse
                   "mevedel-view-render" (data-buf start end &optional raw))
 (declare-function mevedel-view--user-turn-text
@@ -44,7 +55,7 @@
 (require 'mevedel-utilities)
 (require 'mevedel-view-render)
 
-(defconst mevedel-collaboration--protocol-version 2)
+(defconst mevedel-collaboration--protocol-version 3)
 (defconst mevedel-collaboration--max-record-text-bytes
   (/ (- (* 1 1024 1024) 4096) 6)
   "Raw text bytes one projected record carries.
@@ -158,7 +169,7 @@ an artifact only by its record id, never by a filesystem path."
   (let (out)
     (dolist (key '(:id :kind :revision :text :name :status :summary :result
                        :truncated :guest :directive :detail :diff
-                       :artifact :size :missing))
+                       :artifact :size :missing :presentation))
       (when (plist-member record key)
         (push (cons (substring (symbol-name key) 1)
                     (plist-get record key))
@@ -200,6 +211,87 @@ carry the same operand summary and, for ApplyPatch, the authored patch."
                   patch mevedel-collaboration--max-tool-result-bytes)))))
 
 
+(defun mevedel-collaboration-tool-presentation (parsed)
+  "Return a bounded browser presentation tree for PARSED.
+Execution identity and provider results remain unchanged.  Only display fields
+are exported, with one shared text/structure budget across the entire tree."
+  (let ((remaining mevedel-collaboration--max-tool-result-bytes)
+        truncated)
+    (cl-labels
+        ((text (value &optional limit)
+           (when (stringp value)
+             (let* ((size (min remaining (or limit remaining)))
+                    (bounded (if (< size 16) ""
+                               (mevedel-collaboration--truncate-bytes value size))))
+               (when (< (length bounded) (length value)) (setq truncated t))
+               (setq remaining (- remaining (string-bytes bounded)))
+               bounded)))
+         (node (name args result data id depth &optional batch)
+           (if (or (< remaining 512) (> depth 16))
+               (progn (setq truncated t) nil)
+             ;; Reserve structural JSON keys per node as well as its strings.
+             (setq remaining (- remaining 256))
+             (let* ((direct (mevedel-tool-render-data-direct-call name data))
+                    (name (if direct (plist-get direct :tool) name))
+                    (args (if direct (plist-get direct :args) args))
+                    (data (if direct (plist-get direct :render-data) data))
+                    (tool (and (stringp name) (mevedel-tool-for-call name)))
+                    (rendering
+                     (or (and tool (mevedel-view--invoke-renderer tool data args result))
+                         (mevedel-view--generic-tool-rendering name args result nil data)))
+                    (status
+                     (pcase (or (and (memq (plist-get data :status) '(denied cancelled))
+                                     (plist-get data :status))
+                                (plist-get rendering :status))
+                       ('error "failed") ('denied "denied") ('cancelled "cancelled")
+                       ('running "running") ('warning "warning") (_ "completed")))
+                    (row (list :id (text id 200) :name (text name 200)
+                               :detail (text (mevedel-collaboration--tool-detail args) 200)
+                               :header (text (plist-get rendering :header) 1000)
+                               :status status
+                               :collapsed (if (and (not (member status '("failed" "denied")))
+                                                   (plist-get rendering :initially-collapsed-p))
+                                              t :json-false)
+                               :format (pcase (plist-get rendering :body-mode)
+                                         ((or 'markdown-mode 'gfm-mode 'org-mode) "markdown")
+                                         ('diff-mode "diff") (_ "text"))
+                               :body (text (plist-get rendering :body))))
+                    children attachments)
+               (when batch (setq row (plist-put row :batch (text (format "%s" batch) 200))))
+               (when-let* ((diff (plist-get (mevedel-collaboration--tool-extras name args) :diff)))
+                 (setq row (plist-put row :diff (text diff))))
+               (cl-loop for attachment in (plist-get data :attachments)
+                        while (>= remaining 512) do
+                        (let ((body (cdr (assoc attachment (plist-get data :attachment-bodies)))))
+                          (push (node "Skill dependency" (list :name attachment)
+                                      (or body "Delivered dependency body unavailable in this transcript.")
+                                      (list :status 'success)
+                                      (concat "attachment:" attachment) (1+ depth))
+                                attachments)
+                          (when (car attachments)
+                            (setf (plist-get (car attachments) :format) "markdown"))))
+               (cl-loop for child in (plist-get rendering :child-calls)
+                        while (>= remaining 512) do
+                        (push (node (plist-get child :tool) (plist-get child :args)
+                                    (plist-get child :result)
+                                    (plist-put (copy-sequence (plist-get child :render-data))
+                                               :status (plist-get child :status))
+                                    (plist-get child :id) (1+ depth) (plist-get child :batch))
+                              children))
+               (when (or (< (length attachments) (length (plist-get data :attachments)))
+                         (< (length children) (length (plist-get rendering :child-calls))))
+                 (setq truncated t))
+               (when attachments (setq row (plist-put row :attachments (vconcat (delq nil (nreverse attachments))))))
+               (when children (setq row (plist-put row :children (vconcat (delq nil (nreverse children))))))
+               row))))
+      (condition-case nil
+          (let ((row (node (plist-get parsed :name) (plist-get parsed :args)
+                           (plist-get parsed :result) (plist-get parsed :render-data)
+                           "root" 0)))
+            (when truncated (setq row (plist-put row :truncated t)))
+            row)
+        (error nil)))))
+
 (defun mevedel-collaboration--tool-record (parsed raw &optional occurrence)
   "Return an allowlisted tool record from PARSED and transcript RAW text."
   (let* ((name (plist-get parsed :name))
@@ -213,10 +305,10 @@ carry the same operand summary and, for ApplyPatch, the authored patch."
                   "tool" raw occurrence)))
            (result (mevedel--trim-tool-result
                     (if (stringp result) result "")))
-           (status (if (string-match-p
-                        mevedel-collaboration--tool-error-regexp result)
-                       "failed"
-                     "completed"))
+           (presentation (mevedel-collaboration-tool-presentation parsed))
+           (status (or (plist-get presentation :status)
+                       (if (string-match-p mevedel-collaboration--tool-error-regexp result)
+                           "failed" "completed")))
            (result (mevedel-collaboration--truncate-bytes
                     result mevedel-collaboration--max-tool-result-bytes))
            (truncated (string-suffix-p "\n[truncated]" result)))
@@ -229,6 +321,7 @@ carry the same operand summary and, for ApplyPatch, the authored patch."
              :result result
              :truncated (and truncated t)
              :identity-fixed (and tool-use-id t)
+             :presentation presentation
              (mevedel-collaboration--tool-extras
               name (plist-get parsed :args))))))
 
@@ -245,14 +338,19 @@ a mixed patch retains the ordinary row and adds child cards."
            (base (mevedel-collaboration--tool-record
                   parsed (buffer-substring-no-properties start end)
                   occurrence))
-           (files (and (equal (plist-get base :name) "ApplyPatch")
+           (direct (mevedel-tool-render-data-direct-call
+                    (plist-get parsed :name) (plist-get parsed :render-data)))
+           (effective-name (if direct (plist-get direct :tool)
+                             (plist-get parsed :name)))
+           (effective-data (if direct (plist-get direct :render-data)
+                             (plist-get parsed :render-data)))
+           (files (and (equal effective-name "ApplyPatch")
                        (equal (plist-get base :status) "completed")
                        (mevedel-collaboration--artifact-fields
-                        (plist-get parsed :render-data))))
-           (all-files (and (eq (plist-get (plist-get parsed :render-data)
-                                          :kind)
+                        effective-data)))
+           (all-files (and (eq (plist-get effective-data :kind)
                                'patch)
-                           (plist-get (plist-get parsed :render-data) :files)))
+                           (plist-get effective-data :files)))
            (pure (and files (= (length files) (length all-files))))
            cards)
       (dolist (fields files)

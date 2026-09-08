@@ -649,7 +649,7 @@ async function main() {
   await waitFor(() => first.sent.length === 1, 'sealed hello');
   const hello = await unseal(key, first.sent[0]);
   assert.equal(hello.t, 'hello');
-  assert.equal(hello.proto, 2);
+  assert.equal(hello.proto, 3);
   assert.equal(hello.writeToken, base64url(writeToken));
   assert.equal(hello.ownerToken, base64url(ownerToken));
   assert.equal(typeof hello.name, 'string');
@@ -670,7 +670,7 @@ async function main() {
 
   // Welcome for a writable guest reveals the composer; the snapshot loads
   // through final-flagged chunks with live updates queued behind it.
-  await deliver({t: 'welcome', proto: 2, readOnly: false, recordCount: 3,
+  await deliver({t: 'welcome', proto: 3, readOnly: false, recordCount: 3,
                  commands: [{name: 'plan', kind: 'command', hint: '[prompt]'},
                             {name: 'review', kind: 'skill', hint: '[target]'}]});
   assert.equal(nodes.composer.hidden, false);
@@ -1524,6 +1524,35 @@ async function main() {
     fakeFile('stale.png', 'image/png', 'pixels'),
   ]);
   await waitFor(() => releaseBitmap, 'deferred image conversion');
+
+  // A direct Skill updates the outer call in place; nested fold choices and
+  // an active composer survive both record updates and a reconnect snapshot.
+  const skillRecord = {id: 'parity-call', kind: 'tool', name: 'ToolCall',
+    status: 'completed', result: 'raw model text', presentation: {
+      id: 'root', name: 'Skill', detail: 'dashboard', body: '# Dashboard',
+      format: 'markdown', collapsed: true, attachments: [{
+        id: 'attachment:base', name: 'Skill dependency', detail: 'base',
+        body: 'Delivered base', collapsed: true, format: 'markdown',
+      }],
+    }};
+  nodes['composer-input'].value = '> Draft\nKeep this text';
+  await deliverTo(sockets[1], {t: 'record', record: {
+    id: 'parity-call', kind: 'tool', name: 'ToolCall', status: 'running', result: '',
+  }});
+  await deliverTo(sockets[1], {t: 'record', record: skillRecord});
+  let skillTurn = findByRecordId(nodes.transcript, 'parity-call');
+  skillTurn.disclosures.get('root').open = true;
+  skillTurn.disclosures.get('root/attachment:base').open = true;
+  await deliverTo(sockets[1], {t: 'record', record: {...skillRecord, revision: 2}});
+  skillTurn = findByRecordId(nodes.transcript, 'parity-call');
+  assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
+  assert.equal(nodes.transcript.children.filter(turn => turn.dataset.recordId === 'parity-call').length, 1);
+  await deliverTo(sockets[1], {t: 'welcome', proto: 3, readOnly: false, recordCount: 1});
+  await deliverTo(sockets[1], {t: 'snapshot-chunk', final: true, records: [skillRecord]});
+  skillTurn = findByRecordId(nodes.transcript, 'parity-call');
+  assert.equal(skillTurn.disclosures.get('root').open, true);
+  assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
+  assert.equal(nodes['composer-input'].value, '> Draft\nKeep this text');
 
   // Bye ends the session: no reconnect, composer gone.
   timer = null;

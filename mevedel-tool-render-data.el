@@ -62,6 +62,25 @@ the serialized render-data without re-running the tool.")
 (defconst mevedel-tool-render-data-close "<!-- /mevedel-render-data -->"
   "Closing delimiter marking the end of a render-data side-channel block.")
 
+(defun mevedel-tool-render-data-direct-call (name data)
+  "Return the settled direct child of tool NAME with render DATA, or nil.
+Envelope failures and live programs retain their own presentation.  The child
+is display metadata only; it never replaces the provider's call identity."
+  (when (and (equal name "ToolCall")
+             (eq (plist-get data :kind) 'ptc)
+             (stringp (plist-get data :direct-tool))
+             (not (plist-get data :live-p))
+             (memq (plist-get data :outcome) '(completed tool-error)))
+    (let* ((calls (plist-get data :calls))
+           (child (and (consp calls) (null (cdr calls)) (car calls))))
+      (when (and child
+                 (equal (plist-get child :tool) (plist-get data :direct-tool))
+                 (not (and (eq (plist-get data :status) 'error)
+                           (not (eq (plist-get child :status) 'error)))))
+        (plist-put (copy-sequence child) :render-data
+                   (plist-put (copy-sequence (plist-get child :render-data))
+                              :status (plist-get child :status)))))))
+
 (defun mevedel-tool-render-data--plain (value)
   "Return VALUE with text properties stripped from all contained strings."
   (cond

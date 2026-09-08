@@ -32,7 +32,7 @@
   const notificationsApi = window.mevedelViewerNotifications;
   const {base64urlDecode, base64urlEncode, importKey, parseFragment} = transportApi;
 
-  const PROTO = 2;
+  const PROTO = 3;
   const GIVE_UP_MS = 3 * 60 * 1000;
   const MAX_PROMPT_BYTES = 256 * 1024;
 
@@ -244,10 +244,10 @@
       state.elements.set(record.id, turn);
       transcript.append(turn);
     } else {
-      const wasOpen = !!(turn.toolDetails && turn.toolDetails.open);
+      const saved = window.mevedelTranscriptRenderer.captureDisclosures(turn);
       const fresh = window.mevedelTranscriptRenderer.renderRecord(
         record, directiveLabel, artifacts.open);
-      if (wasOpen && fresh.toolDetails) fresh.toolDetails.open = true;
+      window.mevedelTranscriptRenderer.restoreDisclosures(fresh, saved);
       fresh.hidden = turn.hidden;
       turn.replaceWith(fresh);
       state.elements.set(record.id, fresh);
@@ -258,6 +258,8 @@
 
   function replaceSnapshot(records) {
     const follow = atLiveEdge();
+    const saved = new Map([...state.elements].map(([id, turn]) =>
+      [id, window.mevedelTranscriptRenderer.captureDisclosures(turn)]));
     state.records.clear();
     state.elements.clear();
     state.unseen.clear();
@@ -265,7 +267,10 @@
     records.forEach(record => {
       if (record && typeof record.id === 'string') state.records.set(record.id, record);
     });
-    state.records.forEach(record => updateRecordElement(record));
+    state.records.forEach(record => {
+      const turn = updateRecordElement(record);
+      window.mevedelTranscriptRenderer.restoreDisclosures(turn, saved.get(record.id));
+    });
     refreshFilter();
     markContinuations();
     if (follow) scrollToLive();

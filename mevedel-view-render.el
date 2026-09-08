@@ -157,6 +157,8 @@
                   t)
 
 ;; `mevedel-tool-render-data'
+(declare-function mevedel-tool-render-data-direct-call
+                  "mevedel-tool-render-data" (name data))
 (declare-function mevedel-tool-render-data-extract
                   "mevedel-tool-render-data"
                   (result-string &optional session expected-tool-use-id
@@ -1763,18 +1765,11 @@ The renderer receives RENDER-DATA as-is (possibly nil): data-driven
 renderers like the ApplyPatch summary can check for their kind
 and opt out; output-driven renderers (Grep, Bash, Read, ...) work
 straight off ARGS and RESULT without needing render-data."
-  (if-let* ((name (and (equal (and tool (mevedel-tool-name tool)) "ToolCall")
-                       (plist-get render-data :direct-tool)
-                       (not (plist-get render-data :live-p))
-                       (memq (plist-get render-data :outcome)
-                             '(completed tool-error))
-                       (plist-get render-data :direct-tool)))
-            (child (car (plist-get render-data :calls)))
-            (_ (not (and (eq (plist-get render-data :status) 'error)
-                         (not (eq (plist-get child :status) 'error))))))
-      (let ((underlying (mevedel-tool-for-call name))
-            (data (plist-put (copy-sequence (plist-get child :render-data))
-                             :status (plist-get child :status))))
+  (if-let* ((child (mevedel-tool-render-data-direct-call
+                    (and tool (mevedel-tool-name tool)) render-data)))
+      (let* ((name (plist-get child :tool))
+             (underlying (mevedel-tool-for-call name))
+             (data (plist-get child :render-data)))
         (or (mevedel-view--invoke-renderer underlying data
                                            (plist-get child :args) result)
             (mevedel-view--generic-tool-rendering

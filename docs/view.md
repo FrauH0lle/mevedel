@@ -905,6 +905,17 @@ against the tier the entry was queued under on receipt and again at
 delivery. `/review` and `/verify` sent without an argument are queued as
 `uncommitted`, because their argument-less form is a minibuffer picker on
 the host, and their chip hint lists the accepted target forms.
+Browser tool rows use the host's bounded semantic presentation tree. Direct
+ToolCall expressions display the underlying tool (for example, `Skill:
+artifact-dashboard`); composed expressions retain ToolCall and nested tool
+rows, parallel groups and returned output. Skill bodies render as safe
+Markdown, with delivered dependencies in separate collapsed foldouts. Missing
+historical dependency bodies are labelled unavailable rather than reread from
+current files. Raw model-facing reminder wrappers are not the display body.
+Nested open and closed choices survive record updates, reconnect snapshots
+and agent transcript refreshes; the composer draft stays untouched. Direct
+ApplyPatch calls keep session artifact cards and diff presentation.
+
 The viewer supports installable-PWA presentation, host-synchronized theme,
 and opt-in system notifications for attention-worthy session changes. On
 platforms with the Push API, opt-in registers a service worker and a

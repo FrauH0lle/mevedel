@@ -311,7 +311,7 @@
                            :result "Applied patch: 1 changes"
                            :render-data
                            (:kind patch :files
-                            ((:kind add :path ,path)))))))
+                            ((:kind add :added 1 :deleted 0 :diff "" :path ,path)))))))
               (let* ((record (car (mevedel-collaboration--tool-segment-records
                                    (current-buffer) '(tool 1 5))))
                      (json (mevedel-collaboration--json-record record)))
@@ -890,7 +890,7 @@
             (cl-letf (((symbol-function 'mevedel-collaboration--handle-hello)
                        (lambda (room _peer _frame) (push room handled))))
               (mevedel-collaboration--on-frame data-a 1
-                                               (list :t "hello" :proto 2)))
+                                               (list :t "hello" :proto 3)))
             (should (equal (list room-a) handled)))
           ;; Stopping one room leaves the other live and untouched.
           (mevedel-collaboration--stop-internal room-a 'user-stop)

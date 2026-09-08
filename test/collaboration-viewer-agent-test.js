@@ -20,16 +20,13 @@ const document = {
 };
 const sent = [];
 let poll = null;
-const window = {mevedelTranscriptRenderer: {
-  renderRecord(record) {
-    return element(document, 'article', record.kind, record.text || '');
-  },
-}};
+const window = {};
 const context = {
   window, document, console,
   setInterval(callback) { poll = callback; return 1; },
   clearInterval() { poll = null; },
 };
+load('relay/viewer/renderer.js', context);
 load('relay/viewer/viewer-agent.js', context);
 const controller = window.mevedelAgentView.create({
   send(frame) { sent.push(frame); return Promise.resolve(true); },
@@ -61,14 +58,14 @@ controller.handle({reqId: 1, digest: 'digest-1', final: false,
                    records: [{id: 'u1', kind: 'user', text: 'Investigate'}]});
 controller.handle({reqId: 1, digest: 'digest-1', final: true,
                    records: [{id: 'a1', kind: 'assistant', text: 'Found it'}]});
-assert.match(textOf(nodes['agent-transcript']), /InvestigateFound it/);
+assert.match(textOf(nodes['agent-transcript']), /Investigate.*Found it/s);
 
 poll();
 assert.deepEqual({...sent[1]}, {t: 'fetch-agent', reqId: 2,
                                path: '/root/worker', known: 'digest-1'});
 controller.handle({reqId: 2, digest: 'digest-1', unchanged: true});
 controller.handle({reqId: 1, digest: 'stale', final: true, records: []});
-assert.match(textOf(nodes['agent-transcript']), /InvestigateFound it/);
+assert.match(textOf(nodes['agent-transcript']), /Investigate.*Found it/s);
 
 controller.show([{path: '/root/worker', role: 'worker', status: 'waiting'}]);
 assert.match(textOf(nodes['agent-meta']), /waiting/);
@@ -111,7 +108,18 @@ assert.equal(nodes.agents.hidden, true);
 assert.equal(nodes['agents-done-list'].children.length, 0);
 assert.deepEqual(summary, {key: 'agents', text: '', warning: false});
 assert.equal(textOf(nodes['agent-meta']), 'settled');
+const skill = {id: 'skill', kind: 'tool', name: 'ToolCall', status: 'completed',
+  presentation: {id: 'root', name: 'Skill', detail: 'dashboard', collapsed: true,
+    body: 'Dashboard', attachments: [{id: 'attachment:base', name: 'Skill dependency',
+      detail: 'base', body: 'Base instructions', collapsed: true}]}};
+controller.handle({reqId: sent.at(-1).reqId, digest: 'skill-1', final: true, records: [skill]});
+let skillTurn = nodes['agent-transcript'].children[0];
+skillTurn.disclosures.get('root').open = true;
+skillTurn.disclosures.get('root/attachment:base').open = true;
+poll();
+controller.handle({reqId: sent.at(-1).reqId, digest: 'skill-2', final: true, records: [skill]});
+skillTurn = nodes['agent-transcript'].children[0];
+assert.equal(skillTurn.disclosures.get('root/attachment:base').open, true);
 nodes['agent-close'].dispatch('click');
 assert.equal(poll, null);
-
 console.log('viewer agent passed');

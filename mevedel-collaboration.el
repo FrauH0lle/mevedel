@@ -933,7 +933,7 @@ Runs from a buffer-local hook, so the current buffer names the room."
     (progn
       ;; A settled ApplyPatch may have replaced a published artifact, whose
       ;; cached stat would otherwise keep the old size on its card.
-      (when (equal (format "%s" (plist-get info :name)) "ApplyPatch")
+      (when (member (format "%s" (plist-get info :name)) '("ApplyPatch" "ToolCall"))
         ;; Clear the small shared cache instead of translating the tool's
         ;; target-native paths a second time.  In particular, a remote patch
         ;; does not name the TRAMP-qualified keys stored by projection.

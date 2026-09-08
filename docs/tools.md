@@ -170,6 +170,16 @@ and UpdateGoal are standalone-only; unclassified wrapped tools default to that
 route. `mevedel-ptc-composable-tools` admits additional names for composition.
 A program that transforms one child result still renders as a script.
 
+Emacs and collaboration projection share the same direct-call selection rule.
+Browser records retain the outer execution name and ID for pending/settled
+reconciliation and carry a separate, bounded `presentation` tree. Registered
+tool renderers supply its headers, bodies, statuses, children and parallel
+batches. Skill display metadata retains the prepared dependency bodies from
+invocation; browsers show each in a separate collapsed foldout, without
+rereading files or exposing dependency reminder wrappers as the root body.
+Display metadata remains excluded from provider messages.
+
+
 The settled envelope's own body carries only what the script returned. On a
 successful completion, a returned value longer than
 `mevedel-tool-ptc-result-collapse-line-threshold` lines moves into a trailing,
