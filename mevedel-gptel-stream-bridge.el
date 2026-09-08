@@ -159,16 +159,6 @@ chunk when that stale transformer fails."
                (not (stringp response)))))
       (funcall orig-fn response info raw)))))
 
-(defun mevedel-gptel-stream-bridge--gptel-handle-wait-advice (orig-fn fsm)
-  "Preserve an open mevedel reasoning fence across ORIG-FN for FSM."
-  (let* ((info (gptel-fsm-info fsm))
-         (reasoning-open
-          (and (mevedel-gptel-stream-bridge--gptel-stream-info-p info)
-               (plist-get info :reasoning-open))))
-    (prog1 (funcall orig-fn fsm)
-      (when reasoning-open
-        (plist-put info :reasoning-open t)))))
-
 (defun mevedel-gptel-stream-bridge--queue-gptel-stream-insert-batch
     (orig-fn response info raw)
   "Queue string RESPONSE for ORIG-FN as a batched gptel stream insert."
@@ -348,9 +338,6 @@ the entire filter runs with collections batched."
 (defun mevedel-gptel-stream-bridge--install-advice ()
   "Install gptel stream marker repair advice."
   (mevedel-gptel-stream-bridge--advice-add-if-bound
-   'gptel--handle-wait
-   :around #'mevedel-gptel-stream-bridge--gptel-handle-wait-advice)
-  (mevedel-gptel-stream-bridge--advice-add-if-bound
    'gptel-curl--stream-insert-response
    :around #'mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice)
   (mevedel-gptel-stream-bridge--advice-add-if-bound
@@ -367,9 +354,6 @@ the entire filter runs with collections batched."
 
 (defun mevedel-gptel-stream-bridge--uninstall-advice ()
   "Remove gptel stream marker repair advice."
-  (mevedel-gptel-stream-bridge--advice-remove-if-bound
-   'gptel--handle-wait
-   #'mevedel-gptel-stream-bridge--gptel-handle-wait-advice)
   (mevedel-gptel-stream-bridge--advice-remove-if-bound
    'gptel-curl--stream-insert-response
    #'mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice)

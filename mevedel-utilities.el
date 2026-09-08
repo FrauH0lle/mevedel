@@ -937,16 +937,11 @@ so later response insertion happens after the synthetic user turn."
 (defun mevedel--split-open-reasoning-before-user-input (info)
   "Close INFO's open reasoning block before injecting user input."
   (when (eq (plist-get info :reasoning-block) 'in)
-    (let* ((tracking (plist-get info :tracking-marker))
-           (insertion-type
-            (and (markerp tracking)
-                 (marker-insertion-type tracking))))
-      (when (markerp tracking)
-        (set-marker-insertion-type tracking t))
-      (unwind-protect
-          (gptel--display-reasoning-stream t info)
-        (when (markerp tracking)
-          (set-marker-insertion-type tracking insertion-type))))
+    (unwind-protect
+        (gptel--display-reasoning-stream t info)
+      ;; gptel moves and locks the marker, unless a stream hook signals.
+      (when-let* ((tracking (plist-get info :tracking-marker)))
+        (set-marker-insertion-type tracking nil)))
     (when-let* ((marker (plist-get info :reasoning-marker)))
       (set-marker marker nil))
     (plist-put info :reasoning-marker nil)

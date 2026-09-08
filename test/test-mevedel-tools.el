@@ -1462,7 +1462,10 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                          (string-match-p "one" text)))
               (should (< (string-match-p "one" text)
                          (string-match-p "two" text)))
-              (should (= (marker-position tracking-marker) (point-max))))))
+              (should
+               (equal (buffer-substring-no-properties
+                       tracking-marker (point-max))
+                      "\n")))))
       (kill-buffer buffer)))
 
   :doc "keeps USER model payload separate from transcript text and audits"
