@@ -186,12 +186,13 @@ works for a particular file.
 
 Named workspace guidance, environment/date, memory indexes, compact skill
 catalogs, resource availability and active Goal facts are separate from the stable
-system prefix. Facts are grouped into a complete snapshot whenever a selected
-fact changes; workspace guidance and Goal procedures update independently.
-Unchanged turns reuse the retained snapshot. Delivery is checked
-against actual selected history; absent observations are redelivered after
-compaction, filtering or restore. The separate skills-delta snapshot and default
-date-change reminder are superseded by these updates. Explicitly configured
+system prefix. Each changed section delivers its complete current contents with
+an explicit notice that other previously supplied state remains applicable.
+Unchanged sections remain in retained history. Delivery is checked against actual
+selected history; absent observations are redelivered after compaction, filtering
+or restore. If all selected sections are absent, all are delivered again. The
+separate skills-delta snapshot and default date-change reminder are superseded
+by these updates. Explicitly configured
 custom date reminders remain available. See
 [retained instruction context](architecture.md#retained-instruction-context).
 
