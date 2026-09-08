@@ -965,6 +965,14 @@ observing room termination or exhausting reconnects; otherwise browser site
 data can outlive the room, although an ended room id and key no longer
 authorize a live share.
 
+TCP/TLS dialing runs asynchronously, so starting or reconnecting a room does
+not wait for an unreachable address before returning control to Emacs. The
+share panel can appear while the transport is still connecting; its presence
+does not prove that the relay room is ready. TLS retains Emacs' configured
+certificate and hostname verification policy. Only the current connection may
+report an open room; callbacks from cancelled or replaced attempts cannot
+revive it.
+
 The host reconnects to the relay with bounded backoff after a network blip;
 the relay garbage-collects the room with the host connection, so guests
 treat `room-closed` as retryable, rejoin the same room id, and re-hello for

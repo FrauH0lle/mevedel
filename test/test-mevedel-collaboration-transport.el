@@ -255,6 +255,114 @@ relay's room plist."
 ;;
 ;;; Live relay contract
 
+(mevedel-deftest mevedel-collaboration--transport-handshake
+  (:doc "gates only collaboration handshakes on an established connection")
+  (let* ((server (make-network-process :name "mevedel-test-handshake"
+                                       :server t :host 'local :service t
+                                       :noquery t))
+         (url "ws://127.0.0.1/fixture")
+         (mevedel-collaboration--dialing nil)
+         (original (lambda (&rest args) (car (last args))))
+         client)
+    (unwind-protect
+        (progn
+          ;; An unrelated client keeps the original async handshake behavior.
+          (should (mevedel-collaboration--transport-handshake
+                   original url server "key" nil nil nil t))
+          (should-not (process-get server 'mevedel-collaboration))
+          ;; A connection tagged during creation waits for its sentinel.
+          (let ((mevedel-collaboration--dialing (list :url url)))
+            (should-not (mevedel-collaboration--transport-handshake
+                         original url server "key" nil nil nil t)))
+          (should (process-get server 'mevedel-collaboration))
+          (should-not (mevedel-collaboration--transport-handshake
+                       original url server "key" nil nil nil t))
+          (setq client (make-network-process
+                        :name "mevedel-test-handshake-client" :host "127.0.0.1"
+                        :service (process-contact server :service) :noquery t))
+          (process-put client 'mevedel-collaboration t)
+          (let (called)
+            (mevedel-collaboration--transport-handshake
+             (lambda (&rest args) (setq called t) (should-not (car (last args))))
+             url client "key" nil nil nil t)
+            (should called)
+            (setq called nil)
+            (mevedel-collaboration--transport-handshake
+             (lambda (&rest _) (setq called t))
+             url client "key" nil nil nil t)
+            (should-not called)))
+      (when client (delete-process client))
+      (delete-process server))))
+
+(mevedel-deftest mevedel-collaboration--transport-dial
+  ()
+  ,test
+  (test)
+  :doc "connects without waiting and ignores callbacks after cancellation"
+  (mevedel-test--with-stub-relay (state port server)
+    (let ((original (symbol-function 'make-network-process))
+          network-options transport states)
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'make-network-process)
+                       (lambda (&rest options)
+                         (setq network-options options)
+                         (apply original options))))
+              (setq transport
+                    (mevedel-collaboration--transport-open
+                     (format "ws://127.0.0.1:%d/r/async?role=host" port)
+                     (make-string 32 5)
+                     :on-state (lambda (value) (push value states)))))
+            ;; Observe the real socket call, before pumping any callbacks.
+            (should (plist-get network-options :nowait))
+            (should (eq 'connecting (plist-get transport :state)))
+            (let* ((ws (plist-get transport :ws))
+                   (late-open (websocket-on-open ws)))
+              (mevedel-collaboration--transport-stop transport)
+              (funcall late-open ws)
+              (should (eq 'stopped (plist-get transport :state)))
+              (should (equal '(stopped) states))
+              (should-not (plist-get transport :ws))
+              (should-not (plist-get transport :reconnect-timer))
+              (should-not (plist-get transport :keepalive-timer))))
+        (when transport
+          (mevedel-collaboration--transport-stop transport)))))
+
+  :doc "TLS returns before handshake and preserves certificate verification"
+  (let* ((server (make-network-process :name "mevedel-test-tls-pending"
+                                       :server t :host 'local :service t
+                                       :noquery t))
+         (port (process-contact server :service))
+         (original (symbol-function 'make-network-process))
+         (gnutls-verify-error t)
+         (open (symbol-function 'websocket-open))
+         options transport open-error)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'websocket-open)
+                     (lambda (&rest args)
+                       (condition-case err (apply open args)
+                         (error (setq open-error err)
+                                (signal (car err) (cdr err))))))
+                    ((symbol-function 'make-network-process)
+                     (lambda (&rest args)
+                       (setq options args)
+                       (apply original args))))
+            (setq transport
+                  (mevedel-collaboration--transport-open
+                   (format "wss://127.0.0.1:%d/r/async?role=host" port)
+                   (make-string 32 5))))
+          (should-not open-error)
+          ;; This listener deliberately has no TLS responder.  No handshake
+          ;; can have completed when dialing returns to the caller.
+          (should (eq 'connecting (plist-get transport :state)))
+          (should (plist-get options :nowait))
+          (should (eq t (plist-get (cdr (plist-get options :tls-parameters))
+                                   :verify-error)))
+          (should gnutls-verify-error))
+      (when transport (mevedel-collaboration--transport-stop transport))
+      (delete-process server))))
+
 (mevedel-deftest mevedel-collaboration--transport-open
   (:doc "delivers sealed frames and control messages both ways through a relay")
   (mevedel-test--with-stub-relay (state port server)

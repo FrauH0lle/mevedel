@@ -328,3 +328,25 @@ historical delivery. Nested disclosure choices belong to each browser.
 The sealed host/viewer payload protocol is now 3. Update both together; no
 version adapter is retained. The relay still forwards opaque encrypted frames,
 but its binary must be rebuilt to embed the updated viewer assets.
+
+## Amendment: nonblocking relay dialing (2026-09-08)
+
+A timed room recreation spent 135.29 of 135.35 seconds inside websocket-open:
+an IPv6 TCP attempt stalled before IPv4 succeeded. Transcript projection took
+1 ms and QR encoding 4 ms. Relay dialing now uses websocket's asynchronous
+API so this network delay cannot hold up the share panel.
+
+The installed websocket implementation attempts its asynchronous handshake
+while the process is still connecting. Its process-send-string can therefore
+block on TCP/TLS despite :nowait. A narrowly scoped handshake adapter tags
+collaboration connections and defers the handshake to the established-process
+sentinel; other websocket clients retain their original behavior. The same
+unreachable-address probe then returned in approximately 1 ms.
+
+TLS retains Emacs' configured GnuTLS and Network Security Manager validation.
+A local TLS fixture delayed negotiation by half a second: dialing returned in
+under 1 ms, a trusted certificate connected, and an untrusted issuer was
+rejected. Late callbacks from cancelled or replaced sockets cannot reopen a
+stopped transport. Connectivity and DNS remain separate concerns:
+returning promptly does not repair an unreachable address or promise fast
+IPv4 fallback. No relay or browser protocol changes are required.
