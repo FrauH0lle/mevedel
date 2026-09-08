@@ -538,21 +538,20 @@ requirement. Named workspace configuration, environment, memory indexes, skill
 catalogs, resource availability and root Goal context are delivered after current
 input through the existing reminder transaction.
 
-Environment, active Goal, skills, memory and resource availability form one
-complete current-state snapshot, in that order. If any selected fact changes,
-the next request appends the full snapshot. It explicitly replaces the previous
-snapshot and remains valid until updated. Unchanged turns append no new snapshot.
-Workspace guidance and Goal procedures remain independently retained instruction
-updates; a counter change does not repeat their full text. Each instruction update
-supersedes the earlier observation of that component.
+Environment, active Goal, skills, memory and resource availability are retained
+as independent current-state sections. If one selected section changes, the next
+request appends that section's complete current contents. Its notice explicitly
+replaces only that section and says other previously supplied state remains
+applicable. Unchanged sections are not repeated; unchanged turns add no update.
+Workspace guidance and Goal procedures also update independently, so a counter
+change repeats neither their instructions nor the other fact sections.
 
 `mevedel-context-delivery.el` owns this delivery boundary. Only components selected
 by an agent's frozen definition reach that agent. Workers do not inherit the
-root Goal. An agent's snapshot includes only its selected fact sections; an
-instruction-only recipient receives no fact snapshot. Authored inline components
-remain in the system prompt even when named like a built-in observation.
-Stateless buddy and guardian requests retain
-their current snapshot; they do not own a growing conversation prefix.
+root Goal. An instruction-only recipient receives no fact sections. Authored
+inline components remain in the system prompt even when named like a built-in
+observation. Stateless buddy and guardian requests retain their current snapshot;
+they do not own a growing conversation prefix.
 
 ### Acknowledgement and context loss
 
@@ -612,12 +611,6 @@ and [ADR 0115](adr/0115-retain-delivered-conversation-fragments.md).
 Recreate retained agents to adopt the current frozen role contract and dynamic
 component selection. Existing frozen configurations are not rewritten. Removed
 skill-snapshot and delta APIs have no compatibility aliases or migrations.
-
-Revisit partial updates when the general supported model baseline reaches
-gpt-5.6-sol's capability level or better. Confirm current-state interpretation and
-restore/compaction behavior across the then-supported baseline before switching
-back to reduce repeated context. This is a future design decision, not a runtime
-model-name threshold or a second delivery mode.
 
 ## Resource addressing
 

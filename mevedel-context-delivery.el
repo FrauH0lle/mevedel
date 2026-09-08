@@ -118,39 +118,27 @@ cache; cold restore and compaction reconstruct solely from retained records."
 
 (defun mevedel-context-delivery--observations (names context)
   "Render selected NAMES in CONTEXT as independently retained observations.
-Group selected facts into one complete snapshot; keep instructions separate."
-  (cl-flet ((render (name)
-              (let ((value (mevedel-system--render-component
-                            (alist-get name mevedel-system--prompt-components)
-                            context)))
-                (if (and value (not (string-blank-p value)))
-                    value "None currently available or active."))))
-    (let ((facts (cl-remove-if-not
-                  (lambda (name) (memq name names))
-                  '(environment active-goal skills memory resources)))
-          observations)
-      (dolist (name '(workspace-config goal-policy))
-        (when (memq name names)
-          (push (cons (intern (format "context-%s" name))
-                      (format "Current %s context (supersedes earlier %s observations):\n%s"
-                              name name (render name)))
-                observations)))
-      (when facts
-        (push (cons 'context-snapshot
-                    (concat
-                     "Current session state. This complete snapshot replaces the previous session-state snapshot and remains valid until updated. Repository instructions and Goal procedures are delivered separately and remain applicable until superseded.\n\n"
-                     (mapconcat (lambda (name)
-                                  (format "## %s\n%s"
-                                          (capitalize (replace-regexp-in-string
-                                                       "-" " " (symbol-name name)))
-                                          (replace-regexp-in-string
-                                           "\\`## [^\n]+\n+" "" (render name))))
-                                facts "\n\n")))
-              observations))
-      (nreverse observations))))
+Each section replaces only its earlier state; omitted sections stay applicable."
+  (mapcar
+   (lambda (name)
+     (let* ((value (mevedel-system--render-component
+                    (alist-get name mevedel-system--prompt-components) context))
+            (body (if (and value (not (string-blank-p value)))
+                      value "None currently available or active."))
+            (title (capitalize (replace-regexp-in-string "-" " " (symbol-name name)))))
+       (cons (intern (format "context-%s" name))
+             (if (memq name '(workspace-config goal-policy))
+                 (format "Current %s context (supersedes earlier %s observations):\n%s"
+                         name name body)
+               (format "## %s\nThis updates only %s; all other previously supplied state remains applicable. This section replaces earlier %s state and remains valid until updated.\n\n%s"
+                       title title title
+                       (replace-regexp-in-string "\\`## [^\n]+\n+" "" body))))))
+   (cl-remove-if-not
+    (lambda (name) (memq name names))
+    '(workspace-config goal-policy environment active-goal skills memory resources))))
 
 (defun mevedel-context-delivery-stage (fsm)
-  "Stage changed instructions and complete facts for FSM as retained messages.
+  "Stage changed context sections for FSM as retained messages.
 Use the recipient's selected components; never give a worker the root Goal."
   (when-let* ((buffer (plist-get (gptel-fsm-info fsm) :buffer))
               ((buffer-live-p buffer)))
@@ -166,7 +154,7 @@ Use the recipient's selected components; never give a worker the root Goal."
                          (mevedel-session-working-directory mevedel--session)
                          mevedel--session buffer))
                (observations (mevedel-context-delivery--observations names context))
-               (types '(context-workspace-config context-goal-policy context-snapshot))
+               (types (mapcar #'car observations))
                (previous (mevedel-context-delivery--previous
                           types (plist-get (gptel-fsm-info fsm) :data))))
           ;; A retry of an undelivered WAIT replaces its staged observations.
