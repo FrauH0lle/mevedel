@@ -69,6 +69,20 @@
         (should-not (plist-get info :reasoning-marker))
         (should-not (plist-get info :reasoning-block)))))
 
+  :doc "locks the tracking marker when a closing-fence stream hook signals"
+  (with-temp-buffer
+    (org-mode)
+    (let ((info (list :buffer (current-buffer) :position (point-marker)
+                      :include-reasoning 'ignore :reasoning-block 'in)))
+      (gptel--display-reasoning-stream "thinking" info)
+      (let ((gptel-post-stream-hook
+             (list (lambda () (error "Injected stream hook failure")))))
+        (should-error (mevedel--split-open-reasoning-before-user-input info)
+                      :type 'error))
+      (should-not
+       (marker-insertion-type (plist-get info :tracking-marker)))
+      (should (eq (plist-get info :reasoning-block) 'in))))
+
   :doc "direct response after the split does not add another reasoning close"
   (with-temp-buffer
     (org-mode)
@@ -106,8 +120,7 @@
             (list :buffer (current-buffer)
                   :position (point-marker)
                   :include-reasoning 'ignore
-                  :reasoning-block 'in
-                  :reasoning-open t))
+                  :reasoning-block 'in))
            (advice
             #'mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice)
            (installed

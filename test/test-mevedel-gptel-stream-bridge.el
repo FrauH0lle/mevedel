@@ -93,40 +93,6 @@
         (should (eq (plist-get info :position) position))
         (should-not (marker-position position))))))
 
-(mevedel-deftest mevedel-gptel-stream-bridge--gptel-handle-wait-advice ()
-  ,test
-  (test)
-  :doc "keeps an open reasoning fence across a tool continuation request"
-  (mevedel-gptel-stream-bridge-test--with-data-buffer
-   (let* ((mevedel-gptel-stream-bridge-insert-batch-delay nil)
-          (info (list :buffer data-buf
-                      :position (with-current-buffer data-buf
-                                  (copy-marker (point-max) nil))
-                      :include-reasoning 'ignore))
-          (fsm (gptel-make-fsm :info info)))
-     (gptel--display-reasoning-stream "thinking" info)
-     ;; Current gptel tracks whether its rendered fence is still open.
-     (plist-put info :reasoning-open t)
-     (should (plist-get info :reasoning-open))
-     (should (mevedel-gptel-stream-bridge--gptel-stream-info-p info))
-     (should
-      (eq (mevedel-gptel-stream-bridge--gptel-handle-wait-advice
-           (lambda (_fsm)
-             (plist-put info :reasoning-open nil)
-             'continued)
-           fsm)
-          'continued))
-     (should (plist-get info :reasoning-open))
-     (gptel--display-reasoning-stream t info)
-     (with-current-buffer data-buf
-       (let ((text (buffer-string)))
-         (should
-          (= 1 (mevedel-gptel-stream-bridge-test--count-substring
-                "#+begin_reasoning" text)))
-         (should
-          (= 1 (mevedel-gptel-stream-bridge-test--count-substring
-                "#+end_reasoning" text))))))))
-
 (mevedel-deftest mevedel-gptel-stream-bridge--gptel-stream-insert-response-advice ()
   ,test
   (test)
