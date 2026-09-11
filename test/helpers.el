@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'gptel-request)
 
 ;; The shared fixture macros below let-bind these product variables, and a
 ;; macro expands in its consumer, so their owners must be loaded here rather
@@ -12,6 +13,7 @@
 (require 'mevedel-permission-mode)
 (require 'mevedel-plugin-registry)
 (require 'mevedel-structs)
+(require 'mevedel-tool-registry)
 (require 'tramp)
 
 ;; Module-focused fixtures do not create journal jobs unless the journal
@@ -369,9 +371,11 @@ having registered it."
   (unless (assoc "mevedelmock" tramp-methods)
     (add-to-list
      'tramp-methods
-     '("mevedelmock"
-       (tramp-login-program "sh")
-       (tramp-login-args (("-i")))
+     `("mevedelmock"
+       ;; A real login establishes a target HOME even when the client process
+       ;; environment was sanitized.  Use Eask's isolated home for this target.
+       (tramp-login-program "env")
+       (tramp-login-args ((,(concat "HOME=" (getenv "HOME")) "sh" "-i")))
        (tramp-remote-shell "/bin/sh")
        (tramp-remote-shell-args ("-c"))
        (tramp-connection-timeout 10)))))
@@ -391,13 +395,8 @@ settles at the sentinel instead of riding the grace timers."
             (concat "\\`"
                     (regexp-opt (append ,hosts (list (system-name))))
                     "\\'"))
-           ;; A real login sets HOME on the remote side.  This method reuses a
-           ;; local shell, so it inherits the blanked environment mevedel gives
-           ;; a remote child, and TRAMP's history-file probe then asks a shell
-           ;; with no HOME to `cd ~/'.  Bourne shells that decline to fall back
-           ;; to the password entry -- dash, which is /bin/sh on Debian and
-           ;; Ubuntu -- fail that probe and take every mock connection with
-           ;; them.  No history file, no probe.
+           ;; The fixture does not need a shell history file in its shared
+           ;; isolated HOME; keep connection setup independent of that file.
            (tramp-histfile-override t))
        (let ((original-support-tier
               (symbol-function 'mevedel-execution-target--support-tier)))
@@ -925,8 +924,17 @@ See also:
                 (setq test-body
                       `((mevedel-test--with-captured-diagnostics nil
                           ,@test-body))))
+              ;; Registrars and uninstall mutate both tool maps.  Give each
+              ;; case its own containers and matching lookup cache, including
+              ;; when its assertions fail before explicit teardown can run.
               (setq test-body
-                    `((let ((worktree-controls-before
+                    `((let ((mevedel-tool--registry
+                             (copy-hash-table mevedel-tool--registry))
+                            (mevedel-tool--resolve-cache
+                             (make-hash-table :test #'equal))
+                            (gptel--known-tools
+                             (copy-tree gptel--known-tools))
+                            (worktree-controls-before
                              (mevedel-test--worktree-control-snapshot)))
                         (unwind-protect
                             (progn ,@test-body)

@@ -840,11 +840,11 @@ the execution boundary owns the session's single unavailable warning"
          t)))
       (should-not warning))))
 
-(mevedel-deftest mevedel-tool-exec--register ()
+(mevedel-deftest mevedel-tool-exec--register
+  (:before-each (mevedel-tool-exec--register))
   ,test
   (test)
   :doc "registers the shared execution escalation vocabulary for Bash"
-  (mevedel-tool-exec--register)
   (let* ((tool (mevedel-tool-get "Bash"))
          (args (gptel-tool-args (mevedel-tool-gptel-tool tool)))
          (sandbox
@@ -876,7 +876,6 @@ the execution boundary owns the session's single unavailable warning"
     (should (equal "string" (plist-get justification :type)))
     (should (plist-get justification :optional)))
   :doc "registers managed Bash lifecycle tools and yield schema"
-  (mevedel-tool-exec--register)
   (let* ((bash (mevedel-tool-get "Bash"))
          (args (gptel-tool-args (mevedel-tool-gptel-tool bash)))
          (yield (seq-find (lambda (arg)
@@ -896,23 +895,20 @@ the execution boundary owns the session's single unavailable warning"
     (dolist (name '("WriteStdin" "ListExecutions" "StopExecution"))
       (should (mevedel-tool-get name))))
   :doc "registered WriteStdin dispatch preserves the underscored schema key"
-  (progn
-    (mevedel-tool-exec--register)
-    (let* ((tool (mevedel-tool-get "WriteStdin" "mevedel"))
-           (fn (gptel-tool-function (mevedel-tool-gptel-tool tool)))
-           captured)
-      (should (eq 'yield_time_ms
-                  (car (nth 2 (mevedel-tool-args tool)))))
-      (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
-                 (lambda (_tool _callback args)
-                   (setq captured args))))
-        (funcall fn #'ignore "exec-1" "" 12345))
-      (should (equal "exec-1" (plist-get captured :execution_id)))
-      (should (equal ":yield_time_ms" (symbol-name (nth 4 captured))))
-      (should (= 12345 (nth 5 captured)))
-      (should-not (plist-member captured :yield-time-ms))))
+  (let* ((tool (mevedel-tool-get "WriteStdin" "mevedel"))
+         (fn (gptel-tool-function (mevedel-tool-gptel-tool tool)))
+         captured)
+    (should (eq 'yield_time_ms
+                (car (nth 2 (mevedel-tool-args tool)))))
+    (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+               (lambda (_tool _callback args)
+                 (setq captured args))))
+      (funcall fn #'ignore "exec-1" "" 12345))
+    (should (equal "exec-1" (plist-get captured :execution_id)))
+    (should (equal ":yield_time_ms" (symbol-name (nth 4 captured))))
+    (should (= 12345 (nth 5 captured)))
+    (should-not (plist-member captured :yield-time-ms)))
   :doc "execution control inherits authority without becoming read-only"
-  (mevedel-tool-exec--register)
   (dolist (name '("WriteStdin" "StopExecution"))
     (let ((tool (mevedel-tool-get name)))
       (should-not (mevedel-tool-read-only-p tool))
@@ -927,7 +923,6 @@ the execution boundary owns the session's single unavailable warning"
              (mevedel-check-permission
               name :tool-struct tool :content nil :mode 'full-auto))))))
   :doc "one-shot execution control asks for PTY input but not containment"
-  (mevedel-tool-exec--register)
   (let ((write-stdin (mevedel-tool-get "WriteStdin"))
         (stop (mevedel-tool-get "StopExecution"))
         (mevedel-permission-rules nil)
@@ -960,7 +955,6 @@ the execution boundary owns the session's single unavailable warning"
               :content '(:execution_id "exec-1" :chars "\C-c")
               :mode 'full-auto :one-shot-mutations-p t))))))
   :doc "registers Eval mode and preserve_ui optional arguments"
-  (mevedel-tool-exec--register)
   (let* ((tool (mevedel-tool-get "Eval"))
          (args (gptel-tool-args (mevedel-tool-gptel-tool tool)))
          (mode (seq-find (lambda (arg)

@@ -185,13 +185,18 @@
       (should (= 2 resumed)))))
 
 (mevedel-deftest mevedel-uninstall ()
-  ,test
+  (let ((transport-enabled mevedel-transport--enabled-p))
+    (unwind-protect
+        ,test
+      (if transport-enabled
+          (mevedel-transport-install)
+        (mevedel-transport-uninstall))))
   (test)
 
   :doc "tears down skill hot-reload lifecycle state"
   (let ((after-focus-change-function #'ignore)
-        (gptel--known-tools gptel--known-tools)
-        (gptel--known-presets gptel--known-presets)
+        (gptel--known-tools (copy-tree gptel--known-tools))
+        (gptel--known-presets (copy-tree gptel--known-presets))
         (gptel-prompt-transform-functions gptel-prompt-transform-functions)
         called)
     (cl-letf (((symbol-function 'mevedel-skills-uninstall-hot-reload)
@@ -208,8 +213,8 @@
 
   :doc "force-tears down executions"
   (let ((after-focus-change-function #'ignore)
-        (gptel--known-tools gptel--known-tools)
-        (gptel--known-presets gptel--known-presets)
+        (gptel--known-tools (copy-tree gptel--known-tools))
+        (gptel--known-presets (copy-tree gptel--known-presets))
         (gptel-prompt-transform-functions gptel-prompt-transform-functions)
         torn-down)
     (cl-letf (((symbol-function 'mevedel-execution-teardown-all)
@@ -224,8 +229,8 @@
 
   :doc "cancels deferred transport work and removes its advice"
   (let ((after-focus-change-function #'ignore)
-        (gptel--known-tools gptel--known-tools)
-        (gptel--known-presets gptel--known-presets)
+        (gptel--known-tools (copy-tree gptel--known-tools))
+        (gptel--known-presets (copy-tree gptel--known-presets))
         (gptel-prompt-transform-functions
          gptel-prompt-transform-functions)
         (mevedel-transport-retry-seconds 5)
@@ -310,7 +315,8 @@
 		   (should (equal '(property-drawer)
 				  gptel-org-ignore-elements))))
 
-(mevedel-deftest mevedel--chat-buffer-setup ()
+(mevedel-deftest mevedel--chat-buffer-setup
+  (:before-each (require 'org-indent))
 		 ,test
 		 (test)
 

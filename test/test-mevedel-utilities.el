@@ -4,6 +4,7 @@
 
 ;;; Code:
 
+(require 'saveplace)
 (require 'mevedel-execution-target)
 (require 'mevedel-structs)
 (require 'mevedel-tool-render-data)
@@ -740,7 +741,6 @@ rejects trailing binary operators"
   ,test
   (test)
   :doc "keeps a persisted mevedel buffer out of `save-place-alist'"
-  (require 'saveplace)
   (let ((save-place-loaded t)
         (save-place-alist nil)
         (default-directory temporary-file-directory))

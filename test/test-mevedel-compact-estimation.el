@@ -527,26 +527,27 @@ missing or zero prompt-side usage cannot become the active baseline"
   ,test
   (test)
   :doc "applies the configured ratio to the policy's usable context"
-  (put 'mevedel-policy-model :context-window 0.2)
-  (let ((mevedel-compact-estimation-token-threshold 0.5)
+  (let ((model (make-symbol "policy-model"))
+        (mevedel-compact-estimation-token-threshold 0.5)
         (mevedel-model-reserve-tokens 20))
+    (put model :context-window 0.2)
     (should
      (= 90
         (mevedel-compact-estimation-policy-threshold-tokens
-         '(:backend nil :model mevedel-policy-model :max-tokens 10))))))
+         `(:backend nil :model ,model :max-tokens 10))))))
 
 (mevedel-deftest mevedel-compact-estimation-admission ()
   ,test
   (test)
   :doc "distinguishes below-threshold, summarizer-only, and target pressure"
-  (put 'mevedel-admission-target :context-window 0.2)
-  (put 'mevedel-admission-summary :context-window 0.1)
   (let ((mevedel-compact-estimation-token-threshold 0.5)
         (mevedel-model-reserve-tokens 0)
         (summary-policy
-         '(:backend nil :model mevedel-admission-summary :max-tokens 0))
+         `(:backend nil :model ,(make-symbol "summary-model") :max-tokens 0))
         (target-policy
-         '(:backend nil :model mevedel-admission-target :max-tokens 0)))
+         `(:backend nil :model ,(make-symbol "target-model") :max-tokens 0)))
+    (put (plist-get target-policy :model) :context-window 0.2)
+    (put (plist-get summary-policy :model) :context-window 0.1)
     (cl-letf (((symbol-function 'mevedel-compact-estimation-workload-policy)
                (lambda () summary-policy)))
       (should-not (mevedel-compact-estimation-admission 49 target-policy))
