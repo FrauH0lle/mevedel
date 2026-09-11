@@ -412,6 +412,40 @@
       (when (file-directory-p root)
         (delete-directory root t))))
 
+  :doc "validates numeric mode and deadline guards before dependent writes"
+  (let* ((root (make-temp-file "mevedel-control-fs-numeric-" t))
+         (record (file-name-concat root "record"))
+         (next (file-name-concat root "next")))
+    (unwind-protect
+        (progn
+          (write-region "original" nil record nil 'silent)
+          (set-file-modes record #o600)
+          (dolist (case
+                   (list (list 'verify-mode record "600" 'ok)
+                         (list 'verify-mode record "644" 'mismatch)
+                         (list 'verify-mode record "888" 'failed)
+                         (list 'verify-mode record "600\n" 'failed)
+                         (list 'before-time root
+                               (number-to-string
+                                (+ 3600 (mevedel-session-control-fs-target-time root)))
+                               'ok)
+                         (list 'before-time root "0" 'mismatch)
+                         (list 'before-time root "-1" 'failed)
+                         (list 'before-time root "1; true" 'failed)))
+            (let ((results
+                   (mevedel-session-control-fs-run-program
+                    (list (list :op (nth 0 case) :path (nth 1 case)
+                                :content (nth 2 case))
+                          (list :op 'create :path next :content "guarded")))))
+              (should (eq (nth 3 case) (plist-get (car results) :status)))
+              (if (eq (nth 3 case) 'ok)
+                  (progn
+                    (should (equal "guarded" (mevedel-session-control-fs-read-file next)))
+                    (delete-file next))
+                (should (eq 'skipped (plist-get (cadr results) :status)))
+                (should-not (file-exists-p next))))))
+      (delete-directory root t)))
+
   :doc "refuses a linked parent component and a linked final name"
   (let* ((root (make-temp-file "mevedel-control-fs-program-" t))
          (target (file-name-concat root "target"))
@@ -742,8 +776,7 @@
                 (mevedel-session-control-fs-run-program
                  (list (list :op 'write :path missing :content "x"))))
           (should-not (eq 'ok (plist-get (nth 0 results) :status)))
-          ;; The record survives the early stop, because the target emits it
-          ;; from its EXIT trap rather than after the loop.
+          ;; The enclosing diagnostic pipe survives the program's early stop.
           (should (stringp (plist-get (nth 0 results) :diagnostic)))
           (should (equal before
                          (directory-files temporary-file-directory nil
@@ -770,6 +803,35 @@
                          (cdr split))))
       (when (file-directory-p root)
         (delete-directory root t))))
+
+  :doc "transports binary target errors without executing a skipped write"
+  (let* ((root (make-temp-file "mevedel-control-fs-stderr-" t))
+         (process-environment (copy-sequence process-environment))
+         (command (file-name-concat root "mv"))
+         (path (file-name-concat root "record"))
+         (later (file-name-concat root "later"))
+         (forged "1 0\0Zm9yZ2Vk\0"))
+    (unwind-protect
+        (progn
+          ;; A failing target utility can emit arbitrary bytes on stderr.
+          ;; Exercise the real transport, including its encoding and pipe.
+          (write-region "#!/bin/sh\nprintf '1 0\\000Zm9yZ2Vk\\000\\n' >&2\nexit 1\n"
+                        nil command nil 'silent)
+          (set-file-modes command #o700)
+          (setenv "PATH" (concat root ":" (getenv "PATH")))
+          (write-region "original" nil path nil 'silent)
+          (let ((results
+                 (mevedel-session-control-fs-run-program
+                  (list (list :op 'write :path path :content "replacement")
+                        (list :op 'create :path later :content "unreachable")))))
+            (should (eq 'failed (plist-get (car results) :status)))
+            (should (equal forged (plist-get (car results) :diagnostic)))
+            (should (eq 'skipped (plist-get (cadr results) :status)))
+            (should-not (file-exists-p later))
+            (should (equal "original" (mevedel-session-control-fs-read-file path))))
+          (should (equal '("mv" "record")
+                         (directory-files root nil directory-files-no-dot-files-regexp))))
+      (delete-directory root t)))
 
   :doc "reports no diagnostic when the target sent no record"
   (let ((split (mevedel-session-control-fs--take-diagnostic

@@ -35,10 +35,19 @@ or `skipped`, so callers reproduce per operation the nil-versus-signal contract
 of the single-operation wrappers.  An operation may be marked optional, meaning
 its failure does not end the program; ensuring a directory that may already
 exist is the case that needs it.  Requests and responses are NUL-framed with
-base64 payloads, because filenames and content both contain bytes a shell cannot
-carry through a command substitution.  Target diagnostics are captured apart
+base64 content payloads, because filenames and content both contain bytes a shell
+cannot carry through a command substitution.  Target diagnostics are captured apart
 from the response, so a tool writing to stderr cannot present itself as a
 result record.
+
+Read byte limits, permission modes, and deadlines travel as digit strings and
+are validated by the target before use. Encoding these scalars as base64 required
+a decoding subprocess on every bounded read or numeric guard. Repeated local
+measurements put that overhead at 18--22% of those operations after the diagnostic
+pipe change. Content verification removes base64 wrapping with Bash's string
+substitution, and an existing directory returns its ordinary creation conflict
+without launching `mkdir`; these removed another subprocess from their respective
+paths. Arbitrary file content and response bytes remain base64 encoded.
 
 A request reaches the target as arguments when it fits and through a stdin file
 when it does not.  One argument carries one field, because NUL -- the framing
@@ -105,16 +114,26 @@ Keeping diagnostics apart from the response does not mean keeping them in a
 separate file.  A local stderr file makes TRAMP create a remote temporary and
 rename it back on every program, and a CPU profile of a remote turn put that at
 around a twelfth of it; the request file cost roughly twice as much again.  So
-the program discards stderr at the target, collects it there, and emits it as
+the program collects stderr at the target and emits it as
 one trailing record whose header is a word where an operation's is a number --
 which is the separation the property actually needed.  Argument delivery removes
 the request file for the traffic that dominates the round-trip count -- leases,
 clocks, transfers, recovery -- and leaves it for the programs that carry a whole
 artifact or generation, which are the rare ones.
 
-Reading a program's diagnostics now depends on its trailing record arriving.  A
-program killed before its exit trap runs has none, and the failure is reported
-from the raw output buffer instead.
+The collector uses a separate pipe, encoding stderr before it enters a shell
+variable so NUL bytes survive. Operation frames use a separate descriptor and
+the enclosing collector emits the trailing record even when the operation loop
+stops early. A program killed before the collector finishes has no diagnostic
+record, and the failure is reported from the raw output buffer instead.
+
+Amended: the full ERT suite took 749.09 seconds, and its slowest memory-retention
+case spent 28.07 of 28.42 seconds in 4,068 control programs. The target-side
+diagnostic temporary file added creation and removal processes to every program,
+even successful read-only probes. Collecting through a pipe removed those
+processes: repeated local measurements reduced single-read cost by 28% and
+existence-probe cost by 37%, preserving binary diagnostics and early-stop
+semantics. The pinning and ownership proofs remain the same.
 
 Amended: enumerating a workspace did not follow this decision.  The session
 picker's listing called the one-operation wrappers per candidate and spent 491
