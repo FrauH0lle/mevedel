@@ -4724,6 +4724,47 @@
     (should (string-match-p "Reason: PONYTAIL:FULL" expanded))
     (should (string-match-p "Handler: Inject project conventions" expanded))))
 
+(mevedel-deftest mevedel-view--user-turn-hook-audits ()
+  ,test
+  (test)
+  :doc "user turns hide provider bookkeeping while retaining reminder disclosures"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "*** Continue\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mapconcat
+      #'mevedel--format-hook-audit-record
+      '((:type injected-reminders :phase turn-start
+         :items ((:type verification-suggestion :body "Check the result.")))
+        (:type provider-tool-batch-start :id "hidden-call")
+        (:type provider-tool-batch :id "hidden-call" :messages [])
+        (:type fork-point :fork-point-id "hidden-fork"))
+      "")
+     'mevedel-hook-audit)
+    (let* ((end (with-current-buffer data-buf (point-max)))
+           (records (mevedel-view--user-turn-hook-audits
+                     (list (list 'user 1 end)) data-buf)))
+      (should (equal '(injected-reminders)
+                     (mapcar (lambda (record) (plist-get record :type)) records)))
+      (let ((source (plist-get (car records) :source)))
+        (should (equal '(injected-reminders)
+                       (mapcar
+                        (lambda (span) (plist-get (plist-get span :record) :type))
+                        (mevedel-transcript-audit-spans
+                         (mevedel-view-disclosure-data-substring
+                          data-buf (car source) (cdr source) t)))))))
+    (mevedel-view-test--insert-data data-buf "Continuing.\n" 'response)
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert "> quoted\nsecond line")
+      (goto-char (+ (mevedel-view--input-start) 4))
+      (mevedel-view--full-rerender)
+      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+      (should (= (point) (+ (mevedel-view--input-start) 4)))
+      (should (string-search "1 system reminder" (buffer-string)))
+      (should-not (string-search "hook audit" (buffer-string)))
+      (should-not (string-search "hidden-call" (buffer-string))))))
+
 (mevedel-deftest mevedel-view--format-injected-reminders-audit ()
   ,test
   (test)
@@ -6822,6 +6863,22 @@
   :doc "leaves ordinary reasoning prose untouched"
   (should (equal "just thinking\n"
                  (mevedel-view--clean-reasoning-text "just thinking\n")))
+
+  :doc "trust properties distinguish generated audits from quoted audit text"
+  (let* ((audit (mevedel--format-hook-audit-record
+                 '(:type provider-tool-batch-start :id "call-1")))
+         (trusted (concat "#+begin_reasoning\n" audit
+                          "keep\n#+end_reasoning\n"))
+         (quoted (substring-no-properties trusted)))
+    ;; Exercise both cache insertion orders with identical visible text.
+    (dolist (inputs (list (list trusted quoted) (list quoted trusted)))
+      (setq mevedel-view--clean-reasoning-cache nil)
+      (dolist (text inputs)
+        (let ((cleaned (mevedel-view--clean-reasoning-text text)))
+          (should (string-match-p "keep" cleaned))
+          (if (eq text trusted)
+              (should-not (string-match-p "mevedel-hook-audit" cleaned))
+            (should (string-match-p "mevedel-hook-audit" cleaned)))))))
 
   :doc "a repeat cleaning is served from the global cache"
   ;; A render walks every turn, so each tick re-cleans every completed

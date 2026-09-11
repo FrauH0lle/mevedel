@@ -179,6 +179,10 @@ prose. What remains unguarded is markup that opens a run: a response or user
 prompt whose very first line is `<system-reminder>` still reads as structure.
 Hidden audit record grammar and attachment spans live in `mevedel-transcript-audit.el`; the view consumes
 those spans without reparsing the wire format.
+Reasoning summaries and expanded bodies retain source trust properties until
+the audit parser removes hidden records, including provider tool-history
+records between nested tool calls. Removal precedes reasoning-cache lookup
+so quoted audit markup stays visible even when its text matches a trusted record.
 
 Streaming chunks, tool boundaries, and explicit rerender requests share one
 buffer-local render scheduler.  Requests in the same pending window collapse
@@ -1680,7 +1684,10 @@ visible user turn and joins the next accepted root input once. Context from
 rerendered transcript exposes it through the same disclosure; it does not run
 the prompt hook again.
 
-The renderer builds hook audit surfaces from hook audit records.  For
+The renderer builds hook audit surfaces from visible hook audit records.
+User and assistant turns share the same visibility filter: provider-history
+boundaries and fork-point bookkeeping stay hidden, while system-reminder
+disclosures retain their exact source spans. For
 context injection, it reads ordered `<hook-event name="..." ...>` entries,
 including optional `source`, `file`, and `plugin` attributes,
 inside a `<hook-context>` block; new persisted hook context does not need
