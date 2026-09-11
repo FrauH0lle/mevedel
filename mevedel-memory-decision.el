@@ -44,20 +44,21 @@
   "Return the latest accepted public decision for PROPOSAL in WORKSPACE.
 Verify its immutable acceptance evidence; public text alone cannot authorize
 a decision. Recover accepted decisions before using this to decide or apply."
-  (let ((generation 0) latest)
+  (let ((generation 0) (passes (make-hash-table :test #'equal)) latest)
     (dolist (entry (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
       (when (and (eq (plist-get entry :kind) 'decision) (equal proposal (plist-get entry :proposal-id))
                  (not (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) (plist-get entry :pass-id))))
-        (let* ((accepted (mevedel-memory-decision--published workspace entry))
+        (let* ((accepted (mevedel-memory-decision--published workspace entry passes))
                (number (plist-get (plist-get accepted :claim) :generation)))
           (when (> number generation) (setq generation number latest entry)))))
     latest))
 
-(defun mevedel-memory-decision--published (workspace entry)
-  "Return accepted private state matching public decision ENTRY in WORKSPACE."
+(defun mevedel-memory-decision--published (workspace entry &optional passes)
+  "Return accepted private state matching public decision ENTRY in WORKSPACE.
+PASSES is the current read observation described by the private reader."
   (let* ((path (file-name-concat (mevedel-memory-decision--directory workspace)
                                 (concat (plist-get entry :decision-id) ".el")))
-         (accepted (mevedel-memory-decision--read workspace path))
+         (accepted (mevedel-memory-decision--read workspace path passes))
          (metadata (plist-get accepted :metadata)))
     (unless (and accepted
                  (cl-every (lambda (field) (equal (plist-get entry (cdr field)) (plist-get metadata (cdr field))))
@@ -89,17 +90,25 @@ The full reader also verifies that body's dependencies before using a decision."
       (list :claim claim :metadata metadata :write-id (plist-get data :write-id)
             :hash (secure-hash 'sha256 text)))))
 
-(defun mevedel-memory-decision--read (workspace path)
+(defun mevedel-memory-decision--read (workspace path &optional passes)
   "Read an accepted private decision at PATH in WORKSPACE, or nil.
 Unaccepted and retired decisions cannot publish. Verify surviving decisions'
-original accepted proposal bundle and retained write evidence."
+original accepted proposal bundle and retained write evidence.
+PASSES, when non-nil, holds the last authenticated bundle for this WORKSPACE
+read observation. Reuse immutable pass proofs within a scan; callers
+must discard the table after mutations and never retain it between operations."
   (when-let* ((data (mevedel-memory-decision--record workspace path))
               (metadata (plist-get data :metadata))
               ((not (mevedel-journal-cleanup-pass-retired-p (mevedel-workspace-root workspace) (plist-get metadata :pass-id)))))
     (let* ((claim (plist-get data :claim))
-           (accepted (mevedel-memory-store-accepted workspace (plist-get metadata :pass-id)))
-           (prepared (plist-get accepted :prepared))
-           (source (mevedel-journal-claim-outcome (plist-get prepared :claim)))
+           (pass (plist-get metadata :pass-id))
+           (accepted (or (and passes (gethash pass passes))
+                         (let ((bundle (mevedel-memory-store-accepted workspace pass)))
+                           ;; Keep at most one potentially 4-MiB proposal bundle.
+                           (when (and passes bundle)
+                             (clrhash passes)
+                             (puthash pass bundle passes))
+                           bundle)))
            (intent (and (plist-get data :write-id)
                         (mevedel-memory-write-read workspace (plist-get data :write-id) (plist-get metadata :state-hash)))))
       (unless (and (equal (plist-get claim :owner) (plist-get metadata :decision-id))
@@ -109,10 +118,11 @@ original accepted proposal bundle and retained write evidence."
                             (equal (plist-get intent :proposal) (plist-get metadata :proposal-id))
                             (or (not (eq (plist-get metadata :status) 'reversed)) (plist-get intent :reverse-of)))
                      (and (memq (plist-get metadata :status) '(rejected stale unavailable))
-                          (equal (plist-get metadata :state-hash) (plist-get source :payload))))
+                          (equal (plist-get metadata :state-hash) (plist-get accepted :hash))))
                    (member (plist-get metadata :proposal-id) (plist-get (plist-get accepted :review) :proposals)))
         (error "Decision does not match its accepted proposal"))
-      (list :claim claim :metadata metadata :accepted accepted :intent intent))))
+      (list :claim claim :metadata metadata :accepted accepted :intent intent
+            :hash (plist-get data :hash)))))
 
 (defun mevedel-memory-decision--publish (workspace decision)
   "Publish accepted DECISION in WORKSPACE, then release unneeded evidence.
@@ -140,12 +150,13 @@ their pass can release its remaining digest pins."
 Malformed accepted state remains an error, preserving evidence for inspection.
 Reuse one public observation; already published history needs only one pending
 evidence-release check per pass, not repeated republication per decision."
-  (let ((published (make-hash-table :test #'equal)) (checked (make-hash-table :test #'equal)))
+  (let ((published (make-hash-table :test #'equal)) (checked (make-hash-table :test #'equal))
+        (passes (make-hash-table :test #'equal)))
     (dolist (entry (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
       (puthash (plist-get entry :file) (plist-get entry :text) published))
     (dolist (path (mevedel-session-control-fs-list-directory
                   (mevedel-memory-decision--directory workspace) mevedel-memory-write-intent-file-regexp))
-      (when-let* ((decision (mevedel-memory-decision--read workspace path)))
+      (when-let* ((decision (mevedel-memory-decision--read workspace path passes)))
         (let* ((metadata (plist-get decision :metadata))
                (prepared (plist-get (plist-get decision :accepted) :prepared))
                (review (plist-get (plist-get decision :accepted) :review))
@@ -163,6 +174,7 @@ evidence-release check per pass, not repeated republication per decision."
           (when (or release (not (equal expected (gethash file published)))
                     (not (equal review-text (gethash review-file published))))
             (mevedel-memory-decision--publish workspace decision)
+            (clrhash passes)
             (puthash file expected published)
             (puthash review-file review-text published)))))))
 
@@ -179,7 +191,7 @@ This private operation freezes a decision before public publication."
                          :created (mevedel-journal-store-timestamp
                                    (mevedel-session-control-fs-target-time (plist-get claim :directory)))
                          :status status :reason reason
-                         :state-hash (or (plist-get intent :hash) (plist-get (mevedel-journal-claim-outcome (plist-get prepared :claim)) :payload))))
+                         :state-hash (or (plist-get intent :hash) (plist-get accepted :hash))))
          (directory (mevedel-memory-decision--directory workspace))
          (path (file-name-concat directory (concat id ".el")))
          text)
