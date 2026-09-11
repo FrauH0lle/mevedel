@@ -204,7 +204,8 @@ MUTATION holds journal ownership; the caller has proved release eligibility."
 (defun mevedel-memory-store-accepted (workspace id)
   "Return the fenced accepted bundle for WORKSPACE pass ID, or nil.
 Verify its exact bytes against the claim outcome before reading its private
-proposal data. Return the immutable prepared record under :prepared."
+proposal data. Return the immutable prepared record under :prepared and the
+authenticated accepted bytes' hash under :hash."
   (let* ((prepared (mevedel-memory-store-read workspace id))
          (outcome (mevedel-journal-claim-outcome (plist-get prepared :claim))))
     (when (eq (plist-get outcome :status) 'completed)
@@ -224,7 +225,7 @@ proposal data. Return the immutable prepared record under :prepared."
                               (mapcar (lambda (proposal) (plist-get proposal :id)) (plist-get data :proposals))))
             (error "Invalid accepted memory bundle"))
           (mevedel-journal-store--validate-metadata review 'consolidation)
-          (append data (list :prepared prepared)))))))
+          (append data (list :prepared prepared :hash (plist-get outcome :payload))))))))
 
 (defun mevedel-memory-store-accept (workspace prepared reply entries model references)
   "Accept validated REPLY for WORKSPACE's PREPARED pass before public coverage.

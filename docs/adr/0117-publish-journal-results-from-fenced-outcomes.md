@@ -445,6 +445,22 @@ restore an unreleased pin to verify both recovery paths remain active. Missing
 review publication still requires its admitted evidence pins and digest bytes;
 recovery refuses to recreate coverage when that evidence is unavailable.
 
+A phase profile of the same 53-record history later found 4,068 filesystem
+control programs and 213 authentications of its single accepted pass. Recovery
+took 2.72 seconds and expiry 5.56 seconds on the measured local target; making
+each control program cheaper had left redundant reads in the callers. Decision
+scans now reuse the last authenticated immutable pass bundle within one workspace
+observation, discarding it after publication and between operations. Retaining
+only one bundle bounds memory even when a workspace has many large passes. Readers
+return the already authenticated content hash instead of fetching its outcome
+again. Expiry authenticates each public decision once, carries its hash into the
+manifest, and inspects only additional private decisions for unpublished history.
+The deletion phase still reads and checks the accepted hash, so intervening edits
+remain for inspection. This reduced recovery to 1.34 seconds and expiry to 2.89
+seconds without changing the history size or running the test in parallel. Tests
+bound pass/decision reads and verify that later pass corruption and decision
+edits after selection still fail closed.
+
 Application first creates a private expiry marker, making the entry unavailable
 to public readers and republication, then removes the matching physical bytes.
 Unexpected bytes remain for inspection. Completion and deletion are idempotent;
