@@ -651,7 +651,8 @@
     (should (equal '(first broken last) (nreverse events)))
     (should (= 1 (length warnings)))))
 
-(mevedel-deftest mevedel--complete-turn ()
+(mevedel-deftest mevedel--complete-turn
+  (:vars ((mevedel-transport--enabled-p t)))
   ,test
   (test)
   :doc "runs the successful transaction in order and drains after request end"

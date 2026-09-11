@@ -18,6 +18,7 @@
   (test)
   :doc "cancels deferred work on TRAMP unload and reinstalls on reload"
   (let ((mevedel-transport-retry-seconds 5)
+        (methods (copy-tree tramp-methods))
         tramp-features
         timer)
     (unwind-protect
@@ -46,6 +47,7 @@
         (require 'tramp))
       (dolist (feature (reverse tramp-features))
         (require feature nil t))
+      (setq tramp-methods methods)
       (mevedel-transport-install))))
 
 (mevedel-deftest mevedel-transport-nested-p ()

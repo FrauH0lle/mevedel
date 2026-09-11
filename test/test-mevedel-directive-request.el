@@ -569,6 +569,7 @@
 			 (with-current-buffer buf
 			   (insert "source\n")
 			   (write-region (point-min) (point-max) file nil 'silent)
+                           (set-visited-file-modtime)
 			   (set-buffer-modified-p nil)
 			   (let* ((directive
 				   (mevedel--create-directive-in
@@ -608,12 +609,8 @@
 					gap-file '(:gap "capture denied")
 					(mevedel-request-file-snapshots
 					 mevedel--current-request)))
-				     (cl-letf
-					 (((symbol-function
-					    'ask-user-about-supersession-threat)
-					   (lambda (&rest _) nil)))
-				       (with-temp-file file
-					 (insert "changed\n")))
+				     (with-temp-file file
+					 (insert "changed\n"))
 				     (let ((gptel--request-alist
 					    (list
 					     (cons
