@@ -102,6 +102,14 @@ restyle so diagrams and components from one artifact read correctly in
 another; derive `--accent-soft` from `--accent` with `color-mix()` so tuning
 the accent alone keeps the tint in step.
 
+Categorical data needs its own palette: use distinct hues for unrelated series
+or categories, not several tints of the page accent. These data colors are
+separate from decorative accents and semantic good/bad colors. Define them as
+tokens in light, both dark scopes, and print; use the same colors in marks and
+their legend. Prefer solid fills. Use labels, position, and line styles to add
+identification beyond color; reserve hatching for a specific encoding that
+needs it, rather than applying it to every bar or slice.
+
 Two rules keep each theme resolving as a set. `body` must set an explicit
 `background` from a token: the page is composited inside a frame whose own
 ground you do not control, and a transparent body borrows it. And every element
@@ -175,7 +183,8 @@ so a printed subset does not pretend to be the full dataset.
 
 Before writing code, sketch a short design plan - a compact token system:
 
-- **Color**: the palette as 4-6 named hex values.
+- **Color**: the page palette as 4-6 named hex values, plus a distinct categorical
+  palette when the data needs one.
 - **Type**: two or more roles - a characterful display face used with
   restraint, a complementary body face, and a utility face for captions or data
   if needed - each as a full system stack.
