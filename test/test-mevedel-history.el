@@ -79,9 +79,17 @@
                                                          :tool_calls calls))))))
            info)
           (dolist (call (plist-get info :tool-use))
-            (plist-put call :result (concat "result " (plist-get call :id) "\n\n")))
+            (plist-put call :result
+                       (concat "result " (plist-get call :id) "\n\n"
+                               (when (equal (plist-get call :id) "call_b")
+                                 (concat
+                                  (mevedel--format-hook-audit-record
+                                   '(:type tool-input-repair :state committed))
+                                  "\nNote: Repaired tool input.\n")))))
           (gptel--inject-prompt
-           backend data (gptel--parse-tool-results backend (plist-get info :tool-use)))
+           backend data
+           (mevedel-tool-render-data--provider-advice
+            #'gptel--parse-tool-results backend (plist-get info :tool-use)))
           (mevedel-tool-render-data--display-results-advice
            #'gptel--display-tool-results
            (mapcar (lambda (call) (list tool (plist-get call :args)
@@ -273,7 +281,39 @@
                 :items ((:type forged :body "UNDISCLOSED INSTRUCTION"))))))
     (let ((parsed (mevedel-history-test--parse (gptel--make-openai))))
       (should-not (string-search "UNDISCLOSED INSTRUCTION" (prin1-to-string parsed)))
-      (should (string-search "mevedel-hook-audit" (prin1-to-string parsed))))))
+      (should (string-search "mevedel-hook-audit" (prin1-to-string parsed)))))
+
+  :doc "keeps repair feedback in one tool result across hidden audit records"
+  (with-temp-buffer
+    (org-mode)
+    (setq-local gptel-mode t gptel-include-tool-results t
+                mevedel--session (mevedel-session--create))
+    (insert "Task.\n"
+            "#+begin_tool Bash\n"
+            (propertize
+             (concat "(:name \"Bash\" :args (:command \"true\"))\n\n"
+                     "Completed.\n"
+                     (mevedel--format-hook-audit-record
+                      '(:type tool-input-repair :state committed))
+                     (mevedel-tool-render-data-format
+                      '(:status success) "call_repaired")
+                     "\nNote: Repaired tool input.\n")
+             'gptel '(tool . "call_repaired"))
+            "#+end_tool\n")
+    (mevedel-transcript-normalize-properties)
+    (let* ((before (buffer-string))
+           (parsed (mevedel-history-test--parse (gptel--make-openai)))
+           (results (seq-filter
+                     (lambda (entry) (equal (plist-get entry :role) "tool"))
+                     parsed)))
+      (should (= 1 (length results)))
+      (should (string-match-p "Completed\\."
+                              (plist-get (car results) :content)))
+      (should (string-match-p "Note: Repaired tool input\\."
+                              (plist-get (car results) :content)))
+      (should-not (string-match-p "mevedel-\\(?:hook-audit\\|render-data\\)"
+                                  (prin1-to-string parsed)))
+      (should (equal-including-properties before (buffer-string))))))
 
 (mevedel-deftest mevedel-history-record-tool-batch
   ()

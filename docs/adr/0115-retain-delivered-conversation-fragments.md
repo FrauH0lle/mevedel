@@ -26,6 +26,14 @@ Provider changes, edits, omitted results and incomplete spans use ordinary
 backend serialization. This preserves multi-model operation without forwarding
 opaque fields between providers. Transport credentials are not recorded.
 
+A repaired tool result exposed a boundary mismatch on the next user request:
+its hidden audit split the result into two `gptel` tool runs, and the backend
+tried to read the trailing `Note:` prose as another call plist. Prompt-copy
+preparation removes hidden audit/render metadata between runs of the same tool
+ID before computing prepared digests. This preserves one complete result for
+ordinary serialization and retained replay while leaving transcript audits
+intact.
+
 The alternative of reparsing every live continuation into a common text form
 was rejected: it can discard provider-specific reasoning fields and signatures.
 Keeping reminders ephemeral would retain the measured prefix disruption.
