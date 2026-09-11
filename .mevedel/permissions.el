@@ -9,6 +9,6 @@
   ("Bash" :pattern "git status:*" :action allow)
   ("Bash" :pattern "git log:*" :action allow))
  :resource-grants
- ((:path "~/.npm" :access write)
-  (:path "~/.mevedel/skills" :access read)
-  (:path "~/.agents/skills" :access read)))
+ ((:path "~/.npm" :access write) (:path "~/.mevedel/skills" :access read)
+  (:path "~/.agents/skills" :access read)
+  (:path "~/ccs" :access read :recursive t)))
