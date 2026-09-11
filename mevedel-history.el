@@ -255,7 +255,9 @@ Respect BACKEND and MAX-ENTRIES, and never read beyond the selected context."
 (defun mevedel-history--prepare-buffer-advice (original &rest arguments)
   "Carry validated fragments through ORIGINAL's prompt-buffer projection.
 Org removes block headers and unescapes results while copying the transcript.
-Temporary properties map the already-validated spans through those edits."
+Temporary properties map the already-validated spans through those edits.
+Remove hidden metadata between runs of one tool result in the prompt copy,
+so backend parsers read its call metadata once and retain the entire result."
   (if (not (bound-and-true-p mevedel--session))
       (apply original arguments)
     (let ((buffer (current-buffer))
@@ -275,6 +277,24 @@ Temporary properties map the already-validated spans through those edits."
             (let ((prompt (apply original arguments)))
               (with-current-buffer prompt
 		(setq-local mevedel-history--origin t)
+		(let ((position (point-min)))
+                  (while (< position (point-max))
+                    (let ((next (next-single-property-change
+                                 position 'gptel nil (point-max)))
+                          (previous (and (> position (point-min))
+                                         (get-text-property (1- position) 'gptel))))
+                      (when (and (eq (car-safe previous) 'tool)
+                                 (memq (get-text-property position 'gptel)
+                                       '(mevedel-hook-audit mevedel-render-data)))
+                        (while (and (< next (point-max))
+                                    (memq (get-text-property next 'gptel)
+                                          '(mevedel-hook-audit mevedel-render-data)))
+                          (setq next (next-single-property-change
+                                      next 'gptel nil (point-max))))
+                        (when (equal previous (get-text-property next 'gptel))
+                          (delete-region position next)
+                          (setq next position)))
+                      (setq position next))))
 		(let ((position (point-min)))
                   (while (< position (point-max))
                     (let* ((next (next-single-property-change
