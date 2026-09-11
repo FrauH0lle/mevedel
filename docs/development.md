@@ -62,6 +62,50 @@ npx @emacs-eask/cli test ert test/test-*.el
 npx @emacs-eask/cli test ert test/test-mevedel-compact.el
 ```
 
+For a faster complete ERT run, use the measured parallel runner after installing
+the Eask dependencies:
+
+```bash
+python3 test/run_tests.py
+# Limit concurrency on smaller machines:
+python3 test/run_tests.py --jobs 4
+```
+
+This command performs the required Eask bytecode cleanup itself, discovers every
+case in `test/test-*.el`, and runs each exactly once across independent Eask/Emacs
+processes. Each worker gets Eask's temporary HOME and XDG roots and loads the
+complete file roster. The default is at most eight workers. Tests must be
+independent of execution order; setup belongs inside the case or `:before-each`,
+not in a separate template form. Shared fixtures isolate tool registries and
+their lookup cache as well as cleaning up runtime state.
+
+Reports go under `.scratch/test-suite-performance/` in a new timestamped
+directory (`--output DIRECTORY` chooses another new directory). Native worker
+logs retain failures; missing, duplicate, or extra results fail the run.
+`summary.json` records cleanup, discovery, worker ERT, and full-suite wall times.
+`durations.csv` sorts cases slowest first with cumulative duration and shares of
+test time and wall time. Worker durations overlap, so wall-time shares are not
+additive. Startup, loading, and shutdown are included in wall time; the difference
+between worker wall and ERT time measures their combined overhead. Fixture setup
+and teardown are included in individual case durations.
+
+A successful run updates `latest-durations.csv`, used to balance later runs.
+`--durations CSV` supplies another report; without timing history, all discovered
+cases are distributed evenly. No test is omitted because a timing is missing.
+Provisioned SSH, Podman, or Docker acceptance environments force serial execution
+because their tests share target roots. Real transport acceptance remains
+`test/run-remote-acceptance.sh`; its provisioning and runtime are separate from
+the ordinary ERT command. Conditional skips remain visible in reports.
+
+The runner uses Python's standard library and cached `npx` Eask. Dependency
+installation is a separate setup step. Its own checks are:
+
+```bash
+python3 test/test_run_tests.py
+npx @emacs-eask/cli clean elc
+npx @emacs-eask/cli test ert test/test-mevedel-test-helpers.el test/test-mevedel-test-runner.el
+```
+
 Test files mirror modules: `test/test-mevedel-MODULE.el`. Shared helpers
 (including the `mevedel-deftest` macro) are in `test/helpers.el`. Tests
 use real temp files/directories rather than mocking. Eask gives ERT a temporary
