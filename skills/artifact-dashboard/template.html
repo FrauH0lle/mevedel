@@ -21,6 +21,10 @@
     --accent:      #184f95;
     --good:        #1d7a4d;
     --bad:         #b1382f;
+    /* Categorical data colors are independent of the page accent and deltas. */
+    --chart-1: #184f95; --chart-2: #b45309; --chart-3: #0f766e;
+    --chart-4: #7e3fa1; --chart-5: #b33966; --chart-6: #66751f;
+    --chart-7: #087fa3; --chart-8: #596575;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   }
@@ -40,6 +44,9 @@
       --accent:      #6da7ec;
       --good:        #4cb98a;
       --bad:         #e0796f;
+      --chart-1: #6da7ec; --chart-2: #f2a65a; --chart-3: #55c4ad;
+      --chart-4: #bd93e5; --chart-5: #ee8eb0; --chart-6: #b8c861;
+      --chart-7: #63c7e3; --chart-8: #aab6c5;
     }
   }
   :root[data-theme="dark"] {
@@ -54,6 +61,9 @@
     --accent:      #6da7ec;
     --good:        #4cb98a;
     --bad:         #e0796f;
+    --chart-1: #6da7ec; --chart-2: #f2a65a; --chart-3: #55c4ad;
+    --chart-4: #bd93e5; --chart-5: #ee8eb0; --chart-6: #b8c861;
+    --chart-7: #63c7e3; --chart-8: #aab6c5;
   }
   :root[data-theme="light"] { color-scheme: light; }
 
@@ -181,6 +191,9 @@
       --bg: #fff; --card: #fff; --ink: #0b0b0b; --ink-soft: #444;
       --rule: #bbb; --rule-strong: #888; --hover: #fff;
       --accent: #184f95; --good: #1d7a4d; --bad: #b1382f;
+      --chart-1: #184f95; --chart-2: #b45309; --chart-3: #0f766e;
+      --chart-4: #7e3fa1; --chart-5: #b33966; --chart-6: #66751f;
+      --chart-7: #087fa3; --chart-8: #596575;
     }
     .wrap { max-width: none; padding: 0; }
     #chart-tooltip, #chart-values summary, #chart-status[data-state="ready"] { display: none; }
@@ -271,9 +284,6 @@
   const details = document.getElementById('chart-values');
   const table = document.getElementById('chart-table');
   const tooltip = document.getElementById('chart-tooltip');
-  // Keep token references live when the OS theme changes; mixes never exceed 60%.
-  const hueFor = i => i % 4 === 0 ? 'var(--accent)'
-    : `color-mix(in oklab, var(--accent), var(--ink-soft) ${(i % 4) * 20}%)`;
   const dashes = ['', '7 3', '2 3', '9 3 2 3'];
   const el = (name, attrs) => {
     const node = document.createElementNS(NS, name);
@@ -379,6 +389,9 @@
     return;
   }
 
+  // Live tokens follow theme changes; only a lone line/bar uses the page accent.
+  const hueFor = i => type !== 'donut' && series.length === 1
+    ? 'var(--accent)' : `var(--chart-${i % 8 + 1})`;
   const unit = spec.y?.label || '';
   const exact = v => v === null ? 'Missing' : String(v);
   const valueHeading = label => unit ? `${label} (${unit})` : label;
@@ -455,24 +468,13 @@
   };
   document.addEventListener('keydown', event => { if (event.key === 'Escape') hideTooltip(); });
 
-  const defs = el('defs', {});
-  svg.append(defs);
-  const patternFor = i => {
-    const id = `chart-pattern-${i}`;
-    const pattern = el('pattern', { id, width: 8, height: 8, patternUnits: 'userSpaceOnUse',
-      patternTransform: `rotate(${(i % 4) * 45})` });
-    pattern.append(el('rect', { width: 8, height: 8, fill: hueFor(i) }));
-    pattern.append(el('path', { d: 'M 2 0 V 8', stroke: 'var(--card)', 'stroke-width': 1.5 }));
-    defs.append(pattern);
-    return `url(#${id})`;
-  };
   const legendItem = (i, label) => {
     const item = html('span');
     const swatch = el('svg', { viewBox: '0 0 24 12', 'aria-hidden': 'true' });
     swatch.append(type === 'line'
       ? el('line', { x1: 0, x2: 24, y1: 6, y2: 6, stroke: hueFor(i),
           'stroke-width': 2, 'stroke-dasharray': dashes[i % 4] })
-      : el('rect', { width: 24, height: 12, fill: `url(#chart-pattern-${i})` }));
+      : el('rect', { width: 24, height: 12, fill: hueFor(i) }));
     item.append(swatch, `${i + 1}. ${label}`);
     legend.append(item);
   };
@@ -492,7 +494,7 @@
     const positiveCount = slices.filter(s => s.value > 0).length;
     let angle = -Math.PI / 2;
     slices.forEach((slice, i) => {
-      const fill = patternFor(i);
+      const fill = hueFor(i);
       legendItem(i, `${slice.name} · ${exact(slice.value)}${unit ? ` ${unit}` : ''}`);
       if (slice.value === 0) return;
       const sweep = (slice.value / total) * Math.PI * 2;
@@ -556,7 +558,7 @@
     const barW = (groupW * 0.7) / series.length;
     const baselineY = yFor(0);
     series.forEach((s, si) => {
-      const fill = patternFor(si);
+      const fill = hueFor(si);
       s.points.forEach((p, i) => {
         const x = PAD.l + i * groupW + groupW * 0.15 + si * barW;
         const y = yFor(p.y);

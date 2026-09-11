@@ -434,17 +434,37 @@ function runChartContractTests() {
     }
   }
 
-  /* Palette declarations stay live when the OS theme changes, and bounded. */
-  {
-    const chart = state({type: 'line', series: Array.from({length: 12}, (_, i) => ({
-      name: `series ${i}`, points: [{x: 'a', y: i}, {x: 'b', y: i + 1}],
-    }))}, 'ready');
-    const colors = tagsOf(chart.svg, 'polyline').map(n => n.getAttribute('stroke'));
-    assert.ok(colors.every(color => color.includes('var(--')), 'colors snapshot computed theme');
-    for (const color of colors) for (const percentage of color.matchAll(/([\d.]+)%/g)) {
-      assert.ok(Number(percentage[1]) <= 100, 'palette extrapolates beyond 100%');
-    }
-    assertNoBadGeometry(chart.svg, 'bounded palette');
+  /* All chart types use distinct categorical paints and matching legend keys. */
+  for (const type of ['line', 'bar', 'donut']) {
+    const chart = state({type,
+      series: Array.from({length: 8}, (_, i) => ({name: `series ${i}`,
+        points: [{x: 'a', y: i + 1}, {x: 'b', y: i + 2}]})),
+      slices: Array.from({length: 8}, (_, i) => ({name: `slice ${i}`, value: i + 1})),
+    }, 'ready');
+    const paint = type === 'line' ? 'stroke' : 'fill';
+    const marks = type === 'line' ? tagsOf(chart.svg, 'polyline')
+      : chart.svg.querySelectorAll('.chart-mark').filter(n =>
+        type === 'donut' || n.getAttribute('data-index') === '0');
+    const colors = marks.map(n => n.getAttribute(paint));
+    assert.equal(colors.length, 8);
+    assert.equal(new Set(colors).size, 8, `${type}: categorical colors repeat too early`);
+    assert.ok(colors.every(color => /^var\(--[\w-]+\)$/.test(color)),
+      `${type}: paints must be live tokens, not patterns or accent mixes`);
+    assert.equal(chart.svg.querySelectorAll('pattern').length, 0, `${type}: unexpected hatching`);
+    const keys = chart.legend.querySelectorAll(type === 'line' ? 'line' : 'rect');
+    assert.deepEqual(keys.map(n => n.getAttribute(paint)), colors);
+    if (type === 'line') assert.deepEqual(keys.map(n => n.getAttribute('stroke-dasharray')),
+      marks.map(n => n.getAttribute('stroke-dasharray')));
+    assertNoBadGeometry(chart.svg, `${type} categorical palette`);
+  }
+  /* A lone series keeps the page accent, with solid, consistently colored bars. */
+  for (const type of ['line', 'bar']) {
+    const chart = state({type, series: series([1, 2])}, 'ready');
+    const marks = type === 'line' ? tagsOf(chart.svg, 'polyline')
+      : chart.svg.querySelectorAll('.chart-mark');
+    assert.ok(marks.every(n => n.getAttribute(type === 'line' ? 'stroke' : 'fill') === 'var(--accent)'));
+    assert.equal(chart.svg.querySelectorAll('pattern').length, 0);
+    assert.equal(chart.legend.children.length, 0);
   }
   /* Static accessibility wiring must exist too: the fake DOM is not an HTML parser. */
   {

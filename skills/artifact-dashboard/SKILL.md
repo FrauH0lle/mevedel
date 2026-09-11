@@ -96,10 +96,15 @@ runs entirely offline without libraries or a publish-time runtime.
   line data, and zero-total donuts show **No data to chart**. Numerically
   unrepresentable ranges or slice proportions are rejected visibly instead of
   generating broken geometry. It is strict JSON: no trailing commas or comments.
-- Multiple series use live CSS-token colors, repeating dash/pattern styles,
-  numbered keys, and an automatic matching legend. A single line/bar series
-  names itself in the chart title. Keep comparisons small enough to distinguish;
-  the four color/style variants repeat rather than inventing unlimited colors.
+- Bars and donut slices use solid fills. Multiple series and donut slices use
+  eight distinct categorical colors (`--chart-1` through `--chart-8`), independent
+  of the page accent and semantic delta colors. All colors follow the live theme
+  and have print values. Keep the numbered keys and matching legend; lines also
+  use four repeating dash styles so identification does not depend on color
+  alone. A single line/bar series uses `--accent` consistently and names itself
+  in the chart title. Beyond eight series or slices, colors repeat: prefer
+  separate charts or a table when comparisons become difficult to distinguish.
+  Do not add hatching as a default substitute for distinct colors and labels.
 - A shared text-only tooltip works on pointer hover and keyboard focus, and
   Escape dismisses it. Up to 40 marks are individually tabbable; denser charts
   use the exact table for keyboard navigation rather than hundreds of tab stops.
