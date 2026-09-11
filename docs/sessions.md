@@ -276,12 +276,14 @@ decides who won from what it observes after its write, and exclusive
 creation is the only atomic election. Each operation reports `ok`, `conflict`,
 `absent`, `mismatch`, `failed` or `skipped`, so a caller reproduces the
 per-operation nil-versus-signal contract of the single-operation wrappers.
-Payloads and listings travel base64-encoded inside a NUL-framed request and
-response, because filenames and content both contain bytes a shell cannot pass
-through a command substitution literally. An operation marked optional does not
-end its program, which is how ensuring a directory that may already exist
+Content payloads and listings travel base64-encoded inside a NUL-framed request
+and response, because filenames and content both contain bytes a shell cannot pass
+through a command substitution literally. Numeric request fields travel as digit
+strings and are validated on the target without a decoding subprocess.
+An operation marked optional does not end its program, which is how ensuring
+a directory that may already exist
 shares a round trip with the write that needs it. Target diagnostics are
-captured separately from the response, so a tool writing to stderr cannot
+encoded through a separate pipe, so a tool writing to stderr cannot
 present itself as a result.
 
 Round trips therefore dominate durable session work over a real remote

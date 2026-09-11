@@ -132,7 +132,7 @@ before the operation ran."
    "      test ! -L \"$leaf\" || exit 69\n"
    "      test -e \"$leaf\" || exit 77\n"
    "      if test -n \"$payload\"; then\n"
-   "        limit=$(printf '%s' \"$payload\" | base64 -d) || exit 67\n"
+   "        limit=$payload\n"
    "        [[ \"$limit\" =~ ^[0-9]+$ ]] || exit 67\n"
    "        test -f \"$leaf\" || exit 68\n"
    "        (set -o pipefail; dd if=\"$leaf\" iflag=nofollow,count_bytes,nonblock count=\"$limit\" status=none | base64 -w0) || exit 67\n"
@@ -146,13 +146,13 @@ before the operation ran."
    "      observed=$(set -o pipefail; dd if=\"$leaf\" iflag=nofollow status=none | base64 -w0) || exit 67\n"
    ;; The expected payload may arrive newline-wrapped so the command
    ;; line's physical lines stay short; the observation is unwrapped.
-   "      test \"$observed\" = \"$(printf '%s' \"$payload\" | tr -d '\\n')\" || exit 72\n"
+   "      test \"$observed\" = \"${payload//$'\\n'/}\" || exit 72\n"
    "      ;;\n"
    "    absent)\n"
    "      test ! -e \"$leaf\" && test ! -L \"$leaf\" || exit 72\n"
    "      ;;\n"
    "    verify-mode)\n"
-   "      mode=$(printf '%s' \"$payload\" | base64 -d) || exit 67\n"
+   "      mode=$payload\n"
    "      [[ \"$mode\" =~ ^[0-7]+$ ]] || exit 67\n"
    "      test ! -L \"$leaf\" && test -f \"$leaf\" || exit 69\n"
    "      test \"$(stat -c %a -- \"$leaf\")\" = \"$mode\" || exit 72\n"
@@ -199,6 +199,7 @@ before the operation ran."
    "      ;;\n"
    "    mkdir)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
+   "      if test -d \"$leaf\"; then exit 73; fi\n"
    "      if mkdir -- \"$leaf\"; then\n"
    "        :\n"
    "      elif test -d \"$leaf\"; then\n"
@@ -235,7 +236,7 @@ before the operation ran."
    "      if test \"$op\" = clock; then\n"
    "        printf '%s' \"$now\" | base64 -w0 || exit 67\n"
    "      else\n"
-   "        deadline=$(printf '%s' \"$payload\" | base64 -d) || exit 67\n"
+   "        deadline=$payload\n"
    "        [[ \"$deadline\" =~ ^[0-9]+$ ]] || exit 67\n"
    "        test \"$now\" -lt \"$deadline\" || exit 72\n"
    "      fi\n"
@@ -283,20 +284,16 @@ before the operation ran."
    ;; record.  Handing `process-file' a local stderr file instead would make
    ;; TRAMP create a remote temporary and copy it back on every single
    ;; program, which measured as a twelfth of a remote turn.  The record is
-   ;; emitted from the EXIT trap so an early stop still carries it, and its
+   ;; encoded through a separate pipe so an early stop still carries it, and its
    ;; header is a word where an operation's is a number, so no operation can
    ;; be confused with it -- which is the separation that keeps a tool writing
    ;; to stderr from presenting itself as a result.
-   "diagnostics=$(mktemp) || exit 66\n"
-   "trap 'printf \"diagnostic 0\\0%s\\0\" \"$(base64 -w0 <\"$diagnostics\")\";"
-   " rm -f -- \"$diagnostics\"' EXIT\n"
-   "index=0\n"
    "emit() {\n"
    "  index=$((index + 1))\n"
    "  status=0\n"
    ;; The operation never reads the program's own stdin.
    "  out=$(run_op \"$1\" \"$2\" \"$3\" \"$4\" "
-   "</dev/null 2>>\"$diagnostics\") || status=$?\n"
+   "</dev/null) || status=$?\n"
    "  printf '%s %s\\0%s\\0' \"$index\" \"$status\" \"$out\"\n"
    ;; A failed operation ends the program: a caller expresses a precondition
    ;; as an earlier operation, so later ones must not run.  An
@@ -313,6 +310,8 @@ before the operation ran."
    ;; readers stay.  A field is one argument because NUL, the framing byte,
    ;; is the one byte a filename cannot contain and so cannot be embedded in
    ;; one; payload fields may carry newline-wrapped base64.
+   "run_program() {\n"
+   "index=0\n"
    "if test \"$#\" -gt 0; then\n"
    "  while test \"$#\" -ge 5; do\n"
    "    emit \"$1\" \"$2\" \"$3\" \"$4\" \"$5\"\n"
@@ -327,12 +326,24 @@ before the operation ran."
    "    IFS= read -r -d '' optional || exit 71\n"
    "    emit \"$op\" \"$parent\" \"$leaf\" \"$payload\" \"$optional\"\n"
    "  done\n"
-   "fi\n")
+   "fi\n"
+   "}\n"
+   ;; Operation frames bypass the diagnostic pipe through descriptor 3.
+   ;; Encode stderr before command substitution: shell variables cannot hold
+   ;; NUL bytes.  This avoids a temporary file and its creation/removal
+   ;; processes on every program, including successful read-only probes.
+   "exec 3>&1\n"
+   "set -o pipefail\n"
+   "program_status=0\n"
+   "diagnostics=$(run_program \"$@\" 2>&1 1>&3 | base64 -w0) || program_status=$?\n"
+   "printf 'diagnostic 0\\0%s\\0' \"$diagnostics\"\n"
+   "exit \"$program_status\"\n")
   "Target-side script running a whole program of pinned control operations.
 
-Payloads are base64 so one framing carries arbitrary bytes, including the
+Content payloads are base64 so one framing carries arbitrary bytes, including
 NUL-separated listing names and content that a shell cannot pass through a
-command substitution literally.  `base64' resolves through the target PATH,
+command substitution literally.  Numeric request fields travel as digits and
+are validated by the target.  `base64' resolves through the target PATH,
 like `stat'.")
 
 (defvar mevedel-session-control-fs--programs (make-hash-table :test #'equal)
@@ -446,8 +457,9 @@ parent must not turn into a `Setting current directory' failure."
             (unless (and (eq (plist-get op :op) 'read)
                          (natnump (plist-get op :max-bytes)))
               (error "Read byte limit must be a non-negative integer"))
-            (base64-encode-string (number-to-string (plist-get op :max-bytes))))
+            (number-to-string (plist-get op :max-bytes)))
            ((null content) "")
+           ((memq (plist-get op :op) '(verify-mode before-time)) content)
            ((multibyte-string-p content)
             (base64-encode-string
              (encode-coding-string
