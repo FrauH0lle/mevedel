@@ -173,24 +173,17 @@ When EXPANDED is non-nil, include ordered handler details."
    (mevedel-hooks-decision-reason decision)))
 
 (defun mevedel-view--user-turn-hook-audits (segments data-buf)
-  "Return hook audit records found in user SEGMENTS from DATA-BUF."
+  "Return visible hook audit records in user SEGMENTS from DATA-BUF."
   (with-current-buffer data-buf
     (let (records)
       (dolist (seg segments)
         (when (memq (car seg)
                     '(user hook-context prompt render-data ignored))
           (let ((start (cadr seg)))
-            (dolist (span
-                     (mevedel-transcript-audit-spans
-                      (buffer-substring start (caddr seg))))
-              (push (append
-                     (plist-get span :record)
-                     (list :source
-                           (mevedel-view-disclosure-source-range
-                            data-buf
-                            (+ start (plist-get span :start))
-                            (+ start (plist-get span :end)))))
-                    records)))))
+            (dolist (record
+                     (mevedel-view--hook-audit-records-from-text
+                      (buffer-substring start (caddr seg)) nil data-buf start))
+              (push record records)))))
       (nreverse records))))
 
 (defun mevedel-view--format-injected-reminders-audit (record expanded)

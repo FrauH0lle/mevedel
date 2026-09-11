@@ -2689,13 +2689,13 @@ history: each entry holds a whole cleaned block, and a miss costs only the
 work this cache exists to skip.")
 
 (defvar mevedel-view--clean-reasoning-cache nil
-  "Cleaned reasoning text, keyed by the raw text it was produced from.
+  "Cleaned reasoning text, keyed by text after trusted audit removal.
 
 Global for the same reason as `mevedel-view--scaffolding-only-cache\': the
 cleaning depends on nothing but its argument.
 
-`mevedel-view--clean-reasoning-text' is a pure function of its argument, so
-equal input gives equal output and the raw text is a sound key.
+Audit removal runs before lookup because trust depends on text properties,
+which string equality ignores.
 
 It earns its place on redraw.  A render walks every turn in the transcript,
 so each tick re-cleans every completed reasoning block as well as the live
@@ -2706,11 +2706,12 @@ raw/cleaned pair.")
 
 (defun mevedel-view--clean-reasoning-text (text)
   "Strip org scaffolding markers from reasoning TEXT.
-Removes reasoning block markers, nested tool blocks, and generated
-system reminder wrappers.
+Removes trusted audit records, reasoning block markers, nested tool blocks,
+and generated system reminder wrappers.  TEXT must retain audit properties.
 
 Completed blocks are cached globally; see
 `mevedel-view--clean-reasoning-cache'."
+  (setq text (mevedel--strip-hook-audit-blocks text))
   (or (cdr (assoc text mevedel-view--clean-reasoning-cache))
       (let ((cleaned (mevedel-view--clean-reasoning-text-1 text)))
         (when (string-match-p "^#\\+end_reasoning\\b" text)
@@ -3022,7 +3023,7 @@ or org scaffolding markers)."
          (seg-start (or (car-safe bounds) seg-start))
          (seg-end (or (cdr-safe bounds) seg-end)))
     (with-current-buffer data-buf
-      (let* ((text (buffer-substring-no-properties seg-start seg-end))
+      (let* ((text (buffer-substring seg-start seg-end))
              (cleaned (mevedel-view--clean-reasoning-text text))
              (count (mevedel-view--nonblank-line-count cleaned)))
         (if (> count 0)
@@ -4979,7 +4980,7 @@ added when the text before point does not already end with a blank line
            (body
             (with-current-buffer data-buf
               (mevedel-view--clean-reasoning-text
-               (buffer-substring-no-properties start end)))))
+               (buffer-substring start end)))))
       (unless (or (string-empty-p summary)
                   (string-empty-p (string-trim body)))
         (list :kind 'reasoning
@@ -5733,7 +5734,8 @@ Return the normalized source coordinates used for the insertion."
           (mevedel-view-render-add-display-properties
            start (point) (plist-get rendering :vtype)))
       (let ((text (mevedel-view-disclosure-data-substring
-                   data-buf data-start data-end (eq vtype 'hook-audit)))
+                   data-buf data-start data-end
+                   (memq vtype '(hook-audit thinking-summary))))
             body-start)
         (when (eq vtype 'thinking-summary)
           (setq text
