@@ -10,13 +10,90 @@ Remove items when they are implemented, obsolete, or no longer valuable.
 
 ## Inbox
 
+- See /home/roland/Projekte/mevedel/.scratch/memory-lifecycle
+
 - Consider making mevedel's data buffers hidden
+
+- There’s also a new Codex feature that I honestly care about more than several of those benchmarks.
+  - Astra can keep notes across context windows and search previous windows when it needs to recover something that’s no longer in the active context.
+  - So a requirement, bug or test result can fall out of the current window and Astra can still go back and find it instead of relying entirely on a compaction having preserved exactly the right thing.
+  - It’s experimental for now, but OpenAI expects this to become the default Astra behavior in Codex over the next few weeks.
+  - If it works well, this could matter way more in real-world usage than another five points on some benchmark.
+- Notification error: (dbus-error "org.freedesktop.Notifications.Error.ExcessNotificationGeneration" "Created too many similar notifications in quick succession") [3 times]
+- Warning: unknown coding system "utf8" [6 times]
+
+- shared editing
+  - use comments for sending selections to llm
 
 ## Entry format
 
 Each entry records its source, owed change, reason for deferral, current
 status, and blast radius. Keep entries terse and remove them when they
 become implemented, obsolete, or unjustified.
+
+## Permissions
+
+### Reduce repeated permission prompts and make directory grants effective
+
+- **Source:** User backlog note and session audit on 2026-09-07; local evidence:
+  `.scratch/permission-analysis/report.md`. The removed `RequestAccess` tool
+  previously supplied directory approval; see ADR 0019. Local spec:
+  `.scratch/permission-prompt-friction/PRD.md`.
+- **What's owed:** Let the user approve a directory tree from a pending path
+  permission prompt, including when the request names an individual file.
+  Make the chosen directory, exact versus recursive access, read versus write,
+  and invocation/session/workspace lifetime explicit. Use the shared resource
+  grants and re-evaluate queued requests covered by the approval. Cover system
+  research and skill resources, remembered execution profiles for validation,
+  effective confined Git metadata writes, and clear permission-mode reasons.
+- **Why deferred:** The spec is ready; implementation remains. Remembering an
+  exact grant for a session does not
+  broaden it to descendants: one external design folder required 15 session
+  approvals. Native reads/searches accounted for 74 of 103 answered full-auto
+  requests, although directory approval would not eliminate every one.
+- **Status check:** `ready-for-agent`. The user confirmed testing through the
+  tool/prompt/file-operation flow plus real confined execution. Verify fewer
+  repeated approvals and actual granted effects while preserving policy.
+  Retain current ToolScript envelope and execution-profile behavior where the
+  historical defects are already fixed. Amend ADRs 0019 and 0086 as implemented.
+- **Blast radius:** Permission prompt UI, shared resource grants, queue
+  re-evaluation, execution profiles and confinement, skill-resource guidance,
+  permission diagnostics/cockpit, and maintained documentation.
+
+## Model-facing instructions
+
+### Fewer competing instructions, guidance when needed
+
+- **Source:** Harness assessment discussion on 2026-09-06; five models have
+  described the operating instructions as heavy. Local spec:
+  `.scratch/instruction-simplification/PRD.md`.
+- **Research direction (2026-09-11):** Target current capable models with less
+  prescribed reasoning and orchestration. Retain useful context, precise tool
+  contracts, and execution guarantees; evaluate removals against completion
+  quality, cost, latency, and unnecessary user interruptions. Source findings
+  and proposed experiments:
+  `.scratch/harness-guidelines/development-guidelines.md`. This is future work,
+  not a description of implemented behavior.
+- **What's owed:** Reduce unnecessary and conflicting instructions and reliably
+  deliver necessary guidance when relevant. Preserve tool-description structure
+  and 1-2 examples, support many models, and maximize useful provider cache reuse.
+  Generalize on-demand tool manuals through existing `mevedel://` access while
+  keeping ordinary calls and consequential prerequisites clear in descriptions.
+  Include skills, reminders, nudges, deferred-tool discovery/expiry, memory,
+  workspace/hook guidance, and guardian/compaction prompts. Change enforcement
+  where a concrete gap warrants it; reuse existing delivery and gptel seams.
+- **Why deferred:** The expanded PRD addresses the two reviews; implementation
+  starts with effective instruction, ownership, delivery, and cache evidence.
+  Baseline cleanup and delivery improvements now belong to the same effort.
+- **Status check:** `ready-for-agent`. Capture the baseline, specify bounded
+  implementation slices, and reassess across models with focused checks and
+  cache evidence. Acceptance is the user's judgment of fewer competing
+  obligations and timely guidance, not token counts or positive model praise.
+- **Blast radius:** Prompt/tool composition, instruction discovery and lifecycle,
+  provider cache stability, and relevant workspace documentation. Preserve trust,
+  scoped authority, user policy, and truthful verification; distinguish local
+  component memoization from provider cache reuse. Amend affected ADRs with
+  implemented behavior changes.
 
 ## Memory
 
