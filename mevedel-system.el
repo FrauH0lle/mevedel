@@ -585,11 +585,15 @@ present."
             lines))
     (when retained
       (push "- `agent://` - retained agent results for this session." lines))
-    (when (seq-some (lambda (entry) (plist-get entry :history-p))
-                    (plist-get metadata :agents))
-      (push (concat "- `history://` - conversation history for this session. "
-                    "Read `history://root` for the main conversation or "
-                    "`history://root/PATH` for a retained agent conversation.")
+    (when (or (plist-get metadata :saved-history-p)
+              (seq-some (lambda (entry) (plist-get entry :history-p))
+                        (plist-get metadata :agents)))
+      (push (concat "- `history://` - conversation history. "
+                    (when (seq-some (lambda (entry) (plist-get entry :history-p))
+                                    (plist-get metadata :agents))
+                      "Read `history://root` for the main conversation or `history://root/PATH` for a retained agent conversation. ")
+                    (when (plist-get metadata :saved-history-p)
+                      "Read/Glob/Grep `history://saved` for saved workspace conversations; narrow by the session/segment paths returned there."))
             lines))
     (when memory
       (push (concat "- `memory://` - configured persistent-memory "

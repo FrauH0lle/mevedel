@@ -1689,55 +1689,70 @@ invocation descriptions."
                        (<= (car range) (cdr range))))
                 ranges))
     (error "Invalid transcript evidence ranges"))
+  (mevedel-transcript-project-segments
+   (cl-loop for (begin . finish) in ranges
+            append (cl-loop for (type start end) in
+                            (mevedel-transcript-segments begin finish)
+                            collect (list type (max begin start) (min finish end))))
+   :tool-output-max tool-output-max
+   :tool-results-dir tool-results-dir
+   :skill-provenance skill-provenance))
+
+(cl-defun mevedel-transcript-project-segments
+    (segments &key (tool-output-max 8000) tool-results-dir skill-provenance)
+  "Format already classified SEGMENTS from the current buffer as evidence.
+
+SEGMENTS uses the canonical (TYPE START END) representation returned by
+`mevedel-transcript-segments'. Callers may select spans before formatting;
+this function never classifies them again. TOOL-OUTPUT-MAX bounds ordinary
+tool results, TOOL-RESULTS-DIR resolves media, and SKILL-PROVENANCE records
+previously selected skill invocations. These options have the same meaning
+as in `mevedel-transcript-project-evidence'."
   (unless (natnump tool-output-max)
     (error "Tool output maximum must be non-negative"))
   (let (items)
-    (dolist (range ranges)
-      (dolist (segment (mevedel-transcript-segments
-                        (car range) (cdr range)))
-        (pcase-let ((`(,type ,start ,end) segment))
-          (setq start (max (car range) start)
-                end (min (cdr range) end))
-          (unless (or (>= start end)
-                      (eq type 'render-data))
-            (let ((text (buffer-substring start end)))
-              (unless (string-blank-p (substring-no-properties text))
-                (pcase type
-                  ('ignored
-                   (dolist (record (mevedel-transcript-audit-records
-                                    text 'injected-reminders))
-                     (dolist (entry (plist-get record :items))
-                       (push (mevedel-transcript--summary-evidence-item
-                              "system-reminder" (plist-get entry :body))
-                             items))))
-                  ('tool
-                   (pcase-let
-                       ((`(,call ,result)
-                         (mevedel-transcript--summary-tool-parts
-                          text tool-output-max tool-results-dir
-                         (mevedel-transcript--tool-id-in-range start end))))
-                     (push
-                      (mevedel-transcript--summary-evidence-item
-                       "tool-call" call)
-                      items)
-                     (push
-                      (mevedel-transcript--summary-evidence-item
-                       "tool-result" result)
-                      items)))
-                  (_
+    (dolist (segment segments)
+      (pcase-let ((`(,type ,start ,end) segment))
+        (unless (or (>= start end)
+                    (eq type 'render-data))
+          (let ((text (buffer-substring start end)))
+            (unless (string-blank-p (substring-no-properties text))
+              (pcase type
+                ('ignored
+                 (dolist (record (mevedel-transcript-audit-records
+                                  text 'injected-reminders))
+                   (dolist (entry (plist-get record :items))
+                     (push (mevedel-transcript--summary-evidence-item
+                            "system-reminder" (plist-get entry :body))
+                           items))))
+                ('tool
+                 (pcase-let
+                     ((`(,call ,result)
+                       (mevedel-transcript--summary-tool-parts
+                        text tool-output-max tool-results-dir
+                        (mevedel-transcript--tool-id-in-range start end))))
                    (push
                     (mevedel-transcript--summary-evidence-item
-                     (pcase type
-                       ((or 'user 'prompt) "user")
-                       ('response "assistant")
-                       ('reasoning "reasoning")
-                       ('mailbox "agent-message")
-                       ('reminder "system-reminder")
-                       ('hook-context "hook-context")
-                       ('task-background "task-background")
-                       (_ (symbol-name type)))
-                     text)
-                    items)))))))))
+                     "tool-call" call)
+                    items)
+                   (push
+                    (mevedel-transcript--summary-evidence-item
+                     "tool-result" result)
+                    items)))
+                (_
+                 (push
+                  (mevedel-transcript--summary-evidence-item
+                   (pcase type
+                     ((or 'user 'prompt) "user")
+                     ('response "assistant")
+                     ('reasoning "reasoning")
+                     ('mailbox "agent-message")
+                     ('reminder "system-reminder")
+                     ('hook-context "hook-context")
+                     ('task-background "task-background")
+                     (_ (symbol-name type)))
+                   text)
+                  items))))))))
     (dolist (skill skill-provenance)
       (unless (stringp skill)
         (error "Skill provenance must be text"))

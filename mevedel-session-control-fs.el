@@ -116,8 +116,10 @@ before the operation ran."
    "  payload=$4\n"
    "  test -e \"$parent\" || exit 78\n"
    "  exec 9<\"$parent\" || exit 70\n"
-   "  cd -- /proc/self/fd/9 || exit 70\n"
-   "  test \"$(pwd -P)\" = \"$parent\" || exit 70\n"
+   ;; Physical cd sets PWD from the opened directory and -e refuses an
+   ;; unresolvable cwd. Avoid a pwd subshell for every individual operation.
+   "  cd -P -e -- /proc/self/fd/9 || exit 70\n"
+   "  test \"$PWD\" = \"$parent\" || exit 70\n"
    "  if test -n \"$pause_file\"; then\n"
    "    : >\"$pause_file\"\n"
    "    waited=0\n"

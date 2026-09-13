@@ -38,6 +38,18 @@ only prompt discovery uses a disposable, ten-second workspace observation.
 Completion consumes that observation without filesystem access. The observation
 does not confer permission or decide retention, and can be discarded at any time.
 
+Saved conversations now use `history://saved[/SESSION[/SEGMENT]]` through the
+same Read/Glob/Grep surfaces. The evaluated synchronous prototype blocked an
+independent graphical edit for 3.725 seconds at 100 portable sessions, so moving
+only the final search subprocess off the call stack was insufficient.
+Discovery, pinned reads, canonical projection and disposable-file preparation
+now yield cooperatively after authorization; the native execution lifecycle
+owns the search helper. Selected source paths avoid whole-workspace discovery.
+A bounded, disposable projection cache saves classification work only after
+fresh authority and byte validation. This resource-specific CPU reuse does not
+introduce a generic resolver cache or another durable transcript store. Journal
+retention and curated memory remain independent of history search.
+
 Working files now use `work://` with a workspace-owned `shared/` subtree and
 session-owned descendants elsewhere. The scope evaluation found two missed
 cross-session corrections with Luna when publication from a private scratchpad

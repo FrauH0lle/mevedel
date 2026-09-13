@@ -115,7 +115,7 @@
               (should-not (string-match-p "PRIVATE\\|MALFORMED\\|mevedel-resource-search-" result))
               (pcase mode
                 ("content"
-                 (should (string-match-p (concat (regexp-quote address) "\n[0-9]+:") result))
+                 (should (string-match-p (concat (regexp-quote address) ":[0-9]+:") result))
                  (should (string-match-p "Prefer the local runner" result)))
                 ("count" (should (string-match-p (concat (regexp-quote address) ":[0-9]+") result)))
                 ("files_with_matches" (should (equal address (string-trim result)))))))
@@ -140,7 +140,10 @@
                (path (file-name-concat (mevedel-journal-store-directory root) file))
                (address (concat "journal://" (mevedel-resource-encode-component file))))
           (let* ((attempt (mevedel-resource-prepare 'read address context))
-                 (text (mevedel-tool-fs-read--resource '(:offset 1 :limit 2) attempt)))
+                 (mevedel-resource-current-attempts (list (cons address attempt)))
+                 (text (plist-get
+                        (mevedel-test--read (list :file_path address :offset 1 :limit 2))
+                        :result)))
             (should (string-match-p "kind: digest" text))
             (should-not (string-match-p "Prefer the local runner" text)))
           (dolist (mutation '(corrupt delete symlink))

@@ -76,6 +76,14 @@ encodes a command line with the connection coding system, while the request file
 is written without conversion, so a name holding non-ASCII bytes is only
 byte-transparent through the file.
 
+History profiling put 1.8 seconds of a reused 100-session query inside control
+programs. The per-operation proof now uses Bash's physical `cd -P -e` and
+compares the resulting `PWD` with the expected parent. This keeps the opened
+directory descriptor and fails if its physical location cannot be determined,
+while removing the separate `pwd -P` subshell for every operation. The parent
+is still opened and proved anew for each operation. Native symlink and
+parent-replacement coverage exercises the same boundary.
+
 Checks inside the target-side operation state their own failure explicitly
 instead of relying on the shell's `errexit`.  The dispatcher runs each operation
 on the left of a `||` so it can capture the status, and that suppresses

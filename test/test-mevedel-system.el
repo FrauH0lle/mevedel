@@ -278,7 +278,8 @@
           (should (string-match-p "workspace-owned" roster))
           (should (string-match-p "ApplyPatch" roster))
           (should (string-match-p "mevedel://" roster))
-          (dolist (scheme '("skill://" "agent://" "history://"
+          (should (string-search "history://saved" roster))
+          (dolist (scheme '("skill://" "agent://" "history://root"
                             "mcp://"))
             (should-not (string-match-p (regexp-quote scheme) roster)))))))
 
@@ -298,7 +299,7 @@
           (should (string-match-p "history://root/PATH" roster))
           (should-not (string-match-p "agent://" roster)))))
     (should-not (string-match-p
-                 "history://" (mevedel-system--resource-roster context))))
+                 "history://root" (mevedel-system--resource-roster context))))
 
   :doc "advertises configured resource families when their targets exist"
   (let* ((workspace (mevedel-workspace-get-or-create
@@ -345,7 +346,7 @@
                                  "skill://managed/SKILL"
                                  "skill://plugin/PLUGIN/SKILL"))
                   (should (string-match-p (regexp-quote alias) roster)))
-                (dolist (scheme '("agent://" "history://"))
+                (dolist (scheme '("agent://" "history://root"))
                   (should-not (string-match-p (regexp-quote scheme) roster)))))))
       (delete-directory save-path t))))
 

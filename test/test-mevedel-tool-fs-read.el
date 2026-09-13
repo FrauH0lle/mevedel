@@ -399,7 +399,7 @@
                          (list (cons address attempt)))
                         (mevedel--session session)
                         (result (plist-get
-                                 (mevedel-tool-fs-read
+                                 (mevedel-test--read
                                   (list :file_path address))
                                  :result)))
                    (should (string-match-p path result))
@@ -424,7 +424,7 @@
                      (list (cons virtual-address virtual-attempt))))
                 (let ((result
                        (plist-get
-                        (mevedel-tool-fs-read
+                        (mevedel-test--read
                          (list :file_path virtual-address :offset 2 :limit 1))
                         :result)))
                   (should (string-match-p "2\11beta" result))
@@ -449,7 +449,7 @@
                   (list (cons address attempt))))
             (with-temp-file file (insert "current documentation\n"))
             (let ((result (plist-get
-                           (mevedel-tool-fs-read (list :file_path address))
+                           (mevedel-test--read (list :file_path address))
                            :result)))
               (should (string-match-p "1\11current documentation" result))
               (should-not (string-match-p "old documentation" result))
@@ -474,7 +474,7 @@
                      (mevedel-resource-current-attempts
                       (list (cons address attempt)))
                      (text (plist-get
-                            (mevedel-tool-fs-read (list :file_path address))
+                            (mevedel-test--read (list :file_path address))
                             :result)))
                 (should (string-match-p "1\11# " text))
                 (should-not (string-match-p (regexp-quote root) text)))
@@ -484,7 +484,7 @@
               (let* ((attempt (mevedel-resource-prepare 'read address nil))
                      (mevedel-resource-current-attempts
                       (list (cons address attempt))))
-                (should-error (mevedel-tool-fs-read (list :file_path address)))))))
+                (should-error (mevedel-test--read (list :file_path address)))))))
       (delete-directory root t)))
   :doc "rejects binary and media reads through memory addresses"
   (let* ((workspace-root (make-temp-file "mevedel-memory-media-" t))
@@ -509,7 +509,7 @@
                   (list (cons address attempt)))
                  (mevedel--session session)
                  (err (should-error
-                       (mevedel-tool-fs-read (list :file_path address)))))
+                       (mevedel-test--read (list :file_path address)))))
             (should (string-match-p "Memory resources only support text reads"
                                     (error-message-string err)))))
       (delete-directory workspace-root t)))
@@ -553,7 +553,7 @@
               (setq-local mevedel--session session)
               (setq-local mevedel--workspace workspace)
               (setq-local mevedel--current-request request)
-              (mevedel-tool-fs-read (list :file_path file))
+              (mevedel-test--read (list :file_path file))
               (let* ((bodies
                       (cl-loop for entry in (plist-get
                                              mevedel-reminders--turn-events
@@ -569,7 +569,7 @@
                            (string-match "local" body)))
                 ;; A same-turn sibling read coalesces the shared ancestor
                 ;; instructions instead of queuing them again.
-                (mevedel-tool-fs-read (list :file_path sibling-file))
+                (mevedel-test--read (list :file_path sibling-file))
                 (should (= 2 (cl-count-if
                               (lambda (entry)
                                 (eq (car-safe (car entry))
@@ -580,15 +580,15 @@
                (mevedel-session-workspace-instruction-hashes session))
               ;; An abort before injection must not suppress the next delivery.
               (setq-local mevedel-reminders--turn-events nil)
-              (mevedel-tool-fs-read (list :file_path file))
+              (mevedel-test--read (list :file_path file))
               (should mevedel-reminders--turn-events)
               (mevedel-reminders--handle-inject fsm)
               (should (mevedel-session-workspace-instruction-hashes session))
-              (mevedel-tool-fs-read (list :file_path file))
+              (mevedel-test--read (list :file_path file))
               (should-not mevedel-reminders--turn-events)
               (write-region "shared changed" nil
                             (file-name-concat nested "AGENTS.md") nil 'silent)
-              (mevedel-tool-fs-read (list :file_path file))
+              (mevedel-test--read (list :file_path file))
               (should
                (string-search
                 "shared changed"
@@ -602,7 +602,7 @@
               (setq-local mevedel--agent-invocation
                           (mevedel-agent-invocation--create
                            :path "/root/worker"))
-              (mevedel-tool-fs-read (list :file_path file))
+              (mevedel-test--read (list :file_path file))
               (should (cl-find-if
                        (lambda (entry)
                          (eq (caar entry) 'workspace-instructions))

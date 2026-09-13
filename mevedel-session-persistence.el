@@ -1359,6 +1359,29 @@ readable sidecar has an unsupported version or obsolete shape."
        nil)
       (_ (error "%s" diagnostic)))))
 
+(defun mevedel-session-persistence--classify-sidecar-data (sidecar)
+  "Classify already-read SIDECAR using the current persistence schema."
+  (cond
+   ((not (and (plistp sidecar) (keywordp (car sidecar))))
+    (list :status 'unreadable :diagnostic "Invalid session sidecar"))
+   ((not (equal (plist-get sidecar :version)
+                mevedel-session-codec-format-version))
+    (list :status 'unsupported
+          :version (plist-get sidecar :version)
+          :updated-at (plist-get sidecar :updated-at)
+          :diagnostic (format "Unsupported session version: %s"
+                              (or (plist-get sidecar :version) "missing"))))
+   (t
+    (condition-case err
+        (progn
+          (mevedel-session-codec-validate-current-sidecar sidecar)
+          (list :status 'current :sidecar sidecar))
+      (error
+       (list :status 'obsolete
+             :version (plist-get sidecar :version)
+             :updated-at (plist-get sidecar :updated-at)
+             :diagnostic (error-message-string err)))))))
+
 (defun mevedel-session-persistence--classify-sidecar (path)
   "Return the compatibility classification for the sidecar at PATH.
 
@@ -1369,29 +1392,8 @@ validation diagnostic."
   (if (not (file-exists-p path))
       (list :status 'missing :diagnostic "Sidecar is missing")
     (condition-case err
-        (let ((sidecar (mevedel-session-codec-read path)))
-          (cond
-           ((not (and (plistp sidecar) (keywordp (car sidecar))))
-            (list :status 'unreadable
-                  :diagnostic "Invalid session sidecar"))
-           ((not (equal (plist-get sidecar :version)
-                        mevedel-session-codec-format-version))
-            (list :status 'unsupported
-                  :version (plist-get sidecar :version)
-                  :updated-at (plist-get sidecar :updated-at)
-                  :diagnostic
-                  (format "Unsupported session version: %s"
-                          (or (plist-get sidecar :version) "missing"))))
-           (t
-            (condition-case shape-error
-                (progn
-                  (mevedel-session-codec-validate-current-sidecar sidecar)
-                  (list :status 'current :sidecar sidecar))
-              (error
-               (list :status 'obsolete
-                     :version (plist-get sidecar :version)
-                     :updated-at (plist-get sidecar :updated-at)
-                     :diagnostic (error-message-string shape-error)))))))
+        (mevedel-session-persistence--classify-sidecar-data
+         (mevedel-session-codec-read path))
       (error
        (list :status 'unreadable
              :diagnostic (error-message-string err))))))
@@ -2049,17 +2051,41 @@ cold discovery without making it resumable."
           (format-time-string "%FT%H-%M-%S" time))
         :publication publication))
 
+(defun mevedel-session-persistence-read-sidecar-batch (directories)
+  "Return fresh PID sidecar observations for session DIRECTORIES.
+Each alist value contains :sidecar-data or :error.  One pinned program reads
+the files; discovery applies the ordinary current-schema classification."
+  (when directories
+    (cl-mapcar
+     (lambda (directory result)
+       (cons directory
+             (condition-case err
+                 (list :sidecar-data
+                       (car (read-from-string
+                             (mevedel-session-control-fs-program-value result))))
+               (error (list :error err)))))
+     directories
+     (mevedel-session-control-fs-run-program
+      (mapcar (lambda (directory)
+                (list :op 'read :optional t
+                      :path (file-name-concat directory "session.meta.el")))
+              directories)))))
+
 (defun mevedel-session-persistence--discover-entry
-    (entry authority-mode control-results listing)
+    (entry authority-mode control-results listing &optional observation)
   "Return the discovery record for the session directory ENTRY.
 
 AUTHORITY-MODE is the workspace's mode, CONTROL-RESULTS are ENTRY's control
-probe results, and LISTING is its observed lease listing.  A current sidecar
+probe results, and LISTING is its observed lease listing.  OBSERVATION, when
+provided, is this discovery's publication or PID sidecar batch observation.
+A current sidecar
 yields a compatible `(:save-path :summary :publication)' record; any other
 outcome yields an incompatible record.  Signal when a probe failed or ENTRY's
 controls contradict AUTHORITY-MODE; the caller records that as an
 `undiscoverable' row, which stays visible but is never inspected."
   (let ((portable-p (eq authority-mode 'portable)))
+    (when-let* ((err (plist-get observation :error)))
+      (signal (car err) (cdr err)))
     (when-let* ((failed
                  (seq-find (lambda (result)
                              (not (memq (plist-get result :status)
@@ -2068,18 +2094,32 @@ controls contradict AUTHORITY-MODE; the caller records that as an
       (mevedel-session-control-fs-program-value failed))
     (when (seq-find (lambda (result) (eq (plist-get result :status) 'ok))
                     control-results)
-      (mevedel-session-codec-authority-mode-for-path
-       entry nil authority-mode))
+      ;; A PID profile only needs proof that no portable lease exists. Reuse
+      ;; this enumeration's pinned probe, never a previous discovery's cache.
+      (unless (and (eq authority-mode 'pid-lock)
+                   (eq (plist-get (nth 1 control-results) :status) 'absent))
+        (mevedel-session-codec-authority-mode-for-path
+         entry nil authority-mode)))
     (let* ((publication
             (when portable-p
-              (mevedel-session-publication-read entry nil listing)))
+              (if observation (plist-get observation :publication)
+                (mevedel-session-publication-read entry nil listing))))
            (sidecar
             (if portable-p
                 (plist-get publication :sidecar)
               (file-name-concat entry "session.meta.el")))
            (status
             (if sidecar
-                (mevedel-session-persistence--read-summary sidecar)
+                (if observation
+                    (let* ((classified
+                            (mevedel-session-persistence--classify-sidecar-data
+                             (plist-get observation :sidecar-data)))
+                           (data (plist-get classified :sidecar)))
+                      (if data
+                          (list :status 'current :summary
+                                (mevedel-session-persistence--sidecar-summary data))
+                        classified))
+                  (mevedel-session-persistence--read-summary sidecar))
               (list :status 'missing
                     :diagnostic
                     "Portable session has no committed publication"))))

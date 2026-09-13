@@ -1640,6 +1640,21 @@ TOOL-PROP."
     (should (string-prefix-p "--- evidence item; provenance: user ---" item))
     (should (string-suffix-p "--- end evidence item ---" item))))
 
+(mevedel-deftest mevedel-transcript-project-segments ()
+  ,test
+  (test)
+  :doc "projects selected canonical spans as plain evidence without reclassification"
+  (with-temp-buffer
+    (insert (propertize "Ask\nReply\n" 'gptel 'response))
+    (let ((text (mevedel-transcript-project-segments
+                 '((user 1 5) (response 5 11)))))
+      (should (equal text
+                     (concat "--- evidence item; provenance: user ---\nAsk\n"
+                             "--- end evidence item ---\n\n"
+                             "--- evidence item; provenance: assistant ---\nReply\n"
+                             "--- end evidence item ---")))
+      (should-not (text-property-not-all 0 (length text) 'gptel nil text)))))
+
 (mevedel-deftest mevedel-transcript-project-evidence ()
   ,test
   (test)

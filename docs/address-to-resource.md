@@ -26,6 +26,7 @@ resource URI.
 | Skill package | `skill://NAME@SOURCE-KEY[/RELATIVE-PATH]` | yes | yes | yes | no |
 | Retained agent | `agent://`, `agent://root/PATH[#POINTER]` | yes | no | no | no |
 | Conversation history | `history://`, `history://root`, `history://root/PATH` | yes | no | no | no |
+| Saved workspace conversations | `history://saved[/SESSION[/SEGMENT]]` | yes | yes | yes | no |
 | Persistent memory | `memory://root`, `memory://ROOT-KEY/RELATIVE-PATH` | yes | yes | yes | explicit file descendants |
 | Workspace journal | `journal://`, `journal://FILE` | yes | yes | yes | no |
 | MCP resource | `mcp://`, `mcp://ENCODED-SERVER`, `mcp://ENCODED-SERVER/ENCODED-URI` | yes | no | no | no |
@@ -43,7 +44,8 @@ current resource metadata has a usable surface:
 
 - `skill://` requires at least one enabled, discoverable skill;
 - `agent://` requires at least one retained agent record;
-- `history://` requires a live root conversation or a retained agent conversation;
+- live `history://root[/PATH]` requires a live root conversation or a retained
+  agent conversation; `history://saved` requires the request's workspace;
 - `memory://` requires at least one configured memory root; a first permitted
   file write can create a missing directory;
 - `journal://` requires at least one validated published entry in the workspace;
@@ -101,6 +103,10 @@ The address forms have these identity rules:
   storage IDs are rejected. `history://root` names the owning session's main
   agent conversation; it is session-relative and does not make `agent://root`
   a valid result address.
+- `history://saved[/SESSION[/SEGMENT]]` is workspace-relative. SESSION is a
+  returned saved-session directory name and SEGMENT a canonical
+  `segment-NNNN.chat.org` name. It does not accept retained agent paths or
+  arbitrary files inside session storage.
 - `memory://root` is a dynamic union/index query. A listed topic uses its
   root's key in `memory://ROOT-KEY/RELATIVE-PATH`. A configured `.mevedel` or
   `.agents` root that is the only one of its kind uses the readable key
@@ -243,6 +249,7 @@ lists the live root conversation and available retained agent conversations
 in the same order. Root history is available even when there are no retained
 agents. Listings and completion inspect availability metadata only; they do
 not read transcripts or create sessions.
+When a workspace is available, bare history also links to `history://saved`.
 
 An agent address returns the complete payload and terminal outcome of its
 latest settled turn. Completed, errored, and interrupted turns expose the same
@@ -264,6 +271,37 @@ provider bookkeeping, and persistence scaffolding. History is observational
 and cannot rewrite the transcript. Both addresses retain the existing tool
 output truncation and Read offset/limit behavior. They project the current
 conversation representation, without traversing pre-compaction archives.
+
+`history://saved` searches saved conversations across the current workspace.
+Read or Glob lists sources; adding a returned SESSION narrows discovery, and
+adding its SEGMENT selects a single saved source. Read of that source returns
+the filtered transcript, while Grep searches its projected text. Saved access
+includes archived segments, needs no live view buffer, and never resumes a
+session. Read and Grep line references address the same projection rather than
+raw Org file offsets. Unsaved changes remain available only through live history.
+
+After authorization, preparation runs in cooperative steps: discovery, pinned
+batch reads, canonical bounds restoration and classification, then temporary
+file preparation. Ordinary search helpers operate on those client-local files.
+Read also uses an asynchronous handler. Cancellation settles once with a
+cancelled outcome; owner teardown suppresses delivery. Both release the iterator,
+temporary files and any search helper. Individual filesystem operations and
+classification steps still execute synchronously between yields.
+
+Every operation observes current session authority. Portable discovery follows
+only a committed, validated publication and verifies artifact bytes before
+projection reuse. PID sidecars are also read in a fresh pinned batch and passed
+through the native schema classification; previous summary fingerprints do not
+stand in for those reads. A disposable 64 MiB projection payload cache is keyed by
+source identity and freshly read SHA-256; it is neither an authority cache nor
+a second permanent transcript store. Reuse cannot substitute for validation.
+Canonical filtering excludes hidden notes, reasoning and provider/bounds
+metadata while preserving ordinary user examples and useful tool evidence.
+Discovery omits unavailable or incompatible session records and reports their
+count with the result. Failed verification of selected transcript bytes is an
+error rather than a successful empty search.
+Corrected finalization preserves bounds for newly archived sources; it does not
+repair archives whose stored bounds were already corrupted.
 
 ### `memory://`
 
@@ -388,9 +426,11 @@ bare prefix remains usable until an explicit resource operation resolves it.
 
 ## Execution target and Plan mode
 
-Session-owned `work://` descendants, `artifact://`, `agent://`, and `history://` resources
+Session-owned `work://` descendants, `artifact://`, `agent://`, and live `history://root[/PATH]` resources
 belong to the current session's execution target. Their addresses cannot cross
-sessions or targets. Client-local skills and memory roots retain their origin;
+sessions or targets. `history://saved` spans saved sessions in the current
+workspace's storage, without changing execution target or selecting another
+workspace. Validated projections are searched locally. Client-local skills and memory roots retain their origin;
 their client pathname is not reinterpreted as a target-native workspace path.
 MCP authority remains with the configured connection. No address changes the
 session's target or turns a local path into cross-target authority.

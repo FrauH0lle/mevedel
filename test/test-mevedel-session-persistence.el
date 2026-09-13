@@ -3159,6 +3159,47 @@
       (delete-directory root t))))
 
 
+(mevedel-deftest mevedel-session-persistence--discover-entry ()
+  ,test
+  (test)
+  :doc "reuses this discovery's absent lease proof and rejects fresh contradictions"
+  (let* ((root (make-temp-file "mevedel-discover-proof-" t))
+         (entry (file-name-concat root "session"))
+         (sidecar (file-name-concat entry "session.meta.el"))
+         (native (symbol-function 'process-file))
+         (programs 0))
+    (unwind-protect
+        (progn
+          (make-directory entry)
+          ;; An obsolete sidecar is sufficient: profile checks precede schema
+          ;; classification, and it must remain an incompatible discovery row.
+          (with-temp-file sidecar (insert "(:version 0)"))
+          (let ((controls (cdar (mevedel-session-persistence--control-artifacts
+                                 (list entry)))))
+            (cl-letf (((symbol-function 'process-file)
+                       (lambda (&rest args)
+                         (cl-incf programs)
+                         (apply native args))))
+              (should (eq 'incompatible
+                          (plist-get
+                           (mevedel-session-persistence--discover-entry
+                            entry 'pid-lock controls nil) :kind))))
+            ;; Reading the sidecar costs one program. The completed control
+            ;; program already proved that this discovery saw no lease.
+            (should (= programs 1)))
+          (make-directory (file-name-concat entry ".lease"))
+          (let ((controls (cdar (mevedel-session-persistence--control-artifacts
+                                 (list entry)))))
+            (should-error (mevedel-session-persistence--discover-entry
+                           entry 'pid-lock controls nil)))
+          (delete-directory (file-name-concat entry ".lease"))
+          (make-symbolic-link "missing" (file-name-concat entry ".lease"))
+          (let ((controls (cdar (mevedel-session-persistence--control-artifacts
+                                 (list entry)))))
+            (should-error (mevedel-session-persistence--discover-entry
+                           entry 'pid-lock controls nil))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-persistence--format-incompatible-candidate ()
   ,test
   (test)

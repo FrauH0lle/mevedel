@@ -72,6 +72,7 @@ Data model
   mevedel-permission-queue.el permission/Bash/Eval/execution-authority queue
   mevedel-reminders.el        system-reminder staging, delivery and firing policy
   mevedel-history.el          retained reminders and provider response reconstruction
+  mevedel-history-search.el   cooperative saved-transcript discovery, filtering and search
   mevedel-edit-diagnostics.el post-edit Flymake/Flycheck report state machine
   mevedel-plugin-registry.el  plugin manifests, activation state, hook consent
   mevedel-plugin-lifecycle.el managed Git install, update, and removal

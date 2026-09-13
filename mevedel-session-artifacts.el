@@ -2460,8 +2460,10 @@ user\\='s view, by contrast, sees a foldable block."
       (insert-file-contents file)
       (let ((org-agenda-file-menu-enabled nil))
         (org-mode))
+      (mevedel-transcript-restore-properties t)
       (org-entry-put (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"
                      (format-time-string "%FT%H-%M-%S"))
+      (mevedel-session-artifacts-stabilize-gptel-bounds)
       (write-region (point-min) (point-max) file nil 'silent))))
 
 (defun mevedel-session-artifacts-finalized-segment-text (text coding)
@@ -2471,8 +2473,10 @@ user\\='s view, by contrast, sees a foldable block."
     (insert text)
     (let ((org-agenda-file-menu-enabled nil))
       (org-mode))
+    (mevedel-transcript-restore-properties t)
     (org-entry-put (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"
                    (format-time-string "%FT%H-%M-%S"))
+    (mevedel-session-artifacts-stabilize-gptel-bounds)
     (buffer-string)))
 
 (defun mevedel-session-artifacts--publish-remote-segment-transition

@@ -109,6 +109,18 @@ A muted call returns the text it would have shown, as `message' does."
         text
       (apply original format args))))
 
+(defun mevedel-test--read (args)
+  "Await the public Read handler for ARGS, preserving its result envelope."
+  (let (done result cancel)
+    (unwind-protect
+        (progn
+          (setq cancel (mevedel-tool-fs-read
+                        (lambda (value) (setq result value done t)) args))
+          (with-timeout (10 (ert-fail "Read callback timed out"))
+            (while (not done) (accept-process-output nil 0.01)))
+          result)
+      (when (functionp cancel) (funcall cancel)))))
+
 (defun mevedel-test--permission-log-entries (session)
   "Read permission log entries for SESSION."
   (let ((file (mevedel-permission-log-path session))

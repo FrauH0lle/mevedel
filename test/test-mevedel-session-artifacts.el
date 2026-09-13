@@ -12,6 +12,65 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "mevedel-session-test-support"))
 
+(mevedel-deftest mevedel-session-artifacts--finalize-segment-file ()
+  ,test
+  (test)
+  :doc "preserves archived roles and hides internal notes after disk restoration"
+  (let ((file (make-temp-file "mevedel-finalize-" nil ".org"))
+        before)
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (mevedel--transcript-org-mode)
+            (insert ":PROPERTIES:\n:END:\n\nComplete user prompt.\n")
+            (insert (propertize "Complete assistant response.\n"
+                                'gptel 'response))
+            (insert (propertize "\n<system-reminder>\nINTERNAL-NOTE\n</system-reminder>\n"
+                                'gptel 'ignore))
+            (mevedel-session-artifacts-stabilize-gptel-bounds)
+            (setq before (mevedel-agent-conversation-project-history
+                          (current-buffer)))
+            (should (string-match-p "provenance: assistant" before))
+            (should-not (string-match-p "INTERNAL-NOTE" before))
+            (write-region (point-min) (point-max) file nil 'silent))
+          (mevedel-session-artifacts--finalize-segment-file file)
+          (with-temp-buffer
+            (insert-file-contents file)
+            (mevedel--transcript-org-mode)
+            (mevedel-transcript-restore-properties)
+            (should (org-entry-get (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"))
+            (should (equal before (mevedel-agent-conversation-project-history
+                                   (current-buffer))))))
+      (delete-file file))))
+
+(mevedel-deftest mevedel-session-artifacts-finalized-segment-text ()
+  ,test
+  (test)
+  :doc "preserves plain and propertized portable archives after restoration"
+  (let (text before)
+    (with-temp-buffer
+      (mevedel--transcript-org-mode)
+      (insert ":PROPERTIES:\n:END:\n\nComplete user prompt.\n")
+      (insert (propertize "Complete assistant response.\n" 'gptel 'response))
+      (insert (propertize "\n<system-reminder>\nINTERNAL-NOTE\n</system-reminder>\n"
+                          'gptel 'ignore))
+      (mevedel-session-artifacts-stabilize-gptel-bounds)
+      (setq text (buffer-string)
+            before (mevedel-agent-conversation-project-history (current-buffer))))
+    (should (string-match-p "provenance: assistant" before))
+    (should-not (string-match-p "INTERNAL-NOTE" before))
+    (dolist (source (list (substring-no-properties text) text))
+      (with-temp-buffer
+        ;; A portable publication serializes strings without text properties.
+        (insert (substring-no-properties
+                 (mevedel-session-artifacts-finalized-segment-text
+                  source 'utf-8-unix)))
+        (mevedel--transcript-org-mode)
+        (mevedel-transcript-restore-properties)
+        (should (org-entry-get (point-min) "MEVEDEL_SEGMENT_FINALIZED_AT"))
+        (should (equal before (mevedel-agent-conversation-project-history
+                              (current-buffer))))))))
+
 (mevedel-deftest mevedel-session-artifacts-replace-transcript-contents ()
   ,test
   (test)

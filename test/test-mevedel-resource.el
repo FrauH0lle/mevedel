@@ -752,7 +752,7 @@
                          (mevedel-resource-current-attempts
                           (list (cons address attempt)))
                          (page (plist-get
-                                (mevedel-tool-fs-read
+                                (mevedel-test--read
                                  (list :file_path address :offset 2 :limit 1))
                                 :result)))
                     (should (string-match-p "Root user request" page))
