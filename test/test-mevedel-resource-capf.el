@@ -353,7 +353,25 @@
       (insert "history://")
       (should-not (mevedel-resource-capf-test--candidates
                    (mevedel-resource-capf))))
-    (should-not (mevedel-session-save-path session))))
+    (should-not (mevedel-session-save-path session)))
+  :doc "offers saved history from workspace metadata without filesystem discovery"
+  (let* ((root (make-temp-file "mevedel-history-capf-" t))
+         (session (mevedel-resource-capf-test--session nil))
+         (workspace (mevedel-workspace--create :type 'project :root root)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-workspace session) workspace)
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "history://sa")
+            (cl-letf (((symbol-function 'directory-files)
+                       (lambda (&rest _) (ert-fail "Completion enumerated saved storage")))
+                      ((symbol-function 'mevedel-session-control-fs-run-program)
+                       (lambda (&rest _) (ert-fail "Completion read saved storage"))))
+              (should (equal '("history://saved")
+                             (mevedel-resource-capf-test--candidates
+                              (mevedel-resource-capf)))))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-resource-capf-memory
   (:doc "completes configured memory topics without recursive scans")

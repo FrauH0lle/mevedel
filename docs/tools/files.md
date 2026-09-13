@@ -20,6 +20,7 @@ are not filesystem paths.
 | `skill://` | Yes | Yes | Discovered skill packages |
 | `agent://` | Yes | No | Latest settled retained-agent results |
 | `history://` | Yes | No | Root and retained-agent conversations |
+| `history://saved[/SESSION[/SEGMENT]]` | Yes | Yes | Filtered saved workspace conversations, including archives |
 | `memory://root` | Yes | Yes | Configured memory index/roots |
 | `journal://` | Yes | Yes | Validated published workspace journal records |
 | `mevedel://` | Yes | Yes | Installed Markdown documentation |
@@ -31,6 +32,13 @@ Read a bare family address to list current entries, except memory uses
 `history://root` reads the main conversation; it does not imply a corresponding
 `agent://root` result. Availability is checked at use time, and missing sources
 fail rather than being silently replaced.
+
+Use `history://saved` to search across saved workspace sessions. Read or Glob
+returns source addresses; use a returned session or segment path to narrow a
+search. Read of a selected segment and Grep use the same filtered line numbers.
+Saved sources exclude unsaved conversation changes and hidden internal notes.
+History operations are read-only and can be cancelled during preparation or
+search.
 
 `work://RELATIVE-PATH` belongs to the root session; `work://shared/RELATIVE-PATH`
 belongs to the workspace and persists across sessions. Search before creating
@@ -119,6 +127,16 @@ Glob returns up to 100 entries by default with a 30 KiB hard output cap.
 Grep bounds output at 200 KiB, and content mode omits overlong lines according
 to ripgrep's 2000-column limit. Grep's `head_limit` and zero-based `offset`
 select returned lines/entries; they do not make an unbounded search cheap.
+For a bounded content page, collection stops after at most
+`min(1000, offset + head_limit + 1)` matches per file. The extra match preserves
+truncation reporting; context lines remain part of the returned line budget.
+Unlimited content keeps the existing 1000-match per-file ceiling, and count
+mode still counts every match.
+Resource content matches carry their source address on each line, so paging
+does not discard the filename needed to follow a match with Read.
+Bounded resource content keeps only the requested offset, page and one extra
+line before formatting source addresses; a dense search does not format every
+per-file match merely to return a small global page.
 Normal oversized-result persistence can provide an artifact for further reads.
 
 Both searches stop at the configured search timeout (20 seconds by default).

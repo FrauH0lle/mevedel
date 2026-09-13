@@ -41,7 +41,7 @@
 (defvar mevedel--session)
 
 ;; `mevedel-tool-fs-read'
-(declare-function mevedel-tool-fs-read "mevedel-tool-fs-read" (args))
+(declare-function mevedel-tool-fs-read "mevedel-tool-fs-read" (callback args))
 (declare-function mevedel-tool-fs-read-render
                   "mevedel-tool-fs-read"
                   (name args result _render-data))
@@ -254,6 +254,7 @@ whole PATH from inside gptel's curl sentinel."
     :description "Read a file from the local filesystem."
     :prompt-file "prompts/tools/read.md"
     :handler #'mevedel-tool-fs-read
+    :async-p t
     :args ((file_path path-or-resource :required "Absolute or relative path to the file to read, or a canonical resource address. Relative paths are resolved from the session working directory.")
            (offset integer :optional
                   "Text-file line number to start reading from. Do not provide for images or PDFs.")

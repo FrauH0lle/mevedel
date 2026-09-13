@@ -29,6 +29,34 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(mevedel-deftest mevedel-agent-conversation-project-history ()
+  ,test
+  (test)
+  :doc "classifies once while preserving user examples, roles and tool facts"
+  (with-temp-buffer
+    (mevedel--transcript-org-mode)
+    (insert "User example: <system-reminder>literal text</system-reminder>\n")
+    (insert (propertize "Answer.\n" 'gptel 'response))
+    (insert (propertize "#+begin_reasoning\nprivate reasoning\n#+end_reasoning\n"
+                        'gptel 'ignore))
+    (insert (propertize "private note\n" 'gptel 'ignore))
+    (insert (propertize
+             "#+begin_tool\n(:name \"Read\" :args (:file_path \"facts.txt\"))\n\nUseful tool fact.\n#+end_tool\n"
+             'gptel '(tool . "history-call")))
+    (let ((native (symbol-function 'mevedel-transcript-segments))
+          (scans 0) text)
+      (cl-letf (((symbol-function 'mevedel-transcript-segments)
+                 (lambda (&rest args)
+                   (cl-incf scans)
+                   (apply native args))))
+        (setq text (mevedel-agent-conversation-project-history (current-buffer))))
+      (should (string-search "<system-reminder>literal text</system-reminder>" text))
+      (should (string-search "provenance: assistant" text))
+      (should (string-search "Useful tool fact." text))
+      (should-not (string-search "private reasoning" text))
+      (should-not (string-search "private note" text))
+      (should (= 1 scans)))))
+
 (mevedel-deftest mevedel-agent-conversation--working-directory ()
   ,test
   (test)

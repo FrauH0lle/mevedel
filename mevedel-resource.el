@@ -78,6 +78,11 @@
 (autoload 'mevedel-journal-store-file-name-p "mevedel-journal-store")
 (autoload 'mevedel-journal-store-read "mevedel-journal-store")
 
+;; `mevedel-session-artifacts'
+(declare-function mevedel-session-artifacts-segment-number
+                  "mevedel-session-artifacts" (logical))
+(autoload 'mevedel-session-artifacts-segment-number "mevedel-session-artifacts")
+
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-description "mevedel-skills-core" (skill) t)
 (declare-function mevedel-skill-name "mevedel-skills-core" (skill) t)
@@ -697,6 +702,9 @@ SCHEME is nil, include metadata for every scheme."
             (mevedel-resource-work-shared-directory
              (mevedel-resource--workspace context session)))
           :decode-component #'mevedel-resource--decode-component
+          :saved-history-p
+          (and (memq scheme '(nil history))
+               (mevedel-resource--workspace context session) t)
           :safe-path #'mevedel-resource--safe-path
           :skills
           (delq nil
@@ -834,7 +842,8 @@ listing includes only Markdown files."
   "Parse canonical ADDRESS and return a locator plist.
 
 The plist contains decoded `:components', canonical `:canonical', and
-`:locator-class' (`exact', `alias', `session-relative', or `dynamic').
+`:locator-class' (`exact', `alias', `session-relative', `workspace-relative',
+or `dynamic').
 Physical resolution is intentionally not performed here."
   (unless (stringp address)
     (signal 'mevedel-resource-error (list "Resource address must be text")))
@@ -866,9 +875,19 @@ Physical resolution is intentionally not performed here."
               (pcase scheme
                 ('skill (mevedel-resource--parse-skill-tail tail))
                 ('history
-                 (if (equal tail "root")
-                     (list :components '("root") :dynamic-p nil)
-                   (mevedel-resource--parse-agent-history-tail tail)))
+                 (cond
+                  ((equal tail "root")
+                   (list :components '("root") :dynamic-p nil))
+                  ((or (equal tail "saved") (string-prefix-p "saved/" tail))
+                   (let ((parts (mevedel-resource--parse-components tail)))
+                     (unless (and (<= (length parts) 3)
+                                  (or (< (length parts) 3)
+                                      (mevedel-session-artifacts-segment-number (caddr parts))))
+                       (signal 'mevedel-resource-error '("Saved history names a session and canonical segment")))
+                     (list :components parts :dynamic-p (= (length parts) 1)
+                           :locator-class (unless (= (length parts) 1)
+                                            'workspace-relative))))
+                  (t (mevedel-resource--parse-agent-history-tail tail))))
                 ('agent
                  (mevedel-resource--parse-agent-history-tail tail))
                 ('memory (mevedel-resource--parse-memory-tail tail))
@@ -1395,10 +1414,15 @@ the union index read, which already tolerates missing roots."
          (mevedel-resource--agent-read
           (plist-get data :record) parsed)))
       ('history
-       (if (null components)
-           (mevedel-resource--agent-list-result session t)
-         (mevedel-resource--history-read
-          (plist-get data :record) session)))
+       (cond
+        ((equal (car components) "saved")
+         (list :history-workspace (mevedel-resource--workspace context session)
+               :history-components components))
+        ((null components)
+         (concat (mevedel-resource--agent-list-result session t)
+                 (when (mevedel-resource--workspace context session)
+                   "\nhistory://saved\tSaved workspace conversations (Read, Glob, Grep)")))
+        (t (mevedel-resource--history-read (plist-get data :record) session))))
       ('memory
        (if (equal components '("root"))
            (pcase operation
@@ -1572,6 +1596,9 @@ before an authorized handler receives a backing path or virtual record."
                                (file-regular-p physical)
                              (file-exists-p physical)))
                 (setq data (plist-put data :unavailable-p t))))))))
+     ((and (eq scheme 'history) (equal (car components) "saved"))
+      (unless (mevedel-resource--workspace context session)
+        (setq data (plist-put data :unavailable-p t))))
      ((and (eq scheme 'history) (equal components '("root")))
       (unless (and session
                    (buffer-live-p (mevedel-session-root-buffer session)))
@@ -1644,7 +1671,8 @@ errors before any content or handler is reached."
            physical root logical-p)
       (unless (or (eq operation 'read)
                   (and (memq operation '(glob grep))
-                       (memq scheme '(work artifact skill memory journal mevedel)))
+                       (or (memq scheme '(work artifact skill memory journal mevedel))
+                           (and (eq scheme 'history) (equal (car components) "saved"))))
                   (and (eq operation 'apply-patch)
                        (memq scheme '(work memory))))
         (signal 'mevedel-resource-error
@@ -1724,6 +1752,8 @@ errors before any content or handler is reached."
        ((memq scheme '(agent history))
         (setq logical-p t)
         (cond
+         ((and (eq scheme 'history) (equal (car components) "saved"))
+          (unless workspace (setq data (plist-put data :unavailable-p t))))
          ((null components))
          ((and (eq scheme 'history) (equal components '("root")))
           (unless (and session
@@ -1781,6 +1811,8 @@ errors before any content or handler is reached."
     (cond
      ((and (eq scheme 'work) (mevedel-resource--shared-work-p components))
       (unless root "Shared working files require a workspace"))
+     ((and (eq scheme 'history) (equal (car components) "saved"))
+      (when unavailable "Saved history requires a workspace"))
      ((and (memq scheme '(work artifact agent history)) (null session))
       (format "%s resources require a session"
               (if (eq scheme 'work) "Session working file"
@@ -1903,6 +1935,8 @@ executor."
                                            (plist-get result :resource-search-roots)))
                         (setq descriptor (plist-put descriptor :render-data '(:count 0)))))
                     (when (and (listp result) (plist-member result :resource-search-documents))
+                      (setq descriptor (append descriptor result)))
+                    (when (and (listp result) (plist-member result :history-workspace))
                       (setq descriptor (append descriptor result)))
                     (if executor
                         (funcall executor descriptor (plist-get data :address))

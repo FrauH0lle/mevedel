@@ -2211,7 +2211,7 @@ cover, so the permission step's warning about it is captured here."
          (tool
           (mevedel-tool--create
            :name "Read"
-           :handler #'mevedel-tool-fs-read
+           :handler #'mevedel-tool-fs-read :async-p t
            :args '((file_path path :required "Path"))
            :groups '(read)
            :read-only-p t
@@ -2251,7 +2251,7 @@ cover, so the permission step's warning about it is captured here."
          (tool
           (mevedel-tool--create
            :name "Read"
-           :handler #'mevedel-tool-fs-read
+           :handler #'mevedel-tool-fs-read :async-p t
            :args '((file_path path :required "Path"))
            :groups '(read)
            :read-only-p t

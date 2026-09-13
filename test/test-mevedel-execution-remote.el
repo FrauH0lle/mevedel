@@ -62,61 +62,6 @@
 ;;
 ;;; Test support
 
-(defun test-mevedel-execution-remote--real-root (variable method)
-  "Return the opt-in real TRAMP root from VARIABLE for METHOD.
-
-The root must already exist, be writable, and be reachable through normal
-  TRAMP authentication.  The tests never provision, start, or stop a target."
-  (let ((value (getenv variable)))
-    (unless value
-      (ert-skip (format "%s is not set" variable)))
-    (when-let* ((config (and (eq method 'ssh)
-                            (getenv "MEVEDEL_TEST_SSH_CONFIG"))))
-      (setq tramp-use-connection-share t
-            tramp-ssh-controlmaster-options
-            (format "-F %s" (shell-quote-argument config))))
-    (when (string-empty-p value)
-      (ert-fail (format "%s is set but empty" variable)))
-    (let ((root (file-name-as-directory value)))
-      (unless (file-remote-p root)
-        (ert-fail (format "%s must be a TRAMP directory" variable)))
-      (unless (equal (symbol-name method)
-                     (file-remote-p root 'method 'never))
-        (ert-fail
-         (format "%s must use the %s TRAMP method" variable method)))
-      (when (file-remote-p root 'hop 'never)
-        (ert-fail (format "%s must name one target, without hops" variable)))
-      (unless (file-remote-p root 'host 'never)
-        (ert-fail (format "%s must name a target host" variable)))
-      (condition-case err
-          (progn
-            (unless (file-directory-p root)
-              (ert-fail (format "%s is not a directory" variable)))
-            (unless (file-writable-p root)
-              (ert-fail (format "%s is not writable" variable))))
-        (file-error
-         (ert-fail
-          (format "Could not authenticate or open %s: %s"
-                  variable (error-message-string err)))))
-      root)))
-
-(defun test-mevedel-execution-remote--real-temp-directory
-    (root stem &optional persistent)
-  "Create and return a fresh target-side directory named STEM.
-
-The directory is created in the target's temporary directory, which is
-where a disposable journey belongs.  PERSISTENT places it inside ROOT
-instead: ROOT is the project volume that outlives the target, and a journey
-that replaces the target must find its durable state again afterwards."
-  (let ((default-directory root))
-    (if persistent
-        (let ((directory
-               (file-name-as-directory
-                (file-name-concat root (make-temp-name stem)))))
-          (make-directory directory t)
-          directory)
-      (file-name-as-directory (make-nearby-temp-file stem t)))))
-
 (defun test-mevedel-execution-remote--stage (format-string &rest args)
   "Log a bounded remote acceptance stage when diagnostics are enabled."
   (when (getenv "MEVEDEL_TEST_REMOTE_DIAGNOSTICS")
@@ -151,13 +96,6 @@ shell launcher independent of Lisp source interpolation."
   (with-timeout ((or timeout 30) (ert-fail description))
     (while (not (funcall predicate))
       (accept-process-output nil 0.05))))
-
-(defun test-mevedel-execution-remote--accept-storage (session)
-  "Accept SESSION's target-side durable storage for an opt-in test."
-  (puthash
-   (mevedel-execution-target-identity
-    (mevedel-session-execution-target session))
-   t mevedel-session-durability--disclosed-targets))
 
 (defun test-mevedel-execution-remote--run-tool (session name args)
   "Run registered tool NAME with ARGS in SESSION and return its result."

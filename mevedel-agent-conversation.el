@@ -177,9 +177,9 @@
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-normalize-properties
                   "mevedel-transcript" ())
-(declare-function mevedel-transcript-project-evidence
+(declare-function mevedel-transcript-project-segments
                   "mevedel-transcript"
-                  (ranges &rest keys))
+                  (segments &rest keys))
 (declare-function mevedel-transcript-segments
                   "mevedel-transcript" (start end))
 (autoload 'mevedel-transcript-normalize-properties "mevedel-transcript")
@@ -785,16 +785,16 @@ Transcript classification and tool-result projection remain owned by
 and private media paths therefore do not become history content."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (let ((ranges
+      (let ((segments
              (cl-loop for segment in
                       (mevedel-transcript-segments (point-min) (point-max))
                       when (memq (car segment) '(user response tool))
-                      collect (cons (cadr segment) (caddr segment)))))
+                      collect segment)))
         (replace-regexp-in-string
          "; path [^]]+" ""
          (substring-no-properties
-          (mevedel-transcript-project-evidence
-           ranges
+          (mevedel-transcript-project-segments
+           segments
            :tool-results-dir
            (and session
                 (mevedel-session-save-path session)

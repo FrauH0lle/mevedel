@@ -813,6 +813,86 @@ deleted."
       :warning)
      nil)))
 
+(defun mevedel-session-publication-read-batch (directories listings)
+  "Observe current publications for DIRECTORIES using fresh lease LISTINGS.
+Return an alist from directory to (:publication VALUE :sidecar-data PLIST),
+or (:error CONDITION).  Each stage batches pinned reads across directories;
+lease, manifest and sidecar validation remain the ordinary native checks.
+LISTINGS must be observations from this discovery, never a retained cache."
+  (let ((remote-file-name-inhibit-cache t)
+        rows paths)
+    (dolist (directory directories)
+      (let ((row (list :directory directory)))
+        (condition-case err
+            (progn
+              (mevedel-session-durability--assert-no-pid-lock directory)
+              (plist-put row :paths
+                         (mevedel-session-durability--generation-paths
+                          (mevedel-session-durability--lease-path directory)
+                          (cdr (assoc directory listings)))))
+          (error (plist-put row :error err)))
+        (push row rows)))
+    (setq rows (nreverse rows)
+          paths (mapcan (lambda (row) (copy-sequence (plist-get row :paths))) rows))
+    (let ((records (mevedel-session-durability--read-records paths)))
+      (dolist (row rows)
+        (let* ((count (length (plist-get row :paths)))
+               (lease (mevedel-session-durability--head-of-records
+                       (seq-take records count))))
+          (setq records (nthcdr count records))
+          (unless (plist-get row :error)
+            (condition-case err
+                (when lease
+                  (unless (mevedel-session-durability--valid-lease-p lease)
+                    (error "Invalid portable session lease"))
+                  (when-let* ((head (plist-get lease :publication-head)))
+                    (plist-put row :head head)
+                    (plist-put row :manifest
+                               (mevedel-session-publication--publication-path
+                                (plist-get row :directory) head))))
+              (error (plist-put row :error err)))))))
+    (let* ((selected (seq-filter (lambda (row) (plist-get row :manifest)) rows))
+           (manifests (mevedel-session-durability--read-records
+                       (mapcar (lambda (row) (plist-get row :manifest)) selected))))
+      (dolist (row selected)
+        (let ((manifest (pop manifests)))
+          (condition-case err
+              (progn
+                (mevedel-session-publication--validate-manifest
+                 manifest (plist-get row :manifest))
+                (plist-put row :publication
+                           (mevedel-session-publication--capture-publication
+                            (plist-get row :directory)
+                            (list :head (plist-get row :head)
+                                  :sidecar (plist-get manifest :sidecar)
+                                  :artifacts (plist-get manifest :artifacts)))))
+            (error (plist-put row :error err))))))
+    (let* ((selected (seq-filter (lambda (row) (plist-get row :publication)) rows))
+           (results
+            (when selected
+              (mevedel-session-control-fs-run-program
+               (mapcar (lambda (row)
+                         (list :op 'read :coding 'no-conversion :optional t
+                               :path (plist-get (plist-get row :publication) :sidecar)))
+                       selected)))))
+      (dolist (row selected)
+        (let ((result (pop results)))
+          (condition-case err
+              (let* ((bytes (mevedel-session-control-fs-program-value result))
+                     (artifact (cdr (assoc "session.meta.el"
+                                           (plist-get (plist-get row :publication) :artifacts)))))
+                (unless (equal (secure-hash 'sha256 bytes) (plist-get artifact :sha256))
+                  (error "Invalid session publication sidecar"))
+                (plist-put row :sidecar-data
+                           (car (read-from-string (decode-coding-string bytes 'utf-8-unix)))))
+            (error (plist-put row :error err))))))
+    (mapcar (lambda (row)
+              (cons (plist-get row :directory)
+                    (if (plist-get row :error)
+                        (list :error (plist-get row :error))
+                      (list :publication (plist-get row :publication)
+                            :sidecar-data (plist-get row :sidecar-data))))) rows)))
+
 (defun mevedel-session-publication-read (session-dir &optional head names)
   "Return SESSION-DIR's captured immutable publication, or nil.
 

@@ -21,6 +21,11 @@
                   "mevedel-execution"
                   (callback name command read-paths writable-roots &rest keys))
 
+;; `mevedel-history-search'
+(declare-function mevedel-history-search-start
+                  "mevedel-history-search" (callback args descriptor))
+(autoload 'mevedel-history-search-start "mevedel-history-search")
+
 ;; `mevedel-resource'
 (declare-function mevedel-resource-error-message "mevedel-resource"
                   (failure &optional address private-paths))
@@ -553,8 +558,12 @@ and optional :path."
         (mevedel-resource-execute
          attempt
          (lambda (path authored)
-           (if (and (listp path) (plist-member path :resource-search-documents))
-               (mevedel-tool-fs-search--documents callback args path #'mevedel-tool-fs-search-glob)
+           (cond
+            ((and (listp path) (plist-member path :history-workspace))
+             (mevedel-history-search-start callback args path))
+            ((and (listp path) (plist-member path :resource-search-documents))
+               (mevedel-tool-fs-search--documents callback args path #'mevedel-tool-fs-search-glob))
+            (t
              (if (mevedel-tool-fs-search--resource-search-roots path)
                (let ((native-args (copy-sequence args))
                      (mevedel-tool-fs-search--resource-address authored)
@@ -579,7 +588,7 @@ and optional :path."
                      callback
                      (mevedel-tool-fs-search--rewrite-resource-handler-result
                       result path authored t)))
-                  native-args)))))))
+                  native-args))))))))
       (let* ((pattern (plist-get args :pattern))
              (path (plist-get args :path))
              (resource-roots (plist-get args :resource-roots)))
@@ -693,8 +702,12 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
         (mevedel-resource-execute
          attempt
          (lambda (path authored)
-           (if (and (listp path) (plist-member path :resource-search-documents))
-               (mevedel-tool-fs-search--documents callback args path #'mevedel-tool-fs-search-grep)
+           (cond
+            ((and (listp path) (plist-member path :history-workspace))
+             (mevedel-history-search-start callback args path))
+            ((and (listp path) (plist-member path :resource-search-documents))
+               (mevedel-tool-fs-search--documents callback args path #'mevedel-tool-fs-search-grep))
+            (t
              (if (mevedel-tool-fs-search--resource-search-roots path)
                (let ((native-args (copy-sequence args))
                      (mevedel-tool-fs-search--resource-address authored)
@@ -722,7 +735,7 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                        (mevedel-tool-fs-search--rewrite-resource-handler-result
                         result path authored (equal mode "files_with_matches")
                         (if (equal mode "content") "\n" ":")))))
-                  native-args)))))))
+                  native-args))))))))
       (let* ((pattern (plist-get args :pattern))
              (path (mevedel-tool-string-arg args :path "."))
              (resource-roots (plist-get args :resource-roots))
@@ -793,11 +806,20 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                 (pcase output-mode
                   ("content"
                    (when line-numbers (push "--line-number" rg-args))
-                   (push "--heading" rg-args)
+                   ;; Resource pages must retain their source even when an
+                   ;; offset removes earlier matches from the same file.
+                   (push (if resource-roots "--no-heading" "--heading") rg-args)
                    (when ctx-after (push (format "-A%d" ctx-after) rg-args))
                    (when ctx-before (push (format "-B%d" ctx-before) rg-args))
                    (when ctx-around (push (format "-C%d" ctx-around) rg-args))
-                   (push "--max-count=1000" rg-args)
+                   ;; Collect enough matches for the output page and one
+                   ;; more to detect truncation. Headings/context only add
+                   ;; output lines, so they need no additional matches.
+                   (push (format "--max-count=%d"
+                                 (if head-limit
+                                     (min 1000 (+ offset head-limit 1))
+                                   1000))
+                         rg-args)
                    ;; Truncate long lines to prevent log files and other
                    ;; long-line sources from blowing up tool result size.
                    (push "--max-columns=2000" rg-args)
@@ -834,13 +856,21 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
                             (pageable-output-p
                              (plist-get settlement :pageable-p))
                             range-error-p)
+                       ;; Bound global content work before converting every
+                       ;; collected path to a resource address. Keep one extra
+                       ;; line so ordinary pagination still detects truncation.
+                       (when (and resource-roots pageable-output-p head-limit
+                                  (equal output-mode "content"))
+                         (goto-char (point-min))
+                         (forward-line (+ offset head-limit 1))
+                         (delete-region (point) (point-max)))
                        (when resource-roots
                          (let ((rewritten
                                 (mevedel-tool-fs-search--scrub-resource-search-output
                                  (mevedel-tool-fs-search--rewrite-resource-search-roots
                                   (buffer-string) resource-roots
                                   (equal output-mode "files_with_matches")
-                                  (if (equal output-mode "content") "\n" ":"))
+                                  ":")
                                  resource-roots)))
                            (erase-buffer)
                            (insert rewritten)))

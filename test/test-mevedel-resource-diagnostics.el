@@ -77,7 +77,7 @@
                    (mevedel-resource-current-attempts (list (cons address attempt)))
                    result)
               (pcase operation
-                ('read (setq result (mevedel-tool-fs-read (list :file_path address))))
+                ('read (setq result (mevedel-test--read (list :file_path address))))
                 ('glob (mevedel-tool-fs-search-glob
                         (lambda (value) (setq result value))
                         (list :path address :pattern "**/*")))
@@ -118,7 +118,7 @@
                    (failure
                     (should-error
                      (pcase operation
-                       ('read (mevedel-tool-fs-read (list :file_path address)))
+                       ('read (mevedel-test--read (list :file_path address)))
                        ('glob (mevedel-tool-fs-search-glob #'ignore (list :path address :pattern "**/*")))
                        ('grep (mevedel-tool-fs-search-grep #'ignore (list :path address :pattern "note")))))))
               (should (string-search "not found" (error-message-string failure)))
@@ -198,7 +198,7 @@
                       default-directory (file-name-as-directory root))
           (let (result)
             (mevedel-pipeline--step-handler
-             (list :tool (mevedel-tool--create :name "Read" :handler #'mevedel-tool-fs-read)
+             (list :tool (mevedel-tool--create :name "Read" :handler #'mevedel-tool-fs-read :async-p t)
                    :args '(:file_path "agent://root/missing")
                    :resource-attempts
                    (list (cons "agent://root/missing"

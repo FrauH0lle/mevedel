@@ -126,7 +126,11 @@
                            (string-search
                             "1\tcold"
                             (plist-get
-                             (mevedel-tool-fs-read (list :file_path path))
+                             (let (result)
+                               (mevedel-tool-fs-read
+                                (lambda (value) (setq result value))
+                                (list :file_path path))
+                               result)
                              :result))
                          (error "Read owner did not read a real file")))
                    (delete-file path)))

@@ -42,6 +42,11 @@
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind &optional offset limit))
 
+;; `mevedel-history-search'
+(declare-function mevedel-history-search-start
+                  "mevedel-history-search" (callback args descriptor))
+(autoload 'mevedel-history-search-start "mevedel-history-search")
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-tool-results-dir
                   "mevedel-pipeline" (session buffer &optional request))
@@ -1272,40 +1277,41 @@ content, not a read failure.\n</system-reminder>"
              address start-line
              (and line-truncated-p (+ start-line num-lines)))))))))
 
-(defun mevedel-tool-fs-read--resource (args attempt)
-  "Read prepared resource ATTEMPT using the private execution seam."
-  (mevedel-resource-execute
-   attempt
-   (lambda (path address)
-     (if (and (listp path) (plist-get path :virtual))
-         (mevedel-tool-fs-read--virtual-text
-          (plist-get path :result) args address)
-       (progn
-           (unless (and (stringp path) (file-exists-p path))
-             (error "File not found: %s" address))
-           (when (and (string-prefix-p "memory://" address)
-                      (mevedel-tool-fs-read-media-mime-type path))
-             (error "Memory resources only support text reads"))
-           (let ((mevedel-tool-fs-read--resource-address address))
-             (if (file-directory-p path)
-                 (mevedel-tool-fs-read--resource-directory path address)
-               (let ((read-args (copy-sequence args)))
-                 (plist-put read-args :file_path path)
-                 (mevedel-tool-fs-read--file read-args)))))))))
+(defun mevedel-tool-fs-read--resource-path (args path address)
+  "Read authorized PATH for ADDRESS with bounded Read ARGS."
+  (if (and (listp path) (plist-get path :virtual))
+      (mevedel-tool-fs-read--virtual-text (plist-get path :result) args address)
+    (unless (and (stringp path) (file-exists-p path))
+      (error "File not found: %s" address))
+    (when (and (string-prefix-p "memory://" address)
+               (mevedel-tool-fs-read-media-mime-type path))
+      (error "Memory resources only support text reads"))
+    (let ((mevedel-tool-fs-read--resource-address address))
+      (if (file-directory-p path)
+          (mevedel-tool-fs-read--resource-directory path address)
+        (let ((read-args (copy-sequence args)))
+          (plist-put read-args :file_path path)
+          (mevedel-tool-fs-read--file read-args))))))
 
-(defun mevedel-tool-fs-read (args)
-  "Return the Read result for ARGS in a canonical handler envelope."
+(defun mevedel-tool-fs-read (callback args)
+  "Read ARGS and deliver a canonical handler envelope to CALLBACK.
+Saved history returns a canceller while preparation continues asynchronously."
   (let* ((address (plist-get args :file_path))
          (attempt (mevedel-tool-fs-resource-attempt address)))
     (if attempt
-        (let ((mevedel-tool-fs-read--resource-address address))
-          (mevedel-tool-fs-handler-result
-           (mevedel-tool-fs-read--resource args attempt)))
+        (mevedel-resource-execute
+         attempt
+         (lambda (path authored)
+           (if (and (listp path) (plist-member path :history-workspace))
+               (mevedel-history-search-start callback args path)
+             (funcall callback
+                      (mevedel-tool-fs-handler-result
+                       (mevedel-tool-fs-read--resource-path args path authored))))))
       (let ((result (mevedel-tool-fs-handler-result
                      (mevedel-tool-fs-read--file args))))
         (mevedel-tool-fs-read--queue-workspace-instructions
          (plist-get (mevedel-tool-fs-read--normalize-read-args args) :file_path))
-        result))))
+        (funcall callback result)))))
 
 (defun mevedel-tool-fs-read--workspace-instruction-owner ()
   "Return the canonical conversation owner for the current Read."

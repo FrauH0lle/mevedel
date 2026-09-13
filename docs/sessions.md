@@ -993,6 +993,11 @@ to continue. Rewind preserves session preset settings but clears Goal state.
 
 ### Incompatible session inspection
 
+Session discovery reuses control observations only within its current
+enumeration. In particular, a pinned probe that found no portable lease is
+sufficient for that enumeration's PID profile check. Failed probes and
+contradictory controls still reject the entry; a later discovery probes again.
+
 Only a sidecar whose format is exactly the current
 `mevedel-session-codec-format-version` and whose complete current shape
 validates is resumable. The session chooser keeps surviving directories
@@ -1045,6 +1050,12 @@ resumable session state. The view remembers cursor, window, and fold state
 ephemerally while moving among segments. The live composer draft remains
 hidden and unchanged, and `[Latest]` returns to the live segment. Fresh resume
 always starts at latest.
+
+Finalizing an archive restores its transcript properties before inserting the
+finalization timestamp, then stabilizes the saved absolute `GPTEL_BOUNDS` against
+the updated drawer. This applies both to local segment files and portable
+publication strings. Restoring the archive therefore preserves speaker roles
+and ignored internal notes even though the metadata has moved the body.
 
 Live work may continue while an archived segment is displayed. Status,
 interaction, and request-progress chrome stays live, while streaming transcript

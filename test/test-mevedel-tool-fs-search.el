@@ -576,6 +576,48 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
 (mevedel-deftest mevedel-tool-fs-search-grep ()
   ,test
   (test)
+  :doc "bounds dense match collection while preserving pages and context"
+  (let* ((root (make-temp-file "mevedel-grep-dense-" t))
+         (file (file-name-concat root "dense.txt"))
+         (native (symbol-function 'make-process))
+         commands)
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (dotimes (index 150)
+              (insert (format "match %03d\ncontext\n\n" index))))
+          (cl-letf (((symbol-function 'make-process)
+                     (lambda (&rest options)
+                       (push (plist-get options :command) commands)
+                       (apply native options))))
+            (let ((result
+                   (test-mevedel-tool-fs-search--await-callback
+                    #'mevedel-tool-fs-search-grep
+                    (list :path file :pattern "match" :output_mode "content"
+                          :head_limit 3 :offset 2))))
+              (should (string-match-p "7:match 002" result))
+              (should (string-match-p "10:match 003" result))
+              (should (string-match-p "13:match 004" result))
+              (should-not (string-match-p "16:match 005" result))
+              (should (string-match-p "Results truncated" result)))
+            (should (seq-some (lambda (command)
+                                (string-search "--max-count=6"
+                                               (prin1-to-string command)))
+                              commands)))
+          (let ((result
+                 (test-mevedel-tool-fs-search--await-callback
+                  #'mevedel-tool-fs-search-grep
+                  (list :path file :pattern "match" :output_mode "content"
+                        :head_limit 3 :offset 2 :-A 1))))
+            (should (string-match-p "5-context" result))
+            (should (string-match-p "4:match 001" result))
+            (should (string-match-p "Results truncated" result)))
+          (let ((result
+                 (test-mevedel-tool-fs-search--await-callback
+                  #'mevedel-tool-fs-search-grep
+                  (list :path file :pattern "match" :output_mode "count"))))
+            (should (equal "150\n" result))))
+      (delete-directory root t)))
   :doc "greps current installed docs without a session or backing paths"
   (let* ((root (make-temp-file "mevedel-grep-installed-" t))
          (docs (file-name-concat root "docs"))

@@ -261,9 +261,12 @@ doubled by digests nobody reads."
 (defun mevedel-resource-capf--agents (tail metadata &optional history)
   "Complete agent resource paths for TAIL and METADATA.
 
-History candidates include the root and retained conversations."
+History candidates include saved workspace, root and retained conversations."
   (let ((prefix (if history "history://" "agent://"))
         entries)
+    (when (and history (plist-get metadata :saved-history-p)
+               (string-prefix-p tail "saved"))
+      (push '("history://saved" . " [history] saved workspace conversations") entries))
     (dolist (entry (plist-get metadata :agents))
       (let* ((item (plist-get entry :item))
              (path (plist-get item :path))
