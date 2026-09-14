@@ -41,10 +41,8 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (autoload 'mevedel-session-execution-target "mevedel-structs")
-(autoload 'mevedel-session-name "mevedel-structs")
 (autoload 'mevedel-session-session-id "mevedel-structs")
 
 ;; `mevedel-tool-exec'
@@ -317,7 +315,6 @@ argument names are filtered out at scan time
 \\=(see `mevedel-skills--parse-argument-names') so they cannot
 shadow `$0'/`$1' shorthand."
   (let* ((session-id (or (and session (mevedel-session-session-id session))
-                         (and session (mevedel-session-name session))
                          ""))
          (skill-dir (or (mevedel-skills-preparation--target-native-source-dir
                          skill session)

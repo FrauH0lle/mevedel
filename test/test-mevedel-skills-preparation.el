@@ -91,7 +91,7 @@
          (skill (mevedel-skill--create
                  :name "x"
                  :source-dir "/tmp/x/")))
-    (should (equal "session=main dir=/tmp/x/"
+    (should (equal (format "session=%s dir=/tmp/x/" (mevedel-session-session-id session))
                    (mevedel-skills-preparation-substitute
                     "session=${CLAUDE_SESSION_ID} dir=${CLAUDE_SKILL_DIR}"
                     "" session skill))))
@@ -265,7 +265,7 @@ ARGUMENTS: hello"
                            :order nil :total-bytes 0)))
          (session (mevedel-session-create "main" ws))
          (skill (mevedel-skill--create :name "x" :effort 'low)))
-    (should (equal "id=main effort=low\n\nARGUMENTS: hello"
+    (should (equal (format "id=%s effort=low\n\nARGUMENTS: hello" (mevedel-session-session-id session))
                    (mevedel-skills-preparation-substitute
                     "id=${CLAUDE_SESSION_ID} effort=${MEVEDEL_EFFORT}"
                     "hello" session skill)))))

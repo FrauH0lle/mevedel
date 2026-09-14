@@ -3971,7 +3971,7 @@ cover, so the permission step's warning about it is captured here."
 			(ws (mevedel-workspace--create
 			     :type 'project :id tmpdir :root tmpdir))
 			(session (mevedel-session--create
-				  :name "main" :workspace ws
+				  :name "main" :session-id "lazy-result-id" :workspace ws
 				  :execution-target
 				  (mevedel-execution-target-create tmpdir)))
 			(tool (mevedel-tool--create :name "TestTool" :max-result-size 100))

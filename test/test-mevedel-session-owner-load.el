@@ -27,7 +27,7 @@
                 (unwind-protect
                     (progn
                       (mevedel-session-persistence-allocate-session-id
-                       "cold" directory)
+                       directory)
                       (with-temp-buffer
                         (insert "cold")
                         (mevedel-session-persistence-write-current-buffer-atomically

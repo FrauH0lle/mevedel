@@ -112,7 +112,8 @@ invariants.  `mevedel-workspace.el` owns workspace registry and state lookup,
   settlement sequence. A settlement sequence identifies one event across
   all three collections -- planning turns, attempts, and discussion turns
   -- and the codec rejects a record that repeats one.
-- **`mevedel-session`**: per-chat state: workspace, immutable execution target,
+- **`mevedel-session`**: per-chat state: stable name-independent ID, editable
+  display name and one-shot title eligibility, workspace, immutable execution target,
   qualified working directory, tasks, touched-files, permission rules/mode,
   exact or recursive resource grants, reminders, persisted per-conversation
   workspace-instruction content hashes,

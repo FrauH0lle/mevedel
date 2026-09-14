@@ -289,7 +289,7 @@ that contains one:
 ### Sessions
 
 Each chat lives in its own session under
-`<workspace>/.mevedel/sessions/<name>-<timestamp>-<id>/`. Sessions auto-save at
+`<workspace>/.mevedel/sessions/<timestamp>-<12-hex-suffix>/`. Sessions auto-save at
 turn boundaries, keep tracked-file backups, and can be reopened or renamed.
 Rewind is an in-place undo that truncates later conversation and restores
 captured files. Conversation Fork creates a child session that shares the
@@ -306,7 +306,7 @@ it read-only instead of corrupting the writer's transcript.
 | `mevedel-toggle-follow`  | Toggle whether a non-owner view follows the owner's published turns. |
 | `mevedel-refresh-session`| Re-read the owner's newest published state now.                     |
 | `mevedel-save-session`   | Force a save; with prefix arg, save a copy under a fresh id.        |
-| `mevedel-rename-session` | Rename the current session and its on-disk directory.              |
+| `mevedel-rename-session` | Rename the current session without changing its ID or directory.              |
 | `mevedel-rewind`         | Pick a previous prompt in the current session and rewind to it.    |
 
 | Custom Variable                          | Variable Description                                  |
@@ -653,6 +653,12 @@ If one retained agent's current turn is no longer relevant or appears stuck,
 the model can use `InterruptAgent` with its canonical path. The turn settles as
 interrupted while the path, conversation, descendants, and future follow-up
 capability remain intact.
+
+Unnamed sessions initially display their stable timestamp/random ID. The first
+prompt generates a descriptive title in the background through the `naming`
+workload (`fast` tier by default). Explicit names are preserved; failed title
+requests leave the ID displayed. `M-x mevedel-rename-session` changes the name
+without moving the session directory. Forks receive their own IDs and titles.
 
 Named model tiers and workload assignments live in the current session preset.
 The global `mevedel-model-tiers` and `mevedel-model-workloads` values are the

@@ -79,6 +79,8 @@
                   (session buffer staging-path &optional state))
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-auto-name-pending
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-execution-target
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-forked-from-session-id
@@ -336,6 +338,7 @@ parent identity."
                   (plist-get transaction :new-id)
                   (mevedel-session-name session)
                   (plist-get transaction :new-name)
+                  (mevedel-session-auto-name-pending session) nil
                   (mevedel-session-forked-from-session-id session)
                   (plist-get transaction :old-id)
                   (mevedel-session-forked-from-turn session)

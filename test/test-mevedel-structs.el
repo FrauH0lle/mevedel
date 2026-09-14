@@ -508,5 +508,15 @@
       (should (equal (list expanded)
                      (mevedel-session-active-dropped-file-grants session))))))
 
+(mevedel-deftest mevedel-session-generate-id ()
+  ,test
+  (test)
+  :doc "generates id matching <timestamp>-<random-suffix>"
+  (let ((id (mevedel-session-generate-id)))
+    (should (string-match-p
+             "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}T[0-9]\\{2\\}-[0-9]\\{2\\}-[0-9a-f]\\{12\\}\\'"
+             id))))
+
+
 (provide 'test-mevedel-structs)
 ;;; test-mevedel-structs.el ends here

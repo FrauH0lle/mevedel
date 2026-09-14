@@ -216,16 +216,9 @@ directories -- the existence probes and the lease listings."
             ;; directory listed in one more, so four sessions cost two.
             (should (= 2 (car four)))
             ;; Retire half the sessions and enumerate again.
-            (dolist (name '("three" "four"))
-              (delete-directory
-               (file-name-concat
-                (mevedel-session-artifacts-sessions-dir workspace)
-                (car (seq-filter
-                      (lambda (entry) (string-prefix-p name entry))
-                      (directory-files
-                       (mevedel-session-artifacts-sessions-dir workspace)
-                       nil "\\`[^.]"))))
-               t))
+            (dolist (session sessions)
+              (when (member (mevedel-session-name session) '("three" "four"))
+                (delete-directory (mevedel-session-save-path session) t)))
             (let ((two (test-mevedel-session-persistence-cost--probe-programs
                         (lambda ()
                           (should (= 2 (length

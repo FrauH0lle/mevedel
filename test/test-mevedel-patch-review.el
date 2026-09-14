@@ -1603,7 +1603,7 @@ adopt prompt.  Returns the messages the session produced."
                        :type 'test :id root :root root :name "rollback"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session--create
-                     :name "rollback" :workspace workspace
+                     :name "rollback" :session-id "rollback-id" :workspace workspace
                      :working-directory root :permission-mode 'ask))
            (first-address "work://first/one.txt")
            (second-address "work://second/two.txt")
@@ -1776,7 +1776,7 @@ adopt prompt.  Returns the messages the session produced."
                        :type 'test :id root :root root :name "local-visit"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session--create
-                     :name "local-visit" :workspace workspace
+                     :name "local-visit" :session-id "local-visit-id" :workspace workspace
                      :working-directory root :permission-mode 'ask))
            (address "work://notes/one.txt")
            (patch (string-join
