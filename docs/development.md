@@ -15,6 +15,17 @@ Run `npx @emacs-eask/cli upgrade PACKAGE` to update. For example:
 npx @emacs-eask/cli upgrade gptel gptel-agent
 ```
 
+Provider experiments intended to represent the user's configured setup must
+verify the dependencies actually loaded in that setup and in the isolated
+runner. A refreshed upstream checkout or matching model configuration does not
+establish equivalence when the user runs a local dependency branch. Record loaded
+library paths and source hashes; use a frozen copy of the intended dependency
+sources in the runner before loading mevedel. Before paid calls, check the native
+dry-run request for consequential controls such as reasoning effort and output
+limits in that same runner. A policy variable being set is insufficient if the
+loaded transport does not serialize it. Keep any intentionally different
+dependency configuration explicit in the protocol and conclusions.
+
 ## gptel and gptel-agent source rule
 
 mevedel is tightly coupled to gptel and also depends on gptel-agent. Before
