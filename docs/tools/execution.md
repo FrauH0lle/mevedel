@@ -60,7 +60,8 @@ That disclosure does not authorize unrelated operations or expand user scope.
 Bash waits for `yield_time_ms`, then returns an `execution_id` if still running.
 Use WriteStdin with empty `chars` to wait for new unread output. Poll the same
 execution until it completes; a quiet interval does not establish completion.
-ListExecutions lists your managed commands and StopExecution stops one.
+ListExecutions lists yielded commands owned by the calling agent, and
+StopExecution stops one of those commands.
 There is no automatic command timeout; a native `timeout` command can enforce
 a deadline. Shell backgrounding (`&`) bypasses this managed lifetime and should
 be replaced with a small yield interval.

@@ -43,12 +43,12 @@ HTML directly - don't re-read or re-apply this template.
 ## Flavor
 
 - **Numbered steps** (the default): a progression the reader follows start to
-  finish. Use it for concept explainers - how something works. Aim for 3-6
-  steps, one idea each. Fewer and it is a report; more and it wants splitting.
+  finish. Use it for concept explainers - how something works. Give each
+  stage one idea and use the stages the mechanism needs.
 - **Sections**: a tour of a system, a change, or an architecture, where reading
   order is looser and code carries more weight. Use it for PR walkthroughs,
-  codebase tours, and design overviews - 2-7 sections cut at the material's
-  joints, grouped rather than split mechanically. Open with one wide
+  codebase tours, and design overviews. Group sections at the material's
+  natural boundaries. Open with one wide
   architecture or flow diagram when the subject has a structural story.
 
 ## Slots
@@ -56,8 +56,8 @@ HTML directly - don't re-read or re-apply this template.
 | Slot | What to fill in |
 | --- | --- |
 | `TITLE` | What's being explained, phrased as the question the reader has. Appears twice - the `<title>` element and the visible `<h1>`. Fill both. |
-| `LEDE` | Two or three sentences: what the reader will understand by the end, and why it matters. |
-| `STEPS` | Steps flavor: one `<li class="step">` per stage - a heading, 1-3 short paragraphs, and a `.visual`. May end with a `<p class="callout">` aside. |
+| `LEDE` | What the reader will understand by the end, and why it matters. |
+| `STEPS` | Steps flavor: one `<li class="step">` per stage - a heading, the explanation needed for that idea, and a `.visual`. May end with a `<p class="callout">` aside. |
 | `SECTIONS` | Sections flavor: `<section class="topic">` blocks with an `<h2>`, short prose, and `.visual` blocks that are usually code. |
 | `RECAP` | The core takeaways, restated in the reader's new vocabulary. |
 

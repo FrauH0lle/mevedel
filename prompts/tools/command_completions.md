@@ -19,7 +19,10 @@ Discover interactive command names known to the running Emacs.
 ### Examples of good usage
 
 <example>
-command_completions(command_prefix="org-")
+command_completions(command_prefix="org agenda")
+Find interactive commands matching both naming fragments under the installed
+Orderless configuration. Use an exact returned name for later introspection;
+the result depends on symbols available in this Emacs.
 </example>
 
 ### Examples of bad usage

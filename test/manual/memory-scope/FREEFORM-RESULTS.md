@@ -102,11 +102,14 @@ Production behavior is unchanged. This remains a throwaway prototype on
 
 ## Evidence and validation
 
+The local raw-result paths below were not retained in this checkout; they are
+historical locations, not downloadable repository artifacts.
+
 - [Runner](run.el), [measurement/review renderer](summarize.py).
-- Raw local results: [Sol](../../../.scratch/memory-scope-freeform/sol.json),
-  [Luna](../../../.scratch/memory-scope-freeform/luna.json),
-  [Flash](../../../.scratch/memory-scope-freeform/flash.json).
-- [Expanded review sheet](../../../.scratch/memory-scope-freeform/review.md),
+- Raw local results: Sol (`.scratch/memory-scope-freeform/sol.json`),
+  Luna (`.scratch/memory-scope-freeform/luna.json`),
+  Flash (`.scratch/memory-scope-freeform/flash.json`).
+- Expanded review sheet (`.scratch/memory-scope-freeform/review.md`),
   including the final files after each reader.
 
 Model settings and dependencies match the previous runs: Codex effort `none`,

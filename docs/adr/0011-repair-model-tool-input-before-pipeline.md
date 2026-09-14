@@ -10,11 +10,7 @@ This preserves raw argument distinctions needed for safe repair without a
 global preprocessing pass that could rewrite already-valid content.
 
 Generic repair is a bounded, ordered catalogue rather than a growing set of
-model-specific branches. The previously accepted tool-owned callback had no
-production declarations, while it required a second repair phase, callback
-audit validation, and cross-phase cycle tracking. It is removed; add a
-concrete tool-specific repair only when a production relational invariant
-cannot be represented by the catalogue. `path` is a mevedel-internal semantic
+model-specific branches. `path` is a mevedel-internal semantic
 schema type lowered to JSON string for providers.
 
 Successful repairs run without a retry and add transparent model feedback.
@@ -23,13 +19,20 @@ session telemetry, while affected transcript rows reuse the hidden hook-audit
 side channel. Neither surface stores argument values. These diagnostics are
 best-effort and must never block a validated tool call.
 
-Amended 2026-08-23: the catalogue gains a sixth rule, clamping numbers to
-`:minimum`/`:maximum` bounds declared in the tool arg DSL. What moved the
-decision: Bash `yield_time_ms` and WaitAgent `timeout_ms` silently clamped model
-arguments with no corrective note and no telemetry rule, so the model kept
-resending out-of-range values. WriteStdin now advertises the union of its input
-and poll ranges, but its `chars`-dependent bounds remain handler policy and
-requested-versus-effective telemetry. The generic rule stays deterministic —
-the target is the declared bound, never a guess — and the JSON-parse rule
-tolerates range issues on re-validation because the clamp fixes them in a
-later step of the same bounded pass.
+The catalogue also clamps numeric values to declared `:minimum`/`:maximum`
+bounds. Conditional bounds, such as WriteStdin's input-versus-poll range, remain
+handler policy with requested-versus-effective telemetry.
+
+## Decision history
+
+The tool-owned repair callback had no production declarations but required a
+second phase, audit validation, and cross-phase cycle tracking. The bounded
+catalogue replaced it; tool-specific relational repair is not part of the current
+interface.
+
+On 2026-08-23 numeric clamping joined the catalogue because Bash `yield_time_ms`
+and WaitAgent `timeout_ms` silently normalized out-of-range input without repair
+feedback or telemetry. Deterministic declared bounds replaced that invisible
+normalization at raw model admission. JSON parsing permits intermediate range
+issues so the later clamp can finish the same bounded pass. WriteStdin exposes
+the union of its ranges while retaining its argument-dependent handler rule.

@@ -19,6 +19,8 @@ Read a variable's global default value in the running Emacs.
 
 <example>
 variable_value(variable="fill-column")
+If the result is 70, it establishes the global default of 70. A source buffer
+can still have a different buffer-local fill-column; this call does not inspect it.
 </example>
 
 ### Examples of bad usage

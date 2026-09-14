@@ -2,75 +2,55 @@
 
 Status: accepted
 
-A profiled session (2026-08-25) wrote 434 immutable publication generations
-(227MB, peak 21/minute).  Session publication machinery accounted for roughly
-30% of 8.6GB of allocations in a 31-minute window while garbage collection
-took 60% of CPU samples.  The dominant trigger was
-`mevedel-agent-control--persist-session`: every agent activity transition
-forced a full synchronous sidecar publication, and a single permission prompt
-produced two — one when `block-turn` marked the agent blocked, one when its
-release closure marked it running again.  With 763 permission decisions in
-the session, observational flavor changes alone produced hundreds of
-generations whose content the next acknowledged commit rewrote anyway.
+## Current decision
 
-## Decision
+Acknowledged agent mutations remain synchronous: spawn registration, mailbox
+append, RESULT publication, and settlement return only after their publication
+commits. They refuse reentrant queueing. Observational activity changes and
+mailbox consumption schedule one sidecar-only registry save per session, with
+a two-second default debounce through the idle-transport scheduler.
 
-Agent persistence splits along the seam the code already had:
+The registry save does not save the root transcript, rebuild its prompt index,
+scan snapshots, or read the artifact folder. Portable publication overlays the
+sidecar while retaining other committed artifacts. A session without a committed
+sidecar waits for its next critical commit. Synchronous commit absorbs a pending
+save; active publication defers it; Emacs exit flushes pending registry saves.
+[Sessions](../sessions.md) owns the persistence and recovery contract.
 
-- **Acknowledged mutations stay synchronous.**  Spawn registration, mailbox
-  enqueue, RESULT publication, and settlement call
-  `mevedel-agent-control-commit-session`, which forces the save and refuses
-  reentrant queueing.  Their contract (this repository's `docs/sessions.md`
-  and ADR 0064) is unchanged: the caller returns only after the batch changes
-  the immutable head.
-- **Observational persists debounce, and write only the sidecar.**
-  `mevedel-agent-control--persist-session` — reached from activity
-  transitions, mailbox consumption, reservation rollback, and follow-up
-  dispatch failure, all already best-effort with swallowed errors —
-  schedules `mevedel-session-persistence-save-agent-state-soon`: one timer
-  per session (`mevedel-session-persistence-agent-save-debounce`, 2s),
-  handed to `mevedel-transport-run-when-idle`, landing as one
-  `mevedel-session-artifacts-save-agent-registry`.  The registry save
-  rewrites the sidecar (which carries the agent registry the persist is
-  about) and nothing else: no segment `save-buffer`, no snapshot scan, no
-  prompt-index update.  The transcript segment is committed at settlement
-  anyway, so during an active turn the full save wrote a perpetually
-  modified segment every debounce tick — a follow-up profile (2026-08-26)
-  attributed over 2GB of a session's allocation to the deferred full saves
-  and showed one visible whole-segment write every few seconds.  Portable
-  sessions publish that same sidecar as a one-artifact commit; the
-  manifest overlay keeps the committed segment, instruction, and
-  artifact-folder entries.  The original decision kept the full save for
-  portable sessions on the assumption that its byte comparison made an
-  unchanged save free.  A 2026-09 profile attributed 37% of all allocation
-  in a 2h45m session to those saves: the segment copy, artifact-folder
-  read, and instruction serialization run before the comparison, and the
-  registry a persist is about differs from the committed one by
-  construction, so the transaction was never elided.  Project sessions are
-  always portable, which made the sidecar-only path unreachable for the
-  default session type.  A portable session with no committed sidecar yet
-  skips the observational save; the next critical commit carries its
-  registry.  A synchronous commit still cancels a pending registry save
-  outright.  The deferred thunk re-arms instead of
-  writing while a critical publication is active, and the kill-emacs hook
-  flushes pending saves inline because registry mutations do not mark the
-  root buffer modified.
+## Rationale and consequences
 
-Crash inside the debounce window loses only observational flavor:
-`mevedel-agent-control-recover-interrupted` treats every active activity
-identically, and mailbox delivery is at-least-once, so a consumed-but-
-unpersisted message re-delivers exactly as it already could when persistence
-errors were swallowed.
+Acknowledgement promises durable delivery; an activity flavor does not. Recovery
+settles all abandoned active flavors identically, and mail delivery already has
+at-least-once semantics. A crash during debounce can therefore retain a stale
+activity flavor or redeliver consumed mail without losing an acknowledged send.
+A single timer avoids publishing each transient permission-blocked/running pair.
 
-## Diagnostic streams append the delta
+Diagnostic logs also append only their delta through one pinned target operation.
+A crash can tear the trailing line; logs are observational and never resume
+state. Replacing them atomically on every append was rejected for its copying
+cost. The manual describes this limitation rather than treating logs as a
+transactional journal.
 
-The same profile showed `mevedel-session-publication-append-diagnostic`
-re-reading and rewriting the whole diagnostic file per flush — quadratic in
-stream size, ~10-14MB of base64 traffic per flush at a 5.2MB telemetry log.
-The control filesystem gained an `append` verb under the same pinned-parent
-and symlink-refusal proofs, and the diagnostic path now sends one operation
-carrying only the delta.  Append works in place: a crash mid-operation can
-tear one trailing line.  That ceiling is accepted because the streams are
-single-writer under the reserved lease, line-oriented, and never read at
-resume; the upgrade path is write-to-temp plus concatenation if a consumer
-ever parses them strictly.
+## Decision history
+
+All revisions belong to ADR 0112:
+
+- **2026-08-25 profile:** 434 publication generations occupied 227 MB, peaking at
+  21/minute. Publication accounted for roughly 30% of 8.6 GB allocations in a
+  31-minute window; GC took 60% of CPU samples. The session had 763 permission
+  decisions, each producing blocked/running observational saves. Debouncing
+  replaced full synchronous saves for those unacknowledged transitions.
+- **2026-08-26 follow-up:** deferred full saves still allocated over 2 GB and
+  visibly rewrote the modified transcript every few seconds. Sidecar-only
+  registry saves removed that repeated segment work.
+- **September 2026 portable correction:** the initial change kept full saves for
+  portable sessions, assuming byte comparison made unchanged saves free. A
+  2h45m profile attributed 37% of all allocations to those saves: segment copies,
+  artifact reads, and instruction serialization preceded comparison, while the
+  changed registry prevented elision. Project sessions are portable, so the
+  optimization had missed the default case. Portable registry saves now publish
+  only the sidecar as well.
+- **Diagnostic delta append:** a 5.2 MB telemetry log caused approximately
+  10–14 MB base64 traffic per flush. Pinned append replaced complete-file
+  read/rewrite while retaining parent and symlink proofs. The accepted tradeoff
+  is a possibly torn diagnostic tail, not weaker critical publication.

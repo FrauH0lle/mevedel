@@ -235,7 +235,7 @@ whole PATH from inside gptel's curl sentinel."
 
   (mevedel-define-tool
     :name "Glob"
-    :description "Fast file pattern matching tool that works with any codebase size."
+    :description "Find paths matching a glob, with bounded results and search time."
     :prompt-file "prompts/tools/glob.md"
     :handler #'mevedel-tool-fs-search-glob
     :args ((pattern string :required
@@ -251,7 +251,7 @@ whole PATH from inside gptel's curl sentinel."
 
   (mevedel-define-tool
     :name "Read"
-    :description "Read a file from the local filesystem."
+    :description "Read supported text or media from a file or resource address."
     :prompt-file "prompts/tools/read.md"
     :handler #'mevedel-tool-fs-read
     :async-p t

@@ -53,7 +53,7 @@ run. Earlier authorized effects remain recorded and are not rolled back.
 `let` evaluates all initializer expressions in the surrounding environment:
 
 ```elisp
-(let ((paths (Glob :pattern "*.el"))
+(let ((paths (list "a.el" "b.el"))
       (count (length paths))) ; wrong: paths is not bound here
   count)
 ```
@@ -61,7 +61,7 @@ run. Earlier authorized effects remain recorded and are not rolled back.
 Use `let*` when a later initializer depends on an earlier binding:
 
 ```elisp
-(let* ((paths (Glob :pattern "*.el"))
+(let* ((paths (list "a.el" "b.el"))
        (count (length paths)))
   count)
 ```
@@ -190,7 +190,7 @@ A script may open with top-level `defun` and `defmacro` forms:
 ```elisp
 (defun read-or-nil (path)
   (let ((r (Read :file_path path)))
-    (if (plist-get r :error) nil r)))
+    (if (and (listp r) (plist-get r :error)) nil r)))
 
 (defmacro with-lines (var call &rest body)
   (let ((text (gensym)))
@@ -301,7 +301,7 @@ Scripts can inspect that value and continue:
 
 ```elisp
 (let ((result (Read :file_path path)))
-  (if (plist-get result :error)
+  (if (and (listp result) (plist-get result :error))
       (list path :unreadable)
     (list path (length result))))
 ```
@@ -349,7 +349,7 @@ These limits are intentionally generous for orchestration and restrictive for
 bulk computation. Prefer:
 
 ```elisp
-(Grep :pattern "^(defcustom" :path "." :output_mode "count")
+(Grep :pattern "^[(]defcustom" :path "." :output_mode "count")
 ```
 
 over reading every file and scanning every line in the interpreter. Narrow
@@ -363,10 +363,8 @@ audit are checkpointed, and the checkpoint is written durably twice: once
 before the first nested call and once at settlement. Retained-agent scripts
 skip this checkpoint because their own interrupted-turn handling settles them.
 Between the root-session writes, child audit progress is journaled in memory
-only (an unrelated autosave captures it
-opportunistically) — per-child sidecar writes dominated script runtime,
-serialized parallel batches, and cost one remote round-trip each on TRAMP
-targets. A crash mid-script therefore recovers the child audit as of the last
+only; an unrelated autosave captures it opportunistically. The performance
+rationale is in [ADR 0111](adr/0111-run-programmatic-tool-calls-in-a-closed-machine.md#decision-history). A crash mid-script therefore recovers the child audit as of the last
 autosave, not the last child. Recovery turns the surviving checkpoint into an
 ordinary ToolCall tool row, marks queued or running children interrupted,
 and consumes the checkpoint with the repaired segment; no lexical environment,

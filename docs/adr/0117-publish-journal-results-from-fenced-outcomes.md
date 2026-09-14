@@ -2,568 +2,237 @@
 
 Status: accepted
 
-## Context
-
-Journal inference can outlive its source buffer or the client that started
-it. Two clients may share a workspace, and a model callback may arrive after
-its attempt expires. Checking a lock or deadline and then writing leaves a
-race in which an old callback publishes after another client takes over.
-Session publication has target-native filesystem primitives and exclusive
-generation election, but its renewable lease also owns session mutation and
-control transfer. A journal request should not create a synthetic session or
-hold a session lease through inference.
-
-## Decision
-
-Use the existing pinned control filesystem for all journal storage. The
-journal belongs to the workspace's `.mevedel/journal/`, independently of
-where sessions are stored. Public Markdown entries are immutable; private
-work state lives under `state/`. Neither storage nor publication edits
-`.gitignore`.
-
-Each bounded work scope elects a unique owner by exclusively creating a
-numbered claim. Its fixed deadline uses the target clock. Completion,
-failure, cancellation, and expired-claim takeover compete to create one
-immutable outcome for that generation. A successor can be admitted only
-after that outcome exists. Exclusive creation is the fencing operation;
-clock observations and process identities alone are not authority.
-
-Ownership preconditions collect the newest-generation listing, exact claim
-identity, absence of an outcome and target time in one pinned control program.
-Every precondition takes a fresh observation; it is still not atomic admission.
-Settlement retains the deadline guard inside its locked exclusive-create
-program, so it no longer needs an additional earlier clock round trip.
-Authenticated decision reads also batch their immutable claim and outcome
-observations, reusing the existing schema and ownership validators only within
-that read operation. The measurement behind these changes was the native
-52-decision cleanup fixture: setup and teardown used 2,131 control calls,
-recovery 321 and cleanup 632. The same boundary now uses 1,693, 269 and 576,
-respectively. Three-run local medians fell from 14.10 to 12.35 seconds overall;
-recovery fell from 1.28 to 1.11 seconds and cleanup from 2.74 to 2.53 seconds.
-The larger setup saving comes from faster production constructors, with all
-52 durable decisions and their validation retained.
-
-A completed outcome retains the exact accepted payload. Callers may publish
-only that payload, and must recover an accepted unpublished result before
-starting replacement work for it. This separates acceptance from public
-publication without losing a result if the client dies between them.
-Failures and cancellations cannot replace a successor's outcome. The claim
-layer neither advances review coverage nor chooses scheduling policy.
-
-Digest IDs derive from durable capture IDs. The creation time is frozen in
-the capture descriptor, so retries name the same public file. Exclusive
-publication preserves the first result. A later result for the same metadata
-returns the existing record; conflicting metadata or a corrupt existing
-record fails closed. Discovery validates metadata, filename identity, and
-the digest grammar, rather than treating every Markdown file as a journal
-entry. Symlinks and private paths are rejected.
-
-Completed-review records use the same immutable target-native publication seam.
-Their identity derives from the pass ID; metadata includes the exact examined
-digest IDs, focus, reference-check evidence and dates, and proposal IDs. The
-public body is derived from those fields and contains no private replacement
-body or before-state. The pass owner must durably store its accepted proposal
-batch before publishing this record. General-review coverage is the union of
-IDs in published records whose focus is empty. Focused reviews, private prepared
-results, and scheduling timestamps cannot consume general coverage. External
-review additions and removals participate in the same throttled observation as
-digests, even when the newest digest filename is unchanged. Cleanup retains
-review and decision records while evidence dependencies or unresolved work
-need them, then expires each complete dependency group together.
-
-Later decisions use their own immutable `kind: decision` records. Public fields
-are identities, date, status, optional reason, and the hash of required private
-state; they never copy original or proposed topic bodies into the journal. The
-codec selects a closed schema by record kind, replacing the earlier boolean
-review selector as the third kind makes that interface ambiguous.
-
-Rejection accepts an immutable private record hash under current workspace
-ownership before publishing its decision. Recovery replays only that accepted
-record. It verifies the original proposal bundle and workspace identity; an
-external public record without matching acceptance evidence cannot decide a
-proposal or release its pins. Tests publish such an unaccepted record and
-confirm that status/rejection fail closed and later model evidence omits it.
-Rejection checks original root authority without requiring unchanged topic
-bytes, because it performs no target edit. Repeated rejection keeps its original
-decision and reason. All proposals must be terminal before pass evidence pins
-are released, and later publication recovery still works after digest expiry.
-
-The next review receives up to twenty whole rejection records within 8 KiB,
-including original proposed content and the user's reason. Original root
-authority gates private content disclosure; unavailable or oversized records
-are counted as omissions. These are untrusted evidence for model judgment,
-not semantic deduplication or authority to repeat a rejected change.
-
-Review scope capture binds each root ID to its original physical directory,
-execution target, and local host/user origin. Shared proposals must not resolve
-their IDs through the approving client's current memory configuration. Bounded
-whole-file snapshots retain literal bytes and hashes, including indexes, while
-complete directory observations can establish expected absence for creation.
-A truncated observation cannot establish absence. A boundary test showed that
-absence of a filename alone was insufficient: a parent could be a symlink to
-another root. The inventory therefore retains ordinary directory names and
-rejects creation beneath any captured non-directory parent. Target reads also
-use the pinned control-filesystem operation. These checks provide before-state
-and freshness evidence; write coordination and recoverable application remain
-the proposal coordinator's responsibility.
-
-Workspace-source investigation excludes every configured memory root, including
-ones whose unavailable index prevented capturing their contents. The captured
-exclusion list is separate from the admitted before-state: otherwise a failed
-memory read would enlarge source authority. The bounded reference pre-check
-uses this same source boundary and records dated path-existence observations.
-It leaves unsupported reference kinds unknown and does not certify symbols,
-commands, lines, or the correctness of the associated memory.
-
-Consolidation investigation uses request-local gptel tools with an explicit
-captured-root argument. It does not create a session or register tools globally.
-Memory and journal searches operate on admitted copies; bounded source searches
-use the same copy boundary after source authorization. Ordinary Glob/Grep supply
-the search behavior, while the investigation owns budgets, copy cleanup, and
-late-result suppression. The external-helper boundary now returns cancellation
-functions because sessionless owners could not previously stop an individual
-search. Cancellation follows the existing process owner's terminal cleanup for
-its single child. A failed confined launch settles without an unrestricted
-retry, as required by [ADR 0116](0116-return-failed-confined-launches-without-retry.md).
-
-Investigation completion restores the caller's working directory before invoking
-its result callback. A recorded review failed after an empty `.mevedel/**` Glob:
-the ordinary search returned synchronously, copy cleanup deleted the dynamically
-bound working directory, and gptel's immediate follow-up could not launch there.
-A native empty-search callback and local HTTP tool-loop test reproduce that
-failure. Restoring the caller directory fixes the lifecycle at its owning seam;
-it needs no deferred callback, retained copy, provider retry or model instruction.
-
-The consolidation request measures gptel's prepared provider payload before
-dispatch and again before every tool follow-up. Raw evidence length alone would
-miss tool schemas and provider formatting. Admission keeps complete digests and
-reports omissions; only a terminal validated response can reach the publication
-coordinator. A local HTTP test exercises actual provider parsing, Read execution,
-follow-up preparation, final validation, and cumulative token accounting.
-gptel's HTTP-completion callback is not overall tool-loop completion, so the
-request settles through its FSM terminal states. It disables interactive tool
-confirmation for its already scoped read tools: an inherited global confirmation
-setting otherwise stalled a sessionless request. Unknown tools fail before
-dispatch. Deadline, tool exhaustion, output limits, and buffer closure all
-retire the same request generation without publishing coverage.
-
-Pass selection uses a fresh validated journal observation. Completed public
-digests remain eligible while their source session continues, including when
-another client owns it. Selection no longer reads source-session locks or leases;
-immutable published evidence requires no authority to mutate its source session.
-Consolidation admission and evidence pins still fence review and publication.
-
-Prepared consolidation state retains complete selected digest bodies and source
-fingerprints alongside the original scope. Preparation holds journal mutation
-ownership, recovers accepted expiry first, verifies the source entries, then
-creates pass-specific evidence pins. A crash test leaves an accepted expiry
-manifest unapplied: preparation finishes that expiry and refuses to pin the old
-selection. This prevents late evidence retention from undoing an earlier deletion
-decision. Pins identify the prepared record by hash and release independently.
-
-Accepted proposal bundles retain exact before-state, including indexes and merge
-inputs, and bind proposal identities to the pass and original targets. The bundle
-is immutable before its hash enters the pass claim's outcome election. Publication
-verifies both that accepted hash and its prepared-state hash, then writes the
-public review under fresh journal mutation ownership. A restart can replay that
-same publication without repeating inference. Public records contain identities
-and reference-check metadata; global/client-local memory bodies remain private.
-Only the published review consumes general coverage. Publication releases omitted
-evidence and no-action pins afterward; unresolved proposals retain admitted
-evidence. A later pin-release failure does not undo a completed review.
-
-Private pass records use the package's established durable Lisp representation
-with escaped literal bytes and a 4 MiB bound, avoiding a second conversion layer
-for captured alists and byte strings. Readers disable evaluation and circular
-syntax; accepted content must match its fenced hash before decoding. Original
-root authority remains mandatory when displaying captured bodies or applying
-proposals, even though storage can recover public review metadata on another
-client.
-
-The coordinator acquires one 180-second workspace claim, recovers prior accepted
-publications before selection, and fences every inference callback against the
-current target generation. Its timer includes preparation time. Selection and
-pin preparation both recover accepted expiry under journal mutation ownership;
-preparation rejects any selected source changed between those operations. A
-real-expiry test lets an owner expire, admits a successor with its own pins,
-then delivers the old owner's success: it cannot publish or disturb the
-successor. Closing the request buffer follows the same cancellation settlement.
-Explicit commands, completed root turns, digest publication and workspace
-activation use this coordinator. Automatic opportunities check mode and cached timing without target
-I/O, coalesce while queued, and defer through the transport idle boundary.
-Under current workspace ownership the coordinator recovers earlier accepted
-results, checks elapsed target time since the last successful general review,
-then counts eligible unreviewed digests. Default thresholds are 24 hours and
-five digests. One day before configured ordinary recall expires, even one
-unreviewed digest may pass the count gate. A failed check defers another scan for
-ten minutes. This
-second check matters when another client finishes between the initial
-observation and admission. Focused reviews never change the general clock, and
-retired completion metadata retains it after expiry. Explicit commands bypass
-the time/count gate. No success callback recursively drains the backlog.
-
-Propose is the default mode. Auto runs the same read-only review and then uses
-the existing checked application operation sequentially; instruction proposals
-remain pending. The admission mode is frozen through asynchronous settlement.
-The old application return value was only the immutable public decision, so
-counting its changed files would also count an idempotent return of another
-call's work. An optional confirmation callback now reports changed paths only
-for a new application by that call. Auto counts distinct paths across the pass,
-including a shared index once. Cancellation during application finishes the
-current checked operation and holds subsequent proposals. Failed applications
-retain the same stale/unavailable/recovery evidence used by explicit approval.
-
-The first configured-model consolidation evaluation exposed a Unicode boundary
-error before inference: the JSON encoder returns UTF-8 bytes, and embedding
-those bytes as prompt text made gptel's next JSON serialization reject the
-request. Review input now decodes that JSON to text before request preparation.
-The same boundary applies to rejection evidence, public journal headers and
-derived bodies, and JSON-quoted topic titles/descriptions. Unicode regression
-cases verify request admission, inspection text, immutable metadata round trips,
-and equality between patch text and decoded file bytes. This uses the existing
-JSON encoders and UTF-8 conversion; no alternate persisted format is introduced.
-
-Memory transaction preparation now derives complete topic and index changes
-from accepted before-state. It generates canonical name/description/type
-frontmatter, escapes index labels and destinations, validates destinations
-including encoded aliases, and replaces/removes affected links while retaining
-unrelated index lines. Instruction changes append only to the captured file.
-The preparer writes nothing; the decision owner persists complete before/after
-intent before applying through the shared patch engine.
-
-The shared ApplyPatch transaction accepts expected-before snapshots and an
-optional current-owner predicate. A before-state mismatch rejects the whole
-batch before effects. It rechecks each path before writing and derives exact
-expected after-state from the intended bytes, not from a later observation that
-might belong to another writer. Rollback restores only matching owned results;
-intervening disk or unsaved buffer edits are preserved as incomplete recovery.
-An ownership-transfer test settles the old claim and admits a successor during
-buffer synchronization: the old transaction cannot undo the successor's files.
-This replaces the previous unconditional snapshot restoration, which reproduced
-data loss when a synchronization hook wrote an intervening edit before failing.
-
-Application now holds both workspace ownership and a target-root claim. A
-workspace-only claim cannot serialize two workspaces using one global memory
-root. Exact intent stays private in the originating journal; a hash-only pending
-marker at the target blocks successors until a resolved decision is durable.
-Claim expiry alone cannot remove this fence.
-Final review identified an additional race: a client could pause after its
-ownership check, then resume its filesystem write after recovery retired that
-marker and a successor applied a change. Client-side predicates cannot fence an
-already-admitted write. Curated mutations, rollback and marker retirement now
-use the same target-side directory `flock` as claim settlement. Guard checks and
-the mutation run in one pinned program while that lock remains held. Expiry uses
-the same filesystem clock as admission, and requested permissions are applied to
-the temporary before rename, keeping crash states recognizable. Independent
-Emacs tests pause a writer inside that program and prove takeover waits; later
-old writes/deletes are refused on both local and TRAMP targets.
-
-Review also found abandoned PID-lock recovery could delete a normal resume's
-replacement after observing stale state. Creation, replacement, release and
-stale sweeping now share Emacs native file locking around the expected-holder
-comparison and mutation. This preserves file-session platform support and keeps
-background recovery from prompting to break a live mutation lock.
-
-Source investigation formerly passed range requests straight to the ordinary
-reader, which could accumulate a whole large single-line file before result
-truncation. It now uses the existing pinned 512-KiB snapshot boundary before
-ordinary line selection. Oversized or unavailable source stays unknown.
- The reserved coordination directory
-is excluded from investigation and recursive memory inventory, avoiding both
-control-state disclosure and exhaustion of the bounded inventory by claim history.
-
-Crash reconciliation compares every captured dependency, including an unchanged
-index, with exact before/after snapshots. Complete writes are recorded as applied
-without repeating them. Partial or foreign state retains the fence. Explicit
-rollback uses the patch engine and refuses intervening edits; before-state stays
-retained for inspection and later checked reversal. Public decisions carry only
-identities, outcome, reason, and the private-state hash. Their accepted claim
-generation orders status, avoiding ambiguous retries with identical timestamps.
-
-A sequential-approval test exposed an overly strict index expectation: the first
-accepted proposal made the second stale despite both belonging to one pass.
-Application now folds only confirmed, hash-verified same-pass index transitions
-into the next expected snapshot. It never adopts current target bytes, so an
-external index edit still blocks application. Original proposals remain immutable.
-
-Checked reversal uses the same durable-intent and decision protocol. The reverse
-intent binds the original write identity/hash and swaps its exact before/after
-snapshots; it cannot choose a new target or baseline. Reversal checks every
-dependency, including the index, and adds a separate immutable `reversed`
-decision. The proposal stays terminal. This preserves the original application
-as evidence and makes a crash during reversal distinguishable from an incomplete
-initial application. An untouched reversal leaves the original application in
-place; a partial reversal remains fenced and can be explicitly rolled back.
-Only completed transitions advance shared-index expectations, so an aborted
-reversal cannot manufacture a new baseline for remaining proposals.
-
-Recovery discovery distinguishes a retained intent from an admitted write. A
-private intent saved before its root marker cannot claim later external bytes
-as its own completed application. Discovery therefore reconciles only verified
-marked attempts after recovering accepted publications under successor workspace
-ownership. Unreadable and unavailable records remain visible, and one unavailable
-root does not rebind or hide another root's pending work.
-
-The proposal cockpit follows the shared tabulated surface contract. It owns only
-navigation and presentation; accept/reject/reverse/recover delegate to persisted
-decision owners. Opening or refreshing the table cannot disturb the originating
-composer or take over a live pass. Body/diff inspection checks original root
-authority, and the table can still name unavailable records without disclosing
-their private contents. Background request inspection/cancellation uses the pass
-runner's existing buffer/cancel handles rather than creating a new session.
-
-`/remember [focus]` and `M-x mevedel-remember` now start that same sessionless
-runner and open the proposal table. Manual review can inspect current memory
-without an eligible digest batch. Completion refreshes only an existing matching
-table and preserves the conversation composer. The bundled report-only remember
-skill is removed, leaving one command route. Automatic completion refreshes the
-same table; auto reports confirmed updated-file counts and held proposals.
-
-A long-session publication test exposed two boundary errors: the original
-24 KiB entry limit could not fit complete turn IDs, and the decoder counted
-publication separators against an otherwise valid 16 KiB body. Public entries
-now have an 8 MiB total bound, matching the scale of private capture storage.
-Metadata admission reserves the full digest body allowance; descriptor size is
-checked before publication or pinning. The decoder excludes separator whitespace
-from the body budget. These checks reject oversized input without dropping
-coverage IDs or creating an unreadable pinned capture.
-
-Evidence retention uses immutable, capture-keyed pins under the source
-session's private `.journal-pins/` directory. Keeping these references beside
-the source lets existing cleanup entry points honor them without locating or
-opening a workspace journal. A pin retains the whole session, its referenced
-publication heads, and every generation those heads resolve through. A
-malformed pin blocks collection rather than silently releasing evidence.
-Pin creation requires the source session's mutation authority; publication
-or explicit discard releases only that capture's pin. An unsealed checkpoint
-may also be superseded by an already pinned, ready checkpoint containing all
-of its completed-turn identities. Capture descriptors
-and model/control state still belong to the workspace journal's `state/`.
-
-Completed-work checkpoints are created after successful root-turn save and
-before generation collection, under the source session's existing authority.
-Portable capture holds a bounded lease reservation during the synchronous
-snapshot. A single exclusively created JSON record contains its descriptor,
-projected evidence, notes, hashes, and serializable model selection. Separate
-snapshot files would allow a crash to leave metadata detached from the notes
-it described; the atomic bundle removes that interval. The source pin precedes
-the ready marker. No model inference happens during a checkpoint.
-
-Coverage uses hashes of persisted fork-point identities, alongside human-readable
-turn numbers. Numbers alone repeat after Rewind and cannot identify completed
-work. Capture IDs derive from the session and ordered stable turn identities;
-published and sealed identities are excluded from later checkpoints. An
-immutable seal records the first compaction/session-end trigger without
-rewriting the capture. Root compaction retains its selected checkpoint before
-changing the transcript and seals it after success. Buffer close and Emacs exit
-seal existing completed evidence, never a partially streamed response. Exit
-starts no inference. Turning journaling off leaves records and pins intact.
-
-Deriving capture coverage solely from surviving public digests allowed deleted
-digests to reappear as old work inside a new checkpoint. Publication now records
-capture and turn identities separately in immutable `state/coverage/` records.
-It writes the public digest first and coverage second; accepted-result recovery
-repairs an interrupted coverage write before releasing the source pin. Sealed
-pending captures reserve this interval. These identity-only records survive
-public expiry and differ from the general-review coverage consolidation owns.
-
-Digest processing uses a dedicated workspace admission scope, separate from
-consolidation ownership, plus an acceptance claim under the capture's own
-attempt directory. Both claims share one exact target-clock deadline. Giving
-them separate relative timeouts could let the capture remain eligible after
-workspace admission expired; the exact deadline prevents that extension.
-One lifecycle opportunity starts at most one sealed job. The capture claim's
-generation bounds automatic attempts to three; successful completion never
-recursively starts another request.
-
-Generation re-resolves the original provider selection and consumes frozen
-text within the shared generator's actual input budget. It uses no live session
-or model tools. The accepted capture outcome contains the exact validated digest
-body. Publication failure leaves that outcome recoverable, and later processing
-publishes it before admitting replacement inference. Publication and pin release
-precede retirement and removal of the raw evidence bundle. Accepted digest
-output remains available for inspection until control-state cleanup.
-
-Lifecycle scheduling coalesces zero-delay opportunities and then uses existing
-transport-idle deferral. Exit suppresses scheduling and cancels queued/active
-requests before its save-and-seal work; it starts no inference and does not wait
-for model output. Deadlines and cancellation preserve evidence pins for retry.
-
-Workspace activation schedules recovery before a processing opportunity. A
-temporary source owner repairs unready captures and seals abandoned checkpoints,
-using the existing PID liveness checks or portable generation election. The
-portable path can fence an expired ordinary lease because it consumes frozen
-completed evidence and changes no session head. It refuses live or publishing
-leases, unsettled mutation, and release fences for control transfer. It uses the
-existing bounded reservation and releases it before any inference; it creates
-no conversation or request. Frozen source identity and evidence hashes are
-checked before pinning and sealing. Per-capture failures are returned as
-diagnostics and do not abort recovery of unrelated captures.
-
-An interrupted supersession can leave a retired capture's pin behind. Recovery
-checks the successor's retained turn coverage before releasing that pin and
-deleting the old raw bundle. The retirement marker remains: replaying an older
-completed-turn set must not recreate a capture whose coverage already moved
-to a successor.
-
-Manual retry admits one selected sealed capture under the same ownership and
-acceptance rules, even after three automatic attempts. It never resets attempt
-history or changes the frozen model policy. The read-only job browser exposes
-unreadable and unavailable work so failures remain actionable.
-
-Explicit discard elects a cancelled outcome containing a closed omission record
-with the original source identity. It persists that record before releasing the
-pin, retiring the capture, and deleting its raw bundle. Persisting only a marker
-would leave recovery unable to locate the pin after descriptor corruption; the
-accepted omission retains enough origin information to finish without inference.
-If the descriptor was already unreadable, the user must supply the original
-source directory and its matching valid pin. Foreign client sources are not
-rebound to the current client. A completed digest outcome takes precedence over
-a later discard request. The omission marker prevents a later save of the same
-completed-turn set from recreating its discarded checkpoint.
-
-Journal expiry shares mutation ownership and also holds digest and consolidation admission
-while selecting up to 50 digest/review groups. Pending captures and evidence pins exclude
-entries from selection. A private immutable expiry manifest records exact public
-filenames and content hashes; its mutation claim accepts the manifest's hash as
-the durable outcome. Expired unaccepted owners cannot delete anything. Accepted
-manifests remain replayable after their original deadlines, and new mutations
-must finish accepted expiry before selecting further evidence. Consolidation
-must create its evidence pins within this same boundary.
-
-Completed reviews use this expiry transaction after their last surviving digest
-and own evidence pin disappear. Counting digests selected in the current batch
-as already gone would retire coverage prematurely, so review eligibility uses
-the complete pre-deletion observation. The closed manifest records each public
-record's kind/identity and exact private file hashes. Pass retirement precedes
-deletion, preventing recovery or the proposal table from resurrecting an expired
-review when only part of its private state has been removed. Private deletion
-checks the originally accepted hashes and retains intervening edits. The manifest
-and retirement marker preserve completion date and general/focused scope, so
-short retention settings cannot erase the general-review scheduling clock.
-Focus text and private topic bodies are not retained in those markers. The manifest
-schema changes directly; there is no reader for superseded manifest formats.
-
-Proposal history adds a dependency the original per-file limit did not model:
-a reversal needs its original write intent, and later decisions need the same
-accepted pass. Expiry therefore selects complete groups rather than splitting
-them across a fifty-file boundary. Each proposal must be terminal, every related
-decision old and published, and every write resolved with no target marker.
-Unavailable original-client targets retain their evidence. The manifest records
-all public decisions and the accepted hashes of private pass, decision, and
-write records; its closed path grammar cannot name curated memory files. The
-4-MiB manifest bound is checked before acceptance or deletion. A test expires
-53 public records as one group; another interrupts private deletion after the
-pass and decision bodies are gone. Retired decision/write readers skip those
-remaining files while the accepted manifest completes deletion.
-
-The large-history test also exposed repeated publication work in decision
-recovery. Recovery now compares accepted records with one public observation,
-replaying only missing or mismatched publications or unfinished evidence-pin
-release. It still authenticates accepted private dependencies; it does not
-infer acceptance from public records. Tests remove a review publication and
-restore an unreleased pin to verify both recovery paths remain active. Missing
-review publication still requires its admitted evidence pins and digest bytes;
-recovery refuses to recreate coverage when that evidence is unavailable.
-
-A phase profile of the same 53-record history later found 4,068 filesystem
-control programs and 213 authentications of its single accepted pass. Recovery
-took 2.72 seconds and expiry 5.56 seconds on the measured local target; making
-each control program cheaper had left redundant reads in the callers. Decision
-scans now reuse the last authenticated immutable pass bundle within one workspace
-observation, discarding it after publication and between operations. Retaining
-only one bundle bounds memory even when a workspace has many large passes. Readers
-return the already authenticated content hash instead of fetching its outcome
-again. Expiry authenticates each public decision once, carries its hash into the
-manifest, and inspects only additional private decisions for unpublished history.
-The deletion phase still reads and checks the accepted hash, so intervening edits
-remain for inspection. This reduced recovery to 1.34 seconds and expiry to 2.89
-seconds without changing the history size or running the test in parallel. Tests
-bound pass/decision reads and verify that later pass corruption and decision
-edits after selection still fail closed.
-
-Application first creates a private expiry marker, making the entry unavailable
-to public readers and republication, then removes the matching physical bytes.
-Unexpected bytes remain for inspection. Completion and deletion are idempotent;
-retired capture payloads may be collected, but capture coverage remains. This
-avoids leaving expired content readable when a client dies during deletion.
-The hourly cleanup opportunity runs independently of session expiry or capture
-settings, on local and TRAMP targets, without inference or recursive draining.
-
-Consolidation reports lifecycle events through the existing workspace telemetry
-writer. The coordinator emits one terminal event under its settle-once guard,
-freezing mode and scope at admission. Cancellation previously settled the
-coordinator before the runner could return its received usage; storage rejection
-also replaced that result. A read-only usage snapshot and preservation before
-publication now retain those costs without weakening cancellation fencing.
-Oversized non-streaming replies account for reported usage before validation.
-The log contains counts and categorical failure classes, never evidence,
-proposal bodies, focus text, backend objects, or arbitrary errors. It remains
-diagnostic, independent of accepted outcomes and coverage authority.
-
-Opening the proposals table was initially the only automatic discovery point
-for interrupted memory writes. Activation now schedules the same checked
-reconciliation independently of the journal capture setting, so a restart can
-resolve an admitted write without first opening that table. It coalesces repeated
-opportunities, respects transport deferral and live ownership, creates nothing
-in a workspace without consolidation state, and cancels queued work on exit.
-The main cockpit reads disposable ten-second count observations on entry and
-renders them without target I/O. The observation never grants write authority.
-
-## Consequences
-
-Recovery can inspect accepted outcomes without the original request buffer,
-provider, or process. Claim records do not contain credentials. The payload
-can contain sensitive evidence and therefore remains private control state.
-Readers of the public journal cannot reach it through entry discovery.
-
-Claims do not renew: inference must honor its bounded runtime and settle
-within the deadline. Expiration fences acceptance; it cannot physically
-stop a provider request owned by an unreachable client. Callers must abort
-their local requests on timeout and ignore rejected late callbacks.
-
-Claim generations remain on disk until their owning work can be retired.
-Cleanup must not remove a live claim, its accepted unpublished payload, or
-source pins needed for recovery. Session and generation collectors now honor
-source pins, and completed-turn autosave creates those pins. Scheduling and
-accepted-result recovery, abandoned checkpoint recovery, and explicit job
-controls are connected. Digest expiry and consolidation evidence pinning/release
-are connected. Completed consolidation and decision history expires only after
-its evidence and recovery dependencies end.
-
-Working-note capture follows the `work://` ownership model: shared files are
-captured first in deterministic filename order, then session-owned files, within
-one 32-KiB bound. There is no privileged notes filename. Shared provenance says
-that content may come from other sessions and does not establish what the
-capturing session performed. This replaces the fixed notes.md preference because
-the freeform shared-file evaluation recovered corrections without a prescribed
-file or folder structure. Captured strings stay immutable after later shared edits.
-
-## 2026-09-13: separate ordinary recall from recovery retention
-
-The prior age rule retained searchable journal evidence for a year and could
-remove old digests without a completed general review. The native cleanup
-regression demonstrated that unreviewed evidence could be deleted solely by age.
-That conflicts with the journal's role as temporary evidence for deliberate
-curation, especially when a workspace is sparse or inactive.
-
-Ordinary recall now defaults to 14 days from immutable entry creation. Public
-resource reads and cached discovery enforce this independently of physical
-cleanup. Unreviewed digests remain in storage for review; existing pins and
-accepted-operation dependencies continue to retain proposal/recovery evidence.
-Successful general no-action review consumes coverage; failure does not.
-
-The source-session exclusion also prevented review during long-lived sessions,
-although published digests are already completed, immutable evidence. Selection
-now admits them without enumerating or modifying source-session authority. Native
-consolidation admission and evidence pinning remain unchanged. Sparse evidence
-gets a review opportunity one day before configured recall expiry, subject to the
-existing general-review time gate. Workspace activation and digest publication
-join completed turns as opportunities; manual mode and the propose default stay.
-The same idle transport queue and ten-minute retry delay absorb scheduling.
-
-The public address is memory://journal/, with journal reserved alongside curated
-root keys. This changes resource naming, not storage format or permissions. The
-old scheme is rejected. No second retention service or semantic blocking registry
-is introduced; curated forgetting remains removal from curated content and its
-index pointer.
+## Current decision
+
+Journal and memory-consolidation work use workspace-owned, bounded claims on the
+existing pinned control filesystem, independently of session leases. A numbered
+claim is elected by exclusive creation with a fixed target-clock deadline.
+Completion, failure, cancellation, and expired-owner takeover compete for one
+immutable outcome. A successor requires that outcome first. Clock checks and
+process identity alone do not grant publication authority.
+
+Accepted outcomes retain exact payloads or hashes of immutable private bundles.
+Publication recovers an accepted unpublished result before replacement inference.
+Public digests, completed reviews, and proposal decisions expose only their closed
+record schemas; captured transcripts, memory bodies, before-state, and replacement
+content stay in private control storage. Public text alone cannot prove acceptance
+or decide a proposal. Source identities, original root/target/client authority,
+exact bytes, and accepted hashes remain binding through recovery.
+
+Successful completed-turn saves freeze one immutable evidence bundle and pin its
+source before marking it ready. Compaction or session-end sealing admits digest
+work without capturing incomplete responses. Stable fork-point identities define
+coverage, so Rewind's repeated turn numbers cannot alias old work. Capture coverage
+survives public digest expiry. Digest inference uses frozen model policy without a
+live session or tools; accepted output is published before source pins are released.
+
+Consolidation captures bounded memory, instructions, source observations, and
+selected digest evidence. It uses scoped read-only tools in a sessionless request.
+Only a terminal validated reply can be accepted. A published general review
+advances coverage; focused reviews, failures, private results, and timestamps do
+not. Proposals retain exact before-state and evidence until their decisions and
+recovery dependencies are resolved. Propose is the default; auto uses the same
+checked application, while instruction changes always await approval.
+
+Application holds both workspace and original target-root claims. It persists
+complete private intent and a hash-only target marker before mutations. Curated
+writes, rollback, claim settlement, and marker retirement share a target-side
+`flock` and guarded pinned program. Claim expiry alone cannot remove an unresolved
+marker. Reconciliation compares exact before/after states; it does not infer a
+successful write from an unmarked intent. Reversal is a separate accepted intent
+and decision, preserving the original application as evidence.
+
+Ordinary journal recall defaults to 14 days and is independent of physical
+retention. Unreviewed digests and unresolved proposal/recovery dependencies remain
+stored after recall ends. Expiry accepts a hash-bound manifest before deletion,
+hides expired entries before removing bytes, and deletes complete dependency
+groups. Later mutations finish accepted expiry before pinning new evidence.
+Curated memory is outside journal expiry. Public retrieval uses `memory://journal/`.
+
+The [memory manual](../memory.md) owns configuration, limits, scheduling, proposal
+syntax, commands, inspection, and recovery procedures. Control-program mechanics
+remain in [ADR 0101](0101-carry-control-operations-as-one-pinned-program.md).
+
+## Rationale, alternatives, and consequences
+
+Inference can outlive its source buffer or client. Checking a deadline and then
+writing leaves a stale-callback race. Session leases also own conversation
+mutation and transfer; manufacturing a session solely to hold journal work would
+couple unrelated lifecycles. Immutable outcome election separates acceptance from
+publication and permits recovery without the original provider or process.
+
+Claims do not renew. Expiration fences acceptance but cannot physically stop a
+provider request on an unreachable client. Local owners cancel timed-out work and
+ignore rejected callbacks. UI counts, scheduling caches, and telemetry remain
+observations, never authority. Failed or unavailable records remain inspectable.
+
+Private evidence can be sensitive despite credential-free claim records. Original
+root authority gates body inspection and application on another client. Target
+coordination requires Linux `flock` on the storage host. Retention is intentionally
+longer than ordinary recall when evidence or recovery still needs it; the recall
+limit is not an erasure guarantee.
+
+## Decision history
+
+The amendments to **ADR 0117** are consolidated below. These are the failures,
+measurements, and constraints that explain the current boundaries; the manual
+contains the corresponding operational details.
+
+### Ownership and safe application
+
+- **An ownership check followed by a client-side write was insufficient.** A
+  client could pause after the check, resume after recovery retired its marker,
+  and overwrite a successor. Workspace ownership also could not serialize two
+  workspaces sharing a global root. Independent root claims, a durable pending
+  marker, and target-side locking across guard plus mutation replaced that gap.
+  Independent Emacs tests paused writers inside the program and demonstrated
+  waiting takeover and rejection of later old writes/deletes locally and over
+  TRAMP. Replacement mode is applied before rename to preserve recognizable
+  crash states.
+- **Unconditional rollback lost intervening edits.** A synchronization hook could
+  write new content and fail, after which snapshot restoration erased it. Exact
+  expected-after matching replaced unconditional restore. An ownership-transfer
+  test admitted a successor during buffer synchronization and confirmed the old
+  transaction could not undo its files.
+- **PID-lock recovery could delete a normal resume's replacement.** Creation,
+  replacement, release, and stale sweeping now share native Emacs file locking
+  around expected-holder comparison and mutation, without prompting background
+  recovery to break a live mutation lock.
+- **One proposal's index update made another proposal in the same pass stale.**
+  Only confirmed, hash-verified same-pass index transitions now advance the next
+  expected snapshot. Current target bytes are never adopted as a new baseline;
+  external edits still block. Aborted reversals do not advance expectations.
+- **A private intent alone could misattribute external writes.** Recovery now
+  reconciles verified marked attempts after accepted publication recovery.
+  Complete applications, untouched attempts, partial writes, and foreign state
+  remain distinct. Reversal binds the original intent/hash and exact snapshots
+  rather than selecting a new target or baseline.
+- **Public decisions alone were not acceptance evidence.** A rejection's private
+  hash is accepted before publication. Tests inserted an unaccepted public record
+  and confirmed it could neither decide/reject a proposal nor enter later model
+  evidence. Rejection checks original root authority without requiring unchanged
+  topic bytes because it performs no edit.
+- **Auto's old return value could count another call's idempotent result as new
+  work.** A confirmation callback now reports paths written by that call; counts
+  deduplicate shared indexes. Cancellation completes the current checked operation
+  and holds the remaining proposals.
+
+### Evidence and request boundaries
+
+- **Filename absence did not prove safe creation.** A parent directory could be
+  a symlink into another root. Captured inventories now retain ordinary directory
+  names and reject non-directory parents. All configured memory roots remain
+  excluded from workspace investigation even when their own capture failed;
+  failed reads cannot enlarge source authority.
+- **Ordinary ranged Read could accumulate a huge single line before truncation.**
+  Source investigation now first obtains a pinned 512-KiB snapshot. Oversized
+  content stays unknown. The reserved coordination directory is excluded both
+  to avoid control-state disclosure and to prevent claim history exhausting the
+  bounded inventory.
+- **Sessionless searches lacked individual cancellation.** External helpers now
+  return the existing process owner's cancellation function. An empty synchronous
+  `.mevedel/**` Glob also left gptel's immediate follow-up in a deleted private
+  copy directory. Native callback and local HTTP tool-loop tests reproduced the
+  failure; restoring the caller directory fixed it without delayed callbacks,
+  retained copies, provider retries, or new model instructions.
+- **Raw evidence size and HTTP completion were insufficient request boundaries.**
+  Admission measures the prepared provider payload, including schemas and roles,
+  on initial and follow-up requests. Only terminal FSM completion validates the
+  final reply. Scoped read tools suppress inherited interactive confirmation,
+  which otherwise stalled sessionless work. A local HTTP test covered provider
+  parsing, Read, follow-up preparation, final validation, and cumulative usage.
+- **The first configured-model evaluation failed at a Unicode boundary before
+  inference.** Embedding JSON encoder UTF-8 bytes as prompt text broke gptel's
+  next serialization. Decoding to text fixes request input, rejection evidence,
+  journal headers/bodies, and quoted topic metadata without a new persisted
+  format. Regression cases check admission, inspection, metadata round trips,
+  and equality of patch text and decoded bytes.
+- **A long digest request spent all 4,000 output tokens on reasoning and returned
+  no digest.** New captures disable reasoning when the selected model supports
+  that control; otherwise they retain provider defaults. Existing captures keep
+  their frozen policy. This does not establish a server ceiling on providers
+  that lack an output-limit control.
+
+### Capture, publication, and recovery
+
+- **Separate snapshot files could detach metadata from its notes after a crash.**
+  One exclusively created descriptor/evidence/policy bundle replaced that
+  interval. Source-local capture pins let session cleanup honor evidence without
+  discovering a workspace journal. Pins precede readiness, and malformed pins
+  block collection.
+- **Turn numbers repeat after Rewind.** Coverage uses persisted fork-point
+  identities. Deriving it solely from surviving public digests also allowed
+  expired/deleted work to reappear in new captures. Identity-only coverage records
+  now survive expiry; accepted-result recovery repairs the interval between public
+  publication and coverage before releasing the source pin.
+- **Relative deadlines could diverge.** Workspace digest admission and the
+  capture's acceptance claim now share one exact target deadline, preventing a
+  capture from remaining eligible after workspace admission expired.
+- **Accepted expiry could be undone by late evidence pinning.** Preparation now
+  recovers expiry under journal mutation ownership before validating and pinning
+  selected bytes. A crash fixture with an accepted unapplied expiry confirms the
+  old selection is refused. Another fixture expires an inference owner, admits a
+  successor with its own pins, and delivers the old success; it cannot publish
+  or disturb the successor.
+- **Retired captures could leave pins behind or be recreated.** Recovery checks
+  a successor's retained turn coverage before old pin release and raw-bundle
+  deletion; retirement remains recorded. Discard accepts an omission containing
+  original source identity before releasing the pin. A marker alone could not
+  recover the source after descriptor corruption. Accepted digest output takes
+  precedence over later discard.
+- **The 24-KiB public entry cap failed on complete long-session turn IDs**, and
+  decoder separator whitespace exhausted an otherwise valid 16-KiB body budget.
+  Public entries now have an 8-MiB total bound, with full body allowance reserved
+  at metadata admission and separators excluded from the body budget. Oversized
+  descriptors are refused before pinning rather than dropping coverage IDs.
+- **Interrupted write recovery initially depended on opening the proposal table.**
+  Workspace activation now schedules the same checked reconciliation independently
+  of capture settings. It coalesces, respects transport/live ownership, creates no
+  state in an unused workspace, and cancels queued work on exit. `/remember` uses
+  that sessionless review owner and cockpit, replacing the report-only remember
+  skill with one command route.
+
+### Retention and cost
+
+- **One-year age-only retention could delete unreviewed evidence.** A native
+  cleanup regression reproduced that loss. On 2026-09-13 ordinary recall changed
+  to 14 days while physical cleanup retained unreviewed work and recovery
+  dependencies. Source-session exclusion also blocked long-lived-session review;
+  completed immutable digests are now eligible without source-session authority.
+  Sparse work gains an opportunity one day before recall expiry, subject to the
+  general time gate. Manual mode and the propose default remain.
+- **Per-file expiry limits split dependencies.** Reversal needs its original
+  intent and accepted pass. Expiry now selects complete groups, uses pre-deletion
+  observations for covering reviews, and records retirement before deletion.
+  Tests expire 53 public records as one group and interrupt deletion after pass
+  and decision bodies disappear. Accepted manifests finish the remaining work
+  without resurrecting history; the 4-MiB manifest cap bounds admission.
+- **Recovery repeatedly republished already-present decisions.** It now compares
+  accepted records with one public observation and replays only missing/mismatched
+  publications or incomplete pin release. Missing review recovery still requires
+  admitted pins and digest bytes; tests remove a publication and restore a pin
+  to exercise both paths.
+- **The 52-decision cleanup fixture exposed redundant control round trips.**
+  Setup/teardown, recovery, and cleanup calls fell from 2,131/321/632 to
+  1,693/269/576 after batched fresh preconditions and decision reads. Three-run
+  local medians fell from 14.10 to 12.35 seconds overall, 1.28 to 1.11 for
+  recovery, and 2.74 to 2.53 for cleanup, retaining all 52 validated decisions.
+  The settlement program's own deadline guard removed an earlier clock call.
+- **A later 53-record profile found 4,068 control programs and 213
+  authentications of one accepted pass.** Recovery/expiry took 2.72/5.56 seconds.
+  One authenticated immutable pass is now reused within an observation, discarded
+  after publication and between operations. Carrying authenticated hashes and
+  reading each public decision once reduced those times to 1.34/2.89 seconds
+  without shrinking history or parallelizing the test. Deletion still rechecks
+  accepted hashes; tests verify later corruption and edits remain errors.
+- **Cancellation and storage rejection lost received usage.** A read-only usage
+  snapshot preserves costs before terminal publication, including oversized
+  non-streaming replies. Telemetry retains counts and categorical outcomes, not
+  private evidence or authority.
+- **Fixed `notes.md` preference was replaced by freeform shared working files.**
+  The shared-file evaluation recovered corrections without prescribed names or
+  folders. Capture reads shared files before session files within one 32-KiB
+  bound, retaining provenance without attributing other sessions' notes to this
+  session. The journal namespace moved to `memory://journal/` without changing
+  storage or granting curated-memory write permission; see
+  [ADR 0104](0104-keep-resource-addresses-closed-and-capability-neutral.md).

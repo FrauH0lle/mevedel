@@ -12,21 +12,24 @@ stateless `mevedel-context-summary.el` generator.
 
 ## Compaction flow
 
+The diagram follows automatic admission for a root session. Manual compaction starts explicitly
+and leaves successful compacted context for the next accepted input.
+
 ```mermaid
 flowchart TD
-    A[User request or manual compact] --> B[Estimate context usage]
-    B --> C{Threshold crossed?}
-    C -- No --> D[Send request normally]
-    C -- Yes --> E{Session eligible?}
-    E -- No --> F[Warn once and continue]
-    E -- Yes --> G[Project selected transcript evidence]
-    G --> H[Generate continuation context summary]
-    H --> I{Succeeded?}
-    I -- No --> J[Retry or disable auto-compaction]
-    I -- Yes --> K[Finalize old segment]
-    K --> L[Create new segment with summary and tail]
-    L --> M[Resume original request]
+    A[Before send or tool continuation] --> B{Automatic threshold reached?}
+    B -- No --> C[Continue request]
+    B -- Yes --> D{Eligible writable context?}
+    D -- No --> E[Warn once and continue]
+    D -- Yes --> F[Run compaction]
+    F --> G{Compaction succeeded?}
+    G -- No --> H[End pending request with an error]
+    G -- Yes --> I[Resume request from the new compacted segment]
 ```
+
+Automatic failure does not send the original request with overflowing context.
+Repeated failures disable automatic compaction for that session; see the failure
+handling contract below.
 
 ## User model
 
@@ -101,7 +104,6 @@ fractional threshold to a near-zero value.
 
 `mevedel-compact-estimation-token-threshold` is a float strictly between `0.0` and
 `1.0`, default `0.80`.  Integer thresholds and invalid ratios are rejected.
-This is a breaking configuration change.
 
 Automatic admission resolves both the realized target model and the
 `summarization` workload model.  It triggers when the estimate reaches the
@@ -120,7 +122,7 @@ warns once and lets the request proceed normally.
 ## Token estimate
 
 Before a request is sent, mevedel still needs a local estimate. It uses
-the historic chars/4 scan when no API baseline is available, ignoring
+a chars/4 scan when no API baseline is available, ignoring
 regions marked `gptel 'ignore` and excluding file-local variables. Complete
 retained reminder bodies count as model-visible content; their encoded records
 and provider reconstruction metadata do not.
@@ -157,12 +159,12 @@ provider-reported usage baseline remains authoritative.
 
 The first automatic gate is installed as a gptel prompt transform. It
 runs after skill/model overrides, mention expansion, and reminder
-injection. This order matters:
+staging. Reminders are delivered when the provider request is realized. This order matters:
 
 - compaction uses the effective model/backend for threshold decisions.
 - source segment rotation uses the original pending user text.
 - the temporary request buffer is rebuilt after compaction and receives
-  the transformed pending text, including reminders and mentions, for
+  the transformed pending text, including expanded mentions, for
   the actual request.
 
 The pre-send estimate starts from the source chat buffer's API-corrected
@@ -276,7 +278,8 @@ choice, accept both streamed and one-shot provider delivery, and use the
 `summarization` workload policy from the session's `mevedel-model-workloads`.
 Failures retry up to three attempts with exponential backoff. Every retry
 reacquires current `PreCompact` policy before sending the otherwise identical
-summary request. After repeated failures,
+summary request. After three failed compaction runs (each with up to three
+summary-request attempts),
 `mevedel--compact-auto-disabled` prevents further automatic attempts in
 that buffer.
 
@@ -286,15 +289,13 @@ usable context.  A locally oversized request fails without gptel dispatch or
 retry.  Ordinary gptel request failures still retry the identical request up
 to three times.
 
-This preflight upper-bounds rather than estimates, because refusing locally
-is strictly better than dispatching: a locally refused request is classified
-`size', which does not retry and does not count toward disabling
-auto-compaction, while a request the provider refuses for the same reason is
-an ordinary failure that retries the identical oversized payload three times
-and then disables auto-compaction for the buffer.  Providers count tokens
-over UTF-8 bytes, so the bound charges a non-ASCII byte one token and keeps
-the chars/4 ratio only for ASCII.  The soft chat estimate above stays chars/4
-deliberately; it informs a threshold rather than upholding a promise.
+The preflight uses a byte-aware estimate: it charges non-ASCII content more
+conservatively than the ordinary chars/4 estimate while retaining that ratio
+for the estimated ASCII portion. It is not a provider tokenizer and cannot
+guarantee that an admitted request fits. A local refusal is classified `size`,
+does not retry, and does not count toward disabling auto-compaction. A provider
+context-limit refusal follows the ordinary request-failure path and can retry
+the same oversized payload before the run fails.
 
 If automatic compaction finds no old body to summarize because the threshold
 is reached entirely by the protected tail, it sends the original request only
@@ -338,8 +339,10 @@ The same request generator also accepts purpose `digest`, using
 `prompts/context-summary/digest.md` and the four headings Done, Learned,
 Surprised, and Unfinished. Digests are factual bullet lists, bounded to 16 KiB
 of UTF-8 output, with at most 4,000 requested output tokens (or the configured
-lower limit). The output limit is checked on gptel's final provider payload;
-providers that expose no supported limit fail before dispatch. Oversized
+lower limit). Supported token-limit fields are clamped on gptel's final
+provider payload. Providers without server-side token control, including Codex
+OAuth, retain the client byte bound and caller-owned timeout; these are not a
+server billing limit. Oversized
 streaming output is aborted without retaining further chunks. Callers may
 supply frozen model policy and receive completion after their source buffer
 has died. Capture, persistence, timeouts, and retries remain caller-owned.
@@ -399,11 +402,11 @@ silently truncated to fit; they count toward the generator's existing input
 size gate, which can reject an oversized request. This preserves evidence for
 the generator but does not mechanically guarantee a model's summary fidelity.
 
-Compaction neither snapshots Goal state into the segment nor queues a static
-Goal reminder. The durable Goal record remains the sole authority and is
-rendered only as fresh request-local context. Summaries may retain discoveries,
-constraints, decisions, progress, evidence, and unresolved next steps, but not
-Goal lifecycle state.
+The durable Goal record remains the authority for Goal lifecycle state.
+Fresh Goal context is derived from that record after compaction; delivered
+context can remain in the transcript, but does not control the Goal. Summaries
+preserve discoveries, constraints, decisions, progress, evidence, and unresolved
+next steps rather than serving as a serialized Goal record.
 
 ## Tail preservation
 

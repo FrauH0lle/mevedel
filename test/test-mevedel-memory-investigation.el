@@ -203,6 +203,12 @@
 		       (let ((tools (mevedel-memory-investigation-tools state)))
 			 (should (equal '("Read" "Glob" "Grep") (mapcar #'gptel-tool-name tools)))
 			 (should (cl-every #'gptel-tool-async tools))
+                         (cl-mapc
+                          (lambda (tool description)
+                            (should (string-prefix-p description
+                                                     (gptel-tool-description tool))))
+                          tools '("Read one relative file" "Find relative paths"
+                                  "Search text with a regular expression"))
 			 (should (equal known gptel--known-tools))
 			 (let (result)
 			   (funcall (gptel-tool-function (car tools)) (lambda (text) (setq result text))

@@ -7,8 +7,8 @@ Expansion runs as a gptel prompt transform (priority -90) via
 `mevedel-mention-handlers`. Each mention becomes a compact
 `[kind:KEY -- STATUS]` placeholder in the prompt text; the full content
 is a staged reminder entry (`mevedel-reminders-stage-entry`) that the
-WAIT injector delivers in the synthetic reminder message before the
-user prompt and records in the hidden injection row. Deduplication
+WAIT injector delivers in the synthetic reminder message after the
+current input and records in the hidden injection row. Deduplication
 commits ride the deferred reminder commit channel, so a request that
 dies before injection never marks content as shown.
 
@@ -41,9 +41,10 @@ content for an existing filesystem-shaped tool. When both identify a file,
 skill source, or MCP server/URI, they share the same canonical resource
 locator, but they do not share side effects.
 
-The session-owned `work://` namespace, including `work://plans/...`, is
+Session-owned `work://` descendants, including `work://plans/...`, are
 shared by the parent and retained agents for durable plans, notes, findings,
-contracts, and handoffs. It remains a tool target; `@file` and `@mcp` attach,
+contracts, and handoffs. `work://shared/...` instead belongs to the workspace
+across sessions. These remain tool targets; `@file` and `@mcp` attach,
 user `$skill` invokes or attaches, authored `!$skill` requires instruction
 context, and `@agent` delegates. Standalone/sticky Plan mode permits
 session-only `ApplyPatch` there, while an ordinary, shared, memory, or bare endpoint is
@@ -102,9 +103,7 @@ A malformed binding is corruption rather than ordinary unavailability. An
 invalid plist, unsupported kind, mismatched token, partial property run, or
 invalid lexical boundary blocks live submission so visible text cannot silently
 retarget. Persisted history containing an incompatible or malformed binding is
-quarantined by the corrupt-history path. The persisted format change is
-intentionally breaking: there is no compatibility reader, migration, registry,
-or sidecar binding store. Supporting another binding kind requires explicit
+quarantined by the corrupt-history path. Bindings live in the prompt string rather than a registry or sidecar store. Supporting another binding kind requires explicit
 schema, send-time binding, and dispatch branches.
 
 ## Mention kinds
@@ -138,7 +137,7 @@ schema, send-time binding, and dispatch branches.
   (`rg --files --hidden --sort path`, without following descendant symlinks)
   capped at
   `mevedel-file-mention-directory-max-entries` (default 1000). Text
-  contents read through `mevedel-tool-fs-read-slurp-file-contents` (512 KB cap,
+  contents read through `mevedel-tool-fs-read-slurp-file-contents` (512 KiB cap,
   line numbers). An exact path inside an active remote session store resolves
   only through that session's artifact resolver: fixed-path cache files do
   not establish presence or content. Resolved media bytes are staged in a
@@ -175,24 +174,30 @@ LLM the bracketed placeholder is a system annotation, not user text.
 flowchart TD
     A[User prompt with mentions] --> B[Prompt transform]
     B --> C[Parse mention kind and key]
-    C --> D{Handler accepts?}
+    C --> G[Resolve target, check access and load content]
+    G --> D{Handler accepts?}
     D -- No --> E[Insert rejected placeholder]
     E --> F[Stage explanatory reminder]
-    D -- Yes --> G[Check permission and load content]
-    G --> H{Already shown unchanged?}
+    D -- Yes --> H{Already shown unchanged?}
     H -- Yes --> I[Keep compact placeholder only]
     H -- No --> J[Stage content reminder entry]
-    J --> K[Attach media when supported]
-    I --> L[Model-visible prompt]
-    K --> L
+    J --> L[Model-visible prompt]
+    I --> L
     F --> L
 ```
+
+The diagram shows preparation of text attachments. Media contexts are prepared
+separately and added to the request even when their content hash is unchanged. The reminder transaction then delivers staged
+entries after the current input or completed tool results. If preparation or
+injection fails, it does not acknowledge those entries; unchanged contents are
+suppressed only after accepted delivery.
 
 ## Dedup
 
 - Per-session: `mevedel-session-mentions-shown` keyed on `(KIND . KEY)`
-  stores `(turn . content-hash)`; unchanged hashes skip re-injection and
-  media reattachment. Direct references use their UUID as `KEY`, so changed
+  stores `(turn . content-hash)`; unchanged hashes skip repeated text-reminder
+  injection. Media contexts remain part of each request that mentions them;
+  ordinary path/MIME context entries are deduplicated within that request. Direct references use their UUID as `KEY`, so changed
   contents are attached again without allowing displayed-number reuse to
   collide. Files use the absolute pathname plus requested line range; MCP
   resources use server name plus URI. The kind and exact locator prevent

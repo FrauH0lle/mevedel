@@ -6,64 +6,34 @@ For source-file responsibilities, see the [module map](module-map.md).
 
 ```mermaid
 flowchart TD
-    A[Workspace root and configuration] --> B[Data buffer]
-    B --> C[Session state]
-    C --> D[Request state]
-    D --> E[gptel request and FSM]
-    E --> R[Raw tool validation and repair]
-    R --> F[Tool pipeline and agents]
-    F --> B
-    B --> G[View buffer and previews]
-    C --> H[Persistent memory and session files]
+    W[Workspace] -->|shared records| D[Directives and source anchors]
+    W -->|one or more| S[Sessions]
+    S -->|owns| T[Canonical transcript in data buffer]
+    S -->|admits| R[Request and gptel state machine]
+    R -->|validated and authorized calls| X[Tool pipeline and agent runtime]
+    R -->|responses and results| T
+    T -->|projects into| V[Emacs view and browser view]
+    S -->|publishes| P[Durable session state]
 ```
 
-The live browser collaboration slice is composed of the
-`mevedel-collaboration.el` room/public-command facade,
-`mevedel-collaboration-guest.el` untrusted guest protocol handler,
-`mevedel-collaboration-owner.el` owner-link authority handler,
-`mevedel-collaboration-projection.el` canonical transcript projection,
-`mevedel-collaboration-task.el` task projection/publication, and
-`mevedel-collaboration-transport.el` sealed relay client. The focused
-`mevedel-collaboration-share.el` module presents bearer links and QR codes
-without exposing frame or share-buffer state to the room lifecycle. The host
-dials the self-hosted content-blind Go relay in `relay/` (which also serves
-the `relay/viewer/` HTML, CSS, and JavaScript assets); it never listens.
-Frames are AES-256-GCM sealed under a room key delivered in the bearer links'
-URL fragments. A notification-enabled viewer retains that bearer in browser
-local storage and registers a browser Web Push endpoint so an installed PWA
-can wake and reconnect. Push requests have empty bodies; only routing metadata
-is visible to the relay and browser push service. A full link additionally
-carries a write token granting prompting and interrupting; an owner link
-appends a further owner token granting the two authorities that otherwise
-require the host at the keyboard -- changing the permission mode and
-creating a session. Public-facing
-relays may require `-host-token`; the host then sends the
-matching `mevedel-collaboration-relay-host-token` in a handshake header to
-create a room. Tokenless mode keeps localhost and test deployments simple.
-The authenticated mode keeps strangers who find a public endpoint from
-opening rooms or driving outbound Web Push; guests stay tokenless, their
-authority being the bearer link.
-Each shared session owns an independent room, and multiple guests may join;
-the transport
-reconnects with bounded backoff and guests re-hello for a fresh snapshot.
-Guest prompts enter the ordinary pending-input queue; a guest whose
-transcript filter names a directive sends into that directive's discussion,
-the one directive action external input may reach. Guests see the pending
-count and their own place in line. Prompts may carry attachments -- images,
-PDFs, and text types on a fixed allowlist -- which are saved under the
-session media directory and mentioned as `@file` tokens with read grants,
-leaving Read to decide text or media.
-Full-link guests may also queue an invocation from the host-curated guest-skill
-roster, including arguments, while ordinary guest text remains skill-inert.
-It also has deterministic session/buffer/Emacs teardown. It is an observer
-only: its post-stream and post-response hooks are failure-isolated so
-projection or transport errors cannot settle a model request. Tool starts
-publish a stable running record immediately and replace it with the settled
-canonical result;
-the projection never infers running state from empty output. A configured
-public HTTPS origin is operator-managed; without one, generated links are
-loopback-only. See
-`docs/adr/0099-project-live-collaboration-from-host-authoritative-state.md`.
+A workspace shares directive records across sessions. Each session owns its
+conversation, execution target, authority and retained agents. The data buffer
+holds the canonical transcript; views project it and submit user actions through
+the owning session. A request has its own admission and settlement boundary.
+Tool and agent failures return through that boundary; a rendering failure does
+not settle the request. See [tool execution](tools.md), [agent lifecycle](agents.md)
+and [session publication and recovery](sessions.md) for their failure paths.
+
+Memory has separate workspace and user scopes. Selected memory indexes become
+request context; memory is not a transcript or a session-owned storage slot.
+See [persistent memory](#persistent-memory).
+
+Browser collaboration projects host state through an encrypted, content-blind
+relay connection. The Emacs host owns session behavior and validates guest
+actions. The [collaboration manual](collaboration.md) owns deployment, link
+authority, attachments, reconnects, notifications and lifecycle details;
+[ADR 0099](adr/0099-project-live-collaboration-from-host-authoritative-state.md)
+explains the boundary.
 
 ## Key data structures
 
@@ -288,8 +258,7 @@ time, and its reported size are all unchanged: a modification time alone is
 not proof, since restoring timestamps, a backwards clock, and
 coarse-grained filesystem stamps all leave it standing, while a change time
 cannot be set from userland and so moves anyway. A rewrite that restores
-all three is the remaining blind spot, and closing that would mean reading
-every cached file on every poll. A file over
+all three is the remaining blind spot, and the cache does not detect such a rewrite without a fresh content read. A file over
 `mevedel-file-cache-max-file-bytes` is cached as a fingerprint with no
 content, and mevedel's own session directories are refused outright
 (`mevedel-session-file-cache-excluded-p`) apart from their `artifacts`
@@ -311,8 +280,8 @@ target's distribution.  Mevedel never pushes binaries to a target.
 
 A remote project mounted into the local filesystem -- SSHFS, `rclone mount`,
 NFS, SMB -- is deliberately ordinary local operation, not a remote target.
-Mevedel sees a local path, so files, search, Bash, and sessions all work with
-no remote-specific support and no target dependencies at all.  The trade is
+Mevedel sees a local path, so files, search, Bash, and sessions use the
+ordinary local execution path and its local dependencies.  The trade is
 that the mount's host runtime is unused: commands run against the local
 toolchain, compilers, and container environment rather than the storage host's.
 Choose a TRAMP target when the project's runtime matters, and a mount when only
@@ -471,15 +440,16 @@ The shared tool-orchestration component describes useful delegation and batching
 without search/file thresholds. Dependencies, waits, approvals, and conflicting
 mutations remain sequential. ToolCall suitability lives in its description;
 activating it does not rewrite the earlier system prompt with a promotion.
-Resource availability remains context-specific. Stable assembly is structural
-cache evidence, not a provider cache-hit measurement.
+Resource availability remains context-specific. Provider cache reuse still depends on provider policy and request configuration.
 
-`mevedel-gptel-stream-bridge.el` isolates private, version-sensitive gptel
-stream advice. gptel 0.9.9.6 owns tracking-marker movement around response
-insertion and the trailing navigation newline. Mevedel retains marker locking
-if a reasoning-close stream hook signals, plus the semantic reasoning-state
-reset before injected user messages. It no longer advises WAIT to preserve the
-removed fork-only `:reasoning-open` flag.
+`mevedel-gptel-stream-bridge.el` isolates private gptel stream advice. It
+repairs detached insertion markers, falls back to raw chunks when a stale
+transformer fails, and delays early output until the process has a registered
+request state machine. Consecutive plain-text inserts are batched for
+`mevedel-gptel-stream-bridge-insert-batch-delay` seconds (0.04 by default);
+non-text boundaries and cleanup flush the batch. Setting the delay to nil or
+zero disables batching. These mechanisms preserve the data buffer as the
+transcript authority; view redraw scheduling remains separate.
 `mevedel-gptel-bridge.el` routes native steering commands through the root
 composer submission path and refuses native agent/confirmation steering;
 there is no second request-local steering queue in managed sessions.
@@ -623,19 +593,20 @@ Retained updates preserve earlier request messages. They increase history size;
 compaction can retire obsolete observations. See [reminders.md](reminders.md)
 and [ADR 0115](adr/0115-retain-delivered-conversation-fragments.md).
 
-### Adoption
+### Retained agent configuration
 
-Recreate retained agents to adopt the current frozen role contract and dynamic
-component selection. Existing frozen configurations are not rewritten. Removed
-skill-snapshot and delta APIs have no compatibility aliases or migrations.
+A retained agent keeps the role contract and dynamic component selection resolved
+at spawn. Role-definition changes apply to newly created agents. Create a new
+agent when its task needs a changed configuration; follow-ups keep the existing
+agent's snapshot.
 
 ## Resource addressing
 
 Filesystem-shaped tools consume one closed set of eight resource-address
 families: `work://`, `artifact://`, `skill://`, `agent://`, `history://`,
 `memory://` (including `memory://journal/`), `mcp://`, and `mevedel://`. `Read` supports all eight; `Glob` and
-`Grep` support `work://`, `artifact://`, `skill://`, `memory://`, `memory://journal/`, and
-`mevedel://`; `ApplyPatch` supports `work://` and explicit memory file descendants alongside ordinary filesystem
+`Grep` support `work://`, `artifact://`, `skill://`, `memory://` (including
+`memory://journal/`), `history://saved`, and `mevedel://`; `ApplyPatch` supports `work://` and explicit memory file descendants alongside ordinary filesystem
 paths. Addresses serialize canonical resource locators and do not replace
 target-native paths, mentions, or permissions. `mevedel://` is an always-
 available, read-only view of packaged Markdown documentation and exposes no
@@ -659,9 +630,7 @@ Planning remains strictly read-only and does not allow `ApplyPatch`, including
 session-only proposals, or `Eval`. The shared `local/plans/` namespace holds
 durable plans for the parent and retained agents. `work://shared/` maps to
 workspace-owned `.mevedel/shared/` for working notes and handoffs across sessions,
-with agent-chosen filenames and folders. There is no migration or compatibility reader for an older
-standalone plan layout.
-See [`address-to-resource.md`](address-to-resource.md) and
+with agent-chosen filenames and folders. See [`address-to-resource.md`](address-to-resource.md) and
 [`ADR 0104`](adr/0104-keep-resource-addresses-closed-and-capability-neutral.md).
 
 ## Persistent memory

@@ -26,6 +26,7 @@ are not filesystem paths.
 | `mevedel://` | Yes | Yes | Installed Markdown documentation |
 | `mcp://` | Yes | No | Connected servers' advertised resources |
 
+Bare `skill://` supports Read only; Glob and Grep require a selected package.
 Read a bare family address to list current entries, except memory uses
 `memory://root`. For memory descendants, use the returned
 `memory://ROOT-KEY/RELATIVE-PATH`; root keys may be readable names or hashes.
@@ -103,7 +104,8 @@ Read(file_path="docs/design.pdf", pages="2-4")
 `max_width`, `max_height`, and `max_tokens` resize images or rendered PDF pages
 and require ImageMagick (`magick` or `convert`). Omit them when original media
 is suitable. They are not text-output limits. `offset` and `limit` are text
-line controls and cannot accompany image/PDF reads.
+line controls and cannot select image/PDF content. Omit them for media; zero
+values and the default `limit=2000` are tolerated as absent.
 
 ```text
 Read(file_path="screenshots/failure.png", max_width=1600)
@@ -117,16 +119,18 @@ in particular memory addresses reject binary/media reads.
 ## Text ranges and search limits
 
 Read returns line numbers starting at 1 and defaults to at most 2000 lines.
-Files above 512 KB need explicit range controls. Individual lines are truncated
+Files above 512 KiB need explicit range controls. Individual lines are truncated
 at 2000 characters and final text output at 50 Ki characters. Use a returned
 continuation offset when available; the end of a bounded result need not be
 the end of the file. Unchanged duplicate reads may be suppressed in a session;
 ToolCall nested reads still return the content needed by the script.
 
 Glob returns up to 100 entries by default with a 30 KiB hard output cap.
-Grep bounds output at 200 KiB, and content mode omits overlong lines according
-to ripgrep's 2000-column limit. Grep's `head_limit` and zero-based `offset`
-select returned lines/entries; they do not make an unbounded search cheap.
+Grep bounds output at 200 KiB. Content mode previews overlong lines with
+ripgrep's 2000-column limit and an omission marker. Grep's `head_limit` and zero-based `offset`
+select returned lines/entries. `head_limit` defaults to 250; zero removes that
+page limit while retaining the other bounds. Paging does not make an unbounded
+search cheap.
 For a bounded content page, collection stops after at most
 `min(1000, offset + head_limit + 1)` matches per file. The extra match preserves
 truncation reporting; context lines remain part of the returned line budget.

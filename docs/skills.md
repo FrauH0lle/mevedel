@@ -61,7 +61,7 @@ Skills are scanned from configured user/project/managed/plugin dirs plus
 bundled skills under `skills/` when `mevedel-skills-include-bundled` is
 non-nil. The bundled `frontend` skill preserves product UI guidance outside
 the shared baseline. Its description is discoverable with the other skills;
-the body loads through `Skill(name="frontend")` or an explicit `/frontend`
+the body loads through `Skill(name="frontend")` or an explicit `$frontend`
 invocation, without automatically activating for every source-file read.
 The default search order is `.mevedel/skills/`,
 `.agents/skills/`, `~/.mevedel/skills/`, then `~/.agents/skills/`.
@@ -78,16 +78,10 @@ Recursive discovery does not follow directory symlinks.  A linked skill tree
 must be configured as its own explicit root; repository links cannot escape a
 configured root or create an ancestor cycle during scanning.
 
-Parsed frontmatter is kept per SKILL.md and reused while the file's
-identifier, modification time and size are unchanged. Installing a session's
-skills parses every discovered file, and the pure-Lisp YAML reader dominated
-that scan -- a profile of a startup with thirty-eight skills put it at 0.8
-seconds and a third of the whole command's allocation. Reuse is keyed on the
-file rather than remembered per scan, so hot reload is unaffected: an edited
-SKILL.md no longer matches its fingerprint and is parsed again. Frontmatter
-parsed from content a caller supplies, which is how a project skill reaches
-the parser through its hook snapshot, is not reused -- the file fingerprint
-does not identify those bytes.
+Parsed frontmatter is cached by source file identity, modification time, and
+size. Changed files are parsed again on refresh. Content supplied directly by a
+caller, including hook snapshots, bypasses the file cache because the file's
+fingerprint does not identify those bytes.
 
 Plugin skills are discovered from enabled `.codex-plugin/plugin.json`
 manifests. A manifest `skills` path is resolved relative to the plugin
@@ -198,7 +192,7 @@ review and opens the proposals cockpit. `M-x mevedel-remember` does the same;
 a prefix argument asks for focus. In manual mode, proposals wait for explicit
 decisions through the captured-state application checks. The table provides
 full body/diff/evidence inspection, accept/reject, and checked recovery or
-reversal. The bundled `remember` skill has been removed. See [memory](memory.md).
+reversal. See [memory](memory.md).
 
 Raw skill names come from frontmatter `name` when valid, otherwise the
 containing directory name. Raw names must match `[a-z0-9-]+`; visible
@@ -282,8 +276,7 @@ Worktree isolation has split surfaces:
 - `git-worktree` is model-visible but not user-invocable. It embeds
   best-effort read-only Git detection and tells the model how to mirror
   `/worktree` defaults when the user explicitly requested isolation.
-- A model-visible `Worktree` tool is deferred; until then, model-driven
-  creation uses ordinary permission-gated Bash.
+- Model-driven worktree creation uses ordinary permission-gated Bash.
 
 Plugin management:
 
@@ -317,8 +310,7 @@ Plugin management:
   the table state column and explained in `RET` details. Malformed plugin
   manifests are rendered as warning rows instead of being silently hidden.
   If an old activation binding points at a shadowed source, the enable
-  action still routes through an explicit switch confirmation. There is no
-  separate `/plugin show` command in this iteration.
+  action still routes through an explicit switch confirmation. Plugin details are available from the management buffer.
 - `/plugin enable NAME` activates all implemented plugin components for
   the current workspace. If the plugin contributes executable hooks,
   mevedel shows a concise consent summary of the risky/executable surface
@@ -405,7 +397,7 @@ Current fields include:
 - `name`, `display-name`, `description`
 - `argument-hint`, `arguments`
 - `user-invocable`, `disable-model-invocation`
-- `allowed-tools`
+- `allowed-tools`, `ptc-primitives`
 - `model`, `effort`
 - `context`, `agent`
 - `paths`
@@ -445,7 +437,9 @@ ListSkills without a query includes active path-scoped skills; a query also
 searches dormant ones. Explicit invocation is independent of path activity.
 Authored configuration changes deliver a fresh retained catalog update.
 
-The model-aware roster budget shortens descriptions before omitting names.
+The model-aware roster budget (`mevedel-skills-listing-budget`, default 0.02)
+uses the effective request model's context window and estimates four characters
+per token. It shortens descriptions before omitting entries.
 Its stable usage contract always advertises `ListSkills(query)`, including when
 no names fit. There is no separate budget reminder to repeat that instruction
 or consume a notice before dispatch.
@@ -708,10 +702,10 @@ For command invocations, parsed entries become skill-scoped permission rules
 on the owned request or agent invocation. For instructions they exist only on
 the temporary preparation request and do not grant tools to the consuming
 request. These buckets outrank session and persistent rules for allow/ask
-resolution, while deny remains absolute across all buckets. Active Goal
-planning and review phases deny tools in the native `edit` group before skill
-allow grants are considered. Bash and Eval still follow normal permission
-policy in those phases.
+resolution, while deny remains absolute across all buckets. Plan mode applies its capability restriction before skill allow grants: only
+ApplyPatch to explicit session-owned `work://` descendants has a bounded write
+exception, and directive planning has no patch exception. Goal execution uses
+ordinary request permissions. See [Plan mode](plan-mode.md).
 
 ## ToolCall Primitives
 

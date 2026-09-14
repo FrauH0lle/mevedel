@@ -53,9 +53,8 @@ current resource metadata has a usable surface:
 - `mcp://` requires at least one configured MCP server.
 
 With no valid request session, the roster still contains `mevedel://` but no
-session-owned families. An omitted family is not usable in that request and
-must not be inferred from the closed family list above. The roster does not
-change the operation matrix, permissions, or lifecycle rules below.
+session-owned families. The roster reports request-time availability metadata; it does not itself
+authorize an operation or replace resolver validation. It does not change the operation matrix, permissions, or lifecycle rules below.
 
 Unsupported scheme/operation pairs fail explicitly. Ordinary target-native
 filesystem paths retain their existing operation behavior. A bare address is a
@@ -64,7 +63,7 @@ invocation, or mutation.
 
 ## Canonical addresses and locator classes
 
-Only the nine exact `scheme://` prefixes above are internal addresses. An
+Only the eight `scheme://` prefixes above are internal addresses. An
 unknown `scheme://` prefix, malformed known address, traversal, or containment
 failure is a validation error and is not treated as a filesystem path. Other
 strings containing a colon remain ordinary tool input.
@@ -179,8 +178,12 @@ is an error rather than an empty discovery root.
   sessions in that workspace see the same files. The directory is created only
   by a permitted write and has no prescribed children. Working notes, drafts,
   findings and handoffs default here: search before creating and update relevant
-  existing files. Different workspace roots, including separate Git worktrees,
-  have separate shared areas; there is no cross-project publication mechanism.
+  existing files. Separate workspaces have separate shared areas. Worktree
+  sessions created through mevedel retain the parent workspace and share its
+  files; a worktree opened as a separate workspace has its own shared area.
+  Use `work://shared/...` to address the workspace's files: a literal relative
+  `.mevedel/shared/...` path follows the session's working directory instead.
+  There is no cross-project publication mechanism.
 - Other descendants map to the session's lazily materialized `local/` directory.
   The parent and retained agents share this session scope. First write establishes
   durable session persistence. Save, resume and rename retain it; Fork copies it
@@ -194,18 +197,20 @@ in source snapshots, touched-file tracking, diagnostics or directive patch
 capture. Shared writes use the real backing path for normal filesystem edit
 permissions; they receive no session scratch exception in Plan mode.
 
+Shared note contents are not automatically added to every conversation. Models
+discover and read them with Read, Glob, and Grep; an agent handing off work
+provides the note's address to the receiving agent.
+
 `/clean-work [focus]` explicitly reviews shared files and removes confirmed
 obsolete copies through normal ApplyPatch permissions and review. It preserves
 unresolved work and does not infer obsolescence from age or session deletion.
 There is no background expiry timer; `/learn` handles durable promotion.
 
-The former `local://` scheme is rejected; there is no alias or migration.
 The physical session directory remains named `local/` to describe its ownership.
 
 The `local/plans/` subtree is shared by the parent and retained agents for
 current and accepted plans. Working notes, findings, contracts and handoffs
-default to `work://shared/`. It is addressed as `work://plans/...`; there is no compatibility
-migration from a separate top-level plans directory or older plan format.
+default to `work://shared/`. It is addressed as `work://plans/...`.
 Accepted archives always use canonical `accepted-TIMESTAMP.md` names, so every
 managed plan is addressable. `local/plans/` is also the one part of `local/`
 that a Fork does not copy verbatim: the child keeps only the artifact already
@@ -300,8 +305,7 @@ metadata while preserving ordinary user examples and useful tool evidence.
 Discovery omits unavailable or incompatible session records and reports their
 count with the result. Failed verification of selected transcript bytes is an
 error rather than a successful empty search.
-Corrected finalization preserves bounds for newly archived sources; it does not
-repair archives whose stored bounds were already corrupted.
+Saved-history access does not repair corrupted stored bounds.
 
 ### `memory://`
 
@@ -331,8 +335,7 @@ new destination. Authored addresses remain in patch results and review headings.
 
 `journal` is a reserved branch of the memory scheme, distinct from configured
 curated-memory root keys. Its root spelling includes the final slash; descendants
-name one public entry. The old `journal://` scheme is rejected, with no alias or
-persisted-state migration. Existing journal files keep their names and layout.
+name one public entry.
 
 The workspace owns `.mevedel/journal/` on its execution target. Root Read lists
 validated published records within the ordinary recall age limit, newest first; an exact filename reads the full

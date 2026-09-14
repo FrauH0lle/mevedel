@@ -19,7 +19,7 @@ Data model
   mevedel-journal-recovery.el  abandoned checkpoint recovery through source authority
   mevedel-journal-discard.el   accepted omissions and recoverable source-pin release
   mevedel-journal-jobs.el      pending journal inspection, retry, and discard commands
-  mevedel-journal-evidence.el  frozen completed transcript and bounded local-note evidence
+  mevedel-journal-evidence.el  frozen completed transcript and bounded shared/session working notes
   mevedel-journal-pins.el      source-session and publication retention for captures
   mevedel-models.el           model tier/provider resolution, context budget
   mevedel-memory-proposal.el  bounded consolidation reply and captured-scope validation
@@ -192,6 +192,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-ask-ui.el      Ask form state, controllers, and presentation
   mevedel-tool-ui.el          Agent/InterruptAgent/ToolSearch/SendMessage assembly
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
+  mevedel-tool-goal.el        UpdateGoal terminal-state tool and captured Goal authority checks
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
   mevedel-tool-introspect.el  wraps gptel-agent introspection tools
   mevedel-buddy.el            edit recording, diff assembly, review requests

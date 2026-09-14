@@ -1,4 +1,11 @@
-# Session Persistence
+# Sessions and persistence
+
+Sessions retain conversation, request configuration, agent state, and captured
+filesystem changes across saves and resumes. Project sessions publish state on
+their execution target; file-backed sessions use their own storage authority.
+Compaction, Rewind, and Fork each preserve different parts of that state.
+
+## Directive session boundaries
 
 Settled directive work remains a complete first-class turn in its execution
 session segment. Its canonical user, response, and `(tool . id)` properties are
@@ -76,29 +83,30 @@ Transport and publication scheduling defer metadata work until it can run safely
 It updates the persisted name and buffer/view presentation, without moving files.
 Save As creates a new identity with the explicitly supplied display name.
 
-The new required naming metadata advances the sidecar format to `v0.5.5`.
-Older sidecars are unsupported; no migration or directory rewriting is performed.
+The closed sidecar schema is `v0.5.5`, including required naming metadata.
+Other schemas are rejected; there is no migration.
 
 ## Persistence flow
 
+Project-session publication has one authoritative commit point: the published
+head. Preparing a generation does not make it visible to readers. A failure
+before head publication leaves the prior head authoritative; a committed head
+remains published even if later lease normalization needs recovery.
+
 ```mermaid
 flowchart TD
-    A[Completed turn] --> B[Save current segment]
-    B --> C[Update session sidecar]
-    C --> D[Record file snapshots and logs]
-    D --> E{Resume?}
-    E -- Yes --> F[Load segment and sidecar]
-    F --> G[Rebuild data buffer]
-    G --> H[Render view]
-    E -- No --> I{Compact, Rewind, or Fork?}
-    I -- Compact --> J[Rotate segment]
-    I -- Rewind --> K[Transactionally truncate session and restore files]
-    I -- Fork --> L[Arm settled assistant response]
-    J --> B
-    K --> B
-    L --> M[Accepted model-bound follow-up]
-    M --> N[Publish and open independent child]
+    A[Writable owner prepares a generation] --> B[Write immutable artifacts and manifest]
+    B --> C{Ownership and candidate valid?}
+    C -- No --> D[Refuse publication and retain prior head]
+    C -- Yes --> E[Commit new published head]
+    E --> F[Readers validate referenced manifest and bytes]
+    F --> G[Restore data and render the view]
 ```
+
+File-backed sessions use the separate PID-lock profile described below. File
+snapshots are captured at mutation boundaries; saving persists that evidence.
+[Compaction](compaction.md), [Rewind](#rewind), and [Fork](#fork)
+use the persistence contracts described in their sections.
 
 ## Session persistence
 
@@ -149,6 +157,7 @@ Layout:
   artifacts/                         ; durable session artifacts (mockups,
                                      ; documents); cockpit inventory and
                                      ; collaboration byte source
+  tool-results/                      ; retained oversized tool output and media
   agents/                            ; sub-agent transcript .chat.org files
 ```
 
@@ -181,10 +190,7 @@ configurations, activity, mailboxes, and conversation locations. It records
 only the selected `:preset-name`; resume rebuilds mevedel variables from that
 currently registered trusted preset, so sidecar data cannot name or populate
 buffer locals. It also records the session's exact `:model-provider` and
-explicit `:reasoning-effort`. This removal of persisted preset variable keys
-and values and the durable ToolCall audit checkpoint change the sidecar
-format to `v0.5.5`; older sessions are intentionally rejected rather than
-migrated. The checkpoint contains the ToolCall call and bounded child audit,
+explicit `:reasoning-effort` and the durable ToolCall audit checkpoint. The checkpoint contains the ToolCall call and bounded child audit,
 never an interpreter continuation. A Session Fork also copies the source
 session's permission mode, sandbox mode, session permission rules, and resource
 grants at the fork point. Parent and child then diverge independently.
@@ -209,10 +215,8 @@ agents use `work://plans/...` for current and accepted plans. Working
 notes, findings, contracts, and handoffs default to workspace-owned
 `work://shared/`, outside session persistence. These shared files survive session
 cleanup and are not copied by Fork; sessions in the same workspace use the same
-files. Separate workspace roots have separate shared areas. Accepted archives are always canonical
-`accepted-TIMESTAMP.md` names, so every managed plan is addressable. The layout
-is intentionally current: there is no migration or compatibility reader for an
-older top-level `plans/` directory or persisted plan format.
+files. Separate workspace roots have separate shared areas. Accepted archives use canonical `accepted-TIMESTAMP.md` names, so every
+managed plan is addressable.
 
 `local/plans/` is the one exception to plain Fork copying, because it is managed
 plan state rather than free-form local content. A Fork drops the copied
@@ -267,9 +271,7 @@ observed later.  Publication failure leaves admission blocked and retryable.
 Admission observes the fingerprint with one target command rather than a full
 readiness probe.  Environment, capabilities, and sandbox facts are fixed for
 the life of a connection, so they are probed when the session opens, when the
-connection is replaced, and on `mevedel-retry-target-readiness`; re-deriving
-them at every mutation boundary cost roughly fifteen synchronous round trips
-per admitted mutation, and a session admits several per prompt.  A failed
+connection is replaced, and on `mevedel-retry-target-readiness`.  A failed
 observation falls back to the full probe, which settles the blocked readiness
 that admission reports.
 
@@ -305,7 +307,10 @@ the window between them to two adjacent syscall sequences rather than a
 network round trip. It does not remove the window -- another client can
 exclusively create the next generation in between -- so a lease commit
 decides who won from what it observes after its write, and exclusive
-creation is the only atomic election. Each operation reports `ok`, `conflict`,
+creation is the generation-election primitive. Callers that need a guarded
+critical section can supply a physical lock directory; target-side `flock` then
+serializes that program against other users of the same lock. Journal and memory
+mutation use this separate boundary. Each operation reports `ok`, `conflict`,
 `absent`, `mismatch`, `failed` or `skipped`, so a caller reproduces the
 per-operation nil-versus-signal contract of the single-operation wrappers.
 For two to 32 independent unbounded reads, the same control program can carry
@@ -329,20 +334,19 @@ shares a round trip with the write that needs it. Target diagnostics are
 encoded through a separate pipe, so a tool writing to stderr cannot
 present itself as a result.
 
-Round trips therefore dominate durable session work over a real remote
-connection, and the layer is written to spend as few as it can. One lease
-commit is one program, not a clock read plus two listings plus two reads plus
-a write. The interpreters those processes run through are resolved
-once per target rather than per operation, because locating a program on a
-TRAMP target costs one test per `exec-path` entry and the durability layer
-inhibits the remote file-name cache; a refused operation drops the resolved
-pair so a moved interpreter is looked up again. An operation that carries
-content pays two further round trips, because TRAMP copies its input file to
-the target and removes it afterwards. Reads never create control directories:
+Control programs combine related proofs, reads, and mutations in one dispatch.
+Interpreter paths are cached per target; whole-process failure invalidates them
+for a later lookup, while an operation-level refusal does not. ASCII request
+fields travel as arguments when shell-quoted physical lines fit 3 KiB, individual
+fields fit 96 KiB, and the total fits 512 KiB. Wrapped payloads can occupy several
+short lines. Larger requests or non-ASCII fields use an explicitly UTF-8 encoded
+input file, which incurs TRAMP transfer overhead. The carrier changes without
+splitting the program. See [ADR 0101](adr/0101-carry-control-operations-as-one-pinned-program.md)
+for these bounds and their transport rationale.
+Reads never create control directories:
 an absent transfer mailbox holds no requests, so a polling observer performs no
 target mutation. Publication proves lease ownership immediately before every
-artifact write and once after the last one; each of those proofs is one round
-trip.
+artifact write and once after the last one; those proofs may share a control program.
 Enumerating a workspace's sessions obeys the same budget. Every candidate
 directory's control artifacts are probed in one program and every lease
 directory is listed in one more, and both observations are then shared with
@@ -584,23 +588,18 @@ body arms is re-armed on exit rather than lost, and a `with-timeout` opened
 inside it still fires, because the bound lists are the ones Emacs consults
 while the body runs; only timers that existed beforehand are held.
 
-Suspension stops timers, not process sentinels, and that residual is real
-rather than theoretical. `accept-process-output` with JUST-THIS-ONE suppresses
-other processes' *output* but still dispatches their status changes, so any
-package that performs remote I/O from a sentinel can still nest inside a
-mevedel command. Observed in practice: projectile advises `delete-file` to
-invalidate its cache, which resolves a project root — `file-truename` over the
-connection — whenever a native-compilation job or a syntax checker deletes its
-own local temporary file. TRAMP refuses that nested call, which is the
-outcome the guard exists to produce: the refusal belongs to the intruding
-sentinel and the running command's reply is untouched. Nothing on this side can
-prevent it, so the mitigation is to hold fewer commands in flight, which is why
-the remote control-transfer poll is deliberately slow.
+Suspension stops timers, not process sentinels. `accept-process-output` with
+JUST-THIS-ONE suppresses other processes' output but still dispatches their
+status changes. A package performing remote I/O from a sentinel can therefore
+nest inside a mevedel command and receive TRAMP's reentrancy refusal. The remote
+control-transfer poll limits how often a command is in flight. See
+[ADR 0101](adr/0101-carry-control-operations-as-one-pinned-program.md#decision-history)
+for the failure that motivated this boundary.
 
-Each such package can be stopped at its own door, and projectile is worth
-stopping: a remote session hits it on every temporary file any sentinel
-deletes. `mevedel-transport--depth` is non-zero exactly while a TRAMP
-operation is on the stack, so the intruding work can decline to run there:
+For packages such as projectile that advise temporary-file deletion with remote
+project discovery, the following configuration suppresses that discovery while
+TRAMP is already active. `mevedel-transport--depth` is non-zero while a TRAMP
+operation is on the stack:
 
 ```elisp
 (with-eval-after-load 'projectile
@@ -650,7 +649,7 @@ spellings, and what decides the outcome is whether anybody is writing it.
 The row's annotation names the machine involved — `held by desktop`,
 `lease expired, was laptop` — from the lease record's `:host`, since the
 client id is opaque and per-process and can only answer "is this me, now".
-A lease written before hosts were recorded reads as unknown, not as an error.
+A lease without diagnostic host metadata displays `unknown`.
 
 Joining an active writer opens only its last committed publication and exposes
 `Request control` in the view. Expired takeover still requires the ordinary
@@ -707,61 +706,25 @@ such as target-side copy, restore, and rename.  It suppresses timer target I/O
 and checks final ownership but does not itself publish, commit, or drain queued
 artifacts.
 
-A generation is written on every committed save, so a turn that streamed for a
-minute leaves dozens of them; one day of one session measured 101 generations
-and 67 MB, of which 54 MB was superseded copies of a growing transcript.  A
-settled turn is where the generations that turn published stop being anyone's
-recovery state -- until settlement they are what a crashed owner resumes from,
-and afterwards nothing resolves through them -- so
-`mevedel-session-publication-collect-generations` runs there, best-effort,
-under the owner's lease.  It also runs when a restore acquires the lease,
-because a turn that never settles -- crash, suspend, lost provider callback
--- orphans everything it published and settlement never sees it again: one
-real two-day session accumulated 421 collectible generations (366 MB) that
-way.
+Publication collection runs best-effort at turn settlement and lease-acquiring
+restore. It deletes all collectible generation directories in one batched
+control program under the owner's lease. Failure warns without breaking
+settlement or restore.
 
-A collection pass is complete: every collectible generation is deleted in one
-batched control program (`mevedel-session-control-fs-delete-directories`),
-so a backlog costs one extra round trip rather than surviving to the next
-settlement.  An earlier per-pass cap of 32, motivated by one-deletion-per-
-program round trips, lost by arithmetic once publications streamed in at
-several per minute.
+Collection follows references rather than age: manifests can retain unchanged
+bytes in older generations. It reads every published sidecar, using cached
+immutable manifest/sidecar facts, and retains the current head, settled-turn
+representatives, journal capture pins, the newest
+`mevedel-session-publication-keep-recent-generations` (default 3), and their
+artifact-reference closure. Mid-turn generations become collectible once their
+turn settles unless another retained root needs them. An unreadable journal pin
+blocks collection.
 
-Collection reads every published sidecar rather than a recent window,
-because coarse target timestamps make "the newest N generations" an
-unreliable set when several publishes share a second: a generation the
-current head still resolves through could fall outside such a window.
-Manifests and sidecar facts are therefore cached in memory per generation
-path, which a committed generation's immutability makes sound.  Reading
-752 uncached generations measured 17 seconds inside one settlement and
-0.12 once cached, so the cache is what makes the complete scan
-affordable rather than an optimisation.
-
-Collection is a mark-and-sweep, never an age cap, because manifests are
-chained: a committed manifest carries unchanged entries forward verbatim rather
-than copying their bytes, so a retained head resolves artifacts through the
-generations that first wrote them.  Deleting by age would break the current
-head.  Retained roots include journal capture pins, one per distinct settled turn
-state, which is what a restore targets; the newest
-`mevedel-session-publication-keep-recent-generations` regardless; and the
-reference closure of both.  A generation captured mid-turn is not a settled
-state -- its latest prompt is one turn ahead of its turn count -- so it is
-collectable once its turn settles, and orphaned generations from failed
-publishes fall out of the same closure test.
-
-The retained count therefore floors above the number of turns rather than at
-it: the measured session collects 88 of 101 generations and keeps 13, because
-retained blobs keep their original directories alive.  Making it exactly one
-directory per turn would mean rewriting each retained head as self-contained,
-which is the copying that carry-forward exists to avoid.
-
-`ponytail:` ordinary transcript readers have no read pins; journal captures
-have explicit durable pins. The grace window covers the reader race it
-replaces them for -- a follower re-reads the owner's current head rather than
-pinning it, and the newest generations are retained regardless -- but a reader
-that resolved an older non-boundary head can still lose its bytes, and will see
-a hash or absence failure rather than silent corruption.  Add pins if
-cross-client following of superseded heads ever becomes a real access pattern.
+Ordinary transcript readers have no read pins. The recent-generation grace
+window protects typical following, but a reader of an older non-boundary head
+can lose its bytes and receive an absence or hash failure. It never silently
+falls back to mutable caches. [ADR 0072](adr/0072-make-rewind-in-place-undo.md#decision-history)
+records the retention tradeoffs and measurements.
 
 Terminal retained-agent state in an already-materialized portable project session uses
 the same seam: finalization first updates the in-memory transcript metadata and
@@ -797,8 +760,7 @@ debounce window costs at most a stale activity flavor and an
 already-possible re-delivery.  See ADR 0112.
 
 Diagnostic streams (telemetry, hook, permission, and repair logs) reach a
-remote target as one pinned `append` operation carrying only the delta;
-republishing the whole file per flush was quadratic in stream size.  The
+remote target as one pinned `append` operation carrying only the delta.  The
 append works in place, so a crash mid-operation can tear one trailing line of
 a stream nothing reads at resume.
 
@@ -856,63 +818,15 @@ queued follow-ups, their category order and edit state, session-local IDs,
 delivery pause, and failure pause are deliberately transient. Killing and
 resuming a session therefore restores accepted text only through the ordinary
 workspace input history; it does not recreate either pending-input category or
-any delivery state. There is no compatibility migration or queue-size cap.
+any delivery state. There is no queue-size cap.
 
-Standalone Plan metadata lives in the same sidecar, while its artifacts live
-under `local/plans/` in the session directory.
-Here/Fresh finalizes the planning segment through the `/clear` rotation path
-and records a `SessionStart(clear)` context snapshot.  Here/Summary instead
-uses aggressive root compaction with no preserved tail and records the compact
-handoff in the new segment.  Both contexts then submit the immutable accepted
-path and full plan through the ordinary prompt and request lifecycle.  If
-preparation or request startup fails, the sidecar keeps the accepted artifact,
-selected context, permission mode, model/effort snapshot, canonical skill
-references, implementation instructions, and the first incomplete step for
-`mevedel-retry-plan-implementation`. It also keeps a completed Summary
-handoff, so retry repeats neither a finished Fresh rotation nor a successful
-summary request.  Direct clears the record after request startup. Goal instead
-stores a reserved Goal ID before preparation and clears the record after the
-matching Goal is durably constructed, before kickoff.
-
-Plan approval can instead select Worktree/Fresh or Worktree/Summary.  Before acceptance, `RET`
-collects and validates the branch name; cancelling the minibuffer leaves the
-approval pending.  A dirty source checkout remains eligible, but the approval
-warns that the linked worktree starts at `HEAD` and excludes uncommitted
-changes.  Preparation never copies, stashes, or applies those changes.
-The source keeps its approval archive, permission mode, and durable retry
-record. The new session inherits the source preset and ordinary Goal budget,
-gets the accepted model/effort snapshot and selected permission mode, and owns a
-byte-identical immutable accepted artifact. Completed Worktree creation and
-target-artifact steps are recorded by target session identity and path, so
-retry restores that same target and does not create another worktree, session,
-or artifact.
-
-Worktree/Summary runs the same summary producer against the source transcript
-without compacting or rotating it.  The cached handoff converts source-checkout
-file references to repository-relative paths, and the new clean target segment
-stores that summary before the target artifact path, full plan, and Direct
-implementation instruction.  Retry reuses the summary, validated branch,
-worktree, target artifact, accepted model/effort, implementation attachments,
-and selected mode.
-
-When approval selects Goal instead of Direct, Goal construction happens only
-after the chosen segment, summary, Worktree, target settings, and target-local
-accepted artifact exist. The prepared target session owns the Goal record and
-its relative accepted-plan reference; the source session never owns or
-transfers the Worktree Goal. The first turn stores the full artifact path, plan
-content, and compact kickoff in the target transcript while the rendered view
-uses the short Goal implementation label.
-
-The source retry record is the durable handoff reservation. Its preallocated
-Goal ID plus the target accepted-plan reference identify a construction that
-survived a crash, allowing retry to reuse it without duplicating the Goal. A
-different unfinished target Goal remains a conflict. A matching Goal restored
-as paused is reactivated without scheduling; the surviving Plan handoff still
-owns the explicit kickoff. Worktree targets keep
-a temporary copy of the kickoff reservation so target input queues locally;
-source input stays in the source session. Here input likewise queues behind the
-kickoff. If kickoff startup fails after Plan recovery is cleared, the target
-Goal is paused and its owned queue remains held for `/goal resume`.
+Standalone Plan metadata and its implementation retry record live in the
+sidecar; draft and accepted artifacts live under `local/plans/`. The retry
+record identifies completed preparation steps, cached Summary evidence, an
+existing Worktree target, and any reserved Goal construction. It allows retry
+without repeating an accepted rotation, summary, target creation, or Goal.
+See [Plan execution](plan-mode.md) for the Here/Worktree, Fresh/Summary, and
+Direct/Goal workflows and their failure handling.
 
 The telemetry stream and diagnostics directory are observational artifacts,
 not resumable state. They are append-only within a run and are never consulted
@@ -923,7 +837,7 @@ crosses the connection. Diagnostics for such a run are consequently not
 portable. See [`telemetry.md`](telemetry.md) for the event schema, redaction
 boundary, and profiler procedure.
 
-The Goal remains in the session sidecar as a strict phase-free record: identity,
+The Goal remains in the session sidecar as a strict record: identity,
 objective, status/reason, token/time/turn accounting, optional budget, optional
 accepted-plan reference, and timestamps. Provider usage is authoritative when
 available; otherwise the request estimator supplies the charge.
@@ -967,8 +881,7 @@ filtered or incomplete fragments use normal backend serialization.
 Tool IDs are established before persistence by the
 [tool-result rendering adapter](tools.md#tool-call-identity-in-transcripts).
 It renders each completed call from its own authoritative request record;
-normalization and restoration preserve those IDs. No scan of result text guesses
-an original ID, and no migration repairs previously corrupted plain transcripts.
+normalization and restoration preserve those IDs. No scan of result text guesses an original ID.
 
 After mevedel restores persisted bounds, session restoration calls
 `mevedel-transcript-normalize-properties`. The transcript module reapplies
@@ -1000,8 +913,8 @@ rest), keeping only `GPTEL_BOUNDS`. The sidecar is the sole durable
 source of session request configuration; a stale drawer copy would
 otherwise override live buffer-locals through gptel's send advice
 (`gptel-org--send-with-props`), silently undoing a mid-session model
-change. The same strip runs at chat-buffer init and agent hydration so
-segments persisted with the old format are cleaned on sight. Restored
+change. The same strip runs at chat-buffer initialization and agent hydration,
+preventing transcript properties from overriding sidecar request policy. Restored
 sessions rebuild model, effort, and preset from the sidecar
 (`mevedel-model-apply-session-policy`, `mevedel-preset-restore-session`).
 
@@ -1191,6 +1104,8 @@ deliberately not per-turn state and remains unchanged.
 Rewind refuses while the session has live executions and points the user to
 `/ps` and `/stop`; hiding a process behind older history would violate its
 session ownership boundary.
+It also requires aborting the current provider request, interrupting active
+agent turns, and pausing an active Goal before changing the source conversation.
 
 Rewind and `/clear` also refuse while either pending-input category is nonempty.
 The user must resolve the entries in the Pending Inputs cockpit or explicitly
@@ -1214,8 +1129,7 @@ heads captured mid-turn -- a head whose latest prompt is one turn ahead of its
 turn count restores a half-arrived response, which is a recovery state rather
 than a choice. Rows are labelled with segment, turn, and that turn's prompt
 through `mevedel-session-rewind--prompt-label`, the same label the Rewind
-picker uses, so undo and redo read as one vocabulary over turns. On the
-measured session this turned 100 generation rows into 5 turn rows.
+picker uses, so undo and redo read as one vocabulary over turns.
 
 Restoring republishes the chosen generation as a **new** committed head under
 the session's reserved lease: the artifacts are materialized into a temporary
@@ -1306,8 +1220,7 @@ one-shot prompt context start empty. Ordinary session-owned local content is
 copied into independent child state rather than shared, but managed
 `local/plans/` state is projected separately: the mutable current plan and
 unrelated evidence are discarded, and only an accepted artifact that is valid
-at the fork point is preserved. There is no compatibility migration for
-discarded plan state. Only dropped-file grants referenced by the transferred
+at the fork point is preserved. Only dropped-file grants referenced by the transferred
 draft move to Child.
 The Source's current free-form `artifacts/` subtree is copied into independent
 child state. Portable forks materialize its committed immutable bytes; PID-lock
@@ -1482,7 +1395,7 @@ session from expiring. Publication-generation collection also retains each
 pinned head and every generation referenced by its manifest. Pins survive
 independently of a live buffer; publication or explicit discard must release
 them. An unreadable pin blocks generation collection, and even a malformed
-pin keeps its session from expiring. Completed root-turn autosave now creates
+pin keeps its session from expiring. Completed root-turn autosave creates
 these pins before generation collection. A checkpoint containing all of an
 unsealed predecessor's turns replaces that predecessor's pin only after its
 own pin and ready marker are durable. Compaction success, root-buffer close,
@@ -1521,12 +1434,12 @@ archives, deletes, or modifies persisted session files.
 
 ## Defcustoms
 
-All in `mevedel-session-persistence.el`:
+Defined in `mevedel-session-persistence.el` unless another module is named:
 
 - `mevedel-sessions-directory` (default `.mevedel/sessions/`)
 - `mevedel-session-max-age-days` (default 30)
 - `mevedel-session-keep-recent-count` (default 3)
-- `mevedel-file-history-max-snapshot-bytes` (default 1 MB)
+- `mevedel-file-history-max-snapshot-bytes` (default 1 MiB)
 - `mevedel-session-lease-seconds` (in `mevedel-session-durability.el`,
   default 90; renewal runs from a timer that cannot fire inside blocking
   target I/O, so the owner reclaims its own expired lease)

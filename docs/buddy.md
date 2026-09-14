@@ -1,10 +1,9 @@
 # Buddy
 
-Buddy is mevedel's third way of working. The first two are pull: you mark a
-region and author a directive, or you type a prompt in the chat buffer. Buddy
-is push. A model reads what you just wrote and leaves short notes in the margin
-of your source buffer. You did not ask for them, and ignoring one costs a
-keystroke.
+Buddy reviews recent edits and adds short advisory notes beside source code.
+Enable it per buffer or globally, request an immediate review, or use the
+guidance command for suggestions about a region. Notes can be ignored or
+dismissed; they do not become instructions or edit your code.
 
 ```
 M-x mevedel-buddy-mode        watch this buffer
@@ -38,7 +37,7 @@ the product. One always-on prompt cannot be tuned against both targets, so the
 automatic channel stays strict and guidance is a command.
 
 Tools, note records, overlays, ids, severity, dismissal, and the request path
-are identical between them. Every request carries the whole note set, so a
+are identical between them. Every request carries a bounded set of active and dismissed notes from its scope, so a
 guidance note raised on a sketch is visible to the review that runs later, once
 the code exists, and can be retracted once you have acted on it. Guidance opens
 a thread; review closes it. Do not partition notes by originating channel — the
@@ -74,24 +73,18 @@ another project merely by changing what it visits.
 ## Everything is ephemeral
 
 Notes, dismissals, recorded edits, note ids, and the last-reviewed time live in
-memory and die with the Emacs process. Nothing is written under `.mevedel/`,
-nothing enters persistent memory, and nothing lands in a session transcript.
-Reopen a file and Buddy re-derives whatever is still true.
+memory and die with the Emacs process. Buddy does not persist that state, write curated memory, or insert notes into a
+session transcript. It can record diagnostic lifecycle events through an
+available session's telemetry writer. Later reviews derive notes from the source
+they are shown.
 
-**Buddy never writes persistent memory, and that is deliberate.** Its defining
-property is that it runs unattended — idle timer, no request, no confirmation.
-That is exactly what makes it the wrong producer for durable context: anything
-it wrote would be a claim you never reviewed, and `MEMORY.md` feeds straight
-into future system prompts. Tutor mode ran this experiment; its hints file
-accumulated forever and was read by nobody.
+To make durable guidance, edit the applicable `AGENTS.md` or explicitly request
+a memory update through the ordinary workflow. Buddy's passive request has no
+memory-saving policy.
 
-If Buddy annoys you the same way repeatedly, add a line to `AGENTS.md`. That is
-a write you made with attention, and it steers everything else too.
-
-Dismissals are also ephemeral. They are described to the model within the Emacs
-session, which is enough to stop it repeating rejected advice, and they cost
-nothing to lose. It also keeps undo cheap: dismissals are a list, so recovering
-an accidental dismissal is a `pop` if that ever becomes worth building.
+Dismissed notes remain eligible for the bounded in-process note context, labelled
+as rejected advice. That evidence helps the model avoid repeats; it does not
+guarantee suppression, and disappears with the Emacs process.
 
 ## Notes are not instructions
 
@@ -115,10 +108,8 @@ call returns at most `mevedel-buddy-note-read-limit` lines. An unbounded read
 would ship a whole file to the provider on an idle timer, for a one-line edit,
 through a tool that takes no permission step.
 
-Lines read back are annotatable, so a fault the read exposes gets its note where
-the fault is rather than described from the diff. That widens where notes may
-appear; if it turns noisy, the narrower rule is to gate `add_note` back to diff
-lines.
+Lines returned by read_buffer are annotatable, so notes can address evidence
+beyond the original diff while remaining within the captured buffer scope.
 
 Findings need concrete evidence and enough value to justify an inline note;
 no notes is a valid result. Severity describes the actual impact, including
@@ -172,8 +163,8 @@ comes first, the reason it matters comes last — so truncating one loses the ha
 that justified interrupting you. But laying every note out in full turns a busy
 buffer into a wall of blocks.
 
-Buddy takes flycheck's approach and picks the style **per line**, so exactly one
-note is ever laid out in full: the one you are reading.
+Buddy picks the style per line. By default, notes on the current line show in
+full and notes on other lines use a compact end-of-line preview.
 
 | | default | shows |
 | --- | --- | --- |
@@ -244,39 +235,17 @@ the usual `:model-workloads` key:
       '(:provider "Ollama:qwen2.5-coder"))
 ```
 
-This is the one mevedel workload where a local model is arguably the default
-rather than the fallback: it fires constantly on small diffs, latency beats
-depth, and your source goes out on every idle timer.
+The selected provider receives the captured source evidence when Buddy runs.
+Automatic requests follow the idle and minimum-interval settings below.
 
-## Divergences from llm-buddy
+## Request boundary
 
-Buddy is a port of [llm-buddy](https://github.com/ahyatt/llm-buddy) by Andrew
-Hyatt. The package itself is not a dependency — it requires the `llm` library
-and mevedel is gptel-coupled, so avoiding a second provider abstraction is the
-reason this port exists. Four divergences are deliberate:
-
-- **No `end` tool and no forced tool choice.** llm-buddy forces a tool call
-  every turn, which means the model can never stop, so it must be handed an
-  explicit exit. Buddy inverts it: a turn with no tool call has nothing left to
-  say. That drops a tool and removes a dependency on forced tool choice, which
-  gptel honors for anthropic, gemini, bedrock, openai, and openai-responses but
-  which ollama silently ignores.
-- **Tools stay out of the registry and pipeline.** They need argument
-  validation but no permission check, no snapshot, and no persistence — one
-  pipeline stage out of five. Keeping them unregistered also means nothing
-  outside a Buddy request can call them.
-- **Scope is the mevedel workspace**, not a `project.el` project, and it is
-  derived from `default-directory` rather than requiring a visited file.
-- **Reads and notes are bounded.** llm-buddy's `read_buffer` takes optional
-  bounds that mean the whole buffer, applies no line cap, and checks no buffer
-  allowlist; its `add_note` resolves a line number by counting from `point-min`
-  when the tool call arrives. mevedel requires both bounds, caps the span,
-  restricts reads to buffers in the running review, and resolves every line
-  through markers captured when that line was shown.
-
-llm-buddy's `replace_content` auto-fix path is not ported. mevedel already has
-patch proposals, patch review, and the permission chain for edits; a second
-route that modifies a buffer unprompted is at odds with that. Notes only.
+Buddy creates request-local tools for bounded reads and note maintenance. They
+are not registered as general tools and do not use the ordinary mutation pipeline.
+A response without another tool call ends the review; there is no end tool or
+forced tool choice. Buddy has no auto-fix tool: code edits use the normal patch
+and permission workflow. The port's rationale is recorded in
+[ADR 0108](adr/0108-buddy-notes-are-not-instructions.md#decision-history).
 
 ## Configuration
 

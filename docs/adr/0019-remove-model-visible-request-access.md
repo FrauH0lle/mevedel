@@ -1,14 +1,17 @@
 # Remove model-visible RequestAccess
 
-Remove the model-visible `RequestAccess` tool and its directory-specific
-prompt, cache, renderer, diagnostics path, and agent assignments.  Native
+There is no model-visible RequestAccess tool or separate directory-access
+permission system.  Native
 filesystem calls already request missing authority through the normal
 permission pipeline, while Bash and batch Eval use additive permissions; both
-now settle through one resource-grant interface with invocation, session, and
-persistent scopes.  Keep the manual project-root commands for deliberate broad
-user configuration.  If proactive model permission requests later prove
-necessary, add a generalized adapter over the shared grant interface rather
-than restoring a parallel directory-access system.
+settle through one resource-grant interface with invocation, session, and
+persistent scopes.  Manual project-root commands remain for deliberate broad
+user configuration.
+
+## Decision history
+
+RequestAccess and its directory-specific prompt, cache, renderer, diagnostics,
+and agent assignments were removed in favor of shared resource grants.
 
 The September 2026 session audit showed that ordinary exact-path prompts were
 not a sufficient directory workflow: one external design folder needed two

@@ -1,45 +1,43 @@
-# Non-Owner Buffers Follow Published State
+# Non-owner buffers follow published state
 
-A session buffer whose lease is held somewhere else keeps up with the owner's
-committed publications instead of holding the snapshot it opened with.
+Status: accepted
 
-Joining a session another client is writing used to be a photograph. The
-buffer read the publication that was current at that instant and never looked
-again; nothing in the client re-read a later generation. The transfer poll ran
-the whole time, but its requester side returns immediately unless a request is
-outstanding, so an idle joined client did no target I/O and learned nothing.
-The state it showed was correct when it opened and silently wrong from the
-first turn the owner finished.
+## Current decision
 
-The same applies to the machine that hands control away. Owner and non-owner
-are lease positions, not roles: a host that grants a transfer becomes a
-read-only buffer of a session being written elsewhere, which is the joined
-client's situation exactly. One follow rule serves both, and a rule that only
-served the joining side would leave the more surprising case broken.
+A read-only session buffer follows the lease owner's committed publications by
+default. The rule applies both to a joining client and to a former owner that
+has handed control away. Owner and non-owner are lease positions, not permanent
+client roles.
 
-Granularity is one publication. A non-owner sees what the owner has committed
-and never work in progress, so turns appear whole rather than streaming. That
-is a consequence of the durability model rather than a target to improve on:
-committed state is the only state another client can read consistently.
+Following advances by complete publications, never by streaming partial turns.
+An unchanged head costs one lease observation and no artifact reads. A changed
+head triggers validated publication and sidecar loading, staged transcript
+installation, and session-state replacement. A locally modified buffer is left
+alone; a background observer cannot discard the user's edits.
 
-The cost is bounded by the publication head already carried in the lease
-record. An owner that has published nothing new costs one lease observation
-per tick and no artifact reads; only an advance pays for the sidecar and the
-segment. This is why following is on by default despite adding I/O to a case
-that previously had none — the floor is the observation the poll was already
-shaped around, and the alternative default is a buffer that lies.
+`mevedel-session-follow-published` can be set per buffer. Explicit refresh can
+bypass that opt-out. Following does not require a pending control-transfer
+request and grants no write authority. The [session manual](../sessions.md)
+owns the user workflow and transfer procedures.
 
-A locally modified buffer is never advanced. Those edits are what the transfer
-path already refuses to discard, and a timer must not resolve on the user's
-behalf a conflict the interactive path escalates.
+## Rationale and consequences
 
-## Consequences
+Committed publication is the shared consistency boundary. Observing partial
+owner output would require another transport and state contract. Following
+reuses the staging and installation path used by control adoption, without
+acquiring the lease or enabling writes. It remains useful during a transfer:
+the owner can publish while draining, and the requester can observe that state.
 
-- `mevedel-session-follow-published` is read per buffer, so one session can
-  opt out without changing the default.
-- A follower reloads through the same committed-state path a granted transfer
-  ends with, minus the lease acquisition and the write enable. The two paths
-  cannot drift apart in what they consider committed state.
-- Following does not observe transfer state, so it keeps working while a
-  request is in flight: the owner publishes until it drains, and the requester
-  watches that happen.
+Default-on following trades a bounded lease observation for keeping an open
+read-only conversation current. New artifacts are read only when the head
+changes. Local edits and unavailable publications can prevent advancement;
+following is not authority to resolve those conflicts.
+
+## Decision history
+
+ADR 0107 replaced static joined-session snapshots. The existing requester poll
+returned immediately when no transfer request was outstanding, so an idle
+joined buffer performed no target I/O and silently became stale after the
+owner's next completed turn. Former owners had the same problem after granting
+control. A common publication follower replaced both gaps. Head comparison
+bounded the added idle cost without inventing a second publication protocol.

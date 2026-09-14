@@ -1,5 +1,33 @@
 # Wait for agents explicitly
 
-Status: accepted
+Status: accepted. Incorporates ADR 0044.
 
-V2 replaces implicit BWAIT parking with an explicit `WaitAgent` tool. Calling it keeps the current agent turn active and suspends its tool callback until the first queued or newly arriving message, completion, failure, or interruption from any agent in the root session tree. New user input also interrupts the wait so user steering takes precedence. The tool does not target a particular agent, poll, or spend additional model turns while suspended. Its result reports only why the wait ended; mailbox content is delivered separately, and the caller may invoke `WaitAgent` again when it needs more results. An agent that does not need another result may settle while other agents continue. Every role with `Agent` also receives `WaitAgent`, so a delegator can join work it creates; leaf roles receive neither. The implementation should use the ordinary asynchronous tool path rather than retain BWAIT's injected FSM state, terminal interception, and watchdog machinery.
+## Current decision
+
+WaitAgent suspends its ordinary asynchronous callback until queued or arriving
+mail, user input, active-agent follow-up steering, or timeout releases it. It
+names no target, polls no provider, and spends no extra model turn while waiting.
+Its turn stays active and holds capacity. The result describes the wake-up;
+mail contents arrive through the separate conversation delivery path.
+
+The default timeout is 30,000 milliseconds. Numeric values are normalized within
+10,000–3,600,000 milliseconds; unrepairable values are rejected. A timeout is a
+successful outcome, after which the caller may work or wait again. A MAIL wake-up
+does not prove sender completion; RESULT identifies terminal settlement.
+
+## Rationale and consequences
+
+Explicit waiting lets the caller choose whether it needs another result. A
+caller may settle while descendants continue. Delegators receive WaitAgent with
+their control bundle; communicating leaves do not. A bounded successful timeout
+prevents a missed notification from parking a turn indefinitely without claiming
+the delegated task failed.
+
+## Decision history
+
+**ADR 0036 replaced implicit BWAIT parking** and its injected FSM state,
+terminal interception, and watchdog machinery with the ordinary async tool path.
+**ADR 0044 added bounded successful timeouts** to that same waiting decision.
+The original phrase “completion from any agent” means a result actually addressed
+to this recipient; WaitAgent does not subscribe to every tree event or broadcast
+another parent's child results.

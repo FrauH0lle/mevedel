@@ -111,16 +111,19 @@ configuration or resource behavior changed.
 
 ## Evidence and validation
 
+The local raw-result paths below were not retained in this checkout; they are
+historical locations, not downloadable repository artifacts.
+
 See the [protocol](README.md), [runner](run.el), [measurement renderer](summarize.py)
 and [earlier results](RESULTS.md). The same installed dependencies and model
 settings as the earlier run were used. Temporary provider snapshots were deleted.
 
 Local raw evidence and the expanded review sheet are retained at:
 
-- [Sol](../../../.scratch/memory-scope-nested/sol.json)
-- [Luna](../../../.scratch/memory-scope-nested/luna.json)
-- [Flash](../../../.scratch/memory-scope-nested/flash.json)
-- [Review sheet](../../../.scratch/memory-scope-nested/review.md)
+- Sol (`.scratch/memory-scope-nested/sol.json`)
+- Luna (`.scratch/memory-scope-nested/luna.json`)
+- Flash (`.scratch/memory-scope-nested/flash.json`)
+- Review sheet (`.scratch/memory-scope-nested/review.md`)
 
 The adapter smoke test checks cross-session shared reads and updates, isolation
 of ordinary local notes, root search visibility, rejection of the old scheme

@@ -19,7 +19,10 @@ Discover bound variable names known to the running Emacs.
 ### Examples of good usage
 
 <example>
-variable_completions(variable_prefix="org-")
+variable_completions(variable_prefix="org agenda")
+Find bound variables matching both naming fragments under the installed
+Orderless configuration. Use an exact returned name for later introspection;
+the result depends on symbols available in this Emacs.
 </example>
 
 ### Examples of bad usage

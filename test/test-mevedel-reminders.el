@@ -1093,7 +1093,10 @@ this collapses both shapes to the delivered text."
     (should (funcall (mevedel-reminder-trigger reminder) session))
     (should-not (mevedel-reminder-interval reminder))
     (let ((content (funcall (mevedel-reminder-content reminder) session)))
-      (dolist (text '("Bash is limited"
+      (dolist (text '("Eval is unavailable"
+                      "session-owned work:// descendants"
+                      "directive Planning permits no file writes"
+                      "Bash is limited"
                       "implementation request"
                       "Explore available evidence"
                       "genuine user preferences"

@@ -4,15 +4,16 @@ Status: accepted
 
 ## Decision
 
-Project sessions use one persisted `:authority-mode portable` profile in
-session format `v0.5.2`.  The profile is valid for both local and TRAMP access
+Project sessions use one persisted `:authority-mode portable` profile.  The profile is valid for both local and TRAMP access
 to the same execution target.  Ownership is a renewable `.lease/`; committed
 state is addressed by an immutable publication head.  Project sessions do not
 create or interpret `.lock`.
 
 File-workspace sessions retain the separate `:authority-mode pid-lock`
 profile and `.lock` authority.  They do not create a portable lease or
-publication tree and do not persist a target incarnation.
+publication tree. Both profiles persist and validate a non-empty target
+incarnation; the profile chooses ownership mechanics, not whether target
+identity is checked.
 
 All authority operations receive the session's explicit profile.  Path
 remoteness is only a transport/path concern and cannot choose lock acquisition,
@@ -26,6 +27,15 @@ and hostname payload, so a replacement target invalidates old authority in
 either access mode.  Restore, takeover, unsettled-mutation recovery, and
 publication all use that same profile.
 
-This is a direct format break.  There is no migration or dual reader for
-earlier sidecars, and a missing or contradictory authority profile is an
-error.
+A missing or contradictory authority profile is an error. The session codec
+accepts one current format without migrations or a dual reader. See
+[Sessions](../sessions.md) for the current storage contract.
+
+## Decision history
+
+ADR 0100 introduced the portable profile in session format v0.5.2, replacing
+transport-selected ownership for project sessions. It initially described file
+sessions as lacking an incarnation; the current shared codec requires one for
+both profiles. The original record did not document that later extension's
+reason. Keeping the incarnation requirement explicit avoids implying that a
+PID lock makes target identity irrelevant.

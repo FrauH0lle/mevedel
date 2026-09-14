@@ -2,95 +2,105 @@
 
 Status: accepted
 
+## Current decision
+
 Delivered reminders remain at their original conversation boundary until
-compaction retires the corresponding history. Eligibility remains sparse and
-state-driven; later state changes supersede historical descriptions. Staging
-without delivery creates no history. The existing trusted injection record now
-stores complete bodies and reconstructs a separate user message after the
-current prompt or complete tool results.
+compaction retires that history. Eligibility is sparse and state-driven;
+staging without delivery creates no history. Trusted injection records retain
+complete bodies and reconstruct separate user messages after the current prompt
+or complete tool results.
 
-This reverses the ephemeral reminder policy formerly documented in
-`docs/reminders.md`. Fully installed lifecycle measurements found six changed
-history boundaries and five cached-token drops across eight continuations.
-Permission/verifier reminders disappeared during reconstruction, changing an
-early prefix. Independently, an offline reproduction showed that gptel rebuilt
-grouped tool calls as interleaved call/result pairs. Correct IDs alone did not
-preserve the delivered conversation shape.
+Named workspace guidance, environment, Goal facts and policy, skill catalogs,
+memory indexes, journal discovery, and resource availability are independently
+retained observations. When a selected section changes, deliver its complete
+current contents and explicitly state that other sections remain applicable.
+Unchanged sections are not repeated. Empty or inactive state is an explicit
+observation, not silent omission.
 
-Preserve each completed provider tool-response fragment beside its rendered
-transcript. Reuse it only for the same provider, model and cache policy when
-the entire covered source is unchanged. Paired boundaries and source/prepared
-digests protect context selection and later filtering. A prepared digest
-includes role properties: changing a span to ignored must not resurrect it.
-Provider changes, edits, omitted results and incomplete spans use ordinary
-backend serialization. This preserves multi-model operation without forwarding
-opaque fields between providers. Transport credentials are not recorded.
+A section is acknowledged only by a complete trusted message actually present
+in the realized outgoing payload, in payload order. Context loss, filtering, or
+restore therefore causes missing current sections to be delivered again. A
+rebuildable transcript index avoids repeated decoding. Agents receive only their
+frozen selected components; authored inline components remain system content.
+There is no independent persisted acknowledgment schema or runtime model-name
+gate. See [retained instruction context](../architecture.md#retained-instruction-context).
 
-A repaired tool result exposed a boundary mismatch on the next user request:
-its hidden audit split the result into two `gptel` tool runs, and the backend
-tried to read the trailing `Note:` prose as another call plist. Prompt-copy
-preparation removes hidden audit/render metadata between runs of the same tool
-ID before computing prepared digests. This preserves one complete result for
-ordinary serialization and retained replay while leaving transcript audits
-intact.
+Completed provider tool-response fragments are retained beside the rendered
+transcript. Replay requires the same provider, model, and cache policy and an
+unchanged complete covered source. Paired boundaries and source/prepared digests
+protect context selection and filtering; prepared digests include role
+properties so a newly ignored span cannot reappear. Provider changes, edits,
+omitted results, and incomplete spans use ordinary backend serialization.
+Transport credentials are not retained.
 
-The alternative of reparsing every live continuation into a common text form
-was rejected: it can discard provider-specific reasoning fields and signatures.
-Keeping reminders ephemeral would retain the measured prefix disruption.
-Keeping a new snapshot of the entire request on every dispatch would cause
-unnecessary cumulative storage growth.
+Prompt-copy preparation removes hidden audit/render metadata between runs of
+the same tool ID before prepared-digest computation. This preserves a complete
+tool result for both ordinary serialization and retained replay, while keeping
+its transcript audit intact.
 
-The selected design duplicates individual response content in local storage
-and keeps more historical guidance in context. Those are explicit costs.
-Compaction consumes decoded guidance and ordinary displayed evidence, excludes
-encoded reconstruction metadata, and removes records with retired history.
-Estimation counts guidance bodies rather than metadata size. Provider cache
-retention and serving remain outside mevedel's control. No migration repairs
-previously incomplete history.
+## Rationale and consequences
 
-## Dynamic-context extension
+Removing delivered reminders or reshaping grouped tool exchanges changes an
+early conversation prefix even when call IDs remain correct. Retaining their
+actual delivered shape avoids that reconstruction loss without snapshotting the
+entire request on every dispatch. Reparsing every continuation into a common
+text representation was rejected because provider reasoning fields and
+signatures can be lost.
 
-A subsequent source audit found environment dates, Goal counters, memory indexes,
-skill catalogs and resource availability embedded in the system prefix. The
-previous live fixture held those inputs stable, so its successful history replay
-did not establish stability when they changed.
+Changing system-prefix facts also invalidates everything following them.
+Independent retained updates preserve freshness and prefix continuity while
+avoiding unrelated repeated facts. They cost additional history and duplicate
+individual provider responses in local storage. Compaction consumes decoded
+guidance and displayed evidence, excludes encoded reconstruction metadata, and
+retires records with their history. Estimates count guidance bodies rather than
+encoded metadata. Provider cache retention and serving remain external limits.
 
-Deliver these named observations, and workspace guidance, through the existing
-retained reminder transaction. Keep the behavioral contract stable. Deduplicate
-against complete trusted reminder messages actually present in the realized
-payload, in payload order, rather than assuming all source history was selected.
-A derived incremental transcript index avoids repeated decoding; it is rebuilt
-after history edits and cold restore. Agent component selection is frozen and
-persisted; inline authored components remain system content.
+## Decision history
 
-This preserves freshness and context-loss recovery without an independent
-persisted acknowledgement schema. Short catalogs and an on-demand memory manual
-reduce unnecessary procedural content. See
-[retained instruction context](../architecture.md#retained-instruction-context)
-for the delivery contract.
-
-## Complete current-state snapshots
-
-Partial fact updates preserved the prefix but smaller models sometimes treated
-omitted sections as unavailable. A 216-request comparison found correct facts in
-36/36 complete-snapshot reports versus 30/36 partial-update reports. Adopt one
-complete snapshot of selected environment, active Goal, skills, memory and
-resource facts whenever any selected fact changes. Keep repository instructions
-and Goal procedures independently retained. The snapshot remains valid until
-superseded; unchanged turns add no snapshot. Recipient selection and actual
-outgoing-history acknowledgement remain authoritative.
-
-This adds 16.4% total input in the measured growing workload, with more uncached
-input for three models. Cache discounts can buffer repeated content, but new
-snapshots still require an initial uncached delivery. The user accepts this cost
-for the measured factual reliability and accepts Flash's three remaining
-repository reporting failures as a known model limitation. The detailed
-216-request experiment is archived locally under
-`.scratch/instruction-simplification/instruction-snapshot-measurements.md`;
-the decision and its measured tradeoffs are recorded here for clean checkouts.
-
-When the general supported model baseline reaches gpt-5.6-sol's capability level
-or better, reconsider partial updates to reduce repeated context. Sol and Pro
-passed all nine partial-update reports. Recheck current-state and lifecycle
-behavior across that future baseline before changing the decision. Keep one
-delivery design; do not infer a runtime capability gate from model names.
+- **Ephemeral reminders to retained delivery:** installed lifecycle measurements
+  found six changed history boundaries and five cached-token drops across eight
+  continuations. Permission/verifier reminders disappeared during reconstruction.
+  An offline reproduction also found grouped tool calls rebuilt as interleaved
+  call/result pairs. Retained reminders and provider fragments addressed those
+  separate losses. Previously incomplete history is not repaired by migration.
+- **Dynamic observations:** a source audit found dates, Goal counters, memory
+  indexes, catalogs, and resource availability in the system prefix. The earlier
+  live fixture held them constant, so successful fragment replay did not prove
+  stability when they changed. Named facts moved to retained delivery; workspace
+  guidance and Goal policy used the same transaction. This replaced the roster
+  placement and separate skill-snapshot acknowledgment described by ADR 0008.
+- **Complete-snapshot experiment:** a 216-request comparison found correct facts
+  in 36/36 complete-snapshot reports versus 30/36 partial-update reports. The
+  complete variant added 16.4% total input in the measured growing workload and
+  more uncached input for three models. It was initially selected for that
+  factual reliability despite Flash's three remaining repository-reporting
+  failures. Sol and Pro each passed all nine partial-update reports. The detailed
+  experiment remains local evidence under
+  `.scratch/instruction-simplification/instruction-snapshot-measurements.md`;
+  these numbers preserve its consequential tradeoff in the maintained record.
+- **Return to independent sections, 2026-09-08:** commit `e31fe423` deliberately
+  replaced the whole snapshot with separately acknowledged sections and an
+  explicit statement that omitted sections remain applicable. It updated source,
+  delivery tests, architecture, and reminders documentation, but left this ADR's
+  complete-snapshot text stale. The change reduces repeated unrelated context
+  while retaining actual-payload acknowledgment and context-loss recovery.
+  Its recorded tests cover delivery mechanics; the commit supplies no new model
+  comparison establishing that the earlier smaller-model reliability gap closed.
+  That measurement limitation remains rather than treating complete snapshots as
+  current behavior or inventing a capability threshold.
+- **Repaired tool results:** a hidden audit split one result into two gptel tool
+  runs, so the next request tried to read trailing `Note:` prose as a call plist.
+  Removing same-tool metadata in prompt copies before computing their prepared
+  digest restored complete serialization without deleting the durable audit.
+- **Repeated tool names lost call identity:** the installed gptel renderer
+  selected the first tool-use record matching a name. A metadata repair after
+  insertion could not recover plain result IDs. The adapter now gives the normal
+  renderer each authoritative call record separately, preserving order and IDs
+  without a second history store. Original IDs in already-corrupted plain
+  transcripts cannot generally be reconstructed. This rationale was recorded in
+  the tool manual without a separate date.
+- **Duplicate tool-availability reminder:** an ephemeral reminder repeated
+  guidance already in native ToolSearch/ToolCall descriptions and changed the
+  beginning of worker task history when it disappeared on follow-up. Removing
+  it leaves static descriptions and actual search results as the capability
+  discovery interface. The reminder manual recorded this without a date.

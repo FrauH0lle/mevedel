@@ -36,7 +36,7 @@ Return this JSON shape without Markdown fences or surrounding prose:
 {
   "findings": [
     {
-      "title": "<at most 80 characters, priority prefix and imperative>",
+      "title": "<concise title with priority prefix and needed correction>",
       "body": "<one Markdown paragraph explaining the trigger and impact>",
       "confidence_score": 0.0,
       "priority": 2,
@@ -47,7 +47,7 @@ Return this JSON shape without Markdown fences or surrounding prose:
     }
   ],
   "overall_correctness": "patch is correct",
-  "overall_explanation": "<1-3 sentences supporting the verdict and its limits>",
+  "overall_explanation": "<evidence supporting the verdict and its material limits>",
   "overall_confidence_score": 0.0
 }
 ```

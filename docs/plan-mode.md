@@ -27,7 +27,8 @@ turn. Discuss is unchanged. Batch processing remains sequential: an
 enabled directive reaches approval and implementation before the next item
 starts.
 
-Directive planning uses the directive's model and effort override. Its proposal
+Directive planning uses the directive's model and effort override when set;
+otherwise it resolves the preset's `planning` workload. Its proposal
 uses the ordinary `<proposed_plan>` parser and shared approval interaction. The
 directive card offers only implementation Mode, Model, Skills, Instructions,
 Accept, Feedback, and Cancel: execution is always Direct in the directive's
@@ -149,6 +150,9 @@ The instructions editor saves with `C-c C-c` and cancels with `C-c C-k`.
 and `C-g` cancels.
 Selecting Worktree while Current is selected changes the context to Fresh. A
 dirty source checkout is not copied or stashed; Worktree starts at `HEAD`.
+Accepting a Worktree proposal prompts for its branch name in Emacs. Browser
+acceptance is available only for Here, using the host-selected settings;
+settings changes and Worktree acceptance remain in Emacs.
 
 Pending input remains available while the approval overlay is open. `C-c TAB`
 queues a follow-up without demoting or settling the proposal. Same-turn
@@ -214,7 +218,7 @@ bytes for that logical artifact. Absolute source or publication paths are not
 part of Plan metadata or retry records.
 
 After any valid location/context preparation, Direct submits its ordinary
-one-turn instruction. Goal instead constructs a phase-free Goal in the prepared
+one-turn instruction. Goal instead constructs a Goal in the prepared
 target session, using the target-owned immutable accepted-plan path and the
 Plan-selected Goal budget. Its deterministic objective treats plan
 outcomes, constraints, and acceptance criteria as the completion contract while
@@ -236,8 +240,8 @@ prompt while the rendered view keeps the compact implementation label.
 
 For Worktree execution, the target session owns the Goal, accepted artifact,
 selected permission mode, accepted model/effort snapshot, and selected Goal
-budget. The source session keeps its original permission mode and remains
-otherwise unchanged. Branch acceptance first proves that Git and its worktree
+budget. The source session keeps its original permission mode and the accepted-plan
+and handoff-recovery metadata. Branch acceptance first proves that Git and its worktree
 command are available on the source session's execution target; preparation
 then persists the deterministic branch/directory reservation before Git
 mutation, creates the linked worktree on that target, and opens the target
@@ -282,8 +286,8 @@ resume.
 Plan activity, proposal identity, selection, artifact descriptors, and retry
 state persist in session metadata. Resume reconstructs an approval only when
 Plan is active, metadata says `proposed`, and the current artifact still
-matches its recorded hash. Persisted proposals without an implementation model
-snapshot are demoted instead of migrated. Drafts never reactivate
+matches its recorded hash. Persisted proposals without a valid implementation model
+snapshot are demoted to drafts. Drafts never reactivate
 automatically.
 
 A failed approval renderer dismisses the interaction without touching that

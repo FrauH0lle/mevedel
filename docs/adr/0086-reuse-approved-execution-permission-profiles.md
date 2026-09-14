@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Supersedes ADR 0079, ADR 0082, and ADR 0083.
+## Current decision
 
 Bash and batch Eval resolve command authority and child-confinement authority
 in one interaction. The card presents the operation plus every requested
@@ -26,6 +26,60 @@ Only direct session, workspace-persistent, and global user rules contribute
 profiles. Invocation/request delegation cannot broaden confinement. Live Eval
 never receives child permissions. The mechanism is command-pattern based and
 contains no package-manager or workload-specific policy.
+
+Profiles preserve exact versus recursive filesystem extent. A recursive
+requirement is reattached only with a sufficient recursive direct grant. The
+card's selected current-call extent is independent of which capabilities the
+user chooses to remember; the initial remembering selection includes the whole
+requested profile, including capabilities already available for this call.
+
+Confinement refuses exact directory writes and exact reads beneath inaccessible
+masks that Bubblewrap cannot represent without widening authority. Explicit tree
+grants can admit protected Git metadata. File masks use private mode-000 files,
+and approved exact file mounts replace only their matching masks. These are
+current representability limits, not invitations to broaden a request.
+
+Remembering does not infer unknown requirements, turn a failure into a prompt,
+or replay a process. A model must still issue a new invocation when it discovers
+a capability that no matching approved profile contains. The complete
+effective profile is resolved before spawn, and a child that may have started
+is never retried automatically.
+
+## Rationale and consequences
+
+Operation-specific reuse removes repeated prompts without making all future
+commands inherit one operation's network or path authority. Resource grants and
+operation rules remain independently revocable. New requirements need a fresh
+invocation; a partial failure never causes an automatic broader retry.
+
+The [permissions manual](../permissions.md) owns the card, matching rules, and
+scope controls. Regression evidence for these boundaries follows.
+
+## Decision history
+
+- **ADR 0079** required a fresh, justified model invocation before requesting
+  missing execution authority. Failed confined results carried a conditional
+  retry hint; successful and semantic non-error outcomes did not. Its safety
+  constraint survives: a failure never creates a prompt or replays a command.
+  When a required backend is unavailable, additive authority cannot repair it;
+  only a new explicit full-escalation request can ask to bypass confinement.
+- **ADR 0082** allowed explicitly requested additive network access in
+  full-auto, while ask and edits required direct user authority. That mode
+  distinction remains, but callers no longer need to repeat capabilities
+  already supplied by a matching approved profile.
+- **ADR 0083** stored reusable network authority in capability-qualified tool
+  rules and filesystem authority in a shared grant store. One card resolved the
+  operation and unresolved additions, with separate remembering toggles; denial
+  rejected the complete invocation. Workspace remembering never created global
+  policy. These separation and approval constraints remain. The old rule merely
+  matched an explicit capability request; it did not attach requirements to a
+  later default invocation.
+- **ADR 0086** replaced that repeated-request requirement with automatic reuse
+  of directly approved profiles. It retains separate, revocable filesystem
+  grants and full escalation. The initial record specifies this reduction in
+  caller bookkeeping without citing a measurement for the replacement.
+
+### Profile and mount refinements
 
 Profiles later gained optional recursive filesystem requirements because an
 exact-only profile could not reuse approved directory-tree authority.  A
@@ -74,9 +128,3 @@ the command started. File masks now use private empty files with mode 000 set
 before read-only binding; dedicated input descriptors preserve the child's
 stdin and never change a host inode. Exact approved file mounts still replace
 only their matching masks.
-
-Remembering does not infer unknown requirements, turn a failure into a prompt,
-or replay a process. A model must still issue a new invocation when it discovers
-a capability that no matching approved profile contains. The complete
-effective profile is resolved before spawn, and a child that may have started
-is never retried automatically.

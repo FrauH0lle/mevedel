@@ -15,12 +15,6 @@ List yielded Bash executions owned by this agent.
   Other agents' commands are outside this tool's scope.
 - Use a returned ID with WriteStdin for unread output or StopExecution to stop it.
 
-### Examples of good usage
-
-<example>
-ListExecutions()
-</example>
-
 ### Examples of bad usage
 
 <example>

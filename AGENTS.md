@@ -65,8 +65,11 @@ boundary on later work. When evidence changes the trade, change the ADR.
 
 - Amend an ADR in the same change that changes the behavior it describes. An
   ADR documenting a design the code no longer has is worse than no ADR.
-- Supersede instead of amending when the decision itself is reversed: keep the
-  old record, mark it superseded, and name the ADR replacing it.
+- Keep one canonical ADR per coherent decision. Fold amendments into its
+  current explanation; when a choice is reversed, retain the previous choice,
+  replacement, and reason in a clearly marked decision-history section.
+  Consolidated records preserve original ADR IDs and their destinations in
+  `docs/adr/README.md`. Keep independent decisions separate.
 - State what moved the decision — a measurement, a failure, a constraint that
   turned out not to hold. "We changed our minds" is not a reason; "the profile
   put this at 21% and the check was redundant with the target-side proof" is.
@@ -78,11 +81,13 @@ Before planning or changing an unfamiliar area, consult the
 [documentation map](docs/index.md#documentation-map) and read its relevant
 contracts. The `docs/` tree documents the system as it exists now: implemented
 behavior, current contracts, and the rationale for the current design. It is
-not a planning workspace. Keep plans, PRDs, proposals, roadmaps, backlogs, and
-speculative designs outside `docs/`, under `.scratch/<feature-slug>/`.
+not a planning workspace. `docs/backlog.md` is the sole future-work exception,
+holding concise actionable entries. Keep detailed plans, PRDs, proposals,
+roadmaps, reviews, progress reports, and speculative designs outside `docs/`,
+under `.scratch/<feature-slug>/`.
 Update `docs/` when the corresponding change is implemented; do not document
-intended behavior as current behavior. Clearly marked superseded ADRs retain
-historical rationale, not future plans. This file keeps the entry rules and
+intended behavior as current behavior. Clearly marked ADR decision histories
+retain historical rationale, not future plans. This file keeps the entry rules and
 retrieval triggers.
 
 Each `.el` file also describes its purpose in its `;;; Commentary:` block.

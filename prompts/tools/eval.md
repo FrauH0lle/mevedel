@@ -39,7 +39,10 @@ Evaluate one Elisp form and return its value and printed output.
 ### Examples of good usage
 
 <example>
-Eval(expression="(let ((value (+ 1 2))) (princ value) (* value value))")
+- Check a library operation without relying on the live Emacs's loaded packages:
+Eval(mode="batch", expression="(progn (require 'cl-lib) (let ((values (cl-remove-if-not #'numberp '(1 skip 2)))) (princ values) (apply #'+ values)))")
+The returned value is 3; STDOUT contains (1 2). The library is required inside
+the single evaluated form because batch mode does not inherit live loaded state.
 </example>
 
 ### Examples of bad usage

@@ -1,235 +1,109 @@
-# Skill Roster Is Prompt Context
+# Keep skill discovery separate from invocation
 
-Status: delivery placement and snapshot acknowledgement superseded by
-[ADR 0115](0115-retain-delivered-conversation-fragments.md), dynamic-context
-extension (2026-09-08). Discovery, canonical names, scope, optionality and
-invocation decisions below remain applicable.
+Status: accepted. Catalog transport follows [ADR 0115](0115-retain-delivered-conversation-fragments.md).
 
-The current design keeps skill dispatch policy in the stable system prompt and
-delivers a compact catalog through retained current-context updates. Each entry
-has its canonical name and first sentence/line (at most 160 characters); full
-authored descriptions remain searchable with ListSkills. Trusted observations
-actually present in the outgoing payload acknowledge delivery. The separate
-session `skills-snapshot` and skill-delta reminder have been removed.
+## Current decision
 
-The source audit showed that ordinary catalog changes still changed the system
-prefix ahead of all history. Tail placement addressed neither that invalidation
-nor frozen worker freshness. Retained updates preserve earlier messages while
-reporting additions, removals and empty catalogs. This is the reason for
-reversing the placement and acknowledgement decisions recorded below.
+Skills are discoverable capabilities, with explicit invocation and preparation
+boundaries. A stable system component explains user invocation, optional
+selection, and guidance lifetime. A compact catalog arrives through retained
+current-context updates. It contains enabled, model-invocable skills without
+path restrictions, using canonical names, registered `skill://` source addresses,
+and short purposes. Detailed descriptions remain searchable through ListSkills.
+Read inspects source; Skill prepares and invokes it. Neither discovery nor source
+inspection proves that a skill has been invoked.
 
-## Historical decision and continuing discovery contract
+The catalog budget defaults to 2% of the effective request model's context
+window, estimated at four characters per token. Purposes use the first sentence
+or line, capped at 160 characters. Descriptions shrink before entries disappear.
+The stable policy advertises ListSkills even when the catalog is empty or cannot
+fit. Display names are UI-only; canonical names include source/plugin prefixes
+when required to disambiguate invocation.
 
-The model-facing skill roster should be rendered as request-time prompt context,
-not as an every-turn system reminder. Skills are baseline capabilities like
-tools and environment context, while reminders are reserved for runtime nudges
-or changes; `ListSkills(query)` remains the escape hatch when the compact
-roster is omitted or too narrow. The roster should use the existing Markdown
-system-section style rather than a new XML wrapper or `<system-reminder>` block,
-and it should replace the old recurring skill roster reminder instead of
-running in parallel with it. The same prompt section applies to main sessions
-and sub-agents, rendered from the effective skill set for that invocation.
+Path-scoped skills use optional recipient-local notices and ListSkills. Matching
+file activity affects catalog eligibility, not required workflow or authority.
+A query can find dormant skills; exact invocation may use one without activating
+its default-listing visibility. Notice acknowledgement occurs only on delivery,
+independently for each conversation. A changed skill fact can rearm a notice;
+compaction alone does not. Cold resume starts a new live notice throttle.
 
-The skill-use contract belongs with the skills prompt section. Explicit user
-requests and already prepared dependencies are honored. Other skills are
-optional guidance selected for their useful scope and approach; description
-and path matches are discovery signals, not compulsory workflow. Reuse relevant
-loaded guidance for its task and authored applicability. A new message alone
-does not end it, and user direction can extend, end, or replace it. Missing or
-changed guidance is retrieved when needed. User wording such as `$foo off`
-retains the scope the user gave it; persisted workspace disabling is a distinct
-operation through `/skills disable` or the skills UI.
+Explicit user requests and prepared dependencies are honored. Other guidance is
+selected for its useful scope and approach. A new message does not automatically
+end its applicability; authored scope, task completion, and user direction do.
+Enablement is separate from invocation arguments such as `$foo off`.
 
-This replaces the former mandatory match-and-invoke, ordering announcement,
-and one-turn lifetime rules. Captured system and Skill descriptions repeated
-those rules while disagreeing about task versus turn scope. The replacement
-reduces those competing obligations without rewriting skill authors' policy.
-Skills remain enabled by default; the workspace denylist applies to every
-visible project, user, bundled, managed, and enabled-plugin skill without
-changing path-scoped catalogue state. `Skill` owns body preparation; models
-need not read source files to invoke an already discovered skill.
+Leading user commands and model-side Skill calls own invocation policy. Inline
+user mentions attach instructions. Required `!$skill` dependencies also attach
+instructions; they never inherit command, agent, model, effort, hook, or consuming
+request permission policy. Only literal authored declarations create dependency
+structure. Origin and source identity survive preparation, so generated text
+cannot create dependencies or bypass a model-invocation gate. Graph failure
+prevents partial request/child dispatch, but completed body injections cannot be
+rolled back.
 
-The roster belongs at the tail of the request-time system prompt, after the
-more stable sections. It includes active model-invocable skills without path
-restrictions, rendered fresh from the session rather than cached independently.
-Path-scoped skills remain outside this system roster regardless of file activity;
-their discovery uses later optional notices and ListSkills results. Authored
-configuration changes still refresh the roster, including enable/disable changes.
+The [skills manual](../skills.md) owns discovery roots, syntax, soft unavailable
+mentions, hook ordering, request ownership, frontmatter, and preparation details.
+The built-in worker and explorer have skill capabilities; verifier and reviewer
+do not. Skill remains read-only in the tool classification because actual
+injection or child effects pass through their own permission-gated tools.
 
-The 2026-09-07 lifecycle measurements found that merely placing a dynamic roster
-last in the system prompt was insufficient: Luna and Sol root follow-ups added
-an entire Skills section after matching file activity, then fresh restore removed
-it. All conversation history followed that changed prefix despite fixed native
-tool schemas. Excluding path-scoped entries from the system roster removes this
-observed invalidation without freezing configuration or adding persisted state.
+## Rationale and consequences
 
-Unlike Codex, mevedel's always-on roster should not
-include skill source paths; `Skill`, `ListSkills`, and `/skills help` remain the
-places to inspect skill details. If there are no eligible skills without paths,
-the prompt omits the skills section entirely rather than paying for empty
-instructions. Disabled skills are omitted rather than shown as unavailable.
-Roster entries use only the canonical invocation name plus description;
-`display-name` stays UI-only so the model has one name to invoke. The roster
-uses plugin-prefixed names such as `plugin:skill` when that is the canonical
-visible invocation name. Entries use raw names, not `$name`, so the model passes
-the correct value to `Skill(name=...)`. The roster budget should reuse mevedel's
-existing budget
-machinery but default to 2% of the context window, matching Codex's known-window
-policy. When the roster exceeds budget, shrink descriptions first so skill names
-remain visible; omit whole entries only when name-only entries still cannot fit.
-In `mevedel-system.el`, the ordered main profile places skills after
-environment with no component cache; see ADR 0070. The producer reads the current
-session's effective skills when the session matches the prompt workspace and
-working directory; otherwise it returns nil.
+Discovery should be cheap without making a description match an unconditional
+workflow. Explicit preparation centralizes source resolution, dependency checks,
+and invocation policy instead of requiring models to recreate them by reading
+files. Exact source addresses enable inspection without host-path rediscovery.
 
-Sub-agents use the parent session's effective skills rather than a separate
-agent-specific skill store, but the skills section is rendered only when that
-agent's resolved tool set includes `Skill` or `ListSkills`. Agents without skill
-tools should not receive a model-facing skill roster. Separately assess which
-agents should intentionally receive skill tools.
+Keeping changing catalogs out of the system prefix preserves earlier request
+content and updates retained workers. Recipient-local acknowledgements prevent a
+child's observation from suppressing its parent's notice or a cancelled request
+from consuming its own retry. Optional notices can leave context; ListSkills is
+the rediscovery path, while required body fidelity belongs to compaction.
 
-Initial built-in agent policy: worker and explorer should receive `Skill` and
-`ListSkills`; verifier and reviewer should not receive skill tools or a skill
-roster. Discovery-only skill access is avoided because an agent that cannot
-invoke skills has no useful reason to inspect them.
+Required attachments allow shared authored rules without copying them into every
+leaf skill. Literal provenance and inherited origin constrain this exception to
+recursive interpretation. Structured render metadata keeps the user-facing
+prepared body and dependency names independent of provider reminder wrappers.
 
-Main presets should expose skill tools for `discuss` and `implement`.
+## Decision history
 
-The `Skill` tool remains `read-only-p`: invoking a skill prepares prompt text or
-dispatches controlled sub-agent work, while any concrete writes inside that work
-still pass through normal permission-gated tools.
+- **ADR 0008 initially placed the roster at the tail of the system prompt**, with
+  no source paths and no section for an empty catalog. This replaced a recurring
+  full-roster reminder. A 2026-09-07 lifecycle measurement found that path activity
+  added a whole Skills section in Luna and Sol follow-ups and fresh restore
+  removed it, invalidating the prefix before all history. Path-scoped entries
+  were excluded from that roster. ADR 0115 subsequently moved the changing
+  catalog to retained conversation updates because ordinary configuration
+  changes still invalidated the system prefix and frozen workers became stale.
+  The former persisted root `skills-snapshot` and capped ten-item change-delta
+  reminder were removed in favor of actual-payload observation acknowledgement.
+- **Shared path-notice acknowledgement was replaced with per-conversation
+  delivery facts.** A child could suppress its parent's discovery, and cancelled
+  staging could suppress a later retry. Per-skill event keys also preserve
+  distinct discoveries in multi-path calls. The optional notice does not claim
+  that a frozen system roster changed or enforce pre-action instruction loading.
+- **Mandatory match-and-invoke, ordering announcements, and one-turn lifetimes
+  were removed.** Captured prompts repeated those rules while disagreeing about
+  task versus turn scope. Stable optional-selection policy replaced them without
+  rewriting skill authors' own requirements.
+- **Literal required attachments replaced copying shared rules.** Their source
+  provenance prevents argument substitution, hooks, injection results, or model
+  output from creating dependency structure. A flattened presentation later
+  misparsed an authored `<system-reminder>` example as the generated wrapper's
+  end. Structured root/dependency metadata and balanced transcript scanning
+  replaced wrapper-based presentation recovery.
+- **Source inspection gained registered addresses** under
+  [ADR 0104](0104-keep-resource-addresses-closed-and-capability-neutral.md), superseding the original
+  no-path catalog choice while keeping raw backing paths out of the roster.
+  User invocation binding and unavailable-mention behavior follow
+  [the mention lifecycle](../mentions.md#atomic-binding-lifecycle); the original
+  blanket rejection of known disabled inline mentions is no longer current.
+- **Tutor removal** is recorded once in
+  [ADR 0070](0070-compose-system-prompts-from-ordered-profiles.md#decision-history).
+  It did not change skill discovery or invocation boundaries.
 
-Model-side `Skill` invocation does not fire `UserPromptExpansion`; user `$skill`
-invocations do. Model invocation is already inside a model turn and should not
-be treated as a user prompt expansion event.
-Multiple inline attachment-style `$skill` invocations fire
-`UserPromptExpansion` once per deduped attached skill in first-occurrence order.
-If any hook blocks, the whole send is blocked; this preserves the existing
-single-skill hook contract instead of adding an aggregate hook event.
-For inline attachments, hook `:updated-input` replaces only that skill's hidden
-body; leading command-style invocation keeps the existing whole-prompt rewrite
-behavior.
-
-`Skill` tool results remain model-visible as the full prepared body, while the
-view keeps them collapsed to avoid transcript noise for the user.
-
-Skill-related reminders report catalogue changes or optional path matches.
-There is no separate budget notice: the stable roster contract advertises
-`ListSkills(query)` even when no names fit, and cannot lose that instruction
-through cancelled reminder staging. They should point to
-`ListSkills(query)` or an exact `Skill(name=...)` when known, not repeat the
-full roster.
-
-`ListSkills` with no query lists active model-invocable skills and stays capped,
-including active path-scoped skills absent from the system roster.
-`ListSkills(query)` searches all enabled model-invocable skills, including
-dormant path-scoped skills absent from the default listing. Query results should
-mark dormant path-scoped skills so the model can tell why they were absent from
-the default listing. Exact `Skill(name=...)` or `$skill` invocation of a dormant
-path-scoped skill runs it once without activating its default-listing visibility;
-that activation remains tied to file/tool activity matching `paths`.
-Neither path activity nor one-shot dormant invocation changes the system roster
-or emits its change delta.
-
-Available-skill changes use the root session's `skills-snapshot`. The first
-snapshot is silent; its acknowledgement commits only when the request payload
-exists. Later additions/removals are reported once, with the same candidate
-set as the root roster, and commit by the same delivery mechanism. Persisting
-the snapshot prevents cold resume from treating known skills as new.
-
-Path matching changes shared catalogue eligibility, not instructions or
-recipient acknowledgement. Each conversation with callable Skill access gets
-an optional notice for matching skill facts it has not been shown. Per-skill
-event keys preserve discoveries across multiple paths and tool calls. Delivery
-commits a buffer-local fact (name, source, description, paths), so cancelling
-before dispatch permits a later matching observation to retry. An agent does
-not acknowledge for its parent or siblings. Path notice delivery never mutates
-the system-roster snapshot: its entries exclude path-scoped skills, so there is
-no corresponding delta to suppress.
-
-This replaces immediate shared snapshot mutation: a child could previously
-suppress the parent's discovery, and a cancelled notice could suppress its
-own retry. Frozen agent prompts also made the claim that their roster had
-changed false. Notices now describe optional relevance and offer Skill or
-ListSkills; they make no invocation or pre-action enforcement claim. Delivery
-is once per live conversation and matching fact; a changed fact can rearm it.
-Compaction alone does not repeat optional discovery. Cold resume starts a new
-buffer throttle. The always-callable ListSkills contract remains the fallback
-when a notice has left context; required skill-body fidelity is a separate
-compaction responsibility.
-
-Generic skill-change deltas cap added and removed lists at ten entries each,
-then use an `and N more; use ListSkills(query)` suffix.
-
-User-initiated skill invocation uses `$skill` syntax. Slash commands remain
-reserved for local mevedel commands such as `/skills`, `/plugin`, and `/review`.
-Leading `$foo off` is parsed as command-style invocation of `foo` with argument
-`off` when `$` is the first non-whitespace character; it is not parsed as
-disabling the skill. Inline `$skill` mentions elsewhere in the prompt are
-attachment-style explicit invocations: mevedel prepares the named skill while
-preserving the original user prompt as the prompt body; inline invocations
-pass empty skill arguments and duplicate mentions of the same canonical skill
-are injected once, preserving first occurrence order. Unknown `$foo` text is
-sent as a normal prompt rather than rejected, so shell/environment prose such
-as `$PATH` remains safe. A `$foo` mention that names a known but disabled
-skill blocks the send with guidance to enable it via `/skills enable foo` or
-escape it as literal text. A leading command contributes command-scoped
-permissions and hooks. Exactly one leading command may also own the next
-request's model and effort; a command stack retains session policy. Embedded
-instruction mentions attach prepared skill context but do not activate command
-permissions, hooks, agents, model, or effort.
-Quoted `"$foo"` / `'$foo'`, escaped `\$foo`, and `$foo` inside Markdown inline
-code spans or fenced code blocks stay literal text for inline detection.
-Inline attachment-style `$skill` is resolved by mevedel itself from atomic
-source bindings into additive hidden skill context before the model request.
-It does not ask the model to call `Skill(name=...)`. The transcript keeps the
-user's original prompt text, while the model-visible prompt replaces recognized
-inline mentions with compact placeholders such as
-`[skill:to-prd -- attached]`. Inline attachment-style invocations persist the
-original user text plus render metadata containing the prepared root body and
-attached-skill names and bodies. Leading command expansion also leaves its
-provider-facing prompt, including required-attachment reminder wrappers, in the
-canonical user run; the view uses the structured metadata instead of reparsing
-those wrappers. Transformed inline-attachment placeholders are request-time
-only. Inline
-attachment-style invocation treats even a `context: fork` skill as a non-forking
-instruction. Only a leading fork command dispatches a child. Unknown `/foo`
-remains a strict unknown-command error
-because slash is reserved for local commands.
-
-Amendment: a skill author may declare recursive required instruction
-attachments with literal `!$skill` syntax in `SKILL.md`. This is a deliberate,
-narrow exception to the rule that skill bodies are not recursively interpreted.
-The declaration attaches the dependency as context; it does not execute the
-skill, invoke a tool, or dispatch an agent. Dependencies resolve and validate as
-one graph, prepare dependency first in authored sibling order, and preserve the
-root's user or model origin. A model-origin graph requires every node to permit
-model invocation, so a parent cannot reach a model-disabled descendant. A
-user-origin graph requires only its root to be user-invocable; a dependency may
-be attachment-only and hidden from direct user invocation. Required children
-contribute instructions only and do not activate their command/fork behavior,
-agent, model, effort, hooks, or request permissions.
-
-Amendment: inline command render metadata now stores the prepared root body and
-each required attachment as structured data. The previous single flattened
-prompt made wrapper recovery ambiguous when an authored attachment itself
-contained a literal `<system-reminder>` example: the inner closing tag could be
-mistaken for the generated outer close and split the transcript. Structured
-metadata keeps presentation independent of provider wire syntax, while the
-canonical transcript scanner balances nested reminder delimiters.
-
-The exception depends on literal source provenance rather than text alone.
-Escaped and Markdown-code forms, plus markers introduced by argument
-substitution, injections, hooks, prepared bodies, child prompts or results, and
-model output remain inert. Without that provenance boundary, generated or
-untrusted text could turn into executable dependency structure and bypass the
-model-invocation gate. Full-line dependency arguments may use ordinary parent
-argument substitution, but the substituted result remains non-author text for
-the same reason.
-
-Amendment: Tutor mode was removed. It required the user to summon it before
-knowing they needed teaching, then refused to answer what was asked, so the
-chat buffer answered the same questions better without it. Its pedagogical
-angle now reaches the user through Buddy notes, which arrive unasked and cost
-nothing to ignore. Every tutor profile, component, preset, and tool named above
-is gone; the surrounding mechanism is unchanged.
+- **Frontmatter parsing gained a file-fingerprint cache.** A startup profile with
+  38 skills put YAML parsing at 0.8 seconds and one third of command allocation.
+  Reusing unchanged file parses reduced repeated scanning work while retaining
+  hot reload; directly supplied content remains uncached because a file
+  fingerprint cannot prove its identity.

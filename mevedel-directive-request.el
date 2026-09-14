@@ -268,13 +268,7 @@
   (format
    "## TASK: Implement the following request.
 
-### INSTRUCTIONS:
-
-1. Read and understand the implementation request below
-2. Read and understand all provided references
-3. Use the references to complete the request
-4. Use your tools as needed
-5. Create working, complete code that fulfills the request
+Use the supplied references as context for implementing the request.
 
 ### IMPLEMENTATION REQUEST:
 
@@ -431,12 +425,7 @@ discussion.  ATTEMPT-INDEX attaches that implementation result."
     (format
      "## TASK: Answer the following request.
 
-### INSTRUCTIONS:
-
-1. Read and understand the request below
-2. Read and understand all provided references
-3. Use the references to complete the request
-4. Use your tools to access files as needed
+Use the supplied references and discussion as context for answering the request.
 
 ### REQUEST:
 

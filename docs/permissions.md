@@ -11,43 +11,33 @@ those facts with tool policy.
 
 ```mermaid
 flowchart TD
-    A[Tool call] --> B[Extract specifiers]
-    B --> C{Any deny rule?}
-    C -- Yes --> Z[Deny]
-    C -- No --> D{Planning/review<br/>and forbidden mutation?}
-    D -- Yes --> Z
-    D -- No --> E{Command checker?}
-    E -- Yes --> F{Checker or rules<br/>authorize command?}
-    F -- Deny or ask --> Q[Command decision]
-    F -- Allow --> G{Path supplied?}
-    E -- No --> N{Protected path without<br/>a covering grant?}
-    N -- Yes --> X[Ask for resource authority]
-    N -- No --> H{Matching native rule?}
-    H -- Deny or ask --> Q
-    H -- Allow --> Y
-    H -- None --> J{Allowed root, exact path,<br/>or resource grant?}
-    J -- No --> X
-    J -- Yes --> K{Mode authorizes tool?}
-    K -- Yes --> Y
-    K -- No --> Q
-    G -- No --> Y[Allow]
-    G -- Yes --> I{Protected path without<br/>a covering grant?}
-    I -- Yes --> X[Ask for resource authority]
-    I -- No --> L{Allowed root, exact path,<br/>or resource grant?}
-    L -- Yes --> Y
-    L -- No --> X
+    Input[Operation and resource facts] --> Absolute{Absolute deny or workflow restriction?}
+    Absolute -->|Yes| Deny[Deny]
+    Absolute -->|No| Tool[Resolve tool or command authority]
+    Tool --> Resource[Resolve independent resource authority]
+    Resource --> Result{Combined decision}
+    Result -->|Denied| Deny
+    Result -->|Missing authority| Ask[Permission hooks and user decision]
+    Result -->|Authorized| Allow[Continue within approved confinement]
+    Ask -->|Denied| Deny
+    Ask -->|Approved| Allow
 ```
+
+The diagram shows authority composition; the ordered resolver below supplies the
+exact precedence. Bash and batch Eval also resolve their child-confinement
+capabilities before execution. An approval applies only within the requested and
+approved scope; it cannot override an absolute denial or workflow ceiling.
+
 
 Single decision function `mevedel-check-permission`. Decision chain:
 
 1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /
    `get-name` slots
 2. Deny rules (across all buckets — see bucket precedence below)
-3. Active standalone Plan with a native edit tool other than an session-only
-   `ApplyPatch` or with `Eval`, active directive Planning with any native edit
-   tool or `Eval`, an `ApplyPatch` containing an ordinary, shared, memory, or bare
-   endpoint, or active Goal planning/review with a native edit tool -> deny
-   regardless of allow rules or permission mode
+3. Workflow restrictions: standalone/sticky Plan denies native edit tools and
+   Eval, except ApplyPatch whose every operand is a session-owned `work://`
+   descendant. Directive Planning denies all native edits and Eval. These
+   restrictions apply regardless of allow rules or permission mode.
 4. Tool's own `check-permission` slot decides command authority
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
 6. For a path not directly covered by a native path rule, resolve an allowed
@@ -208,8 +198,10 @@ client-absolute custom pattern stays in the client path domain and therefore
 does not become a remote protection rule.
 String-only entries are invalid by design. Glob discovery walks the
 workspace, memory, and additional writable roots before every launch; the
-execution target's temporary directory is writable scratch the child already
-owns and is not searched, so a repository placed there is not protected.
+execution target's temporary directory is excluded as a discovery root. A
+workspace or additional root beneath it is still searched when independently
+listed. Other repositories placed only in temporary scratch do not receive
+glob-discovered protection.
 
 The three canonical modes are `ask`, `edits`, and `full-auto`:
 
@@ -453,9 +445,8 @@ notification.
                       "https://ntfy.sh/YOUR-TOPIC")))
 ```
 
-The desktop wrappers request a non-expiring critical notification.  A
-notification server may ignore the timeout hint; `notify-send(1)` documents
-GNOME Shell and Notify OSD as examples.
+The desktop wrappers request a non-expiring critical notification.  The
+notification server may ignore the timeout hint.
 
 `mevedel-permission-prompt.el` is the focused UI owner for all four entry
 kinds. It owns generic permission controls, agent attribution, Bash guardian
@@ -642,10 +633,7 @@ directory and its `commondir` target. Both retain the applicable protection.
 Failed confined results identify the discovered shared metadata location for
 objects and refs; this is repository-layout information, not a diagnosis
 inferred from stderr or an automatic grant. A new explicit invocation can
-request the missing scope. Real prompt-to-launch tests cover staging and
-committing with both metadata trees approved, and verify that another
-repository remains unwritable.
-
+request the missing scope.
 Before Bash or batch Eval starts, one shared resolver merges capabilities
 explicitly requested by that invocation with every matching direct
 session/workspace/global profile. A non-empty effective profile promotes
@@ -718,99 +706,21 @@ snapshot.
 
 ### Bash guardian guidance
 
-`mevedel-permission-guardian` can add model-reviewed risk guidance to
-Bash prompts. Outside `full-auto`, it is advisory only: the normal
-permission chain still decides `allow` / `ask` / `deny`, explicit deny
-rules still win and protected-path policy is
-unchanged, and the user remains authoritative. The reviewer receives the
-normalized command class, parser, reasons, identified resources, and pending
-confinement facts. Its normalized response contains only risk,
-recommendation, and reason. Recommendations use `proceed`, `ask`, or `deny`;
-`allow-once` is deliberately excluded because guardian output never grants
-authority. Risk and recommendation remain separate: risk reports intrinsic
-severity using `low`, `medium`, `high`, or `critical`, while recommendation
-expresses the suggested response. A high-risk command may still warrant `ask`;
-clear credential exfiltration may warrant `critical` plus `deny`. Severity is
-the potential impact directly expressed by the command, not a guess about the
-likelihood of harm from unknown local state. Read-only inspection is normally
-low; project builds, tests, and bounded retrieval from public network resources
-are normally medium. Authenticated network actions, remote mutations,
-transmission of local data, downloading executable code, destructive
-operations, and privilege or process changes are high. Explicit remote-code
-execution, broad data loss, credential exfiltration, persistence tampering, or
-security-control tampering are critical. A request for network capability is
-not itself a risk level; the intended network effect determines severity.
-`deny` is reserved for expressed effects that should not continue without a
-more specific human intervention: broad or irreversible data loss, credential
-exfiltration, download-and-execute patterns, persistence or security-control
-tampering, and destructive privilege changes. It is not an automatic mapping
-from every critical rating; potentially legitimate but high-impact operations
-use `ask`. `proceed` is used only when the supplied evidence is sufficient and
-no user judgment is needed, including bounded inspection, formatting,
-reversible workspace writes, and ordinary confined builds or tests. Ambiguous
-intent, scope, targets, generated code, or state-dependent effects use `ask`.
-For the permission guardian, `ask` means uncertainty worth presenting in
-interactive permission modes but not severe enough to veto `full-auto`. In
-`full-auto`, the guardian is deny-only for commands that the normal classifier
-would have treated as suspicious: `deny` vetoes, while timeouts, failures,
-invalid output, `proceed`, and `ask` allow the already-authorized unattended
-path to continue. The one-sentence reason names the decisive command effect
-first and mentions confinement only when it changes the practical next step.
-It does not narrate permission policy or tell the user who should decide.
+The optional guardian runs after an interactive Bash decision reaches `ask`.
+The permission card appears immediately with “Analyzing command risk...” and is
+redrawn with risk, recommendation and reason when guidance arrives. Failed,
+timed-out or invalid guidance leaves an “Unavailable” section. The normal
+permission chain and the user's answer remain authoritative.
 
-Interactive guardian guidance runs after Bash resolves to `ask`; the
-deny-only `full-auto` path runs only for commands that would otherwise have
-asked. The interactive permission prompt is shown immediately with:
+In `full-auto`, guardian review is deny-only for commands that would otherwise
+have asked under ordinary classification. A `deny` vetoes that unattended path;
+`proceed`, `ask` or unavailable guidance lets the already-authorized path
+continue. Direct user authority and escalation follow the resolver's ordering;
+the guardian cannot grant missing filesystem or network capabilities.
 
-```text
-Guardian guidance
-Status: Analyzing command risk...
-```
-
-When guidance arrives, the same queued prompt is redrawn with risk,
-recommendation, and reason. If the reviewer times out, fails, or returns
-unparseable output, the section stays visible as:
-
-```text
-Guardian guidance
-Unavailable
-```
-
-Set `mevedel-permission-guardian` to `t` to use the `guardian` workload
-policy from the current session's `mevedel-model-workloads`, or to a custom
-`(lambda (command context callback) ...)` classifier for tests or local
-policy. `mevedel-permission-guardian-timeout` controls the wait for
-reviewer output; the default is 20 seconds. The model prompt lives in
-`prompts/permissions/bash-guardian-system.md`. The ordered guardian profile
-places scoped workspace configuration and environment data after that role
-policy. The maintained [guardian prompt contract](guardian-prompts.md) records
-the trusted role wording and semantic examples. Elisp constructs the separate
-user message containing the command evidence.
-
-The model-backed reviewer runs as an isolated guardian request. Its system
-message contains the trusted reviewer policy, authority limits,
-injection-resistance instructions, evaluation criteria, response contract,
-scoped `AGENTS.md` / `AGENTS.local.md`, and environment data. Project
-configuration informs the workflow being evaluated, including documented
-commands such as repository test runners, but cannot override guardian policy
-or grant authority. The user message contains the Bash command and deterministic
-analysis as untrusted evidence. The request does not inherit the session's
-coding-assistant system prompt, transcript, tools, memories, or skills, and does
-not receive the user's request or conversation context. Authorization and user
-intent remain the deterministic permission system's responsibility.
-
-Command evidence is limited to the exact Bash source, command class and parser,
-dangerous or complex flags, analysis reasons, parsed command names, literal
-resources, active confinement facts, requested additive or full escalation,
-and any matching explicit allow patterns. Allow patterns are evidence of
-configured policy, not model-granted authority. Transcript excerpts and tool
-output are not included. The active permission mode is also excluded: the
-guardian produces mode-independent semantic guidance, and mevedel interprets it
-according to the session mode. Everything in the user message is evidence to
-analyze, never instructions to follow. Confinement informs the recommendation
-and reason but does not reduce the command's risk rating.  Pending confinement
-facts probe the same execution target and working directory that the eventual
-command launch will use.
+[Permission guardian](guardian-prompts.md) owns configuration, trust boundaries,
+command-evidence fields, risk criteria and examples. Its output is guidance,
+not a grant or proof that execution occurred.
 
 ## Introspection source reads
 
@@ -852,8 +762,7 @@ Trusted skill expansion cannot create an interactive prompt and therefore
 requires existing authority, typically from the skill's `allowed-tools:
 [Eval]`.
 Standalone/sticky Plan mode withholds Eval regardless of this authority;
-directive Planning also withholds it. Goal planning/review routes Eval through
-the ordinary policy rather than suppressing it as a native edit tool. Markers
+directive Planning also withholds it. Goal turns use ordinary Eval policy. Markers
 introduced by argument
 substitution are not trusted literals and are left as text.
 Literal markers may still contain substituted text in their expression
@@ -872,10 +781,9 @@ confinement policy. Any
 "allow-session" / "deny-session" outcome accepted inside the sub-agent's
 prompt is written via `setf` on the same struct -- so the new rule
 applies immediately to the root and to every other live sub-agent.
-This is a deliberate sharing contract; agents that should not be able to
-mutate the shared state are constrained today by their tool list (e.g.
-the verifier ships read-only tools, so its calls never reach the prompt
-step).
+An agent's tool list limits which operations it can request. A read-only
+agent can still need a permission prompt for a protected or outside-root
+resource; read-only capability does not confer unrestricted read authority.
 
 All queued permission prompts render in the root session's interactive
 view buffer, not inside the sub-agent transcript buffer or a read-only
@@ -921,16 +829,16 @@ an interactive decision, `full-auto`, or a deliberately authored direct-user
 pattern.
 
 A portable project-local store that authorizes the Eask CLI, network access,
-and only npm's cache writes is:
+and writes within npm's cache directory is:
 
 ```elisp
 (:rules
  (("Bash" :pattern "npx @emacs-eask/cli *"
    :network t
-   :file-system ((:path "~/.npm" :access write))
+   :file-system ((:path "~/.npm" :access write :recursive t))
    :action allow))
  :resource-grants
- ((:path "~/.npm" :access write)))
+ ((:path "~/.npm" :access write :recursive t)))
 ```
 
 A `:recursive t` entry grants a whole directory tree — here read access to

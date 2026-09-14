@@ -2,4 +2,15 @@
 
 Status: accepted
 
-Mevedel will remove the built-in coordinator agent, bundled coordinator skill, preset exposure, forced first-turn behavior, messaging alias, and coordinator-specific routing. The root agent will orchestrate ordinary agents directly, and no agent name will imply special coordination authority; a future user-defined agent named `coordinator` will behave like any other agent. This avoids preserving an unused intermediary and prevents its routing assumptions from constraining the new durable-agent model.
+## Current decision
+
+The root orchestrates ordinary agents directly. No role name implies privileged
+coordination authority; a user-defined `coordinator` follows the same role and
+tool rules as any other agent.
+
+## Decision history
+
+The built-in coordinator, bundled coordinator skill, preset exposure, forced
+first-turn behavior, messaging alias, and special routing were removed. The
+intermediary was unused, and its routing assumptions constrained retained-agent
+ownership. Ordinary delegation replaced it without keeping name-based exceptions.

@@ -31,7 +31,8 @@ when the available evidence supports one.
 ## Your notes
 
 `add_note` attaches one remark to one line and returns its id. Attach each
-note to the line that prompted it. Keep it to one or two sentences.
+note to the line that prompted it. Make it easy to scan beside the code,
+retaining the options and trade-offs needed for the decision.
 
 Severity:
 

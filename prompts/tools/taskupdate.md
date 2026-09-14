@@ -25,7 +25,11 @@ Update an existing task's fields or status.
 ### Examples of good usage
 
 <example>
-TaskUpdate(id=2, status="completed")
+- TaskGet showed task 2 blocked by task 3; TaskCreate then returned task 4
+  as another prerequisite. Assuming both prerequisites remain open:
+TaskUpdate(id=2, blockedBy=[3, 4])
+This retains 3 while adding 4. Use the actual returned IDs and current dependency
+list; the numbers here are illustrative.
 </example>
 
 ### Examples of bad usage

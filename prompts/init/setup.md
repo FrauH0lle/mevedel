@@ -45,10 +45,9 @@ question or skip any question it clearly answers.
 
 ## Phase 2: Explore
 
-Inspect before writing. For a non-trivial repository, dispatch an
-`Agent` to survey structure, commands, tests, conventions, and existing
-agent instructions while you inspect the files most likely to be
-authoritative.
+Inspect the repository's structure, commands, tests, conventions, and
+existing agent instructions before writing. Delegate a bounded survey when it
+can make useful independent progress alongside your inspection.
 
 Prioritize:
 
@@ -78,16 +77,9 @@ choices and explain them in the final response.
 ## Phase 4: Propose
 
 Before writing, summarize the intended files and use `Ask` with object
-options. Include short `preview` text when it helps the user compare
-choices. Keep previews compact; they are for decision support, not a
-full draft.
-
-Example options:
-
-- `{ label: "Looks good (Recommended)", description: "Write the proposed setup.", preview: "AGENTS.md with commands, style, tests; one review skill; no hooks." }`
-- `{ label: "Drop skills", description: "Write instruction files only plus any approved hooks." }`
-- `{ label: "Drop hooks", description: "Write instructions and skills, but no hook config." }`
-- `{ label: "Instructions only", description: "Only write AGENTS.md or AGENTS.local.md." }`
+options. Use `label` and `description` for each choice. When a preview helps,
+put it in `sample` for every option in that question; otherwise omit `sample`
+from every option. Mark exactly one label with ` (Recommended)`.
 
 ## Phase 5: Write Instructions
 

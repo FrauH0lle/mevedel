@@ -16,16 +16,40 @@ The session sidecar stores a strict Goal record containing:
 - an optional token budget and accepted-plan reference; and
 - creation and update timestamps.
 
-Old Goal schemas are invalid and load as no Goal. An active Goal loaded from a
+An invalid persisted Goal record loads as no Goal. An active Goal loaded from a
 saved session is demoted to `paused` with a session-resumed reason so recovery
 cannot dispatch work without an explicit `/goal resume`.
 
+The state controls whether another ordinary turn may start. Pausing does not
+abort a turn already running. Runtime failures pause execution; a task-level
+impasse is a separate, model-reported blocked state.
+
+```mermaid
+stateDiagram-v2
+    state "budget-limited" as budget_limited
+    [*] --> active: Start
+    active --> paused: Pause or runtime failure
+    active --> blocked: Task impasse
+    active --> budget_limited: Budget reached
+    active --> complete: Objective achieved
+    complete --> [*]
+```
+
+The diagram shows how active execution stops. Resume returns paused or blocked
+Goals to active; a budget-limited Goal requires raising or removing its budget.
+Loading an active saved Goal pauses it. Lowering a budget to current usage can
+limit any nonterminal Goal. Clearing removes the record, and a completed Goal
+cannot be resumed.
+
 ## Request context and authority
 
-Immediately before every active root request, mevedel generates request-local
-Goal context from the durable record. It contains the objective, accounting,
-remaining budget, and any accepted-plan reference. It is never inserted into
-the visible or persisted transcript. The Goal's session must match the
+Before an active root request, mevedel derives current Goal facts from the
+durable record: objective, accounting, remaining budget, and accepted-plan
+reference. Changed facts are delivered as retained context updates, hidden from
+ordinary chat presentation but preserved in transcript audit records. Unchanged
+facts remain in selected history; loss of that context causes delivery again.
+The durable record supplies current authority, not the old observations.
+The Goal's session must match the
 request's workspace and working directory; stale ambient sessions contribute
 no Goal context. Ordinary user messages that start a turn during a Goal receive
 the same context and accounting as automatic turns. Same-turn steering instead
@@ -56,12 +80,13 @@ one turn at canonical success or failure settlement. Token accounting uses
 normalized provider input plus output usage, excluding cached-input counts,
 with the request estimate as fallback.
 
-Compaction does not copy Goal state into summaries or segment snapshots and
-does not queue a static Goal reminder. Ordinary steering remains ordinary
+Compaction does not reconstruct the durable Goal from a summary. Retained
+observations can leave selected history; the context-delivery layer supplies
+current facts and policy again when needed. Ordinary steering remains ordinary
 conversation history: unresolved requests may survive as actionable summary
 steps, while satisfied requests retire to outcome or evidence under completed
-work. Fresh request-local Goal context remains the only model-visible Goal
-authority.
+work. Current facts derived from the durable Goal supersede historical Goal
+observations.
 
 ## Token budget
 
@@ -102,7 +127,7 @@ after canonical request teardown. Dispatch requires all of the following:
 - the Goal is active;
 - no root request is running;
 - no permission or Plan interaction is pending;
-- no queued follow-up is ready to run; and
+- no queued follow-up remains to be delivered; and
 - the token budget is not exhausted.
 
 Same-turn steering stays with its owning active request. After that request
@@ -129,9 +154,9 @@ Goal. It accepts exactly:
 The tool reports only the status transition. Canonical turn settlement still
 persists the final accounting.
 
-The installed `prompts/goals/active-context.md` supplies the active root with
-the current objective, accepted-plan reference, accounting, and completion
-contract. It requires evidence for the full requested outcome; passing a
+The installed `prompts/goals/active-context.md` formats current objective,
+accepted-plan reference, and accounting. `prompts/goals/policy.md` separately
+supplies the completion contract. It requires evidence for the full requested outcome; passing a
 narrower set of checks does not establish completion. A model-reported block
 requires the same impasse across at least three consecutive Goal turns with
 no meaningful independent progress possible. These are judgment obligations,
@@ -141,7 +166,7 @@ not claims that the tool mechanically verifies completion or classifies blockers
 
 - `/goal <objective>` starts a Goal and schedules its first turn.
 - Bare `/goal` opens the Goal cockpit.
-- `/goal pause` pauses after the current request.
+- `/goal pause` stops continuation without aborting the current request.
 - `/goal budget <N|none>` replaces or removes the token limit.
 - `/goal edit <objective>` replaces the objective without resetting the run.
 - `/goal resume [steering]` resumes, queueing steering before continuation.
@@ -161,7 +186,8 @@ context, resolved artifact path, full plan, and kickoff; later turns use the
 small request-local Goal context and may reread the validated artifact.
 
 The Plan-selected permission mode and Goal budget apply to the target session.
-The source session's permission mode and Goal state remain unchanged. Derived
+For Worktree execution, the source session's permission mode and Goal state
+remain unchanged; Here execution uses the current session. Derived
 artifact authority exists only while the target Goal is unfinished and never
 alters user grants.
 

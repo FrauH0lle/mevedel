@@ -641,7 +641,7 @@ than silently answered for somewhere else."
 
   (mevedel-define-tool
     :name "XrefReferences"
-    :description "Find where a function, variable, or class is used throughout your codebase."
+    :description "Find identifier references using a context file's available xref backend."
     :summary "LSP-aware symbol references, callers, and impact analysis."
     :prompt-file "prompts/tools/xref-references.md"
     :handler #'mevedel-tool-code--xref-references
@@ -658,7 +658,7 @@ than silently answered for somewhere else."
 
   (mevedel-define-tool
     :name "XrefDefinitions"
-    :description "Search for functions, variables, or classes by name pattern across your project."
+    :description "Find definitions by name pattern using a context file's xref backend."
     :summary "LSP-aware symbol definitions and name discovery."
     :prompt-file "prompts/tools/xref-definitions.md"
     :handler #'mevedel-tool-code--xref-definitions

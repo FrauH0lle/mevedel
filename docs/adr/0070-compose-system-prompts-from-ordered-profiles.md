@@ -1,66 +1,84 @@
 # Compose system prompts from ordered profiles
 
-Status: accepted
+Status: accepted. Incorporates ADR 0021's guardian boundary.
 
-System prompts are rendered through one ordered profile mechanism. Reusable
-components declare a file, literal text, or dynamic producer; profiles choose
-those components, may add inline file or text components, and define render
-order directly. Workspace-aware profiles must explicitly include workspace
-configuration and environment components, so context cannot disappear through
-implicit defaults. Main, agent, Bash guardian, and compaction
-prompts use this mechanism. Agent definitions declare inline
-`:system-components`; behavioral system content is frozen when the retained
-agent is spawned. As extended by ADR 0115, selected named observations are
-instead delivered as retained current-context updates. The selected component
-names are frozen and persisted alongside the role contract; authored inline
-components remain in the system prompt.
+## Current decision
 
-Role and tone remain separate selectable components. Main owns the coding tone
-and worker/explorer/verifier share a reporting tone. Memory saving guidance is
-selected only for main and worker; Buddy profiles also select memory context
-and use policy, without saving instructions.
-Compaction uses the isolated context-summary generator's fixed prompt.
+System prompts use ordered profiles of reusable named components and inline
+file/text components. A named component can read a file, supply literal text,
+or produce dynamic content. Workspace-aware profiles explicitly include
+workspace configuration and environment; validation rejects missing required
+components and duplicate names. Main, agent, Bash guardian, and Buddy prompts
+use this mechanism. The isolated context-summary generator owns a fixed prompt.
 
-Amendment: captured effective prompts showed repeated routing/workflow policy
-in roles and descriptions, while the former ToolScript activation rewrote the earlier
-system prompt to promote a tool already described in its own schema. Coding
-profiles now share an explicit `task-policy` component for scope, permission,
-trust, existing edits, and verification. Roles keep their distinct obligations
-and machine-consumed report formats; tone owns communication. ToolScript
-activation no longer adds system policy. This retains ordered composition and
-frozen agent prompts while reducing competing homes and avoidable prefix churn.
-Guardians and summaries do not select the coding task policy.
+Role, tone, shared task policy, and memory use/save policy are separate
+components. Main owns the coding tone; worker, explorer, and verifier share a
+reporting tone. Main and worker select memory saving guidance. Buddy selects
+memory context and use policy without saving instructions. The save policy
+requires retrieving `mevedel://memory.md` before mutations; that manual owns
+root selection, frontmatter, and index maintenance.
 
-The same inspection found verifier/reviewer contracts duplicated in unconditional
-per-turn reminders. Frozen role policy is restored before every request and does
-not live in the compacted transcript, so these name-triggered reminders are
-removed. Role-local judgment and report formats remain in the role prompt; direct
-tool rosters and permission enforcement are unchanged. Custom role names no longer
-implicitly acquire an undeclared read-only reminder.
+Retained agents freeze their behavioral system content and selected observation
+names at spawn. Named workspace, memory, journal, environment, skill, resource,
+and Goal observations are delivered according to
+[ADR 0115](0115-retain-delivered-conversation-fragments.md), subject to the
+profile's selection. Authored inline components remain in the system prompt.
+Changing a retained role contract requires a new agent.
 
-Memory inspection also found save procedures in passive Buddy requests and
-relative index ages that rewrote unchanged context daily. Memory use policy,
-save policy, and root/index data are now separate explicit components. Static
-policies precede changing data; absolute modification dates retain freshness
-metadata without daily text churn. The initial split kept the ordinary save procedure inline. The 2026-09-08
-follow-up moves root selection, frontmatter and index-maintenance procedure to
-`mevedel://memory.md`; the always-visible save policy requires retrieving that
-manual before explicit or model-initiated mutations. This preserves a visible
-before-write trigger while removing procedures unrelated to most turns.
-Behavioral compliance with that trigger is not established for every model.
+The Bash guardian receives its dedicated risk policy first, then scoped
+`AGENTS.md`/`AGENTS.local.md` and environment data. Command text and deterministic
+classifier facts are separate untrusted user evidence. Workspace context can
+explain a documented workflow but cannot override risk criteria, advisory-only
+authority, or the response contract. The guardian excludes the coding-assistant
+prompt, ambient conversation, tools, memory, and skills.
 
-This supersedes ADR 0021's exclusion of workspace instructions from guardian
-system messages. The Bash guardian now receives scoped `AGENTS.md` /
-`AGENTS.local.md` content and environment data after its dedicated role policy.
-That project context can explain documented workflows, but cannot override the
-guardian's risk criteria, advisory authority boundary, or response contract.
-The guardian still excludes the coding-assistant prompt, transcript, tools,
-memory, and skills; the Bash command and deterministic classifier facts remain
-separate user-message evidence.
+The [architecture manual](../architecture.md) describes composition and retained
+instruction delivery. The [guardian manual](../guardian-prompts.md) owns risk
+classification and examples.
 
-Amendment: Tutor mode was removed. It required the user to summon it before
-knowing they needed teaching, then refused to answer what was asked, so the
-chat buffer answered the same questions better without it. Its pedagogical
-angle now reaches the user through Buddy notes, which arrive unasked and cost
-nothing to ignore. Every tutor profile, component, preset, and tool named above
-is gone; the surrounding mechanism is unchanged.
+## Rationale and consequences
+
+Explicit ordered composition makes prompt dependencies visible at their owner.
+Shared policy has one home; roles retain distinct duties and machine-consumed
+report formats. Guardians and summaries do not inherit coding task policy.
+A retained role does not need a per-turn reminder to reconstruct policy that is
+restored outside the compacted transcript.
+
+Separating stable policy from changing observations avoids unrelated prefix
+changes and keeps agent behavior predictable. Absolute modification dates give
+memory freshness information without rewriting unchanged data every day.
+Retrieving the memory manual reduces always-visible procedure text, but relies
+on model compliance with the before-write trigger; compliance has not been
+established for every model.
+
+## Decision history
+
+- **ADR 0021 isolated two guardians completely**, including excluding workspace
+  instructions. Each owned a full trusted system prompt and received reviewed
+  material as untrusted user content. Duplicating their small trust-boundary
+  wording was preferred to a shared template because their authority and response
+  contracts differed. The Goal guardian was tool-free and trusted explicit PRD
+  or ticket references rather than independently investigating them.
+- **The Bash guardian gained scoped workspace context in ADR 0070.** Documented
+  project workflows can explain the command under review without importing the
+  coding assistant or changing the guardian's authority. Ordered components
+  replaced the blanket workspace exclusion. The former automatic Goal planning
+  guardian was removed with the phase-based workflow; see
+  [ADR 0067](0067-separate-planning-from-goal-execution.md#decision-history).
+- **Captured prompts exposed repeated workflow and routing policy** across role
+  text, descriptions, and unconditional verifier/reviewer reminders. Shared
+  `task-policy` and role-local report contracts replaced these duplicates. Custom
+  role names no longer acquire an undeclared read-only reminder. Tool authority
+  did not change with that prompt cleanup.
+- **ToolScript activation rewrote earlier system policy** to promote a tool whose
+  schema already explained it. That activation policy was removed. Tool discovery
+  and the later ToolCall surface retain their own contracts.
+- **Memory inspection found saving procedures in passive Buddy requests and
+  relative index ages that changed daily.** Use policy, save policy, and data
+  were split. On 2026-09-08 the ordinary save procedure moved from the inline
+  policy to the retrieved manual, preserving the visible before-write trigger.
+- **Tutor mode was removed.** It required users to summon teaching before knowing
+  they needed it and then refused the requested answer; ordinary chat answered
+  those questions better. The pedagogical purpose moved to optional Buddy notes
+  that can be ignored without interaction. Tutor profiles, presets, components,
+  and tools were removed; ordered composition remains.

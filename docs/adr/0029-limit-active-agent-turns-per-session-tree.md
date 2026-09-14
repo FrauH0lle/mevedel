@@ -1,5 +1,30 @@
 # Limit active agent turns per session tree
 
-Status: accepted
+Status: accepted. Incorporates ADR 0055.
 
-Mevedel will enforce one shared capacity across all active non-root agent turns in a root session tree, regardless of nesting depth. The capacity defaults to three, is stored as a session setting derived from the global default, and cannot be overridden by descendants. A turn holds its slot from dispatch through settlement, including while suspended in `WaitAgent`; completion, error, or interruption releases it, while durable identities and settled turns consume no slot. `Agent` and a follow-up that must start an idle target fail immediately with a capacity-exhausted tool error when full; a follow-up to an already running target and queue-only messages remain deliverable. V2 imposes no separate delegation-depth or total-agent limit; automatic admission queues, an unlimited mode, runtime-residency LRU, and accumulation limits are omitted until demonstrated need justifies their lifecycle complexity.
+## Current decision
+
+One root-session setting bounds active non-root turns across the entire agent
+tree, regardless of depth. It defaults to three and descendants cannot override
+it. A turn holds capacity through waiting and human interactions; settlement
+releases it. Retained idle identities consume no slot.
+
+Agent reserves capacity before publishing a child. FollowupAgent reserves a slot
+only to start an idle target; steering an already active target needs no new
+slot. An idle follow-up at capacity fails immediately without queueing its task.
+SendMessage remains available for queue-only communication.
+
+## Rationale and consequences
+
+One shared active-turn bound limits concurrent work without confusing runtime
+cost with retained identity. Separate depth/total-agent limits, an unlimited
+mode, admission queues, and residency eviction are not part of this design.
+Waiting still holds a slot, so delegators must account for the tree's capacity.
+
+## Decision history
+
+**ADR 0029 established the tree-wide bound; ADR 0055 clarified idle follow-up
+admission.** Treating every follow-up as a new turn would reject useful steering
+when the tree was full. Active steering therefore keeps its existing slot;
+idle activation uses the same capacity boundary as a new spawn. These records
+express one admission decision and are consolidated here.
