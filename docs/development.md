@@ -166,8 +166,7 @@ symbols and `eval-when-compile` for compile-time-only dependencies.
   cold command/setup entry point, or at top level when it is unconditional
   and acyclic. Use `eval-when-compile` only for compile-time dependencies.
 - **Never call `require` on a hot path**: code reached per segment, chunk,
-  redraw tick, or guest step must rely on an earlier load boundary. A profiled
-  session attributed 20% of CPU samples to repeated `require` calls. Avoid
+  redraw tick, or guest step must rely on an earlier load boundary. Avoid
   circular dependencies through module direction rather than scattering
   lazy `require`s through helpers.
 - **ASCII in code, unicode only in UI-facing strings**: comments,

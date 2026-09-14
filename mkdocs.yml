@@ -1,9 +1,47 @@
 site_name: mevedel docs
-site_description: Working documentation for mevedel, for humans and agents.
+site_description: User and architecture manual for mevedel, for humans and agents.
 site_url: https://frauh0lle.github.io/mevedel/
 repo_url: https://github.com/FrauH0lle/mevedel
 edit_uri: edit/master/docs/
 docs_dir: docs
+nav:
+  - Home: index.md
+  - Using mevedel:
+      - Conversation and workspace view: view.md
+      - Browser collaboration: collaboration.md
+      - Plans: plan-mode.md
+      - Goals: goals.md
+      - Agents and tasks: agents.md
+      - Mentions: mentions.md
+      - Skills and plugins: skills.md
+      - Patch review: preview.md
+      - Buddy notes: buddy.md
+      - Sessions and recovery: sessions.md
+      - Memory and journal: memory.md
+      - Permissions and confinement: permissions.md
+  - Architecture:
+      - System architecture: architecture.md
+      - Module map: module-map.md
+      - Resource addressing: address-to-resource.md
+      - Tool pipeline: tools.md
+      - Context compaction: compaction.md
+      - Context delivery and reminders: reminders.md
+      - Lifecycle hooks: hooks.md
+      - Guardian prompts: guardian-prompts.md
+      - Decision records: adr/README.md
+  - Tool reference:
+      - Programmatic tool calls: ptc-dialect.md
+      - Files and search: tools/files.md
+      - ApplyPatch: tools/applypatch.md
+      - Execution: tools/execution.md
+  - Development:
+      - Development guide: development.md
+      - Telemetry and diagnostics: telemetry.md
+      - Commit conventions: commits.md
+      - Domain documentation: agents/domain.md
+      - Local issues: agents/issue-tracker.md
+      - Triage labels: agents/triage-labels.md
+      - Backlog: backlog.md
 theme:
   name: material
   features:

@@ -2,180 +2,132 @@
 
 Status: accepted
 
-## Decision
+## Current decision
 
-One target process carries a program of session-control operations rather than
-a single operation.  Each operation in a program opens and re-proves its own
-parent descriptor, so a program is exactly as pinned as the same operations run
-one at a time: a symlinked parent component or final entry still fails closed,
-and a pathname swapped after the descriptor was opened still cannot redirect the
-operation.
+One target process carries a program of control-filesystem operations. Every
+operation opens its own parent descriptor and proves its physical location with
+Bash `cd -P -e` and `PWD`. Symlinked parents/leaves and redirected pathnames fail
+closed. Single-operation wrappers use the same program entry point.
 
-A program stops at the first operation that does not succeed and reports the
-remaining ones as skipped.  A precondition is therefore stated as a `verify`
-operation that the writes after it depend on, and the proof and the write it
-guards execute in one process.  This is stronger than reading a record,
-comparing it in Emacs, and writing: that sequence leaves a network round trip
-between the comparison and the write, and a program leaves two adjacent syscall
-sequences.
+Programs stop at the first non-optional unsuccessful operation and report the
+remaining operations as skipped. Results use `ok`, `conflict`, `absent`,
+`mismatch`, `failed`, and `skipped`; wrappers retain their operation-specific
+nil-versus-error behavior. Target checks fail explicitly because the dispatcher's
+status capture suppresses shell `errexit` inside an operation.
 
-Amended: this section first claimed a program leaves no window at all, and
-called the arrangement a compare-and-set.  Both were wrong.  The operations in
-one program are not mutually exclusive against another client -- nothing holds
-a lock on the leaf between them -- so a concurrent exclusive `create` of the
-next lease generation can land between the proof and the write.  What moved the
-decision was tracing that interleaving to its end: the write still happens, and
-the caller then decides who won from what it observes afterwards, which means
-`verify` is a precondition and the exclusive `create` verb is the only atomic
-election primitive here.  The narrowed window is still worth its cost; the
-claim of atomicity was not true and callers must not assume it.
+A `verify` followed by a write is a precondition, not compare-and-set. Without
+an explicit lock, another client can interleave between operations. Exclusive
+`create` remains the generation-election primitive. Callers requiring guarded
+mutual exclusion may supply a pinned lock directory; the program holds its
+`flock` across all operations. Journal settlement and curated-memory mutation
+use that boundary under [ADR 0117](0117-publish-journal-results-from-fenced-outcomes.md).
 
-Every operation reports one of `ok`, `conflict`, `absent`, `mismatch`, `failed`
-or `skipped`, so callers reproduce per operation the nil-versus-signal contract
-of the single-operation wrappers.  An operation may be marked optional, meaning
-its failure does not end the program; ensuring a directory that may already
-exist is the case that needs it.  Requests and responses are NUL-framed with
-base64 content payloads, because filenames and content both contain bytes a shell
-cannot carry through a command substitution.  Target diagnostics are captured apart
-from the response, so a tool writing to stderr cannot present itself as a
-result record.
+Requests use five fields per operation and NUL framing. Arbitrary content and
+response bytes use base64; numeric limits, modes, and deadlines use validated
+digit strings. Diagnostic bytes are encoded through a separate pipe and returned
+in a distinct trailing record. A killed process without that record reports
+its raw captured failure output.
 
-Read byte limits, permission modes, and deadlines travel as digit strings and
-are validated by the target before use. Encoding these scalars as base64 required
-a decoding subprocess on every bounded read or numeric guard. Repeated local
-measurements put that overhead at 18--22% of those operations after the diagnostic
-pipe change. Content verification removes base64 wrapping with Bash's string
-substitution, and an existing directory returns its ordinary creation conflict
-without launching `mkdir`; these removed another subprocess from their respective
-paths. Arbitrary file content and response bytes remain base64 encoded.
+ASCII fields travel as arguments within the shell-quoted limits: 3 KiB per
+physical line, 96 KiB per field, and 512 KiB total. Wrapped content can span
+many short physical lines. Other requests use an explicitly UTF-8 encoded input
+file in the same process. Delivery changes do not split a program into per-file
+calls. Whole-process failure invalidates cached interpreter paths for later
+lookup; an ordinary refused operation does not.
 
-A request reaches the target as arguments when it fits and through a stdin file
-when it does not.  One argument carries one field, because NUL -- the framing
-byte -- is the one byte a filename cannot contain and therefore cannot be
-embedded in an argument.  An operation is five fields -- verb, parent, leaf,
-payload, optional flag -- and the parent travels once, in its physical
-no-trailing-slash spelling: the script both opens that name and proves it
-against `pwd -P`, which prints exactly that form, with the root spelled `/`
-on both sides.  An argument run whose shell-quoted size exceeds
-3 KiB, or any field outside ASCII, sends the request to the file instead.
-Either way a program is one target process; an oversized request changes how the
-request travels, never how many calls carry it.
+Two to 32 independent unbounded reads may use GNU tar in the same process, keeping
+all proved parents open, refusing symlink leaves, and disabling inherited
+`TAR_OPTIONS`. Emacs decodes expected ordered regular members and checks headers
+without extraction. Failed transfer or rejected archives discard the batch and
+retry fresh ordinary reads. Bounded reads and mixed programs use the ordinary
+path; byte/hash validation stays with callers.
 
-Read-only batches of two to 32 unbounded operations may use GNU tar as a bulk
-carrier inside that process. Each physical parent remains pinned by its own
-open descriptor. GNU tar's default no-follow leaf opens and disabled inherited
-`TAR_OPTIONS` preserve the read boundary. Emacs uses its built-in tar decoder
-without extracting files, accepting only the expected ordered regular members
-with valid checksums and successful transfer status. Bytes stream directly
-through base64 rather than passing through a shell variable. Target-side
-transfer failure or host-side archive rejection discards all transferred bytes
-and issues fresh ordinary reads in a second process. Optional failures and stopped programs
-therefore retain their existing result semantics. No cross-operation cache or
-new caller protocol is introduced. Bounded reads and mixed programs keep their
-existing path.
+The [session manual](../sessions.md) describes the ownership and publication
+contracts that use these operations. This layer reduces their execution cost;
+it does not change their proof cadence or add a cross-operation authority cache.
 
-The measurement behind this amendment was a reused portable 100-session search:
-24 control calls accounted for 1.536 seconds, including per-file encoding
-subprocesses inside already batched reads. Bulk transfer reduced that measured
-control time to 0.774 seconds, with the same call count and source verification.
-These are instrumented local attribution measurements, not a remote latency
-guarantee. A native leaf-replacement test, unavailable-carrier fallback, corrupted
-archive retry and binary/long-name decoding exercise the changed boundary.
-The long UTF-8 filename test also exposed an existing request-file encoding
-failure; requests now explicitly encode UTF-8 before entering the unibyte
-transfer buffer.
+## Rationale and consequences
 
-The size bound is far below the target's own, and it is not `ARG_MAX` — that is
-megabytes.  It is one physical line of the command TRAMP writes to the
-connection process, which talks over a pty: canonical mode truncates past
-`N_TTY_BUF_SIZE` (4 KiB), and `process-send-string` then blocks inside the
-write.  No timer interrupts that and no timeout unwinds it, so an over-long line
-wedges the connection for the life of the process rather than failing.  Only the
-arguments are budgeted, because only they are one unbroken line:
-`tramp-send-string` preserves newlines, so the script — several times this
-budget — arrives as a hundred short lines.  The remaining kilobyte covers the
-script's last line and TRAMP's prefix.  The measurement is taken after shell
-quoting, which is what lands on the line.  The ASCII bound is TRAMP's: it
-encodes a command line with the connection coding system, while the request file
-is written without conversion, so a name holding non-ASCII bytes is only
-byte-transparent through the file.
+Remote durability is sensitive to process and transport round trips. Adjacent
+operations share one dispatch while retaining per-operation descriptor proof.
+A steady-state renewal can carry verification, writes, listing, and an optional
+clock observation together. Cold, contested, or stale-clock renewal still needs
+a preceding observation. Publication continues to prove ownership before every
+artifact write and after the last, even when those operations share a process.
 
-History profiling put 1.8 seconds of a reused 100-session query inside control
-programs. The per-operation proof now uses Bash's physical `cd -P -e` and
-compares the resulting `PWD` with the expected parent. This keeps the opened
-directory descriptor and fails if its physical location cannot be determined,
-while removing the separate `pwd -P` subshell for every operation. The parent
-is still opened and proved anew for each operation. Native symlink and
-parent-replacement coverage exercises the same boundary.
+The argument bounds address different limits. TRAMP's canonical PTY line can
+truncate above 4 KiB and wedge `process-send-string`; ordinary timeout handling
+does not unwind that write. The 3-KiB physical-line allowance reserves room for
+TRAMP's prefix and the script's final line. Per-field and aggregate bounds also
+leave margin below kernel exec limits. Non-ASCII fields use the file carrier to
+avoid connection-coding conversion. A request-file carrier is preferable to a
+failed or wedged connection.
 
-Checks inside the target-side operation state their own failure explicitly
-instead of relying on the shell's `errexit`.  The dispatcher runs each operation
-on the left of a `||` so it can capture the status, and that suppresses
-`errexit` for everything the operation does, which would otherwise let a
-refused symlink or a failed descriptor proof continue into the operation it was
-meant to prevent.
+The target requires Linux descriptor facilities, Bash, stat, and base64; locked
+programs also require flock. Missing required utilities fail visibly. GNU tar is
+an optional read optimization with an ordinary-read fallback. No new caller
+protocol, extraction directory, or generic resolver cache is needed.
 
-The single-operation entry point is gone: every wrapper is a one-operation
-program.  Classification comes from the shared status vocabulary --
-`conflict' and `absent' raise their conditions, anything else failed raises a
-file error carrying the target's own diagnostic -- and wrapper content under
-the argument budget travels on the command line instead of through a local
-temporary file and a remote INFILE copy.  The interpreter lookup retries only
-when the program process itself fails; a refused operation inside a program
-that ran proves the interpreters work.
+## Decision history
 
-## Consequences
-
-Durable session work is bounded by target round trips, and this is what makes
-the count tractable.  A steady-state lease renewal is one round trip: the
-commit program proves the precondition with its opening `verify`, writes,
-lists, and refreshes the transaction clock with a trailing optional clock
-operation, so the next renewal in the same transaction can assume its
-observation instead of repeating it.  Only a cold, contested, or stale-clock
-renewal pays a preceding observation program.  A publication generation with
-its artifacts and manifest is one round trip rather than one per file.  The documented ownership-proof cadence is unchanged --
-publication still proves ownership immediately before every artifact write and
-once after the last -- because the cost of a proof, not its frequency, was the
-problem.
-
-The target must provide `base64` in addition to `bash` and `stat`.  It resolves
-through the target `PATH` like `stat`, so a target without it fails the
-operation rather than silently degrading.
-
-Keeping diagnostics apart from the response does not mean keeping them in a
-separate file.  A local stderr file makes TRAMP create a remote temporary and
-rename it back on every program, and a CPU profile of a remote turn put that at
-around a twelfth of it; the request file cost roughly twice as much again.  So
-the program collects stderr at the target and emits it as
-one trailing record whose header is a word where an operation's is a number --
-which is the separation the property actually needed.  Argument delivery removes
-the request file for the traffic that dominates the round-trip count -- leases,
-clocks, transfers, recovery -- and leaves it for the programs that carry a whole
-artifact or generation, which are the rare ones.
-
-The collector uses a separate pipe, encoding stderr before it enters a shell
-variable so NUL bytes survive. Operation frames use a separate descriptor and
-the enclosing collector emits the trailing record even when the operation loop
-stops early. A program killed before the collector finishes has no diagnostic
-record, and the failure is reported from the raw output buffer instead.
-
-Amended: the full ERT suite took 749.09 seconds, and its slowest memory-retention
-case spent 28.07 of 28.42 seconds in 4,068 control programs. The target-side
-diagnostic temporary file added creation and removal processes to every program,
-even successful read-only probes. Collecting through a pipe removed those
-processes: repeated local measurements reduced single-read cost by 28% and
-existence-probe cost by 37%, preserving binary diagnostics and early-stop
-semantics. The pinning and ownership proofs remain the same.
-
-Amended: enumerating a workspace did not follow this decision.  The session
-picker's listing called the one-operation wrappers per candidate and spent 491
-target processes on 66 directories -- a profile put that at 2.4 seconds of a
-local startup, and each of those processes is an SSH round trip on a remote
-workspace.  The probes and the lease listings now travel as one program each,
-and both are shared with the reads they feed, which brought the same listing to
-87 processes and 0.82 seconds.  What moved this was the measurement, not a
-change of principle: the budget was already stated here and the listing simply
-did not keep to it.  Two seams carry the sharing, because a batched observation
-is only reusable by the caller that took it -- the durable transaction's
-pid-lock memo, which the listing seeds, and the existing already-observed
-listing argument, which it passes down through the publication read.
+- **The original ADR 0101 claimed a program removed the race window and provided
+  compare-and-set.** Tracing a concurrent exclusive creation of the next lease
+  generation showed that it can land between verification and write. The write
+  still happens and the caller observes who won afterward. The claim was corrected
+  to a precondition with a narrower interval. Later journal mutation requirements
+  added explicit directory locking; ordinary programs are still not atomic.
+- **Per-operation process dispatch made durability expensive.** Grouping operations
+  retained parent proof at each operation and moved execution mechanics behind
+  one entry point. A later session-listing profile found it still using wrappers
+  independently: 491 processes for 66 directories, taking 2.4 local seconds.
+  Batched probes/listings and reuse within the caller's durable transaction reduced
+  that listing to 87 processes and 0.82 seconds. A PID-lock memo and passed-down
+  observed listing share evidence only in its owning observation.
+- **Local stderr files caused remote copies.** A remote-turn profile attributed
+  about one twelfth of time to that path and about twice as much to request files.
+  Target-collected diagnostics with a distinct trailing frame and argument delivery
+  removed those transfers for eligible calls. The full ERT run later took
+  749.09 seconds; its slow memory-retention case spent 28.07 of 28.42 seconds in
+  4,068 programs. Replacing the target diagnostic temporary file with a pipe
+  removed creation/deletion subprocesses, reducing repeated local single-read
+  cost by 28% and existence-probe cost by 37%, while preserving binary diagnostics
+  and early-stop behavior.
+- **Base64-encoded numeric scalars added a decoder process to each bounded read
+  and guard.** Repeated local measurements put this at 18–22% after the diagnostic
+  pipe change. Validated digit strings replaced that encoding. Bash substitution
+  removes verification-payload wrapping; existing-directory conflict avoids a
+  needless mkdir process. Arbitrary bytes remain encoded.
+- **Batched reads still encoded each file separately.** A reused portable
+  100-session search spent 1.536 seconds in 24 control calls. Bulk transfer reduced
+  measured control time to 0.774 seconds with the same calls and source checks.
+  These are instrumented local measurements, not remote latency guarantees.
+  Native tests cover leaf replacement, missing carrier, corrupt archive retry,
+  and binary/long-name decoding. The long UTF-8 filename case also exposed the
+  request-file encoding failure corrected by explicit UTF-8 encoding.
+- **Physical-parent proof launched a pwd subshell for every operation.** History
+  profiling put 1.8 seconds of a reused 100-session query in control programs.
+  Bash's physical cd and resulting PWD replaced those subshells while retaining
+  failure when the opened directory's physical location cannot be determined.
+  Symlink and parent-replacement tests cover the boundary.
+- **The initial argument explanation bounded the whole quoted request to 3 KiB.**
+  The current carrier bounds physical lines, individual fields, and total bytes
+  separately. Wrapped payloads therefore need not use a request file solely
+  because their total exceeds one PTY line. The original rationale—avoiding a
+  connection-wedging write—still applies; the inspected record does not contain
+  a separate measurement for this carrier refinement.
+- **Admission probe cost:** recomputing environment, capability, and sandbox
+  readiness at every mutation boundary cost roughly fifteen synchronous target
+  round trips per admitted mutation. Admission now observes incarnation with one
+  command and reuses connection-scoped readiness, with full probing on open,
+  connection replacement, explicit retry, or observation failure. The original
+  session manual supplied no separate measurement date.
+- **Diagnostic append cost:** republishing complete diagnostic logs on every
+  flush grew quadratically with stream size. Delta-only pinned append replaced
+  that path; a crash can tear the last diagnostic line, which is not resume state.
+- **Timer suspension did not stop sentinel reentrancy.** Projectile's advice on
+  `delete-file` resolved remote project roots while native compilation or syntax
+  checking deleted local temporary files. Those sentinels ran inside a remote
+  control command despite JUST-THIS-ONE output waiting. TRAMP refused the nested
+  call, preserving the running reply but producing an error in the sentinel.
+  A slower remote transfer poll reduces exposure; package-specific suppression
+  remains an operational workaround, not a guarantee against external sentinels.

@@ -49,8 +49,10 @@ If it yields an execution_id, poll that execution to obtain completion and remai
 ### Examples of bad usage
 
 <example>
-Bash(command="echo 'Processing complete'")
+Bash(command="make test &")
 <reasoning>
-A shell result is not communication. Tell the user directly what completed.
+Shell backgrounding is rejected. Use Bash(command="make test", yield_time_ms=1000)
+to yield through the managed execution lifecycle. If it returns an execution_id,
+use that returned ID with WriteStdin to observe completion; yielding is not success.
 </reasoning>
 </example>

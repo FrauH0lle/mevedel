@@ -18,11 +18,9 @@ actually delivered, retain their complete content at that point in conversation
 history until compaction removes the corresponding prefix. Later state changes
 arrive as new context; old state descriptions do not override current settings.
 
-This replaces the earlier ephemeral default. Installed lifecycle measurements
-showed that removing a reminder from reconstructed history changed the cached
-prefix, even though the rest of the conversation was unchanged. Retention costs
-historical context and local storage; sparse firing, deduplication and compaction
-control that cost. See [the decision](adr/0115-retain-delivered-conversation-fragments.md).
+Retention consumes historical context and local storage; sparse firing,
+deduplication, and compaction control that cost. The rationale and prior delivery
+behavior are recorded in [ADR 0115](adr/0115-retain-delivered-conversation-fragments.md).
 
 Staged entries and turn events share this delivery contract. Unsent events remain
 owner-bound and transient; cancellation must not manufacture delivered history.
@@ -79,20 +77,18 @@ payload that is actually dispatched.
 Consuming a reminder is a separate step from staging it. A content
 function returns either its body or a `:body`/`:commit` plist. A nil `:body`
 stages only the commit, for a silent acknowledgement of context already in the
-prompt. Every commit --
-the pending-event FIFO, hook context, the observed
-date, external-change snapshots, queued turn
-events, mention deduplication, and each reminder's fired turn -- runs
-only once the final provider-bound payload exists at WAIT. Hook context is the exception in
-mechanism, not in guarantee: it rides the prompt text rather than a
-block, so the transform reserves it out of the pending list
-immediately -- otherwise automatic compaction's context epoch or a
-prompt prepared in the composer could deliver the same entries a
-second time -- and ending the request returns the reservation, which
-every dead turn does. A request that fails to realize, is aborted or
-cancelled before its first WAIT, or whose injection signals therefore
-keeps everything for the next turn instead of losing it, and an
-interval reminder is not marked fired for a turn the model never saw.
+prompt. Pending-event consumption, observed dates, external-change snapshots,
+turn events, mention deduplication, and reminder firing marks commit only after
+the final provider-bound payload exists at WAIT. A request that fails before
+injection keeps that state eligible for a later attempt.
+
+Hook context has two entry paths. Composer preparation consumes accepted hook
+context when its user turn is committed to the transcript; a later dispatch
+failure cannot redeliver text already stored there. Context still pending when
+the prompt transform runs is reserved into that request's prompt text. Its WAIT
+commit clears the reservation, and request teardown returns an uncommitted
+reservation to the pending list. See [hook lifecycle integration](hooks.md#lifecycle-integration).
+
 A trigger that mutates state has no commit channel, so a reminder
 whose trigger consumes still reports once per attempt rather than once
 per delivery.
@@ -105,8 +101,8 @@ remain isolated.
 
 Every successful injection writes one trusted hidden record
 (`:type injected-reminders`, phase `turn-start` or `mid-turn`) containing each
-entry's type and complete body. Bodies are not truncated: the record now owns
-reconstruction, not merely inspection. Missing insertion markers or recording
+entry's type and complete body. Bodies are not truncated: the record supplies
+reconstruction as well as inspection. Missing insertion markers or recording
 failures prevent committing delivery; injection failures retain pending state.
 
 The encoded record stays out of provider text. `mevedel-history.el` decodes it
@@ -119,8 +115,7 @@ session segments. Compaction can summarize or retire obsolete guidance.
 The view renders it as one grouped collapsed row -- `◇ N system
 reminders (labels…)` -- above the user turn for turn-start injections
 and inline in the assistant turn for mid-turn injections, expanding to
-per-entry bodies. Historical durable `<system-reminder>` text (old
-fork disclosures, the btw boundary) keeps the single-block
+per-entry bodies. Inline `<system-reminder>` text (fork disclosures and the btw boundary) keeps the single-block
 `◇ System reminder (N lines)` row.
 
 ## Agent requests
@@ -137,7 +132,9 @@ owner exactly as on the root path.
 ### Session state and mode guidance (evaluated from current state)
 
 - **Plan-mode workflow:** the every-turn `plan-mode` reminder
-  reinforces Plan's read-only boundary, exploration-first behavior,
+  describes read-only project inspection, unavailable Eval, session-only
+  ApplyPatch in standalone/sticky Plan, and no writes in directive Planning.
+  It retains exploration-first behavior,
   replacement semantics, exact proposal tags, and the preferred
   proposal shape.
 - **Mode constraints / full-auto:** permission-mode guidance.
@@ -175,9 +172,7 @@ as reminders. Explicitly configured role reminders retain their own lifetimes.
 
 Specialist tools are discoverable through ToolSearch by capability or name.
 Their descriptions and search results own suitability and call guidance.
-There is no generic ToolSearch/ToolCall availability reminder. The native
-descriptions already deliver that stable guidance; an ephemeral duplicate
-changed the beginning of worker task history when it disappeared on follow-up.
+There is no generic ToolSearch/ToolCall availability reminder. The native descriptions deliver that stable guidance.
 Ordinary Read/Grep calls and open editor buffers do not trigger navigation
 workflow advice; a registered tool alone does not establish that its backend
 works for a particular file.
@@ -190,10 +185,7 @@ system prefix. Each changed section delivers its complete current contents with
 an explicit notice that other previously supplied state remains applicable.
 Unchanged sections remain in retained history. Delivery is checked against actual
 selected history; absent observations are redelivered after compaction, filtering
-or restore. If all selected sections are absent, all are delivered again. The
-separate skills-delta snapshot and default date-change reminder are superseded
-by these updates. Explicitly configured
-custom date reminders remain available. See
+or restore. If all selected sections are absent, all are delivered again. Explicitly configured custom date reminders remain available. See
 [retained instruction context](architecture.md#retained-instruction-context).
 
 ### Runtime status and event reminders
@@ -259,8 +251,7 @@ Sibling sessions under the same sessions root are excluded too — reading a
 second live session's files churns identically — each confirmed by its
 sidecar rather than assumed from its location. The `artifacts` subtree stays
 watched: those are authored deliverables, and an outside edit to one is worth
-reporting. The interaction record is still written for an excluded path, so
-Edit's read-before-write gate is unaffected.
+reporting. The interaction record is still written for an excluded path.
 
 Content is bounded twice. A file the filesystem reports as larger than
 `mevedel-file-cache-max-file-bytes` is cached as a fingerprint — timestamps

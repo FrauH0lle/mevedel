@@ -132,15 +132,9 @@ the layout holds at a narrow width. Judge diagram labels at their displayed
 size, not just their SVG font size: reflow, simplify, or use a minimum-width
 figure in a local scroll container rather than shrinking text beyond legibility.
 
-**Avoid AI-generated design.** AI-generated design currently clusters around a
-few looks: warm cream (`#F4F1EA`) with a serif display and terracotta accent;
-near-black with a lone acid-green or vermilion pop; broadsheet hairline rules
-with dense columns; a purple-to-blue gradient hero on white; Inter or Space
-Grotesk as the "safe" face; emoji as section markers; everything centered;
-`rounded-lg` everywhere; an accent bar or rail on rounded cards. Where the user
-pins down a visual direction, follow it exactly - their words always win,
-including when they ask for one of these looks. Where nothing is specified,
-don't spend that freedom on one of these defaults.
+**Make the treatment specific.** Choose visual conventions because they suit
+the subject, audience, and existing product. Follow the user's requested visual
+direction and avoid decorative choices that add no meaning or usability.
 
 **Build cleanly.** Watch for overlapping elements, cascade collisions, and
 silent font fallbacks; visual bugs hide in the gap between source and output.
@@ -181,16 +175,10 @@ so a printed subset does not pretend to be the full dataset.
 
 ## Process
 
-Before writing code, sketch a short design plan - a compact token system:
-
-- **Color**: the page palette as 4-6 named hex values, plus a distinct categorical
-  palette when the data needs one.
-- **Type**: two or more roles - a characterful display face used with
-  restraint, a complementary body face, and a utility face for captions or data
-  if needed - each as a full system stack.
-- **Layout**: the layout concept in one or two sentences.
-
-Then build, deriving every color and type decision from that plan.
+Choose a coherent palette, type hierarchy, and layout for the subject,
+using the existing design system when present. Record a design plan when it
+helps resolve consequential choices or the user requests one. Keep categorical
+data colors distinct and declare complete system-font fallback stacks.
 
 Before publishing, check the page offline, at a narrow width, with the keyboard,
 in both themes (including switching while open), and in print when relevant.
@@ -201,14 +189,9 @@ state which checks could not be performed.
 
 ## When the request is editorial
 
-The stance shifts: the client has already rejected proposals that felt
-templated, and is paying for a distinctive point of view. Make opinionated
-calls, and take one real aesthetic risk where it serves the work.
-
-Review the design plan against the subject before building. If any part of it
-reads like the generic default you would produce for any similar page, revise
-that part and note what you changed and why. Only once you've confirmed the
-plan's uniqueness do you write the code, following the revised plan exactly.
+For editorial work, develop a distinctive treatment grounded in the user's
+brief and the subject. Explain consequential design choices when useful, and
+revise them as the rendered result supplies evidence.
 
 - **The hero is a thesis.** Open with the most characteristic thing in the
   subject's world - headline, image, live demo, interactive moment.

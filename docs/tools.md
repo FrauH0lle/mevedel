@@ -4,9 +4,13 @@
 
 Native tool schemas own parameter names, types, required fields, and basic
 constraints. Descriptions retain suitability, ordinary usage, essential limits,
-and one or two worked examples, using the existing When to use / When NOT to
-use / How to use / good and bad example sections. Avoid repeating a workflow
-policy across tools; suitability should explain this tool's actual behavior.
+and failure behavior in When to use / When NOT to use / How to use sections.
+Keep worked examples that clarify parameter combinations, result interpretation,
+recovery, or consequential mistakes. Examples may repeat a contract when the
+concrete case makes it easier to use. Improve or omit examples that add no useful
+information; neither an example nor a good/bad pair is required for every tool.
+Avoid repeating a workflow policy across tools; suitability should explain this
+tool's actual behavior.
 
 Tools with meaningful advanced behavior point to packaged Markdown and name
 the cases that need it. Read, Glob, and Grep share
@@ -35,29 +39,30 @@ All tools share one execution pipeline. Provider calls enter through
 
 ```mermaid
 flowchart TD
-    R[Raw model call] --> S[Validate, then repair if needed]
-    S --> A[Validate final args]
-    A --> B[PreToolUse hooks]
-    B --> C[Permission check]
-    C --> D{Allowed?}
-    D -- No --> E[PermissionDenied hooks]
-    D -- Ask --> Q[PermissionRequest hooks]
-    Q -- Ask --> F[Permission queue]
-    Q -- Deny --> E
-    Q -- Allow --> G
-    F --> C
-    D -- Yes --> G[Snapshot file when declared]
-    G --> H[Handler]
-    H --> I[Render transform]
-    I --> J[PostToolUse or failure hooks]
-    J --> K{Consumer}
-    K -- Structured nested call --> L[Canonical status, value, media, identity]
-    K -- Provider --> M[Append repair reminder]
-    M --> N[Persist oversized result]
-    N --> O[Queue Goal budget warning when crossed]
-    O --> P[Attach render-data]
-    P --> R[Attach media data]
+    Raw[Raw model arguments] --> Repair[Schema-directed repair]
+    Repair --> Validate[Final validation and PreToolUse hooks]
+    Validate --> Resolve[Normalize paths and prepare resources]
+    Resolve --> Permission{Permission}
+    Permission -->|Deny| Refuse[Return refusal]
+    Permission -->|Ask| Review[Permission hooks and user interaction]
+    Review -->|Denied| Refuse
+    Review -->|Approved| Capture
+    Permission -->|Allow| Capture[Capture mutation coverage and snapshots]
+    Capture --> Execute[Run handler and render transform]
+    Execute --> Post[PostToolUse or failure hooks]
+    Post --> Outcome[Canonical structured outcome]
+    Outcome --> Nested[Nested ToolCall consumer]
+    Outcome --> Provider[Provider projection and result persistence]
 ```
+
+This shows the common execution path and its two output consumers. Validation,
+resource preparation, hooks, or the handler can terminate a call with a failure;
+permission denial cannot reach mutation capture or the handler. Permission hooks
+and user decisions are detailed in [Permissions](permissions.md#decision-flow).
+Provider projection adds hook context and repair feedback, persists oversized
+output when declared, queues any Goal-budget warning, then attaches render data
+and media. It does not feed that presentation back into a nested ToolCall.
+
 
 Synchronous handlers receive `(args)` and asynchronous handlers receive
 `(callback args)`, where args is a keyword plist. The
@@ -97,14 +102,9 @@ retain their own IDs. The callback's tool specification is located by name;
 call identity, arguments and output always come from the authoritative record,
 never a name/argument guess or text inside the result.
 
-This replaces the narrower repair that scanned trusted render metadata after
-insertion. Plain results need the same identity guarantee. The installed gptel
-renderer otherwise looks up the first call with a matching tool name, assigning
-that ID to repeated calls. Mevedel uses its renderer without changing the
-upstream callback format or maintaining another history store. The resulting
-properties are preserved through normal transcript normalization and save/restore.
-Already-corrupted transcripts are not migrated: original IDs are not generally
-recoverable from plain result text.
+The adapter retains gptel's callback format and normal transcript storage.
+Its rationale and the prior ID-assignment failure are recorded in
+[ADR 0115](adr/0115-retain-delivered-conversation-fragments.md#decision-history).
 
 ### Retained provider history
 
@@ -133,8 +133,7 @@ The view continues to render the normal transcript and grouped reminder rows;
 provider fragments stay hidden. Compaction uses displayed evidence and decoded
 reminder bodies, excludes encoded provider metadata, and removes records with
 retired history. Source edits, partial selection, compaction and deliberate
-provider/model/policy changes can still change the cached prefix. Previously
-saved conversations without complete fragments are not migrated.
+provider/model/policy changes can still change the cached prefix. History without complete fragments uses normal backend serialization.
 
 ### Programmatic Tool Calling
 
@@ -277,8 +276,7 @@ by `PreToolUse` remain validation-only.
 While gptel decodes provider responses, mevedel preserves JSON `null` as a
 distinct sentinel. Before pre-tool hooks it restores decoded empty objects in
 the common tool-call representation. This temporary adapter covers gptel's
-tool-capable backends in one place and can be removed when gptel's shared JSON
-string decoder preserves nulls itself.
+tool-capable backends in one place to preserve the distinctions required by schema validation.
 
 The generic repair catalogue is deliberately small and ordered:
 
@@ -298,8 +296,7 @@ numbers or booleans: the JSON parser must consume the exact input and the
 result must validate, tolerating only range issues the clamp rule fixes in a
 later step of the same pass. Clamping is not invention: the bound is declared
 schema data, the repair is deterministic, and it is always reported in the
-corrective note and telemetry. This replaces Bash and WaitAgent's silent
-static clamps. WriteStdin advertises the union of its input and poll ranges;
+corrective note and telemetry. WriteStdin advertises the union of its input and poll ranges;
 its `chars`-dependent bounds remain handler policy and requested-versus-
 effective telemetry.
 Required `null` and required empty-object placeholders
@@ -394,10 +391,11 @@ handler instead of leaving a stale `gptel-tool` captured by an older preset.
 
 ## Resource addresses in filesystem-shaped tools
 
-The closed resource resolver accepts the nine documented `scheme://` families
+The closed resource resolver accepts the eight documented `scheme://` families
 without adding a model-facing tool. The operation matrix is deliberately
 narrow: `Read` accepts every family; `Glob` and `Grep` accept `work://`,
-`artifact://`, `skill://`, `memory://`, `memory://journal/`, and `mevedel://`;
+`artifact://`, `skill://`, `memory://` (including `memory://journal/`),
+`history://saved/`, and `mevedel://`;
 `ApplyPatch` accepts `work://`, explicit memory file descendants, and ordinary
 filesystem paths. Unsupported combinations fail
 explicitly. Bare addresses list only when the family defines a discovery
@@ -517,8 +515,7 @@ for the current main session. `/tools` and `/tools list` open the same
 surface. The buffer is read-only UI chrome, not transcript content.
 
 The tools surface lists native and discoverable tools. It supports contract
-search (`s`), details, and opening the gptel configuration menu. Obsolete
-activate/defer/load/unload controls are removed.
+search (`s`), details, and opening the gptel configuration menu.
 
 ## Tool renderers
 
@@ -568,7 +565,7 @@ other visible rendering ends the run. Validated by
 
 Well-formed tool segments always render through a registered renderer
 or the generic fallback. Malformed or unparseable tool segments keep the
-older safe fallback behavior.
+safe raw-text fallback.
 
 Renderers that remove appended system reminders from
 their display body must strip only an explicit trailing appended block.
@@ -663,7 +660,7 @@ whose body contains structured per-file diff blocks.
 
 When `:max-result-size` is set and result exceeds the effective limit
 (min of tool value and 50,000-char global cap), the full result is saved
-to `.mevedel/tool-results/` and replaced with a preview wrapped in
+to the owning session's `tool-results/` directory and replaced with a preview wrapped in
 `<persisted-output>` XML. The LLM can `Read` the file to see the full
 output, and the notice provides a followable `artifact://` address plus exact
 bounded `Read` continuation and `Grep` recovery calls. `Grep` accepts an
@@ -674,13 +671,13 @@ truncated but not persisted according to
 the canonical status produced at the handler boundary. Every
 oversized preview keeps equal head and tail budgets, prefers nearby newline
 boundaries, and reports the exact omitted character count. The persisted file
-remains complete. Bash and Eval do not apply an earlier prefix-only cap. No
-workspace → no persistence.
+remains complete. Bash and Eval do not apply an earlier prefix-only cap. Ephemeral requests and calls without durable session storage cannot persist
+output.
 
-Per-tool limits match Claude Code's approach: Grep 20k, Bash/Eval 30k,
+Per-tool character limits are: Grep 20k, Bash/Eval 30k,
 Glob 30k, Ask 30k, Xref*/Imenu 20k, Treesitter 30k,
 WebFetch 50k. Read/ApplyPatch: nil (self-bounded or short). Agent
-`RESULT` mailbox records inline at most a 32 KiB preview of the final response;
+`RESULT` mailbox records inline at most a 32,768-character preview of the final response;
 the retained agent resource keeps the complete latest settled payload and
 terminal outcome.
 
@@ -910,8 +907,10 @@ mutation lease and durably arms its unsettled-mutation latch before process
 launch is attempted. Yield releases the scheduler lane, so more than one
 mutating process can remain armed; one clean settlement cannot clear the latch
 while another armed record remains. A post-attempt launch error, transport loss,
-or failed lease compare-and-set remains unknown. Reconnect plus explicit user
-acknowledgement clears the durable latch before mutation admission reopens.
+or failed lease compare-and-set remains unknown. A later target proof that the recorded process group is dead can clear the
+block. A durable latch restored without process identity requires
+`mevedel-retry-target-readiness` and explicit acknowledgement before mutation
+admission reopens.
 Non-read-only tools are rejected while the latch is armed without a live
 provable writer. Lifecycle teardown gives a final KILL one bounded proof
 interval before it decides whether the latch can clear. Process records,

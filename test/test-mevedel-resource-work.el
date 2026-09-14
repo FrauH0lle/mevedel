@@ -49,12 +49,14 @@
 (mevedel-deftest mevedel-resource-execute/shared-work ()
   ,test
   (test)
-  :doc "shared files survive session deletion and stay separate across workspaces"
+  :doc "shared files cross session working directories and survive session deletion"
   (let* ((root (make-temp-file "mevedel-work-ownership-" t))
          (workspace (mevedel-workspace--create :root root))
          (save-path (file-name-concat root "session-a"))
          (first (mevedel-session--create :workspace workspace :save-path save-path))
-         (second (mevedel-session--create :workspace workspace))
+         (second (mevedel-session--create
+                  :workspace workspace
+                  :working-directory (file-name-concat root ".worktrees" "feature")))
          (shared (mevedel-resource-work-shared-directory workspace))
          (address "work://shared/build-decision.md"))
     (unwind-protect

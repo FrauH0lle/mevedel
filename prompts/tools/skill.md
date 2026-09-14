@@ -33,14 +33,16 @@ A skill supplies task-specific instructions or a configured agent workflow.
 ### Examples of good usage
 
 <example>
-Skill(name="analyze-log", arguments="~/logs/session.log")
--> Run the discovered log-analysis skill with this argument.
+- The user requests a typeset comparison memo, and artifact-doc was discovered
+  as model-invocable with its prepared guidance not yet loaded:
+Skill(name="artifact-doc", arguments="Create a typeset memo comparing the two cache designs, using the supplied measurements.")
+Use the returned prepared guidance, including its dependencies, for that request.
 </example>
 
 ### Examples of bad usage
 
 <example>
-Skill(name="review") called again immediately after its body loaded
+Skill(name="artifact-doc") called again immediately after its prepared guidance loaded for the same request
 <reasoning>
 Reuse the loaded guidance unless new arguments or changed instructions require
 another invocation.

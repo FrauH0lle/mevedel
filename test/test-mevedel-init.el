@@ -64,6 +64,8 @@
                                      (expand-file-name "~/.agents/memory"))
                                     prompt))
             (should-not (string-match-p "CLAUDE\\.md" prompt))
+            (should (string-match-p "put it in `sample` for every option" prompt))
+            (should-not (string-match-p "preview:" prompt))
             (should (string-match-p "User-provided focus: prefer hooks"
                                     prompt))))
       (kill-buffer data-buffer))))

@@ -27,7 +27,17 @@ Present questions in one form and wait for the user's answers.
 ### Examples of good usage
 
 <example>
-Ask(questions=[{question: "Where should this guidance apply?", options: [{label: "This repository (Recommended)", description: "Shared with contributors."}, {label: "My checkout", description: "Private local guidance."}]}])
+Ask(questions=[{
+  question: "Where should this guidance apply?",
+  options: [
+    {label: "This repository (Recommended)", description: "Shared with contributors.",
+     sample: "AGENTS.md: Run the focused tests before committing."},
+    {label: "My checkout", description: "Private local guidance.",
+     sample: "AGENTS.local.md: Run the focused tests before committing."}
+  ]
+}])
+Both alternatives supply a sample; the answer is the selected label, not the
+sample text. These samples illustrate the proposed placement.
 </example>
 
 ### Examples of bad usage

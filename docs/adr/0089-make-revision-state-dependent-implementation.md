@@ -1,13 +1,50 @@
 # Make revision state-dependent implementation
 
-Status: accepted
-Composer placement: superseded by ADR 0091.
+Status: accepted. Composer placement follows [ADR 0091](0091-render-directive-turns-in-the-shared-session-view.md).
 
-Directives expose Discuss and Implement as their two initial intents; Revise is removed as a peer action and processing mode. After success, Request changes starts another implementation attempt using the directive request, freshly resolved references, the immediately preceding attempt's answer and captured patch, and explicit new feedback, newly added subdirectives, or both; older activity remains inspectable but is not supplied automatically, and current repository state remains authoritative. After failure or abort, one Retry action uses the preceding error and captured partial changes plus optional guidance rather than splitting guided and unguided retry into separate actions. The directive activity surface keeps preceding activity visible and owns the multiline feedback composer for both actions rather than routing feedback through the minibuffer. Request changes feedback is optional when unconsumed subdirectives already supply the requested changes and required otherwise. The preceding patch is labeled historical with capture time and completeness, but revision performs no mechanical stale classification or gate; the model inspects current repository state instead. Every accepted attempt remains activity whether it succeeds, fails, or is aborted, retaining its exact submitted request, available answer or error, outcome, patch, capture completeness, and turn-checkpoint link rather than overwriting one directive-level result. Attempt activity distinguishes no filesystem changes under complete observation, captured changes, and incomplete capture caused by known unsnapshotted mutation paths. View changes projects the selected attempt's patch into one reusable diff-mode buffer; that viewer never owns history or supplies revision context. Explicitly editing the current directive request preserves earlier activity but returns the directive to Ready, so Request changes is unavailable until the edited request has an attempt. There is no prompt-fresh re-run from the already-modified repository: a genuinely clean restart is Rewind followed by Implement. Request changes uses the ordinary implementation capability preset; its feedback and preceding-attempt context belong in the request prompt, so no revision-specific preset, system role, or system profile remains. Batch processing performs only an initial implementation: it implements Ready directives directly and Discussed directives with their local discussion, skips every directive that already has an implementation attempt, and never infers Request changes or Retry. The batch stops on the first failed or aborted attempt and leaves all remaining directives untouched. This preserves the directive's authored intent, makes available actions match lifecycle state, and removes a revision-specific identity whose actual behavior is implementation given history.
+## Current decision
 
-Amendment: Tutor mode was removed. It required the user to summon it before
-knowing they needed teaching, then refused to answer what was asked, so the
-chat buffer answered the same questions better without it. Its pedagogical
-angle now reaches the user through Buddy notes, which arrive unasked and cost
-nothing to ignore. Every tutor profile, component, preset, and tool named above
-is gone; the surrounding mechanism is unchanged.
+Discuss and Implement are the initial directive intents. Request changes after
+success and Retry after failure/abort are further implementation attempts, using
+the ordinary implementation preset. No revision-specific mode, system role, or
+profile is needed.
+
+Request changes receives the current directive, freshly resolved references,
+the immediately preceding successful answer and captured patch, and new feedback
+or unconsumed subdirectives. Feedback is required only when no nested detail
+supplies it. Retry receives the preceding error/partial changes and optional
+guidance. Older activity remains inspectable rather than being supplied
+implicitly. The shared directive-scoped composer accepts multiline feedback.
+
+The preceding patch is historical evidence with capture time and completeness.
+Current repository state is authoritative; there is no mechanical stale-patch
+gate. Editing the authored directive returns it to Ready while preserving old
+activity, and Request changes stays unavailable until that edited request has
+an attempt. A clean restart uses Rewind followed by Implement.
+
+Each accepted attempt retains its exact submitted request, outcome, available
+answer/error, captured patch, completeness, and execution checkpoint. Capture
+distinguishes known no-change, captured changes, and gaps from unsnapshotted
+effects. The reusable diff viewer projects one selected attempt and owns neither
+history nor revision context. [Directive views](../view.md#directive-turns-and-inspector)
+provide the interaction entry points.
+
+Batch processing starts only initial implementations: Ready directives directly,
+Discussed directives with matching discussion. It skips directives with an
+implementation attempt, never infers revision/retry, and stops at the first
+failed or aborted attempt.
+
+## Rationale and consequences
+
+Available actions follow lifecycle state and preserve authored intent. A separate
+revision identity duplicated implementation behavior whose only difference was
+historical context. Keeping attempts immutable makes failures and partial effects
+inspectable instead of overwriting one directive-level answer. A state-dependent
+batch cannot silently reinterpret failed work as permission to retry it.
+
+## Decision history
+
+ADR 0089 removed Revise as a peer action/processing mode in favor of Request
+changes and Retry. Its separate composer placement was subsequently replaced by
+ADR 0091's shared session view; directive-local context remained. Tutor removal
+belongs to [ADR 0070](0070-compose-system-prompts-from-ordered-profiles.md#decision-history).

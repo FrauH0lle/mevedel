@@ -2,7 +2,7 @@
 
 Status: accepted
 
-## Decision
+## Current decision
 
 Remote process-group liveness is decided by one target-side probe that
 ignores zombies, and a stopping execution whose main process exits is
@@ -15,11 +15,7 @@ non-zombie member remains -- the group is settled, because a zombie can
 neither run nor write; it is bookkeeping its holder has not collected.
 `ambiguous`: live members exist but the leader identity does not match,
 which is the PID-reuse case -- such a group is never signalled and keeps
-the unknown-outcome classification, safety over latency.  The probe
-replaces the previous pair of round trips (a leader identity check
-followed by a `kill -0` on the group) with one process, and it replaces
-`kill -0` as the liveness authority because `kill -0` on a process group
-succeeds while the group's only remaining members are zombies.
+the unknown-outcome classification, safety over latency.
 
 The launcher's own wait loop applies the same rule: it scans `/proc` for
 group members and exits once none of them is running, filtering state
@@ -37,6 +33,24 @@ still settle cleanly.
 
 ## Consequences
 
+A stop settles as soon as the target proves no runnable group member remains.
+The grace timers remain the backstop for surviving groups. This can reduce
+latency without converting an unproven stop into success.
+
+The `ambiguous` answer keeps a rare cost: when the leader PID has been
+reused while other members survive, the record still becomes unknown
+even though the surviving members are provably ours by group id.  The
+group id cannot prove ownership -- a fully-collected group frees its id
+for reuse -- so the conservative reading stands.
+
+## Decision history
+
+The probe
+replaces the previous pair of round trips (a leader identity check
+followed by a `kill -0` on the group) with one process, and it replaces
+`kill -0` as the liveness authority because `kill -0` on a process group
+succeeds while the group's only remaining members are zombies.
+
 A stop whose TERM works settles at the sentinel, typically well under a
 second, instead of riding up to two grace periods; the grace timers
 remain as the backstop for groups that genuinely survive signals.  A
@@ -48,9 +62,3 @@ false unknown outcome and blocked further durable mutation.
 Every remote stop costs one fewer control-connection round trip, and
 the test suite no longer needs a shortened grace: the mock-method
 binding of the kill delay was removed with no measurable slowdown.
-
-The `ambiguous` answer keeps a rare cost: when the leader PID has been
-reused while other members survive, the record still becomes unknown
-even though the surviving members are provably ours by group id.  The
-group id cannot prove ownership -- a fully-collected group frees its id
-for reuse -- so the conservative reading stands.

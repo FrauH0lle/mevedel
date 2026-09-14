@@ -1239,6 +1239,7 @@
           (mevedel--discuss-directive-prompt
            "Fresh directive and references" record "Follow up" 1)))
     (should (string-match-p "Fresh directive and references" prompt))
+    (should-not (string-match-p "### INSTRUCTIONS:" prompt))
     (should (string-match-p "First question" prompt))
     (should (string-match-p "First answer" prompt))
     (should (string-match-p "Follow up" prompt))

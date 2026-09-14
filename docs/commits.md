@@ -1,187 +1,76 @@
-# Commit Messages
+# Commit messages
 
-The commit style is an adaptation from [Conventional
-Commits](https://www.conventionalcommits.org) and [GNU style
-changelog](https://www.gnu.org/prep/standards/html_node/Style-of-Change-Logs.html).
+The repository combines a Conventional Commits-style subject with GNU-style
+file and function entries. Describe the final change and its reason in present
+tense. The [development guide](development.md) owns required validation before
+committing.
 
-## Basic format:
-```
-type(component): brief description (50-72 chars)
+## Format
 
-[Optional overall description]
+```text
+type(scope): Brief description
 
-* [filename].[ext] ([affected-items]): [Description of changes]
-[Additional context and rationale]
-[Limitations or future implications]
-  
-[Optional footer(s)]
-```
+Optional explanation of the problem, change, and rationale.
 
-## Guidelines
+* file.el (function, variable): Describe the change.
 
-1. Start with the type, the optional package/component/scope/file name within
-   parenthesis followed by a colon and a brief title. The first word of the
-   title should be capitalized.
-   - Example: `feat(parser): Add finite state machine`
-   - Example: `fix(api): Prevent racing of requests`
-   
-   Append a `!` after the type/scope if the commit introduces a breaking change
-   
-2. **Optional**: Describe the overall changes made by this commit in present tense, explaining:
-   - What changed
-   - Why it changed (rationale)
-      
-3. For files changed, list them in parentheses followed by affected
-   functions/variables:
-
-   ```
-   * file.ext (function1, function2, variable1): Description.
-   ```
-   If you have multiple changes affecting different items in the same file, use
-   parentheses to separate them. Add a blank line to separate the items.
-
-   ```
-   * file.ext (function1, variable1): Description.
-
-   (function2, variable2): Description.
-
-   (function3, variable3, variable4): Description.
-   ```
-
-   Break long lists of function names by closing continued lines with `)`,
-   rather than `,`, and opening the continuation with `(`. Here is an example:
-   
-   ```
-   * src/keyboard.c (menu_bar_items, tool_bar_items)
-   (Fexecute_extended_command): Deal with 'keymap' property.
-   ```
-
-   When **multiple files** are changed, list each one with its own bullet point and
-   description:
-
-   ```
-   * file1.ext (functions): Description.
-   * file2.ext (functions): Related changes.
-   ```
-
-   For implementation details that affect **multiple components**, explain **shared
-   changes** once and use "Ditto" for repeated similar changes:
-
-   ```
-   * component1.ext: Main change description.
-   * component2.ext: Ditto.
-   ```
-
-   Include important context about:
-   - Experimental features or APIs
-   - Testing configurations
-   - Known limitations
-   - Future plans or potential changes
-
-   > [!IMPORTANT] 
-   > Write descriptions that are clear enough to be understood without needing to
-   > look at the code, while still being concise
-
-4. **Optional**: Mention any limitations, caveats or future implications if relevant 
-   due to the overall changes.
-
-5. One or more footers may be provided one blank line after the body. Each
-   footer must consist of a word token, followed by a `:<space>` separator,
-   followed by a string value (see [git trailer
-   convention](https://git-scm.com/docs/git-interpret-trailers)). A footer’s
-   token must use `-` in place of whitespace characters, e.g., `Acked-by`. An
-   exception is made for `BREAKING CHANGE`, which may also be used as a token.
-   
-   ```
-   chore!: Drop support for Node 6
-
-   BREAKING CHANGE: Use JavaScript features not available in Node 6.
-   Reviewed-by: Z
-   Refs: #123
-   ```
-
-## Notes:
-
-- Start with type(scope): following Conventional Commits
-- Include BREAKING CHANGE: in body for breaking changes
-- Follow with detailed file-by-file changes
-- Use present tense for descriptions
-- Include rationale for non-obvious changes
-- Mention experimental features or limitations
-- Use "Ditto" for repeated changes across files
-- Keep consistent formatting with blank lines between sections
-
-## Conventional Commits Types:
-
-| Type     | Description                                                       |
-|:---------|:------------------------------------------------------------------|
-| feat     | New feature addition                                              |
-| fix      | Bug fix                                                           |
-| docs     | Documentation changes                                             |
-| style    | Code style/formatting changes (no code change)                    |
-| refactor | Code refactoring                                                  |
-| perf     | Performance improvements                                          |
-| test     | Adding/fixing tests                                               |
-| build    | Build system changes                                              |
-| ci       | CI configuration changes                                          |
-| chore    | General maintenance                                               |
-| revert   | Revert previous changes                                           |
-| tweak    | Code changes that change user-facing defaults but not drastically |
-
-## Examples:
-
-### Feature addition example
-
-```
-feat!(parser): Add async event handler system
-
-Implement asynchronous event handling system using asyncio, which
-should provide better scaling for high load situations.
-
-* event_handler.py (AsyncEventManager, EventDispatcher, EventQueue): 
-This provides a more scalable approach to handling multiple
-concurrent events with support for priorities and custom callbacks.
-
-Currently experimental - API may evolve based on performance metrics.
-Known limitation: Does not support nested event triggering yet.
-
-BREAKING CHANGE: Changes event dispatch flow, existing handlers need updates
+Optional trailers.
 ```
 
-### Bug fix example
+Use a 50–72-character subject when practical. Scope is optional; capitalize the
+first word of the description. A breaking change places `!` after the type or
+scope, as in `refactor(session)!: Replace the stored format`, and describes its
+effect in a `BREAKING CHANGE:` footer.
 
+## Body
+
+Explain shared rationale once, then identify changed files and affected functions
+or variables. Separate distinct changes in the same file with a blank line:
+
+```text
+* mevedel-example.el (example-start, example-stop): Share cleanup.
+
+(example-status): Report the settled outcome.
 ```
-fix(storage): Resolve race condition in concurrent writes
 
-* src/storage/manager.rs (StorageManager::write_batch, acquire_lock): 
-Fix race condition when multiple threads attempt concurrent writes
-to the same storage partition. Implements proper mutex locking
-with deadlock prevention.
+A long affected-item list can continue by closing one parenthesis and opening
+another on the next line. Use “Ditto” for an identical change in another file
+when its meaning remains clear. Include relevant validation, limitations, and
+compatibility effects; avoid claims unsupported by the actual checks.
 
-Performance impact is minimal (<1ms per write operation).
+These names are illustrative. A commit description should make the change
+understandable without requiring the reader to reconstruct the conversation.
+
+## Types
+
+| Type | Use |
+| --- | --- |
+| feat | New capability |
+| fix | Bug fix |
+| docs | Documentation |
+| style | Formatting without behavior changes |
+| refactor | Code restructuring |
+| perf | Performance improvement |
+| test | Tests |
+| build | Build system or dependencies |
+| ci | Continuous integration |
+| chore | Maintenance |
+| revert | Reverting a change |
+| tweak | Small user-facing default changes |
+
+## Trailers
+
+Separate trailers from the body with a blank line. Use `Token: value`, with
+hyphens in multiword tokens (`Reviewed-by`, `Acked-by`); `BREAKING CHANGE` is the
+exception. References and review attribution must identify actual records or
+reviewers.
+
+```text
+BREAKING CHANGE: Existing saved records using the old schema are rejected.
+Refs: <issue reference>
 ```
 
-### Multiple file changes example
-
-```
-feat!(auth): Implement OAuth2 provider integration
-
-OAuth2 was a longstanding feature request which we now finally 
-implement. Redis is used for caching of security tokens which 
-provides very high and scalable performance.
-
-* auth/provider.js (createOAuthClient, validateToken): Add OAuth2
-client implementation with support for multiple providers.
-Includes automatic token refresh and session management.
-
-* auth/middleware.js (authGuard, refreshMiddleware): Add Express
-middleware for protecting routes and handling token refresh.
-  
-* auth/storage.js (TokenStorage): Add secure token storage with
-encryption and automatic cleanup of expired tokens.
-Currently only supports in-memory storage, Redis support planned.
-
-BREAKING CHANGE: Authentication flow now requires OAuth2 configuration
-Refs: #234
-Reviewed-by: @security-team
-```
+The upstream conventions are described in
+[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/),
+[GNU change logs](https://www.gnu.org/prep/standards/html_node/Style-of-Change-Logs.html),
+and [Git trailers](https://git-scm.com/docs/git-interpret-trailers).

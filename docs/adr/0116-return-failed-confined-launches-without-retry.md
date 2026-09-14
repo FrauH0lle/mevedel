@@ -2,13 +2,7 @@
 
 Status: accepted
 
-Supersedes [ADR 0015](0015-best-effort-confinement-falls-back-only-before-execution.md).
-
-The permission audit found narrow Git approvals followed by failed confined
-operations and requests for complete bypass. Real launch regressions confirmed
-that an exact-directory mismatch or mount ordering error can make an approved
-scope ineffective. Switching automatically to unrestricted execution would hide
-that defect and exceed the boundary the user just reviewed.
+## Current decision
 
 Once confined preparation begins, a preparation or launcher failure returns one
 refusal. Neither managed Bash nor the one-shot executor starts an unrestricted
@@ -27,3 +21,24 @@ executor does not infer them from failure.
 Real disposable-process tests verify a pre-start failure returns its exit code
 without creating the original command's mutation marker. The same no-replacement
 contract applies to managed and one-shot execution.
+
+## Rationale and consequences
+
+Switching automatically to unrestricted execution would hide confinement defects
+and exceed the boundary the user reviewed. A failed invocation therefore costs
+a new explicit request when more authority is needed, but cannot silently replay
+effects or widen its scope. See [Execution](../tools/execution.md).
+
+## Decision history
+
+ADR 0015 allowed disclosed direct execution when an initial capability probe
+was unavailable and prohibited replay after the requested process had started:
+partial effects could not be excluded. That probe fallback still applies.
+
+ADR 0116 strengthened the no-replacement boundary to the start of confined
+preparation, even when a missing start marker proves the command did not run.
+The permission audit found narrow Git approvals followed by failed confined
+operations and requests for complete bypass. Real launch regressions showed
+that exact-directory mismatches and mount ordering could make an approved scope
+ineffective. Evidence of no execution did not justify hiding such a defect with
+an unrestricted replacement.

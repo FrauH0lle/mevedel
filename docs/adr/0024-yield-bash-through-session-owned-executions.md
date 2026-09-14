@@ -2,12 +2,41 @@
 
 Status: accepted
 
-Mevedel will run Bash through a shared execution module that owns process creation, PTY and pipe behavior, bounded output capture, signaling, scheduling, and teardown. A Bash call waits up to `yield_time_ms`, then returns an opaque `execution_id` when still running; the chat session owns the registry while the originating main agent or canonical sub-agent remains the only model owner allowed to control that execution. Authorization, confinement, and resource grants are fixed at spawn, so owner-scoped input and stop controls reuse that authority without another prompt and can never widen it. Explicit deny rules and permission hooks remain authoritative.
+## Current decision
 
-Yielding is the boundary at which a process becomes independent: queued or foreground Bash work is cancelled with its request, while a yielded execution survives request completion and abort but not explicit stop, owner termination, session teardown, or Emacs exit. Shell-native `&` backgrounding is rejected, completed handles retire after their final notification is secured, and resumed sessions mark stale running records as lost rather than attempting unsafe PID reattachment. `WriteStdin`, `ListExecutions`, and `StopExecution` provide owner-scoped model control; `/ps`, `/stop`, and the session cockpit may inspect and control every owner. Rewind refuses to hide live executions, forks do not inherit them, and compaction records completion in the current segment when the original Bash row has been archived.
+The session owns managed executions; the initiating root or canonical agent is
+its model-facing owner. Bash waits through `yield_time_ms`, then returns unread
+output and an opaque handle if still running. Yield detaches the process from
+request abort while retaining its owner, working directory, permission grant,
+and confinement. Input, observation, and stop reuse that captured authority;
+explicit denies and hooks remain authoritative.
 
-Output is spooled from spawn into a session-owned artifact while Emacs retains bounded head/tail views and counters. A configurable 64 MiB artifact limit terminates the process instead of silently discarding output, and shared oversized-result previews preserve equal head and tail portions without changing the full artifact. Read-only Bash calls may overlap within one session, other calls are scheduled exclusively and fairly, and an exclusive lease is released when its command yields so long-lived servers do not block later work. Managed Bash has no automatic timeout; a command runs until completion, explicit stop, output-limit termination, or owner/session teardown.
+The [execution manual](../tools/execution.md) owns tool arguments and result
+handling; [managed Bash](../tools.md#managed-bash-execution) describes scheduling,
+progress, settlement, and recovery. The `mevedel-execution.el` facade exposes
+operations and immutable facts while `mevedel-execution-process.el` owns child
+processes and spools. Callers do not inspect process records or timers.
 
-Execution facts and explicit handler success/error status are canonical structured data rendered separately for the UI and model, leaving command output unmodified. Live rows update transiently, completion uses the existing owner mailbox without starting an unsolicited model request, and whichever model tool first observes termination consumes the single final delivery. Child environments force stable UTF-8, no-color, and no-pager defaults plus `MEVEDEL_EXECUTION=1`.
+## Rationale and consequences
 
-The session struct exposes only an opaque transient execution-state slot. `mevedel-execution.el` is the sole owner of execution records and provides lifecycle operations that start managed commands, observe or write to yielded commands, list fact snapshots, stop commands or owners, and tear down a session. It also owns the confined one-shot helper path used by batch Eval and external file helpers. Callers receive immutable observation and fact plists and subscribe to execution events; Bash tools, cockpit surfaces, persistence, and teardown code must not inspect process records, buffers, timers, queues, or spool cursors directly.
+One owner absorbs process groups, output bounds, cancellation, and cleanup for
+Bash, batch Eval, and one-shot helpers. A shell-native background process would
+escape that lifecycle, so background operators are refused. Request-owned
+foreground work stops on abort; yielded work survives until completion, stop,
+owner/session teardown, or Emacs exit. Resumed sessions mark stale rows lost
+rather than reattaching unproven PIDs. Rewind refuses live executions and Fork
+never copies them.
+
+Output is spooled with a configurable 64 MiB default limit and bounded head/tail
+observations. Remote live spools stay client-local; omitted output is staged as
+session-owned evidence. Exceeding the cap terminates execution rather than
+silently losing bytes. Read-only commands may overlap; other commands take a
+fair exclusive lane, released on yield so long-running work does not block
+admission. Managed Bash imposes no automatic timeout.
+
+Structured execution facts keep exit and outcome separate from command output.
+UI progress is transient; completion updates durable presentation and reaches
+its captured owner without starting a model request. User controls can inspect
+all session owners, while model controls remain owner-scoped. Deterministic
+UTF-8, terminal, color, pager, and `MEVEDEL_EXECUTION=1` defaults make child output
+consistent without changing user-authorized command semantics.

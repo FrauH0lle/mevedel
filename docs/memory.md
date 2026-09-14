@@ -7,583 +7,11 @@ selective by default: optional saves should preserve durable context useful to
 future work. Explicit user requests to save, forget, or ignore memory take
 precedence over package preferences about what is worth retaining.
 
-Journal storage is separate from curated memory. The internal
-`mevedel-journal-store` module publishes immutable workspace digests and
-completed-review and proposal-decision records, and
-`mevedel-journal-claim` provides bounded work ownership and recoverable
-outcomes. Completed-turn capture and sealing are connected to session
-lifecycle. Background generation and accepted-result recovery now run from
-lifecycle opportunities and workspace activation recovers abandoned checkpoints.
-`memory://journal/` now supports ordinary Read, Glob, and Grep over validated published
-records, with cached composer completion and request-time roster availability.
-The main conversation receives a bounded recent-digest map as retained context.
-Consolidation runs on demand through `/remember` or automatically in `propose` and `auto` modes;
-the memory proposals cockpit supports inspection, decisions, and recovery. See
-[ADR 0117](adr/0117-publish-journal-results-from-fenced-outcomes.md) for the
-storage contract and the workflows below for the user surface.
 
-The consolidation output contract is implemented in
-`mevedel-memory-proposal-parse`. It validates the complete reply against captured
-root IDs, admitted files, complete filename observations for creation, and
-admitted digest IDs before returning any proposals. The fixed ordered sections
-are Promote, Update, Merge, Remove, Instructions, and No action. Proposal fences
-contain JSON-valued header lines, a `---` separator, and Markdown replacement
-content. The header is a sequence of `key: value` lines, not a JSON object;
-only the values use JSON syntax. Merge sources must be admitted files; overlapping file operations
-invalidate the entire reply. Instruction targets must be exact captured
-applicable files. Direct MEMORY.md proposals are rejected because application
-owns index consistency. This parser performs no reads or writes and does not
-establish current authority, freshness, or factual correctness. The request uses
-this parser at terminal settlement before accepting proposals into the durable
-review and decision lifecycle exposed by the memory proposals cockpit.
-
-`mevedel-memory-scope-capture` supplies the parser's root and file allowlist.
-It reads complete topic, index, and root instruction files without changing
-them: at most 32 KiB per file and 96 KiB total, with a 256-entry inventory per
-memory root. Omitted files remain known existing names; an incomplete inventory
-cannot authorize creation. Symlinked files and symlinked parents cannot supply
-before-state or new proposal targets. The captured index is reserved for the
-application transaction, rather than offered as a direct model-editable topic.
-
-Each root retains its original physical path, target identity,
-and local host/user identity where applicable. Later configuration changes do
-not rebind these IDs. Inspection checks original authority; a different local
-client or a retargeted root makes it unavailable. Freshness checks compare
-literal captured bytes and expected absence with current target reads, including
-indexes and merge inputs selected by the caller. These read-only checks do not
-acquire write ownership or commit files; the application coordinator must hold
-the required ownership across checking and mutation.
-
-The captured source boundary accepts relative paths only within the original
-workspace target. It excludes VCS metadata, `.mevedel` state, symlinks, and all
-configured memory roots, including roots omitted because their index was
-unavailable. Omitting a memory root does not make its contents available through
-a source-file fallback.
-
-`mevedel-memory-reference-check` inspects backticked references in the admitted
-topic snapshots, returning at most 200 distinct topic/token observations with
-dates. Its current check is workspace-relative **path existence**, including
-references with line-number suffixes. A found path does not verify a lesson or
-the referenced line. Commands, flags, external references, ambiguous identifiers,
-and paths outside the source boundary remain `unknown`. Oversized references,
-unavailable topics, and the count limit produce explicit omissions. Topics
-without candidates receive no certification. These rows can be stored in the
-immutable review record and are supplied to the consolidation request.
-
-`mevedel-memory-investigation` supplies request-local gptel Read, Glob, and Grep
-tools. Each call names `workspace`, `journal`, or an admitted root ID, plus a
-relative path. This is a scoped tool argument, not another resource-address
-family. Memory and journal reads use captured evidence; source Read uses the
-ordinary text reader over a pinned UTF-8 snapshot capped at 512 KiB, including
-range support within that snapshot. Oversized files are refused before the
-reader can scan a long line or a large offset. No tool definitions are added to gptel's global tool registry.
-
-Searches reuse ordinary Glob/Grep over private admitted copies. Source search
-examines at most 256 entries, copies at most 2 MiB, and omits files larger than
-512 KiB. Omitted, unavailable, and excluded source paths produce a partial-search
-notice. Narrowing the subtree or reading a named source file supports further
-investigation. Results use relative filenames and omit private copy paths.
-Each result is capped at 8 KiB of UTF-8; a request may return at most 64 KiB
-across 20 calls. Exceeding either aggregate limit retires the investigation and
-reports failure to its request owner. Stopping cancels active search helpers,
-removes their copies, and suppresses late delivery. The owner still supplies
-the overall deadline and generation check.
-Search completion restores the caller's working directory before delivering
-the result, including synchronous empty results. A provider follow-up never
-inherits a deleted investigation snapshot as its working directory.
-
-`mevedel-memory-review-request` combines that scope, reference pre-check, and
-investigation in a sessionless gptel request using the `memory` workload (default
-tier `balanced`). It admits a prefix of at most 20 complete candidate digests and
-reports omissions. The
-initial prepared provider payload, including tools and roles, must fit both
-32,000 estimated tokens and the model's usable context with output reserve.
-Indexes, instructions, and topics are supplied as complete documents when they
-fit; other captured documents remain available through Read. An empty digest
-set requires an explicit memory-only request. Focus and recent rejection text
-are each bounded to 8 KiB.
-
-The request has a 180-second deadline, a cumulative 8,000-token output budget,
-and a 32 KiB output text cap. Supported provider output limits are clamped;
-providers without that control retain client-side limits, not a server billing
-ceiling. Every follow-up rechecks the prepared payload against usable context.
-Review callback results include accumulated output bytes and estimated tokens
-for reply text, reasoning and tool arguments, separately from provider-reported
-usage. These counters remain available when a client output guard ends the review.
-Read tools execute within their captured authority without interactive gptel
-confirmation; unavailable tool names fail the review. Only gptel's terminal
-DONE state validates the final proposal response. An intermediate HTTP completion
-does not finish the tool loop or consume coverage.
-
-While running, its read-only buffer displays admitted evidence, model output,
-and tool results. Closing it or invoking the returned cancel function retires
-the request, stops active searches, and suppresses late results. The validated
-callback includes the exact validated reply, admitted digests, and cumulative
-provider usage. It does not publish proposals or coverage. Connecting the
-request to pass selection, storage, and cancellation is handled by
-`mevedel-memory-pass-start`.
-
-`mevedel-memory-pass-select` supplies candidate selection from a fresh journal
-observation. General passes select uncovered digests; focused passes can reuse
-covered ones. Selection returns at most twenty, oldest first with digest ID as
-the tie breaker, and reports the eligible backlog beyond that batch. Later
-arrivals do not enter an already captured observation.
-
-Published digests describe completed, immutable work and are eligible even while
-their source session remains open or another client holds that session. Selection
-needs no source-session authority: it changes neither session state nor review
-coverage. The coordinator still acquires journal/consolidation ownership and pins
-freshly validated evidence before a review starts.
-
-`mevedel-memory-store` supplies private prepared and accepted pass storage. The
-caller holds the 180-second consolidation claim. Preparation acquires journal
-mutation ownership, recovers accepted expiry, checks that selected entries still
-match their public source bytes, and then pins them. This order prevents a pass
-from reviving evidence already committed for expiry. The prepared record retains
-the original scope, complete digest bodies, source fingerprints, and focus.
-Focus must fit the public record's 4 KiB bound before inference begins.
-
-Private records live in `state/passes/<pass-id>/prepared.el` and `accepted.el`.
-They use bounded durable Lisp data, preserving literal byte strings in captured
-before-state; each record is limited to 4 MiB. Reading disables evaluation and
-circular-reader syntax. Evidence pins live under
-`state/evidence-pins/<digest-id>/<pass-id>.pin` and bind to the prepared record's
-hash. These records are internal storage, outside `memory://journal/`; displaying their
-memory bodies still requires the original scope's authority checks.
-
-Acceptance validates the reply again against the prepared scope and exact
-admitted digest subset. Each proposal retains its affected topics, merge inputs,
-index, or instruction before-state. Its identity includes the pass, original
-target and client, proposed change, and before-state. The accepted bundle is
-written before its hash competes in the pass claim's immutable outcome election.
-Changed private bundles cannot be replayed as accepted results.
-
-Publication reads that accepted bundle under fresh journal mutation ownership
-and publishes the immutable review record. Only this public record advances
-general coverage. Replaying publication is idempotent, including after the
-original request is gone. Pending proposals retain admitted digest pins;
-omitted digests and a no-action pass release their pins after publication.
-Failed, cancelled, or expired passes can release only their own pins, after
-their unsuccessful outcome has been recorded. None of these storage operations
-applies proposals to curated files. Decisions, application, and expiry use the
-separate checked operations described below.
-
-`mevedel-memory-pass-start` coordinates one 180-second workspace claim. Before
-selecting evidence, it recovers accepted older pass publications and releases
-pins belonging to fenced unsuccessful attempts. Selection runs under journal
-mutation ownership after accepted expiry recovery. Preparation rechecks the
-selected entries when pinning them; a change between those operations fails
-without consuming coverage. Each request checks current target ownership, and
-the coordinator's timer includes selection and preparation in its deadline.
-
-The returned state contains the running read-only request buffer, available
-through `mevedel-memory-pass-running`. `mevedel-memory-pass-cancel`, or closing
-that buffer, retires only this client's attempt. Failure and expired callbacks
-cannot publish fresh results or change a successor's claim or pins. Success
-returns the immutable public review, usage, and remaining frozen backlog count;
-arrivals after selection remain eligible. There is no recursive backlog drain.
-Explicit callers may allow an empty batch for current-memory review. The proposal
-cockpit and `/remember [focus]` command are available. Workspace telemetry records
-pass starts and terminal outcomes, usage received so far, published proposal and
-coverage counts, and remaining backlog without private content.
-
-`mevedel-memory-consolidation-mode` supports `manual`, `propose` (the default),
-and `auto`. Manual runs only on request. Propose schedules a read-only review at
-eligible completed, durably saved root turns, workspace activation and digest
-publication, and leaves its proposals for approval. Auto uses the same review and applies fresh memory proposals through
-the ordinary checked decision path. Instruction proposals always wait for
-approval, including changes to `AGENTS.md`. The mode is frozen at pass admission.
-
-The automatic gate checks mode, then elapsed time since the last successful
-general review, then the eligible unreviewed digest count. The settings
-`mevedel-memory-consolidation-min-hours` and
-`mevedel-memory-consolidation-min-digests` default to 24 hours and five digests.
-Both automatic and general on-demand completion move the clock; focused reviews
-do not. Retired review metadata preserves that clock after history expiry.
-A smaller backlog becomes eligible one day before its oldest digest reaches the
-configured ordinary-recall age limit (13 days under the default). Disabled expiry
-keeps the count threshold; the elapsed-time gate still applies in either case.
-This creates review opportunities for sparse workspaces and completed work from
-long-running sessions. `/remember` bypasses timing and count thresholds.
-
-Turn completion checks cached timing and settings without target I/O. Queued
-turns coalesce, and filesystem work waits for idle transport. A failed count
-check is cached for ten minutes; a recent successful general review postpones
-the next check until its interval ends. The coordinator acquires target
-ownership and recovers accepted publications before rechecking the gate, so
-another client's completion cannot be missed merely because the initial
-observation was stale. Journaling can be disabled while existing digests remain
-eligible for consolidation. Exit cancels queued and active review work.
-
-Auto applies proposals sequentially with fresh workspace and original-root
-ownership for each application. Shared-index expectations advance only through
-confirmed changes from the same pass. Intervening edits remain stale; cancelled
-application holds the remaining proposals. Completion reports the number of
-distinct files confirmed written by that run, counting a shared index once and
-excluding idempotently returned decisions from another call. A successful
-review can still leave held, stale, unavailable, or recovery-required proposals.
-Neither syntactic validation nor the updated-file count establishes that the
-new memory is correct.
-
-`mevedel-memory-decision-reject` records a rejection without editing memory or
-rewriting the completed review. It acquires workspace ownership and checks the
-proposal's original target authority. A repeated rejection returns the same
-terminal decision, including its original reason. The reason is optional and
-limited to 4 KiB. Private `state/decisions/<decision-id>.el` records retain the
-claim, exact public metadata, and optional write-intent identity. Their hash is accepted before publication,
-so a later client can recover a rejection after the owner stops.
-
-Public `kind: decision` records contain decision, pass, proposal, and workspace
-identities, date, status, reason, and a private-state hash. Their body is derived
-from metadata and includes no private topic or proposed replacement. Decision
-status is verified against immutable acceptance evidence; public text alone
-cannot decide a pending proposal or release its evidence. When every proposal
-in a pass is terminal, publication releases that pass's digest pins. Review
-and decision records remain retained while evidence or unresolved work needs
-them, then expire together under the journal age rule.
-
-Before a later request, the coordinator recovers accepted decisions and includes
-bounded recent rejection evidence: the original suggestion and reason, under
-the original memory-root authority. It admits at most twenty whole records
-within 8 KiB and reports omitted or unavailable records. This can help the model
-recognize reworded suggestions; it is untrusted evidence and does not guarantee
-semantic suppression. Rejection, application, and reversal APIs are implemented
-through the proposal cockpit as well as their internal APIs.
-
-`mevedel-memory-apply-changes` prepares complete topic/index or instruction
-changes from accepted before-state without writing them. Topic frontmatter is
-generated from the validated name, description, and type. Index updates escape
-labels and filenames, retain unrelated lines, and reject duplicate or invalid
-destinations, including two encoded names for the same file. Instructions
-append to their captured file. Every emitted change retains expected original
-bytes or absence and exact proposed bytes for the shared patch transaction.
-Generated files must fit the memory reader's 32-KiB per-file bound, including
-index growth, so a change cannot exclude its root from the next review.
-
-The patch transaction now checks supplied before-state before any write and
-again before writing each path. It restores only its own expected after-state;
-intervening disk and unsaved buffer edits survive a failure. A caller can fence
-all writes and rollback through a target mutation callback in addition to
-client-side ownership checks. Interrupted buffer
-synchronization rolls back before propagating a quit.
-
-`mevedel-memory-decision-apply` acquires the workspace claim and an independent
-claim at the original target root. It checks all captured dependencies, including
-unchanged indexes, before applying. Full before/after states live in private
-`state/writes/<intent-id>.el` records. A hash-only marker under the target's
-`.mevedel-memory-write/pending/` is durable before curated writes. An unresolved
-marker blocks other workspaces at that root even after the original claim
-expires. Coordination files are excluded from consolidation memory and source
-scopes; inventory does not descend into their directory.
-
-Curated mutations and target-claim settlement take the same target-side `flock`
-on the pinned claims directory. Each mutation checks the unsettled claim,
-filesystem-clock deadline, expected bytes and mode under that lock; replacement
-mode is set on the temporary before rename. A delayed old writer either finishes
-before takeover or fails its guard afterward. The same mechanism protects
-rollback and marker retirement. This requires Linux `flock` on the storage
-host; acquisition waits at most 20 seconds and process death releases the lock.
-
-Application accepts an immutable decision before retiring the marker. Status
-ordering uses accepted claim generations, so retries in the same second still
-produce an unambiguous latest result. Remaining proposals in the same pass use
-confirmed earlier applications to advance their expected index bytes. The
-original pass stays immutable, topic expectations stay unchanged, and external
-index edits still make a later approval stale.
-
-`mevedel-memory-decision-recover-write` reconciles exact retained states without
-repeating application: complete writes become applied, untouched attempts become
-unavailable, and mixed or intervening changes remain recovery-required with their
-marker intact. Its explicit rollback option restores a pending attempt through
-the patch engine only when every dependency matches recorded before or after
-state. Foreign or unsaved edits prevent rollback.
-
-`mevedel-memory-decision-reverse` reverses a resolved application only while all
-affected files match its exact after-state. It persists a separate reverse intent
-linked to the original intent identity and hash, then uses the same patch and
-decision path. Successful reversal adds an immutable `reversed` decision; the
-original application remains inspectable. Reversed proposals remain terminal,
-so repeating accept, reject, or reverse cannot silently reapply them. A new
-review is needed for a new proposal.
-
-Reversal can also be interrupted: completed reverse writes become `reversed`
-when reconciled, untouched attempts leave the proposal `applied`, and partial
-attempts remain recovery-required. Explicitly rolling back a partial reversal
-restores the previously applied state. Same-pass index expectations follow only
-completed apply/reverse transitions. Consequently, an earlier proposal cannot
-be reversed through a later proposal's index edits; reverse those later changes
-first, or leave the current files intact.
-
-`mevedel-memory-decision-recover-pending` discovers retained write records and
-reconciles their independently marked attempts without inference or file
-reapplication. It first recovers settled publications under successor workspace
-ownership. Unmarked intents are not classified as applications, even if an
-external edit happens to match their proposed bytes. Unreadable or unavailable
-records stay inspectable. Session selection and conversation setup schedule
-this recovery independently of journaling being enabled. Repeated activations
-coalesce and wait for idle transport. A live workspace owner leaves recovery
-for a later activation. New workspaces create no memory state just by activating;
-exit cancels queued recovery. Recovery neither requests a model nor repeats or
-rolls back memory writes.
-
-`M-x mevedel-memory-list-open`, or **Memory** (`l`) in the session cockpit, opens
-the proposals table. Rows show action, type, title, status, and exact target/origin.
-The header identifies the workspace, pass date, manual mode, pending count, and
-this client's running pass. Opening attempts checked recovery; a busy owner does
-not prevent read-only inspection or lose its claim. Refresh preserves the active
-session composer draft. Another client's unavailable memory root remains visible,
-but inspecting private body/diff evidence or applying there requires its original
-authority.
-
-The main cockpit's Memory row shows pending/stale proposals, interrupted-write
-recovery, and unavailable-record counts separately. Opening the cockpit refreshes
-observations older than ten seconds; table refresh also updates them. Rendering
-uses the cached counts without reading target files. Counts are disposable UI
-state and never authorize an application or override its freshness checks.
-
-`RET`/`i` shows the complete proposed body, retained before/after diff, decision
-reason, retained digest bodies with their original addresses, and dated reference
-checks. Evidence inspection still works if a public digest is unavailable.
-Pending diffs include confirmed
-same-pass index transitions; applied/reversed diffs come from the exact retained
-write intent. `a` accepts, `r` rejects, `A` accepts pending proposals sequentially,
-and `R` rejects pending proposals. Rejection is one key; use a prefix argument to
-enter an optional reason. `u` performs checked reversal. `c` reconciles an
-interrupted write; `U` explicitly rolls back a known interrupted attempt.
-`v` inspects this client's running request, `k` cancels it through the pass owner,
-and `j` opens pending journal jobs with their inspection/retry/discard actions.
-`m` runs another consolidation; a prefix argument asks for focus. The first-class
-`/remember [focus]` command and `M-x mevedel-remember` use the same bounded
-sessionless pass, allow explicit current-memory review without eligible digests,
-and open this table. Completion refreshes an existing matching table without
-reopening a closed table or altering the composer. The command may run while a
-conversation request is active; already published digests from it remain eligible.
-`g`, `?`, and `q` follow the shared cockpit refresh/help/back contract.
-
-The `journal` component is selected only by `main` and delivered as an independent
-retained context update, leaving the system prefix stable. It shows at most
-five recent digests with date, session name, canonical address, and the first
-nonempty Learned bullet (falling back to Done). The entire component is bounded
-to 2 KiB of UTF-8, including labels and addresses; long names and excerpts get
-visible omission markers. These are dated evidence, not current instructions
-or authority to resume unfinished work. Worker, explorer, verifier, reviewer,
-guardian, buddy, and context-summary prompts omit the map. Review coverage is
-the exact union of digest IDs in published general-review records. Focused
-reviews retain their examined IDs without advancing general coverage. The
-cached observation includes reviews, so additions or removals refresh the count
-even when the newest digest filename stays unchanged. Changed maps or coverage
-produce a new complete journal section; unchanged state is not repeated. Empty
-state clears an earlier map, and outgoing-history loss causes redelivery through
-the ordinary context acknowledgement mechanism. The resource roster advertises
-journal retrieval only when validated public entries are available.
-
-A completed review records its pass ID, exact examined digest IDs, focus,
-reference-check evidence and dates, and generated proposal IDs. Its public body
-is derived from that metadata; it contains no proposal replacement bodies or
-captured private topic content. Publication is the coverage commit point, so the
-pass owner must persist its proposal batch before publishing the review. Review
-records remain retained while any examined digest survives. Once their evidence
-dependencies end, old reviews can expire with their private prepared/accepted
-bodies and complete terminal decision/write history.
-
-Main and worker guidance asks for attributed factual lessons in
-`work://shared/` when the request permits workspace writes. Agents search before
-creating and update relevant existing files; no filename or structure is required. Read-only agents
-report lessons through their existing results or available SendMessage; they
-gain no mutation tools. `/learn` considers available notes and digests as
-additional evidence, verifies relevant claims, and acknowledges omissions.
-
-With `mevedel-journal-enabled` (default `t`), a successful completed root-turn
-save freezes a checkpoint before generation collection. One immutable private
-record contains projected evidence, notes, their hashes, stable completed-turn
-identities, and serializable journal model selection. It pins the source
-session and any committed publication head. A newer checkpoint supersedes an
-unsealed predecessor only when it contains all that predecessor's turns.
-Published and sealed turns stay outside later checkpoints; replacement
-branches use distinct persisted fork-point identities even when turn numbers
-repeat. Storage failure reports a warning without failing the conversation save.
-
-Publication retains capture and completed-turn IDs in private immutable coverage
-records. These contain no transcript or digest text and survive deletion or
-expiry of public digests. A later checkpoint therefore excludes previously
-published work even when its public digest is gone. This capture coverage is
-separate from consolidation review coverage.
-
-Public entries and private capture bundles have separate 8 MiB storage bounds;
-digest bodies remain capped at 16 KiB. Metadata admission reserves the entire
-body allowance, so long completed-turn ID lists are never silently truncated.
-An oversized capture is rejected before publication or pinning and stays
-eligible for a later successful capture.
-Capture decoding also checks the complete source-reference schema, unique
-segment names, their revision hash, and all frozen policy fields. Malformed
-descriptors remain inspectable with their source pins intact. A saved reasoning
-effort that the resolved model no longer supports stays unavailable before any
-provider request.
-
-Successful root compaction seals the checkpoint selected before the transcript
-was replaced. Failed attempts leave it unsealed; agent compactions create no
-journal work. Closing the root data buffer or exiting Emacs seals completed
-checkpoints as session-end work. View-pair close seals before removing the
-root registration. Read-only buffers do not seal, and a portable session must
-still own its lease; closing does not reacquire authority. Neither path
-snapshots incomplete streaming output. Exit starts no model request. Sealing is immutable and preserves the
-first trigger. Disabling journaling stops new capture and sealing while keeping
-existing snapshots and pins.
-
-Completed turns, successful root compaction, and session close schedule one
-background processing opportunity. Scheduling waits until the caller returns
-and the target transport is idle. Duplicate events coalesce, and completion
-does not recursively drain the backlog. Only sealed captures run. A dedicated
-workspace admission claim permits one digest request at a time; the capture's
-own claim accepts its result. Both share a 120-second target-clock deadline.
-Failed jobs get at most three automatic attempts on separate opportunities.
-
-Processing re-resolves the exact frozen provider/model and uses the saved
-streaming, effort, and output settings. Missing policy or client-owned evidence
-stays unavailable instead of selecting a fallback. Frozen evidence is bounded
-again to the generator's actual input budget, with explicit omissions. No live
-conversation buffer or tools are needed. Cancellation and timeout preserve
-pins; late callbacks cannot replace an accepted outcome.
-If one accepted result cannot finish recovery, a background opportunity retains
-it and can process another sealed capture. Explicit retry reports the recovery
-error. The job browser identifies a capture that requires its original client.
-
-New captures use the configured `journal` workload (default tier `balanced`)
-and explicit effort. When effort is unspecified and the model declares support
-for disabling reasoning,
-digest capture freezes `disabled` or `none`: a real long-transcript case consumed all
-4,000 output tokens in reasoning without producing any digest. Models without
-that control retain their provider default. Existing frozen policies keep their
-saved effort. Digest prompts also skip routine successful tool chatter and
-prefer a few decisive facts; continuation and handoff policy is unchanged.
-
-Input admission reserves at most 4,000 output tokens. Supported server token
-limits are capped accordingly. Codex OAuth has no such control, so its requests
-use the same 16-KiB digest limit and 120-second client deadline without claiming
-a server token or billing ceiling. Streaming overflow cancels the request;
-oversized final output is rejected. The journal model remains configurable
-through `mevedel-model-workloads`; changing it affects new captures, while queued
-captures keep their frozen choice and published digests remain readable.
-
-Successful output is accepted durably before publication. If publication
-fails, the next opportunity recovers that exact output without another model
-request. After successful publication, the processor releases the source pin,
-retires the job, and removes its frozen transcript/notes bundle. Exit cancels
-queued and active processing before sealing remaining checkpoints, starts no
-inference, and does not wait for a model.
-
-Opening the session chooser or setting up a conversation schedules recovery
-before processing. Recovery inspects inactive captures as well as ready jobs,
-repairs interrupted pin/ready publication, and seals abandoned completed work.
-It verifies the original source session and frozen evidence under temporary
-source authority. PID locks use the existing dead-holder check and a checked
-replacement serialized with normal resume and release by Emacs native file
-locking. A resume replacing the observed stale record prevents recovery from
-acquiring it. Live, foreign,
-or unreadable locks remain untouched. Portable recovery fences an expired
-ordinary lease through the existing generation election. Live leases, publishing
-leases, unresolved mutation, and reserved control transfers remain held for
-normal session recovery. No conversation is resumed and no model request runs
-while source authority is held. One unavailable capture does not prevent the
-recovery scan from examining unrelated captures.
-
-Recovery also finishes superseded pin release after checking the successor's
-retained completed-turn coverage. It then removes the old raw bundle. Retirement
-markers prevent an old completed-turn set from recreating its retired capture.
-
-`M-x mevedel-journal-jobs` lists pending checkpoints and jobs, including failed,
-exhausted, unavailable, and unreadable captures. `RET` inspects the frozen
-evidence, `r` retries the selected sealed job once, `d` discards it, and `g`
-refreshes the list. The corresponding commands are `mevedel-journal-inspect`,
-`mevedel-journal-retry`, and `mevedel-journal-discard`. They work from a session
-or workspace buffer as well as the job list. Inspection starts no inference.
-Manual retry retains the frozen model policy and attempt history, and respects
-active ownership and already accepted results.
-Unready checkpoints also appear as recovery work, including damaged descriptors;
-retired captures remain outside the pending list. Inspection does not acquire
-source authority or repair storage.
-
-Explicit discard remains available when journaling is disabled. It cancels a
-matching request owned by this client, records an immutable omission before
-releasing the source pin, and removes the raw evidence bundle. It cannot take
-over another client's live request. An interrupted discard resumes from its
-accepted outcome. An already accepted digest is recovered instead of discarded.
-When a capture descriptor is unreadable, the interactive command asks for its
-original source directory and verifies the matching pin before proceeding.
-Discarding a checkpoint prevents that exact capture from being repinned; new
-completed work can still produce a new capture.
-
-The journal jobs inspector also shows overdue public entries that remain in
-storage: total count, age in days, review mode, and observed retention reasons.
-Unreviewed evidence, unfinished capture publication, evidence pins and retained
-review/decision history appear separately from pending digest jobs. Entry buttons
-read current validated storage for human inspection. Review and proposal/recovery
-buttons use the existing `/remember` and proposal cockpit commands; capture retry
-and discard keep their existing authority checks. No inspection grants ordinary
-model recall or unconditional deletion.
-
-`mevedel-journal-max-age-days` defaults to 14; nil disables journal expiry.
-The clock starts at the immutable public entry `created` timestamp in UTC.
-For a digest, this is the execution target time when its completed-turn capture
-was first frozen, carried unchanged into later digest publication. Reviews and
-decisions use their native record-creation time. Delayed digest generation can
-therefore publish evidence whose ordinary recall period has already ended;
-unprocessed evidence remains available for consolidation and human inspection.
-Reading, retrying, reviewing and changing the address namespace do not reset it.
-At the limit, ordinary Read/Glob/Grep, exact addresses, discovery and completion
-exclude an entry even if physical storage must retain it. Recall checks use the
-client's current UTC clock; native cleanup and automatic review use the execution
-target's clock. Machines should have synchronized clocks for matching boundaries.
-Cached discovery checks age on every use, and prepared reads check at execution.
-
-Physical deletion has additional dependencies. Unreviewed digests remain available
-to consolidation and human inspection after their ordinary recall expires. A
-successful general review with no proposed changes counts as processing; failed,
-cancelled and focused reviews do not consume general coverage. Pending proposals
-and interrupted operations can retain evidence indefinitely until resolved. A
-14-day recall limit is therefore not a physical-erasure guarantee.
-Expiry runs independently of session expiry and new capture, for local and TRAMP
-workspaces, during workspace activation and existing cleanup opportunities.
-Opportunities are throttled to once an hour and select at most 50 digest/review groups;
-they do not recursively drain a backlog. Selection currently scans validated
-public entries. Pending captures and pinned review evidence remain retained.
-
-Expiry accepts an immutable manifest through journal mutation ownership before
-removing anything. Later mutations recover accepted expiry before selecting new
-evidence. An expiry marker hides the public entry immediately, even if physical
-deletion is interrupted; recovery finishes deletion without inference. Changed
-public or private bytes are retained for inspection. Retired capture payloads can be removed
-with their expired digest, while identity-only capture coverage survives.
-Consolidation uses the same mutation boundary when pinning proposal evidence.
-Cleanup also acquires consolidation admission, so a live pass postpones cleanup.
-Completed reviews become eligible only after all their examined digests are gone,
-their own evidence pins are released, and their accepted private state matches
-the public record. A digest and its covering review expire on separate
-opportunities; selecting a digest for deletion does not prematurely remove its
-coverage. Retirement is recorded before public or private deletion. Pass recovery
-and the proposal table skip retired passes, including interrupted deletions.
-Retirement retains the completion date and general/focused scope, without the
-focus text, so expiry does not erase the scheduling history of general reviews.
-Every proposal must have a terminal applied, rejected, or reversed decision, and
-every decision must also satisfy the age rule. Unpublished decisions, unresolved
-write intents, outstanding target markers, and unavailable original targets
-retain the group. The manifest includes the complete related public decision
-history and exact private pass, decision, and write filenames with accepted
-hashes; it cannot name arbitrary workspace files. Its encoded size is capped at
-4 MiB before acceptance or deletion. A group may contain more than fifty public
-records; splitting it would break retained reversal dependencies. Current curated
-memory files are never deleted by journal expiry. Readers skip retired history
-even when an interrupted deletion leaves only a private write intent behind.
-Prompt and cockpit observations are invalidated after cleanup.
-
-The internal note snapshotter caps the entire working-note input at 32 KiB,
-including provenance and omission labels. It visits shared files first and
-session files second, in filename order without a preferred filename. Shared
-content is labelled as potentially coming from other sessions, not evidence of
-this session's work. It labels notes as untrusted prior context, lists binary or non-UTF-8 files by
-name, and includes only names and first lines for `local/plans/`. Reads are
-bounded on the execution target before transfer. Snapshot strings remain
-unchanged when the source files later change.
+Curated topics hold durable facts; journal digests hold dated evidence from
+completed work. Use `/remember` to review memory and journal evidence, then
+inspect the proposed changes in the [memory cockpit](#memory-proposals-cockpit).
+The `$learn` skill supports explicitly requested write-back during a conversation.
 
 ## Memory flow
 
@@ -594,7 +22,8 @@ flowchart TD
     B -- No --> D{Useful durable context?}
     D -- No --> E[No save needed]
     D -- Yes --> C
-    C --> F[Create or update topic file and index]
+    C --> M[Read the memory manual]
+    M --> F[Create or update topic file and index]
     F --> G[Discover through future memory context]
     G --> H[Verify drift-prone claims before relying on them]
 ```
@@ -723,28 +152,12 @@ facts, cite them, compare against them, or mention them.
 ## On-demand review
 
 `/remember [focus]` and `M-x mevedel-remember` run bounded consolidation over
-eligible digests, captured memory, and applicable instructions. The bundled
-`remember` skill has been removed. In manual mode the resulting proposals wait
-in the memory cockpit for accept/reject decisions; inspection alone edits no
-curated files. `/learn` retains its own skill routing and existing authority.
+eligible digests, captured memory, and applicable instructions. In `manual` and `propose` modes, resulting proposals wait in the memory cockpit
+for accept/reject decisions; inspection alone edits no curated files. `propose`
+is the default. The bundled `$learn` skill provides a separate, explicitly
+requested workflow for writing durable session findings to instructions or memory.
 
-## Evaluation and model selection
-
-The September 2026 synthetic extraction/retrieval comparison selected Sol
-provisionally for digest generation, then using the `summarization` workload.
-All seven cases passed through production admission. The extended evaluation
-used the separately configured `buddy` workload at the time, DeepSeek V4 Flash,
-to review stale prior memory and apply actual checked changes in temporary
-roots. After a UTF-8 boundary fix and a matching
-proposal-fence clarification, all fourteen manual/auto requests succeeded;
-assistant inspection found the intended correction, test-resolution,
-abandoned-decision and repeated-evidence distinctions in the applied guidance.
-Missing/failed-journal variants preserved existing memory without invented facts.
-An earlier malformed response was rejected without writes and is retained in
-local evaluation evidence. These small fixtures do not establish general accuracy
-or replace review of individual proposals; `propose` remains the default.
-The opt-in harness is documented in
-[test/manual/memory-quality/README.md](../test/manual/memory-quality/README.md).
+## Model selection
 
 Journal generation and memory consolidation have independent `journal` and
 `memory` workloads, both defaulting to the `balanced` tier. They use the ordinary
@@ -757,19 +170,627 @@ Journal generation and memory consolidation have independent `journal` and
                     (memory :tier balanced)))
 ```
 
-These entries no longer share model selection with `summarization` (compaction
-and handoff) or `buddy` (edit reviews and guidance). For the selected Sol digest
-setup, after registering the Codex backend:
-
-```elisp
-(setf (alist-get 'journal mevedel-model-workloads)
-      '(:provider "Codex:gpt-5.6-sol" :effort none))
-```
+These workloads are independent of `summarization` (compaction and handoff)
+and `buddy` (edit reviews and guidance). Configure either workload with the
+ordinary model policy to select a provider, model, and reasoning effort.
 
 Journal capture freezes the originating root buffer's policy. Changing that
 entry affects new captures; already captured jobs retain their frozen policy.
 Consolidation resolves `memory` in the caller's current buffer. Automatic review
 runs from an idle callback without restoring an originating session preset;
 configure its workload globally when a consistent background policy is needed.
-The isolated implementation worktree does not alter a running Emacs or its
-configuration.
+
+## Journal and consolidation overview
+
+Journal storage is separate from curated memory. The internal
+`mevedel-journal-store` module publishes immutable workspace digests and
+completed-review and proposal-decision records, and
+`mevedel-journal-claim` provides bounded work ownership and recoverable
+outcomes. Completed-turn capture and sealing are connected to session
+lifecycle. Background generation and accepted-result recovery run from
+lifecycle opportunities and workspace activation recovers abandoned checkpoints.
+`memory://journal/` supports ordinary Read, Glob, and Grep over validated published
+records, with cached composer completion and request-time roster availability.
+The main conversation receives a bounded recent-digest map as retained context.
+Consolidation runs on demand through `/remember` or automatically in `propose` and `auto` modes;
+the memory proposals cockpit supports inspection, decisions, and recovery. See
+[ADR 0117](adr/0117-publish-journal-results-from-fenced-outcomes.md) for the
+storage contract and the workflows below for the user surface.
+
+## Review evidence and proposal format
+
+The consolidation output contract is implemented in
+`mevedel-memory-proposal-parse`. It validates the complete reply against captured
+root IDs, admitted files, complete filename observations for creation, and
+admitted digest IDs before returning any proposals. The fixed ordered sections
+are Promote, Update, Merge, Remove, Instructions, and No action. Proposal fences
+contain JSON-valued header lines, a `---` separator, and Markdown replacement
+content. The header is a sequence of `key: value` lines, not a JSON object;
+only the values use JSON syntax. Merge sources must be admitted files; overlapping file operations
+invalidate the entire reply. Instruction targets must be exact captured
+applicable files. Direct MEMORY.md proposals are rejected because application
+owns index consistency. This parser performs no reads or writes and does not
+establish current authority, freshness, or factual correctness. The request uses
+this parser at terminal settlement before accepting proposals into the durable
+review and decision lifecycle exposed by the memory proposals cockpit.
+
+`mevedel-memory-scope-capture` supplies the parser's root and file allowlist.
+It reads complete topic, index, and root instruction files without changing
+them: at most 32 KiB per file and 96 KiB total, with a 256-entry inventory per
+memory root. A review admits at most sixteen configured memory roots; exceeding
+that count refuses capture. Omitted files remain known existing names; an incomplete inventory
+cannot authorize creation. Symlinked files and symlinked parents cannot supply
+before-state or new proposal targets. The captured index is reserved for the
+application transaction, rather than offered as a direct model-editable topic.
+
+Each root retains its original physical path, target identity,
+and local host/user identity where applicable. Later configuration changes do
+not rebind these IDs. Inspection checks original authority; a different local
+client or a retargeted root makes it unavailable. Freshness checks compare
+literal captured bytes and expected absence with current target reads, including
+indexes and merge inputs selected by the caller. These read-only checks do not
+acquire write ownership or commit files; the application coordinator must hold
+the required ownership across checking and mutation.
+
+The captured source boundary accepts relative paths only within the original
+workspace target. It excludes VCS metadata, `.mevedel` state, symlinks, and all
+configured memory roots, including roots omitted because their index was
+unavailable. Omitting a memory root does not make its contents available through
+a source-file fallback.
+
+`mevedel-memory-reference-check` inspects backticked references in the admitted
+topic snapshots, returning at most 200 distinct topic/token observations with
+dates. Its current check is workspace-relative **path existence**, including
+references with line-number suffixes. A found path does not verify a lesson or
+the referenced line. Commands, flags, external references, ambiguous identifiers,
+and paths outside the source boundary remain `unknown`. Oversized references,
+unavailable topics, and the count limit produce explicit omissions. Topics
+without candidates receive no certification. These rows can be stored in the
+immutable review record and are supplied to the consolidation request.
+
+### Investigation tools
+
+`mevedel-memory-investigation` supplies request-local gptel Read, Glob, and Grep
+tools. Each call names `workspace`, `journal`, or an admitted root ID, plus a
+relative path. This is a scoped tool argument, not another resource-address
+family. Memory and journal reads use captured evidence; source Read uses the
+ordinary text reader over a pinned UTF-8 snapshot capped at 512 KiB, including
+range support within that snapshot. Oversized files are refused before the
+reader can scan a long line or a large offset. No tool definitions are added to gptel's global tool registry.
+
+Searches reuse ordinary Glob/Grep over private admitted copies. Source search
+examines at most 256 entries, copies at most 2 MiB, and omits files larger than
+512 KiB. Omitted, unavailable, and excluded source paths produce a partial-search
+notice. Narrowing the subtree or reading a named source file supports further
+investigation. Results use relative filenames and omit private copy paths.
+Each result is capped at 8 KiB of UTF-8; a request may return at most 64 KiB
+across 20 calls. Exceeding either aggregate limit retires the investigation and
+reports failure to its request owner. Stopping cancels active search helpers,
+removes their copies, and suppresses late delivery. The owner still supplies
+the overall deadline and generation check.
+Search completion restores the caller's working directory before delivering
+the result, including synchronous empty results. A provider follow-up never
+inherits a deleted investigation snapshot as its working directory.
+
+### Request limits and settlement
+
+`mevedel-memory-review-request` combines that scope, reference pre-check, and
+investigation in a sessionless gptel request using the `memory` workload (default
+tier `balanced`). It admits a prefix of at most 20 complete candidate digests and
+reports omissions. The
+initial prepared provider payload, including tools and roles, must fit both
+32,000 estimated tokens and the model's usable context with output reserve.
+Indexes, instructions, and topics are supplied as complete documents when they
+fit; other captured documents remain available through Read. An empty digest
+set requires an explicit memory-only request. Focus and recent rejection text
+are each bounded to 8 KiB.
+
+The request has a 180-second deadline, a cumulative 8,000-token output budget,
+and a 32 KiB output text cap. Supported provider output limits are clamped;
+providers without that control retain client-side limits, not a server billing
+ceiling. Every follow-up rechecks the prepared payload against usable context.
+Review callback results include accumulated output bytes and estimated tokens
+for reply text, reasoning and tool arguments, separately from provider-reported
+usage. These counters remain available when a client output guard ends the review.
+Read tools execute within their captured authority without interactive gptel
+confirmation; unavailable tool names fail the review. Only gptel's terminal
+DONE state validates the final proposal response. An intermediate HTTP completion
+does not finish the tool loop or consume coverage.
+
+While running, its read-only buffer displays admitted evidence, model output,
+and tool results. Closing it or invoking the returned cancel function retires
+the request, stops active searches, and suppresses late results. The validated
+callback includes the exact validated reply, admitted digests, and cumulative
+provider usage. It does not publish proposals or coverage. Connecting the
+request to pass selection, storage, and cancellation is handled by
+`mevedel-memory-pass-start`.
+
+## Selecting and accepting a review
+
+`mevedel-memory-pass-select` supplies candidate selection from a fresh journal
+observation. General passes select uncovered digests; focused passes can reuse
+covered ones. Selection returns at most twenty, oldest first with digest ID as
+the tie breaker, and reports the eligible backlog beyond that batch. Later
+arrivals do not enter an already captured observation.
+
+Published digests describe completed, immutable work and are eligible even while
+their source session remains open or another client holds that session. Selection
+needs no source-session authority: it changes neither session state nor review
+coverage. The coordinator still acquires journal/consolidation ownership and pins
+freshly validated evidence before a review starts.
+
+`mevedel-memory-store` supplies private prepared and accepted pass storage. The
+caller holds the 180-second consolidation claim. Preparation acquires journal
+mutation ownership, recovers accepted expiry, checks that selected entries still
+match their public source bytes, and then pins them. This order prevents a pass
+from reviving evidence already committed for expiry. The prepared record retains
+the original scope, complete digest bodies, source fingerprints, and focus.
+Focus must fit the public record's 4 KiB bound before inference begins.
+
+Private records live in `state/passes/<pass-id>/prepared.el` and `accepted.el`.
+They use bounded durable Lisp data, preserving literal byte strings in captured
+before-state; each record is limited to 4 MiB. Reading disables evaluation and
+circular-reader syntax. Evidence pins live under
+`state/evidence-pins/<digest-id>/<pass-id>.pin` and bind to the prepared record's
+hash. These records are internal storage, outside `memory://journal/`; displaying their
+memory bodies still requires the original scope's authority checks.
+
+Acceptance validates the reply again against the prepared scope and exact
+admitted digest subset. Each proposal retains its affected topics, merge inputs,
+index, or instruction before-state. Its identity includes the pass, original
+target and client, proposed change, and before-state. The accepted bundle is
+written before its hash competes in the pass claim's immutable outcome election.
+Changed private bundles cannot be replayed as accepted results.
+
+Publication reads that accepted bundle under fresh journal mutation ownership
+and publishes the immutable review record. Only this public record advances
+general coverage. Replaying publication is idempotent, including after the
+original request is gone. Pending proposals retain admitted digest pins;
+omitted digests and a no-action pass release their pins after publication.
+Failed, cancelled, or expired passes can release only their own pins, after
+their unsuccessful outcome has been recorded. None of these storage operations
+applies proposals to curated files. Decisions, application, and expiry use the
+separate checked operations described below.
+
+### Pass ownership
+
+`mevedel-memory-pass-start` coordinates one 180-second workspace claim. Before
+selecting evidence, it recovers accepted older pass publications and releases
+pins belonging to fenced unsuccessful attempts. Selection runs under journal
+mutation ownership after accepted expiry recovery. Preparation rechecks the
+selected entries when pinning them; a change between those operations fails
+without consuming coverage. Each request checks current target ownership, and
+the coordinator's timer includes selection and preparation in its deadline.
+
+The returned state contains the running read-only request buffer, available
+through `mevedel-memory-pass-running`. `mevedel-memory-pass-cancel`, or closing
+that buffer, retires only this client's attempt. Failure and expired callbacks
+cannot publish fresh results or change a successor's claim or pins. Success
+returns the immutable public review, usage, and remaining frozen backlog count;
+arrivals after selection remain eligible. There is no recursive backlog drain.
+Explicit callers may allow an empty batch for current-memory review. The proposal
+cockpit and `/remember [focus]` command are available. Workspace telemetry records
+pass starts and terminal outcomes, usage received so far, published proposal and
+coverage counts, and remaining backlog without private content.
+
+### Automatic review and application
+
+`mevedel-memory-consolidation-mode` supports `manual`, `propose` (the default),
+and `auto`. Manual runs only on request. Propose schedules a read-only review at
+eligible completed, durably saved root turns, workspace activation and digest
+publication, and leaves its proposals for approval. Auto uses the same review and applies fresh memory proposals through
+the ordinary checked decision path. Instruction proposals always wait for
+approval, including changes to `AGENTS.md`. The mode is frozen at pass admission.
+
+The automatic gate checks mode, then elapsed time since the last successful
+general review, then the eligible unreviewed digest count. The settings
+`mevedel-memory-consolidation-min-hours` and
+`mevedel-memory-consolidation-min-digests` default to 24 hours and five digests.
+Both automatic and general on-demand completion move the clock; focused reviews
+do not. Retired review metadata preserves that clock after history expiry.
+A smaller backlog becomes eligible one day before its oldest digest reaches the
+configured ordinary-recall age limit (13 days under the default). Disabled expiry
+keeps the count threshold; the elapsed-time gate still applies in either case.
+This creates review opportunities for sparse workspaces and completed work from
+long-running sessions. `/remember` bypasses timing and count thresholds.
+
+Turn completion checks cached timing and settings without target I/O. Queued
+turns coalesce, and filesystem work waits for idle transport. A failed count
+check is cached for ten minutes; a recent successful general review postpones
+the next check until its interval ends. The coordinator acquires target
+ownership and recovers accepted publications before rechecking the gate, so
+another client's completion cannot be missed merely because the initial
+observation was stale. Journaling can be disabled while existing digests remain
+eligible for consolidation. Exit cancels queued and active review work.
+
+Auto applies proposals sequentially with fresh workspace and original-root
+ownership for each application. Shared-index expectations advance only through
+confirmed changes from the same pass. Intervening edits remain stale; cancelled
+application holds the remaining proposals. Completion reports the number of
+distinct files confirmed written by that run, counting a shared index once and
+excluding idempotently returned decisions from another call. A successful
+review can still leave held, stale, unavailable, or recovery-required proposals.
+Neither syntactic validation nor the updated-file count establishes that the
+new memory is correct.
+
+## Proposal decisions
+
+`mevedel-memory-decision-reject` records a rejection without editing memory or
+rewriting the completed review. It acquires workspace ownership and checks the
+proposal's original target authority. A repeated rejection returns the same
+terminal decision, including its original reason. The reason is optional and
+limited to 4 KiB. Private `state/decisions/<decision-id>.el` records retain the
+claim, exact public metadata, and optional write-intent identity. Their hash is accepted before publication,
+so a later client can recover a rejection after the owner stops.
+
+Public `kind: decision` records contain decision, pass, proposal, and workspace
+identities, date, status, reason, and a private-state hash. Their body is derived
+from metadata and includes no private topic or proposed replacement. Decision
+status is verified against immutable acceptance evidence; public text alone
+cannot decide a pending proposal or release its evidence. When every proposal
+in a pass is terminal, publication releases that pass's digest pins. Review
+and decision records remain retained while evidence or unresolved work needs
+them, then expire together under the journal age rule.
+
+Before a later request, the coordinator recovers accepted decisions and includes
+bounded recent rejection evidence: the original suggestion and reason, under
+the original memory-root authority. It admits at most twenty whole records
+within 8 KiB and reports omitted or unavailable records. This can help the model
+recognize reworded suggestions; it is untrusted evidence and does not guarantee
+semantic suppression. Rejection, application, and reversal APIs are implemented
+through the proposal cockpit as well as their internal APIs.
+
+### Checked application
+
+`mevedel-memory-apply-changes` prepares complete topic/index or instruction
+changes from accepted before-state without writing them. Topic frontmatter is
+generated from the validated name, description, and type. Index updates escape
+labels and filenames, retain unrelated lines, and reject duplicate or invalid
+destinations, including two encoded names for the same file. Instructions
+append to their captured file. Every emitted change retains expected original
+bytes or absence and exact proposed bytes for the shared patch transaction.
+Generated files must fit the memory reader's 32-KiB per-file bound, including
+index growth, so a change cannot exclude its root from the next review.
+
+The patch transaction checks supplied before-state before any write and
+again before writing each path. It restores only its own expected after-state;
+intervening disk and unsaved buffer edits survive a failure. A caller can fence
+all writes and rollback through a target mutation callback in addition to
+client-side ownership checks. Interrupted buffer
+synchronization rolls back before propagating a quit.
+
+`mevedel-memory-decision-apply` acquires the workspace claim and an independent
+claim at the original target root. It checks all captured dependencies, including
+unchanged indexes, before applying. Full before/after states live in private
+`state/writes/<intent-id>.el` records. A hash-only marker under the target's
+`.mevedel-memory-write/pending/` is durable before curated writes. An unresolved
+marker blocks other workspaces at that root even after the original claim
+expires. Coordination files are excluded from consolidation memory and source
+scopes; inventory does not descend into their directory.
+
+Curated mutations and target-claim settlement take the same target-side `flock`
+on the pinned claims directory. Each mutation checks the unsettled claim,
+filesystem-clock deadline, expected bytes and mode under that lock; replacement
+mode is set on the temporary before rename. A delayed old writer either finishes
+before takeover or fails its guard afterward. The same mechanism protects
+rollback and marker retirement. This requires Linux `flock` on the storage
+host; acquisition waits at most 20 seconds and process death releases the lock.
+
+Application accepts an immutable decision before retiring the marker. Status
+ordering uses accepted claim generations, so retries in the same second still
+produce an unambiguous latest result. Remaining proposals in the same pass use
+confirmed earlier applications to advance their expected index bytes. The
+original pass stays immutable, topic expectations stay unchanged, and external
+index edits still make a later approval stale.
+
+### Recovery and reversal
+
+`mevedel-memory-decision-recover-write` reconciles exact retained states without
+repeating application: complete writes become applied, untouched attempts become
+unavailable, and mixed or intervening changes remain recovery-required with their
+marker intact. Its explicit rollback option restores a pending attempt through
+the patch engine only when every dependency matches recorded before or after
+state. Foreign or unsaved edits prevent rollback.
+
+`mevedel-memory-decision-reverse` reverses a resolved application only while all
+affected files match its exact after-state. It persists a separate reverse intent
+linked to the original intent identity and hash, then uses the same patch and
+decision path. Successful reversal adds an immutable `reversed` decision; the
+original application remains inspectable. Reversed proposals remain terminal,
+so repeating accept, reject, or reverse cannot silently reapply them. A new
+review is needed for a new proposal.
+
+Reversal can also be interrupted: completed reverse writes become `reversed`
+when reconciled, untouched attempts leave the proposal `applied`, and partial
+attempts remain recovery-required. Explicitly rolling back a partial reversal
+restores the previously applied state. Same-pass index expectations follow only
+completed apply/reverse transitions. Consequently, an earlier proposal cannot
+be reversed through a later proposal's index edits; reverse those later changes
+first, or leave the current files intact.
+
+`mevedel-memory-decision-recover-pending` discovers retained write records and
+reconciles their independently marked attempts without inference or file
+reapplication. It first recovers settled publications under successor workspace
+ownership. Unmarked intents are not classified as applications, even if an
+external edit happens to match their proposed bytes. Unreadable or unavailable
+records stay inspectable. Session selection and conversation setup schedule
+this recovery independently of journaling being enabled. Repeated activations
+coalesce and wait for idle transport. A live workspace owner leaves recovery
+for a later activation. New workspaces create no memory state just by activating;
+exit cancels queued recovery. Recovery neither requests a model nor repeats or
+rolls back memory writes.
+
+## Memory proposals cockpit
+
+`M-x mevedel-memory-list-open`, or **Memory** (`l`) in the session cockpit, opens
+the proposals table. Rows show action, type, title, status, and exact target/origin.
+The header identifies the workspace, pass date, manual mode, pending count, and
+this client's running pass. Opening attempts checked recovery; a busy owner does
+not prevent read-only inspection or lose its claim. Refresh preserves the active
+session composer draft. Another client's unavailable memory root remains visible,
+but inspecting private body/diff evidence or applying there requires its original
+authority.
+
+The main cockpit's Memory row shows pending/stale proposals, interrupted-write
+recovery, and unavailable-record counts separately. Opening the cockpit refreshes
+observations older than ten seconds; table refresh also updates them. Rendering
+uses the cached counts without reading target files. Counts are disposable UI
+state and never authorize an application or override its freshness checks.
+
+`RET`/`i` shows the complete proposed body, retained before/after diff, decision
+reason, retained digest bodies with their original addresses, and dated reference
+checks. Evidence inspection still works if a public digest is unavailable.
+Pending diffs include confirmed
+same-pass index transitions; applied/reversed diffs come from the exact retained
+write intent. `a` accepts, `r` rejects, `A` accepts pending proposals sequentially,
+and `R` rejects pending proposals. Rejection is one key; use a prefix argument to
+enter an optional reason. `u` performs checked reversal. `c` reconciles an
+interrupted write; `U` explicitly rolls back a known interrupted attempt.
+`v` inspects this client's running request, `k` cancels it through the pass owner,
+and `j` opens pending journal jobs with their inspection/retry/discard actions.
+`m` runs another consolidation; a prefix argument asks for focus. The first-class
+`/remember [focus]` command and `M-x mevedel-remember` use the same bounded
+sessionless pass, allow explicit current-memory review without eligible digests,
+and open this table. Completion refreshes an existing matching table without
+reopening a closed table or altering the composer. The command may run while a
+conversation request is active; already published digests from it remain eligible.
+`g`, `?`, and `q` follow the shared cockpit refresh/help/back contract.
+
+## Journal discovery and context
+
+The `journal` component is selected only by `main` and delivered as an independent
+retained context update, leaving the system prefix stable. It shows at most
+five recent digests with date, session name, canonical address, and the first
+nonempty Learned bullet (falling back to Done). The entire component is bounded
+to 2 KiB of UTF-8, including labels and addresses; long names and excerpts get
+visible omission markers. These are dated evidence, not current instructions
+or authority to resume unfinished work. Worker, explorer, verifier, reviewer,
+guardian, buddy, and context-summary prompts omit the map. Review coverage is
+the exact union of digest IDs in published general-review records. Focused
+reviews retain their examined IDs without advancing general coverage. The
+cached observation includes reviews, so additions or removals refresh the count
+even when the newest digest filename stays unchanged. Changed maps or coverage
+produce a new complete journal section; unchanged state is not repeated. Empty
+state clears an earlier map, and outgoing-history loss causes redelivery through
+the ordinary context acknowledgement mechanism. The resource roster advertises
+journal retrieval only when validated public entries are available.
+
+A completed review records its pass ID, exact examined digest IDs, focus,
+reference-check evidence and dates, and generated proposal IDs. Its public body
+is derived from that metadata; it contains no proposal replacement bodies or
+captured private topic content. Publication is the coverage commit point, so the
+pass owner must persist its proposal batch before publishing the review. Review
+records remain retained while any examined digest survives. Once their evidence
+dependencies end, old reviews can expire with their private prepared/accepted
+bodies and complete terminal decision/write history.
+
+## Working notes and completed-turn capture
+
+Main and worker guidance asks for attributed factual lessons in
+`work://shared/` when the request permits workspace writes. Agents search before
+creating and update relevant existing files; no filename or structure is required. Read-only agents
+report lessons through their existing results or available SendMessage; they
+gain no mutation tools. `$learn` considers available notes and digests as
+additional evidence, verifies relevant claims, and acknowledges omissions.
+
+With `mevedel-journal-enabled` (default `t`), a successful completed root-turn
+save freezes a checkpoint before generation collection. One immutable private
+record contains projected evidence, notes, their hashes, stable completed-turn
+identities, and serializable journal model selection. It pins the source
+session and any committed publication head. A newer checkpoint supersedes an
+unsealed predecessor only when it contains all that predecessor's turns.
+Published and sealed turns stay outside later checkpoints; replacement
+branches use distinct persisted fork-point identities even when turn numbers
+repeat. Storage failure reports a warning without failing the conversation save.
+
+Publication retains capture and completed-turn IDs in private immutable coverage
+records. These contain no transcript or digest text and survive deletion or
+expiry of public digests. A later checkpoint therefore excludes previously
+published work even when its public digest is gone. This capture coverage is
+separate from consolidation review coverage.
+
+Public entries and private capture bundles have separate 8 MiB storage bounds;
+digest bodies remain capped at 16 KiB. Metadata admission reserves the entire
+body allowance, so long completed-turn ID lists are never silently truncated.
+An oversized capture is rejected before publication or pinning and stays
+eligible for a later successful capture.
+Capture decoding also checks the complete source-reference schema, unique
+segment names, their revision hash, and all frozen policy fields. Malformed
+descriptors remain inspectable with their source pins intact. A saved reasoning
+effort that the resolved model no longer supports stays unavailable before any
+provider request.
+
+Successful root compaction seals the checkpoint selected before the transcript
+was replaced. Failed attempts leave it unsealed; agent compactions create no
+journal work. Closing the root data buffer or exiting Emacs seals completed
+checkpoints as session-end work. View-pair close seals before removing the
+root registration. Read-only buffers do not seal, and a portable session must
+still own its lease; closing does not reacquire authority. Neither path
+snapshots incomplete streaming output. Exit starts no model request. Sealing is immutable and preserves the
+first trigger. Disabling journaling stops new capture and sealing while keeping
+existing snapshots and pins.
+
+### Digest generation
+
+Completed turns, successful root compaction, and session close schedule one
+background processing opportunity. Scheduling waits until the caller returns
+and the target transport is idle. Duplicate events coalesce, and completion
+does not recursively drain the backlog. Only sealed captures run. A dedicated
+workspace admission claim permits one digest request at a time; the capture's
+own claim accepts its result. Both share a 120-second target-clock deadline.
+Failed jobs get at most three automatic attempts on separate opportunities.
+
+Processing re-resolves the exact frozen provider/model and uses the saved
+streaming, effort, and output settings. Missing policy or client-owned evidence
+stays unavailable instead of selecting a fallback. Frozen evidence is bounded
+again to the generator's actual input budget, with explicit omissions. No live
+conversation buffer or tools are needed. Cancellation and timeout preserve
+pins; late callbacks cannot replace an accepted outcome.
+If one accepted result cannot finish recovery, a background opportunity retains
+it and can process another sealed capture. Explicit retry reports the recovery
+error. The job browser identifies a capture that requires its original client.
+
+New captures use the configured `journal` workload (default tier `balanced`)
+and explicit effort. When effort is unspecified and the model declares support
+for disabling reasoning,
+digest capture freezes `disabled` or `none` to reserve output capacity for the
+digest itself. Models without
+that control retain their provider default. Existing frozen policies keep their
+saved effort. Digest prompts also skip routine successful tool chatter and
+prefer a few decisive facts; continuation and handoff policy is unchanged.
+
+Input admission reserves at most 4,000 output tokens. Supported server token
+limits are capped accordingly. Codex OAuth has no such control, so its requests
+use the same 16-KiB digest limit and 120-second client deadline without claiming
+a server token or billing ceiling. Streaming overflow cancels the request;
+oversized final output is rejected. The journal model remains configurable
+through `mevedel-model-workloads`; changing it affects new captures, while queued
+captures keep their frozen choice and published digests remain readable.
+
+Successful output is accepted durably before publication. If publication
+fails, the next opportunity recovers that exact output without another model
+request. After successful publication, the processor releases the source pin,
+retires the job, and removes its frozen transcript/notes bundle. Exit cancels
+queued and active processing before sealing remaining checkpoints, starts no
+inference, and does not wait for a model.
+
+### Abandoned checkpoint recovery
+
+Opening the session chooser or setting up a conversation schedules recovery
+before processing. Recovery inspects inactive captures as well as ready jobs,
+repairs interrupted pin/ready publication, and seals abandoned completed work.
+It verifies the original source session and frozen evidence under temporary
+source authority. PID locks use the existing dead-holder check and a checked
+replacement serialized with normal resume and release by Emacs native file
+locking. A resume replacing the observed stale record prevents recovery from
+acquiring it. Live, foreign,
+or unreadable locks remain untouched. Portable recovery fences an expired
+ordinary lease through the existing generation election. Live leases, publishing
+leases, unresolved mutation, and reserved control transfers remain held for
+normal session recovery. No conversation is resumed and no model request runs
+while source authority is held. One unavailable capture does not prevent the
+recovery scan from examining unrelated captures.
+
+Recovery also finishes superseded pin release after checking the successor's
+retained completed-turn coverage. It then removes the old raw bundle. Retirement
+markers prevent an old completed-turn set from recreating its retired capture.
+
+## Journal jobs and inspection
+
+`M-x mevedel-journal-jobs` lists pending checkpoints and jobs, including failed,
+exhausted, unavailable, and unreadable captures. `RET` inspects the frozen
+evidence, `r` retries the selected sealed job once, `d` discards it, and `g`
+refreshes the list. The corresponding commands are `mevedel-journal-inspect`,
+`mevedel-journal-retry`, and `mevedel-journal-discard`. They work from a session
+or workspace buffer as well as the job list. Inspection starts no inference.
+Manual retry retains the frozen model policy and attempt history, and respects
+active ownership and already accepted results.
+Unready checkpoints also appear as recovery work, including damaged descriptors;
+retired captures remain outside the pending list. Inspection does not acquire
+source authority or repair storage.
+
+Explicit discard remains available when journaling is disabled. It cancels a
+matching request owned by this client, records an immutable omission before
+releasing the source pin, and removes the raw evidence bundle. It cannot take
+over another client's live request. An interrupted discard resumes from its
+accepted outcome. An already accepted digest is recovered instead of discarded.
+When a capture descriptor is unreadable, the interactive command asks for its
+original source directory and verifies the matching pin before proceeding.
+Discarding a checkpoint prevents that exact capture from being repinned; new
+completed work can still produce a new capture.
+
+The journal jobs inspector also shows overdue public entries that remain in
+storage: total count, age in days, review mode, and observed retention reasons.
+Unreviewed evidence, unfinished capture publication, evidence pins and retained
+review/decision history appear separately from pending digest jobs. Entry buttons
+read current validated storage for human inspection. Review and proposal/recovery
+buttons use the existing `/remember` and proposal cockpit commands; capture retry
+and discard keep their existing authority checks. No inspection grants ordinary
+model recall or unconditional deletion.
+
+## Journal recall and retention
+
+`mevedel-journal-max-age-days` defaults to 14; nil disables journal expiry.
+The clock starts at the immutable public entry `created` timestamp in UTC.
+For a digest, this is the execution target time when its completed-turn capture
+was first frozen, carried unchanged into later digest publication. Reviews and
+decisions use their native record-creation time. Delayed digest generation can
+therefore publish evidence whose ordinary recall period has already ended;
+unprocessed evidence remains available for consolidation and human inspection.
+Reading, retrying, reviewing and changing the address namespace do not reset it.
+At the limit, ordinary Read/Glob/Grep, exact addresses, discovery and completion
+exclude an entry even if physical storage must retain it. Recall checks use the
+client's current UTC clock; native cleanup and automatic review use the execution
+target's clock. Machines should have synchronized clocks for matching boundaries.
+Cached discovery checks age on every use, and prepared reads check at execution.
+
+Physical deletion has additional dependencies. Unreviewed digests remain available
+to consolidation and human inspection after their ordinary recall expires. A
+successful general review with no proposed changes counts as processing; failed,
+cancelled and focused reviews do not consume general coverage. Pending proposals
+and interrupted operations can retain evidence indefinitely until resolved. A
+14-day recall limit is therefore not a physical-erasure guarantee.
+Expiry runs independently of session expiry and new capture, for local and TRAMP
+workspaces, during workspace activation and existing cleanup opportunities.
+Opportunities are throttled to once an hour and select at most 50 digest/review groups;
+they do not recursively drain a backlog. Selection currently scans validated
+public entries. Pending captures and pinned review evidence remain retained.
+
+Expiry accepts an immutable manifest through journal mutation ownership before
+removing anything. Later mutations recover accepted expiry before selecting new
+evidence. An expiry marker hides the public entry immediately, even if physical
+deletion is interrupted; recovery finishes deletion without inference. Changed
+public or private bytes are retained for inspection. Retired capture payloads can be removed
+with their expired digest, while identity-only capture coverage survives.
+Consolidation uses the same mutation boundary when pinning proposal evidence.
+Cleanup also acquires consolidation admission, so a live pass postpones cleanup.
+Completed reviews become eligible only after all their examined digests are gone,
+their own evidence pins are released, and their accepted private state matches
+the public record. A digest and its covering review expire on separate
+opportunities; selecting a digest for deletion does not prematurely remove its
+coverage. Retirement is recorded before public or private deletion. Pass recovery
+and the proposal table skip retired passes, including interrupted deletions.
+Retirement retains the completion date and general/focused scope, without the
+focus text, so expiry does not erase the scheduling history of general reviews.
+Every proposal must have a terminal applied, rejected, or reversed decision, and
+every decision must also satisfy the age rule. Unpublished decisions, unresolved
+write intents, outstanding target markers, and unavailable original targets
+retain the group. The manifest includes the complete related public decision
+history and exact private pass, decision, and write filenames with accepted
+hashes; it cannot name arbitrary workspace files. Its encoded size is capped at
+4 MiB before acceptance or deletion. A group may contain more than fifty public
+records; splitting it would break retained reversal dependencies. Current curated
+memory files are never deleted by journal expiry. Readers skip retired history
+even when an interrupted deletion leaves only a private write intent behind.
+Prompt and cockpit observations are invalidated after cleanup.
+
+## Working-note snapshot limits
+
+The internal note snapshotter caps the entire working-note input at 32 KiB,
+including provenance and omission labels. It visits shared files first and
+session files second, in filename order without a preferred filename. Shared
+content is labelled as potentially coming from other sessions, not evidence of
+this session's work. It labels notes as untrusted prior context, lists binary or non-UTF-8 files by
+name, and includes only names and first lines for `local/plans/`. Reads are
+bounded on the execution target before transfer. Snapshot strings remain
+unchanged when the source files later change.

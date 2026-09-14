@@ -20,14 +20,22 @@ covered path prompt without authorizing any command form.  Grants are stored
 separately and never rewrite protected-path policy, so revocation immediately
 restores the underlying confinement restriction.
 
-## Amendment: the temporary directory is not searched
+## Temporary-root boundary
 
-Glob resolution walks the writable roots to find concrete matches, and the
-execution target's temporary directory is a writable root.  A 2026-09
-profile of an unattended session showed that walk descending all of `/tmp`
-before every Bash launch, and a transient tree found there (a helper scratch
-holding a `.git`) vanished before launch, which failed the Bubblewrap mount
-and dropped the child to unconfined execution.  The temporary directory is
-scratch the child already owns, so protecting a repository placed there
-buys little.  Discovery therefore skips the temporary root; a read-only mount
-whose source has vanished is skipped rather than aborting the launch.
+Protected-path glob discovery does not traverse a discovery root equal to the
+execution target's temporary directory. A workspace nested there remains a
+separate discovery root and is still checked.
+A read-only mount whose source has disappeared is skipped. Other confinement
+preparation or launch failures follow
+[ADR 0116](0116-return-failed-confined-launches-without-retry.md).
+
+## Decision history
+
+A September 2026 unattended-session profile found protected glob discovery walking
+all of `/tmp` before every Bash launch. A transient helper tree containing `.git`
+disappeared before launch, causing a Bubblewrap mount failure and, under the
+then-current fallback policy, unconfined execution. Skipping temporary-root
+search avoids that cost and race: the child already owns that scratch area, so
+protecting a repository found there adds little. Missing read-only sources are
+skipped. The later no-retry boundary in ADR 0116 independently removed unrestricted
+replacement after confined preparation begins.

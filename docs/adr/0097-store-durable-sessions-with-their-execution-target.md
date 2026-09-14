@@ -2,6 +2,8 @@
 
 Status: accepted
 
+## Current decision
+
 Durable session state stays with its workspace on the execution target so
 another compatible client can resume the same conversation without a
 client-local mirror or target-to-cache mapping.  Transient process spools,
@@ -33,10 +35,8 @@ and sidecar eagerly and verify other artifact bytes only when selected.  A
 replacement marker starts from an empty logical snapshot.  Portable Save As
 materializes the parent's allowlisted logical artifacts without copying its
 manifest or control history, then the rewritten child sidecar performs that
-child's first durable commit.  An injected adoption-time acquisition failure
-showed that reacquiring after live mutation could leave neither parent nor
-child fully bound.  Adoption therefore verifies and transfers the already-owned
-child lease into the live session before releasing the parent path.
+child's first durable commit. Adoption transfers the already-owned child lease into the live session before
+releasing the parent path.
 
 Serialized publication uses a bounded publishing lease synchronously renewed
 before and checked after every artifact rather than target I/O from timer
@@ -51,21 +51,36 @@ interactive conversation takeover here would strand completed evidence after
 a crash. Recovery still refuses publishing leases, unsettled mutation, live
 owners, and reserved control transfers, and releases its bounded reservation
 before inference. See [ADR 0117](0117-publish-journal-results-from-fenced-outcomes.md).
-Immutable publication generations remain
-until session-directory cleanup; v1 deliberately has no garbage collection or
-read-pin protocol.
+Publication collection retains settled-turn heads, recent generations, and
+referenced artifact generations, as specified by
+[ADR 0072](0072-make-rewind-in-place-undo.md). There is no read-pin protocol.
 
 Rebinding through a different client-specific TRAMP spelling uses durable
 workspace identity.  A changed target incarnation remains an unacknowledged
 observation while session resource grants are revoked, then a sidecar marker
 atomically publishes the replacement identity with empty session resource
-authority.  The fence originally also emptied the workspace store's resource
-grants; that was dropped on 2026-09-04 after a routine reboot wiped grants
-committed to version control and shared with a second machine.  The workspace
-store is configuration, not incarnation-bound authority.  Only
-a
-successful marker acknowledges the replacement; failure blocks the next
+authority. Workspace resource grants remain configuration rather than incarnation-bound
+session authority. Only a successful marker acknowledges the replacement; failure blocks the next
 request for explicit publication recovery.  This accepts remote-write latency,
 unavailability, and immutable-snapshot storage growth in exchange for portable,
 co-located session history, and requires serialized publication rather than
 asynchronous callbacks writing directly through TRAMP.
+
+## Decision history
+
+An injected adoption-time acquisition failure
+showed that reacquiring after live mutation could leave neither parent nor
+child fully bound.  Adoption therefore verifies and transfers the already-owned
+child lease into the live session before releasing the parent path.
+
+The fence originally also emptied the workspace store's resource
+grants; that was dropped on 2026-09-04 after a routine reboot wiped grants
+committed to version control and shared with a second machine.  The workspace
+store is configuration, not incarnation-bound authority.
+
+The original record omitted publication collection. Current collection retains
+settled-turn heads, recent generations, and referenced artifacts under ADR 0072;
+it does not introduce read pins. Frozen journal checkpoint recovery also gained
+a storage-only expired-lease path so completed evidence is not stranded behind
+interactive conversation takeover, while publishing leases and unsettled mutation
+remain refused.

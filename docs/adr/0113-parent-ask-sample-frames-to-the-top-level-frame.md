@@ -19,11 +19,16 @@ to. That is the accepted cost: the sample is transient, the focused option stays
 visible above it, and `mevedel-directive-frame--anchor' already flips a frame
 above its anchor when there is no room below. Clipping has no such escape hatch.
 
-The price is that anchor coordinates computed in a window inside the directive
-frame must be translated into top-level frame coordinates.
-`window-absolute-pixel-position' returns display coordinates while
-`set-frame-position' on a child frame takes parent-relative ones, so that
-translation is a subtraction of the parent's `frame-position'. It is not new
-work: `mevedel-directive-frame--anchor' omits it today, which pins the directive
-frame to the right edge whenever the Emacs frame does not sit at display origin.
-The fix lands before sample frames are built.
+Anchor coordinates computed inside the directive frame must be translated into
+top-level native-frame coordinates. Both sample and directive placement subtract
+the parent's native origin, obtained through `frame-edges`, from display
+coordinates returned by `window-absolute-pixel-position`.
+
+## Decision history
+
+The original ADR identified a directive-anchor bug: display coordinates were
+used as child-frame coordinates, pinning the directive to the right edge when
+the parent did not sit at the display origin. It described correcting that
+before implementing sample frames. Both paths now perform the translation;
+the implemented reference is native frame edges rather than the original
+record's proposed `frame-position` subtraction.

@@ -34,8 +34,9 @@ Annotate only buffers that appear in this review.
 
 ## Your notes
 
-`add_note` attaches one remark to one line and returns its id. Keep it to one
-sentence. Name the problem; do not explain at length.
+`add_note` attaches one remark to one line and returns its id. Keep the note
+compact enough to scan beside the code, including the trigger and consequence
+needed to understand the finding.
 
 Severity:
 

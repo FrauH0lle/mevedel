@@ -19,7 +19,10 @@ Discover function names known to the running Emacs.
 ### Examples of good usage
 
 <example>
-function_completions(function_prefix="org-")
+function_completions(function_prefix="org element")
+Find functions matching both naming fragments under the installed
+Orderless configuration. Use an exact returned name for later introspection;
+the result depends on symbols available in this Emacs.
 </example>
 
 ### Examples of bad usage

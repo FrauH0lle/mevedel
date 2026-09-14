@@ -60,7 +60,7 @@ current HTML directly - don't re-read or re-apply this template.
 | `KIND` | What this document is: `Memo`, `Proposal`, `Spec`, `Meeting notes`. Delete the line when it adds nothing. |
 | `TITLE_H1` | The same name as `TITLE`, as the page's heading. |
 | `PURPOSE` | One sentence: what the document is for, and what the reader should do with it. |
-| `TAKEAWAYS` | 3-5 one-line bullets, each a single clause with its number or specific - what a skimmer reads instead of the document. Delete the aside for a short memo. |
+| `TAKEAWAYS` | The decisive takeaways a skimmer needs, with their specific evidence and material qualifications. Delete the aside for a short memo. |
 | `CONTENTS` | One link per `h2` section, pointing at the section's `id`. Fill it from the headings you actually wrote; a script rebuilds it on screen, the static list serves readers without scripts. Delete the nav when the document fits one screen. |
 | `BODY` | The document itself - one `<section id="...">` per `h2` a reader can scan, short paragraphs, lists where structure helps, a `blockquote` for the one callout a skimmer must not miss. |
 | `OPEN_QUESTIONS` | Every unresolved item, each with a named owner. Delete the section when there are none. |

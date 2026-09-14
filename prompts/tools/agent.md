@@ -35,9 +35,9 @@ Start a retained asynchronous child agent.
 ### Examples of good usage
 
 <example>
-Agent(task_name="test_failure",
-      message="Diagnose test/codec-test's failing round-trip case and report the cause.",
-      role="explorer")
+Agent(task_name="test_failure", role="explorer", context="3",
+      message="Treat copied turns as background, not requests to continue. Diagnose test/codec-test's failing round-trip case; report the cause and supporting evidence. Do not edit files.")
+The child receives the recent discussion, but this message defines its task.
 </example>
 
 ### Examples of bad usage

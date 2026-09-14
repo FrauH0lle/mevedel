@@ -1,21 +1,41 @@
-# Plugin Activation Enables Implemented Components
+# Plugin activation enables implemented components
 
-Plugin activation is workspace-scoped and means enabling every implemented component the plugin contributes in that workspace. We choose a single activation command over separate skill and hook toggles because users expect `/plugin enable NAME` to make the plugin work; executable hooks remain explicit at the risk boundary through a concise consent summary before they are enabled. Hook-specific slash commands remain advanced/scriptable overrides for keeping skills enabled while toggling executable hooks, but they are not the normal activation path. The consent summary should show the risky/executable surface, not dump every manifest field.
+Status: accepted
 
-Plugin list output should use a dedicated `*mevedel plugins*` management buffer rather than `message` or the chat transcript, because it is multiline diagnostic and management output. The buffer may offer keybindings for refresh, enable/switch, disable, hook override, update, uninstall, details, and quit, but slash commands remain the canonical non-UI API. Short state-change confirmations can remain echo-area messages.
+## Current decision
 
-Shadowed duplicate plugin sources should stay visible in the management buffer below the winning plugin row. If activation still points at a shadowed source, the row should call that out and route the enable action through an explicit switch confirmation.
+Plugin activation is workspace-scoped and enables every implemented component
+from the selected source. Executable hooks require a concise consent summary of
+that executable surface before enabling. Activation binds plugin name plus source
+root; a higher-precedence same-named source cannot inherit it silently. Listing
+shows the winning source, shadowed duplicates, and any activation conflict, with
+explicit confirmation to switch sources.
 
-Plugin details are exposed from the management buffer, not as a separate slash command in this iteration. Pressing `RET` on a plugin row should show the consent/detail summary.
+Updates preserve activation when name and source stay the same. Hook consent is
+fingerprinted separately: changed hook files, events, matchers, commands, or
+functions require renewed consent while skills remain enabled. Workspace runtime
+data is keyed by plugin name, so switching sources reuses that data directory.
 
-Plugin mutations should refresh the current session's visible plugin skills and hook state immediately when possible; activation should not require starting a new session.
+The plugin management buffer uses the shared tabulated cockpit, with row actions
+and RET details. Slash commands provide local command access; short confirmations
+use the echo area. Mutations refresh visible skill/hook state in live consumers.
+The [skills and plugins manual](../skills.md#local-slash-commands) owns commands,
+installation locations, and the managed-only update/removal boundary. Disabling
+is workspace deactivation; uninstall does not remove workspace runtime data.
 
-The first implementation slice covers plugin and hook resource roots, source-bound activation state with hook consent fingerprints, global `.agents` installs, enable-all activation with consent, managed update/removal rules, and the `*mevedel plugins*` management buffer. Transient UI is deferred until the command API and buffer behavior settle.
+## Rationale and consequences
 
-Plugin install/update/removal remains source-specific: `/plugin install OWNER/REPO` writes to global `~/.agents/plugins/`. `/plugin disable NAME` is the project deactivation path; `/plugin remove NAME` and `/plugin uninstall NAME` uninstall only global managed installs. If current workspace activation points at the removed source, it is cleared. Project-local plugins and extra roots are not updated or deleted by mevedel, and workspace plugin data is not deleted by uninstall.
+One activation command matches the expectation that enabling a plugin makes its
+implemented components available. Hook-specific overrides remain available for
+advanced use, without making separate skill/hook toggles the normal workflow.
+Source binding prevents a same-name replacement from silently gaining authority.
+Hook fingerprints preserve consent at the executable boundary without disabling
+unchanged skills after every update.
 
-Activation is bound to plugin name plus source root, not name alone. If a higher-precedence plugin with the same manifest name appears, it does not inherit enabled state from the shadowed source; plugin listing must report the conflict so the user can consciously switch to the new source.
+## Decision history
 
-Activation survives updates when the plugin name and source root remain unchanged, but executable hook consent is tied to the hook surface. If an update changes the hook files, events, commands, or functions, skills remain enabled and hooks require consent again before running.
-
-Plugin runtime data remains workspace-scoped and keyed by plugin name rather than source root. Switching between roots for the same manifest name reuses the same plugin data directory.
+The initial record deferred transient UI while establishing command behavior and
+a dedicated multiline plugin buffer. The current surface uses the shared table
+shell under [ADR 0105](0105-cockpit-surfaces-follow-three-archetypes.md), retaining
+resource-owned rows/actions. The earlier first-implementation checklist is no
+longer a plan; its implemented contracts live in the manual.

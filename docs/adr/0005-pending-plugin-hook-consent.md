@@ -18,9 +18,8 @@ executable hook surfaces.
 
 Until the user approves the changed hook surface, the session continues with
 those hooks withheld and the plugin cockpit continues to show the pending
-consent state. Noninteractive or batch contexts should not block; they should
-report the pending consent through user-visible warnings/messages instead.
+consent state. Noninteractive and batch contexts do not block; they report the pending consent through user-visible warnings/messages instead.
 
 Pending consent is user configuration and security state, not model context.
-It should be shown in the user-facing session/view surfaces and messages, not
+It is shown in the user-facing session/view surfaces and messages, not
 injected as a model-visible reminder.

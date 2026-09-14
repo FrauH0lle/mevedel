@@ -1,16 +1,57 @@
 # Keep directive identity outside source overlays
 
-Status: accepted
-Activity-surface placement: superseded by ADR 0091.
+Status: accepted. Activity presentation follows [ADR 0091](0091-render-directive-turns-in-the-shared-session-view.md).
 
-A directive and its activity are durable workspace-owned records, while its source overlay is only the presentation of an attached anchor. References remain source-bound context and disappear with their entire anchor or source file because they own no activity or recovery entry point. An attached directive presents its tinted source region plus one short lifecycle/outcome label; substantive answers, patches, and history remain in the activity surface. Partial source edits preserve and resize the attached anchor without introducing a heuristic stale-anchor state. Deleting the entire region detaches the directive and leaves one compact visual line backed by a zero-width marker at the deletion position rather than inserting buffer text or relying only on a fringe glyph; deleting its source file marks that source missing. Co-located detached directives render as one stable block with one independently actionable row per directive in former source order; the initial design does not fold the block. Neither deletion case discards the directive, its activity, or its recovery entry point. Creating a directive requires a file-visiting source buffer: the durable record is anchored to a file, and detaching or archiving a fileless anchor would freeze one into a record the codec no longer accepts, which would reject the whole workspace directive list on the next load. Refusing at creation keeps that failure at the one place a user can act on it, rather than discarding work later at save time. A nested directive remains a parent-owned subdirective rather than independent activity: processing resolves to the topmost parent and includes every current nested detail. If deleting the parent range removes its nested presentations, prompt construction and submission use the durable parent-owned records; successful implementation consumes the submitted subdirectives, and failure or abort leaves them in place. The workspace directive activity surface remains available without a live source buffer; each implementation attempt links to the session and turn checkpoint that executed it without transferring ownership to that session. When a missing source returns, only one exact, unambiguous anchor match reattaches automatically; otherwise the directive stays source-missing until the user explicitly reattaches it. A directive without activity may be removed; once activity exists, Archive hides its source presentation and active-list entry while retaining inspectable, restorable activity and checkpoint links. Permanent deletion of directive activity is omitted, allowing an implementation that removes its own source to remain inspectable and rewindable without broken session-event links or Rewind resurrection rules.
+## Current decision
 
-The implementation follows the same ownership boundary. The instruction
-registry owns workspace buckets, IDs, lookup, and links;
-`mevedel-directive-source.el` alone coordinates durable directive records with
-source presentations; overlay UI owns actions and redraw; and the remaining
-overlay core owns geometry, tags, context, and prompt assembly. This split was
-made after source deletion and nested-detail failures showed that keeping all
-four responsibilities in one module made partial record/presentation mutation
-too easy. It moves the settled operations without retaining aliases or a
-second mutation path.
+Directives and their activity are durable workspace records. An overlay presents
+an attached source anchor; losing it does not destroy the directive. References,
+which own no activity or recovery entry point, remain source-bound and disappear
+with their complete anchor or source file. Creating a directive requires a
+file-visiting buffer so its durable anchor has a valid file identity.
+
+Partial edits resize the anchor. Deleting its whole region creates a detached
+zero-width anchor with one compact actionable visual row; co-located detached
+rows remain ordered and unfolded. Source-file deletion marks the source missing.
+When it returns, only an exact unambiguous match reattaches automatically;
+otherwise reattachment is explicit. Source presentation contains a short
+lifecycle/outcome label; the shared view and read-only inspector expose answers,
+patches, and history. See [directive views](../view.md#directive-turns-and-inspector).
+
+Nested directives belong to their topmost parent rather than owning independent
+activity. Prompt construction uses those durable records even if source deletion
+removed their overlays. Successful implementation consumes submitted nested
+details; failure and abort leave them available.
+
+A directive without activity can be removed. Archive hides an active-list/source
+presentation while retaining inspectable, restorable activity and execution
+checkpoint links. There is no permanent activity-deletion command. Implementation
+attempts name their execution session and turn without transferring directive
+ownership into that session.
+
+## Rationale and consequences
+
+An implementation can delete its own source and must remain inspectable and
+rewindable afterward. Overlay-owned identity would lose precisely that recovery
+entry point. Permanent activity deletion would also need rules for broken
+session links and Rewind resurrection.
+
+The instruction registry owns workspace buckets, IDs, lookup, and links;
+`mevedel-directive-source.el` coordinates durable records and presentations;
+overlay UI owns actions/redraw; overlay core owns geometry and prompt context.
+This localizes record/presentation consistency instead of distributing it across
+callers.
+
+## Decision history
+
+ADR 0087 established workspace ownership and originally placed substantive
+activity on a dedicated activity surface. ADR 0091 replaced that placement with
+first-class shared-session turns plus a read-only record inspector; ownership,
+source-loss recovery, and archival decisions remain in force.
+
+Source-deletion and nested-detail failures motivated separating registry,
+source coordination, UI, and overlay geometry. A fileless directive could also
+be archived into a shape the codec rejected, making the whole workspace list
+unloadable. Requiring a visiting source file rejects that invalid identity at
+creation instead of losing work on a later save/load. Separate incident dates
+were not recorded.

@@ -835,7 +835,7 @@ sessions rather than spamming every turn."
    :content
    (lambda (_session)
      (concat
-      "Plan mode is active. Inspect and discuss the project without editing files. Bash is limited to commands classified as read-only; Eval and other tools retain normal permission policy. Treat an implementation request as a request to produce or revise the plan, not to edit. Explore available evidence before asking questions; ask only about genuine user preferences that repository evidence cannot resolve. Every new <proposed_plan> block replaces the previous proposal completely. Do not ask whether you should proceed with implementation. When the plan is complete, emit exactly one line-oriented block with this structure:\n\n"
+      "Plan mode is active. Inspect and discuss the project. Bash is limited to commands classified as read-only, and Eval is unavailable. Standalone or sticky Plan permits ApplyPatch only for session-owned work:// descendants; directive Planning permits no file writes, including those descendants. Treat an implementation request as a request to produce or revise the plan, not to edit. Explore available evidence before asking questions; ask only about genuine user preferences that repository evidence cannot resolve. Every new <proposed_plan> block replaces the previous proposal completely. Do not ask whether you should proceed with implementation. When the plan is complete, emit exactly one line-oriented block with this structure:\n\n"
       "<proposed_plan>\n"
       "# Concrete Plan Title\n\n"
       "## Summary\n"

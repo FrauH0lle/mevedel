@@ -422,6 +422,11 @@ paths:
                          :key #'mevedel-skill-name :test #'equal))
          (body (and worktree (mevedel-skill-load-body worktree)))
          (learn-body (and learn (mevedel-skill-load-body learn))))
+    (let ((analyzer (cl-find "analyze-log" skills
+                             :key #'mevedel-skill-name :test #'equal)))
+      (should analyzer)
+      (should (mevedel-skill-user-invocable-p analyzer))
+      (should-not (mevedel-skill-model-invocable-p analyzer)))
     (should frontend)
     (should (eq 'bundled (mevedel-skill-source frontend)))
     (should (mevedel-skill-user-invocable-p frontend))

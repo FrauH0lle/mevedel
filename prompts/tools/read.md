@@ -34,16 +34,16 @@ permissions and the current model's media capabilities.
 ### Examples of good usage
 
 <example>
-- Inspect a function's implementation:
-Read(file_path="src/utils.ts", offset=45, limit=18)
-The result contains numbered source lines, possibly followed by truncation guidance.
+- A search located the relevant function at src/utils.ts:45:
+Read(file_path="src/utils.ts", offset=40, limit=30)
+Inspect its surrounding implementation before deciding on a change. This requests
+lines 40-69, subject to truncation; the search hit alone did not show that context.
 </example>
 
-### Examples of bad usage
-
 <example>
-Read(file_path="*test*")
-<reasoning>
-Read takes one target, not a pattern. Use Glob(pattern="**/*test*") to locate files.
-</reasoning>
+- An oversized result supplied artifact://tool-results/call-42.txt, and its Read
+  continuation guidance supplied offset=241 and limit=40:
+Read(file_path="artifact://tool-results/call-42.txt", offset=241, limit=40)
+Reuse the exact address and continuation values from the actual result; these
+values are illustrative. A bounded page is not proof that the artifact ends there.
 </example>

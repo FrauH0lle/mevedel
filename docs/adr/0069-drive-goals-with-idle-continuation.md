@@ -7,5 +7,6 @@ user/system controls handle pause and budget limits, while runtime failures
 pause rather than making claims about task feasibility. Planning, approval,
 independent review, model routing, and prose-verdict parsing are not Goal
 phases. This trades automatic phase-specific review for a much smaller
-lifecycle whose completion contract is enforced by current Goal context,
-repository evidence, and explicit terminal tool calls.
+lifecycle with explicit terminal tool calls and a completion contract supplied
+in Goal context. Assessing repository evidence and whether the full objective
+is complete remains model judgment; the tool does not prove task completion.

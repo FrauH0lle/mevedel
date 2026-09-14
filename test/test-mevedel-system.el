@@ -135,7 +135,7 @@
 (mevedel-deftest mevedel-system-render-prompt-file ()
   ,test
   (test)
-  :doc "keeps maintained guardian prompt contracts synchronized exactly"
+  :doc "renders the canonical guardian prompt referenced by the manual"
   (let ((guardian-doc
          (with-temp-buffer
            (insert-file-contents
@@ -145,10 +145,8 @@
            (buffer-string))))
     (dolist (prompt-path '("prompts/permissions/bash-guardian-system.md"))
       (let ((prompt (mevedel-system-render-prompt-file prompt-path)))
-        (should
-         (string-match-p
-          (regexp-quote (concat "```text\n" prompt "```"))
-          guardian-doc))))))
+        (should-not (string-empty-p (string-trim prompt)))
+        (should (string-search prompt-path guardian-doc))))))
 
 (mevedel-deftest mevedel-inspect-effective-prompt ()
   ,test
@@ -968,7 +966,12 @@
                                                     :working-directory root :session session)))
             (should (string-match-p "Recent journal evidence" prompt))
             (should (string-match-p "Map-only lesson" prompt))
-            (should (string-match-p "work://shared/" prompt)))
+            (should (string-match-p "work://shared/" prompt))
+            (dolist (guidance '("main agent, subagents, and later sessions in the same workspace"
+                                "mevedel-created worktree sessions"
+                                "not automatically added to conversations"
+                                "give the receiving agent the note's address"))
+              (should (string-search guidance prompt))))
           (let ((prompt (mevedel-system-build-prompt 'main :retained t
                                                     :workspace workspace :session session)))
             (should-not (string-search "Map-only lesson" prompt)))
@@ -985,7 +988,12 @@
                               (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
                 (should (string-search "memory://journal/" context))
                 (should-not (string-search "Map-only lesson" context))
-                (should (string-search "work://shared/" context)))
+                (should (string-search "work://shared/" context))
+                (dolist (guidance '("main agent, subagents, and later sessions in the same workspace"
+                                    "mevedel-created worktree sessions"
+                                    "not automatically added to conversations"
+                                    "give the receiving agent the note's address"))
+                  (should (string-search guidance context))))
               (if (equal name "worker")
                   (should (string-search "Persistent memory" prompt))
                 (should (string-search "source/task attribution" prompt)))))

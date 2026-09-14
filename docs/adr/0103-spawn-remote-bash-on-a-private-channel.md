@@ -2,7 +2,7 @@
 
 Status: accepted
 
-## Decision
+## Current decision
 
 An eligible remote Bash execution spawns through TRAMP's direct
 asynchronous process path: a local `ssh` (or container client) invocation
@@ -17,7 +17,7 @@ decided per record at launch.  The container methods carry the
 direct-async parameter too, but their per-spawn client exec allocates
 a tty and prints its own notices ahead of the command; carriage
 returns and interleaved client output corrupt the group marker
-protocol, so they stay classic until that protocol tolerates them.
+protocol, so those methods use the classic path.
 
 The channel is forced per spawn rather than through a connection-local
 profile.  A profile flips every `make-process` on that host for the whole
@@ -57,7 +57,7 @@ the -F config a host alias needs to resolve at all.  mevedel routes
 the intended call for each direct-async spawn's extent -- a scoped
 rebinding, not a global alias -- so the spawn carries the user's
 options and reuses the master socket while still running outside the
-master shell, and a fixed Emacs later loses the shim without a trace.
+master shell, and the adapter is inactive when the expected function already exists.
 The shell channel is the contention this decision removes.
 
 The local process's exit status is the ssh client's: a remote exit 255 is

@@ -38,7 +38,8 @@ which inherit `diff-added`/`diff-removed`, or magit's diff faces once
 Every tally (header, file rows, primary button) counts selected changes
 only and updates live.
 
-Every file starts folded. Keys, active anywhere in the review body:
+Every file starts folded. File and hunk actions apply at their respective rows;
+the remaining actions are available across the review body:
 
 - `TAB` folds a file, or a single hunk on a hunk row
 - `SPC` toggles selection; on an Update file row it toggles every hunk
@@ -59,7 +60,8 @@ Every file starts folded. Keys, active anywhere in the review body:
   against the baseline, parsed by the engine's own payload parser), so a
   derived hunk matches by construction and its context is never
   hand-written. An Add's proposed content is replaced; a Delete with
-  anything left on the right becomes an Update that keeps the file. One
+  retained content becomes an Update. An empty revision or one that restores
+  the unchanged baseline is refused with guidance to use selection instead. One
   session at a time. `e` refuses a pure rename and a file whose two sides
   hold the same lines, which covers a file with nothing selected.
   Adopting reports and discards instead of staging when the review
@@ -134,28 +136,26 @@ interactive review but use the same validation and transaction.
 
 ## Parse leniencies
 
-The parser accepts everything Codex's grammar-constrained `.lark` emits and
-mirrors Codex's hand-written parser leniencies on top: structural markers
+The parser accepts these structural leniencies: markers
 match after trimming surrounding whitespace (update-body markers tolerate
 trailing whitespace only, so an indented header inside an update stays a
 context line), one `*** Environment ID:` line after `*** Begin Patch` is
 skipped, and a bare empty line inside an update body is an empty context
-line whose space marker the model dropped. Deliberate divergences: a pure
-rename (Update + Move with no hunks) is allowed where Codex rejects it, and
-a context-only hunk is accepted as a locator that positions later hunks
+line whose space marker the model dropped. A pure
+rename (Update + Move with no hunks) is allowed, and a context-only hunk is
+accepted as a locator that positions later hunks
 without changing the file. An Update whose hunks are all locators is rejected
 as a no-op. Locator hunks are hidden from review rows, counts, result lines,
 and persisted diffs; they cannot be selected or commented on.
 
 ## Matching fallbacks
 
-Update hunks match through the full Codex ladder in decreasing strictness:
+Update hunks match in decreasing strictness:
 exact (after line-ending normalization), ignoring trailing whitespace,
 ignoring surrounding whitespace, then additionally folding typographic
-Unicode punctuation to ASCII (dashes, curly quotes, exotic spaces — the
-same table as Codex). An `*** End of File` hunk is first anchored to the
-end of the file, then retried unanchored. Two deliberate divergences from
-Codex: every pass still requires a unique match (ambiguity is rejected,
+Unicode punctuation to ASCII using a fixed table of dashes, curly quotes and
+exotic spaces. An `*** End of File` hunk is first anchored to the
+end of the file, then retried unanchored. Every pass requires a unique match (ambiguity is rejected,
 never first-match-wins), and application preserves the file's context lines
 verbatim — a fuzzy match only decides where the hunk lands and what gets
 deleted, so ASCII-fied or re-indented context in the patch never rewrites

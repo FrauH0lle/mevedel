@@ -54,7 +54,7 @@ When the same plugin manifest name appears in multiple roots, mevedel uses
 root precedence rather than exposing multiple prefixed plugin names:
 workspace `.mevedel/plugins/`, workspace `.agents/plugins/`, global
 `~/.mevedel/plugins/`, global `~/.agents/plugins/`, then extra roots.
-Shadowed duplicates should be visible in plugin listing output.
+Plugin details expose shadowed duplicates and their source roots.
 
 Workspace instructions remain in ordinary `AGENTS.md` and `AGENTS.local.md`
 files along the workspace directory chain. mevedel does not read `CLAUDE.md`

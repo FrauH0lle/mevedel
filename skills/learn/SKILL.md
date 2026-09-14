@@ -45,7 +45,7 @@ and facts already recorded. Prefer repository instructions for facts that can
 be rediscovered from the repository; do not duplicate them into memory.
 
 Verify cheap claims before writing. Find the nearest instruction scope, preserve
-the existing file's style, and keep each new instruction to one to three lines.
+the existing file's style, and state each new instruction with its relevant scope and reason.
 Update or replace duplicate or stale entries instead of appending another copy.
 
 Invoking this skill authorizes the requested write-back, but every concrete edit

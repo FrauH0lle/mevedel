@@ -13,18 +13,3 @@ List Info manuals available to this Emacs.
 - Takes no arguments and returns a JSON array of manual names. Availability depends
   on local Info configuration, including for remote workspaces.
 - Large output is persisted with a bounded preview and a retrieval address.
-
-### Examples of good usage
-
-<example>
-manual_names()
-</example>
-
-### Examples of bad usage
-
-<example>
-manual_names(query="sequences")
-<reasoning>
-There is no query argument. Choose a returned manual and inspect its node list for topics.
-</reasoning>
-</example>

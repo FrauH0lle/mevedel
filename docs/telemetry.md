@@ -1,4 +1,4 @@
-# Session Telemetry and Profiler Runs
+# Session telemetry and profiling
 
 mevedel writes a versioned, append-only diagnostic event stream for every
 session. The stream is evidence for postmortems and performance analysis; it
@@ -45,10 +45,10 @@ Telemetry records lifecycle metadata, sizes, classifications, hashes, and
 bounded identifiers. The emitter keeps only the keys named in
 `mevedel-telemetry--allowed-keys` and drops everything else, at every depth: a
 nested property list is filtered by the same rule as the event's own
-properties, so an aggregate field cannot carry a prompt, a command, a path, or
-a tool result past the boundary. The list is an allowlist because a denylist
-has to name every field that might leak, which makes silence the default for
-any field a caller invents. The names of dropped keys -- names only -- are
+properties. This is a structural filter, not content classification: a string
+under an allowed key is bounded but is not inspected for secrets or payload
+text. Callers must classify or hash payload-derived values before emission.
+The names of dropped keys -- names only -- are
 recorded on the event as `:dropped-keys`, so a caller whose property was
 omitted can see that instead of nothing. Adding a property to telemetry means
 adding its key to that list, and classifying or hashing anything derived from
@@ -93,8 +93,6 @@ events. `mevedel-session-debug` starts that same profiler, so it also enables
 full telemetry. Other concurrently live sessions remain on the normal tier.
 
 ## Covered lifecycle boundaries
-
-The event stream covers:
 
 Request settlement `:duration-ms` remains end-to-end wall-clock latency,
 including user waits. Interaction events separately identify whether active
@@ -169,9 +167,9 @@ first.
 
 1. Run `M-x mevedel-telemetry-profiler-start`. Combined CPU and memory
    profiling is the default. With a prefix argument, choose a single mode.
-2. Create the Goal with the same preset, objective, and interaction sequence.
-   Queue the same deliberate mid-implementation message and avoid unrelated
-   commands.
+2. Create the Goal with the preset and objective being investigated. For a
+   comparison, repeat the same interaction sequence, including any queued input,
+   and avoid unrelated commands.
 3. Let the Goal reach a terminal state or a clearly stranded state.
 4. Run `M-x mevedel-telemetry-profiler-stop`.
 
@@ -182,12 +180,11 @@ buffer point, selected-window point/start, composer-relative offsets, and
 managed-fragment coordinates around interaction registration, full rerenders,
 and zone reconciliation.
 
-While the capture is active, `gptel--log` is advised to append entries raw
-instead of pretty-printing them: a capture's streamed response bodies are
-multi-megabyte payloads in a log buffer that grows for the whole capture, and
-a profiled capture spent a third of its CPU inside `json-pretty-print`,
-freezing the session it was meant to observe. Raw entries are also what the
-reproduction procedure consumes.
+During `mevedel-session-debug`, `gptel--log` appends raw entries without
+JSON pretty-printing. The debug log remains an opt-in raw-data artifact; ordinary
+telemetry still follows the bounded metadata policy. See
+[ADR 0118](adr/0118-keep-diagnostics-observational-and-bounded.md) for the
+instrumentation tradeoffs.
 
 Each profiler run gets a directory containing:
 
@@ -201,18 +198,17 @@ gptel-debug.log               gptel log captured by mevedel-session-debug
 view-render-debug.log         view trace captured by mevedel-session-debug
 ```
 
-For a session saved locally that directory is
-`SESSION_DIR/diagnostics/run-TIMESTAMP-ID/`. For a session saved on a target it
-is a fresh local temporary directory instead, created per run under
-`temporary-file-directory`. A profile measures the client Emacs, and the `ssh`
-method has no out-of-band copy at any size, so writing 8 MB of profile to the
-target means 8 MB of base64 through the shell for an artifact no resume
-consults. The cost is the reason; the consequence is that diagnostics for a
-remote session are **not portable** — another client resuming it finds no
-`diagnostics/` for a run profiled elsewhere. The `profiler-stopped` event
-therefore records `:artifacts-directory` as an absolute client-side path plus
-`:artifacts-local`, and `M-x mevedel-telemetry-profiler-stop` prints the
-directory, which is the only way to find a remote-session run.
+For a session saved locally, the directory is
+`SESSION_DIR/diagnostics/run-TIMESTAMP-ID/`. For a remote session, it is a fresh
+client-local directory under `temporary-file-directory`. Remote-session
+profiler artifacts are not portable: another client resuming the session does
+not receive them. `profiler-stopped` records the absolute client-side
+`:artifacts-directory`, and the stop command prints it.
+
+Current diagnostic limitation: `:artifacts-local` is false for remote sessions
+even though their profiler artifacts are client-local. Use the explicit
+directory and the storage rules above to locate the files; the flag does not
+reliably describe artifact locality.
 
 Native profile files hold `profiler-fixup-profile` output, which normalizes
 sampled runtime objects before serialization.  Open them with
@@ -254,9 +250,9 @@ status hash, an exact dirty-content hash (tracked diff plus untracked
 file content hashes), loaded gptel and gptel-agent file hashes and repository
 commits, Emacs and system versions, configured sandbox mode, and Bubblewrap
 availability. File contents are not written to telemetry, and neither are
-paths, with one exception: `:artifacts-directory` records the absolute
-client-side directory holding the profiler artifacts, because a reader who
-cannot find those files cannot use the run.
+arbitrary source paths. The explicit path exceptions are repository-local
+Eask test names used for workload classification and `:artifacts-directory`,
+which locates the client-side profiler output.
 
 ## Comparing session instrumentation modes
 

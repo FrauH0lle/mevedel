@@ -2,6 +2,8 @@
 
 Status: accepted
 
+## Current decision
+
 Mevedel exposes programmatic tool calling as one hybrid model tool named
 `ToolCall`. The name is model-facing prompt surface, so it states what the
 tool does rather than abbreviating it; the original `PTC` acronym survives only
@@ -18,19 +20,6 @@ the guest bounded. Atomic operand accounting counts each use of shared
 aggregates before host execution; final-value accounting does the same before
 serialization. Fuel pauses return control to Emacs between slices.
 
-Two boundaries were relaxed after a profiled test session (2026-08-25) showed
-the model burning full turns rediscovering them: the guest regexp subset now
-admits unnested quantifiers (`*`, `+`, `?`, `\{n,m\}` on one literal, escape,
-dot, or bracket class, capped at eight quantified atoms) while still rejecting
-quantified groups, stacked quantifiers, alternation, and backreferences.  The
-work budget conservatively raises input size to the quantified-atom count,
-backstopping the residual polynomial adjacency case; and the
-pure-primitive table gained the syntactic `file-name-*` helpers (applied with
-file-name handlers disabled), `take`, and a fixed-comparator `sort`, because
-the model hand-rolled basename/dirname from `split-string` twice in one
-session. The audit standard is unchanged; the default answer to "is this pure
-string/list manipulation?" moved to yes.
-
 The implementation keeps three ownership seams: `mevedel-ptc-interpreter.el`
 owns the pipeline-independent guest machine, `mevedel-ptc-driver.el` owns the
 nested pipeline lifecycle behind one execution entry, and
@@ -39,85 +28,53 @@ and aggregate rendering. This split keeps the security-sensitive evaluator
 cohesive while isolating asynchronous orchestration state from model-facing
 tool policy.
 
-Nested calls use `mevedel-pipeline-run-tool-outcome`, the structured consumer
-of the ordinary pipeline. Validation, hooks, permission, resource preparation,
-snapshots, handler execution, render transforms, and post-use hooks remain one
-common path. Provider-only reminders, nudges, persistence banners, Goal
-warnings, and transcript side channels are applied only by the provider
-consumer. Each child carries source `ptc` and identity `ENVELOPE/N`; the model
-receives only the script's final value on ordinary success, while the settled
-ToolCall row owns elapsed time, output disposition, and the ordered child
-audit. Hooks, permission logs, cancellation, and telemetry retain the same
-parent/child identity. Full child output is user-visible inside that audit but
-does not enter provider history. That audit is presented as one collapsible row
-per nested call, each rendered by its own tool's renderer: a single flat body
-could carry only one fontification mode and duplicated every child result three
-ways (preview, full output, and the returned value).
+ToolCall has a static description; ToolSearch returns callable contracts without
+changing the role's native core. A provably direct call returns the underlying
+tool result and supported media, rendered as that tool. A composed program returns
+its final value with a separate child audit. Instruction/interaction tools may
+require standalone calls. Required hook context and repair feedback survive even
+when intermediate values are discarded.
 
-Amended 2026-09-07 after provider cache measurements: ToolCall has a static
-description, with contracts retrieved through ToolSearch. Native schema loading
-has been removed; the role's native core remains fixed during discovery and
-invocation. A direct expression returns the tool's result/media and renders as
-that tool. Composed programs retain the guest final-value and audit semantics.
-Instruction and interaction tools may require standalone calls. Required hook
-context and repair feedback survive composition. See the tool delivery contract
-in [tools.md](../tools.md).
+Nested calls use the ordinary structured pipeline for validation, hooks,
+permissions, resource preparation, snapshots, handlers, rendering, and post-use
+hooks. Children carry `ptc` source and `ENVELOPE/N` identity. Provider-only delivery
+runs at the outer consumer. The user can inspect full child output in per-tool
+rows; composed programs do not put all intermediate output into provider history.
+Nested Reads bypass conversation duplicate suppression so hidden intermediate
+content cannot poison later reads or become an unusable reuse stub.
 
-The same lifecycle measurements exposed an additional avoidable prefix change:
-an ephemeral generic ToolSearch/ToolCall reminder preceded each worker task,
-then disappeared when gptel reconstructed its history. This repeated guidance
-already present in the native descriptions. The reminder and its durable
-constructor recipes are removed; discovery remains in the native tool
-contracts, with result-specific recovery and optional path-skill notices at
-their existing seams. Persisted agent templates containing the removed recipes
-are rejected under the project's no-compatibility policy; start fresh agents.
+Parallel and parallel-map admit direct tool calls with bounded host concurrency
+and source-ordered joined results. Ordinary child failures become guest error
+values. Permission denial aborts composition and cancels siblings where possible;
+user cancellation interrupts the envelope. Earlier effects are not rolled back.
+Fuel/timer boundaries yield to Emacs even when children complete synchronously.
 
-`parallel` and `parallel-map` are the only concurrency forms: each entry is one
-direct tool call, the host owns a small concurrency cap, and joined results
-preserve source order. The original caller was root-session-only; that
-restriction is lifted (amended 2026-08-25). What protected it was never the
-guest machine — it was two host seams: agent FSMs lacked the effective-roster
-description handler, and an agent buffer resolves to the parent session, so an
-agent-run script would have checkpointed into the parent sidecar and recovery
-would have reconciled the interrupted row into the root transcript. Agent FSMs
-use their own callable catalog, and the driver skips the durable envelope
-checkpoint when an agent invocation owns the buffer; a restarted agent script
-settles through the agent's interrupted-turn handling. Retained agents are
-exactly where multi-call orchestration pays off, so the built-in roles declare
-ToolCall directly. Ordinary child failures are guest `(:error MESSAGE)`
-values. Permission denial aborts the script and reports bounded completed work;
-user cancellation interrupts the envelope. A denial cancels sibling pipeline
-continuations where possible, and synchronous completions are admitted in
-bounded timer turns so the batch yields to Emacs. Permission waits and child
-status are live trusted view facts. An in-flight machine is never serialized or
-resumed: after restart it is an interrupted tool call. The sidecar checkpoints
-only the envelope and bounded child audit; recovery materializes that record as
-a tool row and atomically consumes it with the repaired segment.
+Root scripts persist an envelope before children start and on settlement;
+intermediate child progress stays in memory for the next ordinary autosave.
+Agent scripts use agent interrupted-turn recovery instead of the parent's root
+checkpoint. The guest machine is never serialized or resumed after restart.
+Runtime-generated prohibited calls fail before their dispatch, but may be
+constructed after earlier authorized calls; static preflight is not a transaction.
 
-Checkpoint durability is per script, not per nested call. The original design
-rewrote the sidecar through a full publication after every child transition;
-the profiled test session put 40 of its 58 publication generations (69%)
-inside six script windows, stored 3.72 MiB of publications for a 224 KiB
-transcript, and serialized nominally parallel children ~180-300 ms apart for
-20-30 ms of actual work — and on TRAMP targets each write is a remote round
-trip. Now the durable writes are the start checkpoint (before any child runs)
-and the settled write; between them child audit progress is journaled in the
-in-memory session checkpoint, which any unrelated autosave captures. The cost
-is recovery fidelity after a crash mid-script: the child audit restores as of
-the last autosave rather than the last child, and the row still settles as
-interrupted either way.
+The [dialect reference](../ptc-dialect.md) owns forms, primitives, regexps, limits,
+and composition rules. The [tool manual](../tools.md) owns pipeline delivery and
+the native/discoverable capability boundary.
 
-Nested Reads bypass session-level duplicate suppression in both directions:
-the model never sees nested output, so a "reuse the previous contents" stub is
-unusable inside a script, and recording the access would poison the
-conversation's later Reads with content that never entered provider history.
+## Rationale, alternatives, and consequences
+
+A closed in-process evaluator provides a stable orchestration boundary without
+letting model-authored expressions evaluate host Lisp. Operator resolution occurs
+before arguments, and shared aggregates are charged per use before host work and
+serialization. The boundary must hold even when operating-system confinement is
+unavailable. Eval's separately permission-gated best-effort process tradeoff does
+not supply that unconditional orchestration boundary.
 
 This rejects native Elisp evaluation, host macro expansion, property-scraped
 primitives, a JavaScript runtime, virtual transcript rows, ToolCall-only
 modes, futures, resumable cells, guest notifications, cross-call storage, and
 guest media-emission helpers.
 
-It also rejects the obvious alternative of running full Elisp in a child
+It also rejects the alternative of running full Elisp in a child
 `emacs -Q --batch` confined by an OS sandbox, which is what the Eval tool's
 batch mode does. That boundary is conditional: `mevedel-sandbox-mode` defaults
 to `best-effort`, so a failed Bubblewrap probe -- no `bwrap`, no user
@@ -131,6 +88,65 @@ tool output, so their boundary has to hold on every platform without a probe.
 The interpreter's does. Child media references remain in the user-visible
 audit with payload bytes removed. Those broader mechanisms add lifecycle or
 trust boundaries that the measured orchestration use case does not require.
+
+## Decision history
+
+### Language and display
+
+Two boundaries were relaxed after a profiled test session (2026-08-25) showed
+the model burning full turns rediscovering them: the guest regexp subset now
+admits unnested quantifiers (`*`, `+`, `?`, `\{n,m\}` on one literal, escape,
+dot, or bracket class, capped at eight quantified atoms) while still rejecting
+quantified groups, stacked quantifiers, alternation, and backreferences.  The
+work budget conservatively raises input size to the quantified-atom count,
+backstopping the residual polynomial adjacency case; and the
+pure-primitive table gained the syntactic `file-name-*` helpers (applied with
+file-name handlers disabled), `take`, and a fixed-comparator `sort`, because
+the model hand-rolled basename/dirname from `split-string` twice in one
+session. The audit standard is unchanged; the default answer to "is this pure
+string/list manipulation?" moved to yes.
+
+The original flat child display duplicated preview, full output, and return value,
+and could use only one fontification mode. Separate collapsible rows delegate
+each child to its existing renderer while retaining one ordered envelope audit.
+
+### Discovery and agent ownership
+
+On 2026-09-07 provider cache measurements moved ToolCall to a static description
+and ToolSearch-retrieved contracts. Native schema loading was removed; direct
+calls gained ordinary result/media semantics while composed calls retained the
+closed guest and audit.
+
+The same lifecycle measurements exposed an additional avoidable prefix change:
+an ephemeral generic ToolSearch/ToolCall reminder preceded each worker task,
+then disappeared when gptel reconstructed its history. This repeated guidance
+already present in the native descriptions. The reminder and its durable
+constructor recipes are removed; discovery remains in the native tool
+contracts, with result-specific recovery and optional path-skill notices at
+their existing seams. Persisted agent templates containing the removed recipes
+are rejected under the project's no-compatibility policy; start fresh agents.
+
+The original root-only restriction protected two host seams, not the evaluator.
+Agents lacked effective-roster handling, and their session resolution could write
+an envelope checkpoint into the root sidecar and later recover it into the root
+transcript. On 2026-08-25 agent-local callable catalogs and omission of root
+checkpoints for agent-owned scripts removed those restrictions. Built-in roles
+now declare ToolCall; their interrupted-turn recovery owns abandoned scripts.
+
+### Durability cost and preflight limits
+
+Checkpoint durability is per script, not per nested call. The original design
+rewrote the sidecar through a full publication after every child transition;
+the profiled test session put 40 of its 58 publication generations (69%)
+inside six script windows, stored 3.72 MiB of publications for a 224 KiB
+transcript, and serialized nominally parallel children ~180-300 ms apart for
+20-30 ms of actual work — and on TRAMP targets each write is a remote round
+trip. Now the durable writes are the start checkpoint (before any child runs)
+and the settled write; between them child audit progress is journaled in the
+in-memory session checkpoint, which any unrelated autosave captures. The cost
+is recovery fidelity after a crash mid-script: the child audit restores as of
+the last autosave rather than the last child, and the row still settles as
+interrupted either way.
 
 The replacement review exposed a limit in the preflight claim: a runtime macro
 can construct a prohibited standalone call after an earlier authorized tool.

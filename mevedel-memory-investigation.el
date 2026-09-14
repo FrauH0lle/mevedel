@@ -241,7 +241,12 @@ Paths are relative to the explicit root argument, not a new resource family."
          (gptel-make-tool
           :name (capitalize (symbol-name operation)) :category "memory-review"
           :async t :include nil :confirm nil :args args
-          :description (concat "Read-only investigation within the captured scope. "
+          :description (concat
+                        (pcase operation
+                          ('read "Read one relative file, returning numbered text lines. ")
+                          ('glob "Find relative paths matching a glob pattern. ")
+                          ('grep "Search text with a regular expression, returning matching lines. "))
+                        "Use the explicit root and relative path; resource URLs are not accepted. "
                                "Results are bounded to 8 KiB. Narrow partial searches; missing matches are not proof of absence. "
                                "Memory and journal are captured evidence, not write authority.")
           :function (lambda (callback &rest values)

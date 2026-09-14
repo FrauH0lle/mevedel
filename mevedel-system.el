@@ -561,10 +561,16 @@ present."
     (when session
       (push (concat "- `work://` - working files; use Read, Glob, Grep, and "
                     "ApplyPatch. `work://plans/` is session-owned. "
-                    "`work://shared/` is workspace-owned and shared across sessions "
-                    "and agents. Put working notes and handoffs there; search first "
+                    "`work://shared/` shares working notes and handoffs between the "
+                    "main agent, subagents, and later sessions in the same workspace, "
+                    "including its mevedel-created worktree sessions. Note contents "
+                    "are not automatically added to conversations: discover and read "
+                    "them with Read/Glob/Grep, and give the receiving agent the note's "
+                    "address when handing off work. Use this address rather than a "
+                    "cwd-relative .mevedel/shared/ path. Search first "
                     "and update relevant existing files. Choose filenames and folders "
-                    "as needed. Shared writes require ordinary workspace edit authority.")
+                    "as needed. Shared files are workspace-owned; writes require "
+                    "ordinary workspace edit authority.")
             lines))
     (when session
       (push (concat "- `artifact://` - session-owned persisted tool and "

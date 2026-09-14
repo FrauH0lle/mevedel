@@ -1,7 +1,8 @@
 # Multi-agent system
 
 Main and worker prompts ask for short attributed lessons in `work://shared/`
-only when the current request permits local writes. Explorer, verifier, and
+only when the current request permits shared-file writes. Standalone Plan
+permits session-owned plan edits but excludes shared and memory writes. Explorer, verifier, and
 reviewer report observations and hypotheses through existing results or an
 available SendMessage; they receive no extra write authority. Reviewer lessons
 stay within its existing JSON response schema. Only the main prompt receives
@@ -26,7 +27,7 @@ the triggering Agent tool segment, runs one central handoff-summary request
 focused on the hook-accepted task, and stores the result as a labelled advisory
 `Task background` block before that authoritative task. The copy modes retain
 gptel's user/response/tool span properties,
-including actionable user instructions, and is taken from the current
+including actionable user instructions, and are taken from the current
 post-compaction buffer only. Callers use copied context only when the child
 must inspect parent dialogue and identify that dialogue as background in the
 initial task. Archived raw segments are never reconstructed. The initial task
@@ -121,7 +122,7 @@ not injected; `ListAgents` is the explicit full-tree discovery surface.
 
 A Goal runs in the root session conversation rather than through a special
 agent or phase machine. Child-agent turns are excluded from Goal accounting.
-Each active root turn receives request-local Goal context, while the existing
+Each active root turn receives current Goal facts through retained context delivery, while the existing
 agent tree, capacity, and permission rules remain unchanged. Queued user
 messages steer the Goal before its next automatic continuation.
 
@@ -158,25 +159,24 @@ the reporting tone, while reviewer relies on its strict output contract.
 ## Asynchronous agent lifecycle
 
 ```mermaid
-flowchart TD
-    A[Validate Agent request] --> B[Privately reserve path and capacity]
-    B --> C[Freeze parent evidence and configuration]
-    C --> D[Run SubagentStart once]
-    D --> E[Run UserPromptSubmit once]
-    E --> S{Summary context?}
-    S -- Yes --> T[Generate one task-focused handoff summary]
-    S -- No --> F[Persist transcript and start provider FSM]
-    T --> F
-    F --> G[Publish retained identity and Agent result]
-    G --> H[Settle and run SubagentStop exactly once]
-    H --> I[Release capacity and persist idle record]
-    I --> J[Queue RESULT for spawn parent]
-    J --> K{Parent needs result now?}
-    K -- Yes --> L[WaitAgent wakes]
-    K -- No --> M[Parent continues independently]
+sequenceDiagram
+    participant P as Spawn parent
+    participant H as Agent runtime
+    participant C as Retained child
+    P->>H: Agent request
+    H->>H: Reserve path and prepare the accepted task
+    Note over P,H: Setup failure releases the reservation and returns an error
+    H->>C: Persist transcript and start request
+    H-->>P: Canonical child path
+    Note over P,C: Parent and child continue independently
+    C->>H: Turn settles
+    H->>H: Stop hook, release capacity, retain conversation
+    H-->>P: Queue terminal RESULT and wake an existing waiter
 ```
 
-Every agent turn uses this path. A caller that needs the result explicitly
+The diagram covers initial spawning and settlement. Follow-ups reuse the
+retained identity and configuration, run UserPromptSubmit for an idle agent's
+new task, and do not rerun SubagentStart. A caller that needs the result explicitly
 invokes `WaitAgent`; a caller that does not may finish while descendants keep
 running. `/review`, `/verify`, and fork-skill workflows may keep their owning
 interaction open until a leaf result arrives, but that awaiting behavior does

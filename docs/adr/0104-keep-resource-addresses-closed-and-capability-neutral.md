@@ -2,83 +2,101 @@
 
 Status: accepted
 
+## Current decision
+
 Mevedel exposes one closed resolver for `work://`, `artifact://`, `skill://`,
-`agent://`, `history://`, `memory://`, `mcp://`, and `mevedel://`. A resource
-address is a plain serialization of a canonical locator, not a grant:
-preparation validates and resolves an opaque attempt plus logical authority
-facts before permission, and authorized execution consumes that attempt without
-reparsing or exposing backing paths. Existing `Read`, `Glob`, `Grep`, and
-reviewed `ApplyPatch`
-surfaces keep their operation-specific capabilities. Standalone and sticky Plan
-mode permit `ApplyPatch` only when every source and destination operand is a
-non-bare session-owned `work://` descendant outside `work://shared/`, so durable plans and notes stay editable while
-workspace mutation remains denied tree-wide; Directive Planning stays fully
-read-only.
+`agent://`, `history://`, `memory://`, `mcp://`, and `mevedel://`. An address
+serializes a canonical locator; it grants no authority. Preparation validates
+an opaque attempt and logical authority facts before permission. Authorized
+execution consumes that attempt without reparsing or exposing private backing
+paths. Existing Read, Glob, Grep and ApplyPatch retain operation-specific
+capabilities. The [resource manual](../address-to-resource.md) owns address
+syntax, supported operations, selectors, completion and failure behavior.
 
-This rejects a public scheme registry, one model tool per resource kind,
-generic caching, URL/path fallbacks, and address-driven permission grants.
-Keeping the dispatch closed makes the trust boundary auditable, preserves each
-resource's existing freshness and persistence owner, and prevents a copied
-address from silently acquiring authority or changing execution target.
+Freshness and persistence remain resource-specific. Session-owned working files
+and workspace-owned `work://shared/` files use the same family but have distinct
+lifetimes. Shared files survive cleanup of an individual session; separate
+workspace roots remain isolated. Explicit memory-root descendants are writable
+through the native patch transaction, while `memory://journal/` exposes only
+validated, temporary, read-only evidence. Saved conversation search uses
+`history://saved`; curated memory and journal retention are independent of it.
 
-Skill origin aliases make discovered packages readable without weakening exact
-identity: each explicit local, global, bundled, managed, or plugin alias resolves
-to the current exact full-hash skill locator, while model-visible output keeps
-the authored alias. There is no unqualified name alias. `mevedel://` is the one
-always-advertised family and exposes only installed Markdown documentation
-through Read, Glob, and Grep; it adds no source browser, compression layer,
-registry, mutation path, or extra aliases.
+Standalone and sticky Plan permit ApplyPatch only when every source and
+destination is a non-bare session-owned `work://` descendant outside
+`work://shared/`. This permits durable plans and private notes while preserving
+the tree-wide workspace mutation boundary. Shared and memory writes cannot
+borrow that exception. Directive Planning remains fully read-only.
 
-Workspace journals add cross-session evidence without exposing private capture
-state. `memory://journal/` therefore admits only validated public records through Read,
-Glob, and Grep. Searches operate on validated document snapshots using the
-existing search helpers, so a private or malformed file cannot enter results
-through raw directory traversal. Authorized operations validate current storage;
-only prompt discovery uses a disposable, ten-second workspace observation.
-Completion consumes that observation without filesystem access. The observation
-does not confer permission or decide retention, and can be discarded at any time.
+Explicit skill-origin aliases resolve to the current exact full-hash locator
+while preserving the authored alias in model-visible output. There is no
+unqualified name alias. `mevedel://` is always advertised and exposes installed
+Markdown documentation through Read, Glob and Grep. It does not expose source
+code or a mutation interface.
 
-Saved conversations now use `history://saved[/SESSION[/SEGMENT]]` through the
-same Read/Glob/Grep surfaces. The evaluated synchronous prototype blocked an
-independent graphical edit for 3.725 seconds at 100 portable sessions, so moving
-only the final search subprocess off the call stack was insufficient.
-Discovery, pinned reads, canonical projection and disposable-file preparation
-now yield cooperatively after authorization; the native execution lifecycle
-owns the search helper. Selected source paths avoid whole-workspace discovery.
-A bounded, disposable projection cache saves classification work only after
-fresh authority and byte validation. This resource-specific CPU reuse does not
-introduce a generic resolver cache or another durable transcript store. Journal
-retention and curated memory remain independent of history search.
+## Rationale and alternatives
 
-Working files now use `work://` with a workspace-owned `shared/` subtree and
-session-owned descendants elsewhere. The scope evaluation found two missed
-cross-session corrections with Luna when publication from a private scratchpad
-was required; shared-default recovered all six cases. A follow-up freeform run
-recovered all six cases per model without prescribed filenames or directories.
-This supports one address family and unstructured shared-default working notes.
-Shared storage is outside session persistence so cleanup of one session cannot
-remove another session's working files. Separate workspace roots remain isolated.
+A closed dispatch keeps the trust boundary auditable and avoids a tool per
+resource kind. A copied address cannot silently acquire permission or change
+execution target. A public scheme registry, URL/path fallbacks and address-driven
+grants would weaken that boundary. Generic caching would obscure the different
+freshness and authority requirements, so disposable caches remain with the
+owning resource.
 
-A first-use session exposed a mismatch between lazy storage and discovery:
-`Read(work://shared)` reported an unavailable resource before the first write,
-although the root was usable. The diagnostic audit also reproduced failed
-empty artifact searches, an internal empty-memory descriptor returned to the
-model, and a zero-file result rendered as one file. Read/Glob/Grep now treat
-unused discovery roots as successful empty results without materializing them.
-Missing explicit descendants and unavailable owners remain errors. Search
-empty-result counts travel in render data, independently of explanatory text.
-Errors identify their authored target and distinguish syntax, unsupported
-operations, missing selections, unavailable owners, and content readiness;
-underlying safe causes are retained without exposing private backing paths.
+Journal searches use validated document snapshots rather than raw traversal,
+which could expose private or malformed records. Authorized operations validate
+current storage; prompt discovery and completion may use a disposable,
+ten-second workspace observation. That observation cannot authorize access or
+decide retention.
 
-Explicit memory-root descendants now admit ApplyPatch through the same native
-transaction. Shared and memory writes expose their prepared backing paths only
-to filesystem permission policy, retain address presentation, and reject root
-rebinding. Neither can borrow the session-only Plan exception. Root discovery
-addresses and journal/artifact evidence remain non-writable.
+Saved-history discovery, pinned reads, projection and search preparation yield
+cooperatively after authorization. The native execution lifecycle owns the
+search helper. Selected paths avoid whole-workspace discovery, and a bounded
+projection cache reuses CPU work only after fresh authority and byte validation.
+It creates no second durable transcript store.
 
-The 2026-09-13 journal lifecycle change reserves `memory://journal/` within the
-memory scheme. Journal evidence is temporary and read-only; sharing the scheme
-with curated memory does not share its write permission. The separate journal
-scheme added no capability and is removed without an alias. Existing journal
-storage and its internal recovery authority are unchanged.
+Unused discovery roots return successful empty results without materialization.
+Missing explicit descendants and unavailable owners remain errors. Diagnostics
+retain the authored address and safe causes while distinguishing invalid syntax,
+unsupported operations, missing selections, unavailable owners and unavailable
+content. Shared and memory patch operations expose prepared paths only to
+filesystem permission policy and reject root rebinding.
+
+## Consequences
+
+The model uses familiar file tools across resources but must still respect each
+operation's supported families and each resource's scope. The resolver absorbs
+backing-path mechanics; callers retain permission, review and cancellation
+boundaries. Empty discovery does not create storage, and an address is never a
+substitute for checking a settled operation's result.
+
+## Decision history
+
+All revisions below refine ADR 0104's closed resolver decision.
+
+- **Saved-history responsiveness.** The synchronous prototype blocked an
+  independent graphical edit for 3.725 seconds at 100 portable sessions.
+  Moving only the final search subprocess off the call stack could not address
+  the preceding blocking work. Cooperative discovery, reads, projection and
+  preparation replaced that path; resource-local validated projection caching
+  avoids repeating classification without weakening authority checks.
+- **Shared working scope.** A private scratchpad with explicit publication
+  missed two cross-session corrections with Luna. Shared-default working notes
+  recovered all six cases; a freeform follow-up recovered all six per model
+  without prescribed filenames or directories. This supported one `work://`
+  family and unstructured shared-default notes, with shared storage outside
+  individual session persistence.
+- **Lazy discovery.** A first-use session returned “unavailable” for
+  `Read(work://shared)` even though the root was usable. The audit also found
+  failing empty artifact searches, an internal empty-memory descriptor leaking
+  into the result, and a zero-file result rendered as one file. Successful
+  empty discovery replaced those failures; result counts now travel separately
+  from explanatory text in render data. Explicit missing selections still fail.
+- **Memory writes.** Explicit memory-root descendants gained ApplyPatch through
+  the same native transaction and filesystem authority policy. They did not
+  gain the session-only Plan exception. No separate measurement explaining the
+  timing of this extension was recorded.
+- **Journal namespace.** On 2026-09-13, `memory://journal/` replaced the separate
+  journal scheme, which added no capability. The change kept journal storage
+  and internal recovery authority while reserving a read-only namespace inside
+  memory; sharing a scheme did not confer curated-memory write authority. The
+  old scheme has no alias.
