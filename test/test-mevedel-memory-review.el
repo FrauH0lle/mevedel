@@ -51,10 +51,10 @@
                   (funcall callback text (gptel-fsm-info request))))
       ,test))
   (test)
-  :doc "uses the buddy workload, scoped tools, and terminal validation without publishing coverage"
+  :doc "uses the memory workload, scoped tools, and terminal validation without publishing coverage"
   (progn
     (start)
-    (should (eq 'buddy workload))
+    (should (eq 'memory workload))
     (should sent)
     (with-current-buffer (plist-get handle :buffer)
       (should-not mevedel--session)

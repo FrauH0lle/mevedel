@@ -147,7 +147,7 @@ WORKSPACE is used to verify that client-owned evidence remains available."
   (let* ((frozen (plist-get capture :policy))
          (provider (plist-get frozen :provider)))
     (unless provider
-      (error "Captured summarization policy is unavailable: %s" (plist-get frozen :error)))
+      (error "Captured journal policy is unavailable: %s" (plist-get frozen :error)))
     (let* ((policy (mevedel-model-resolve-provider provider))
            (name (plist-get frozen :effort))
            (effort (and name (or (intern-soft name)

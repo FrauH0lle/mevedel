@@ -206,9 +206,9 @@ arguments charged by the client, independently of provider-reported usage."
             (dolist (text (list focus rejections))
               (unless (or (null text) (and (stringp text) (<= (string-bytes text) 8192)))
                 (error "Review guidance exceeds its text bound")))
-            (setq policy (copy-sequence (mevedel-model-resolve-workload 'buddy)))
+            (setq policy (copy-sequence (mevedel-model-resolve-workload 'memory)))
             (unless (and (plist-get policy :backend) (plist-get policy :model))
-              (error "No model resolves for the buddy workload"))
+              (error "No model resolves for the memory workload"))
             (setq policy (plist-put policy :max-tokens
                                     (min 8000 (or (plist-get policy :max-tokens) 8000)
                                          (max 1 (/ (mevedel-model-effective-context-window (plist-get policy :model)) 2)))))

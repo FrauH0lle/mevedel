@@ -91,7 +91,7 @@ the user's selection; Sol also passed the seven production-path cases.
 Preserve failing runs when changing prompts, scope, or models. Do not repeatedly
 rerun an unchanged case until a lucky result is treated as acceptance.
 
-`consolidation.el` extends the seven cases through the real buddy review and
+`consolidation.el` extends the seven cases through the real memory review and
 checked application. It consumes the accepted stage-one digest artifacts for
 the five extraction cases. Missing/failed-journal cases contain no digest and
 review current memory through the explicit empty-batch path. Existing memory
@@ -99,15 +99,15 @@ deliberately contains stale claims in the correction, resolved-test,
 abandoned-decision, and repeated-summary cases. Review questions and expected
 answers stay outside model input.
 
-Export the configured buddy workload by binding
-`MEVEDEL_QUALITY_WORKLOAD=buddy` in `process-environment` around the export form.
+Export the configured memory workload by binding
+`MEVEDEL_QUALITY_WORKLOAD=memory` in `process-environment` around the export form.
 Then run:
 
 ```sh
 MEVEDEL_QUALITY_PROVIDER=/tmp/RETURNED-PROVIDER-FILE.el \
 MEVEDEL_QUALITY_OUTPUT=/ABS/QUALITY-OUTPUT \
 MEVEDEL_QUALITY_DIGESTS=/ABS/ACCEPTED-STAGE-ONE-RESULTS \
-MEVEDEL_QUALITY_RESULTS=consolidation-buddy \
+MEVEDEL_QUALITY_RESULTS=consolidation-memory \
   npx @emacs-eask/cli test ert test/manual/memory-quality/consolidation.el
 ```
 

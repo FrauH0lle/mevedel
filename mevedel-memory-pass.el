@@ -314,7 +314,7 @@ No request recursively drains a remaining backlog."
                               :started-at (float-time)
                               :telemetry (list :pass-id (plist-get claim :owner)
                                                :attempt-generation (plist-get claim :generation)
-                                               :mode mevedel-memory-consolidation-mode :workload 'buddy
+                                               :mode mevedel-memory-consolidation-mode :workload 'memory
                                                :scope (if (string-empty-p focus) 'general 'focused)))))
             (puthash key state mevedel-memory-pass--running)
             (unless automatic

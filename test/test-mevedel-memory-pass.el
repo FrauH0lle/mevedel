@@ -229,6 +229,7 @@
       (should (equal '(memory-consolidation-fired memory-consolidation-completed)
                      (mapcar (lambda (event) (plist-get event :event)) records)))
       (should (eq 'focused (plist-get completed :scope)))
+      (should (eq 'memory (plist-get completed :workload)))
       (should (eq 'manual (plist-get completed :mode)))
       (should (= 1 (plist-get completed :reviewed-count)))
       (should (= 0 (plist-get completed :covered-count)))

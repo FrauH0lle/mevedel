@@ -140,7 +140,7 @@ cancellation releases the fence and leaves the machine retryable.
 - `memory-consolidation-fired`, `memory-consolidation-completed`,
   `memory-consolidation-failed`, and `memory-consolidation-killed` in workspace
   diagnostics. Each pass carries its identity, ownership generation, frozen
-  mode, general/focused scope, and buddy workload. Terminal events add duration,
+  mode, general/focused scope, and `memory` workload. Terminal events add duration,
   available provider usage, published proposal/review counts, consumed coverage,
   and the frozen eligible backlog remaining. Focused passes consume no general
   coverage; failed or cancelled passes leave the selected batch in the backlog.

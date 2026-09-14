@@ -77,7 +77,7 @@
 
 ;;;###autoload
 (defun mevedel-context-summary-digest-policy (policy)
-  "Freeze digest defaults in newly resolved summarization POLICY.
+  "Freeze digest defaults in newly resolved journal POLICY.
 Keep explicit reasoning choices.  When supported, disable unspecified
 reasoning so it cannot consume the entire short digest output allowance.
 Callers load `mevedel-models' at their request or capture boundary."
@@ -252,7 +252,9 @@ The return value is a
 zero-argument cancellation thunk.  SESSION is used only for model policy and
 telemetry ownership.  PREVIOUS-SUMMARY is valid only for continuation.  FOCUS
 and bounded GUIDANCE influence relevance without changing the output contract.
-POLICY, when non-nil, is a previously resolved summarization model policy."
+POLICY, when non-nil, is a previously resolved model policy.
+Otherwise use the `journal' workload for digests and `summarization' for
+continuation and handoff summaries."
   (unless (and (stringp source) (not (string-blank-p source)))
     (user-error "Context summary source must be non-empty text"))
   (unless (memq purpose '(continuation handoff digest))
@@ -375,7 +377,8 @@ POLICY, when non-nil, is a previously resolved summarization model policy."
                     ;; Resolver keys must win: `plist-get' returns the
                     ;; first occurrence, so leading defaults would shadow
                     ;; a resolved :max-tokens or :request-params.
-                    (append (mevedel-model-resolve-workload 'summarization)
+                    (append (mevedel-model-resolve-workload
+                             (if (eq purpose 'digest) 'journal 'summarization))
                             '(:max-tokens nil :request-params nil)))))
           ;; A frozen digest policy was already bounded at capture; applying
           ;; the same idempotent defaults keeps every digest request clamped.

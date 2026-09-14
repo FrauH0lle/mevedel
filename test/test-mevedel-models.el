@@ -390,6 +390,18 @@
         (put 'gptel-reasoning-effort 'custom-type old-custom)
         (put 'fast-model :reasoning-effort old-fast)
         (put 'llama3.1:8b :reasoning-effort old-llama))))
+  :doc "journal and memory default to balanced independently of buddy and summarization"
+  (mevedel-models-test--with-backends
+    (let* ((mevedel-model-tiers '((balanced :provider "Balanced:balanced-model")
+                                 (fast :provider "Fast:fast-model")))
+           (mevedel-model-workloads
+            (mevedel-model-merge-workloads
+             '((buddy :tier fast) (summarization :tier fast))
+             (eval (car (get 'mevedel-model-workloads 'standard-value)) t))))
+      (dolist (workload '(journal memory))
+        (should (eq 'balanced (plist-get (alist-get workload mevedel-model-workloads) :tier)))
+        (should (eq 'balanced-model
+                    (plist-get (mevedel-model-resolve-workload workload) :model))))))
   :doc "the buddy workload defaults to the fast tier"
   (mevedel-models-test--with-backends
     (let ((mevedel-model-tiers '((fast :provider "Fast:fast-model")))
