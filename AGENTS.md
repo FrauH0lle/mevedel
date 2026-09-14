@@ -7,6 +7,37 @@ interacting with LLMs during programming. It enables overlay-based
 instruction management for AI-assisted development with direct gptel
 integration.
 
+## DEEP HARNESS
+
+Design mevedel as a **deep module**: substantial useful behavior behind a small,
+clear interface. The LLM is its caller. Depth means capability per amount the
+caller must learn, not implementation size or the number of tools.
+
+The interface includes everything the model must know to operate correctly:
+tools, prompts, reminders, resource conventions, ordering constraints, and
+recovery procedures. Moving required knowledge into a manual does not remove
+it from the interface.
+
+- Leave task strategy and ordinary reasoning to capable models. Supply user
+  intent, relevant evidence, clear constraints, and acceptance criteria.
+  Preserve explicitly requested workflows without imposing them on every task.
+- Absorb execution mechanics and bookkeeping in the harness: permissions,
+  execution targets, process and agent lifecycles, mutation tracking, and
+  persistence. Keep consequential effects, failures, and limits visible.
+- Expose clear, composable capabilities. Fewer tools help only when they reduce
+  what the model must learn and coordinate; a generic tool with a complicated
+  language can enlarge the interface.
+- Prefer locality: an implementation fix should stay inside its owning module,
+  without requiring new operating instructions across callers. Test behavior
+  through the same interface callers use.
+- Apply the deletion test to instructions and orchestration: if removing one
+  loses nothing useful, delete it. If removing a module makes callers recreate
+  its mechanics, it earns its place. Do not move obsolete prompt rituals into
+  hardcoded controllers.
+- Reassess interventions as models improve. Judge simplification by completed
+  work, correctness, cost, latency, and user interruptions; fewer tokens alone
+  do not establish a better interface.
+
 ## NO BACKWARDS COMPATIBILITY
 
 mevedel is under active development and has no backwards-compatibility
@@ -45,8 +76,14 @@ boundary on later work. When evidence changes the trade, change the ADR.
 
 Before planning or changing an unfamiliar area, consult the
 [documentation map](docs/index.md#documentation-map) and read its relevant
-contracts. The `docs/` tree is the maintained working documentation; this file
-keeps the entry rules and retrieval triggers.
+contracts. The `docs/` tree documents the system as it exists now: implemented
+behavior, current contracts, and the rationale for the current design. It is
+not a planning workspace. Keep plans, PRDs, proposals, roadmaps, backlogs, and
+speculative designs outside `docs/`, under `.scratch/<feature-slug>/`.
+Update `docs/` when the corresponding change is implemented; do not document
+intended behavior as current behavior. Clearly marked superseded ADRs retain
+historical rationale, not future plans. This file keeps the entry rules and
+retrieval triggers.
 
 Each `.el` file also describes its purpose in its `;;; Commentary:` block.
 
@@ -80,7 +117,7 @@ For interactive commands, see [README.md](README.md#usage).
 
 ### Issue tracker
 
-Issues and PRDs are tracked as local markdown files under `.scratch/<feature-slug>/`. `.scratch/` is gitignored local agent state; promote durable PRD decisions to maintained docs. See `docs/agents/issue-tracker.md`.
+Issues and PRDs are tracked as local markdown files under `.scratch/<feature-slug>/`. `.scratch/` is gitignored local agent state; promote implemented decisions to maintained docs when they describe the current system. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

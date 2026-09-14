@@ -1,10 +1,12 @@
 # Issue tracker: Local Markdown
 
 Issues and PRDs for this repo live as markdown files in `.scratch/`.
-That directory is intentionally gitignored local agent state. If a PRD
-contains durable product or architecture decisions, promote those parts
-to maintained docs such as `docs/adr/`, `docs/backlog.md`, or
-the relevant area doc instead of committing `.scratch/`.
+That directory is intentionally gitignored local agent state. Keep plans,
+proposals, roadmaps, backlogs, and speculative designs there, outside `docs/`.
+The `docs/` tree describes the current system. Once a PRD's product or
+architecture decisions are implemented, record the resulting behavior and
+rationale in `docs/adr/` or the relevant area doc instead of committing
+`.scratch/`.
 
 ## Issue flow
 
