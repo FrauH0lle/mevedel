@@ -26,6 +26,13 @@ limits in that same runner. A policy variable being set is insufficient if the
 loaded transport does not serialize it. Keep any intentionally different
 dependency configuration explicit in the protocol and conclusions.
 
+Preserve and check the configured backend's concrete type, not just its name,
+model and endpoint. Reconstructing a Codex OAuth backend as a generic Responses
+backend changes native request controls: OAuth omits unsupported server output
+limits while mevedel retains its client-side guards. Preflight must exercise the
+configured backend type through the native request path; matching an expected
+payload from a substituted type does not establish configuration equivalence.
+
 ## gptel and gptel-agent source rule
 
 mevedel is tightly coupled to gptel and also depends on gptel-agent. Before
