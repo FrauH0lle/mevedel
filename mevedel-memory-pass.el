@@ -13,8 +13,6 @@
 (require 'mevedel-memory-decision)
 (require 'mevedel-memory-review)
 (require 'mevedel-memory-store)
-(require 'mevedel-session-durability)
-(require 'mevedel-session-persistence)
 
 ;; `mevedel-memory-list'
 (declare-function mevedel-memory-list--finished "mevedel-memory-list" (workspace result))
@@ -26,8 +24,9 @@
 
 (defcustom mevedel-memory-consolidation-mode 'propose
   "How memory consolidation is scheduled and proposals are handled.
-Manual runs only on request.  Propose also runs at eligible completed
-root turns.  Auto uses the same gate and applies fresh memory proposals
+Manual runs only on request. Propose also runs at eligible workspace activation,
+digest publication and completed root turns. Auto uses the same gate and applies
+fresh memory proposals
 with checked writes.
 Instruction proposals always wait for explicit approval."
   :type '(choice (const manual) (const propose) (const auto))
@@ -40,7 +39,9 @@ Focused reviews do not move this clock.  Explicit commands bypass the gate."
 
 (defcustom mevedel-memory-consolidation-min-digests 5
   "Minimum eligible unreviewed digests needed for automatic memory review.
-Known live sessions are excluded.  Explicit commands bypass this threshold."
+Completed digests from running sessions are eligible. One day before ordinary
+journal expiry, a smaller backlog may be reviewed. Explicit commands bypass
+this threshold."
   :type '(integer :tag "Digests") :group 'mevedel)
 
 (defvar mevedel-memory-pass--inhibit-scheduling nil
@@ -82,7 +83,7 @@ malformed retirement marker stops automatic admission for inspection."
 (defun mevedel-memory-pass--automatic-selection (workspace entries)
   "Return an eligible automatic batch from fresh WORKSPACE ENTRIES, or nil.
 The caller owns consolidation admission and has recovered prior publications.
-Check elapsed target time before enumerating live sessions and counting digests.
+Check elapsed target time before selecting completed published evidence.
 Cache only the next client-side opportunity, never coverage or write authority."
   (unless (and (numberp mevedel-memory-consolidation-min-hours)
                (>= mevedel-memory-consolidation-min-hours 0)
@@ -95,29 +96,38 @@ Cache only the next client-side opportunity, never coverage or write authority."
     (setf (mevedel-workspace-memory-schedule workspace)
           (list :after (+ (float-time) (if (> remaining 0) remaining 600))
                 :hours mevedel-memory-consolidation-min-hours
-                :digests mevedel-memory-consolidation-min-digests))
+                :digests mevedel-memory-consolidation-min-digests
+                :age mevedel-journal-max-age-days))
     (when (<= remaining 0)
-      (let ((selection (mevedel-memory-pass-select workspace entries)))
-        (when (>= (plist-get selection :eligible) mevedel-memory-consolidation-min-digests)
+      (let ((selection (mevedel-memory-pass-select entries)))
+        (when (or (>= (plist-get selection :eligible) mevedel-memory-consolidation-min-digests)
+                  (and (plist-get selection :entries)
+                       (integerp mevedel-journal-max-age-days)
+                       (>= mevedel-journal-max-age-days 0)
+                       (>= (- now (float-time (date-to-time
+                                              (plist-get (car (plist-get selection :entries)) :created))))
+                           (* (max 0 (1- mevedel-journal-max-age-days)) 86400))))
           selection)))))
 
 ;;;###autoload
 (defun mevedel-memory-pass-schedule (workspace)
-  "Offer automatic review after a completed root turn in WORKSPACE.
-Manual mode, cached thresholds, and pending turns need no target I/O.  Defer
-the cold observation until transport is idle; a pass rechecks admission under
-target ownership.  No completion recursively schedules another pass."
+  "Offer automatic review at an activity boundary in WORKSPACE.
+Manual mode, cached thresholds and pending opportunities need no target I/O.
+Defer the cold observation until transport is idle; a pass rechecks admission
+under target ownership. No completion recursively schedules another pass."
   (unless (or mevedel-memory-pass--inhibit-scheduling
               (eq mevedel-memory-consolidation-mode 'manual))
     (let ((cached (mevedel-workspace-memory-schedule workspace)))
       (unless (or (gethash workspace mevedel-memory-pass--pending)
                   (and (equal (plist-get cached :hours) mevedel-memory-consolidation-min-hours)
                        (equal (plist-get cached :digests) mevedel-memory-consolidation-min-digests)
+                       (equal (plist-get cached :age) mevedel-journal-max-age-days)
                        (< (float-time) (or (plist-get cached :after) 0))))
         (setf (mevedel-workspace-memory-schedule workspace)
               (list :after (+ (float-time) 600)
                     :hours mevedel-memory-consolidation-min-hours
-                    :digests mevedel-memory-consolidation-min-digests))
+                    :digests mevedel-memory-consolidation-min-digests
+                    :age mevedel-journal-max-age-days))
         (mevedel-transport-schedule-idle
          mevedel-memory-pass--pending workspace 'memory-pass (mevedel-workspace-root workspace)
          (lambda ()
@@ -139,59 +149,17 @@ target ownership.  No completion recursively schedules another pass."
   (maphash (lambda (_key state) (mevedel-memory-pass-cancel (plist-get state :workspace)))
            mevedel-memory-pass--running))
 
-(defun mevedel-memory-pass--session-state (workspace record)
-  "Return live, unavailable, or nil for WORKSPACE session RECORD.
-Use current authority, including records without a readable publication."
-  (condition-case nil
-      (let ((path (plist-get record :save-path)))
-        (if (eq (mevedel-session-codec-workspace-authority-mode workspace) 'portable)
-            (and (memq (mevedel-session-durability-lease-state path) '(owned foreign)) 'live)
-          (let ((lock (mevedel-session-persistence--lock-path path)))
-            (when (mevedel-session-control-fs-path-exists-p lock)
-              (let ((record (mevedel-session-persistence--read-lock lock)))
-                (unless (and (proper-list-p record)
-                             (stringp (plist-get record :hostname))
-                             (not (string-empty-p (plist-get record :hostname)))
-                             (integerp (plist-get record :pid)) (> (plist-get record :pid) 0))
-                  (error "Session lock is unreadable"))
-                (and (or (not (equal (plist-get record :hostname) (system-name)))
-                         (mevedel-session-persistence--same-host-lock-active-p record))
-                     'live))))))
-    (error 'unavailable)))
+(defun mevedel-memory-pass-select (entries &optional focused)
+  "Select at most twenty completed digests from validated public ENTRIES.
+FOCUSED also admits previously reviewed evidence. Published digests are
+immutable completed work, including from sessions that are still running.
 
-(defun mevedel-memory-pass-select (workspace entries &optional focused)
-  "Select at most twenty complete eligible digests from WORKSPACE ENTRIES.
-ENTRIES are validated public records from a fresh journal observation. FOCUSED
-also admits previously reviewed digests as evidence. Both modes exclude known
-live sessions across clients; unreadable authority remains unavailable.
-
-Return :entries oldest first, :eligible count, :remaining eligible backlog,
-and excluded digest IDs under :excluded (live) and :unavailable. Break equal
-timestamps by digest ID. This observation acquires no ownership, pins no
-evidence, and consumes no coverage; the caller must coordinate publication."
-  (let ((digests (if focused
-                     (seq-filter (lambda (entry) (eq (plist-get entry :kind) 'digest)) entries)
-                   (mevedel-journal-index-unreviewed entries)))
-        (states (make-hash-table :test #'equal))
-        eligible excluded unavailable)
-    (when digests
-      (let ((sessions (mevedel-session-persistence--enumerate-sessions workspace)))
-        (dolist (record (append (plist-get sessions :sessions) (plist-get sessions :incompatible)))
-          (let ((state (mevedel-memory-pass--session-state workspace record))
-                (ids (delete-dups
-                      (list (plist-get (plist-get record :summary) :session-id)
-                            (file-name-nondirectory (directory-file-name (plist-get record :save-path)))))))
-            (dolist (id (delq nil ids))
-              (puthash id (if (eq state 'live) 'live (or (gethash id states) state)) states)))))
-      (dolist (entry digests)
-        (let* ((session-id (plist-get entry :session))
-               (state (if (mevedel-session-persistence-find-live-buffer
-                           session-id (mevedel-session-buffer-name (plist-get entry :session-name) workspace))
-                          'live (gethash session-id states))))
-          (pcase state
-            ('live (push (plist-get entry :id) excluded))
-            ('unavailable (push (plist-get entry :id) unavailable))
-            (_ (push entry eligible))))))
+Return :entries oldest first, :eligible count and :remaining eligible backlog.
+Break equal timestamps by digest ID. This observation acquires no ownership,
+pins no evidence and consumes no coverage; the caller coordinates publication."
+  (let ((eligible (if focused
+                      (seq-filter (lambda (entry) (eq (plist-get entry :kind) 'digest)) entries)
+                    (mevedel-journal-index-unreviewed entries))))
     (setq eligible
           (sort eligible (lambda (left right)
                            (let ((first (plist-get left :created)) (second (plist-get right :created)))
@@ -199,8 +167,7 @@ evidence, and consumes no coverage; the caller must coordinate publication."
                                  (string-lessp (plist-get left :id) (plist-get right :id))
                                (string-lessp first second))))))
     (list :entries (seq-take eligible 20) :eligible (length eligible)
-          :remaining (max 0 (- (length eligible) 20))
-          :excluded (nreverse excluded) :unavailable (nreverse unavailable))))
+          :remaining (max 0 (- (length eligible) 20)))))
 
 (defun mevedel-memory-pass-running (workspace)
   "Return this client's running consolidation state for WORKSPACE, or nil.
@@ -365,7 +332,7 @@ No request recursively drains a remaining backlog."
                               (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
                              (let ((entries (mevedel-journal-store-entries (mevedel-workspace-root workspace))))
                                (if automatic (mevedel-memory-pass--automatic-selection workspace entries)
-                                 (mevedel-memory-pass-select workspace entries (not (string-empty-p focus))))))))
+                                 (mevedel-memory-pass-select entries (not (string-empty-p focus))))))))
                          (entries (plist-get selection :entries)))
                     (when (and automatic (not selection))
                       (mevedel-journal-claim-settle claim 'cancelled "")

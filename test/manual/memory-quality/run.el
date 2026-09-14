@@ -49,10 +49,10 @@
 
 (defun mevedel-quality--grep (workspace query)
   "Use the ordinary journal Grep handler in WORKSPACE for QUERY."
-  (let* ((args (list :path "journal://" :pattern query :output_mode "content"))
-         (attempt (mevedel-resource-prepare 'grep "journal://"
+  (let* ((args (list :path "memory://journal/" :pattern query :output_mode "content"))
+         (attempt (mevedel-resource-prepare 'grep "memory://journal/"
                                             (list :workspace workspace :args args)))
-         (mevedel-resource-current-attempts (list (cons "journal://" attempt)))
+         (mevedel-resource-current-attempts (list (cons "memory://journal/" attempt)))
          (deadline (+ (float-time) 20))
          done result)
     (unwind-protect
@@ -186,7 +186,7 @@
                                      :created (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)
                                      :model (format "%s:%s" (plist-get config :name) model))
                                (plist-get result :summary))))
-                  (setq address (concat "journal://" (mevedel-resource-encode-component (plist-get entry :file)))
+                  (setq address (concat "memory://journal/" (mevedel-resource-encode-component (plist-get entry :file)))
                         retrieval (mevedel-quality--grep workspace (plist-get case :query)))))
               (with-temp-file (file-name-concat results-directory (concat name ".md"))
                 (insert (format "# %s\n\nModel: %s / %s; effort: %S\n\nPurpose: %s\n\nPrompt SHA256: %s\n\nElapsed seconds: %.2f\n\nOutcome: %S\n\nInput tokens: %S; output tokens: %S\n\nConfigured costs per million tokens: input %S; output %S (configuration values, not a billing receipt).\n\nHuman judgment: PENDING\n\nReview question: %s\n\n"

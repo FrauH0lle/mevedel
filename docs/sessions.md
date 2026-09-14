@@ -276,6 +276,17 @@ decides who won from what it observes after its write, and exclusive
 creation is the only atomic election. Each operation reports `ok`, `conflict`,
 `absent`, `mismatch`, `failed` or `skipped`, so a caller reproduces the
 per-operation nil-versus-signal contract of the single-operation wrappers.
+For two to 32 independent unbounded reads, the same control program can carry
+regular files together in a GNU tar stream. It keeps every proved parent
+descriptor open, refuses symlink leaves, and disables inherited `TAR_OPTIONS`.
+Emacs decodes the stream without extracting files and requires the expected
+ordered regular members, valid header checksums and successful transfer status.
+The target streams encoded bytes without buffering the archive in a shell
+variable. Unavailable or unsuccessful transfer and rejected archives are
+discarded and retried with fresh ordinary reads in a second target process;
+it never supplies partial success to the caller. Bounded reads and mutations
+retain their ordinary execution path. Source byte/hash checks still belong to
+their existing callers.
 Content payloads and listings travel base64-encoded inside a NUL-framed request
 and response, because filenames and content both contain bytes a shell cannot pass
 through a command substitution literally. Numeric request fields travel as digit
@@ -1430,10 +1441,15 @@ still-live publishing generation back to active before reserving a new window.
 
 Workspace journal expiry runs before session-cleanup eligibility checks, so
 disabling session expiry or using a TRAMP workspace does not disable it.
-`mevedel-journal-max-age-days` independently defaults to 365 (nil disables it).
-An hourly opportunity expires up to 50 unreferenced digests through recoverable
-accepted manifests. Pending captures, review evidence pins, and capture coverage
-survive; see [memory](memory.md) for the journal retention contract.
+`mevedel-journal-max-age-days` independently defaults to 14 days of ordinary
+recall from immutable entry creation (nil disables age expiry). Expired entries
+are hidden from ordinary recall even when their bytes must remain. An hourly
+cleanup opportunity retires eligible evidence through recoverable accepted
+manifests, preserving unreviewed digests, pending captures, evidence pins and
+unresolved proposal/write dependencies. A successful general no-action review
+counts as processing. Resolved review/decision history expires as a complete
+dependency group; capture coverage survives. See [memory](memory.md) for the
+retention and human inspection contract.
 
 Pending journal capture pins under a session's `.journal-pins/` prevent that
 session from expiring. Publication-generation collection also retains each

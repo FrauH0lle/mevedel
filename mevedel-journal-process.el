@@ -20,6 +20,10 @@
 (declare-function mevedel-journal-recovery-run "mevedel-journal-recovery" (workspace))
 (autoload 'mevedel-journal-recovery-run "mevedel-journal-recovery")
 
+;; `mevedel-memory-pass'
+(declare-function mevedel-memory-pass-schedule "mevedel-memory-pass" (workspace))
+(autoload 'mevedel-memory-pass-schedule "mevedel-memory-pass")
+
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record-workspace "mevedel-telemetry"
                   (workspace event &rest props))
@@ -133,6 +137,7 @@ admit replacement inference.  USAGE carries available provider token counts."
              :output-tokens (plist-get usage :output-tokens)
              :outcome 'published)
             (mevedel-journal-capture--retire workspace capture (format "published %s\n" (plist-get entry :id)))
+            (mevedel-memory-pass-schedule workspace)
             entry))))))
 
 (defun mevedel-journal-process--policy (workspace capture)

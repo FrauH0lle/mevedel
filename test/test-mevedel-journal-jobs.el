@@ -137,5 +137,50 @@
                                   (get-buffer "*mevedel journal evidence*")))
            (when (buffer-live-p candidate) (kill-buffer candidate))))))))
 
+(mevedel-deftest mevedel-journal-jobs--retained (:quiet t)
+  ,test
+  (test)
+  :doc "overdue evidence exposes age, unfinished review and capture reasons without changing storage"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (mevedel-test-journal-capture--turn session buffer "Request" "Saved evidence")
+     (let* ((workspace (mevedel-session-workspace session))
+            (root (mevedel-workspace-root workspace))
+            (capture (car (mevedel-journal-capture-seal session buffer 'session-end)))
+            (metadata (copy-tree (mevedel-journal-process--metadata workspace capture)))
+            (mevedel-journal-max-age-days 14)
+            (mevedel-memory-consolidation-mode 'manual)
+            (clock (symbol-function 'float-time))
+            (now (float-time (date-to-time "2026-09-22T12:00:00Z"))))
+       (plist-put metadata :created "2026-09-07T12:00:00Z")
+       (let* ((entry (mevedel-journal-store-publish-digest
+                      root metadata
+                      "## Done\n- Observed: Retained result.\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none"))
+              (file (plist-get entry :file)))
+         (unwind-protect
+             (cl-letf (((symbol-function 'float-time)
+                        (lambda (&optional value) (if value (funcall clock value) now))))
+               (let ((row (car (mevedel-journal-jobs--retained workspace))))
+                 (should (equal entry (plist-get row :entry)))
+                 (should (= 15 (plist-get row :age)))
+                 (should (member "Unreviewed" (plist-get row :reasons)))
+                 (should (member "Capture completion pending" (plist-get row :reasons))))
+               (save-window-excursion
+                 (with-current-buffer (mevedel-journal-jobs workspace)
+                   (should (string-search "Overdue retained evidence: 1" (buffer-string)))
+                   (should (string-search "15 days" (buffer-string)))
+                   (should (string-search "manual" (buffer-string)))
+                   (goto-char (point-min))
+                   (search-forward "Inspect retained entry")
+                   (button-activate (button-at (1- (point)))))
+                 (with-current-buffer "*mevedel journal evidence*"
+                   (should (string-search "Retained result" (buffer-string)))))
+               (should-not (mevedel-journal-index-entries workspace))
+               (should (equal entry (mevedel-journal-store-read root file)))
+               (let ((mevedel-journal-max-age-days nil))
+                 (should-not (mevedel-journal-jobs--retained workspace))))
+           (dolist (name '("*mevedel journal jobs*" "*mevedel journal evidence*"))
+             (when (get-buffer name) (kill-buffer name)))))))))
+
 (provide 'test-mevedel-journal-jobs)
 ;;; test-mevedel-journal-jobs.el ends here

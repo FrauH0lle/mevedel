@@ -30,6 +30,28 @@
   "## Done\n- Observed: tests passed (turn 7).\n\n## Learned\n- User: use the local runner (turn 4).\n\n## Surprised\n- none\n\n## Unfinished\n- none"
   "Valid attributed digest text.")
 
+(mevedel-deftest mevedel-journal-store-recall-p ()
+  ,test
+  (test)
+  :doc "ordinary recall expires at the immutable age boundary and respects configuration"
+  (let ((entry '(:created "2026-09-01T12:00:00Z"))
+        (mevedel-journal-max-age-days 14))
+    (should (mevedel-journal-store-recall-p entry
+                                          (float-time (date-to-time "2026-09-15T11:59:59Z"))))
+    (should-not (mevedel-journal-store-recall-p entry
+                                              (float-time (date-to-time "2026-09-15T12:00:00Z"))))
+    (should-not (mevedel-journal-store-recall-p entry
+                                              (float-time (date-to-time "2026-09-16T12:00:00Z"))))
+    (let ((mevedel-journal-max-age-days 30))
+      (should (mevedel-journal-store-recall-p entry
+                                            (float-time (date-to-time "2026-09-16T12:00:00Z")))))
+    (let ((mevedel-journal-max-age-days nil))
+      (should (mevedel-journal-store-recall-p entry
+                                            (float-time (date-to-time "2027-09-16T12:00:00Z")))))
+    (let ((mevedel-journal-max-age-days 0))
+      (should-not (mevedel-journal-store-recall-p entry
+                                                (float-time (date-to-time "2026-09-01T12:00:00Z")))))))
+
 (mevedel-deftest mevedel-journal-store-publish-review ()
   ,test
   (test)

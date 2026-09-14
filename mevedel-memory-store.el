@@ -32,10 +32,7 @@
 
 (defun mevedel-memory-store--assert-owned (claim)
   "Reject CLAIM unless it is the current unexpired, unsettled owner."
-  (unless (and (equal claim (mevedel-journal-claim-current (plist-get claim :directory)))
-               (not (mevedel-journal-claim-outcome claim))
-               (< (mevedel-session-control-fs-target-time (plist-get claim :directory))
-                  (plist-get claim :expires-at)))
+  (unless (mevedel-journal-claim-owned-p claim)
     (error "Memory pass ownership is unavailable")))
 
 (defun mevedel-memory-store--mutation (workspace function)

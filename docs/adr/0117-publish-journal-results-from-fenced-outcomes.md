@@ -28,6 +28,21 @@ immutable outcome for that generation. A successor can be admitted only
 after that outcome exists. Exclusive creation is the fencing operation;
 clock observations and process identities alone are not authority.
 
+Ownership preconditions collect the newest-generation listing, exact claim
+identity, absence of an outcome and target time in one pinned control program.
+Every precondition takes a fresh observation; it is still not atomic admission.
+Settlement retains the deadline guard inside its locked exclusive-create
+program, so it no longer needs an additional earlier clock round trip.
+Authenticated decision reads also batch their immutable claim and outcome
+observations, reusing the existing schema and ownership validators only within
+that read operation. The measurement behind these changes was the native
+52-decision cleanup fixture: setup and teardown used 2,131 control calls,
+recovery 321 and cleanup 632. The same boundary now uses 1,693, 269 and 576,
+respectively. Three-run local medians fell from 14.10 to 12.35 seconds overall;
+recovery fell from 1.28 to 1.11 seconds and cleanup from 2.74 to 2.53 seconds.
+The larger setup saving comes from faster production constructors, with all
+52 durable decisions and their validation retained.
+
 A completed outcome retains the exact accepted payload. Callers may publish
 only that payload, and must recover an accepted unpublished result before
 starting replacement work for it. This separates acceptance from public
@@ -124,15 +139,11 @@ setting otherwise stalled a sessionless request. Unknown tools fail before
 dispatch. Deadline, tool exhaustion, output limits, and buffer closure all
 retire the same request generation without publishing coverage.
 
-Pass selection uses a fresh journal observation and existing session discovery,
-including sessions whose publications cannot be read. Lease status is read from
-the execution target; both this client's owned lease and another client's held
-lease exclude evidence even when no local root buffer exists. File-session
-checks retain the existing same-host PID/start-time proof and conservatively
-treat foreign-host holders as live. An unreadable lock is unavailable, not an
-absent owner. The PID record is read once for the decision: rereading between
-validation and liveness could turn a changed or damaged record into apparent
-absence. Selection reports excluded evidence without consuming its coverage.
+Pass selection uses a fresh validated journal observation. Completed public
+digests remain eligible while their source session continues, including when
+another client owns it. Selection no longer reads source-session locks or leases;
+immutable published evidence requires no authority to mutate its source session.
+Consolidation admission and evidence pins still fence review and publication.
 
 Prepared consolidation state retains complete selected digest bodies and source
 fingerprints alongside the original scope. Preparation holds journal mutation
@@ -169,13 +180,15 @@ preparation rejects any selected source changed between those operations. A
 real-expiry test lets an owner expire, admits a successor with its own pins,
 then delivers the old owner's success: it cannot publish or disturb the
 successor. Closing the request buffer follows the same cancellation settlement.
-Both the explicit command and completed-root-turn opportunities use this
-coordinator. Automatic opportunities check mode and cached timing without target
+Explicit commands, completed root turns, digest publication and workspace
+activation use this coordinator. Automatic opportunities check mode and cached timing without target
 I/O, coalesce while queued, and defer through the transport idle boundary.
 Under current workspace ownership the coordinator recovers earlier accepted
 results, checks elapsed target time since the last successful general review,
 then counts eligible unreviewed digests. Default thresholds are 24 hours and
-five digests; a failed count check defers another scan for ten minutes. This
+five digests. One day before configured ordinary recall expires, even one
+unreviewed digest may pass the count gate. A failed check defers another scan for
+ten minutes. This
 second check matters when another client finishes between the initial
 observation and admission. Focused reviews never change the general clock, and
 retired completion metadata retains it after expiry. Explicit commands bypass
@@ -517,3 +530,32 @@ that content may come from other sessions and does not establish what the
 capturing session performed. This replaces the fixed notes.md preference because
 the freeform shared-file evaluation recovered corrections without a prescribed
 file or folder structure. Captured strings stay immutable after later shared edits.
+
+## 2026-09-13: separate ordinary recall from recovery retention
+
+The prior age rule retained searchable journal evidence for a year and could
+remove old digests without a completed general review. The native cleanup
+regression demonstrated that unreviewed evidence could be deleted solely by age.
+That conflicts with the journal's role as temporary evidence for deliberate
+curation, especially when a workspace is sparse or inactive.
+
+Ordinary recall now defaults to 14 days from immutable entry creation. Public
+resource reads and cached discovery enforce this independently of physical
+cleanup. Unreviewed digests remain in storage for review; existing pins and
+accepted-operation dependencies continue to retain proposal/recovery evidence.
+Successful general no-action review consumes coverage; failure does not.
+
+The source-session exclusion also prevented review during long-lived sessions,
+although published digests are already completed, immutable evidence. Selection
+now admits them without enumerating or modifying source-session authority. Native
+consolidation admission and evidence pinning remain unchanged. Sparse evidence
+gets a review opportunity one day before configured recall expiry, subject to the
+existing general-review time gate. Workspace activation and digest publication
+join completed turns as opportunities; manual mode and the propose default stay.
+The same idle transport queue and ten-minute retry delay absorb scheduling.
+
+The public address is memory://journal/, with journal reserved alongside curated
+root keys. This changes resource naming, not storage format or permissions. The
+old scheme is rejected. No second retention service or semantic blocking registry
+is introduced; curated forgetting remains removal from curated content and its
+index pointer.

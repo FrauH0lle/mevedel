@@ -13,7 +13,7 @@
           "helpers"))
 (require 'mevedel-journal-index)
 
-(mevedel-deftest mevedel-journal-index-unreviewed ()
+(mevedel-deftest mevedel-journal-index-unreviewed (:vars ((mevedel-journal-max-age-days nil)))
   ,test
   (test)
   :doc "coverage is the exact union of general reviews, independent of timestamps"
@@ -27,7 +27,7 @@
                    (mevedel-journal-index-unreviewed (append (list first second third) reviews)))))
   (should-not (mevedel-journal-index-unreviewed nil)))
 
-(mevedel-deftest mevedel-journal-index-entries ()
+(mevedel-deftest mevedel-journal-index-entries (:vars ((mevedel-journal-max-age-days nil)))
   ,test
   (test)
   :doc "throttles scans but observes external additions, removals, and workspace root changes"
@@ -68,7 +68,7 @@
             (should (= scans 4))))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-journal-index--line ()
+(mevedel-deftest mevedel-journal-index--line (:vars ((mevedel-journal-max-age-days nil)))
   ,test
   (test)
   :doc "flattens evidence and bounds UTF-8 without splitting characters"
@@ -79,7 +79,7 @@
     (should (string-suffix-p " [...]" line))
     (should (equal line (decode-coding-string (encode-coding-string line 'utf-8) 'utf-8)))))
 
-(mevedel-deftest mevedel-journal-index--lesson ()
+(mevedel-deftest mevedel-journal-index--lesson (:vars ((mevedel-journal-max-age-days nil)))
   ,test
   (test)
   :doc "prefers the first Learned bullet, then Done, ignoring empty sections"
@@ -92,7 +92,7 @@
   (should (equal "User: correction (turn 4)" (mevedel-journal-index--lesson
                                              "## Done\n- none\n\n## Learned\n- User: correction\n  (turn 4)\n- Inferred: other\n\n## Surprised\n- none\n\n## Unfinished\n- none"))))
 
-(mevedel-deftest mevedel-journal-index-prompt ()
+(mevedel-deftest mevedel-journal-index-prompt (:vars ((mevedel-journal-max-age-days nil)))
   ,test
   (test)
   :doc "external review changes refresh exact counts even when the newest digest is unchanged"
@@ -144,10 +144,10 @@
     (should (string-match-p "Unreviewed digests: 7" prompt))
     (should (string-match-p "dated evidence" prompt))
     (should (string-match-p "\\[\\.\\.\\.\\]" prompt))
-    (should (= 6 (length (split-string prompt "journal://" t))))
+    (should (= 6 (length (split-string prompt "memory://journal/" t))))
     (dolist (entry (seq-take entries 5))
       (should (string-match-p
-               (regexp-quote (concat "journal://" (mevedel-resource-encode-component (plist-get entry :file)))) prompt)))
+               (regexp-quote (concat "memory://journal/" (mevedel-resource-encode-component (plist-get entry :file)))) prompt)))
     (should-not (string-match-p "2026-09-02" prompt))
     (setf (plist-get (mevedel-workspace-journal-observation workspace) :entries) nil)
     (should-not (mevedel-journal-index-prompt workspace))))

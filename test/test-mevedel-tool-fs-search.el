@@ -1219,12 +1219,12 @@ Return (BIN-DIRECTORY . MARKER-PATH)."
   ,test
   (test)
   :doc "search preparation errors retain a useful cause while hiding temporary storage"
-  (let* ((address "journal://")
+  (let* ((address "memory://journal/")
          (failure
           (should-error
            (mevedel-tool-fs-search--documents
             #'ignore '(:pattern "note")
-            (list :address address :scheme 'journal :resource-search-documents nil)
+            (list :address address :scheme 'memory :resource-search-documents nil)
             (lambda (&rest _) (error "'rg' not installed on execution target"))))))
     (should (string-search "not installed on execution target" (cadr failure)))
     (should (string-search address (cadr failure)))

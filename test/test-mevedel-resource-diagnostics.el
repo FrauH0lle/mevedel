@@ -30,8 +30,8 @@
                    (mevedel-resource-error-message
                     '(error "File not found: work://note.md") "work://note.md"))))
   :doc "private local and target-native paths are replaced in nested diagnostics"
-  (let ((address "journal://"))
-    (should (equal "Cannot open journal://entry.md (journal://state/lock)"
+  (let ((address "memory://journal/"))
+    (should (equal "Cannot open memory://journal/entry.md (memory://journal/state/lock)"
                    (mevedel-resource-error-message
                     '(error "Cannot open /ssh:host:/private/journal/entry.md (/private/journal/state/lock)")
                     address '("/ssh:host:/private/journal"))))))

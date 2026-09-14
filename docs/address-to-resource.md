@@ -28,7 +28,7 @@ resource URI.
 | Conversation history | `history://`, `history://root`, `history://root/PATH` | yes | no | no | no |
 | Saved workspace conversations | `history://saved[/SESSION[/SEGMENT]]` | yes | yes | yes | no |
 | Persistent memory | `memory://root`, `memory://ROOT-KEY/RELATIVE-PATH` | yes | yes | yes | explicit file descendants |
-| Workspace journal | `journal://`, `journal://FILE` | yes | yes | yes | no |
+| Workspace journal | `memory://journal/`, `memory://journal/FILE` | yes | yes | yes | no |
 | MCP resource | `mcp://`, `mcp://ENCODED-SERVER`, `mcp://ENCODED-SERVER/ENCODED-URI` | yes | no | no | no |
 | Packaged documentation | `mevedel://`, `mevedel://RELATIVE-PATH` | yes | yes | yes | no |
 
@@ -48,7 +48,7 @@ current resource metadata has a usable surface:
   agent conversation; `history://saved` requires the request's workspace;
 - `memory://` requires at least one configured memory root; a first permitted
   file write can create a missing directory;
-- `journal://` requires at least one validated published entry in the workspace;
+- `memory://journal/` requires at least one validated published entry in the workspace;
   private pending state alone does not qualify; and
 - `mcp://` requires at least one configured MCP server.
 
@@ -189,7 +189,7 @@ is an error rather than an empty discovery root.
 
 Shared files survive session rename, fork, rewind and deletion, because they
 are workspace-owned. They are mutable working material, distinct from curated
-`memory://` and immutable dated `journal://` evidence. Neither scope participates
+`memory://` and immutable dated `memory://journal/` evidence. Neither scope participates
 in source snapshots, touched-file tracking, diagnostics or directive patch
 capture. Shared writes use the real backing path for normal filesystem edit
 permissions; they receive no session scratch exception in Plan mode.
@@ -327,16 +327,25 @@ out-of-workspace global roots. A prepared shared or memory write fails if its
 owning root changes before execution; the previous approval cannot authorize a
 new destination. Authored addresses remain in patch results and review headings.
 
-### `journal://`
+### `memory://journal/`
 
-The workspace owns `.mevedel/journal/` on its execution target. Bare Read lists
-validated published records newest first; an exact filename reads the full
+`journal` is a reserved branch of the memory scheme, distinct from configured
+curated-memory root keys. Its root spelling includes the final slash; descendants
+name one public entry. The old `journal://` scheme is rejected, with no alias or
+persisted-state migration. Existing journal files keep their names and layout.
+
+The workspace owns `.mevedel/journal/` on its execution target. Root Read lists
+validated published records within the ordinary recall age limit, newest first; an exact filename reads the full
 public Markdown with ordinary Read pagination. Timestamp colons use canonical
 `%3A` encoding in addresses. Private `state/`, nested names, traversal, malformed
 records, and symlink escapes are excluded. ApplyPatch is unsupported.
 Completed consolidation reviews are public records alongside digests; their
 metadata names examined digest IDs, focus, reference checks, and proposal IDs.
 Private proposal bodies and captured memory before-state are not public entries.
+The default 14-day limit applies from immutable entry creation to exact reads,
+search, discovery and completion, including prepared or cached access. Retention
+for unfinished review, proposals or recovery does not extend ordinary recall.
+Internal review/recovery and human inspection retain their storage access.
 Accepted expiry markers also exclude entries immediately, including when
 physical deletion is interrupted. Private capture coverage survives expiry
 without exposing old digest text through this address family.
@@ -351,8 +360,9 @@ supports these operations without constructing a session.
 Prompt discovery observes published entries at most once every ten seconds;
 local digest publication invalidates that observation. External additions and
 removals become visible at the next eligible observation. Completion uses only
-previously observed filenames, with no filesystem access. An initially cold
-composer can still insert `journal://`; request-time discovery populates its
+previously observed filenames, with no filesystem access. Both check age on
+every use, so an observation does not extend the ordinary recall period. An initially cold
+composer can still insert `memory://journal/`; request-time discovery populates its
 descendants. Authorized operations always validate current storage, independently
 of the discovery observation and whether automatic capture is enabled.
 

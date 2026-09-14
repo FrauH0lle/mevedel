@@ -120,6 +120,10 @@
 (declare-function mevedel-memory-decision-schedule-recovery "mevedel-memory-decision" (workspace))
 (autoload 'mevedel-memory-decision-schedule-recovery "mevedel-memory-decision")
 
+;; `mevedel-memory-pass'
+(declare-function mevedel-memory-pass-schedule "mevedel-memory-pass" (workspace))
+(autoload 'mevedel-memory-pass-schedule "mevedel-memory-pass")
+
 ;; `mevedel-models'
 (declare-function mevedel-model-apply-session-policy
                   "mevedel-models" (session &optional buffer))
@@ -704,6 +708,7 @@ M-x mevedel-retry-plan-implementation resumes it")))
       (mevedel-directive-plan-restore-pending mevedel--session buf))
     (mevedel-journal-cleanup-schedule workspace)
     (mevedel-journal-process-schedule workspace t)
+    (mevedel-memory-pass-schedule workspace)
     (mevedel-memory-decision-schedule-recovery workspace)
     (unless inspection-p
       (mevedel--run-session-start-hooks source))))

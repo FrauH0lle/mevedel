@@ -97,8 +97,7 @@ remote media conversion, this processes an already transferred copy locally."
           (plist-put native :path nil)
           (plist-put native :resource-roots
                      (list (list :path directory
-                                 :address (format "%s://"
-                                                  (plist-get descriptor :scheme)))))
+                                 :address (file-name-directory address))))
           (plist-put native :resource-address address)
           (funcall operation
                    (lambda (result)

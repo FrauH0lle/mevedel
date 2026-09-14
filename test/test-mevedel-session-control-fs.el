@@ -208,10 +208,222 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(mevedel-deftest mevedel-session-control-fs--archive-results
+  (:doc "decodes native binary members and long UTF-8 names while rejecting mismatched or corrupt archives")
+  (let* ((root (make-temp-file "mevedel-control-fs-archive-" t))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root (concat (make-string 120 ?a) "\u754c\nlast")))
+         (payload (unibyte-string 0 1 127 128 255))
+         (operations (list (list :op 'read :path first :coding 'no-conversion)
+                           (list :op 'read :path second :coding 'no-conversion)))
+         (original (symbol-function 'mevedel-session-control-fs--archive-results))
+         archive)
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write 'no-conversion))
+            (write-region payload nil first nil 'silent)
+            (write-region "" nil second nil 'silent))
+          (cl-letf (((symbol-function 'mevedel-session-control-fs--archive-results)
+                     (lambda (ops bytes)
+                       (setq archive bytes)
+                       (funcall original ops bytes))))
+                   (should (equal (list payload "")
+                                  (mapcar (lambda (r) (plist-get r :value))
+                                          (mevedel-session-control-fs-run-program operations)))))
+          (should (stringp archive))
+          (should (equal (list payload "")
+                         (mapcar (lambda (r) (plist-get r :value))
+                                 (mevedel-session-control-fs--archive-results operations archive))))
+          (should-error (mevedel-session-control-fs--archive-results
+                         (reverse operations) archive))
+          (should-error (mevedel-session-control-fs--archive-results
+                         (list (car operations)) archive))
+          (should-error (mevedel-session-control-fs--archive-results
+                         (append operations (list (car operations))) archive))
+          (should-error (mevedel-session-control-fs--archive-results
+                         operations (substring archive 0 513)))
+          (let ((corrupt (copy-sequence archive)))
+            (aset corrupt 100 (if (= (aref corrupt 100) ?0) ?1 ?0))
+            (should-error (mevedel-session-control-fs--archive-results operations corrupt))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-control-fs-run-program
   ()
   ,test
   (test)
+
+  :doc "batches independent binary reads in one archive without per-file encoding processes"
+  (let* ((root (make-temp-file "mevedel-control-fs-bulk-" t))
+         (bin (file-name-concat root "bin"))
+         (marker (file-name-concat root "tar-used"))
+         (tar (executable-find "tar"))
+         (payload (encode-coding-string "Binary\0evidence\n" 'utf-8-unix))
+         (calls 0) paths)
+    (skip-unless tar)
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (with-temp-file (file-name-concat bin "tar")
+            (insert "#!/bin/bash\n: >" (shell-quote-argument marker)
+                    "\nexec " (shell-quote-argument tar) " \"$@\"\n"))
+          (set-file-modes (file-name-concat bin "tar") #o700)
+          (dotimes (i 3)
+            (let ((path (file-name-concat root (number-to-string i) "session.org")))
+              (make-directory (file-name-directory path) t)
+              (let ((coding-system-for-write 'no-conversion))
+                (write-region payload nil path nil 'silent))
+              (push path paths)))
+          (let ((process-environment (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment))
+                (original (symbol-function 'process-file)))
+            (cl-letf (((symbol-function 'process-file)
+                       (lambda (&rest args) (cl-incf calls) (apply original args))))
+                     (let ((results (mevedel-session-control-fs-run-program
+                                     (mapcar (lambda (path) (list :op 'read :path path :coding 'no-conversion)) paths))))
+                       (should (equal '(ok ok ok) (mapcar (lambda (r) (plist-get r :status)) results)))
+                       (dolist (result results) (should (equal payload (plist-get result :value)))))))
+          (should (= 1 calls))
+          (should (file-exists-p marker)))
+      (delete-directory root t)))
+
+  :doc "bulk reads ignore archive preferences and reject a leaf replaced after proof"
+  (let* ((root (make-temp-file "mevedel-control-fs-bulk-race-" t))
+         (bin (file-name-concat root "bin"))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (outside (file-name-concat root "outside"))
+         (tar (executable-find "tar"))
+         (original (symbol-function 'process-file))
+         (calls 0))
+    (skip-unless tar)
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (write-region "initial" nil first nil 'silent)
+          (write-region "second" nil second nil 'silent)
+          (write-region "OUTSIDE-CANARY" nil outside nil 'silent)
+          ;; The wrapper runs after the target has proved both parents and
+          ;; checked both leaves, immediately before the actual archive read.
+          (with-temp-file (file-name-concat bin "tar")
+            (insert "#!/bin/bash\nrm -- " (shell-quote-argument first)
+                    "\nln -s -- " (shell-quote-argument outside) " "
+                    (shell-quote-argument first) "\nexec "
+                    (shell-quote-argument tar) " \"$@\"\n"))
+          (set-file-modes (file-name-concat bin "tar") #o700)
+          (let ((process-environment
+                 (append (list (concat "PATH=" bin ":" (getenv "PATH"))
+                               "TAR_OPTIONS=--dereference --remove-files")
+                         process-environment)))
+            (cl-letf (((symbol-function 'process-file)
+                       (lambda (&rest args)
+                         (cl-incf calls)
+                         (apply original args))))
+                     (let ((results
+                            (mevedel-session-control-fs-run-program
+                             (list (list :op 'read :path first :optional t)
+                                   (list :op 'read :path second)))))
+                       (should (equal '(failed ok)
+                                      (mapcar (lambda (r) (plist-get r :status)) results)))
+                       (should-not (plist-get (car results) :value))
+                       (should (equal "second" (plist-get (cadr results) :value))))))
+          (should (= calls 2))
+          (should (file-symlink-p first))
+          (should (file-exists-p second))
+          (should (equal "OUTSIDE-CANARY"
+                         (mevedel-session-control-fs-read-file outside))))
+      (delete-directory root t)))
+
+  :doc "unavailable bulk carrier retries ordinary reads with ordered failure semantics"
+  (let* ((root (make-temp-file "mevedel-control-fs-bulk-fallback-" t))
+         (bin (file-name-concat root "bin"))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (original (symbol-function 'process-file))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (write-region "first" nil first nil 'silent)
+          (write-region "second" nil second nil 'silent)
+          (with-temp-file (file-name-concat bin "tar")
+            (insert "#!/bin/bash\nexit 127\n"))
+          (set-file-modes (file-name-concat bin "tar") #o700)
+          (let ((process-environment
+                 (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+            (cl-letf (((symbol-function 'process-file)
+                       (lambda (&rest args)
+                         (cl-incf calls)
+                         (apply original args))))
+                     (should (equal '("first" "second")
+                                    (mapcar (lambda (r) (plist-get r :value))
+                                            (mevedel-session-control-fs-run-program
+                                             (list (list :op 'read :path first)
+                                                   (list :op 'read :path second))))))
+                     (should (= calls 2))
+                     (delete-file first)
+                     (should (equal '(absent skipped)
+                                    (mapcar (lambda (r) (plist-get r :status))
+                                            (mevedel-session-control-fs-run-program
+                                             (list (list :op 'read :path first)
+                                                   (list :op 'read :path second))))))
+                     (should (equal '(absent ok)
+                                    (mapcar (lambda (r) (plist-get r :status))
+                                            (mevedel-session-control-fs-run-program
+                                             (list (list :op 'read :path first :optional t)
+                                                   (list :op 'read :path second)))))))))
+      (delete-directory root t)))
+
+  :doc "rejected bulk output is discarded and retried against fresh native bytes"
+  (let* ((root (make-temp-file "mevedel-control-fs-bulk-fresh-" t))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (original (symbol-function 'process-file))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (write-region "initial" nil first nil 'silent)
+          (write-region "second" nil second nil 'silent)
+          (cl-letf (((symbol-function 'process-file)
+                     (lambda (&rest args)
+                       (cl-incf calls)
+                       (prog1 (apply original args)
+                         (when (= calls 1)
+                           (with-current-buffer (car (nth 2 args))
+                             (should (string-prefix-p "archive 0\0" (buffer-string)))
+                             (erase-buffer)
+                             (insert "archive 0\0invalid-base64!\0"))
+                           (write-region "updated" nil first nil 'silent))))))
+                   (should (equal '("updated" "second")
+                                  (mapcar (lambda (r) (plist-get r :value))
+                                          (mevedel-session-control-fs-run-program
+                                           (list (list :op 'read :path first)
+                                                 (list :op 'read :path second)))))))
+          (should (= calls 2)))
+      (delete-directory root t)))
+
+  :doc "a complete-looking stream from a failed carrier cannot supply stale success"
+  (let* ((root (make-temp-file "mevedel-control-fs-stream-failure-" t))
+         (bin (file-name-concat root "bin"))
+         (first (file-name-concat root "first"))
+         (second (file-name-concat root "second"))
+         (tar (executable-find "tar")))
+    (skip-unless tar)
+    (unwind-protect
+        (progn
+          (make-directory bin)
+          (write-region "initial" nil first nil 'silent)
+          (write-region "second" nil second nil 'silent)
+          (with-temp-file (file-name-concat bin "tar")
+            (insert "#!/bin/bash\n" (shell-quote-argument tar) " \"$@\"\n"
+                    "printf updated >" (shell-quote-argument first) "\nexit 1\n"))
+          (set-file-modes (file-name-concat bin "tar") #o700)
+          (let ((process-environment
+                 (cons (concat "PATH=" bin ":" (getenv "PATH")) process-environment)))
+            (should (equal '("updated" "second")
+                           (mapcar (lambda (r) (plist-get r :value))
+                                   (mevedel-session-control-fs-run-program
+                                    (list (list :op 'read :path first)
+                                          (list :op 'read :path second))))))))
+      (delete-directory root t)))
 
   :doc "runs every operation of a program in one target process"
   (let* ((root (make-temp-file "mevedel-control-fs-program-" t))

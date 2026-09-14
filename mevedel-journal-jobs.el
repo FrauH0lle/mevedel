@@ -9,7 +9,9 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'button)
 (require 'mevedel-journal-process)
+(require 'mevedel-memory-list)
 (require 'mevedel-workspace)
 
 ;; `mevedel-cockpit'
@@ -75,6 +77,65 @@
       (lambda (capture) (mevedel-journal-capture--marked-p workspace (plist-get capture :id) "retired"))
       (mevedel-journal-capture-list workspace t)))))
 
+(defun mevedel-journal-jobs--retained (workspace)
+  "Describe overdue public evidence still stored in WORKSPACE.
+Observe existing review coverage, capture state and evidence pins. These rows
+explain retention for humans; they grant neither recall nor deletion authority."
+  (let* ((root (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
+         (entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
+         (unreviewed (mevedel-journal-index-unreviewed entries))
+         (now (float-time))
+         (proposals (when (seq-some
+                          (lambda (entry)
+                            (and (eq (plist-get entry :kind) 'consolidation)
+                                 (plist-get entry :proposals)
+                                 (not (mevedel-journal-store-recall-p entry now)))) entries)
+                      (mevedel-memory-list--collect (list :workspace workspace))))
+         rows)
+    (dolist (entry entries (nreverse rows))
+      (unless (mevedel-journal-store-recall-p entry now)
+        (let (reasons)
+          (when (memq entry unreviewed) (push "Unreviewed" reasons))
+          (pcase (plist-get entry :kind)
+            ('digest
+             (let ((capture (file-name-concat root "state" "captures" (plist-get entry :capture-id))))
+               (when (and (mevedel-session-control-fs-path-exists-p capture)
+                          (not (mevedel-session-control-fs-path-exists-p
+                                (file-name-concat capture "retired"))))
+                 (push "Capture completion pending" reasons)))
+             (when (mevedel-session-control-fs-list-directory
+                    (file-name-concat root "state" "evidence-pins" (plist-get entry :id)) "\\`[^.]")
+               (push "Pinned for review, proposal or recovery" reasons)))
+            ('consolidation
+             (when (seq-some (lambda (other)
+                              (and (eq (plist-get other :kind) 'digest)
+                                   (member (plist-get other :id) (plist-get entry :digests)))) entries)
+               (push "Reviewed digest evidence still retained" reasons))
+             (when (plist-get entry :proposals)
+               (let ((states (delete-dups
+                              (mapcar (lambda (row) (plist-get row :status))
+                                      (seq-filter
+                                       (lambda (row) (equal (plist-get entry :pass-id) (plist-get row :pass)))
+                                       proposals)))))
+                 (dolist (state states)
+                   (pcase state
+                     ((or 'pending 'stale) (push "Awaiting proposal decisions" reasons))
+                     ('recovery-required (push "Write recovery required" reasons))
+                     ('unavailable (push "Proposal or recovery evidence requires inspection" reasons))
+                     (_ (unless (mevedel-memory-decision-terminal-status-p state)
+                          (push "Unresolved proposal decision" reasons)))))
+                 (unless states (push "Proposal acceptance requires inspection" reasons)))
+               (when (seq-some
+                      (lambda (other)
+                        (and (eq (plist-get other :kind) 'decision)
+                             (equal (plist-get entry :pass-id) (plist-get other :pass-id))
+                             (mevedel-journal-store-recall-p other now))) entries)
+                 (push "Recent decision evidence" reasons))))
+            ('decision (push "Retained with its consolidation history" reasons)))
+          (push (list :entry entry
+                      :age (floor (/ (- now (float-time (date-to-time (plist-get entry :created)))) 86400))
+                      :reasons (or (nreverse reasons) '("Awaiting safe cleanup"))) rows))))))
+
 (defun mevedel-journal-jobs--selection ()
   "Return the workspace and selected pending job identity for a command."
   (let* ((workspace (mevedel-journal-jobs--workspace))
@@ -102,10 +163,11 @@
 
 ;;;###autoload
 (defun mevedel-journal-jobs (&optional workspace)
-  "Inspect pending journal jobs in WORKSPACE, including failed or unreadable jobs."
+  "Inspect pending jobs and overdue retained journal evidence in WORKSPACE."
   (interactive)
   (setq workspace (or workspace (mevedel-journal-jobs--workspace)))
   (let ((jobs (mevedel-journal-jobs--records workspace))
+        (retained (mevedel-journal-jobs--retained workspace))
         (buffer (get-buffer-create "*mevedel journal jobs*")))
     (with-current-buffer buffer
       (mevedel-journal-jobs-mode)
@@ -123,6 +185,32 @@
                               (or (plist-get metadata :model) "unknown model") (or (plist-get job :attempts) "unknown")
                               (plist-get job :id) (or (plist-get job :detail) "")))
               (add-text-properties start (point) (list 'mevedel-journal-capture-id (plist-get job :id))))))
+        (insert (format "\nOverdue retained evidence: %d | review mode: %s\n"
+                        (length retained) mevedel-memory-consolidation-mode))
+        (when retained
+          (insert "Hidden from ordinary recall; retained until review and recovery dependencies resolve.\n")
+          (insert-text-button "Review unprocessed evidence"
+                              'action (lambda (_) (mevedel-remember nil (list :workspace workspace)))
+                              'follow-link t)
+          (insert "   ")
+          (insert-text-button "Inspect proposals and recovery"
+                              'action (lambda (_) (mevedel-memory-list-open (list :workspace workspace)))
+                              'follow-link t)
+          (insert "\n\n")
+          (dolist (row retained)
+            (let* ((entry (plist-get row :entry))
+                   (file (plist-get entry :file)))
+              (insert (format "%s | %d days | %s\n%s\n"
+                              (plist-get entry :kind) (plist-get row :age)
+                              (string-join (plist-get row :reasons) "; ") file))
+              (insert-text-button
+               "Inspect retained entry"
+               'action (lambda (_)
+                         (let ((fresh (mevedel-journal-store-read (mevedel-workspace-root workspace) file)))
+                           (with-help-window "*mevedel journal evidence*"
+                             (princ (plist-get fresh :text)))))
+               'follow-link t)
+              (insert "\n\n"))))
         (goto-char (point-min))))
     (pop-to-buffer buffer)
     buffer))

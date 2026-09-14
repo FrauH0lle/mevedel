@@ -397,7 +397,7 @@ handler instead of leaving a stale `gptel-tool` captured by an older preset.
 The closed resource resolver accepts the nine documented `scheme://` families
 without adding a model-facing tool. The operation matrix is deliberately
 narrow: `Read` accepts every family; `Glob` and `Grep` accept `work://`,
-`artifact://`, `skill://`, `memory://`, `journal://`, and `mevedel://`;
+`artifact://`, `skill://`, `memory://`, `memory://journal/`, and `mevedel://`;
 `ApplyPatch` accepts `work://`, explicit memory file descendants, and ordinary
 filesystem paths. Unsupported combinations fail
 explicitly. Bare addresses list only when the family defines a discovery

@@ -236,7 +236,7 @@
                            (mevedel-memory-scope-source-path scope "src/new.el")))
             (dolist (path '("../escape.el" "/etc/passwd" "~/.emacs" "escape/secret.el"
                             ".mevedel/journal/state/job.json" ".git/config" "memory/secret.md"
-                            "journal://state/job.json"))
+                            "memory://journal/state/job.json"))
               (should-error (mevedel-memory-scope-source-path scope path)))
             (cl-letf (((symbol-function 'system-name) (lambda () "another-client")))
               (should-error (mevedel-memory-scope-source-path scope "src/new.el")

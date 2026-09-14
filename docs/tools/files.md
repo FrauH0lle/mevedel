@@ -22,7 +22,7 @@ are not filesystem paths.
 | `history://` | Yes | No | Root and retained-agent conversations |
 | `history://saved[/SESSION[/SEGMENT]]` | Yes | Yes | Filtered saved workspace conversations, including archives |
 | `memory://root` | Yes | Yes | Configured memory index/roots |
-| `journal://` | Yes | Yes | Validated published workspace journal records |
+| `memory://journal/` | Yes | Yes | Validated published workspace journal records |
 | `mevedel://` | Yes | Yes | Installed Markdown documentation |
 | `mcp://` | Yes | No | Connected servers' advertised resources |
 
