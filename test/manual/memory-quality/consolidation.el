@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Extend the accepted digest cases through real buddy review and checked writes.
+;; Extend the accepted digest cases through real memory review and checked writes.
 ;; Expectations remain outside the model input. All writes use temporary roots.
 
 ;;; Code:
@@ -132,14 +132,14 @@ path; this is fixture execution, not a claim of human semantic approval."
           (make-directory output t)
           (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                      (lambda (workload &rest _)
-                       (unless (eq workload 'buddy) (error "Unexpected evaluation workload")) policy)))
+                       (unless (eq workload 'memory) (error "Unexpected evaluation workload")) policy)))
             (dolist (case (mevedel-quality--cases))
               (dolist (mode '(manual auto))
                 (let* ((name (plist-get case :name))
                        (evidence (mevedel-quality--consolidate case mode))
                        (path (file-name-concat output (format "%s-%s.md" name mode))))
                   (with-temp-file path
-                    (insert (format "# %s / %s\n\nModel: %s / %s; workload: buddy; effort: %S\n\nPrompt SHA256: %s\n\nOutcome: %S; elapsed seconds: %.2f\n\nInput tokens: %S; cached input: %S; output tokens: %S\n\nConfigured price per million tokens: input %S; output %S (not a billing receipt).\n\nHuman judgment: PENDING\n\nReview question: %s\n\n"
+                    (insert (format "# %s / %s\n\nModel: %s / %s; workload: memory; effort: %S\n\nPrompt SHA256: %s\n\nOutcome: %S; elapsed seconds: %.2f\n\nInput tokens: %S; cached input: %S; output tokens: %S\n\nConfigured price per million tokens: input %S; output %S (not a billing receipt).\n\nHuman judgment: PENDING\n\nReview question: %s\n\n"
                                     name mode (plist-get config :name) model (plist-get policy :effort)
                                     (secure-hash 'sha256 (mevedel-system-render-prompt-file "prompts/memory/consolidation.md"))
                                     (plist-get evidence :outcome) (plist-get evidence :elapsed)

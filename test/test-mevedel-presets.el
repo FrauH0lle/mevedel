@@ -602,10 +602,13 @@
                         ($plugin:code-review :tier fast)))
     (mevedel-define-preset test-parent-b
       :model-tiers ((strong :provider "Strong:strong-model"))
-      :model-workloads ((review :tier strong)))
+      :model-workloads ((review :tier strong)
+                        (journal :tier balanced)
+                        (memory :tier balanced)))
     (mevedel-define-preset test-child
       :parents (test-parent-a test-parent-b)
-      :model-workloads ((planning :tier strong)))
+      :model-workloads ((planning :tier strong)
+                        (journal :tier fast)))
     (let ((settings (mevedel-preset-resolve-settings 'test-child)))
       (should (equal '(:provider "Fast:fast-model")
                      (alist-get 'fast
@@ -620,7 +623,11 @@
       (should (equal '(:tier fast)
                      (alist-get '$plugin:code-review
                                 (alist-get 'mevedel-model-workloads
-                                           settings)))))))
+                                           settings))))
+      (should (equal '(:tier fast)
+                     (alist-get 'journal (alist-get 'mevedel-model-workloads settings))))
+      (should (equal '(:tier balanced)
+                     (alist-get 'memory (alist-get 'mevedel-model-workloads settings)))))))
 
 (mevedel-deftest mevedel-preset--resolved-metadata
   (:after-each

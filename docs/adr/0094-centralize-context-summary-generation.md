@@ -18,7 +18,7 @@ restored transcript still contained them. The evidence projector now retains
 complete `Skill` instruction results, still labelled as tool evidence, without
 adding a second durable skill-state format. Ordinary tool output remains capped.
 
-Mevedel uses one generator and `summarization` model workload to turn frozen model-visible context into context-summary text, while each consuming workflow retains ownership of source selection, hooks, retries, persistence, injection, and source mutation. The generator supports continuation, handoff, and digest purposes through a shared, validated summary core; only continuation summaries carry actionable next steps, while handoff source material remains evidence beneath a separately supplied authoritative task. Only continuation generation treats an earlier continuation summary as authoritative retained context; handoff generation instead re-filters the parent's complete effective context, including any anchored summary, against the receiving task. Source transcripts are projected as one delimited evidence document with provenance labels rather than replayed provider roles, so user turns, assistant text, and tool results remain untrusted evidence instead of live summarizer instructions. Caller guidance may focus content but cannot override the purpose, structure, or authority contract. This shares prompt and model-request behavior without making non-mutating plan, worktree, or agent handoffs inherit conversation-compaction lifecycle semantics.
+Mevedel uses one generator to turn frozen model-visible context into context-summary text, while each consuming workflow retains ownership of source selection, hooks, retries, persistence, injection, and source mutation. The generator supports continuation, handoff, and digest purposes through a shared, validated summary core; only continuation summaries carry actionable next steps, while handoff source material remains evidence beneath a separately supplied authoritative task. Only continuation generation treats an earlier continuation summary as authoritative retained context; handoff generation instead re-filters the parent's complete effective context, including any anchored summary, against the receiving task. Source transcripts are projected as one delimited evidence document with provenance labels rather than replayed provider roles, so user turns, assistant text, and tool results remain untrusted evidence instead of live summarizer instructions. Caller guidance may focus content but cannot override the purpose, structure, or authority contract. This shares prompt and model-request behavior without making non-mutating plan, worktree, or agent handoffs inherit conversation-compaction lifecycle semantics.
 
 Journal digest generation needs the same frozen evidence, model policy,
 admission, and callback settlement as continuation and handoff generation.
@@ -60,4 +60,14 @@ Codex setting, and still clamps every server limit that is present. Client
 cancellation bounds local processing and accepted output; it cannot guarantee
 a server-side token or billing ceiling. This limitation is explicit instead of
 being hidden by a test-only admission exception. Model selection stays in the
-existing configurable summarization workload, not in the journal implementation.
+ordinary configurable workload map, not in the journal implementation.
+
+The September 2026 configuration review exposed unnecessary coupling: tuning
+journal extraction also changed compaction and handoffs, while tuning memory
+consolidation also changed Buddy. Shared request mechanics do not require shared
+model selection. The generator now resolves `journal` for digests and
+`summarization` for continuation/handoff; journal capture freezes `journal`
+before dispatch. Consolidation resolves `memory` instead of `buddy`. Both new
+workloads default to `balanced` and use the existing tier/provider/effort map.
+Existing queued captures keep their frozen policy. The generator and workflow
+ownership boundaries remain unchanged.

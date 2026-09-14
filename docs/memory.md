@@ -93,8 +93,9 @@ the result, including synchronous empty results. A provider follow-up never
 inherits a deleted investigation snapshot as its working directory.
 
 `mevedel-memory-review-request` combines that scope, reference pre-check, and
-investigation in a sessionless gptel request using the buddy workload. It admits
-a prefix of at most 20 complete candidate digests and reports omissions. The
+investigation in a sessionless gptel request using the `memory` workload (default
+tier `balanced`). It admits a prefix of at most 20 complete candidate digests and
+reports omissions. The
 initial prepared provider payload, including tools and roles, must fit both
 32,000 estimated tokens and the model's usable context with output reserve.
 Indexes, instructions, and topics are supplied as complete documents when they
@@ -395,7 +396,7 @@ additional evidence, verifies relevant claims, and acknowledges omissions.
 With `mevedel-journal-enabled` (default `t`), a successful completed root-turn
 save freezes a checkpoint before generation collection. One immutable private
 record contains projected evidence, notes, their hashes, stable completed-turn
-identities, and serializable summarization model selection. It pins the source
+identities, and serializable journal model selection. It pins the source
 session and any committed publication head. A newer checkpoint supersedes an
 unsealed predecessor only when it contains all that predecessor's turns.
 Published and sealed turns stay outside later checkpoints; replacement
@@ -447,8 +448,9 @@ If one accepted result cannot finish recovery, a background opportunity retains
 it and can process another sealed capture. Explicit retry reports the recovery
 error. The job browser identifies a capture that requires its original client.
 
-New captures use the configured summarization model and explicit effort. When
-effort is unspecified and the model declares support for disabling reasoning,
+New captures use the configured `journal` workload (default tier `balanced`)
+and explicit effort. When effort is unspecified and the model declares support
+for disabling reasoning,
 digest capture freezes `disabled` or `none`: a real long-transcript case consumed all
 4,000 output tokens in reasoning without producing any digest. Models without
 that control retain their provider default. Existing frozen policies keep their
@@ -459,7 +461,7 @@ Input admission reserves at most 4,000 output tokens. Supported server token
 limits are capped accordingly. Codex OAuth has no such control, so its requests
 use the same 16-KiB digest limit and 120-second client deadline without claiming
 a server token or billing ceiling. Streaming overflow cancels the request;
-oversized final output is rejected. The summarization model remains configurable
+oversized final output is rejected. The journal model remains configurable
 through `mevedel-model-workloads`; changing it affects new captures, while queued
 captures keep their frozen choice and published digests remain readable.
 
@@ -729,10 +731,11 @@ curated files. `/learn` retains its own skill routing and existing authority.
 ## Evaluation and model selection
 
 The September 2026 synthetic extraction/retrieval comparison selected Sol
-provisionally for the `summarization` workload. All seven cases passed through
-production admission. The extended evaluation used the separately configured
-buddy workload, DeepSeek V4 Flash, to review stale prior memory and apply actual
-checked changes in temporary roots. After a UTF-8 boundary fix and a matching
+provisionally for digest generation, then using the `summarization` workload.
+All seven cases passed through production admission. The extended evaluation
+used the separately configured `buddy` workload at the time, DeepSeek V4 Flash,
+to review stale prior memory and apply actual checked changes in temporary
+roots. After a UTF-8 boundary fix and a matching
 proposal-fence clarification, all fourteen manual/auto requests succeeded;
 assistant inspection found the intended correction, test-resolution,
 abandoned-decision and repeated-evidence distinctions in the applied guidance.
@@ -743,15 +746,30 @@ or replace review of individual proposals; `propose` remains the default.
 The opt-in harness is documented in
 [test/manual/memory-quality/README.md](../test/manual/memory-quality/README.md).
 
-Model choice remains ordinary workload configuration, without a journal-specific
-model setting. For the selected Sol setup, after registering the Codex backend:
+Journal generation and memory consolidation have independent `journal` and
+`memory` workloads, both defaulting to the `balanced` tier. They use the ordinary
+`mevedel-model-workloads` and preset `:model-workloads` configuration:
 
 ```elisp
-(setf (alist-get 'summarization mevedel-model-workloads)
+(mevedel-define-preset my-preset
+  :parents (mevedel-implement)
+  :model-workloads ((journal :tier balanced)
+                    (memory :tier balanced)))
+```
+
+These entries no longer share model selection with `summarization` (compaction
+and handoff) or `buddy` (edit reviews and guidance). For the selected Sol digest
+setup, after registering the Codex backend:
+
+```elisp
+(setf (alist-get 'journal mevedel-model-workloads)
       '(:provider "Codex:gpt-5.6-sol" :effort none))
 ```
 
-This also selects the existing summarization workload for compaction. Changing
-that entry later changes future requests; already captured jobs retain their
-frozen policy. The isolated implementation worktree does not alter a running
-Emacs or its configuration.
+Journal capture freezes the originating root buffer's policy. Changing that
+entry affects new captures; already captured jobs retain their frozen policy.
+Consolidation resolves `memory` in the caller's current buffer. Automatic review
+runs from an idle callback without restoring an originating session preset;
+configure its workload globally when a consistent background policy is needed.
+The isolated implementation worktree does not alter a running Emacs or its
+configuration.

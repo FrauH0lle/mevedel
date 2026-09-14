@@ -72,6 +72,8 @@ session backend, model, and reasoning effort."
     (reviewer :tier strong)
     (guardian :tier fast)
     (buddy :tier fast)
+    (journal :tier balanced)
+    (memory :tier balanced)
     (summarization :tier balanced))
   "Alist mapping workloads to tier or exact-provider policy.
 

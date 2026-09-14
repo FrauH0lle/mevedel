@@ -11,7 +11,7 @@
                      (unless backend (error "Unknown configured backend: %s" name))
                      (list :backend backend :model (car (gptel-backend-models backend))))
                  (mevedel-model-resolve-workload
-                  (intern (or (getenv "MEVEDEL_QUALITY_WORKLOAD") "summarization")))))
+                  (intern (or (getenv "MEVEDEL_QUALITY_WORKLOAD") "journal")))))
        (backend (plist-get policy :backend))
        (model (plist-get policy :model))
        (gptel-backend backend)

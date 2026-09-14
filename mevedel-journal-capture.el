@@ -334,9 +334,9 @@ Return non-nil only when the ready marker was newly created."
    "ready\n"))
 
 (defun mevedel-journal-capture--freeze-policy ()
-  "Freeze serializable summarization selection in the current root buffer."
+  "Freeze serializable journal selection in the current root buffer."
   (condition-case err
-      (let* ((policy (mevedel-model-resolve-workload 'summarization))
+      (let* ((policy (mevedel-model-resolve-workload 'journal))
              (policy (mevedel-context-summary-digest-policy
                       (plist-put (copy-sequence policy) :max-tokens
                                  (or (plist-get policy :max-tokens) gptel-max-tokens)))))

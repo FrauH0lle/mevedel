@@ -293,6 +293,25 @@
     (should-not (plist-get captured :use-tools))
     (should-not (buffer-live-p (plist-get captured :buffer))))
 
+  :doc "unfrozen digest requests resolve the journal workload"
+  (let (result request-buffer)
+    (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (workload &rest _)
+                 (should (eq workload 'journal))
+                 '(:backend digest-backend :model digest-model)))
+              ((symbol-function 'mevedel-model-usable-input-tokens)
+               (lambda (_policy) 100000))
+              ((symbol-function 'gptel-request)
+               (lambda (_prompt &rest args)
+                 (setq request-buffer (plist-get args :buffer))
+                 (funcall (plist-get args :callback)
+                          test-mevedel-context-summary--digest nil))))
+      (mevedel-context-summary-generate
+       "Completed work" 'digest (lambda (value) (setq result value))))
+    (should (eq 'success (plist-get result :outcome)))
+    (should (eq 'digest-model (plist-get result :model)))
+    (should-not (buffer-live-p request-buffer)))
+
   :doc "digest generation uses the frozen policy with a bounded output reserve"
   (dolist (limit '(nil 9000 1000 codex))
     (let ((policy (list :backend (if (eq limit 'codex)
