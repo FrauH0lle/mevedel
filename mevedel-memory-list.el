@@ -136,7 +136,7 @@ Check original root authority before disclosing private topic contents."
                (lambda (id)
                  (let ((entry (seq-find (lambda (entry) (equal id (plist-get entry :id)))
                                         (plist-get (plist-get accepted :prepared) :entries))))
-                   (if entry (format "journal://%s\n%s\n" (plist-get entry :file) (plist-get entry :body))
+                   (if entry (format "memory://journal/%s\n%s\n" (plist-get entry :file) (plist-get entry :body))
                      (format "%s: retained evidence unavailable.\n" id))))
                (plist-get proposal :evidence) "\n"))
             "\nReference checks\n"

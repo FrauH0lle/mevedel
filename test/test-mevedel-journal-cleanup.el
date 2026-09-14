@@ -17,17 +17,31 @@
 (require 'mevedel-session-persistence)
 
 (defun mevedel-test-journal-cleanup--entry (root name &optional fresh)
-  "Publish one real digest named NAME under ROOT, old unless FRESH."
-  (mevedel-journal-store-publish-digest
-   root
-   (list :capture-id (secure-hash 'sha256 name) :session name :session-name name
-         :workspace (make-string 64 ?b) :trigger 'session-end :segment 1
-         :source-revision (make-string 64 ?c) :turns '(1)
-         :turn-ids (list (secure-hash 'sha256 (concat name "-turn")))
-         :created (if fresh (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)
-                    "2000-01-01T00:00:00Z")
-         :model "provider:model")
-   "## Done\n- Observed: completed (turn 1).\n\n## Learned\n- none\n\n## Surprised\n- none\n\n## Unfinished\n- none"))
+  "Publish a digest named NAME under ROOT, old and reviewed unless FRESH."
+  (let ((entry
+         (mevedel-journal-store-publish-digest
+          root
+          (list :capture-id (secure-hash 'sha256 name) :session name :session-name name
+                :workspace (make-string 64 ?b) :trigger 'session-end :segment 1
+                :source-revision (make-string 64 ?c) :turns '(1)
+                :turn-ids (list (secure-hash 'sha256 (concat name "-turn")))
+                :created (if fresh (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)
+                           "2000-01-01T00:00:00Z")
+                :model "provider:model")
+          "## Done\n- Observed: completed (turn 1).\n\n## Learned\n- none\n\n## Surprised\n- none\n\n## Unfinished\n- none")))
+    (unless fresh
+      (mevedel-journal-store-publish-review
+       root (list :pass-id (secure-hash 'sha256 (concat "review-" name))
+                  :workspace (plist-get entry :workspace)
+                  :created (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t)
+                  :model "test:model" :focus "" :digests (list (plist-get entry :id))
+                  :proposals nil :references nil)))
+    entry))
+
+(defun mevedel-test-journal-cleanup--digests (root)
+  "Return the remaining digest records in ROOT, excluding review fixtures."
+  (seq-filter (lambda (entry) (eq 'digest (plist-get entry :kind)))
+              (mevedel-journal-store-entries root)))
 
 (mevedel-deftest mevedel-journal-cleanup-expired ()
   ,test
@@ -47,7 +61,7 @@
           (mevedel-journal-cleanup-expired workspace)
           (should (equal review (mevedel-journal-store-read root (plist-get review :file))))
           (let ((entries (mevedel-journal-store-entries root)))
-            (should (= 2 (length entries)))
+            (should (= 3 (length entries)))
             (should-not (mevedel-journal-index-unreviewed entries))))
       (delete-directory root t)))
 
@@ -60,14 +74,14 @@
         (let ((old (mevedel-test-journal-cleanup--entry root "old"))
               (fresh (mevedel-test-journal-cleanup--entry root "fresh" t)))
           (mevedel-session-persistence-cleanup-expired workspace)
-          (should (equal (list fresh) (mevedel-journal-store-entries root)))
+          (should (equal (list fresh) (mevedel-test-journal-cleanup--digests root)))
           (should-not (file-exists-p (file-name-concat (mevedel-journal-store-directory root) (plist-get old :file))))
           (should (member (car (plist-get old :turn-ids)) (mevedel-journal-store-covered-turns root)))
           (should-error (mevedel-journal-store-read root (plist-get old :file)))
           (should-error (mevedel-test-journal-cleanup--entry root "old"))
           (mevedel-test-journal-cleanup--entry root "another-old")
           (should-not (mevedel-journal-cleanup-expired workspace))
-          (should (= 2 (length (mevedel-journal-store-entries root))))
+          (should (= 2 (length (mevedel-test-journal-cleanup--digests root))))
           (should (= 1 (mevedel-journal-cleanup-expired workspace t))))
       (delete-directory root t)))
 
@@ -79,7 +93,7 @@
         (progn
           (dotimes (n 51) (mevedel-test-journal-cleanup--entry root (format "old-%d" n)))
           (should (= 50 (mevedel-journal-cleanup-expired workspace)))
-          (should (= 1 (length (mevedel-journal-store-entries root))))
+          (should (= 1 (length (mevedel-test-journal-cleanup--digests root))))
           (should-not (mevedel-journal-cleanup-expired workspace))
           (should (= 51 (length (mevedel-journal-store-covered-turns root))))
           (should (= 1 (mevedel-journal-cleanup-expired workspace t))))
@@ -105,7 +119,7 @@
           (write-region "published" nil (file-name-concat capture "retired") nil 'silent)
           (write-region "retired accepted payload" nil (file-name-concat capture "capture.json") nil 'silent)
           (should (= 1 (mevedel-journal-cleanup-expired workspace)))
-          (should (= 2 (length (mevedel-journal-store-entries root))))
+          (should (= 2 (length (mevedel-test-journal-cleanup--digests root))))
           (should (mevedel-journal-pins-present-p source))
           (should (file-exists-p pin-directory))
           (should-not (file-exists-p capture)))
@@ -121,7 +135,7 @@
                  (workspace (mevedel-workspace--create :type 'project :id remote :root remote))
                  (entry (mevedel-test-journal-cleanup--entry remote "remote-old")))
             (mevedel-session-persistence-cleanup-expired workspace)
-            (should-not (mevedel-journal-store-entries remote))
+            (should-not (mevedel-test-journal-cleanup--digests remote))
             (should (equal (plist-get entry :turn-ids) (mevedel-journal-store-covered-turns remote)))))
       (delete-directory root t)))
 
@@ -164,7 +178,7 @@
                            (funcall delete-file-fn target)))))
               (should-not (mevedel-journal-cleanup-expired workspace))))
           (should (file-exists-p path))
-          (should-not (mevedel-journal-store-entries root))
+          (should-not (mevedel-test-journal-cleanup--digests root))
           (let* ((claim (mevedel-journal-claim-current (file-name-concat directory "state" "mutation")))
                  (manifest (mevedel-journal-cleanup--read
                             directory (file-name-concat directory "state" "expiry"
@@ -192,10 +206,15 @@
          successor)
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'mevedel-session-control-fs-target-time)
-                     (lambda (_path) (1+ (plist-get claim :expires-at)))))
-            (should (= 0 (mevedel-journal-cleanup--owned workspace claim)))
-            (setq successor (mevedel-journal-claim-acquire scope 120)))
+          ;; Expire the synthetic native record so the final target-side
+          ;; settlement guard observes the same deadline as the caller.
+          (plist-put claim :expires-at 1)
+          (mevedel-session-control-fs-write-file
+           (mevedel-journal-claim--path claim nil)
+           (json-serialize (mevedel-journal-claim--record claim)))
+          (should (= 0 (mevedel-journal-cleanup--owned workspace claim)))
+          (should-not (mevedel-journal-claim-outcome claim))
+          (setq successor (mevedel-journal-claim-acquire scope 120))
           (should successor)
           (let ((manifest (mevedel-journal-cleanup--read
                            directory (file-name-concat directory "state" "expiry"

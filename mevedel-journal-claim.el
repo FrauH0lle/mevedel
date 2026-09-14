@@ -33,30 +33,62 @@
         :owner (plist-get token :owner)
         :expires-at (plist-get token :expires-at)))
 
-(defun mevedel-journal-claim--read (path outcome-p)
+(defun mevedel-journal-claim--decode (text outcome-p)
+  "Decode claim TEXT, or an outcome when OUTCOME-P, with the exact schema."
+  (let* ((object (json-parse-string text))
+         (generation (and (hash-table-p object) (gethash "generation" object)))
+         (owner (and (hash-table-p object) (gethash "owner" object)))
+         (expires (and (hash-table-p object) (gethash "expires-at" object)))
+         (status (and outcome-p (hash-table-p object)
+                      (car (memq (intern-soft (gethash "status" object))
+                                 '(completed failed cancelled expired)))))
+         (payload (and outcome-p (hash-table-p object) (gethash "payload" object))))
+    (unless (and (hash-table-p object)
+                 (= (hash-table-count object) (if outcome-p 5 3))
+                 (integerp generation) (> generation 0)
+                 (mevedel-journal-store-id-p owner)
+                 (integerp expires) (> expires 0)
+                 (or (not outcome-p) (and status (stringp payload))))
+      (error "Invalid journal claim record"))
+    (append (list :generation generation :owner owner :expires-at expires)
+            (when outcome-p (list :status status :payload payload)))))
+
+(defun mevedel-journal-claim--read (path outcome-p &optional observation)
   "Read the claim at PATH, or an outcome when OUTCOME-P.
-Return nil for an absent record.  Malformed records fail closed; they never
-permit takeover or silently reopen a settled generation."
+Return nil for an absent record. Malformed records fail closed; they never
+permit takeover or silently reopen a settled generation.
+OBSERVATION may be PATH's native read result from this operation's batch;
+it must never be retained between operations."
+  (when (and observation (not (equal path (plist-get observation :path))))
+    (error "Journal claim observation addresses another record"))
   (condition-case nil
-      (let* ((object (json-parse-string
-                      (mevedel-session-control-fs-read-file path)))
-             (generation (and (hash-table-p object) (gethash "generation" object)))
-             (owner (and (hash-table-p object) (gethash "owner" object)))
-             (expires (and (hash-table-p object) (gethash "expires-at" object)))
-             (status (and outcome-p (hash-table-p object)
-                          (car (memq (intern-soft (gethash "status" object))
-                                     '(completed failed cancelled expired)))))
-             (payload (and outcome-p (hash-table-p object) (gethash "payload" object))))
-        (unless (and (hash-table-p object)
-                     (= (hash-table-count object) (if outcome-p 5 3))
-                     (integerp generation) (> generation 0)
-                     (mevedel-journal-store-id-p owner)
-                     (integerp expires) (> expires 0)
-                     (or (not outcome-p) (and status (stringp payload))))
-          (error "Invalid journal claim record: %s" path))
-        (append (list :generation generation :owner owner :expires-at expires)
-                (when outcome-p (list :status status :payload payload))))
+      (mevedel-journal-claim--decode
+       (if observation (mevedel-session-control-fs-program-value observation)
+         (mevedel-session-control-fs-read-file path)) outcome-p)
     (mevedel-session-control-fs-absent nil)))
+
+(defun mevedel-journal-claim-owned-p (token)
+  "Observe whether TOKEN is the current unexpired, unsettled owner.
+Every call takes a fresh pinned target observation. This is a precondition,
+not atomic admission; settlement still uses its exclusive outcome election."
+  (let* ((directory (mevedel-session-control-fs-physical-path
+                     (plist-get token :directory)))
+         (path (mevedel-journal-claim--path token nil))
+         (results
+          (mevedel-session-control-fs-run-program
+           (list (list :op 'list-directory :path directory)
+                 (list :op 'read :path path)
+                 (list :op 'absent :path (mevedel-journal-claim--path token t))
+                 (list :op 'target-time :path directory)))))
+    (and (cl-every (lambda (result) (eq (plist-get result :status) 'ok)) results)
+         (equal (file-name-nondirectory path)
+                (car (sort (seq-filter
+                            (lambda (name) (string-match-p mevedel-journal-claim--name-regexp name))
+                            (plist-get (car results) :value)) #'string>)))
+         (equal token
+                (append (list :directory directory)
+                        (mevedel-journal-claim--decode (plist-get (nth 1 results) :value) nil)))
+         (< (plist-get (nth 3 results) :value) (plist-get token :expires-at)))))
 
 (defun mevedel-journal-claim-current (directory)
   "Return DIRECTORY's newest claim token, or nil when no claim exists.
@@ -71,12 +103,14 @@ The token names an attempt, not proof that it is still allowed to settle."
       (error "Journal claim generation does not match its filename"))
     (append (list :directory directory) record)))
 
-(defun mevedel-journal-claim-outcome (token)
+(defun mevedel-journal-claim-outcome (token &optional observation)
   "Return TOKEN's durable outcome or nil when it has not settled.
 The returned payload belongs to the winning settlement, including after
-process death or a later generation's admission."
+process death or a later generation's admission.
+OBSERVATION is a native read result from this operation's batch, as for
+`mevedel-journal-claim--read'."
   (when-let* ((outcome (mevedel-journal-claim--read
-                       (mevedel-journal-claim--path token t) t)))
+                       (mevedel-journal-claim--path token t) t observation)))
     (unless (equal (mevedel-journal-claim--record token)
                    (mevedel-journal-claim--record outcome))
       (error "Journal outcome does not belong to this claim"))
@@ -144,11 +178,9 @@ outcome, or nil for an expired, foreign, or already-settled token.  Only a
 successful completed outcome authorizes publication of its exact payload."
   (unless (and (memq status '(completed failed cancelled)) (stringp payload))
     (error "Invalid journal claim settlement"))
-  (when (and (equal (mevedel-journal-claim--record token)
-                    (mevedel-journal-claim--read
-                     (mevedel-journal-claim--path token nil) nil))
-             (< (mevedel-session-control-fs-target-time (plist-get token :directory))
-                (plist-get token :expires-at)))
+  (when (equal (mevedel-journal-claim--record token)
+               (mevedel-journal-claim--read
+                (mevedel-journal-claim--path token nil) nil))
     (mevedel-journal-claim--finish token status payload)))
 
 (provide 'mevedel-journal-claim)

@@ -51,7 +51,7 @@
       (insert "")
       (let ((result (mevedel-resource-capf)))
         (should (equal
-                 '("agent://" "artifact://" "history://" "journal://"
+                 '("agent://" "artifact://" "history://"
                    "mcp://" "memory://" "mevedel://" "skill://" "work://")
                  (sort (mevedel-resource-capf-test--candidates result)
                        #'string-lessp)))

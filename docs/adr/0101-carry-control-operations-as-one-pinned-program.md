@@ -61,6 +61,30 @@ on both sides.  An argument run whose shell-quoted size exceeds
 Either way a program is one target process; an oversized request changes how the
 request travels, never how many calls carry it.
 
+Read-only batches of two to 32 unbounded operations may use GNU tar as a bulk
+carrier inside that process. Each physical parent remains pinned by its own
+open descriptor. GNU tar's default no-follow leaf opens and disabled inherited
+`TAR_OPTIONS` preserve the read boundary. Emacs uses its built-in tar decoder
+without extracting files, accepting only the expected ordered regular members
+with valid checksums and successful transfer status. Bytes stream directly
+through base64 rather than passing through a shell variable. Target-side
+transfer failure or host-side archive rejection discards all transferred bytes
+and issues fresh ordinary reads in a second process. Optional failures and stopped programs
+therefore retain their existing result semantics. No cross-operation cache or
+new caller protocol is introduced. Bounded reads and mixed programs keep their
+existing path.
+
+The measurement behind this amendment was a reused portable 100-session search:
+24 control calls accounted for 1.536 seconds, including per-file encoding
+subprocesses inside already batched reads. Bulk transfer reduced that measured
+control time to 0.774 seconds, with the same call count and source verification.
+These are instrumented local attribution measurements, not a remote latency
+guarantee. A native leaf-replacement test, unavailable-carrier fallback, corrupted
+archive retry and binary/long-name decoding exercise the changed boundary.
+The long UTF-8 filename test also exposed an existing request-file encoding
+failure; requests now explicitly encode UTF-8 before entering the unibyte
+transfer buffer.
+
 The size bound is far below the target's own, and it is not `ARG_MAX` — that is
 megabytes.  It is one physical line of the command TRAMP writes to the
 connection process, which talks over a pty: canonical mode truncates past

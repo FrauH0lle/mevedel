@@ -294,7 +294,12 @@ History candidates include saved workspace, root and retained conversations."
 
 (defun mevedel-resource-capf--memory (tail metadata)
   "Complete memory root topics one directory level below TAIL."
-  (let (entries)
+  (let ((entries
+         (cond
+          ((and (not (equal tail "journal/")) (string-prefix-p tail "journal/"))
+           (list '("memory://journal/" . " [journal] temporary workspace evidence")))
+          ((string-prefix-p "journal/" tail)
+           (mevedel-resource-capf--journal (substring tail 8) metadata)))))
     (when (string-prefix-p tail "root")
       (push (cons "memory://root" " [memory] configured union") entries))
     (dolist (entry (plist-get metadata :memory-roots))
@@ -326,7 +331,7 @@ History candidates include saved workspace, root and retained conversations."
     (dolist (entry (plist-get metadata :journal) (nreverse entries))
       (let ((file (mevedel-resource-encode-component (plist-get entry :file))))
         (when (string-prefix-p tail file)
-          (push (cons (concat "journal://" file) " [journal] dated evidence") entries))))))
+          (push (cons (concat "memory://journal/" file) " [journal] dated evidence") entries))))))
 
 (defun mevedel-resource-capf--mcp (tail metadata)
   "Complete MCP servers and advertised resource metadata for TAIL."
@@ -395,7 +400,7 @@ History candidates include saved workspace, root and retained conversations."
             (push (cons address (format " [%s] resource" scheme)) entries))))
       (mevedel-resource-capf--result start end (nreverse entries)))
      ((string-match
-       "\\`\\(work\\|artifact\\|skill\\|agent\\|history\\|memory\\|journal\\|mcp\\|mevedel\\)://\\(.*\\)\\'"
+       "\\`\\(work\\|artifact\\|skill\\|agent\\|history\\|memory\\|mcp\\|mevedel\\)://\\(.*\\)\\'"
        token)
       (let* ((scheme (intern (match-string 1 token)))
              (tail (match-string 2 token))
@@ -424,7 +429,6 @@ History candidates include saved workspace, root and retained conversations."
                 ('agent (mevedel-resource-capf--agents tail metadata))
                 ('history (mevedel-resource-capf--agents tail metadata t))
                 ('memory (mevedel-resource-capf--memory tail metadata))
-                ('journal (mevedel-resource-capf--journal tail metadata))
                 ('mcp (mevedel-resource-capf--mcp tail metadata)))))
         (mevedel-resource-capf--result start end entries)))))
 

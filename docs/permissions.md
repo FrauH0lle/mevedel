@@ -103,7 +103,7 @@ and containment failures stop before permission and post-use hooks; a valid but
 missing, disconnected, stale, or unreadable resource follows ordinary handler
 failure handling.
 
-Read-only `artifact://`, `skill://`, `agent://`, `history://`, `memory://`, and `journal://`
+Read-only `artifact://`, `skill://`, `agent://`, `history://`, `memory://`, and `memory://journal/`
 resources keep their intrinsic read capability and current freshness rules.
 `work://` and explicit memory-file mutation use ordinary `ApplyPatch` permission
 and patch review. Shared and memory operands use their real backing paths for

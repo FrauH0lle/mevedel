@@ -126,10 +126,94 @@
             (plist-put (copy-tree claim) :owner (make-string 64 ?0))
             'completed "foreign result"))
           (should-not (mevedel-journal-claim-outcome claim))
-          (should (mevedel-journal-claim-settle claim 'cancelled "user cancelled"))
+          (let ((original (symbol-function 'mevedel-session-control-fs-run-program))
+                (calls 0))
+            (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                       (lambda (&rest args)
+                         (cl-incf calls)
+                         (apply original args))))
+              (should (mevedel-journal-claim-settle claim 'cancelled "user cancelled")))
+            ;; The final target-side deadline guard owns admission. A separate
+            ;; earlier clock probe adds no protection against expiry here.
+            (should (= calls 2)))
           (should-not (mevedel-journal-claim-settle claim 'completed "after cancel"))
           (should (eq 'cancelled (plist-get (mevedel-journal-claim-outcome claim) :status))))
       (delete-directory directory t))))
+
+(mevedel-deftest mevedel-journal-claim--decode
+  (:doc "preserves exact claim schemas and rejects malformed ownership or outcome records")
+  (let ((record (list :generation 1 :owner (make-string 64 ?a) :expires-at 100)))
+    (should (equal record (mevedel-journal-claim--decode (json-serialize record) nil)))
+    (should (equal (append record (list :status 'completed :payload "result"))
+                   (mevedel-journal-claim--decode
+                    (json-serialize (append record (list :status "completed" :payload "result"))) t)))
+    (should-error (mevedel-journal-claim--decode "{}" nil))
+    (should-error (mevedel-journal-claim--decode "not JSON" nil))
+    (should-error (mevedel-journal-claim--decode (json-serialize record) t))
+    (should-error (mevedel-journal-claim--decode
+                   (json-serialize (append record (list :extra "field"))) nil))
+    (should-error (mevedel-journal-claim--decode
+                   (json-serialize (plist-put (copy-tree record) :generation 0)) nil))))
+
+(mevedel-deftest mevedel-journal-claim-owned-p ()
+  ,test
+  (test)
+  :doc "observes current identity, absence of settlement and target time in one native program"
+  (let ((directory (make-temp-file "mevedel-journal-owned-" t)))
+    (unwind-protect
+        (let ((claim (mevedel-journal-claim-acquire directory 120))
+              (original (symbol-function 'mevedel-session-control-fs-run-program))
+              (calls 0))
+          (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                     (lambda (&rest args)
+                       (cl-incf calls)
+                       (apply original args))))
+            (should (mevedel-journal-claim-owned-p claim)))
+          (should (= calls 1))
+          (should-not (mevedel-journal-claim-owned-p
+                       (plist-put (copy-tree claim) :owner (make-string 64 ?0))))
+          (should (mevedel-journal-claim-settle claim 'cancelled ""))
+          (should-not (mevedel-journal-claim-owned-p claim))
+          (let ((next (mevedel-journal-claim-acquire directory 120)))
+            (should (mevedel-journal-claim-owned-p next))
+            (should-not (mevedel-journal-claim-owned-p claim))))
+      (delete-directory directory t)))
+
+  :doc "refuses expired, missing and malformed ownership without cached proof"
+  (let ((directory (make-temp-file "mevedel-journal-owned-expiry-" t)))
+    (unwind-protect
+        (let* ((claim (mevedel-journal-claim-acquire directory 120))
+               (path (mevedel-journal-claim--path claim nil)))
+          (should (mevedel-journal-claim-owned-p claim))
+          ;; Native records retain the same identity, with a deterministic
+          ;; deadline in the past; no timer or substituted target clock.
+          (plist-put claim :expires-at 1)
+          (mevedel-session-control-fs-write-file
+           path (json-serialize (mevedel-journal-claim--record claim)))
+          (should-not (mevedel-journal-claim-owned-p claim))
+          (mevedel-session-control-fs-write-file path "{}")
+          (should-error (mevedel-journal-claim-owned-p claim))
+          (delete-file path)
+          (should-not (mevedel-journal-claim-owned-p claim)))
+      (delete-directory directory t)))
+
+  :doc "a newer generation or redirected parent invalidates an earlier observation"
+  (let* ((root (make-temp-file "mevedel-journal-owned-parent-" t))
+         (directory (file-name-concat root "scope"))
+         (moved (file-name-concat root "moved")))
+    (unwind-protect
+        (let* ((claim (mevedel-journal-claim-acquire directory 120))
+               (next (plist-put (copy-tree claim) :generation 2)))
+          (should (mevedel-journal-claim-owned-p claim))
+          (mevedel-session-control-fs-create-file
+           (mevedel-journal-claim--path next nil)
+           (json-serialize (mevedel-journal-claim--record next)))
+          (should-not (mevedel-journal-claim-owned-p claim))
+          (should (mevedel-journal-claim-owned-p next))
+          (rename-file directory moved)
+          (make-symbolic-link moved directory)
+          (should-not (mevedel-journal-claim-owned-p next)))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-journal-claim-current
   (:doc "reports no claim without creating state and fails closed on corrupt state")

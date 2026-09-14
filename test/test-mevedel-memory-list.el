@@ -147,7 +147,7 @@
       (mevedel-cockpit-goto-id (plist-get proposal :id))
       (let ((details (mevedel-memory-list--details (mevedel-cockpit-surface-selected) context)))
         (should (string-search "Observed: Frozen lesson." details))
-        (should (string-search (concat "journal://" (plist-get digest :file)) details)))))
+        (should (string-search (concat "memory://journal/" (plist-get digest :file)) details)))))
   :doc "the remember command starts a focused sessionless pass and preserves the draft on completion"
   (let* ((gptel--known-backends nil)
          (model (make-symbol "memory-command-model"))

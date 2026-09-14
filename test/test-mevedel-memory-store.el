@@ -29,7 +29,7 @@
 (mevedel-deftest mevedel-memory-store-prepare ()
   ,test
   (test)
-  :doc "preparation retains exact evidence across restart and expiry until its fenced cancellation"
+  :doc "fenced cancellation releases pass pins but preserves unreviewed evidence for retry"
   (let* ((root (make-temp-file "mevedel-memory-store-" t))
          (workspace (mevedel-workspace--create :root root))
          (identity (mevedel-workspace-identity-ensure root))
@@ -63,8 +63,10 @@
               (should (mevedel-journal-claim-settle claim 'cancelled ""))
               (mevedel-memory-store-release workspace id)
               (mevedel-memory-store-release workspace id)
-              (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
-              (should-not (mevedel-journal-store-entries root)))))
+              (should (= 0 (mevedel-journal-cleanup-expired workspace t)))
+              (should (equal entry (mevedel-journal-store-read root (plist-get entry :file))))
+              (should (= 1 (length (mevedel-journal-index-unreviewed
+                                    (mevedel-journal-store-entries root))))))))
       (when claim (mevedel-journal-claim-settle claim 'cancelled ""))
       (delete-directory root t)))
   :doc "accepted expiry is recovered before selected evidence can acquire a new pin"
@@ -190,8 +192,10 @@
                 (should-not (string-match-p "PRIVATE_GUIDANCE\\|Proposed private replacement" (plist-get published :text)))
                 (should (equal "test conditions" (plist-get published :focus)))
                 (should (= 2 (length (mevedel-journal-index-unreviewed (mevedel-journal-store-entries root))))))
-              (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
-              (should (equal (list entry) (mevedel-journal-index-unreviewed (mevedel-journal-store-entries root))))
+              (should (= 0 (mevedel-journal-cleanup-expired workspace t)))
+              (should (= 2 (length (mevedel-journal-index-unreviewed
+                                    (mevedel-journal-store-entries root)))))
+              (should (equal omitted (mevedel-journal-store-read root (plist-get omitted :file))))
               (should-error (mevedel-memory-store-release workspace id))
               (let* ((path (file-name-concat (mevedel-journal-store-directory root) "state" "passes" id "accepted.el"))
                      (text (mevedel-session-control-fs-read-file path)))

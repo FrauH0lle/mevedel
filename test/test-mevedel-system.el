@@ -951,7 +951,8 @@
   ,test
   (test)
   :doc "pushes the map only to main, while worker retains memory and read-only agents report lessons"
-  (let* ((root (make-temp-file "mevedel-journal-profile-" t))
+  (let* ((mevedel-journal-max-age-days nil)
+         (root (make-temp-file "mevedel-journal-profile-" t))
          (workspace (mevedel-workspace--create
                      :root root :journal-observation
                      (list :root root :time (float-time) :entries
@@ -982,7 +983,7 @@
               (mevedel-context-delivery-stage fsm)
               (let ((context (prin1-to-string
                               (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))
-                (should (string-search "journal://" context))
+                (should (string-search "memory://journal/" context))
                 (should-not (string-search "Map-only lesson" context))
                 (should (string-search "work://shared/" context)))
               (if (equal name "worker")

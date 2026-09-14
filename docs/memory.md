@@ -14,7 +14,7 @@ completed-review and proposal-decision records, and
 outcomes. Completed-turn capture and sealing are connected to session
 lifecycle. Background generation and accepted-result recovery now run from
 lifecycle opportunities and workspace activation recovers abandoned checkpoints.
-`journal://` now supports ordinary Read, Glob, and Grep over validated published
+`memory://journal/` now supports ordinary Read, Glob, and Grep over validated published
 records, with cached composer completion and request-time roster availability.
 The main conversation receives a bounded recent-digest map as retained context.
 Consolidation runs on demand through `/remember` or automatically in `propose` and `auto` modes;
@@ -121,13 +121,11 @@ covered ones. Selection returns at most twenty, oldest first with digest ID as
 the tie breaker, and reports the eligible backlog beyond that batch. Later
 arrivals do not enter an already captured observation.
 
-Selection checks current session discovery and authority across clients. Open
-local roots, live PID locks, and owned or foreign portable leases exclude their
-digests. Foreign-host PID locks remain held because this client cannot establish
-remote process death. Unreadable authority is reported separately and excluded;
-records without a readable session publication still receive authority checks.
-A released session becomes eligible at the next selection without changing its
-digest. Selection neither acquires session ownership nor changes review coverage.
+Published digests describe completed, immutable work and are eligible even while
+their source session remains open or another client holds that session. Selection
+needs no source-session authority: it changes neither session state nor review
+coverage. The coordinator still acquires journal/consolidation ownership and pins
+freshly validated evidence before a review starts.
 
 `mevedel-memory-store` supplies private prepared and accepted pass storage. The
 caller holds the 180-second consolidation claim. Preparation acquires journal
@@ -142,7 +140,7 @@ They use bounded durable Lisp data, preserving literal byte strings in captured
 before-state; each record is limited to 4 MiB. Reading disables evaluation and
 circular-reader syntax. Evidence pins live under
 `state/evidence-pins/<digest-id>/<pass-id>.pin` and bind to the prepared record's
-hash. These records are internal storage, outside `journal://`; displaying their
+hash. These records are internal storage, outside `memory://journal/`; displaying their
 memory bodies still requires the original scope's authority checks.
 
 Acceptance validates the reply again against the prepared scope and exact
@@ -183,8 +181,8 @@ coverage counts, and remaining backlog without private content.
 
 `mevedel-memory-consolidation-mode` supports `manual`, `propose` (the default),
 and `auto`. Manual runs only on request. Propose schedules a read-only review at
-eligible completed, durably saved root turns and leaves its proposals for
-approval. Auto uses the same review and applies fresh memory proposals through
+eligible completed, durably saved root turns, workspace activation and digest
+publication, and leaves its proposals for approval. Auto uses the same review and applies fresh memory proposals through
 the ordinary checked decision path. Instruction proposals always wait for
 approval, including changes to `AGENTS.md`. The mode is frozen at pass admission.
 
@@ -194,8 +192,11 @@ general review, then the eligible unreviewed digest count. The settings
 `mevedel-memory-consolidation-min-digests` default to 24 hours and five digests.
 Both automatic and general on-demand completion move the clock; focused reviews
 do not. Retired review metadata preserves that clock after history expiry.
-Known live sessions across clients remain excluded by the same selector used
-for on-demand review. `/remember` bypasses timing and count thresholds.
+A smaller backlog becomes eligible one day before its oldest digest reaches the
+configured ordinary-recall age limit (13 days under the default). Disabled expiry
+keeps the count threshold; the elapsed-time gate still applies in either case.
+This creates review opportunities for sparse workspaces and completed work from
+long-running sessions. `/remember` bypasses timing and count thresholds.
 
 Turn completion checks cached timing and settings without target I/O. Queued
 turns coalesce, and filesystem work waits for idle transport. A failed count
@@ -348,7 +349,7 @@ and `j` opens pending journal jobs with their inspection/retry/discard actions.
 sessionless pass, allow explicit current-memory review without eligible digests,
 and open this table. Completion refreshes an existing matching table without
 reopening a closed table or altering the composer. The command may run while a
-conversation request is active; the pass still excludes that session's digests.
+conversation request is active; already published digests from it remain eligible.
 `g`, `?`, and `q` follow the shared cockpit refresh/help/back contract.
 
 The `journal` component is selected only by `main` and delivered as an independent
@@ -503,7 +504,35 @@ original source directory and verifies the matching pin before proceeding.
 Discarding a checkpoint prevents that exact capture from being repinned; new
 completed work can still produce a new capture.
 
-`mevedel-journal-max-age-days` defaults to 365; nil disables journal expiry.
+The journal jobs inspector also shows overdue public entries that remain in
+storage: total count, age in days, review mode, and observed retention reasons.
+Unreviewed evidence, unfinished capture publication, evidence pins and retained
+review/decision history appear separately from pending digest jobs. Entry buttons
+read current validated storage for human inspection. Review and proposal/recovery
+buttons use the existing `/remember` and proposal cockpit commands; capture retry
+and discard keep their existing authority checks. No inspection grants ordinary
+model recall or unconditional deletion.
+
+`mevedel-journal-max-age-days` defaults to 14; nil disables journal expiry.
+The clock starts at the immutable public entry `created` timestamp in UTC.
+For a digest, this is the execution target time when its completed-turn capture
+was first frozen, carried unchanged into later digest publication. Reviews and
+decisions use their native record-creation time. Delayed digest generation can
+therefore publish evidence whose ordinary recall period has already ended;
+unprocessed evidence remains available for consolidation and human inspection.
+Reading, retrying, reviewing and changing the address namespace do not reset it.
+At the limit, ordinary Read/Glob/Grep, exact addresses, discovery and completion
+exclude an entry even if physical storage must retain it. Recall checks use the
+client's current UTC clock; native cleanup and automatic review use the execution
+target's clock. Machines should have synchronized clocks for matching boundaries.
+Cached discovery checks age on every use, and prepared reads check at execution.
+
+Physical deletion has additional dependencies. Unreviewed digests remain available
+to consolidation and human inspection after their ordinary recall expires. A
+successful general review with no proposed changes counts as processing; failed,
+cancelled and focused reviews do not consume general coverage. Pending proposals
+and interrupted operations can retain evidence indefinitely until resolved. A
+14-day recall limit is therefore not a physical-erasure guarantee.
 Expiry runs independently of session expiry and new capture, for local and TRAMP
 workspaces, during workspace activation and existing cleanup opportunities.
 Opportunities are throttled to once an hour and select at most 50 digest/review groups;

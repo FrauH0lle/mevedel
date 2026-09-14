@@ -158,6 +158,10 @@
 (autoload 'mevedel-memory-decision-schedule-recovery "mevedel-memory-decision")
 
 ;; `mevedel-memory-pass'
+(declare-function mevedel-memory-pass-schedule "mevedel-memory-pass" (workspace))
+(autoload 'mevedel-memory-pass-schedule "mevedel-memory-pass")
+
+;; `mevedel-memory-pass'
 (declare-function mevedel-memory-pass-stop-all "mevedel-memory-pass" ())
 (defvar mevedel-memory-pass--inhibit-scheduling)
 
@@ -2420,6 +2424,7 @@ expired lease is taken over."
   ;; listing, so the chooser never offers a row that exists only because
   ;; nothing has cleaned up after a previous invocation.
   (mevedel-journal-process-schedule workspace t)
+  (mevedel-memory-pass-schedule workspace)
   (mevedel-memory-decision-schedule-recovery workspace)
   (mevedel-session-persistence-cleanup-expired workspace)
   (mevedel-session-persistence--sweep-stale-locks workspace)

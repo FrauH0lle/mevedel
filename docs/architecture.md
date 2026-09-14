@@ -630,10 +630,10 @@ skill-snapshot and delta APIs have no compatibility aliases or migrations.
 
 ## Resource addressing
 
-Filesystem-shaped tools consume one closed set of nine resource-address
+Filesystem-shaped tools consume one closed set of eight resource-address
 families: `work://`, `artifact://`, `skill://`, `agent://`, `history://`,
-`memory://`, `journal://`, `mcp://`, and `mevedel://`. `Read` supports all nine; `Glob` and
-`Grep` support `work://`, `artifact://`, `skill://`, `memory://`, `journal://`, and
+`memory://` (including `memory://journal/`), `mcp://`, and `mevedel://`. `Read` supports all eight; `Glob` and
+`Grep` support `work://`, `artifact://`, `skill://`, `memory://`, `memory://journal/`, and
 `mevedel://`; `ApplyPatch` supports `work://` and explicit memory file descendants alongside ordinary filesystem
 paths. Addresses serialize canonical resource locators and do not replace
 target-native paths, mentions, or permissions. `mevedel://` is an always-
@@ -678,10 +678,14 @@ frontmatter. `MEMORY.md` should contain one-line links only.
 LLM-writable. See [`memory.md`](memory.md) for the full layout, save
 policy, staleness rules, and the `/remember` consolidation command and cockpit.
 
-Completed saved root turns offer automatic consolidation. A disposable
-workspace timing cache keeps the hot check free of target I/O, and the existing
-transport boundary defers the cold observation. The coordinator rechecks the
-24-hour/five-digest gate under target ownership after publication recovery.
+Completed saved root turns, digest publication and workspace activation offer
+automatic consolidation. A disposable workspace timing cache keeps the hot check
+free of target I/O, and the existing transport boundary defers the cold
+observation. The coordinator rechecks the 24-hour gate under target ownership
+after publication recovery. Five unreviewed digests normally qualify; even one
+qualifies one day before ordinary recall expiry. Completed published evidence
+is eligible while its source session remains live. Idle workspaces wait for
+their next activity boundary and retain unreviewed evidence in the meantime.
 Propose is the default; auto applies memory changes through the same checked
 decision operation and holds instruction proposals for approval.
 

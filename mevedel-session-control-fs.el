@@ -15,13 +15,14 @@
 ;; suspended, and the latter is a macro, so this is a load-time dependency
 ;; rather than a lazily reachable one.
 (require 'mevedel-transport)
+(require 'tar-mode)
 
 (define-error 'mevedel-session-control-fs-conflict
-  "Portable control filesystem name already exists")
+	      "Portable control filesystem name already exists")
 (define-error 'mevedel-session-control-fs-absent
-  "Portable control filesystem name does not exist")
+	      "Portable control filesystem name does not exist")
 (define-error 'mevedel-session-control-fs-busy
-  "Portable control filesystem target is already in use")
+	      "Portable control filesystem target is already in use")
 
 (defun mevedel-session-control-fs--assert-idle (path)
   "Refuse a control operation on PATH that would nest in another one.
@@ -93,7 +94,8 @@ before the operation ran."
    "set -eu\n"
    "pause_file=$1\n"
    "lock_directory=$2\n"
-   "shift 2\n"
+   "archive_reads=$3\n"
+   "shift 3\n"
    "if test -n \"$lock_directory\"; then\n"
    "  exec 7<\"$lock_directory\" || exit 70\n"
    "  test \"$(cd /proc/self/fd/7 && pwd -P)\" = \"$lock_directory\" || exit 70\n"
@@ -106,14 +108,8 @@ before the operation ran."
    ;; on `set -e'.  The caller runs this function on the left of a `||', and
    ;; that suppresses errexit for everything the function does, so an implicit
    ;; guard would silently continue into the operation it was meant to refuse.
-   "run_op() {\n"
-   "  op=$1\n"
-   ;; One parent spelling serves both the open and the proof: it is the
-   ;; physical no-trailing-slash form, which is exactly what `pwd -P'
-   ;; prints, and the root is spelled `/' on both sides.
-   "  parent=$2\n"
-   "  leaf=$3\n"
-   "  payload=$4\n"
+   "pin_parent() {\n"
+   "  parent=$1\n"
    "  test -e \"$parent\" || exit 78\n"
    "  exec 9<\"$parent\" || exit 70\n"
    ;; Physical cd sets PWD from the opened directory and -e refuses an
@@ -129,6 +125,32 @@ before the operation ran."
    "      test \"$waited\" -lt 6000 || exit 79\n"
    "    done\n"
    "  fi\n"
+   "}\n"
+   ;; Read-only batches keep all proved parents open while tar transfers the
+   ;; regular files. No link is dereferenced and no archive is extracted.
+   "run_archive() (\n"
+   "  files=()\n"
+   "  while test \"$#\" -ge 5; do\n"
+   "    test \"$1\" = read && test -z \"$4\" || exit 74\n"
+   "    pin_parent \"$2\"\n"
+   "    test ! -L \"$3\" && test -f \"$3\" || exit 69\n"
+   "    exec {pin}</proc/self/fd/9 || exit 70\n"
+   "    files+=(\"/proc/self/fd/$pin/$3\")\n"
+   "    shift 5\n"
+   "  done\n"
+   "  test \"$#\" -eq 0 || exit 71\n"
+   "  export TAR_OPTIONS=\n"
+   "  exec tar --format=gnu --no-recursion --hard-dereference --absolute-names -cf - -- \"${files[@]}\"\n"
+   ")\n"
+   "run_op() {\n"
+   "  op=$1\n"
+   ;; One parent spelling serves both the open and the proof: it is the
+   ;; physical no-trailing-slash form, which is exactly what `pwd -P'
+   ;; prints, and the root is spelled `/' on both sides.
+   "  parent=$2\n"
+   "  leaf=$3\n"
+   "  payload=$4\n"
+   "  pin_parent \"$parent\"\n"
    "  case \"$op\" in\n"
    "    read)\n"
    "      test ! -L \"$leaf\" || exit 69\n"
@@ -314,6 +336,20 @@ before the operation ran."
    ;; one; payload fields may carry newline-wrapped base64.
    "run_program() {\n"
    "index=0\n"
+   "if test \"$archive_reads\" = 1; then\n"
+   "  if test \"$#\" -eq 0; then\n"
+   "    fields=()\n"
+   "    while IFS= read -r -d '' field; do fields+=(\"$field\"); done\n"
+   "    set -- \"${fields[@]}\"\n"
+   "  fi\n"
+   ;; Stream the encoded bytes instead of copying a multi-megabyte archive
+   ;; through a shell variable. The receiver also requires successful exit.
+   "  printf 'archive 0\\0'\n"
+   "  archive_status=0\n"
+   "  run_archive \"$@\" </dev/null | base64 -w0 || archive_status=$?\n"
+   "  printf '\\0archive-status %s\\0' \"$archive_status\"\n"
+   "  return 0\n"
+   "fi\n"
    "if test \"$#\" -gt 0; then\n"
    "  while test \"$#\" -ge 5; do\n"
    "    emit \"$1\" \"$2\" \"$3\" \"$4\" \"$5\"\n"
@@ -627,6 +663,39 @@ report why."
          results)))
     (nreverse results)))
 
+(defun mevedel-session-control-fs--archive-results (operations bytes)
+  "Decode a read-only archive of OPERATIONS from target BYTES.
+Accept exactly one regular member per operation, in request order. Nothing
+is extracted to disk. A rejected archive requires fresh ordinary reads."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert bytes)
+    (let ((position (point-min)) results)
+      (dolist (op operations)
+        (let* ((header (tar-header-block-tokenize position 'utf-8-unix))
+               (start (and header (tar-header-data-start header)))
+               (size (and header (tar-header-size header))))
+          (unless (and header (eq (plist-get op :op) 'read)
+                       (null (tar-header-link-type header)) (natnump size)
+                       (<= (+ start size) (point-max))
+                       (string-match-p
+                        (concat "\\`/proc/self/fd/[0-9]+/"
+                                (regexp-quote (file-name-nondirectory (plist-get op :path))) "\\'")
+                        (tar-header-name header)))
+            (error "Invalid control read archive member"))
+          (unless (= (tar-header-checksum header)
+                     (tar-header-block-checksum
+                      (buffer-substring-no-properties (- start 512) start)))
+            (error "Invalid control read archive checksum"))
+          (push (list :op 'read :path (plist-get op :path) :status 'ok :code 0
+                      :value (mevedel-session-control-fs--program-value
+                              op (buffer-substring-no-properties start (+ start size)))
+                      :diagnostic nil) results)
+          (setq position (tar-header-data-end header))))
+      (when (tar-header-block-tokenize position 'utf-8-unix)
+        (error "Unexpected control read archive member"))
+      (nreverse results))))
+
 (defun mevedel-session-control-fs-run-program (operations &optional lock-directory)
   "Run OPERATIONS as one pinned target program and return their results.
 
@@ -645,9 +714,12 @@ interprets
 itself, such as ensuring a directory that may already exist, and which
 therefore does not end the program.
 
-Every operation opens and re-proves its own parent descriptor inside the one
-process, so a program is exactly as pinned as the same operations run one at
-a time.  The program stops at the first operation that does not succeed, and
+Every operation opens and proves its parent descriptor inside the target
+process. Up to 32 independent unbounded reads may transfer together through
+GNU tar while keeping those descriptors open. Unavailable tar, an unsafe
+batch or an invalid archive causes a fresh ordinary read program.
+No archive is extracted, and caller byte/hash validation remains unchanged.
+The program stops at the first operation that does not succeed, and
 its remaining operations report `skipped'; that is what lets a caller state a
 precondition as a `verify' its writes depend on.  This narrows the window
 between the proof and the write to two adjacent syscall sequences in one
@@ -684,6 +756,10 @@ signal contract of the single-operation wrappers per operation."
              ;; payload a second time for the request file.
              (fields (mapcar #'mevedel-session-control-fs--program-fields
                              operations))
+             (archive-p (and (<= 2 (length operations) 32)
+                             (cl-every (lambda (op)
+                                         (and (eq (plist-get op :op) 'read)
+                                              (not (plist-member op :max-bytes)))) operations)))
              (arguments
               (mevedel-session-control-fs--program-arguments fields))
              (input (unless arguments
@@ -698,51 +774,66 @@ signal contract of the single-operation wrappers per operation."
                                 fields)))
                   (with-temp-buffer
                     (set-buffer-multibyte nil)
-                    (insert request)
+                    (insert (encode-coding-string request 'utf-8-unix))
                     (write-region (point-min) (point-max) input nil 'silent))))
-              (let* ((coding-system-for-read 'no-conversion)
-                     (status
-                      (mevedel-transport-with-exclusive-connection
-                        ;; Stderr is discarded rather than pointed at a local
-                        ;; file: TRAMP would answer a local one by creating a
-                        ;; remote temporary and copying it back on every
-                        ;; program.  The script ships diagnostics itself, in a
-                        ;; record of its own.  A bare buffer destination is
-                        ;; not an option -- that leaves stderr unredirected
-                        ;; into the connection buffer, which TRAMP appends to
-                        ;; the output, corrupting the framing.
-                        ;;
-                        ;; Still exactly one target process per program: a
-                        ;; request too large for the command line moves to the
-                        ;; stdin file, it does not become a second call.
-                        (apply
-                         #'process-file
-                         bash input (list output nil) nil
-                         "-p" "-c"
-                         mevedel-session-control-fs--program-script
-                         "mevedel-session-control-fs"
-                         (or mevedel-session-control-fs--test-pause-file "")
-                         (if lock-directory (file-local-name lock-directory) "")
-                         arguments)))
-                     (text (with-current-buffer output (buffer-string))))
-                (unless (and (integerp status) (zerop status))
-                  ;; The resolved interpreters are the only cached input, so a
-                  ;; program that failed as a whole retries their lookup.
-                  (remhash (or remote "")
-                           mevedel-session-control-fs--programs)
-                  (signal 'file-error
-                          (list "Portable control program failed"
-                                (plist-get (car operations) :path)
-                                ;; A program that died before its trap ran has
-                                ;; no record; report what did arrive.
-                                (let ((captured
-                                       (car
-                                        (mevedel-session-control-fs--take-diagnostic
-                                         (split-string text "\0")))))
-                                  (if (string-empty-p captured)
-                                      (string-trim text)
-                                    captured)))))
-                (mevedel-session-control-fs--program-results operations text)))
+              (catch 'read-result
+                (dotimes (_attempt 2)
+                  (with-current-buffer output (erase-buffer))
+                  (let* ((coding-system-for-read 'no-conversion)
+                         (status
+                          (mevedel-transport-with-exclusive-connection
+                           ;; Stderr is discarded rather than pointed at a local
+                           ;; file: TRAMP would answer a local one by creating a
+                           ;; remote temporary and copying it back on every
+                           ;; program.  The script ships diagnostics itself, in a
+                           ;; record of its own.  A bare buffer destination is
+                           ;; not an option -- that leaves stderr unredirected
+                           ;; into the connection buffer, which TRAMP appends to
+                           ;; the output, corrupting the framing.
+                           ;;
+                           ;; Oversized requests use stdin in the same process.
+                           ;; Only a rejected archive needs an ordinary retry.
+                           (apply
+                            #'process-file
+                            bash input (list output nil) nil
+                            "-p" "-c"
+                            mevedel-session-control-fs--program-script
+                            "mevedel-session-control-fs"
+                            (or mevedel-session-control-fs--test-pause-file "")
+                            (if lock-directory (file-local-name lock-directory) "")
+                            (if archive-p "1" "0")
+                            arguments)))
+                         (text (with-current-buffer output (buffer-string))))
+                    (unless (and (integerp status) (zerop status))
+                      ;; The resolved interpreters are the only cached input, so a
+                      ;; program that failed as a whole retries their lookup.
+                      (remhash (or remote "")
+                               mevedel-session-control-fs--programs)
+                      (signal 'file-error
+                              (list "Portable control program failed"
+                                    (plist-get (car operations) :path)
+                                    ;; A program that died before its trap ran has
+                                    ;; no record; report what did arrive.
+                                    (let ((captured
+                                           (car
+                                            (mevedel-session-control-fs--take-diagnostic
+                                             (split-string text "\0")))))
+                                      (if (string-empty-p captured)
+                                          (string-trim text)
+                                        captured)))))
+                    (when (and (not archive-p) (string-prefix-p "archive 0\0" text))
+                      (error "Unexpected control read archive"))
+                    (if (string-prefix-p "archive 0\0" text)
+                        (condition-case nil
+                            (let ((records (split-string text "\0")))
+                              (unless (equal (nth 2 records) "archive-status 0")
+                                (error "Control read archive transfer failed"))
+                              (throw 'read-result
+                                     (mevedel-session-control-fs--archive-results
+                                      operations (base64-decode-string (cadr records)))))
+                          (error (setq archive-p nil)))
+                      (throw 'read-result
+                             (mevedel-session-control-fs--program-results operations text)))))))
           (when (and input (file-exists-p input))
             (delete-file input))
           (when (buffer-live-p output)

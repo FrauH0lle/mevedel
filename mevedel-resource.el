@@ -73,6 +73,7 @@
 (declare-function mevedel-journal-store-entries "mevedel-journal-store" (root))
 (declare-function mevedel-journal-store-file-name-p "mevedel-journal-store" (name))
 (declare-function mevedel-journal-store-read "mevedel-journal-store" (root file))
+(declare-function mevedel-journal-store-recall-p "mevedel-journal-store" (entry &optional now))
 (autoload 'mevedel-journal-store-directory "mevedel-journal-store")
 (autoload 'mevedel-journal-store-entries "mevedel-journal-store")
 (autoload 'mevedel-journal-store-file-name-p "mevedel-journal-store")
@@ -122,7 +123,7 @@
 (autoload 'mevedel--transcript-org-mode "mevedel-utilities")
 
 (defconst mevedel-resource-supported-schemes
-  '(work artifact skill agent history memory journal mcp mevedel)
+  '(work artifact skill agent history memory mcp mevedel)
   "Closed set of resource address schemes understood by mevedel.")
 
 (defconst mevedel-resource--unreserved
@@ -180,7 +181,7 @@ condition labels.  Other conditions retain their ordinary diagnostic text."
                                 (file-local-name (directory-file-name path)))))
           (setq message (string-replace
                          (concat variant "/")
-                         (if (string-suffix-p "://" address) address
+                         (if (string-suffix-p "/" address) address
                            (concat address "/"))
                          message))
           (setq message (string-replace variant address message))))
@@ -459,8 +460,18 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
 
 (defun mevedel-resource--parse-memory-tail (tail)
   "Parse the memory-specific TAIL and return its locator fields."
-  (let ((components (mevedel-resource--parse-components tail)))
+  (let ((components (if (equal tail "journal/")
+                        '("journal")
+                      (mevedel-resource--parse-components tail))))
     (cond
+     ((equal (car components) "journal")
+      (unless (or (equal tail "journal/")
+                  (and (= (length components) 2)
+                       (mevedel-journal-store-file-name-p (cadr components))))
+        (signal 'mevedel-resource-error
+                '("Journal addresses use memory://journal/ or name one public entry")))
+      (list :components components :dynamic-p (null (cdr components))
+            :locator-class (unless (null (cdr components)) 'workspace-relative)))
      ((equal components '("root"))
       (list :components components :dynamic-p t))
      ((and (>= (length components) 2)
@@ -470,7 +481,7 @@ Return a plist containing decoded `:fragment', canonical `:raw', and pointer
       (list :components components :dynamic-p nil))
      (t
       (signal 'mevedel-resource-error
-              (list "Memory address requires 'root' or a root key and path"))))))
+              (list "Memory address requires 'root', 'journal/', or a root key and path"))))))
 
 (defun mevedel-resource--parse-agent-history-tail (tail)
   "Parse canonical retained-agent TAIL for agent or history resources."
@@ -746,7 +757,7 @@ SCHEME is nil, include metadata for every scheme."
                                    root memory-roots))))
                         memory-roots))
           :journal
-          (when (memq scheme '(nil journal))
+          (when (memq scheme '(nil memory))
             (mapcar (lambda (entry) (list :file (plist-get entry :file)))
                     (mevedel-journal-index-entries
                      (mevedel-resource--workspace context session) scheme)))
@@ -891,14 +902,6 @@ Physical resolution is intentionally not performed here."
                 ('agent
                  (mevedel-resource--parse-agent-history-tail tail))
                 ('memory (mevedel-resource--parse-memory-tail tail))
-                ('journal
-                 (let ((parts (mevedel-resource--parse-components tail)))
-                   (unless (or (null parts)
-                               (and (= 1 (length parts))
-                                    (mevedel-journal-store-file-name-p (car parts))))
-                     (signal 'mevedel-resource-error
-                             '("Journal addresses name one public entry")))
-                   (list :components parts :dynamic-p (null parts))))
                 ('mcp (mevedel-resource--parse-mcp-tail tail))
                 (_ (list :components (mevedel-resource--parse-components tail)
                          :dynamic-p (string-empty-p tail)))))
@@ -920,6 +923,8 @@ Physical resolution is intentionally not performed here."
                                          components))
                               "")))
                  (t "")))
+               ((and (eq scheme 'memory) (equal components '("journal")))
+                "journal/")
                ((eq scheme 'mcp)
                 (mevedel-resource--canonical-components components))
                (t (mevedel-resource--canonical-components components))))
@@ -1423,6 +1428,51 @@ the union index read, which already tolerates missing roots."
                  (when (mevedel-resource--workspace context session)
                    "\nhistory://saved\tSaved workspace conversations (Read, Glob, Grep)")))
         (t (mevedel-resource--history-read (plist-get data :record) session))))
+      ((and 'memory (guard (equal (car components) "journal")))
+       (let* ((components (cdr components))
+              (workspace (mevedel-resource--workspace context session))
+              (workspace-root (and workspace (mevedel-workspace-root workspace))))
+         (unless workspace-root
+           (signal 'mevedel-resource-unavailable '("Journal requires a workspace")))
+         (condition-case err
+             (let ((entries (if components
+                                (list (mevedel-journal-store-read
+                                       workspace-root (car components)))
+                              (mevedel-journal-store-entries workspace-root))))
+               (setq entries (seq-filter #'mevedel-journal-store-recall-p entries))
+               (when (and components (null entries))
+                 (signal 'mevedel-journal-store-invalid
+                         '("Journal entry has expired from ordinary recall")))
+               (if (eq operation 'read)
+                   (if components
+                       (plist-get (car entries) :text)
+                     (if entries
+                         (mapconcat
+                          (lambda (entry)
+                            (concat "memory://journal/"
+                                    (mevedel-resource-encode-component
+                                     (plist-get entry :file))))
+                          entries "\n")
+                       "No published journal entries"))
+                 (list :resource-search-documents
+                       (mapcar (lambda (entry)
+                                 (cons (plist-get entry :file) (plist-get entry :text)))
+                               entries))))
+           ((file-missing mevedel-session-control-fs-absent)
+            (signal 'mevedel-resource-unavailable
+                    '("Journal entry not found; Read memory://journal/ to discover published entries")))
+           (mevedel-journal-store-invalid
+            (signal 'mevedel-resource-unavailable
+                    (list (format "Invalid journal entry: %s"
+                                  (car (last (cdr err)))))))
+           (file-error
+            (signal 'mevedel-resource-unavailable
+                    '("Journal storage could not be read; check workspace storage access")))
+           (error
+            (signal 'mevedel-resource-unavailable
+                    (list (format "Journal read failed: %s"
+                                  (mevedel-resource-error-message
+                                   err (plist-get data :address) (list root)))))))))
       ('memory
        (if (equal components '("root"))
            (pcase operation
@@ -1441,46 +1491,6 @@ the union index read, which already tolerates missing roots."
                       "No memory roots configured."))))
          (signal 'mevedel-resource-unavailable
                  (list "Internal resource error: memory file reached discovery execution"))))
-      ('journal
-       (let* ((workspace (mevedel-resource--workspace context session))
-              (workspace-root (and workspace (mevedel-workspace-root workspace))))
-         (unless workspace-root
-           (signal 'mevedel-resource-unavailable '("Journal requires a workspace")))
-         (condition-case err
-             (let ((entries (if components
-                                (list (mevedel-journal-store-read
-                                       workspace-root (car components)))
-                              (mevedel-journal-store-entries workspace-root))))
-               (if (eq operation 'read)
-                   (if components
-                       (plist-get (car entries) :text)
-                     (if entries
-                         (mapconcat
-                          (lambda (entry)
-                            (concat "journal://"
-                                    (mevedel-resource-encode-component
-                                     (plist-get entry :file))))
-                          entries "\n")
-                       "No published journal entries"))
-                 (list :resource-search-documents
-                       (mapcar (lambda (entry)
-                                 (cons (plist-get entry :file) (plist-get entry :text)))
-                               entries))))
-           ((file-missing mevedel-session-control-fs-absent)
-            (signal 'mevedel-resource-unavailable
-                    '("Journal entry not found; Read journal:// to discover published entries")))
-           (mevedel-journal-store-invalid
-            (signal 'mevedel-resource-unavailable
-                    (list (format "Invalid journal entry: %s"
-                                  (car (last (cdr err)))))))
-           (file-error
-            (signal 'mevedel-resource-unavailable
-                    '("Journal storage could not be read; check workspace storage access")))
-           (error
-            (signal 'mevedel-resource-unavailable
-                    (list (format "Journal read failed: %s"
-                                  (mevedel-resource-error-message
-                                   err (plist-get data :address) (list root)))))))))
       ('mcp
        (cond
         ((null components)
@@ -1612,6 +1622,12 @@ before an authorized handler receives a backing path or virtual record."
           (setq data (plist-put data :record record))
           (unless record
             (setq data (plist-put data :unavailable-p t))))))
+     ((and (eq scheme 'memory) (equal (car components) "journal"))
+      (if-let* ((workspace (mevedel-resource--workspace context session)))
+          (progn
+            (setq root (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
+            (mevedel-resource--safe-path root (cdr components)))
+        (setq data (plist-put data :unavailable-p t))))
      ((eq scheme 'memory)
       (unless (equal components '("root"))
         (let ((memory-root
@@ -1622,13 +1638,7 @@ before an authorized handler receives a backing path or virtual record."
             (setq root (plist-get memory-root :dir)
                   physical (mevedel-resource--safe-path
                             root (cdr components))
-                  data (plist-put data :memory-root memory-root))))))
-     ((eq scheme 'journal)
-      (if-let* ((workspace (mevedel-resource--workspace context session)))
-          (progn
-            (setq root (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
-            (mevedel-resource--safe-path root components))
-        (setq data (plist-put data :unavailable-p t)))))
+                  data (plist-put data :memory-root memory-root)))))))
     (when (and (eq operation 'apply-patch)
                (or (eq scheme 'memory)
                    (and (eq scheme 'work) (mevedel-resource--shared-work-p components)))
@@ -1671,7 +1681,7 @@ errors before any content or handler is reached."
            physical root logical-p)
       (unless (or (eq operation 'read)
                   (and (memq operation '(glob grep))
-                       (or (memq scheme '(work artifact skill memory journal mevedel))
+                       (or (memq scheme '(work artifact skill memory mevedel))
                            (and (eq scheme 'history) (equal (car components) "saved"))))
                   (and (eq operation 'apply-patch)
                        (memq scheme '(work memory))))
@@ -1679,6 +1689,9 @@ errors before any content or handler is reached."
                 (list (format "%s does not support %s:// resources"
                               (if (eq operation 'apply-patch) "ApplyPatch"
                                 (capitalize (symbol-name operation))) scheme))))
+      (when (and (eq operation 'apply-patch) (eq scheme 'memory)
+                 (equal (car components) "journal"))
+        (signal 'mevedel-resource-error '("Journal evidence is read-only")))
       (when (and (eq scheme 'skill)
                  (plist-get parsed :dynamic-p)
                  (not (eq operation 'read)))
@@ -1767,6 +1780,11 @@ errors before any content or handler is reached."
             (setq data (plist-put data :record record))
             (unless record
               (setq data (plist-put data :unavailable-p t)))))))
+       ((and (eq scheme 'memory) (equal (car components) "journal"))
+        (setq logical-p t)
+        (when workspace
+          (setq root (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
+          (mevedel-resource--safe-path root (cdr components))))
        ((eq scheme 'memory)
         (if (equal components '("root"))
             (setq logical-p t)
@@ -1779,11 +1797,6 @@ errors before any content or handler is reached."
                     physical (mevedel-resource--safe-path
                               root (cdr components))
                     data (plist-put data :memory-root memory-root))))))
-       ((eq scheme 'journal)
-        (setq logical-p t)
-        (when workspace
-          (setq root (mevedel-journal-store-directory (mevedel-workspace-root workspace)))
-          (mevedel-resource--safe-path root components)))
        ((eq scheme 'mcp)
         (setq logical-p t)))
       (setq data (plist-put data :root root))
@@ -1842,9 +1855,10 @@ errors before any content or handler is reached."
      ((memq scheme '(agent history))
       (format "Agent not found in this session; Read %s:// to discover available %s"
               scheme (if (eq scheme 'agent) "agents" "histories")))
+     ((and (eq scheme 'memory) (equal (car components) "journal"))
+      "Journal resources require a workspace")
      ((eq scheme 'memory)
       "Memory root is not configured; Read memory://root to discover configured roots")
-     ((eq scheme 'journal) "Journal resources require a workspace")
      (t "Internal resource error: availability failure has no reason"))))
 
 (defun mevedel-resource-attempt-address (attempt)

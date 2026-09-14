@@ -32,7 +32,7 @@
 (mevedel-deftest mevedel-memory-pass-select ()
   ,test
   (test)
-  :doc "general coverage and live sessions are excluded, and a closed session becomes eligible again"
+  :doc "general coverage is excluded while completed evidence from a live session remains eligible"
   (mevedel-test-journal-capture--with-session
    (lambda (session buffer)
      (mevedel-test-journal-capture--turn session buffer "Check source" "Tests passed")
@@ -47,17 +47,17 @@
                    :created "2026-08-04T12:00:00Z" :model "test:model" :focus ""
                    :digests (list (plist-get first :id)) :proposals nil :references nil))
        (let* ((entries (mevedel-journal-store-entries root))
-              (selection (mevedel-memory-pass-select workspace entries)))
-         (should (equal (list third) (plist-get selection :entries)))
-         (should (equal (list (plist-get live :id)) (plist-get selection :excluded)))
-         (should (= 1 (plist-get selection :eligible)))
+              (selection (mevedel-memory-pass-select entries)))
+         (should (equal (list live third) (plist-get selection :entries)))
+         (should-not (plist-get selection :excluded))
+         (should (= 2 (plist-get selection :eligible)))
          (should (= 0 (plist-get selection :remaining)))
-         (should (equal (list first third)
-                        (plist-get (mevedel-memory-pass-select workspace entries t) :entries)))
+         (should (equal (list first live third)
+                        (plist-get (mevedel-memory-pass-select entries t) :entries)))
          (let ((mevedel-journal-enabled nil)) (kill-buffer buffer))
          (mevedel-session-persistence-lock-release (mevedel-session-save-path session) session)
          (should (equal (list live third)
-                        (plist-get (mevedel-memory-pass-select workspace entries) :entries)))
+                        (plist-get (mevedel-memory-pass-select entries) :entries)))
          (should (equal entries (mevedel-journal-store-entries root)))))))
   :doc "selection freezes twenty oldest digests and reports the remaining eligible backlog"
   (mevedel-test-journal-capture--with-session
@@ -69,16 +69,16 @@
          (push (mevedel-test-memory-pass--digest workspace (1+ index) "closed" "Closed") published))
        (setq published (nreverse published))
        (let* ((entries (mevedel-journal-store-entries root))
-              (selection (mevedel-memory-pass-select workspace entries)))
+              (selection (mevedel-memory-pass-select entries)))
          (should (equal (seq-take published 20) (plist-get selection :entries)))
          (should (= 24 (plist-get selection :eligible)))
          (should (= 4 (plist-get selection :remaining)))
          (should-not (plist-get selection :excluded))
          (mevedel-test-memory-pass--digest workspace 25 "arrived-later" "Later")
-         (should (equal selection (mevedel-memory-pass-select workspace entries)))
+         (should (equal selection (mevedel-memory-pass-select entries)))
          (should (= 5 (plist-get (mevedel-memory-pass-select
-                                 workspace (mevedel-journal-store-entries root)) :remaining)))))))
-  :doc "foreign PID holders and unreadable authority stay excluded without changing their locks"
+                                 (mevedel-journal-store-entries root)) :remaining)))))))
+  :doc "published evidence remains eligible without reading or changing source session locks"
   (mevedel-test-journal-capture--with-session
    (lambda (session buffer)
      (mevedel-test-journal-capture--turn session buffer "Check source" "Tests passed")
@@ -92,13 +92,11 @@
        (dolist (contents (list "(:hostname \"another-host\" :pid 123)" "("
                               (format "(:hostname %S :pid nil)" (system-name))))
          (write-region contents nil lock nil 'silent)
-         (let ((selection (mevedel-memory-pass-select workspace (mevedel-journal-store-entries root))))
-           (should-not (plist-get selection :entries))
-           (should (equal (list (plist-get entry :id))
-                          (plist-get selection (if (string-match-p "another-host" contents) :excluded :unavailable))))
+         (let ((selection (mevedel-memory-pass-select (mevedel-journal-store-entries root))))
+           (should (equal (list entry) (plist-get selection :entries)))
            (should (equal contents (mevedel-session-control-fs-read-file lock)))))
        (delete-file lock))))
-  :doc "portable target leases exclude other clients and owned sessions without a local root buffer"
+  :doc "completed evidence from portable sessions remains eligible without changing their leases"
   (let ((local-root (file-name-as-directory (make-temp-file "mevedel-memory-live-" t))))
     (unwind-protect
         (mevedel-test--with-local-shell-tramp '("memory-live")
@@ -114,16 +112,15 @@
                       (let ((mevedel-session-durability--client-id owner))
                         (should (mevedel-session-durability-lease-acquire directory "Other conversation")))
                       (let* ((before (mevedel-session-durability-lease-status directory))
-                             (selection (mevedel-memory-pass-select workspace entries)))
-                        (should-not (plist-get selection :entries))
-                        (should (equal (list (plist-get entry :id)) (plist-get selection :excluded)))
+                             (selection (mevedel-memory-pass-select entries)))
+                        (should (equal (list entry) (plist-get selection :entries)))
                         (should (equal before (mevedel-session-durability-lease-status directory)))))
                   (let ((mevedel-session-durability--client-id owner))
                     (mevedel-session-durability-lease-release directory))))
-              (should (equal (list entry) (plist-get (mevedel-memory-pass-select workspace entries) :entries))))))
+              (should (equal (list entry) (plist-get (mevedel-memory-pass-select entries) :entries))))))
       (delete-directory local-root t)
       (mevedel-workspace-clear-registry)))
-  :doc "an independent Emacs holder excludes its digest until the process releases its authority"
+  :doc "an independent Emacs holder can continue while its completed evidence is selected"
   (mevedel-test-journal-capture--with-session
    (lambda (session buffer)
      (mevedel-test-journal-capture--turn session buffer "Check source" "Tests passed")
@@ -171,15 +168,14 @@
              (ert-info ((with-current-buffer output (buffer-string)))
                (should (file-exists-p ready))
                (should (process-live-p process)))
-             (let ((selection (mevedel-memory-pass-select workspace (mevedel-journal-store-entries root))))
-               (should-not (plist-get selection :entries))
-               (should (equal (list (plist-get entry :id)) (plist-get selection :excluded))))
+             (let ((selection (mevedel-memory-pass-select (mevedel-journal-store-entries root))))
+               (should (equal (list entry) (plist-get selection :entries))))
              (write-region "release" nil release nil 'silent)
              (with-timeout (10 (ert-fail "Independent holder did not release authority"))
                (while (process-live-p process) (accept-process-output nil 0.01)))
              (should (= 0 (process-exit-status process)))
              (should (equal (list entry)
-                            (plist-get (mevedel-memory-pass-select workspace (mevedel-journal-store-entries root)) :entries))))
+                            (plist-get (mevedel-memory-pass-select (mevedel-journal-store-entries root)) :entries))))
          (when (process-live-p process) (delete-process process))
          (kill-buffer output))))))
 

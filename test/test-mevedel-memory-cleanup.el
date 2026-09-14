@@ -11,6 +11,7 @@
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-memory-pass)
 (require 'mevedel-memory-list)
+(require 'mevedel-journal-jobs)
 (require 'mevedel-system)
 
 (mevedel-deftest mevedel-memory-cleanup-entry
@@ -91,6 +92,10 @@
     (should (= 0 (mevedel-journal-cleanup-expired workspace)))
     (should (file-exists-p (mevedel-memory-write--pin intent)))
     (should (= 2 (length (mevedel-journal-store-entries root))))
+    (should-not (mevedel-journal-index-entries workspace))
+    (should (seq-some
+             (lambda (row) (member "Write recovery required" (plist-get row :reasons)))
+             (mevedel-journal-jobs--retained workspace)))
     (should-not (mevedel-journal-cleanup-pass-retired-p root (plist-get prepared :id))))
   :doc "interrupted history deletion can resume after its pass and decision bodies are gone"
   (let ((proposal (topic)) intent)
@@ -244,6 +249,10 @@
                              "## Update\n- none\n## Merge\n- none\n## Remove\n- none\n## Instructions\n- none\n## No action\n- none")
                      (caar (plist-get (mevedel-memory-scope-capture workspace) :roots))))
     (should (= 0 (mevedel-journal-cleanup-expired workspace)))
+    (should-not (mevedel-journal-index-entries workspace))
+    (let ((row (car (mevedel-journal-jobs--retained workspace))))
+      (should (member "Awaiting proposal decisions" (plist-get row :reasons)))
+      (should (> (plist-get row :age) 365)))
     (should (plist-get (mevedel-memory-store-accepted workspace (plist-get prepared :id)) :proposals)))
   :doc "manifest private paths cannot escape the exact retired pass"
   (progn
@@ -295,7 +304,26 @@
     (should (= 2 (length (mevedel-journal-store-entries root))))
     (should (= 2 (length (mevedel-session-control-fs-list-directory
                          (mevedel-memory-decision--directory workspace) "\\.el\\'"))))
-    (should-not (mevedel-journal-cleanup-pass-retired-p root (plist-get prepared :id)))))
+    (should-not (mevedel-journal-cleanup-pass-retired-p root (plist-get prepared :id))))
+  :doc "unreviewed overdue evidence survives until a successful no-action review"
+  (let ((entry (mevedel-journal-store-publish-digest
+                root (list :capture-id (make-string 64 ?a) :session "closed"
+                           :session-name "Closed" :workspace identity
+                           :trigger 'session-end :segment 1
+                           :source-revision (make-string 64 ?b) :turns '(1)
+                           :turn-ids (list (make-string 64 ?c))
+                           :created "2000-01-01T00:00:00Z" :model "test:model")
+                "## Done\n- Observed: Completed work.\n\n## Learned\n- none\n\n## Surprised\n- none\n\n## Unfinished\n- none")))
+    (should (= 0 (mevedel-journal-cleanup-expired workspace)))
+    (should (equal entry (mevedel-journal-store-read root (plist-get entry :file))))
+    (should-not (mevedel-journal-index-entries workspace))
+    (publish entry)
+    (should-not (mevedel-journal-index-unreviewed (mevedel-journal-store-entries root)))
+    (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
+    (should-error (mevedel-journal-store-read root (plist-get entry :file)))
+    (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
+    (should-not (mevedel-journal-store-entries root))))
+
 
 (mevedel-deftest mevedel-journal-cleanup-pass-retired-p ()
   ,test

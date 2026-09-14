@@ -140,7 +140,7 @@
     (unwind-protect
         (progn
           (dolist (address '("work://shared" "work://" "memory://root"
-                             "memory://local-mevedel" "artifact://x" "journal://"))
+                             "memory://local-mevedel" "artifact://x" "memory://journal/"))
             (should-error (mevedel-resource-prepare 'apply-patch address context)))
           (dolist (entry '(("work://shared/note.md" ".mevedel/shared/note.md")
                            ("memory://local-mevedel/topic.md" ".mevedel/memory/topic.md")))

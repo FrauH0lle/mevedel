@@ -95,7 +95,7 @@
   ,test
   (test)
   :doc "recognizes supported schemes and ordinary native paths"
-  (dolist (scheme '(work artifact skill agent history memory journal mcp mevedel))
+  (dolist (scheme '(work artifact skill agent history memory mcp mevedel))
     (should (mevedel-resource-supported-scheme-p scheme)))
   (should-not (mevedel-resource-address-p "ordinary/path:with-colon"))
   (should (mevedel-resource-address-p "artifact://result.txt")))
@@ -197,7 +197,7 @@
                    :workspace workspace))
          (resource-root-function
           (symbol-function 'mevedel-resource--root)))
-    (dolist (scheme '(work artifact skill agent history memory journal mcp mevedel))
+    (dolist (scheme '(work artifact skill agent history memory mcp mevedel))
       (cl-letf (((symbol-function 'mevedel-resource--root)
                  (lambda (root-scheme owner)
                    (unless (eq root-scheme scheme)

@@ -10,7 +10,7 @@ Review the current session for durable, non-obvious knowledge worth carrying
 forward, optionally limited by `$ARGUMENTS`, and write only material that passes
 the minimum-signal rules below.
 
-Search `work://shared` for relevant working files and `journal://` for published
+Search `work://shared` for relevant working files and `memory://journal/` for published
 digests as additional evidence. Missing, delayed, or failed captures are possible;
 acknowledge relevant omissions and do not claim exhaustive coverage. Preserve
 source/task attribution and distinguish user statements, observed outcomes,

@@ -21,7 +21,8 @@
   "Return recently validated public entries for WORKSPACE.
 Observe storage at most once every ten seconds.  CACHED-ONLY never performs
 filesystem operations, including when there is no observation yet.  Storage
-failures produce an empty observation until the next refresh opportunity."
+failures produce an empty observation until the next refresh opportunity.
+Apply the age limit on every use, including cached-only discovery."
   (when-let* ((root (and workspace (mevedel-workspace-root workspace))))
     (let* ((observation (mevedel-workspace-journal-observation workspace))
            (now (float-time)))
@@ -37,7 +38,8 @@ failures produce an empty observation until the next refresh opportunity."
                                  (mevedel-journal-store-entries root)
                                (error nil))))
         (setf (mevedel-workspace-journal-observation workspace) observation))
-      (plist-get observation :entries))))
+      (seq-filter #'mevedel-journal-store-recall-p
+                  (plist-get observation :entries)))))
 
 (defun mevedel-journal-index--line (text byte-limit)
   "Flatten TEXT to one line of at most BYTE-LIMIT UTF-8 bytes.
@@ -97,7 +99,7 @@ their order. Focused reviews retain their evidence IDs without covering them."
        header
        (mapconcat
         (lambda (entry)
-          (let ((prefix (format "- %s | %S | journal://%s | "
+          (let ((prefix (format "- %s | %S | memory://journal/%s | "
                                 (substring (plist-get entry :created) 0 10)
                                 (mevedel-journal-index--line (plist-get entry :session-name) 48)
                                 (mevedel-resource-encode-component (plist-get entry :file)))))

@@ -157,7 +157,7 @@ Bundled skills currently include:
 - `learn` — user-invocable durable write-back helper. Repository-derived
   contributor facts go to the nearest applicable `AGENTS.md`; stable personal,
   rationale, and external-reference findings use the existing memory types.
-  Relevant files discovered under `work://shared` and `journal://` digests supply additional
+  Relevant files discovered under `work://shared` and `memory://journal/` digests supply additional
   evidence; the skill retains attribution, verifies cheap claims, and acknowledges
   relevant missing captures without treating repeated summaries as independent
   evidence.

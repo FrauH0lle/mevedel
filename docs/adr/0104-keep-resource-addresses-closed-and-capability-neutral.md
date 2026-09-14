@@ -3,7 +3,7 @@
 Status: accepted
 
 Mevedel exposes one closed resolver for `work://`, `artifact://`, `skill://`,
-`agent://`, `history://`, `memory://`, `journal://`, `mcp://`, and `mevedel://`. A resource
+`agent://`, `history://`, `memory://`, `mcp://`, and `mevedel://`. A resource
 address is a plain serialization of a canonical locator, not a grant:
 preparation validates and resolves an opaque attempt plus logical authority
 facts before permission, and authorized execution consumes that attempt without
@@ -30,7 +30,7 @@ through Read, Glob, and Grep; it adds no source browser, compression layer,
 registry, mutation path, or extra aliases.
 
 Workspace journals add cross-session evidence without exposing private capture
-state. `journal://` therefore admits only validated public records through Read,
+state. `memory://journal/` therefore admits only validated public records through Read,
 Glob, and Grep. Searches operate on validated document snapshots using the
 existing search helpers, so a private or malformed file cannot enter results
 through raw directory traversal. Authorized operations validate current storage;
@@ -76,3 +76,9 @@ transaction. Shared and memory writes expose their prepared backing paths only
 to filesystem permission policy, retain address presentation, and reject root
 rebinding. Neither can borrow the session-only Plan exception. Root discovery
 addresses and journal/artifact evidence remain non-writable.
+
+The 2026-09-13 journal lifecycle change reserves `memory://journal/` within the
+memory scheme. Journal evidence is temporary and read-only; sharing the scheme
+with curated memory does not share its write permission. The separate journal
+scheme added no capability and is removed without an alias. Existing journal
+storage and its internal recovery authority are unchanged.

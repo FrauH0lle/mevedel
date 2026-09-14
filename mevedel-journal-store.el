@@ -16,6 +16,25 @@
 
 (define-error 'mevedel-journal-store-invalid "Invalid journal entry")
 
+(defcustom mevedel-journal-max-age-days 14
+  "Age in days after which journal entries leave ordinary recall.
+Age uses the immutable entry creation timestamp.  Nil disables age expiry.
+Unfinished review, proposal and recovery dependencies may retain evidence
+beyond this period for inspection and processing.  Physical cleanup runs
+independently of session cleanup or capture and requires resolved dependencies."
+  :type '(choice (const :tag "Disabled" nil) (integer :tag "Days"))
+  :group 'mevedel)
+
+(defun mevedel-journal-store-recall-p (entry &optional now)
+  "Return whether validated ENTRY is young enough for ordinary recall.
+NOW is UTC seconds, defaulting to the current time.  This predicate neither
+authorizes access nor decides whether stored evidence can be deleted."
+  (or (not (and (integerp mevedel-journal-max-age-days)
+                (>= mevedel-journal-max-age-days 0)))
+      (< (- (or now (float-time))
+            (float-time (date-to-time (plist-get entry :created))))
+         (* mevedel-journal-max-age-days 86400))))
+
 (defconst mevedel-journal-store--entry-max-bytes (* 8 1024 1024)
   "Maximum public entry bytes, including complete turn coverage and body.")
 

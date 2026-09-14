@@ -13,6 +13,7 @@
           "helpers"))
 (require 'mevedel-memory-decision)
 (require 'mevedel-memory-pass)
+(require 'mevedel-session-persistence)
 (require 'mevedel-memory-review)
 (require 'mevedel-system)
 (require 'gptel-openai)
@@ -54,6 +55,20 @@
   :doc "rejects idempotently without editing memory or rewriting its completed review"
   (let ((decision (mevedel-memory-decision-reject workspace pass (plist-get proposal :id) "Abandoned choice")))
     (should (eq 'rejected (plist-get decision :status)))
+    (let ((original (symbol-function 'mevedel-session-control-fs-run-program))
+          (calls 0))
+      (cl-letf (((symbol-function 'mevedel-session-control-fs-run-program)
+                 (lambda (&rest args) (cl-incf calls) (apply original args))))
+        (should (equal (plist-get decision :decision-id)
+                       (plist-get
+                        (plist-get
+                         (mevedel-memory-decision--record
+                          workspace
+                          (file-name-concat (mevedel-memory-decision--directory workspace)
+                                            (concat (plist-get decision :decision-id) ".el")))
+                         :metadata)
+                        :decision-id))))
+      (should (= calls 2)))
     (should (equal decision (mevedel-memory-decision-reject workspace pass (plist-get proposal :id) "A second reason")))
     (should (equal decision (mevedel-memory-decision-status workspace (plist-get proposal :id))))
     (should (equal "Abandoned choice" (plist-get decision :reason)))

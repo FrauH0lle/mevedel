@@ -10,6 +10,7 @@
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-memory-pass)
+(require 'mevedel)
 (require 'mevedel-system)
 (require 'gptel-openai)
 
@@ -18,6 +19,7 @@
                           (workspace (mevedel-workspace--create :root root))
                           (identity (mevedel-workspace-identity-ensure root))
                           (mevedel-memory-dirs nil)
+                          (mevedel-journal-max-age-days 14)
                           (mevedel-memory-consolidation-mode 'propose)
                           (mevedel-memory-consolidation-min-hours 24)
                           (mevedel-memory-consolidation-min-digests 5)
@@ -34,13 +36,14 @@
                               (cl-incf calls)
                               (setq callback cb selected entries)
                               (list :cancel #'ignore))))
-                          (cl-labels ((digest (number)
+                          (cl-labels ((digest (number &optional age-days)
                                         (mevedel-journal-store-publish-digest
                                          root (list :capture-id (format "%064x" number) :session "closed" :session-name "Closed"
                                                     :workspace identity :trigger 'session-end :segment 1
                                                     :source-revision (make-string 64 ?c) :turns '(1)
                                                     :turn-ids (list (format "%064x" number))
-                                                    :created "2026-08-01T12:00:00Z" :model "test:model")
+                                                    :created (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                                                                 (- now (* (or age-days 0) 86400)) t) :model "test:model")
                                          "## Done\n- Observed: Tests passed.\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none"))
                                       (start (&rest args)
                                         (setq state (apply #'mevedel-memory-pass-start workspace (lambda (value) (setq result value)) args)))
@@ -92,6 +95,31 @@
                      (should (start :memory-only t))
                      (finish))
                    (should (= 2 calls)))
+                 :doc "sparse work is offered a general review one day before ordinary expiry"
+                 (progn
+                   (digest 1 12)
+                   (should-not (start :automatic t))
+                   (cl-incf now 86400)
+                   (should (start :automatic t))
+                   (should (= 1 (length selected)))
+                   (finish)
+                   (cl-incf now (* 15 86400))
+                   (should-not (start :automatic t))
+                   (should (= 1 calls)))
+                 :doc "custom and disabled expiry preserve their review-age policy and the elapsed-time gate"
+                 (let ((mevedel-journal-max-age-days 30))
+                   (digest 1 28)
+                   (should-not (start :automatic t))
+                   (cl-incf now 86400)
+                   (let ((mevedel-journal-max-age-days nil))
+                     (should-not (start :automatic t)))
+                   (should (start :automatic t))
+                   (finish)
+                   (digest 2 40)
+                   (should-not (start :automatic t))
+                   (cl-incf now 86400)
+                   (should (start :automatic t))
+                   (finish))
                  :doc "focused completion leaves the general clock and coverage available"
                  (progn
                    (cl-decf now 86401)
@@ -247,6 +275,31 @@
                      (should (= 1 (hash-table-count mevedel-memory-pass--pending)))
                      (mevedel-transport-cancel-pending key)
                      (should (= 0 (hash-table-count mevedel-memory-pass--pending)))))
+                 :doc "workspace activation preserves an overdue backlog in manual mode and offers it in propose mode"
+                 (mevedel-test--with-captured-diagnostics nil
+                   (digest 1 30)
+                   (setf (mevedel-workspace-type workspace) 'file
+                         (mevedel-workspace-id workspace) root)
+                   (should (= 0 (mevedel-journal-cleanup-expired workspace t)))
+                   (dolist (mode '(manual propose))
+                     (let ((mevedel-memory-consolidation-mode mode)
+                           buffer view)
+                       (unwind-protect
+                           (progn
+                             (setq buffer (mevedel--chat-buffer
+                                           (symbol-name mode) t workspace root))
+                             (setq view (buffer-local-value 'mevedel--view-buffer buffer))
+                             (drain)
+                             (if (eq mode 'manual)
+                                 (progn (should (= 0 calls))
+                                        (should (= 1 (length (mevedel-journal-index-unreviewed
+                                                              (mevedel-journal-store-entries root))))))
+                               (should (= 1 calls))
+                               (should (= 1 (length selected)))
+                               (finish)))
+                         (let ((mevedel-journal-enabled nil))
+                           (when (buffer-live-p view) (kill-buffer view))
+                           (when (buffer-live-p buffer) (kill-buffer buffer)))))))
                  :doc "an empty workspace stays empty and caches its unsuccessful opportunity"
                  (progn
                    (mevedel-memory-pass-schedule workspace)

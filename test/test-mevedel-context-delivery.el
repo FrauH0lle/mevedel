@@ -17,6 +17,7 @@
 (require 'mevedel-goal)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-workspace)
+(require 'mevedel-workspace-identity)
 (require 'mevedel-journal-index)
 (require 'gptel-openai)
 
@@ -130,7 +131,8 @@
   ,test
   (test)
   :doc "retains changes, retries abandoned staging, and rehydrates after context loss"
-  (let* ((root (make-temp-file "mevedel-context-" t))
+  (let* ((mevedel-journal-max-age-days nil)
+         (root (make-temp-file "mevedel-context-" t))
          (default-directory (file-name-as-directory root))
          (workspace (mevedel-workspace--create :root default-directory :id root
                                                :type 'project :name "context"))
@@ -306,6 +308,55 @@
             (set-marker (plist-get (gptel-fsm-info fsm) :position) (point-max))
             (mevedel-context-delivery-stage fsm)
             (should (= 8 (length (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))))))
+      (delete-directory root t)))
+
+  :doc "expiry replaces a delivered journal observation even with a warm journal cache"
+  (let* ((root (make-temp-file "mevedel-context-expiry-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (session (mevedel-session--create :workspace workspace :working-directory root))
+         (mevedel-journal-max-age-days 14)
+         (mevedel-system-retained-components '(journal))
+         (gptel--known-backends nil)
+         (backend (gptel-make-openai "context-expiry-test" :key "test"
+                                     :host "example.test" :models '(test)))
+         (deadline (+ (float-time (date-to-time "2026-09-01T12:00:00Z")) (* 14 86400)))
+         (now (1- deadline))
+         (real-time (symbol-function 'float-time)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (insert "Current task\n")
+          (let* ((entry (mevedel-journal-store-publish-digest
+                         root
+                         (list :capture-id (make-string 64 ?a) :session "expiry-session"
+                               :session-name "Expiry" :workspace (mevedel-workspace-identity-ensure root)
+                               :trigger 'session-end :segment 1 :source-revision (make-string 64 ?b)
+                               :turns '(1) :turn-ids (list (make-string 64 ?c))
+                               :created "2026-09-01T12:00:00Z" :model "test:model")
+                         "## Done\n- none\n## Learned\n- Observed: RETAINED-JOURNAL-CANARY.\n## Surprised\n- none\n## Unfinished\n- none"))
+                 (data (list :messages [(:role "user" :content "Current task")]))
+                 (fsm (gptel-make-fsm :info (list :buffer (current-buffer) :backend backend
+                                                  :data data :position (point-marker)))))
+            (cl-letf (((symbol-function 'float-time)
+                       (lambda (&optional time) (if time (funcall real-time time) now))))
+              (mevedel-context-delivery-stage fsm)
+              (should (string-search "RETAINED-JOURNAL-CANARY"
+                                     (plist-get (car (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries)) :body)))
+              (mevedel-reminders--handle-inject fsm)
+              (mevedel-context-delivery-stage fsm)
+              (should-not (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))
+              (let ((observation (mevedel-workspace-journal-observation workspace)))
+                (setq now deadline)
+                (mevedel-context-delivery-stage fsm)
+                (should (eq observation (mevedel-workspace-journal-observation workspace)))
+                (let ((updates (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries)))
+                  (should (equal '(context-journal) (mapcar (lambda (row) (plist-get row :type)) updates)))
+                  (should (string-search "replaces earlier Journal state" (plist-get (car updates) :body)))
+                  (should-not (string-search "RETAINED-JOURNAL-CANARY" (plist-get (car updates) :body)))))
+              (mevedel-reminders--handle-inject fsm)
+              (mevedel-context-delivery-stage fsm)
+              (should-not (plist-get (gptel-fsm-info fsm) :mevedel-reminder-entries))
+              (should (equal entry (mevedel-journal-store-read root (plist-get entry :file)))))))
       (delete-directory root t)))
 
   :doc "agent delivery respects frozen component selection"

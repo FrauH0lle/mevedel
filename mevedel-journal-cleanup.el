@@ -2,8 +2,9 @@
 
 ;;; Commentary:
 
-;; Expiry is a bounded journal mutation.  An immutable manifest is accepted by
-;; the existing claim election before entries become unavailable or are removed.
+;; Physical expiry is a bounded journal mutation, separate from ordinary recall
+;; age limits.  Unreviewed digests and unresolved evidence stay recoverable.
+;; An immutable manifest is accepted before storage is retired or removed.
 ;; Accepted manifests are replayed before selecting further evidence.  Private
 ;; turn coverage survives, while retired capture payloads may be collected.
 
@@ -11,6 +12,7 @@
 
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-journal-claim)
+(require 'mevedel-journal-index)
 (require 'mevedel-journal-store)
 (require 'mevedel-structs)
 
@@ -21,14 +23,6 @@
 ;; `mevedel-transport'
 (declare-function mevedel-transport-run-when-idle "mevedel-transport"
                   (key path thunk &optional on-cancel))
-
-(defcustom mevedel-journal-max-age-days 365
-  "Age after which unreferenced public journal entries may expire.
-Nil disables journal expiry independently of session cleanup or capture.
-Each opportunity processes at most fifty digest/review groups. A completed
-review's dependent decision history expires with it, without a recursive drain."
-  :type '(choice (const :tag "Disabled" nil) (integer :tag "Days"))
-  :group 'mevedel)
 
 (defconst mevedel-journal-cleanup--max-bytes (* 4 1024 1024)
   "Maximum encoded expiry manifest, including dependent file identities.")
@@ -193,13 +187,15 @@ evidence."
          (cutoff (- (mevedel-session-control-fs-target-time root)
                     (* mevedel-journal-max-age-days 86400)))
          (observed (mevedel-journal-store-entries workspace-root))
+         (unreviewed (mevedel-journal-index-unreviewed observed))
          (entries nil))
     (dolist (entry (reverse observed))
       (when (and (< (length entries) 50)
-                 (< (float-time (date-to-time (plist-get entry :created))) cutoff))
+                 (<= (float-time (date-to-time (plist-get entry :created))) cutoff))
         (pcase (plist-get entry :kind)
           ('digest
-           (unless (mevedel-journal-cleanup--protected-p root entry)
+           (unless (or (memq entry unreviewed)
+                       (mevedel-journal-cleanup--protected-p root entry))
              (mevedel-journal-store--record-coverage workspace-root entry)
              (push (list :kind "digest" :id (plist-get entry :capture-id) :file (plist-get entry :file)
                          :sha256 (secure-hash 'sha256 (plist-get entry :text)) :private []) entries)))
