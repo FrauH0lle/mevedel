@@ -113,7 +113,6 @@
   "mevedel-session-durability")
 
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-allocate-session-id "mevedel-session-persistence" (name sessions-dir))
 (declare-function mevedel-session-persistence-authoritative-buffer "mevedel-session-persistence" (buffer))
 (declare-function mevedel-session-persistence-first-user-message "mevedel-session-persistence" (buffer))
 (declare-function mevedel-session-persistence-flush-diagnostic-logs "mevedel-session-persistence" (session))
@@ -126,8 +125,6 @@
 (declare-function mevedel-session-persistence-write-current-buffer-atomically "mevedel-session-persistence" (path))
 (defvar mevedel-file-history-max-snapshot-bytes)
 (defvar mevedel-sessions-directory)
-(autoload 'mevedel-session-persistence-allocate-session-id
-  "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-authoritative-buffer
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-first-user-message
@@ -179,7 +176,6 @@
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x))
 (declare-function mevedel-session-execution-target "mevedel-structs" (cl-x))
 (declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x))
-(declare-function mevedel-session-name "mevedel-structs" (cl-x))
 (declare-function mevedel-session-pending-publication "mevedel-structs" (cl-x))
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x))
 (declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x))
@@ -330,32 +326,11 @@ rerender."
 
 
 ;;
-;;; Session id and paths
+;;; Session paths
 
 (defun mevedel-session-artifacts-sanitize (name)
   "Return NAME with everything outside `[A-Za-z0-9_-]' replaced with `_'."
   (replace-regexp-in-string "[^A-Za-z0-9_-]" "_" (or name "")))
-
-(defun mevedel-session-artifacts--short-uuid ()
-  "Return 4 hex chars derived from random + monotonic clock entropy."
-  (substring
-   (secure-hash 'sha256
-                (format "%s-%s-%s"
-                        (random most-positive-fixnum)
-                        (float-time)
-                        (emacs-pid)))
-   0 4))
-
-(defun mevedel-session-artifacts-compute-id (name)
-  "Compute a fresh session id from NAME.
-
-Format: `<sanitized-name>-<ISO-timestamp>-<short-uuid>'.  ISO timestamp
-uses dashes throughout (no colons) so it works on every filesystem and
-sorts lexicographically."
-  (format "%s-%s-%s"
-          (mevedel-session-artifacts-sanitize name)
-          (format-time-string "%FT%H-%M")
-          (mevedel-session-artifacts--short-uuid)))
 
 (defun mevedel-session-artifacts-sessions-dir (workspace)
   "Return the absolute sessions directory for WORKSPACE.
@@ -1004,13 +979,14 @@ Returns SESSION's `save-path' (allocated or existing)."
                         (mevedel-session-artifacts-sessions-dir
                          (mevedel-session-workspace session)))
                        (session-id
-                        (mevedel-session-persistence-allocate-session-id
-                         (mevedel-session-name session) sessions-dir))
+                        (or (mevedel-session-session-id session)
+                            (error "Session has no identity")))
                        (new-save-path
                         (file-name-as-directory
                          (file-name-concat sessions-dir session-id)))
                        (now (format-time-string "%FT%H-%M-%S")))
-                  (make-directory new-save-path t)
+                  (make-directory sessions-dir t)
+                  (make-directory new-save-path)
                   (make-directory (file-name-concat new-save-path "agents") t)
                   (make-directory (file-name-concat new-save-path "file-history") t)
                   (mevedel-session-persistence-lock-acquire

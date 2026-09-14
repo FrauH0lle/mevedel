@@ -72,15 +72,26 @@
           (write-region "occupied\n" nil
                         (file-name-concat sessions-dir "taken") nil 'silent)
           (cl-letf (((symbol-function
-                      'mevedel-session-artifacts-compute-id)
-                     (lambda (_name)
+                      'mevedel-session-generate-id)
+                     (lambda ()
                        (if (= (cl-incf calls) 1) "taken" "fresh"))))
             (should (equal
                      "fresh"
                      (mevedel-session-persistence-allocate-session-id
-                      "main" sessions-dir)))
+                      sessions-dir)))
             (should (= calls 2))))
-      (delete-directory sessions-dir t))))
+      (delete-directory sessions-dir t)))
+  :doc "retries an identity already held by a live unsaved session"
+  (let ((directory (make-temp-file "mevedel-live-id-" t))
+        (calls 0))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session (mevedel-session--create :session-id "live"))
+          (cl-letf (((symbol-function 'mevedel-session-generate-id)
+                     (lambda () (if (= (cl-incf calls) 1) "live" "new"))))
+            (should (equal "new" (mevedel-session-persistence-allocate-session-id directory)))
+            (should (= 2 calls))))
+      (delete-directory directory t))))
 
 
 (mevedel-deftest mevedel-session-persistence-first-user-message ()
@@ -2620,6 +2631,7 @@
                       old-id (mevedel-session-session-id fixture-session)
                       old-save-path session-dir
                       buffer (generate-new-buffer " *save-as-lease*"))
+                (setf (mevedel-session-auto-name-pending session) t)
                 (let* ((mevedel-session-durability--client-id owner-id)
                        (mevedel-session-durability--disclosed-targets
                         (make-hash-table :test #'equal))
@@ -2744,6 +2756,7 @@
                     (with-current-buffer buffer
                       (mevedel-save-session t))
                   (should target-probed)
+                  (should-not (mevedel-session-auto-name-pending session))
                   (should competitor-blocked)
                   (should materialized)
                   (should-not copy-called)
@@ -4941,46 +4954,27 @@
 ;;; Session-id collision retry loop
 
 (mevedel-deftest mevedel-session-persistence/id-collision-retry ()
-  ,test
-  (test)
-  :doc "ensure-files retries id generation when the target dir already exists"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
+  ,test (test)
+  :doc "materialization refuses an occupied identity without changing it"
+  (pcase-let* ((`(,workspace . ,tempdir)
+                 (test-mevedel-session-persistence--make-tempdir-workspace))
+                (session (mevedel-session-create "main" workspace))
+                (id (mevedel-session-session-id session))
+                (path (file-name-concat
+                       (mevedel-session-artifacts-sessions-dir workspace) id))
+                (buffer (generate-new-buffer " *id-collision*")))
     (unwind-protect
-        (let* ((sessions-dir
-                (mevedel-session-artifacts-sessions-dir workspace))
-               ;; Pre-create a directory that a naive `compute-id'
-               ;; would collide with.
-               (colliding "main-collision-0001")
-               (remaining '("main-collision-0002" "main-collision-0003")))
-          (make-directory (file-name-concat sessions-dir colliding) t)
-          (let ((session (mevedel-session-create "main" workspace))
-                (buf     (generate-new-buffer "*test-data-buf*")))
-            (unwind-protect
-                (cl-letf*
-                    ;; First call returns the colliding id, subsequent
-                    ;; calls return fresh ids from `remaining'.
-                    ((first-call-p t)
-                     ((symbol-function
-                       'mevedel-session-artifacts-compute-id)
-                      (lambda (_name)
-                        (cond
-                         (first-call-p
-                          (setq first-call-p nil)
-                          colliding)
-                         (t (pop remaining))))))
-                  (with-current-buffer buf
-                    (org-mode)
-                    (insert "hi\n")
-                    (mevedel-session-artifacts-ensure-files session buf)
-                    ;; Picked a non-colliding id.
-                    (should-not (equal colliding
-                                       (mevedel-session-session-id session)))
-                    ;; Original colliding dir was not touched.
-                    (should (file-directory-p
-                             (file-name-concat sessions-dir colliding)))))
-              (test-mevedel-session-persistence--release-and-kill
-               buf session))))
+        (progn
+          (make-directory path t)
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local mevedel--session session)
+            (should-error (mevedel-session-artifacts-ensure-files session buffer)
+                          :type 'file-already-exists)
+            (should (equal id (mevedel-session-session-id session)))
+            (should-not (mevedel-session-save-path session))
+            (should (equal '("." "..") (directory-files path)))))
+      (test-mevedel-session-persistence--release-and-kill buffer session)
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 

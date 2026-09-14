@@ -191,7 +191,6 @@
 (declare-function mevedel-session-artifacts-assert-mutation-authority "mevedel-session-artifacts" (session &optional buffer))
 (declare-function mevedel-session-artifacts-build-sidecar "mevedel-session-artifacts" (session buffer))
 (declare-function mevedel-session-artifacts-check-target-incarnation "mevedel-session-artifacts" (session buffer))
-(declare-function mevedel-session-artifacts-compute-id "mevedel-session-artifacts" (name))
 (declare-function mevedel-session-artifacts-content-start "mevedel-session-artifacts" (buffer))
 (declare-function mevedel-session-artifacts-disown-save-machinery "mevedel-session-artifacts" nil)
 (declare-function mevedel-session-artifacts-finalized-segment-text "mevedel-session-artifacts" (text coding))
@@ -276,12 +275,18 @@
   "mevedel-session-durability")
 
 ;; `mevedel-session-fork'
-(declare-function mevedel-rename-session "mevedel-session-fork" (new-name))
 (declare-function mevedel-session-fork-clone-session
                   "mevedel-session-fork"
                   (session policy &rest keys))
 (autoload 'mevedel-session-fork-clone-session "mevedel-session-fork")
 
+;; `mevedel-session-naming'
+(declare-function mevedel-rename-session "mevedel-session-naming" (new-name))
+(declare-function mevedel-session-naming-cancel "mevedel-session-naming" ())
+(declare-function mevedel-session-naming-normalize "mevedel-session-naming" (name))
+(autoload 'mevedel-rename-session "mevedel-session-naming")
+(autoload 'mevedel-session-naming-cancel "mevedel-session-naming")
+(autoload 'mevedel-session-naming-normalize "mevedel-session-naming")
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-call-with-diagnostic-batch
@@ -364,6 +369,7 @@
 (declare-function mevedel-session-forked-from-fork-point-id "mevedel-structs" (cl-x))
 (declare-function mevedel-session-forked-from-session-id "mevedel-structs" (cl-x))
 (declare-function mevedel-session-forked-from-turn "mevedel-structs" (cl-x))
+(declare-function mevedel-session-generate-id "mevedel-structs" ())
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x))
 (declare-function mevedel-session-lease "mevedel-structs" (cl-x))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x))
@@ -715,14 +721,21 @@ append and runs inline.  Emacs exit flushes inline either way."
               session))))
       (mevedel-session-persistence--flush-diagnostic-logs-now session))))
 
-(defun mevedel-session-persistence-allocate-session-id (name sessions-dir)
-  "Return a fresh session id for NAME below SESSIONS-DIR."
+(defun mevedel-session-persistence-allocate-session-id (sessions-dir)
+  "Return a fresh id absent from SESSIONS-DIR and live session buffers."
   (cl-loop repeat 33
-           for candidate = (mevedel-session-artifacts-compute-id name)
+           for candidate = (mevedel-session-generate-id)
            for path = (file-name-concat sessions-dir candidate)
-           unless (or (file-exists-p path) (file-symlink-p path))
+           unless (or (file-exists-p path) (file-symlink-p path)
+                      (cl-some
+                       (lambda (buffer)
+                         (when-let* ((session (buffer-local-value
+                                              'mevedel--session buffer)))
+                           (equal candidate (mevedel-session-session-id session))))
+                       (buffer-list)))
            return candidate
            finally (error "Could not allocate a unique session id after 33 attempts")))
+
 
 (defun mevedel-session-persistence-shallow-ensure-files (session buffer)
   "Materialize SESSION and BUFFER paths without writing the sidecar.
@@ -748,14 +761,15 @@ Returns SESSION's `save-path' on success, or nil on failure.  Idempotent."
                  (sessions-dir (mevedel-session-artifacts-sessions-dir
                                 (mevedel-session-workspace session)))
                  (session-id
-                  (mevedel-session-persistence-allocate-session-id
-                   (mevedel-session-name session) sessions-dir))
+                  (or (mevedel-session-session-id session)
+                      (error "Session has no identity")))
                  (save-path (file-name-as-directory
                              (file-name-concat sessions-dir session-id)))
                  (segment-path (mevedel-session-artifacts-segment-path
                                 save-path 1))
                  (now (format-time-string "%FT%H-%M-%S")))
-            (make-directory save-path t)
+            (make-directory sessions-dir t)
+            (make-directory save-path)
             (make-directory (file-name-concat save-path "agents") t)
             (make-directory (file-name-concat save-path "file-history") t)
             (mevedel-session-persistence-lock-acquire
@@ -2653,20 +2667,18 @@ their directory.  Repoint DATA-BUF at the child after it commits."
          (new-name (read-string
                     "Save session as (new name): "
                     (mevedel-session-name session)))
-         (sanitized (mevedel-session-artifacts-sanitize new-name))
-         (_ (when (string-empty-p sanitized)
-              (user-error "Empty session name")))
+         (display-name (mevedel-session-naming-normalize new-name))
          (parent-dir (file-name-directory
                       (directory-file-name old-save-path)))
-         (new-id (mevedel-session-persistence-allocate-session-id
-                  sanitized parent-dir))
+         (new-id (mevedel-session-persistence-allocate-session-id parent-dir))
          (new-save-path (file-name-as-directory
                          (file-name-concat parent-dir new-id))))
     ;; Publish the parent completely before deriving the child.
+    (with-current-buffer data-buf (mevedel-session-naming-cancel))
     (mevedel-session-artifacts-save session data-buf)
     (if (mevedel-session-codec-portable-authority-p session)
         (mevedel-session-save-as-run
-         session data-buf sanitized new-id new-save-path)
+         session data-buf display-name new-id new-save-path)
       (let (child-acquired child)
         (unwind-protect
             (progn
@@ -2686,13 +2698,14 @@ their directory.  Repoint DATA-BUF at the child after it commits."
                        session 'save-as
                        :save-path new-save-path
                        :session-id new-id
-                       :name sanitized
+                       :name display-name
                        :created-at now
                        :updated-at now
                        :forked-from-session-id old-id)))
               (setf (mevedel-session-save-path session) new-save-path
                     (mevedel-session-session-id session) new-id
-                    (mevedel-session-name session) sanitized
+                    (mevedel-session-name session) display-name
+                    (mevedel-session-auto-name-pending session) nil
                     (mevedel-session-forked-from-session-id session) old-id
                     (mevedel-session-forked-from-turn session)
                     (mevedel-session-turn-count session))
@@ -2714,7 +2727,7 @@ their directory.  Repoint DATA-BUF at the child after it commits."
               (error nil))))
         (mevedel-session-save-as--rename-live-session-buffers
          session data-buf)))
-    (message "Session saved as %s" sanitized)
+    (message "Session saved as %s" display-name)
     new-save-path))
 
 

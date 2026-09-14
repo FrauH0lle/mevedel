@@ -196,7 +196,8 @@ the table."
 
 Each chat buffer has exactly one session. Multiple sessions can share a
 workspace."
-  name              ; string: "main", "refactor", etc.
+  name              ; readable display name, initially the session id
+  auto-name-pending ; non-nil until the first title attempt or explicit name
   workspace         ; mevedel-workspace struct (shared by reference)
   (execution-target nil :read-only t) ; immutable filesystem/process authority
   authority-mode    ; `portable' for project sessions, `pid-lock' for file sessions
@@ -505,13 +506,24 @@ The directory is not created here; callers that write into it own that."
 Format: *mevedel:SESSION@WORKSPACE*"
   (format "*mevedel:%s@%s*" session-name (mevedel-workspace-name workspace)))
 
-(defun mevedel-session-create (name workspace &optional working-directory)
+(defun mevedel-session-generate-id ()
+  "Return a name-independent timestamp and 12-hex-character session id."
+  (format "%s-%s" (format-time-string "%FT%H-%M")
+          (substring (secure-hash
+                      'sha256
+                      (format "%s-%s-%s" (random most-positive-fixnum)
+                              (float-time) (emacs-pid)))
+                     0 12)))
+
+(defun mevedel-session-create (name workspace &optional working-directory session-id)
   "Create a new session named NAME for WORKSPACE.
 
 Returns the session struct.  Does not create the buffer -- the caller is
 responsible for buffer setup.  WORKING-DIRECTORY defaults to the
-workspace root and is kept stable for the lifetime of the session."
-  (let* ((target
+workspace root and is kept stable for the lifetime of the session.
+SESSION-ID supplies an already allocated identity; nil generates one."
+  (let* ((id (or session-id (mevedel-session-generate-id)))
+         (target
           (mevedel-execution-target-create
            (mevedel-workspace-root workspace)))
          (directory
@@ -521,7 +533,9 @@ workspace root and is kept stable for the lifetime of the session."
             (or working-directory
                 (mevedel-workspace-root workspace))))))
     (mevedel-session--create
-     :name name
+     :name (or name id)
+     :auto-name-pending (null name)
+     :session-id id
      :workspace workspace
      :execution-target target
      :authority-mode

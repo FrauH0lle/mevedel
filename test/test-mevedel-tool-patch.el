@@ -120,7 +120,7 @@
                        :type 'test :id root :root root :name "patch-resource"
                        :file-cache (mevedel-test-file-cache-create)))
            (session (mevedel-session--create
-                     :name "patch-resource" :workspace workspace
+                     :name "patch-resource" :session-id "patch-resource-id" :workspace workspace
                      :working-directory root :permission-mode 'edits
                      :touched-files (make-hash-table :test #'equal)))
            (buffer (generate-new-buffer " *mevedel-apply-patch-resource*"))
@@ -167,7 +167,7 @@
                      :type 'test :id root :root root :name "mixed-move"
                      :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
-                   :name "mixed-move" :workspace workspace
+                   :name "mixed-move" :session-id "mixed-move-id" :workspace workspace
                    :working-directory root :permission-mode 'edits
                    :touched-files (make-hash-table :test #'equal)))
          (buffer (generate-new-buffer " *mevedel-apply-patch-mixed-move*"))

@@ -1134,15 +1134,14 @@
 		       (should (equal (file-name-as-directory module-dir)
 				      default-directory)))))
 
-		 :doc "session name defaults to the directory path below the workspace root"
-		 (let ((workspace (mevedel-workspace-get-or-create
-				   'project root-dir root-dir "cwd-proj")))
-		   (should (equal "main"
-				  (mevedel--default-session-name-for-directory
-				   workspace root-dir)))
-		   (should (equal "packages:api"
-				  (mevedel--default-session-name-for-directory
-				   workspace module-dir))))
+                 :doc "unnamed sessions start with their stable id"
+                 (let ((workspace (mevedel-workspace-get-or-create
+                                   'project root-dir root-dir "cwd-proj")))
+                   (setq chat-buffer (mevedel--chat-buffer nil t workspace root-dir))
+                   (with-current-buffer chat-buffer
+                     (should (equal (mevedel-session-name mevedel--session)
+                                    (mevedel-session-session-id mevedel--session)))
+                     (should (mevedel-session-auto-name-pending mevedel--session))))
 
 		 :doc "no-prefix start switches to the only live session across directories"
 		 (progn

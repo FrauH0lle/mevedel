@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Owns Fork projection, publication, Worktree restoration, and rename.
+;; Owns Fork projection, publication, Worktree restoration.
 
 ;;; Code:
 
@@ -16,10 +16,6 @@
 (declare-function mevedel-agent-persistence-transcript-path-p "mevedel-agent-persistence" (path save-path))
 (autoload 'mevedel-agent-persistence-transcript-path-p
   "mevedel-agent-persistence")
-
-;; `mevedel-execution'
-(declare-function mevedel-execution-relocate-artifacts "mevedel-execution" (session old-root new-root))
-(autoload 'mevedel-execution-relocate-artifacts "mevedel-execution")
 
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-native-path "mevedel-execution-target" (target path))
@@ -40,12 +36,8 @@
 (declare-function mevedel-session-artifacts-artifacts-dir "mevedel-session-artifacts" (save-path))
 (declare-function mevedel-session-artifacts-assert-mutation-authority "mevedel-session-artifacts" (session &optional buffer))
 (declare-function mevedel-session-artifacts-build-sidecar "mevedel-session-artifacts" (session buffer))
-(declare-function mevedel-session-artifacts-compute-id "mevedel-session-artifacts" (name))
 (declare-function mevedel-session-artifacts-materialize-published-artifacts "mevedel-session-artifacts" (session destination-save-path))
-(declare-function mevedel-session-artifacts-printed-value "mevedel-session-artifacts" (value))
-(declare-function mevedel-session-artifacts-publish-text "mevedel-session-artifacts" (session path content &optional coding))
 (declare-function mevedel-session-artifacts-read-artifact "mevedel-session-artifacts" (session logical &optional committed-only))
-(declare-function mevedel-session-artifacts-sanitize "mevedel-session-artifacts" (name))
 (declare-function mevedel-session-artifacts-save-buffer-silently "mevedel-session-artifacts" ())
 (declare-function mevedel-session-artifacts-save-instructions "mevedel-session-artifacts" (session buffer &optional current-only))
 (declare-function mevedel-session-artifacts-segment-path "mevedel-session-artifacts" (save-path n))
@@ -59,16 +51,10 @@
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-build-sidecar
   "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-compute-id "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-materialize-published-artifacts
-  "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-printed-value
-  "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-publish-text
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-read-artifact
   "mevedel-session-artifacts")
-(autoload 'mevedel-session-artifacts-sanitize "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-save-buffer-silently
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-save-instructions
@@ -100,12 +86,10 @@
   "mevedel-session-durability")
 
 ;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-allocate-session-id "mevedel-session-persistence" (name sessions-dir))
+(declare-function mevedel-session-persistence-allocate-session-id "mevedel-session-persistence" (sessions-dir))
 (declare-function mevedel-session-persistence-find-live-buffer "mevedel-session-persistence" (session-id buf-name))
-(declare-function mevedel-session-persistence-list-sessions "mevedel-session-persistence" (workspace &optional cached))
 (declare-function mevedel-session-persistence-lock-acquire "mevedel-session-persistence" (session-dir buffer-name &optional session))
 (declare-function mevedel-session-persistence-lock-release "mevedel-session-persistence" (session-dir &optional session))
-(declare-function mevedel-session-persistence-notify-session-event "mevedel-session-persistence" (session event &rest args))
 (declare-function mevedel-session-persistence-reconcile-lost-execution-segments "mevedel-session-persistence" (session &optional exclude-path artifact-callback))
 (declare-function mevedel-session-persistence-restore "mevedel-session-persistence" (session-dir &optional lifecycle-source session-override workspace))
 (declare-function mevedel-session-persistence-write-current-buffer-atomically "mevedel-session-persistence" (path))
@@ -113,13 +97,9 @@
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-find-live-buffer
   "mevedel-session-persistence")
-(autoload 'mevedel-session-persistence-list-sessions
-  "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-lock-acquire
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-lock-release
-  "mevedel-session-persistence")
-(autoload 'mevedel-session-persistence-notify-session-event
   "mevedel-session-persistence")
 (autoload 'mevedel-session-persistence-reconcile-lost-execution-segments
   "mevedel-session-persistence")
@@ -129,11 +109,8 @@
   "mevedel-session-persistence")
 
 ;; `mevedel-session-publication'
-(declare-function mevedel-session-publication-discard-rolled-back "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit))
 (declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir &optional head names))
-(autoload 'mevedel-session-publication-discard-rolled-back
-  "mevedel-session-publication")
 (autoload 'mevedel-session-publication-publish "mevedel-session-publication")
 (autoload 'mevedel-session-publication-read "mevedel-session-publication")
 
@@ -230,7 +207,7 @@
 (defvar org-agenda-file-menu-enabled)
 
 ;;
-;;; Fork-on-send and rename
+;;; Fork-on-send
 
 (defun mevedel-session-fork--agent-files-for-segments
     (prompt-index agent-transcripts picked-segment picked-cum-turn)
@@ -272,7 +249,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
              collect entry)))
 
 (defconst mevedel-session-fork--clone-slot-names
-  '(name workspace execution-target authority-mode working-directory
+  '(name auto-name-pending workspace execution-target authority-mode working-directory
     tasks task-status-notes last-task-write-turn touched-files
     permission-rules resource-grants permission-mode sandbox-mode plan-mode
     directive-planning preset-name model-provider
@@ -330,9 +307,8 @@ The identity and timestamp keywords describe the new materialized child."
                  (mevedel-session-turn-count session)))
          (child
           (mevedel-session--create
-           :name (if (eq policy 'save-as)
-                     name
-                   (mevedel-session-name session))
+           :name (if fork-p session-id name)
+           :auto-name-pending fork-p
            :workspace (mevedel-session-workspace session)
            :execution-target (mevedel-session-execution-target session)
            :authority-mode (mevedel-session-authority-mode session)
@@ -703,34 +679,6 @@ caches never become fork authority."
           (setq-local kill-buffer-hook nil))
         (kill-buffer staging-buffer)))))
 
-(defun mevedel-session-fork--fork-child-name (session fork-type)
-  "Return the first unused direct-child name for SESSION and FORK-TYPE."
-  (let* ((source-id (mevedel-session-session-id session))
-         (source-name (mevedel-session-name session))
-         (type-name (symbol-name fork-type))
-         (regexp
-          (format "\\`%s \u00b7 %s \\([0-9]+\\)\\'"
-                  (regexp-quote source-name)
-                  (regexp-quote type-name)))
-         used)
-    (dolist (entry
-             (mevedel-session-persistence-list-sessions
-              (mevedel-session-workspace session)))
-      (let ((summary (plist-get entry :summary)))
-        (when (and (equal source-id
-                          (plist-get summary :forked-from-session-id))
-                   (eq fork-type (plist-get summary :fork-type))
-                   (string-match regexp
-                                 (or (plist-get summary :session-name) "")))
-          (push (string-to-number (match-string 1
-                                                (plist-get summary
-                                                           :session-name)))
-                used))))
-    (let ((number 1))
-      (while (memq number used)
-        (cl-incf number))
-      (format "%s · %s %d" source-name type-name number))))
-
 (defun mevedel-session-fork-provenance-body (session)
   "Return SESSION's fork provenance reminder body, or nil for a non-fork.
 Regenerated from durable session slots by the `fork-provenance'
@@ -1039,12 +987,9 @@ child data buffer without mutating the Source buffer, session, or lock."
          (sessions-dir
           (mevedel-session-artifacts-sessions-dir
            (mevedel-session-workspace session)))
-         (child-name
-          (mevedel-session-fork--fork-child-name
-           session 'conversation))
          (new-id
           (mevedel-session-persistence-allocate-session-id
-           child-name sessions-dir))
+           sessions-dir))
          (new-save-path
           (file-name-as-directory (file-name-concat sessions-dir new-id)))
          (staging-path
@@ -1070,8 +1015,7 @@ child data buffer without mutating the Source buffer, session, or lock."
                    :forked-from-session-id
                    (mevedel-session-session-id session)
                    :forked-from-turn picked-cum-turn)))
-          (setf (mevedel-session-name child) child-name
-                (mevedel-session-fork-type child) 'conversation
+          (setf (mevedel-session-fork-type child) 'conversation
                 (mevedel-session-forked-from-fork-point-id child)
                 (plist-get target :fork-point-id))
           (with-current-buffer staging-buffer
@@ -1114,11 +1058,9 @@ child data buffer without mutating the Source buffer, session, or lock."
               (mevedel-worktree-fork-reservation session)))
          (_ (mevedel-worktree-fork-validate-reservation
              session reservation))
-         (child-name
-          (mevedel-session-fork--fork-child-name session 'worktree))
          (new-id
           (mevedel-session-persistence-allocate-session-id
-           child-name sessions-dir))
+           sessions-dir))
          (new-save-path
           (file-name-as-directory (file-name-concat sessions-dir new-id)))
          (staging-path
@@ -1149,7 +1091,6 @@ child data buffer without mutating the Source buffer, session, or lock."
                              (mevedel-session-session-id session)
                              :forked-from-turn picked-cum-turn)))
                     (setf
-                     (mevedel-session-name child) child-name
                      (mevedel-session-fork-type child) 'worktree
                      (mevedel-session-forked-from-fork-point-id child)
                      (plist-get target :fork-point-id)
@@ -1205,205 +1146,6 @@ child data buffer without mutating the Source buffer, session, or lock."
                  (mevedel-session-fork--worktree-fork-retained-error
                   session failure reservation))
         (signal (car failure) (cdr failure))))))
-
-(defun mevedel-session-fork--commit-remote-rename
-    (session buffer new-name new-id new-save-path)
-  "Rename portable project SESSION and commit NEW-NAME through its current
-lease head.
-
-BUFFER is SESSION's root data buffer.  NEW-ID and NEW-SAVE-PATH name the moved
-session tree.  Return a post-commit lease error, or nil.  A failure before the
-sidecar marker CAS rolls the directory and in-memory paths back while the same
-lease generation remains owned."
-  (let* ((old-save-path (mevedel-session-save-path session))
-         (old-id (mevedel-session-session-id session))
-         (old-name (mevedel-session-name session))
-         (old-publication
-          (or (mevedel-session-publication session)
-              (mevedel-session-publication-read old-save-path)))
-         (head-before (plist-get old-publication :head))
-         (old-buffer-file (buffer-local-value 'buffer-file-name buffer))
-         (old-buffer-truename
-          (buffer-local-value 'buffer-file-truename buffer))
-         (new-buffer-file
-          (and old-buffer-file
-               (file-name-concat
-                new-save-path (file-name-nondirectory old-buffer-file))))
-         moved committed operation-error rollback-error post-commit-error)
-    (unless head-before
-      (error "Portable project Rename requires a committed publication"))
-    (condition-case err
-        (progn
-          (mevedel-session-durability-call-with-reserved-lease
-           session
-           (lambda ()
-             (rename-file (directory-file-name old-save-path)
-                          (directory-file-name new-save-path))
-             (setq moved t)
-             ;; Reservation finalization must immediately follow the moved
-             ;; lease at its new qualified path.
-             (setf (mevedel-session-save-path session) new-save-path
-                   (mevedel-session-session-id session) new-id
-                   (mevedel-session-name session) new-name)
-             (with-current-buffer buffer
-               (setq buffer-file-name new-buffer-file
-                     buffer-file-truename nil))
-             (mevedel-execution-relocate-artifacts
-              session old-save-path new-save-path)
-             (setf (mevedel-session-publication session)
-                   (or
-                    (mevedel-session-publication-read new-save-path)
-                    (error "Moved session has no committed publication")))))
-          (condition-case publish-error
-              (mevedel-session-publication-publish
-               session
-               (list
-                (list
-                 :path
-                 (mevedel-session-artifacts-sidecar-path new-save-path)
-                 :content
-                 (mevedel-session-artifacts-printed-value
-                  (mevedel-session-artifacts-build-sidecar session buffer))
-                 :commit-marker t)))
-            (error
-             (if (not
-                  (equal head-before
-                         (plist-get (mevedel-session-publication session)
-                                    :head)))
-                 (setq committed t
-                       post-commit-error publish-error)
-               (signal (car publish-error) (cdr publish-error)))))
-          (unless committed
-            (when (equal head-before
-                         (plist-get (mevedel-session-publication session)
-                                    :head))
-              (error "Portable project Rename did not commit a publication head"))
-            (setq committed t)))
-      (error (setq operation-error err)))
-    (when (and operation-error moved (not committed))
-      (condition-case err
-          (progn
-            (mevedel-session-durability-call-with-reserved-lease
-             session
-             (lambda ()
-               (rename-file (directory-file-name new-save-path)
-                            (directory-file-name old-save-path))
-               (setf (mevedel-session-save-path session) old-save-path
-                     (mevedel-session-session-id session) old-id
-                     (mevedel-session-name session) old-name
-                     (mevedel-session-publication session) old-publication)
-               (with-current-buffer buffer
-                 (setq buffer-file-name old-buffer-file
-                       buffer-file-truename old-buffer-truename))
-               (mevedel-execution-relocate-artifacts
-                session new-save-path old-save-path)))
-            (mevedel-session-publication-discard-rolled-back
-             session))
-        (error (setq rollback-error err))))
-    (when rollback-error
-      (error
-       "Portable project Rename rollback incomplete after %s: %s"
-       (error-message-string operation-error)
-       (error-message-string rollback-error)))
-    (when operation-error
-      (signal (car operation-error) (cdr operation-error)))
-    post-commit-error))
-
-;;;###autoload
-(defun mevedel-rename-session (new-name)
-  "Rename the current session to NEW-NAME.
-
-Updates `:session-name', renames the on-disk session directory (so
-its prefix matches the new name), updates `:save-path' / `:session-id'
-on the session struct, repoints the buffer's variable `buffer-file-name'
-to the renamed directory, rewrites the sidecar, and renames the chat
-buffer per `mevedel-session-buffer-name'.
-
-Works from a chat buffer or a view buffer."
-  (interactive "sNew session name: ")
-  (let* ((data-buf
-          (cond
-           ((and (boundp 'mevedel--session) mevedel--session) (current-buffer))
-           ((and (boundp 'mevedel--data-buffer) mevedel--data-buffer
-                 (buffer-live-p mevedel--data-buffer))
-            mevedel--data-buffer)
-           (t (user-error "Not in a mevedel chat or view buffer"))))
-         (session (buffer-local-value 'mevedel--session data-buf)))
-    (unless session
-      (user-error "Active buffer has no mevedel session"))
-    (mevedel-session-artifacts-assert-mutation-authority session data-buf)
-    (let ((sanitized (mevedel-session-artifacts-sanitize new-name)))
-      (when (string-empty-p sanitized)
-        (user-error "Empty session name"))
-      ;; Rename the on-disk directory if the session is materialized.
-      (let (post-commit-error)
-      (when (mevedel-session-save-path session)
-        (let* ((old-save-path (mevedel-session-save-path session))
-               (parent-dir    (file-name-directory
-                               (directory-file-name old-save-path)))
-               (old-id        (or (mevedel-session-session-id session)
-                                  (file-name-nondirectory
-                                   (directory-file-name old-save-path))))
-               (old-name-sanitized
-                (mevedel-session-artifacts-sanitize
-                 (mevedel-session-name session)))
-               ;; Derive the suffix by stripping the old sanitized
-               ;; name from the start of the id.  This does not
-               ;; hard-code the id format beyond "name + dash +
-               ;; whatever" -- changes to the timestamp/uuid portion
-               ;; do not break rename.  Fallback: rebuild a fresh id
-               ;; from scratch.
-               (prefix         (concat old-name-sanitized "-"))
-               (suffix         (if (and (stringp old-id)
-                                        (string-prefix-p prefix old-id))
-                                   (substring old-id (length old-name-sanitized))
-                                 nil))
-               (new-id         (if suffix
-                                   (concat sanitized suffix)
-                                 (mevedel-session-artifacts-compute-id
-                                  sanitized)))
-               (new-save-path  (file-name-as-directory
-                                (file-name-concat parent-dir new-id))))
-          (if (mevedel-session-codec-portable-authority-p session)
-              (setq post-commit-error
-                    (mevedel-session-fork--commit-remote-rename
-                     session data-buf sanitized new-id new-save-path))
-            (rename-file (directory-file-name old-save-path)
-                         (directory-file-name new-save-path))
-            (mevedel-execution-relocate-artifacts
-             session old-save-path new-save-path)
-            (setf (mevedel-session-save-path session) new-save-path
-                  (mevedel-session-session-id session) new-id)
-            (with-current-buffer data-buf
-              (when buffer-file-name
-                (setq buffer-file-name
-                      (file-name-concat
-                       new-save-path
-                       (file-name-nondirectory buffer-file-name))))))))
-      ;; PID-lock and unmaterialized sessions retain the direct metadata write.
-      (unless (and (mevedel-session-save-path session)
-                   (mevedel-session-codec-portable-authority-p session))
-        (setf (mevedel-session-name session) sanitized)
-        (when (mevedel-session-save-path session)
-          (mevedel-session-artifacts-publish-text
-           session
-           (mevedel-session-artifacts-sidecar-path
-            (mevedel-session-save-path session))
-           (mevedel-session-artifacts-printed-value
-            (mevedel-session-artifacts-build-sidecar session data-buf)))))
-      ;; Rename the chat buffer per the convention.  The view observes this
-      ;; semantic event and derives its own presentation name.
-      (let* ((workspace (mevedel-session-workspace session))
-             (new-data-name (mevedel-session-buffer-name sanitized workspace)))
-        (with-current-buffer data-buf
-          (rename-buffer new-data-name t))
-        (mevedel-session-persistence-notify-session-event
-         session 'rename new-data-name))
-      (message "Session renamed to %s" sanitized)
-      (when post-commit-error
-        (error "Portable project Rename committed, but lease finalization failed: %s"
-               (error-message-string post-commit-error)))))))
-
 
 (provide 'mevedel-session-fork)
 

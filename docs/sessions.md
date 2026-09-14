@@ -48,6 +48,37 @@ implementation retry record, but the source segment and context epoch stay
 unchanged. The clean target later receives that cached background before its
 accepted-plan implementation turn.
 
+## Session identity and display names
+
+Every new root session has a stable ID before it is saved, in the form
+`2026-07-19T09-47-bf87b5dd793a`. Creation checks saved and live identities;
+materialization refuses to reuse an occupied directory. Explicit display names
+are independent of that ID. Unnamed sessions initially display the ID, including
+Conversation and Worktree forks. Chooser labels include IDs so repeated titles
+remain distinguishable.
+
+The first accepted model-bound authored prompt starts one asynchronous title
+request using the `naming` workload, which defaults to the `fast` tier. It uses a
+private gptel request buffer, with no tools, conversation history, skill/file/hook
+expansion, or context injection. Directive-created sessions use the authored
+directive text. Local commands, rejected submissions, automatic continuations,
+retained agents, and transient conversations do not trigger naming.
+
+Naming sends at most 2,000 input characters, requests a descriptive title in the
+user's language (preferably 3–7 words), and enforces a 60-character display limit.
+Inference has a 30-second timeout. The sidecar's `:auto-name-pending` boolean is
+consumed before inference; a saved consumed attempt is not retried on resume.
+An explicit name, manual rename, or root-buffer teardown cancels pending naming.
+Failures keep the ID and record a diagnostic without interrupting the conversation.
+Transport and publication scheduling defer metadata work until it can run safely.
+
+`mevedel-rename-session` accepts readable Unicode names and normalizes whitespace.
+It updates the persisted name and buffer/view presentation, without moving files.
+Save As creates a new identity with the explicitly supplied display name.
+
+The new required naming metadata advances the sidecar format to `v0.5.5`.
+Older sidecars are unsupported; no migration or directory rewriting is performed.
+
 ## Persistence flow
 
 ```mermaid
@@ -75,12 +106,13 @@ Persistence is split by ownership. `mevedel-session-codec.el` owns the closed
 sidecar schema and validation; `mevedel-session-artifacts.el` owns paths,
 artifacts, snapshots, and segment writes; `mevedel-session-rewind.el` owns
 restore plans and the Rewind transaction; and `mevedel-session-fork.el` owns
-Fork/Worktree projection, publication, and rename.
+Fork/Worktree projection and publication. `mevedel-session-naming.el` owns
+display names and background title requests.
 `mevedel-session-persistence.el` remains the lifecycle, resume, listing,
 locking, and cleanup facade used by callers.
 
 Sessions auto-save lazily and per-completed-turn under
-`<workspace-root>/.mevedel/sessions/<name>-<timestamp>-<short-uuid>/`.
+`<workspace-root>/.mevedel/sessions/<timestamp>-<12-hex-suffix>/`.
 Ordinary model turns and awaited fork-skill turns share one
 successful-turn transaction.  It advances the turn, records the token
 baseline, saves before request teardown, runs `Stop`, restores temporary
@@ -89,7 +121,7 @@ Layout:
 
 ```
 .mevedel/workspace-id                 ; project-owned portable workspace identity
-.mevedel/sessions/main-2026-04-23T14-30-a9f2/
+.mevedel/sessions/2026-04-23T14-30-a9f23d74c019/
   session.meta.el                    ; non-authoritative current sidecar cache
   .lease/                            ; project-session portable lease generations
     00000000000000000001.el         ; current renewable ownership record
@@ -151,7 +183,7 @@ currently registered trusted preset, so sidecar data cannot name or populate
 buffer locals. It also records the session's exact `:model-provider` and
 explicit `:reasoning-effort`. This removal of persisted preset variable keys
 and values and the durable ToolCall audit checkpoint change the sidecar
-format to `v0.5.4`; older sessions are intentionally rejected rather than
+format to `v0.5.5`; older sessions are intentionally rejected rather than
 migrated. The checkpoint contains the ToolCall call and bounded child audit,
 never an interpreter continuation. A Session Fork also copies the source
 session's permission mode, sandbox mode, session permission rules, and resource
@@ -209,7 +241,7 @@ grants, and additional roots.  The next save records the opened workspace's
 identity.  Superseded sidecar shapes are not migrated.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.4`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
+`v0.5.5`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
 project sessions persist `portable`, while file-workspace sessions
@@ -792,12 +824,10 @@ revalidates the same authority before rolling project files back.  Incomplete
 rollback fails closed visibly and retains recovery bytes; the control trees
 and current lease generation are never copied, moved, or replaced.
 
-Portable project Rename reserves the owned lease while moving the whole session tree,
-immediately retargets the bound session to the moved `.lease/`, refreshes its
-captured immutable paths, and commits the renamed sidecar against the same
-generation and head.  Failure before that head compare-and-set moves the tree
-and in-memory paths back under revalidated authority; failure after it leaves
-the committed rename installed and reports lease loss.
+Portable project Rename commits only the display-name metadata against the
+current publication head. The session ID, directory, lease generation, and
+artifact paths stay fixed. A failure before commit restores the in-memory name;
+a failure after commit retains the committed name and reports the failure.
 
 Portable project Save As captures the parent's current committed publication
 through the `mevedel-session-save-as.el` transaction while holding its lease.
@@ -1283,13 +1313,12 @@ The Source's current free-form `artifacts/` subtree is copied into independent
 child state. Portable forks materialize its committed immutable bytes; PID-lock
 forks copy the physical folder.
 
-Conversation children use the first unused direct-child name
-`<source> · conversation N`, receive a normal unique session ID, and can be
-renamed with `mevedel-rename-session`. Their sidecars retain the Source session
-ID, cumulative fork turn, stable fork-point ID, and `conversation` fork type.
-Worktree children independently use `<source> · worktree N`; their branch and
-directory use the first suffix unused by either Git or the workspace's
-`.worktrees/` directory.
+Conversation and Worktree children receive independent session IDs and initially
+use those IDs as display names. Each child's first new authored prompt generates
+its own title; inherited history is not naming input. Their sidecars retain the
+Source ID, cumulative fork turn, stable fork-point ID, and fork type. Worktree
+branch and directory allocation continues to use the first unused Git/worktree
+suffix, independently of session display names.
 
 Once a Fork exists, `B` switches variants for the exact assistant response at
 point. The shared assistant header also shows a text switch such as
@@ -1323,12 +1352,9 @@ retry reports the existing-artifact conflict instead of allocating another
 suffix. Creation rejects symbolic links at the `.worktrees/` boundary and
 revalidates resolved workspace containment immediately before Git mutation.
 
-Renaming a materialized session preserves live execution ownership. Retained
-client-local spool paths and target-native remote recovery paths are retargeted
-in their own domains immediately after the session directory moves, before
-process filters can append further output. Session-relative `work://`
-addresses remain valid within the renamed session even when no new output
-arrives after the move.
+Renaming a materialized session preserves live execution ownership and every
+artifact path. Existing session-relative `work://` addresses and fork references
+remain valid because rename changes neither the ID nor the directory.
 
 ### Agent transcripts
 

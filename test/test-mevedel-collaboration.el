@@ -532,6 +532,7 @@
             (let ((mevedel--data-buffer data-buffer))
               (cl-letf (((symbol-function 'mevedel-view--ensure-interactive-chat-view)
                          (lambda () nil))
+                        ((symbol-function 'mevedel-session-naming-consider) #'ignore)
                         ((symbol-function 'mevedel-view--session)
                          (lambda () 'session))
                         ((symbol-function 'mevedel-request-assert-target-ready)

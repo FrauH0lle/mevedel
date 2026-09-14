@@ -104,6 +104,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-session-rewind)
 (require 'mevedel-session-fork)
+(require 'mevedel-session-naming)
 (require 'mevedel-session-save-as)
 (require 'mevedel-session-control-transfer)
 (require 'mevedel-view-control-transfer)

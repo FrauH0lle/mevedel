@@ -105,13 +105,13 @@
                                         workspace 'glob '(:path "history://saved" :pattern "**/*.org")) :result))
                    (addresses (split-string listing "\n" t))
                    (selected (seq-find (lambda (address)
-                                         (string-search "/first-" address)) addresses)))
+                                         (string-search (concat "/" (mevedel-session-session-id session) "/") address)) addresses)))
               (should (= 3 (length addresses)))
               (dolist (address addresses)
                 (let ((text (plist-get (test-mevedel-history-search--query
                                         workspace 'read (list :file_path address :limit 40)) :result)))
                   (should-not (string-search "PRIVATE" text))
-                  (when (and (string-search "/first-" address)
+                  (when (and (string-search (concat "/" (mevedel-session-session-id session) "/") address)
                              (string-suffix-p "segment-0001.chat.org" address))
                     (should (string-search "Original assistant fact." text))
                     (should (string-search "provenance: assistant" text)))))
@@ -595,15 +595,22 @@
                      (lambda (&rest args)
                        (cl-incf rewrites)
                        (apply native-rewrite args))))
-                   (let ((text (plist-get
+                   (let* ((first (car (sort (copy-sequence sources)
+                                           (lambda (one two)
+                                             (string< (mevedel-session-session-id (car one))
+                                                      (mevedel-session-session-id (car two)))))))
+                          (index (substring (mevedel-session-name (car first)) 6))
+                          (text (plist-get
                                 (test-mevedel-history-search--query
                                  workspace 'grep '(:path "history://saved" :pattern "Dense evidence"
                                                          :output_mode "content" :offset 1 :head_limit 2))
                                 :result)))
-                     (should (string-match-p "history://saved/[^\n]+:[0-9]+:Dense evidence 0/1" text))
-                     (should (string-search "Dense evidence 0/2" text))
-                     (should-not (string-search "Dense evidence 0/0" text))
-                     (should-not (string-search "Dense evidence 0/3" text))
+                     (should (string-match-p
+                              (format "history://saved/[^\n]+:[0-9]+:Dense evidence %s/1" index)
+                              text))
+                     (should (string-search (format "Dense evidence %s/2" index) text))
+                     (should-not (string-search (format "Dense evidence %s/0" index) text))
+                     (should-not (string-search (format "Dense evidence %s/3" index) text))
                      (should (string-search "Results truncated" text))
                      ;; Two page lines, one skipped line, one truncation sentinel.
                      (should (<= rewrites 4)))))

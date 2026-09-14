@@ -47,6 +47,7 @@
 (defvar gptel-stream)
 
 ;; `mevedel-chat'
+(declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 (declare-function mevedel--chat-buffer
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
@@ -157,6 +158,10 @@
   "mevedel-session-artifacts")
 (autoload 'mevedel-session-artifacts-ensure-files
   "mevedel-session-artifacts")
+
+;; `mevedel-session-naming'
+(declare-function mevedel-session-naming-consider "mevedel-session-naming" (session prompt))
+(autoload 'mevedel-session-naming-consider "mevedel-session-naming")
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-resume-id
@@ -611,7 +616,8 @@ settling."
   "Return `(BUFFER . REBIND-P)' for DIRECTIVE in WORKSPACE."
   (let ((session-id (mevedel-directive-session-id directive)))
     (if (not session-id)
-        (cons (mevedel--chat-buffer "main" t workspace) nil)
+        (cons (or (mevedel--active-chat-buffer workspace)
+                  (mevedel--chat-buffer nil t workspace)) nil)
       (or
        (when-let* ((buffer (mevedel--directive-bound-session-buffer
                             directive workspace)))
@@ -624,7 +630,8 @@ settling."
        (if (yes-or-no-p
             (format "Directive session %s is unavailable; rebind future activity to the current workspace session? "
                     session-id))
-           (cons (mevedel--chat-buffer "main" t workspace) t)
+           (cons (or (mevedel--active-chat-buffer workspace)
+                     (mevedel--chat-buffer nil t workspace)) t)
          (user-error "Directive remains bound to unavailable session: %s"
                      session-id))))))
 
@@ -974,6 +981,7 @@ OPTIONS carries local discussion metadata for read-only discussion turns."
 		 response-start
 		 'directive)))
 
+	    (mevedel-session-naming-consider mevedel--session directive-text)
 	    (let ((fsm
 		   (mevedel--send-directive-request
 		    prompt chat-buffer response-start preset model-policy callback-fn)))

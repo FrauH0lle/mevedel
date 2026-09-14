@@ -21,8 +21,6 @@
 (declare-function mevedel--chat-buffer
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
-(declare-function mevedel--default-session-name-for-directory
-                  "mevedel-chat" (workspace working-directory))
 (declare-function mevedel--display-chat-buffer "mevedel-chat" (chat-buffer))
 (declare-function mevedel--insert-local-user-turn
                   "mevedel-chat"
@@ -36,7 +34,6 @@
                              &optional directory-scoped))
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
 (autoload 'mevedel--chat-buffer "mevedel-chat")
-(autoload 'mevedel--default-session-name-for-directory "mevedel-chat")
 (autoload 'mevedel--display-chat-buffer "mevedel-chat")
 (autoload 'mevedel--insert-local-user-turn "mevedel-chat")
 (autoload 'mevedel--sessions-in-working-directory "mevedel-chat")
@@ -1207,8 +1204,6 @@ RECOVERY names the exact prepared session or authorizes unique discovery."
           (when (or (cdr live) (cdr durable))
             (error "Multiple sessions use Worktree directory: %s"
                    worktree-directory)))
-         (session-name (mevedel--default-session-name-for-directory
-                        workspace worktree-directory))
          (chat-buffer
           (cond
            (expected-id
@@ -1220,7 +1215,7 @@ RECOVERY names the exact prepared session or authorizes unique discovery."
              (plist-get (car durable) :save-path) nil nil workspace))
            (t
             (mevedel--chat-buffer
-             session-name t workspace worktree-directory)))))
+             nil t workspace worktree-directory)))))
     (when expected-id
       (let ((session (buffer-local-value 'mevedel--session chat-buffer)))
         (unless (equal expected-id (mevedel-session-session-id session))

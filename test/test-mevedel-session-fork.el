@@ -16,7 +16,7 @@
 (mevedel-deftest mevedel-session-fork-clone-session
   (:doc "covers every session slot and isolates both clone policies")
   (progn
-    (should (= 84
+    (should (= 85
              (length
               (cdr (cl-struct-slot-info 'mevedel-session)))))
     (should (mevedel-session-fork--assert-clone-slot-completeness))
@@ -1031,8 +1031,9 @@
                    (mevedel-session-artifacts-sidecar-path child-path))))
             (should-not (equal (mevedel-session-session-id session)
                                (mevedel-session-session-id child)))
-            (should (string= "main · conversation 1"
+            (should (string= (mevedel-session-session-id child)
                              (mevedel-session-name child)))
+            (should (mevedel-session-auto-name-pending child))
             (should (equal (mevedel-session-working-directory session)
                            (mevedel-session-working-directory child)))
             (should (eq 'conversation
@@ -1591,8 +1592,9 @@
                       (mevedel-session-worktree-directory child))
                      (child-file
                       (file-name-concat worktree "current.txt")))
-                (should (string= "main · worktree 1"
+                (should (string= (mevedel-session-session-id child)
                                  (mevedel-session-name child)))
+                (should (mevedel-session-auto-name-pending child))
                 (should (eq 'worktree
                             (mevedel-session-fork-type child)))
                 (should (equal source-root
@@ -1760,289 +1762,6 @@
              :cleanup-command "git worktree remove"))))
     (should-not (string-match-p "/ssh:alias:" text))
     (should (string-match-p "/srv/repo/.worktrees/fork/" text))))
-
-
-(mevedel-deftest mevedel-session-fork--commit-remote-rename (:quiet t)
-  ,test
-  (test)
-  :doc "moves the owned lease and commits renamed metadata through one head"
-  (let* ((host "rename-publication")
-         (local-root
-          (file-name-as-directory
-           (make-temp-file "mevedel-remote-rename-" t)))
-         (mevedel-session-durability--client-id (make-string 64 ?e))
-         buffer)
-    (unwind-protect
-        (mevedel-test--with-local-shell-tramp (list host)
-          (pcase-let* ((`(,_workspace ,session ,session-dir ,segment)
-                        (test-mevedel-session-persistence--make-remote-restore-fixture
-                         host local-root "rename transcript\n"))
-                       (parent
-                        (file-name-directory
-                         (directory-file-name session-dir)))
-                       (new-id "renamed-remote-restore")
-                       (new-save-path
-                        (file-name-as-directory
-                         (file-name-concat parent new-id)))
-                       (mevedel-session-durability--disclosed-targets
-                        (make-hash-table :test #'equal)))
-            (puthash
-             (mevedel-execution-target-identity
-              (mevedel-session-execution-target session))
-             t mevedel-session-durability--disclosed-targets)
-            (unwind-protect
-                (progn
-                  (should
-                   (mevedel-session-durability-lease-acquire
-                    session-dir "*remote-rename*" session))
-                  (setf (mevedel-session-publication session)
-                        (mevedel-session-publication-read
-                         session-dir))
-                  (setq buffer
-                        (generate-new-buffer " *remote-rename-root*"))
-                  (with-current-buffer buffer
-                    (org-mode)
-                    (setq-local mevedel--session session)
-                    (setq buffer-file-name segment)
-                    (insert "rename transcript\n"))
-                  (let ((generation
-                         (plist-get (mevedel-session-lease session)
-                                    :generation))
-                        (head-before
-                         (plist-get (mevedel-session-publication session)
-                                    :head)))
-                    (should-not
-                     (mevedel-session-fork--commit-remote-rename
-                      session buffer "renamed" new-id new-save-path))
-                    (should-not (file-directory-p session-dir))
-                    (should (file-directory-p new-save-path))
-                    (should
-                     (= generation
-                        (plist-get (mevedel-session-lease session)
-                                   :generation)))
-                    (should-not
-                     (equal head-before
-                            (plist-get (mevedel-session-publication session)
-                                       :head)))
-                    (should
-                     (equal "rename transcript\n"
-                            (mevedel-session-artifacts-read-artifact
-                             session "segment-0001.chat.org" t)))
-                    (let ((sidecar
-                           (with-temp-buffer
-                             (insert
-                              (mevedel-session-artifacts-read-artifact
-                               session "session.meta.el" t))
-                             (goto-char (point-min))
-                             (read (current-buffer)))))
-                      (should (equal "renamed"
-                                     (plist-get sidecar :session-name)))
-                      (should (equal new-id
-                                     (plist-get sidecar :session-id))))))
-              (when session
-                (mevedel-session-durability-lease-release
-                 (mevedel-session-save-path session) session)))))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (set-buffer-modified-p nil))
-        (kill-buffer buffer))
-      (when (file-directory-p local-root)
-        (delete-directory local-root t))
-      (mevedel-workspace-clear-registry)))
-  :doc "rolls the move and in-memory paths back after a pre-CAS failure"
-  (let* ((host "rename-rollback")
-         (local-root
-          (file-name-as-directory
-           (make-temp-file "mevedel-remote-rename-rollback-" t)))
-         (mevedel-session-durability--client-id (make-string 64 ?f))
-         buffer)
-    (unwind-protect
-        (mevedel-test--with-local-shell-tramp (list host)
-          (pcase-let* ((`(,_workspace ,session ,session-dir ,segment)
-                        (test-mevedel-session-persistence--make-remote-restore-fixture
-                         host local-root "rollback transcript\n"))
-                       (new-save-path
-                        (file-name-as-directory
-                         (file-name-concat
-                          (file-name-directory
-                           (directory-file-name session-dir))
-                          "renamed-rollback")))
-                       (mevedel-session-durability--disclosed-targets
-                        (make-hash-table :test #'equal)))
-            (puthash
-             (mevedel-execution-target-identity
-              (mevedel-session-execution-target session))
-             t mevedel-session-durability--disclosed-targets)
-            (unwind-protect
-                (progn
-                  (should
-                   (mevedel-session-durability-lease-acquire
-                    session-dir "*remote-rename-rollback*" session))
-                  (setf (mevedel-session-publication session)
-                        (mevedel-session-publication-read
-                         session-dir))
-                  (setq buffer
-                        (generate-new-buffer
-                         " *remote-rename-rollback-root*"))
-                  (with-current-buffer buffer
-                    (org-mode)
-                    (setq-local mevedel--session session)
-                    (setq buffer-file-name segment)
-                    (insert "rollback transcript\n"))
-                  (let ((head-before
-                         (plist-get (mevedel-session-publication session)
-                                    :head))
-                        (publish-artifact
-                         (symbol-function
-                          'mevedel-session-publication--publish-artifact)))
-                    (cl-letf
-                        (((symbol-function
-                           'mevedel-session-publication--publish-artifact)
-                          (lambda (artifact)
-                            (ignore artifact publish-artifact)
-                            (signal 'file-error
-                                    '("Injected Rename publication failure")))))
-                      (should-error
-                       (mevedel-session-fork--commit-remote-rename
-                        session buffer "renamed" "renamed-rollback"
-                        new-save-path)
-                       :type 'file-error))
-                    (should (file-directory-p session-dir))
-                    (should-not (file-directory-p new-save-path))
-                    (should (equal session-dir
-                                   (mevedel-session-save-path session)))
-                    (should (equal "main" (mevedel-session-name session)))
-                    (should (equal segment
-                                   (buffer-local-value
-                                    'buffer-file-name buffer)))
-                    (should (equal head-before
-                                   (plist-get
-                                    (mevedel-session-publication session)
-                                    :head)))
-                    (should-not
-                     (mevedel-session-pending-publication session))
-                    (should
-                     (mevedel-session-durability-lease-owned-p session))))
-              (when session
-                (mevedel-session-durability-lease-release
-                 (mevedel-session-save-path session) session)))))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (set-buffer-modified-p nil))
-        (kill-buffer buffer))
-      (when (file-directory-p local-root)
-        (delete-directory local-root t))
-      (mevedel-workspace-clear-registry))))
-
-
-(mevedel-deftest mevedel-rename-session (:quiet t)
-  ,test
-  (test)
-  :doc "renames the session-name field and the buffer"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (buf     (generate-new-buffer "*test-data-buf*")))
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (setq-local mevedel--session session)
-                (insert "Hi\n")
-                (mevedel-session-artifacts-save session buf)
-                (let* ((old-save-path (mevedel-session-save-path session))
-                       (artifact-directory
-                        (file-name-concat old-save-path "tool-results"))
-                       (mevedel-sandbox-mode 'off)
-                       initial terminal execution-id)
-                  (mevedel-execution-start-bash
-                   (lambda (value) (setq initial value))
-                   :session session :data-buffer buf :owner "agent-a"
-                   :owner-context session
-                   :command
-                   '("sh" "-c" "printf before; sleep 1; printf after")
-                   :workdir tempdir :writable-roots (list tempdir)
-                   :artifact-directory artifact-directory
-                   :yield-time-ms 10)
-                  (with-timeout (2 (error "Execution did not yield"))
-                    (while (null initial)
-                      (accept-process-output nil 0.02)))
-                  (setq execution-id
-                        (plist-get (plist-get initial :facts) :execution-id))
-                  (mevedel-rename-session "alt-permissions")
-                  (should (equal "alt-permissions"
-                                 (mevedel-session-name session)))
-                  ;; Old directory gone, new directory exists.
-                  (should-not (file-directory-p old-save-path))
-                  (should (file-directory-p
-                           (mevedel-session-save-path session)))
-                  ;; New directory name reflects the new session-name.
-                  (should (string-prefix-p
-                           "alt-permissions-"
-                           (file-name-nondirectory
-                            (directory-file-name
-                             (mevedel-session-save-path session)))))
-                  ;; Buffer renamed per convention.
-                  (should (string-match-p
-                           "\\`\\*mevedel:alt-permissions@"
-                           (buffer-name buf)))
-                  (mevedel-execution-observe
-                   session "agent-a" execution-id
-                   (lambda (value) (setq terminal value))
-                   :wait-ms 5000)
-                  (with-timeout (6 (error "Renamed execution did not finish"))
-                    (while (null terminal)
-                      (accept-process-output nil 0.02)))
-                  (should (= 0
-                             (plist-get (plist-get terminal :facts)
-                                        :exit-code)))
-                  (let ((artifact
-                         (plist-get (plist-get terminal :facts) :output-path)))
-                    (should (string-prefix-p "artifact://" artifact))
-                    (should
-                     (equal "beforeafter"
-                            (mevedel-resource-execute
-                             (mevedel-resource-prepare
-                              'read artifact (list :session session))
-                             (lambda (path _address)
-                               (with-temp-buffer
-                                 (insert-file-contents path)
-                                 (buffer-string)))))))))
-            (test-mevedel-session-persistence--release-and-kill
-             buf session)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
-  :doc "publishes the renamed sidecar through the critical seam"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (let* ((session (mevedel-session-create "main" workspace))
-           (buffer (generate-new-buffer " *rename-publication*"))
-           (publish-function
-            (symbol-function 'mevedel-session-artifacts-publish-text))
-           published)
-      (unwind-protect
-          (with-current-buffer buffer
-            (org-mode)
-            (setq-local mevedel--session session)
-            (insert "transcript\n")
-            (mevedel-session-artifacts-save session buffer)
-            (cl-letf
-                (((symbol-function
-                   'mevedel-session-artifacts-publish-text)
-                  (lambda (actual-session path content &optional coding)
-                    (push path published)
-                    (funcall publish-function
-                             actual-session path content coding))))
-              (mevedel-rename-session "renamed"))
-            (should
-             (equal
-              (list
-               (mevedel-session-artifacts-sidecar-path
-                (mevedel-session-save-path session)))
-              published)))
-        (test-mevedel-session-persistence--release-and-kill buffer session)
-        (delete-directory tempdir t)
-        (mevedel-workspace-clear-registry)))))
 
 
 ;;

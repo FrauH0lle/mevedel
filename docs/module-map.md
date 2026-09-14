@@ -153,7 +153,8 @@ Chat / view
   mevedel-session-save-as.el portable Save As transaction and adoption
   mevedel-session-persistence.el  lifecycle/resume/listing/locking/cleanup facade
   mevedel-session-rewind.el   restore plans, transactional Rewind, published-head redo
-  mevedel-session-fork.el     Fork/Worktree projection, publication, and rename
+  mevedel-session-fork.el     Fork/Worktree projection and publication
+  mevedel-session-naming.el   metadata-only rename and bounded background session titles
   mevedel-session-control-fs.el   pinned target-side session control filesystem
   mevedel-session-control-transfer.el  control-transfer state, drains, descriptors
   mevedel-compact-estimation.el compaction token accounting and admission

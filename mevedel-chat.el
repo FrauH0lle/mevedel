@@ -191,9 +191,15 @@
 (autoload 'mevedel-session-artifacts-inhibit-so-long
   "mevedel-session-artifacts")
 
+;; `mevedel-session-naming'
+(declare-function mevedel-session-naming-consider "mevedel-session-naming" (session prompt))
+(autoload 'mevedel-session-naming-consider "mevedel-session-naming")
+
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-allocate-session-id "mevedel-session-persistence" (sessions-dir))
 (declare-function mevedel-session-persistence-release-on-kill
                   "mevedel-session-persistence" nil)
+(autoload 'mevedel-session-persistence-allocate-session-id "mevedel-session-persistence")
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skills--release-on-kill
@@ -219,7 +225,7 @@
                   (cl-x) t)
 (declare-function mevedel-session-audit-session "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-create "mevedel-structs"
-		  (name workspace &optional working-directory))
+		  (name workspace &optional working-directory session-id))
 (declare-function mevedel-session-enqueue-pending-reminder "mevedel-structs"
                   (session body))
 (declare-function mevedel-session-execution-target
@@ -439,7 +445,16 @@ WORKING-DIRECTORY is used only when creating a fresh session.  If an
 existing live session with SESSION-NAME has a different working
 directory, signal `user-error' instead of silently switching context."
   (let* ((workspace (or workspace (mevedel-workspace)))
-         (buf (mevedel--get-buffer session-name workspace create))
+         (matches (and session-name
+                       (cl-remove-if-not
+                        (lambda (entry) (equal (car entry) session-name))
+                        (mevedel--workspace-sessions workspace))))
+         (_ (when (cdr matches)
+              (user-error "Several sessions have this name; select one by ID")))
+         (buf (if matches
+                  (cons (cdar matches) nil)
+                (when create
+                  (cons (generate-new-buffer " *mevedel-new-session*") t))))
          (created-p (cdr buf))
          (buf (car buf))
          (working-directory (and working-directory
@@ -722,7 +737,11 @@ M-x mevedel-retry-plan-implementation resumes it")))
     ;; Create session after mode setup so it isn't wiped
     (setq-local mevedel--session
                 (mevedel-session-create
-                 session-name workspace working-directory))
+                 session-name workspace working-directory
+                 (mevedel-session-persistence-allocate-session-id
+                  (mevedel-session-artifacts-sessions-dir workspace))))
+    (rename-buffer (mevedel-session-buffer-name
+                    (mevedel-session-name mevedel--session) workspace) t)
     (mevedel--chat-buffer-init-common buf workspace "startup")))
 
 (defun mevedel--patch-buffer (&optional create workspace)
@@ -795,13 +814,20 @@ buffers."
     (nreverse sessions)))
 
 (defun mevedel--pick-session (sessions default)
-  "Prompt for a session name via `completing-read'.
-
-SESSIONS is an alist of (NAME . BUFFER) for the current workspace.
-DEFAULT is the initial input; nil means no default.  Typing a name not
-in SESSIONS creates a new session with that name."
-  (let ((names (mapcar #'car sessions)))
-    (completing-read "Session: " names nil nil nil nil default)))
+  "Select a buffer from SESSIONS, or return a new display name.
+DEFAULT supplies the initial name.  Empty input creates an unnamed session.
+Completion labels include identity, because display names need not be unique."
+  (let* ((choices
+          (mapcar
+           (lambda (entry)
+             (cons (format "%s [%s]" (car entry)
+                           (mevedel-session-session-id
+                            (buffer-local-value 'mevedel--session (cdr entry))))
+                   (cdr entry)))
+           sessions))
+         (choice (completing-read "Session: " choices nil nil nil nil default)))
+    (or (cdr (assoc choice choices))
+        (unless (string-blank-p choice) choice))))
 
 (defun mevedel--display-chat-buffer (chat-buffer)
   "Ensure CHAT-BUFFER has a preset and display its view."
@@ -834,16 +860,6 @@ in SESSIONS creates a new session with that name."
                         t)
    workspace))
 
-(defun mevedel--default-session-name-for-directory (workspace working-directory)
-  "Return a default session name for WORKING-DIRECTORY in WORKSPACE."
-  (let* ((root (file-name-as-directory
-                (expand-file-name (mevedel-workspace-root workspace))))
-         (dir (file-name-as-directory (expand-file-name working-directory)))
-         (relative (directory-file-name (file-relative-name dir root))))
-    (if (or (equal relative "") (equal relative "."))
-        "main"
-      (replace-regexp-in-string "/" ":" relative t t))))
-
 (defun mevedel--sessions-in-working-directory (sessions working-directory)
   "Filter SESSIONS to those whose session cwd is WORKING-DIRECTORY."
   (let ((dir (file-name-as-directory (expand-file-name working-directory))))
@@ -872,25 +888,15 @@ WORKING-DIRECTORY are considered."
                        (mevedel--sessions-in-working-directory
                         all-sessions working-directory)
                      all-sessions))
-         (default-name
-          (if directory-scoped
-              (mevedel--default-session-name-for-directory
-               workspace working-directory)
-            "main"))
-         (session-name
+         (selection
           (cond
-           (prompt-session (mevedel--pick-session sessions default-name))
-           ((null sessions) default-name)
-           ((= (length sessions) 1) (caar sessions))
-           (t (mevedel--pick-session sessions default-name))))
-         (existing (assoc session-name sessions))
-         (target-directory
-          (if existing
-              (with-current-buffer (cdr existing)
-                (mevedel-session-working-directory mevedel--session))
-            working-directory))
-         (chat-buffer (mevedel--chat-buffer
-                       session-name t workspace target-directory)))
+           (prompt-session (mevedel--pick-session sessions nil))
+           ((null sessions) nil)
+           ((= (length sessions) 1) (cdar sessions))
+           (t (mevedel--pick-session sessions nil))))
+         (chat-buffer
+          (if (bufferp selection) selection
+            (mevedel--chat-buffer selection t workspace working-directory))))
     (mevedel--display-chat-buffer chat-buffer)))
 
 (defun mevedel--active-chat-buffer (&optional workspace)
@@ -1252,7 +1258,10 @@ skill-expanded model input and transcript render data."
     (mevedel--insert-local-user-turn
      stored-prompt display-text nil hook-context)
     (when prompt-submission
-      (mevedel-prompt-submission-commit prompt-submission))
+      (mevedel-prompt-submission-commit prompt-submission)
+      (mevedel-session-naming-consider
+       mevedel--session
+       (or (mevedel-prompt-submission-display-text prompt-submission) display-text prompt)))
     (mevedel--gptel-send-request
      (or model-input (and hook-context stored-prompt)))))
 

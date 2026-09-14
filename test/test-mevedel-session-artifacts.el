@@ -255,35 +255,6 @@
   (should (equal "" (mevedel-session-artifacts-sanitize nil))))
 
 
-(mevedel-deftest mevedel-session-artifacts--short-uuid ()
-  ,test
-  (test)
-  :doc "returns four hex characters"
-  (let ((u (mevedel-session-artifacts--short-uuid)))
-    (should (= 4 (length u)))
-    (should (string-match-p "\\`[0-9a-f]+\\'" u)))
-  :doc "produces different values across calls (probabilistically)"
-  (let ((seen (make-hash-table :test #'equal)))
-    (dotimes (_ 32)
-      (puthash (mevedel-session-artifacts--short-uuid) t seen))
-    ;; With 4 hex chars (65536 possible values) and only 32 samples,
-    ;; collisions are vanishingly rare.  Accept any number > 1.
-    (should (> (hash-table-count seen) 1))))
-
-
-(mevedel-deftest mevedel-session-artifacts-compute-id ()
-  ,test
-  (test)
-  :doc "generates id matching <name>-<timestamp>-<short-uuid>"
-  (let ((id (mevedel-session-artifacts-compute-id "main")))
-    (should (string-match-p
-             "\\`main-[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}T[0-9]\\{2\\}-[0-9]\\{2\\}-[0-9a-f]\\{4\\}\\'"
-             id)))
-  :doc "sanitizes the name component"
-  (let ((id (mevedel-session-artifacts-compute-id "my session")))
-    (should (string-prefix-p "my_session-" id))))
-
-
 (mevedel-deftest mevedel-session-artifacts-segment-path ()
   ,test
   (test)

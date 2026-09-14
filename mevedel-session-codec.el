@@ -146,7 +146,7 @@
 ;;
 ;;; Constants
 
-(defconst mevedel-session-codec-format-version "v0.5.4"
+(defconst mevedel-session-codec-format-version "v0.5.5"
   "Current on-disk session sidecar format.
 
 The authority profile is part of this format.  Readers accept exactly this
@@ -159,7 +159,7 @@ Rules with other actions are dropped on load (a future version may
 add more, and we don't want to act on actions we don't understand).")
 
 (defconst mevedel-session-codec--required-sidecar-keys
-  '(:version :session-id :session-name :workspace :working-directory
+  '(:version :session-id :session-name :auto-name-pending :workspace :working-directory
     :authority-mode :target-incarnation
     :created-at :updated-at :current-segment :total-turn-count
     :last-task-write-turn :task-status-notes :first-user-message
@@ -564,6 +564,7 @@ The resulting plist is round-trippable via
    :version                mevedel-session-codec-format-version
    :session-id             (mevedel-session-session-id session)
    :session-name           (mevedel-session-name session)
+   :auto-name-pending      (mevedel-session-auto-name-pending session)
    :workspace              (mevedel-session-codec--workspace-to-plist
                             (mevedel-session-workspace session))
    :authority-mode         authority-mode
@@ -808,6 +809,7 @@ their hygiene filters."
            collect (cons (cdr normalized) (copy-tree (cdr entry)))))
          (session   (mevedel-session--create
                      :name             (plist-get plist :session-name)
+                     :auto-name-pending (eq (plist-get plist :auto-name-pending) t)
                      :workspace        workspace
                      :execution-target execution-target
                      :authority-mode  (plist-get plist :authority-mode)

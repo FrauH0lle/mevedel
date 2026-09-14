@@ -235,6 +235,10 @@
   "mevedel-session-fork")
 (autoload 'mevedel-session-fork-worktree-fork "mevedel-session-fork")
 
+;; `mevedel-session-naming'
+(declare-function mevedel-session-naming-consider "mevedel-session-naming" (session prompt))
+(autoload 'mevedel-session-naming-consider "mevedel-session-naming")
+
 ;; `mevedel-session-persistence'
 (defvar mevedel-session--read-only-mode)
 
@@ -1887,6 +1891,8 @@ ran survives the send."
                (concat transcript-input render-data) input view-context
                submitted-draft)
               (mevedel-prompt-submission-commit submission)
+              (mevedel-session-naming-consider
+               (buffer-local-value 'mevedel--session data-buffer) input)
               (when after-insert
                 (funcall after-insert))
               (with-current-buffer data-buffer
@@ -2683,6 +2689,7 @@ asynchronous preparation ran is left alone instead of cleared."
        (mevedel-collaboration--safe-accepted-prompt data-buffer)
        (when submission
          (mevedel-prompt-submission-commit submission))
+       (mevedel-session-naming-consider session (or display-text input))
        (when after-insert
          (funcall after-insert))
        ;; Render the user's message in the view after the data source is
