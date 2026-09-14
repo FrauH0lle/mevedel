@@ -71,7 +71,9 @@ are optional bounded text. Return a plist with :buffer for inspection,
 an idempotent :cancel function, and a :usage function returning a copy of
 provider-reported usage received so far. The deadline is 180 seconds,
 including input preparation; supported provider output limits are capped
-at 8000 tokens."
+at 8000 tokens.  Callback results include :output-bytes and
+:output-estimated-tokens for the accumulated reply, reasoning and tool
+arguments charged by the client, independently of provider-reported usage."
   (let* ((buffer (generate-new-buffer " *mevedel-memory-review*"))
          (caller (current-buffer))
          (stream gptel-stream)
@@ -92,7 +94,10 @@ at 8000 tokens."
                (unless buffer-killed (kill-buffer buffer)))
              (with-current-buffer (if (buffer-live-p caller) caller (current-buffer))
                (funcall callback
-                        (append (list :outcome outcome :error error :scope scope :entries admitted
+                        (append (list :outcome outcome :error error
+                                      :output-bytes (string-bytes output)
+                                      :output-estimated-tokens (mevedel-context-summary--estimated-tokens "" output)
+                                      :scope scope :entries admitted
                                       :references references :policy policy :omitted-digests (- (length entries) (length admitted)))
                                 parsed usage)))))
          (ensure-live ()

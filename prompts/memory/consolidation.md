@@ -52,7 +52,9 @@ and a JSON array for evidence:
     Complete replacement body, without file frontmatter.
 
 The separator is a line containing only `---`. The body is Markdown, not a JSON
-string. The header is not YAML: quote strings using JSON syntax. No unknown
+string. Write the header as the separate key: value lines shown above, not a JSON
+object: do not wrap it in braces, quote field names, or add commas between
+lines. Quote each string value using JSON syntax. No unknown
 fields are accepted. All scalar values are nonempty single-line strings.
 The type is one of `user`, `feedback`, `project`, or `reference`. Evidence IDs
 must come from this pass's admitted digests; an empty array is appropriate when

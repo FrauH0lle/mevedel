@@ -123,6 +123,43 @@
 		     (mevedel-execution-teardown-all)
 		     (delete-directory directory t)))
 
+  :doc "search callbacks can launch follow-ups after empty or asynchronous results"
+  (let* ((directory (make-temp-file "mevedel-investigation-followup-" t))
+         (default-directory (file-name-as-directory directory))
+         (workspace (mevedel-workspace--create :root directory))
+         (mevedel-memory-dirs nil)
+         (mevedel-sandbox-mode 'off)
+         (state (mevedel-memory-investigation-create
+                 (mevedel-memory-scope-capture workspace) nil (lambda () t) #'ignore)))
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat directory "source.el")
+            (insert ";; Source evidence.\n"))
+          (dolist (case '((glob :root "workspace" :path "." :pattern ".mevedel/**")
+                         (glob :root "workspace" :path "." :pattern "*.el")
+                         (grep :root "workspace" :path "." :pattern "Absent")
+                         (grep :root "workspace" :path "." :pattern "Source"
+                               :glob "missing/*.el")))
+            (let (done failure result callback-directory)
+              (mevedel-memory-investigation-call
+               state (car case) (cdr case)
+               (lambda (text)
+                 (setq result text callback-directory default-directory)
+                 (condition-case err
+                     (should (= 0 (process-file "true" nil nil nil)))
+                   (error (setq failure err)))
+                 (setq done t)))
+              (with-timeout (5 (ert-fail "Investigation did not settle"))
+                (while (not done) (accept-process-output nil 0.01)))
+              (should result)
+              (should-not (string-prefix-p "Error:" result))
+              (should-not failure)
+              (should (equal callback-directory default-directory))
+              (should-not (mevedel-memory-investigation-active state)))))
+      (mevedel-memory-investigation-stop state)
+      (mevedel-execution-teardown-all)
+      (delete-directory directory t)))
+
   :doc "bounds UTF-8 results, total returned text, and calls; exhaustion retires the owner once"
 		 (let* ((directory (make-temp-file "mevedel-investigation-limits-" t))
 			(workspace (mevedel-workspace--create :root directory))

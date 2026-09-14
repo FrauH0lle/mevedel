@@ -10,6 +10,7 @@
          (file-name-concat
           (file-name-directory (or buffer-file-name load-file-name byte-compile-current-file)) "helpers"))
 (require 'mevedel-memory-pass)
+(require 'mevedel-memory-cleanup)
 (require 'mevedel-memory-list)
 (require 'mevedel-journal-jobs)
 (require 'mevedel-system)

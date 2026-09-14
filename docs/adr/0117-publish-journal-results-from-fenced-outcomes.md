@@ -126,6 +126,14 @@ search. Cancellation follows the existing process owner's terminal cleanup for
 its single child. A failed confined launch settles without an unrestricted
 retry, as required by [ADR 0116](0116-return-failed-confined-launches-without-retry.md).
 
+Investigation completion restores the caller's working directory before invoking
+its result callback. A recorded review failed after an empty `.mevedel/**` Glob:
+the ordinary search returned synchronously, copy cleanup deleted the dynamically
+bound working directory, and gptel's immediate follow-up could not launch there.
+A native empty-search callback and local HTTP tool-loop test reproduce that
+failure. Restoring the caller directory fixes the lifecycle at its owning seam;
+it needs no deferred callback, retained copy, provider retry or model instruction.
+
 The consolidation request measures gptel's prepared provider payload before
 dispatch and again before every tool follow-up. Raw evidence length alone would
 miss tool schemas and provider formatting. Admission keeps complete digests and
