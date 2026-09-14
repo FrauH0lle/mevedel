@@ -127,6 +127,16 @@
       (should (eq (if (eq mode 'cancel) 'aborted 'error) (plist-get result :outcome)))
       (should (= 1 settlements))
       (should-not (buffer-live-p (plist-get handle :buffer)))))
+  :doc "reports reasoning and reply charges independently of unavailable provider usage"
+  (progn
+    (start)
+    (respond (cons 'reasoning (make-string 40 ?r)))
+    (respond (make-string 100 ?x))
+    (gptel--fsm-transition request 'DONE)
+    (should (eq 'error (plist-get result :outcome)))
+    (should (= 140 (plist-get result :output-bytes)))
+    (should (= 36 (plist-get result :output-estimated-tokens)))
+    (should (= 0 (plist-get result :output-tokens))))
   :doc "malformed and oversized replies never become successful reviews"
   (dolist (reply (list "## Promote\n- none" (make-string 33000 ?x)))
     (setq result nil settlements 0)
@@ -137,6 +147,9 @@
     (gptel--fsm-transition request 'DONE)
     (should (eq 'error (plist-get result :outcome)))
     (should (= 7000 (plist-get result :output-tokens)))
+    (should (= (string-bytes reply) (plist-get result :output-bytes)))
+    (when (> (length reply) 32000)
+      (should (> (plist-get result :output-estimated-tokens) 8000)))
     (let ((snapshot (funcall (plist-get handle :usage))))
       (setf (plist-get snapshot :output-tokens) 0)
       (should (= 7000 (plist-get (funcall (plist-get handle :usage)) :output-tokens))))
@@ -243,7 +256,7 @@
 (mevedel-deftest mevedel-memory-review-request/transport ()
   ,test
   (test)
-  :doc "a real provider tool round resumes with its result and validates only the final reply"
+  :doc "real Read and empty Glob rounds resume with results and validate only the final reply"
   (let* ((directory (make-temp-file "mevedel-memory-review-http-" t))
          (workspace (mevedel-workspace--create :root directory))
          (mevedel-memory-dirs nil)
@@ -262,9 +275,17 @@
                                                             :function (list :name "Read"
                                                                             :arguments "{\"root\":\"workspace\",\"path\":\"source.el\"}"))))))
                  :usage '(:prompt_tokens 100 :completion_tokens 10 :total_tokens 110))
+           (list :choices
+                 (vector (list :index 0 :finish_reason "tool_calls"
+                               :message (list :role "assistant" :content "I will check for stored evidence."
+                                              :tool_calls
+                                              (vector (list :id "glob-1" :type "function"
+                                                            :function (list :name "Glob"
+                                                                            :arguments "{\"root\":\"workspace\",\"path\":\".\",\"pattern\":\".mevedel/**\"}"))))))
+                 :usage '(:prompt_tokens 200 :completion_tokens 20 :total_tokens 220))
            (list :choices (vector (list :index 0 :finish_reason "stop"
                                        :message (list :role "assistant" :content mevedel-test-memory-review--none)))
-                 :usage '(:prompt_tokens 200 :completion_tokens 20 :total_tokens 220))))
+                 :usage '(:prompt_tokens 300 :completion_tokens 30 :total_tokens 330))))
          server children received result handle backend)
     (put model :context-window 128)
     (put model :capabilities '(tool-use))
@@ -315,12 +336,18 @@
               (while (not result) (accept-process-output nil 0.01))))
           (ert-info ((format "Review error: %s" (plist-get result :error)))
             (should (eq 'success (plist-get result :outcome))))
-          (should (= 2 (length received)))
+          (should (= 3 (length received)))
           (let ((tool-message (cl-find "tool" (plist-get (car received) :messages)
                                        :key (lambda (message) (plist-get message :role)) :test #'equal)))
             (should (string-match-p "Source evidence" (plist-get tool-message :content))))
-          (should (= 300 (plist-get result :input-tokens)))
-          (should (= 30 (plist-get result :output-tokens)))
+          (should (seq-some
+                   (lambda (message)
+                     (and (equal "tool" (plist-get message :role))
+                          (string-match-p "No files found matching pattern"
+                                          (plist-get message :content))))
+                   (plist-get (car received) :messages)))
+          (should (= 600 (plist-get result :input-tokens)))
+          (should (= 60 (plist-get result :output-tokens)))
           (should-not (buffer-live-p (plist-get handle :buffer))))
       (when handle
         (mevedel-test--with-captured-diagnostics nil (funcall (plist-get handle :cancel))))

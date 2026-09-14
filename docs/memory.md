@@ -28,7 +28,8 @@ root IDs, admitted files, complete filename observations for creation, and
 admitted digest IDs before returning any proposals. The fixed ordered sections
 are Promote, Update, Merge, Remove, Instructions, and No action. Proposal fences
 contain JSON-valued header lines, a `---` separator, and Markdown replacement
-content. Merge sources must be admitted files; overlapping file operations
+content. The header is a sequence of `key: value` lines, not a JSON object;
+only the values use JSON syntax. Merge sources must be admitted files; overlapping file operations
 invalidate the entire reply. Instruction targets must be exact captured
 applicable files. Direct MEMORY.md proposals are rejected because application
 owns index consistency. This parser performs no reads or writes and does not
@@ -87,6 +88,9 @@ across 20 calls. Exceeding either aggregate limit retires the investigation and
 reports failure to its request owner. Stopping cancels active search helpers,
 removes their copies, and suppresses late delivery. The owner still supplies
 the overall deadline and generation check.
+Search completion restores the caller's working directory before delivering
+the result, including synchronous empty results. A provider follow-up never
+inherits a deleted investigation snapshot as its working directory.
 
 `mevedel-memory-review-request` combines that scope, reference pre-check, and
 investigation in a sessionless gptel request using the buddy workload. It admits
@@ -102,6 +106,9 @@ The request has a 180-second deadline, a cumulative 8,000-token output budget,
 and a 32 KiB output text cap. Supported provider output limits are clamped;
 providers without that control retain client-side limits, not a server billing
 ceiling. Every follow-up rechecks the prepared payload against usable context.
+Review callback results include accumulated output bytes and estimated tokens
+for reply text, reasoning and tool arguments, separately from provider-reported
+usage. These counters remain available when a client output guard ends the review.
 Read tools execute within their captured authority without interactive gptel
 confirmation; unavailable tool names fail the review. Only gptel's terminal
 DONE state validates the final proposal response. An intermediate HTTP completion

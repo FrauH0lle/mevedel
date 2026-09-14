@@ -124,6 +124,7 @@ The caller labels omitted source data; model tools can narrow the subtree."
 Only admitted copies enter the ordinary helper's read scope. CALLBACK gets
 relative filenames; private copy paths are removed from results and errors."
   (let ((directory (make-temp-file "mevedel-memory-search-" t))
+        (caller-directory default-directory)
         done cancel stopper)
     (cl-labels
      ((cleanup ()
@@ -134,10 +135,12 @@ relative filenames; private copy paths are removed from results and errors."
         (unless done
           (setq done t)
           (cleanup)
-          (mevedel-memory-investigation--deliver
-           state callback
-           (string-replace directory "."
-                           (string-replace (file-name-as-directory directory) "" text)))))
+          ;; Empty searches can settle before the snapshot binding unwinds.
+          (let ((default-directory caller-directory))
+            (mevedel-memory-investigation--deliver
+             state callback
+             (string-replace directory "."
+                             (string-replace (file-name-as-directory directory) "" text))))))
       (abort-search ()
         (unless done
           (setq done t)

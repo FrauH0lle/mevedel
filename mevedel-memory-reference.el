@@ -10,6 +10,7 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+(require 'mevedel-journal-store)
 (require 'mevedel-memory-scope)
 (require 'mevedel-session-control-fs)
 

@@ -19,6 +19,22 @@
 (mevedel-deftest mevedel-memory-reference-check ()
   ,test
   (test)
+  :doc "cold reference checks load their timestamp dependency without the umbrella"
+  (with-temp-buffer
+    (let ((status
+           (call-process
+            (expand-file-name invocation-name invocation-directory) nil t nil
+            "--batch" "-Q" "--eval"
+            (prin1-to-string
+             `(progn
+                (setq load-path ',load-path)
+                (require 'mevedel-memory-reference)
+                (unless (plist-get (mevedel-memory-reference-check '(:roots nil)) :complete)
+                  (error "Empty reference scope was not complete"))
+                (when (featurep 'mevedel)
+                  (error "Reference check loaded the umbrella")))))))
+      (ert-info ((buffer-string)) (should (= 0 status)))
+      (should (string-empty-p (buffer-string)))))
   :doc "records file occurrence, scoped absence, and unsupported references without topic writes"
   (let* ((directory (make-temp-file "mevedel-memory-reference-" t))
          (workspace (mevedel-workspace--create :root directory))
