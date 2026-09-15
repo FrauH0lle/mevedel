@@ -57,6 +57,9 @@
                                    :created "2000-01-01T00:00:00Z" :model "provider:model"
                                    :focus "" :digests (list (plist-get digest :id))
                                    :proposals nil :references nil))))
+          (let ((pins (file-name-concat (mevedel-journal-store-directory root) "state" "evidence-pins" (plist-get digest :id))))
+            (make-directory pins t)
+            (write-region "Another review still needs this note" nil (file-name-concat pins "review.pin") nil 'silent))
           (mevedel-test-journal-cleanup--entry root "expired")
           (mevedel-journal-cleanup-expired workspace)
           (should (equal review (mevedel-journal-store-read root (plist-get review :file))))
@@ -85,14 +88,26 @@
           (should (= 1 (mevedel-journal-cleanup-expired workspace t))))
       (delete-directory root t)))
 
-  :doc "one opportunity expires at most fifty entries without draining the backlog"
+  :doc "recovery and fresh expiry share the fifty-group batch limit"
   (let* ((root (make-temp-file "mevedel-journal-cleanup-batch-" t))
          (workspace (mevedel-workspace--create :root root))
          (mevedel-journal-max-age-days 365))
     (unwind-protect
         (progn
           (dotimes (n 51) (mevedel-test-journal-cleanup--entry root (format "old-%d" n)))
-          (should (= 50 (mevedel-journal-cleanup-expired workspace)))
+          ;; A written but unaccepted full manifest must not consume later
+          ;; recovery budgets or prevent the next attempt from making progress.
+          (let ((settle (symbol-function 'mevedel-journal-claim-settle)))
+            (cl-letf (((symbol-function 'mevedel-journal-claim-settle)
+                       (lambda (claim status payload)
+                         (unless (and (eq status 'completed) (not (string-empty-p payload)))
+                           (funcall settle claim status payload)))))
+              (should (= 0 (mevedel-journal-cleanup-expired workspace)))))
+          (mevedel-test--with-captured-messages nil
+            (cl-letf (((symbol-function 'mevedel-journal-cleanup--apply)
+                       (lambda (&rest _) (error "Interrupted before deletion"))))
+              (should-not (mevedel-journal-cleanup-expired workspace t))))
+          (should (= 50 (mevedel-journal-cleanup-expired workspace t)))
           (should (= 1 (length (mevedel-test-journal-cleanup--digests root))))
           (should-not (mevedel-journal-cleanup-expired workspace))
           (should (= 51 (length (mevedel-journal-store-covered-turns root))))
@@ -221,7 +236,11 @@
                                                        (concat (plist-get claim :owner) ".json")))))
             (should-not (mevedel-journal-claim-settle claim 'completed (plist-get manifest :hash)))
             (should (= 0 (mevedel-journal-cleanup--apply directory manifest)))
-            (should (mevedel-journal-store-read root (plist-get entry :file)))))
+            (should (mevedel-journal-store-read root (plist-get entry :file))))
+          (mevedel-journal-claim-settle successor 'completed "")
+          (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
+          (should-not (file-exists-p (file-name-concat directory "state" "expiry"
+                                                     (concat (plist-get claim :owner) ".json")))))
       (delete-directory root t)))
 
   :doc "changed public bytes remain on disk after accepted expiry recovery"
@@ -277,6 +296,33 @@
             (should-error (mevedel-journal-cleanup--read directory job))
             (should (file-exists-p path))))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-journal-cleanup-schedule ()
+  ,test
+  (test)
+  :doc "coalesces idle requests and preserves an earlier forced cleanup"
+  (let* ((workspace (mevedel-workspace--create :root temporary-file-directory))
+         (mevedel-journal-cleanup--inhibit-scheduling nil)
+         (mevedel-journal-cleanup--pending (make-hash-table :test #'equal))
+         first current calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-transport-run-when-idle)
+                   (lambda (_key _root callback) (funcall callback)))
+                  ((symbol-function 'mevedel-journal-cleanup-expired)
+                   (lambda (owner &optional force) (push (list owner force) calls))))
+          (mevedel-journal-cleanup-schedule workspace t)
+          (setq first (car (gethash temporary-file-directory mevedel-journal-cleanup--pending)))
+          (mevedel-journal-cleanup-schedule workspace)
+          (setq current (car (gethash temporary-file-directory mevedel-journal-cleanup--pending)))
+          (should-not (memq first timer-idle-list))
+          (should (memq current timer-idle-list))
+          (should (= 1 (hash-table-count mevedel-journal-cleanup--pending)))
+          (cancel-timer current)
+          (apply (timer--function current) (timer--args current))
+          (should (equal (list (list workspace t)) calls))
+          (should (= 0 (hash-table-count mevedel-journal-cleanup--pending))))
+      (when (timerp first) (cancel-timer first))
+      (when (timerp current) (cancel-timer current)))))
 
 (provide 'test-mevedel-journal-cleanup)
 ;;; test-mevedel-journal-cleanup.el ends here

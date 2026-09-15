@@ -83,7 +83,7 @@
     (prepare)
     (should (eq 'applied (plist-get (mevedel-memory-decision-apply workspace pass (plist-get item :id)) :status)))
     (should (eq 'reversed (plist-get (mevedel-memory-decision-reverse workspace pass (plist-get item :id)) :status)))
-    (let ((mevedel-journal-max-age-days 0)
+    (let ((mevedel-memory-history-max-age-days 0)
           (now (mevedel-session-control-fs-target-time remote)))
       (cl-letf (((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) (+ now 1))))
         (should (= 3 (mevedel-journal-cleanup-expired workspace)))))

@@ -11,10 +11,65 @@
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-cockpit)
 (require 'mevedel-memory-pass)
+(require 'mevedel-memory-library)
+(require 'mevedel-memory-cleanup)
 (require 'mevedel-report)
 
 ;; `mevedel-journal-jobs'
 (autoload 'mevedel-journal-jobs "mevedel-journal-jobs")
+
+(defvar-local mevedel-memory-list--view nil "Current memory table view.")
+(defvar-local mevedel-memory-list--positions nil "Selected row IDs by view.")
+
+(defun mevedel-memory-list-switch (view)
+  "Show VIEW in the current memory cockpit, preserving each view's selection."
+  (unless (memq view '(candidates memories history)) (user-error "Unknown memory view"))
+  (setf (alist-get mevedel-memory-list--view mevedel-memory-list--positions) (tabulated-list-get-id))
+  (setq mevedel-memory-list--view view)
+  (mevedel-cockpit-surface-refresh (alist-get view mevedel-memory-list--positions)))
+
+(defun mevedel-memory-list-candidates ()
+  "Show outstanding memory candidates."
+  (interactive) (mevedel-memory-list-switch 'candidates))
+
+(defun mevedel-memory-list-memories ()
+  "Show currently stored memories."
+  (interactive) (mevedel-memory-list-switch 'memories))
+
+(defun mevedel-memory-list-history ()
+  "Show retained memory decisions and completed reviews."
+  (interactive) (mevedel-memory-list-switch 'history))
+
+(defun mevedel-memory-list--visible (context)
+  "Collect rows for the selected view in CONTEXT."
+  (let* ((rows (mevedel-memory-list--collect context))
+         (pending (seq-remove (lambda (row) (memq (plist-get row :status) '(applied rejected reversed completed))) rows)))
+    (unless mevedel-memory-list--view
+      (setq mevedel-memory-list--view (if pending 'candidates 'memories)))
+    (pcase mevedel-memory-list--view
+      ('candidates pending)
+      ('memories (mevedel-memory-library-list (mevedel-cockpit-context-workspace context)))
+      ('history (seq-difference rows pending #'equal)))))
+
+(defun mevedel-memory-list-open-file ()
+  "Open the selected stored memory for normal Emacs editing."
+  (interactive)
+  (find-file (mevedel-memory-library-path
+              (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context))
+              (mevedel-cockpit-surface-selected))))
+
+(defun mevedel-memory-list-delete ()
+  "Delete the selected stored memory and index entry with checked undo."
+  (interactive)
+  (let* ((workspace (mevedel-cockpit-context-workspace (mevedel-cockpit-surface-context)))
+         (item (mevedel-cockpit-surface-selected))
+         (path (mevedel-memory-library-path workspace item)))
+    (when (yes-or-no-p (format "Delete memory %s (%s)? " (plist-get item :title) path))
+      (unwind-protect
+          (let ((decision (mevedel-memory-library-delete workspace item)))
+            (unless (eq 'applied (plist-get decision :status))
+              (user-error "%s" (or (plist-get decision :reason) "Memory deletion was not applied"))))
+        (mevedel-cockpit-surface-refresh)))))
 
 (defun mevedel-memory-list--collect (context)
   "Return persisted proposal rows for CONTEXT without writing or inferring."
@@ -38,6 +93,9 @@
                 (when accepted
                   (let ((date (plist-get (plist-get accepted :review) :created)))
                     (when (string> date (or last-pass "")) (setq last-pass date))))
+                (when (and accepted (null (plist-get accepted :proposals)))
+                  (push (list :id pass :kind 'review :pass pass :accepted accepted :status 'completed
+                              :created (plist-get (plist-get accepted :review) :created)) rows))
                 (dolist (proposal (plist-get accepted :proposals))
                   (let* ((id (plist-get proposal :id))
                          (scope (plist-get (plist-get accepted :prepared) :scope))
@@ -84,21 +142,67 @@ read-only; this snapshot never authorizes a decision or a file write."
   "Return ITEM's table row."
   (let ((proposal (plist-get item :proposal)))
     (list (plist-get item :id)
-          (vector (if proposal (symbol-name (plist-get proposal :action)) "record")
-                  (or (plist-get proposal :type) "")
-                  (or (plist-get proposal :title) "Unavailable record")
+          (vector (cond (proposal (symbol-name (plist-get proposal :action)))
+                        ((eq (plist-get item :kind) 'memory) "memory")
+                        ((eq (plist-get item :kind) 'review) "review") (t "record"))
+                  (or (plist-get proposal :type) (plist-get item :type) "")
+                  (or (plist-get proposal :title) (plist-get item :title)
+                      (and (eq (plist-get item :kind) 'review) "No proposed changes") "Unavailable record")
                   (symbol-name (plist-get item :status))
-                  (or (plist-get item :target) (plist-get item :id))))))
+                  (or (plist-get item :target) (plist-get item :created) (format "%s" (plist-get item :id)))))))
 
-(defun mevedel-memory-list--header (items context)
-  "Return workspace, pass date, mode, and counts for ITEMS in CONTEXT."
-  (let ((workspace (mevedel-cockpit-context-workspace context)))
-    (mevedel-cockpit-format-header
-     "memory" (mevedel-workspace-root workspace)
-     (format "%s | %s | %d pending%s" mevedel-memory-consolidation-mode
-             (or (plist-get (mevedel-workspace-memory-observation workspace) :last-pass) "no completed pass")
-             (seq-count (lambda (item) (mevedel-memory-decision-actionable-status-p (plist-get item :status))) items)
-             (if (mevedel-memory-pass-running workspace) " | running" "")))))
+(defun mevedel-memory-list--header (_items context)
+  "Return view selectors and cached workspace counts for CONTEXT."
+  (let* ((workspace (mevedel-cockpit-context-workspace context))
+         (observation (mevedel-workspace-memory-observation workspace)))
+    (concat
+     (mapconcat
+      (lambda (view)
+        (let ((map (make-sparse-keymap)))
+          (define-key map [tab-line mouse-1]
+                      (lambda (event) (interactive "e")
+                        (select-window (posn-window (event-start event)))
+                        (mevedel-memory-list-switch view)))
+          (propertize (capitalize (symbol-name view)) 'local-map map 'mouse-face 'highlight
+                      'face (if (eq view mevedel-memory-list--view) 'bold 'link))))
+      '(candidates memories history) " | ")
+     "    "
+     (mevedel-cockpit-format-header
+      "memory" (mevedel-workspace-root workspace)
+      (format "%d pending | %d recovery | history %d days%s"
+              (or (plist-get observation :pending) 0) (or (plist-get observation :recovery) 0)
+              mevedel-memory-history-max-age-days (if (mevedel-memory-pass-running workspace) " | running" ""))))))
+
+(defun mevedel-memory-list--retention (workspace accepted)
+  "Describe ACCEPTED history's expiry or retaining dependency in WORKSPACE."
+  (condition-case err
+      (let* ((entries (mevedel-journal-store-entries (mevedel-workspace-root workspace)))
+             (history (mevedel-memory-cleanup--history workspace accepted entries))
+             (review (plist-get accepted :review)))
+        (when (and (string-empty-p (or (plist-get review :focus) ""))
+                   (seq-some (lambda (entry) (and (eq 'digest (plist-get entry :kind))
+                                                 (member (plist-get entry :id) (plist-get review :digests)))) entries))
+          (error "Reviewed source notes still have retained references"))
+        (format "History eligible for cleanup: %s\n"
+                (format-time-string "%Y-%m-%d %H:%M UTC" (seconds-to-time (plist-get history :expires)) t)))
+    (error (format "History retained: %s\n" (error-message-string err)))))
+
+(defun mevedel-memory-list--review-details (item context)
+  "Return the complete no-candidate review and its evidence for ITEM in CONTEXT."
+  (let* ((workspace (mevedel-cockpit-context-workspace context))
+         (accepted (mevedel-memory-store-accepted workspace (plist-get item :pass)))
+         (prepared (plist-get accepted :prepared))
+         (scope (plist-get prepared :scope)))
+    (dolist (root (plist-get scope :roots)) (mevedel-memory-scope--root scope (car root)))
+    (list :title "Completed memory review" :identity (plist-get item :id) :navigator t
+          :validate (lambda () (dolist (root (plist-get scope :roots)) (mevedel-memory-scope--root scope (car root))))
+          :sections
+          (cons (list :id 'decision :title "Result"
+                      :body (concat (or (plist-get accepted :no-action) "") "\n\n"
+                                    (mevedel-memory-list--retention workspace accepted)))
+                (mapcar (lambda (entry) (list :id (plist-get entry :id) :title (plist-get entry :file)
+                                             :mode 'markdown-mode :body (plist-get entry :body)))
+                        (plist-get prepared :entries))))))
 
 (defun mevedel-memory-list--diff (before after)
   "Return a unified diff of exact retained BEFORE and AFTER snapshots."
@@ -106,10 +210,14 @@ read-only; this snapshot never authorizes a decision or a file write."
                              (decode-coding-string (or (plist-get after :bytes) "") 'utf-8-unix))
       "No text changes.\n"))
 
-(defun mevedel-memory-list--details (item context)
+(cl-defun mevedel-memory-list--details (item context)
   "Return ITEM's captured body, before/after diff, and evidence in CONTEXT.
 Check original root authority before disclosing private topic contents."
   (when (plist-get item :error) (user-error "%s" (plist-get item :error)))
+  (pcase (plist-get item :kind)
+    ('memory (cl-return-from mevedel-memory-list--details
+               (mevedel-memory-library-details (mevedel-cockpit-context-workspace context) item)))
+    ('review (cl-return-from mevedel-memory-list--details (mevedel-memory-list--review-details item context))))
   (let* ((workspace (mevedel-cockpit-context-workspace context))
          (accepted (mevedel-memory-store-accepted workspace (plist-get item :pass)))
          (proposal (seq-find (lambda (proposal) (equal (plist-get proposal :id) (plist-get item :id))) (plist-get accepted :proposals)))
@@ -136,7 +244,8 @@ Check original root authority before disclosing private topic contents."
              :body (mevedel-report-fields
                     (list "Status" (plist-get item :status))
                     (list "Reason" (plist-get proposal :reason))
-                    (list "Decision" (or (plist-get decision :reason) "Pending"))))
+                    (list "Decision" (or (plist-get decision :reason) "Pending"))
+                    (list "History" (mevedel-memory-list--retention workspace accepted))))
        (list :id 'body :title "Proposed body" :mode 'markdown-mode
              :body (plist-get proposal :body)))
       (mapcar
@@ -258,7 +367,7 @@ Check original root authority before disclosing private topic contents."
 
 (defun mevedel-memory-list--finished (workspace result)
   "Refresh WORKSPACE's open table and report settled consolidation RESULT."
-  (when-let* ((buffer (get-buffer "*mevedel memory proposals*")))
+  (when-let* ((buffer (get-buffer "*mevedel memory*")))
     (with-current-buffer buffer
       (when (and mevedel-cockpit--context (eq workspace (mevedel-cockpit-context-workspace mevedel-cockpit--context)))
         (condition-case nil (mevedel-cockpit-surface-refresh) (error nil)))))
@@ -288,12 +397,17 @@ a focus. An explicit review may inspect current memory without eligible digests.
     state))
 
 (defconst mevedel-memory-list--surface
-  '(:buffer-name "*mevedel memory proposals*" :label "memory proposals" :row-label "proposal"
+  '(:buffer-name "*mevedel memory*" :label "memory" :row-label "item"
     :mode mevedel-memory-list-mode
     :format [("Action" 12 t) ("Type" 10 t) ("Title" 24 t) ("Status" 20 t) ("Target / origin" 0 t)]
-    :collect mevedel-memory-list--collect :entry mevedel-memory-list--entry :header mevedel-memory-list--header
+    :collect mevedel-memory-list--visible :entry mevedel-memory-list--entry :header mevedel-memory-list--header
     :details mevedel-memory-list--details :details-buffer "*mevedel memory proposal*"
-    :keys (("i" "Inspect body, diff, and evidence" mevedel-cockpit-surface-details)
+    :keys (("1" "Show candidates" mevedel-memory-list-candidates)
+           ("2" "Show stored memories" mevedel-memory-list-memories)
+           ("3" "Show history" mevedel-memory-list-history)
+           ("o" "Open stored memory file" mevedel-memory-list-open-file)
+           ("d" "Delete stored memory" mevedel-memory-list-delete)
+           ("i" "Inspect body, diff, and evidence" mevedel-cockpit-surface-details)
            ("a" "Accept proposal" mevedel-memory-list-accept) ("r" "Reject proposal" mevedel-memory-list-reject)
            ("A" "Accept all pending proposals" mevedel-memory-list-accept-all)
            ("R" "Reject all pending proposals" mevedel-memory-list-reject-all)
@@ -304,15 +418,17 @@ a focus. An explicit review may inspect current memory without eligible digests.
            ("k" "Kill running consolidation" mevedel-memory-list-kill)
            ("m" "Run consolidation (prefix: focus)" mevedel-remember)
            ("j" "Inspect pending journal jobs" mevedel-memory-list-jobs)))
-  "Shared cockpit surface for memory proposals.")
+  "Shared cockpit surface for candidates, stored memories, and history.")
 
 (define-derived-mode mevedel-memory-list-mode tabulated-list-mode "mevedel-memory"
-  "Inspect and decide persisted memory proposals."
-  (mevedel-cockpit-setup-tabulated-surface mevedel-memory-list--surface))
+  "Manage memory candidates, stored topics, and retained decisions."
+  (mevedel-cockpit-setup-tabulated-surface mevedel-memory-list--surface)
+  ;; Keep native column headings in the header line; views use the tab line.
+  (setq-local tab-line-format '(:eval (mevedel-cockpit-surface-header-line))))
 
 ;;;###autoload
 (defun mevedel-memory-list-open (&optional context)
-  "Open memory proposals for session cockpit CONTEXT and recover marked writes."
+  "Open the memory cockpit for CONTEXT and recover marked writes."
   (interactive)
   (setq context (or context (mevedel-cockpit-current-context)))
   (let ((workspace (mevedel-cockpit-context-workspace context)))

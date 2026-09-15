@@ -229,11 +229,22 @@ authenticated accepted bytes' hash under :hash."
 ENTRIES are the complete admitted subset; MODEL is its exact provider label and
 REFERENCES are bounded dated observations. Retain original target before-state.
 The immutable claim outcome accepts the bundle hash, allowing later recovery."
+  (mevedel-memory-store-accept-proposals
+   workspace prepared
+   (mevedel-memory-proposal-parse reply (plist-get (plist-get prepared :scope) :roots)
+                                 (mapcar (lambda (entry) (plist-get entry :id)) entries))
+   entries model references))
+
+(defun mevedel-memory-store-accept-proposals (workspace prepared parsed entries producer references)
+  "Accept trusted PARSED proposals for WORKSPACE's PREPARED pass.
+ENTRIES and REFERENCES retain the same evidence contract as model replies.
+PRODUCER is the provider label, or `user' for an explicit cockpit action.
+Callers validate model text before this boundary; direct user actions construct
+structured changes from fresh captured snapshots without synthetic model text."
   (let* ((id (plist-get prepared :id))
          (claim (plist-get prepared :claim))
          (scope (plist-get prepared :scope))
-         (ids (mapcar (lambda (entry) (plist-get entry :id)) entries))
-         (parsed (mevedel-memory-proposal-parse reply (plist-get scope :roots) ids)))
+         (ids (mapcar (lambda (entry) (plist-get entry :id)) entries)))
     (mevedel-memory-store--assert-owned claim)
     (unless (equal prepared (mevedel-memory-store-read workspace id))
       (error "Prepared memory evidence changed"))
@@ -255,7 +266,7 @@ The immutable claim outcome accepts the bundle hash, allowing later recovery."
            (review (list :pass-id id :workspace (plist-get scope :workspace)
                          :created (mevedel-journal-store-timestamp
                                    (mevedel-session-control-fs-target-time (plist-get claim :directory)))
-                         :model model :focus (plist-get prepared :focus) :digests ids
+                         :model producer :focus (plist-get prepared :focus) :digests ids
                          :proposals (mapcar (lambda (proposal) (plist-get proposal :id)) proposals)
                          :references references))
            (_ (mevedel-journal-store--validate-metadata review 'consolidation))
@@ -299,6 +310,7 @@ their admitted evidence; a no-action pass releases it after public publication."
          (setf (mevedel-workspace-journal-observation workspace) nil)
          (mevedel-memory-store--release-pins workspace prepared
                                             (and (plist-get accepted :proposals) (plist-get review :digests)) mutation)
+         (mevedel-journal-cleanup-schedule workspace t)
          published)))))
 
 (defun mevedel-memory-store-recover (workspace)

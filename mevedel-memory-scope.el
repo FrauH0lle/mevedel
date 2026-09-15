@@ -67,8 +67,10 @@ Use the pinned target read so a changed parent cannot redirect the read."
               :mode (file-modes path)))
     (mevedel-session-control-fs-absent (list :path path :exists nil))))
 
-(defun mevedel-memory-scope-capture (workspace)
+(defun mevedel-memory-scope-capture (workspace &optional selection)
   "Capture WORKSPACE's memory and root instruction scopes without writes.
+Optional SELECTION is (CONFIGURED-ROOT . TOPIC) for a direct user operation;
+only that topic and its index are captured from the configured root.
 Return :roots, an alist usable by `mevedel-memory-proposal-parse', together
 with the original workspace path and identity. Each root retains :dir,
 :configured-dir, :client (for local paths), and :before snapshots keyed by
@@ -87,7 +89,15 @@ The request owner must account for these snapshots in context admission."
          roots omissions excluded-roots)
     (when (> (length memory-roots) 16)
       (error "Too many configured memory roots for one review"))
-    (dolist (descriptor (append memory-roots (list (list :dir workspace-root :kind 'instructions))))
+    (when selection
+      (unless (and (mevedel-memory-proposal--file-p (cdr selection))
+                   (not (equal (file-name-nondirectory (cdr selection)) "MEMORY.md")))
+        (error "Invalid selected memory topic"))
+      (setq memory-roots (seq-filter
+                          (lambda (root) (equal (file-name-as-directory (plist-get root :dir))
+                                                (file-name-as-directory (car selection)))) memory-roots))
+      (unless memory-roots (error "Selected memory root is no longer configured")))
+    (dolist (descriptor (append memory-roots (unless selection (list (list :dir workspace-root :kind 'instructions)))))
       (let* ((configured (file-name-as-directory (expand-file-name (plist-get descriptor :dir))))
              (directory (file-name-as-directory (file-truename configured)))
              (kind (or (plist-get descriptor :kind) 'memory))
@@ -114,6 +124,7 @@ The request owner must account for these snapshots in context admission."
                          (append '("AGENTS.md" "AGENTS.local.md")
                                  (mapcar (lambda (path) (file-relative-name path directory))
                                          (mevedel-system-workspace-config-files workspace)))))))
+                (when selection (setq candidates (list "MEMORY.md" (cdr selection))))
                 (setq root (append root inventory))
                 (when (and inventory (not (plist-get inventory :complete)))
                   (push (list :root id :reason "Directory inventory reached its entry limit") omissions))

@@ -13,6 +13,7 @@ Data model
   mevedel-journal-store.el     immutable workspace digest, review, and decision publication
   mevedel-journal-index.el     disposable journal discovery and bounded main prompt map
   mevedel-journal-claim.el     bounded journal work ownership and durable outcomes
+  mevedel-journal-gc.el        bounded coordination collection and retained proof references
   mevedel-journal-cleanup.el   accepted expiry manifests and retained turn coverage
   mevedel-journal-capture.el   completed-turn checkpoints and lifecycle sealing
   mevedel-journal-process.el   bounded digest requests, outcome recovery, and scheduling
@@ -33,7 +34,8 @@ Data model
   mevedel-memory-decision.el  immutable decisions, application, activation recovery, and rejection evidence
   mevedel-memory-apply.el     complete topic/index and instruction transaction preparation
   mevedel-memory-write.el     durable before/after intents, shared-root ownership, and checked rollback
-  mevedel-memory-list.el      proposal cockpit, captured diffs, decisions, and recovery actions
+  mevedel-memory-library.el   current topic inventory and structured user deletion
+  mevedel-memory-list.el      candidates/memories/history cockpit, diffs, decisions, recovery
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
   mevedel-prompt-submission.el accepted prompt + lifecycle-context transaction
   mevedel-bash-analysis.el    conservative shell parsing and normalized command facts

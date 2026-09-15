@@ -179,6 +179,19 @@
       (should (equal "focused" (gethash "scope" record)))
       (should (equal (plist-get review :created) (gethash "created" record)))
       (should-not (string-search "SECRET" text))))
+  :doc "expires focused history while preserving its unprocessed public source"
+  (let ((digest (mevedel-journal-store-publish-digest
+                 root (list :capture-id (make-string 64 ?a) :session "closed" :session-name "Closed"
+                            :workspace identity :trigger 'session-end :segment 1 :source-revision (make-string 64 ?b)
+                            :turns '(1) :turn-ids (list (make-string 64 ?c))
+                            :created (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t) :model "test:model")
+                 "## Done\n- Observed: Tests passed.\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none")))
+    (publish digest nil "Focused question")
+    (should (= 1 (mevedel-journal-cleanup-expired workspace)))
+    (should (equal (list (plist-get digest :id))
+                   (mapcar (lambda (entry) (plist-get entry :id))
+                           (mevedel-journal-index-unreviewed (mevedel-journal-store-entries root)))))
+    (should (mevedel-journal-cleanup-pass-retired-p root (plist-get prepared :id))))
   :doc "retains an old review while its covered digest or unreleased evidence pin survives"
   (let ((digest (mevedel-journal-store-publish-digest
                  root (list :capture-id (make-string 64 ?a) :session "closed" :session-name "Closed"
@@ -187,12 +200,11 @@
                             :created (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t) :model "test:model")
                  "## Done\n- Observed: Tests passed.\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none")))
     (publish digest)
-    (should (= 0 (mevedel-journal-cleanup-expired workspace)))
-    (should (= 2 (length (mevedel-journal-store-entries root))))
+    (should (= 1 (mevedel-journal-cleanup-expired workspace)))
+    (should (= 1 (length (mevedel-journal-store-entries root))))
     (should-not (mevedel-journal-index-unreviewed (mevedel-journal-store-entries root)))
     (let ((mevedel-journal-max-age-days 0))
       (cl-letf (((symbol-function 'mevedel-session-control-fs-target-time) (lambda (_) (+ 2 (floor (float-time))))))
-        (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
         (should (mevedel-memory-store-accepted workspace (plist-get prepared :id)))
         (let ((pin (mevedel-memory-store--pin workspace (plist-get prepared :id) (plist-get digest :id))))
           (make-directory (file-name-directory pin) t)
@@ -202,6 +214,22 @@
           (delete-file pin))
         (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
         (should-not (mevedel-journal-store-entries root)))))
+  :doc "fully reviewed recent notes retire even when recall expiry is disabled"
+  (let* ((mevedel-journal-max-age-days nil)
+         (entry (mevedel-journal-store-publish-digest
+                 root (list :capture-id (make-string 64 ?a) :session "closed" :session-name "Closed"
+                            :workspace identity :trigger 'session-end :segment 1
+                            :source-revision (make-string 64 ?b) :turns '(1)
+                            :turn-ids (list (make-string 64 ?c))
+                            :created (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t) :model "test:model")
+                 "## Done\n- Observed: Completed work.\n## Learned\n- none\n## Surprised\n- none\n## Unfinished\n- none")))
+    (should (= 0 (mevedel-journal-cleanup-expired workspace t)))
+    (publish entry)
+    (should (= 1 (mevedel-journal-cleanup-expired workspace t)))
+    (should-error (mevedel-journal-store-read root (plist-get entry :file)))
+    (should (equal (plist-get entry :body)
+                   (plist-get (car (plist-get (plist-get (mevedel-memory-store-accepted
+                                                        workspace (plist-get prepared :id)) :prepared) :entries)) :body))))
   :doc "a live consolidation owner postpones expiry without losing its claim"
   (progn
     (publish)

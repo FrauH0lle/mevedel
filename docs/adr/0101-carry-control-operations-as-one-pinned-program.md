@@ -22,6 +22,12 @@ mutual exclusion may supply a pinned lock directory; the program holds its
 `flock` across all operations. Journal settlement and curated-memory mutation
 use that boundary under [ADR 0117](0117-publish-journal-results-from-fenced-outcomes.md).
 
+`verify-latest` rejects a claim candidate when the pinned parent contains a
+lexicographically newer leaf with the requested suffix. Used inside the claim
+lock before exclusive creation, it prevents stale acquirers from recreating
+pruned generations. `delete-empty-directory` uses native `rmdir`; nonempty
+directories remain untouched. Domain collectors choose retention and references.
+
 Requests use five fields per operation and NUL framing. Arbitrary content and
 response bytes use base64; numeric limits, modes, and deadlines use validated
 digit strings. Diagnostic bytes are encoded through a separate pipe and returned

@@ -1425,13 +1425,16 @@ still-live publishing generation back to active before reserving a new window.
 Workspace journal expiry runs before session-cleanup eligibility checks, so
 disabling session expiry or using a TRAMP workspace does not disable it.
 `mevedel-journal-max-age-days` independently defaults to 14 days of ordinary
-recall from immutable entry creation (nil disables age expiry). Expired entries
+recall from immutable entry creation (nil disables recall age filtering). Expired entries
 are hidden from ordinary recall even when their bytes must remain. An hourly
-cleanup opportunity retires eligible evidence through recoverable accepted
+cleanup opportunity, plus idle work after decisions, retires eligible evidence through recoverable accepted
 manifests, preserving unreviewed digests, pending captures, evidence pins and
 unresolved proposal/write dependencies. A successful general no-action review
-counts as processing. Resolved review/decision history expires as a complete
-dependency group; capture coverage survives. See [memory](memory.md) for the
+counts as processing. Processed notes retire once references end, regardless of
+age. Resolved review/decision history has its own default 14-day window after the
+latest terminal decision and expires as a complete dependency group. Bounded
+coordination cleanup runs even when recall age filtering is disabled; capture
+coverage survives. See [memory](memory.md) for the
 retention and human inspection contract.
 
 Pending journal capture pins under a session's `.journal-pins/` prevent that

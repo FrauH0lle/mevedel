@@ -10,7 +10,7 @@ precedence over package preferences about what is worth retaining.
 
 Curated topics hold durable facts; journal digests hold dated evidence from
 completed work. Use `/remember` to review memory and journal evidence, then
-inspect the proposed changes in the [memory cockpit](#memory-proposals-cockpit).
+inspect the proposed changes in the [memory cockpit](#memory-cockpit).
 The `$learn` skill supports explicitly requested write-back during a conversation.
 
 ## Memory flow
@@ -193,7 +193,7 @@ lifecycle opportunities and workspace activation recovers abandoned checkpoints.
 records, with cached composer completion and request-time roster availability.
 The main conversation receives a bounded recent-digest map as retained context.
 Consolidation runs on demand through `/remember` or automatically in `propose` and `auto` modes;
-the memory proposals cockpit supports inspection, decisions, and recovery. See
+the memory cockpit supports inspection, decisions, and recovery. See
 [ADR 0117](adr/0117-publish-journal-results-from-fenced-outcomes.md) for the
 storage contract and the workflows below for the user surface.
 
@@ -212,7 +212,7 @@ applicable files. Direct MEMORY.md proposals are rejected because application
 owns index consistency. This parser performs no reads or writes and does not
 establish current authority, freshness, or factual correctness. The request uses
 this parser at terminal settlement before accepting proposals into the durable
-review and decision lifecycle exposed by the memory proposals cockpit.
+review and decision lifecycle exposed by the memory cockpit.
 
 `mevedel-memory-scope-capture` supplies the parser's root and file allowlist.
 It reads complete topic, index, and root instruction files without changing
@@ -482,7 +482,7 @@ status is verified against immutable acceptance evidence; public text alone
 cannot decide a pending proposal or release its evidence. When every proposal
 in a pass is terminal, publication releases that pass's digest pins. Review
 and decision records remain retained while evidence or unresolved work needs
-them, then expire together under the journal age rule.
+them, then expire together under the resolution-based history window.
 
 Before a later request, the coordinator recovers accepted decisions and includes
 bounded recent rejection evidence: the original suggestion and reason, under
@@ -572,16 +572,31 @@ for a later activation. New workspaces create no memory state just by activating
 exit cancels queued recovery. Recovery neither requests a model nor repeats or
 rolls back memory writes.
 
-## Memory proposals cockpit
+## Memory cockpit
 
 `M-x mevedel-memory-list-open`, or **Memory** (`l`) in the session cockpit, opens
-the proposals table. Rows show action, type, title, status, and exact target/origin.
-The header identifies the workspace, pass date, manual mode, pending count, and
-this client's running pass. Opening attempts checked recovery; a busy owner does
+the memory table with **Candidates**, **Memories**, and **History** views.
+Switch with the clickable header or `1`, `2`, and `3`. Opening starts with
+Candidates when proposals need attention, otherwise Memories. Refresh retains
+the selected view and row where possible. Resolved candidates move to History.
+Rows show action, type, title, status, and exact target/origin. The header shows
+workspace, pending/recovery counts, history retention, and this client's running pass. Opening attempts checked recovery; a busy owner does
 not prevent read-only inspection or lose its claim. Refresh preserves the active
 session composer draft. Another client's unavailable memory root remains visible,
 but inspecting private body/diff evidence or applying there requires its original
 authority.
+
+Memories inventories actual topic files in configured roots, including manual
+and unindexed topics, with frontmatter title/type and indexed/unindexed status.
+Indexes and internal coordination files are excluded. `RET` inspects the full
+stored body, `o` opens the actual file, and `d` asks for confirmation naming the
+exact topic. Deletion freshly captures the topic and index, then uses the same
+checked transaction as proposal application. Its producer is `user`; it runs no
+model and fabricates no model response. A concurrent edit prevents application.
+The deletion appears in History, where `u` can restore its exact before-state
+while that history remains and the current files still match. Unrelated topics
+are untouched. History also includes completed reviews with no candidates;
+details show the retention deadline or unresolved dependency.
 
 The main cockpit's Memory row shows pending/stale proposals, interrupted-write
 recovery, and unavailable-record counts separately. Opening the cockpit refreshes
@@ -797,7 +812,8 @@ model recall or unconditional deletion.
 
 ## Journal recall and retention
 
-`mevedel-journal-max-age-days` defaults to 14; nil disables journal expiry.
+`mevedel-journal-max-age-days` defaults to 14; nil disables ordinary recall age
+filtering. It does not disable storage cleanup.
 The clock starts at the immutable public entry `created` timestamp in UTC.
 For a digest, this is the execution target time when its completed-turn capture
 was first frozen, carried unchanged into later digest publication. Reviews and
@@ -811,16 +827,28 @@ client's current UTC clock; native cleanup and automatic review use the executio
 target's clock. Machines should have synchronized clocks for matching boundaries.
 Cached discovery checks age on every use, and prepared reads check at execution.
 
-Physical deletion has additional dependencies. Unreviewed digests remain available
+Physical deletion follows review completion, independently of recall age. Unreviewed digests remain available
 to consolidation and human inspection after their ordinary recall expires. A
 successful general review with no proposed changes counts as processing; failed,
 cancelled and focused reviews do not consume general coverage. Pending proposals
 and interrupted operations can retain evidence indefinitely until resolved. A
-14-day recall limit is therefore not a physical-erasure guarantee.
+14-day recall limit is therefore not a physical-erasure guarantee. Once a
+published general review has terminal decisions for every candidate, its public
+source notes retire at the next idle cleanup opportunity after other references
+end, including when they are younger than 14 days. One decision does not discard
+notes still needed by another candidate or review. Exact evidence remains in the
+private review history for inspection and undo.
+
+`mevedel-memory-history-max-age-days` is an independent nonnegative setting,
+defaulting to 14 days after the latest terminal decision, or completion of a
+review with no proposals. Reversal restarts that window. Expired history is
+removed as a complete public/private dependency group. Curated memories remain.
 Expiry runs independently of session expiry and new capture, for local and TRAMP
 workspaces, during workspace activation and existing cleanup opportunities.
-Opportunities are throttled to once an hour and select at most 50 digest/review groups;
-they do not recursively drain a backlog. Selection currently scans validated
+Workspace activation is throttled to once an hour. Review/decision publication
+also schedules idle cleanup. Each batch selects at most 50 content groups and
+prunes at most 200 obsolete claim pairs. Progress queues another idle batch;
+no progress stops the drain. Redraw does not run cleanup. Selection currently scans validated
 public entries. Pending captures and pinned review evidence remain retained.
 
 Expiry accepts an immutable manifest through journal mutation ownership before
@@ -831,16 +859,17 @@ public or private bytes are retained for inspection. Retired capture payloads ca
 with their expired digest, while identity-only capture coverage survives.
 Consolidation uses the same mutation boundary when pinning proposal evidence.
 Cleanup also acquires consolidation admission, so a live pass postpones cleanup.
-Completed reviews become eligible only after all their examined digests are gone,
+Completed general reviews become eligible only after all their examined digests are gone,
 their own evidence pins are released, and their accepted private state matches
 the public record. A digest and its covering review expire on separate
 opportunities; selecting a digest for deletion does not prematurely remove its
-coverage. Retirement is recorded before public or private deletion. Pass recovery
+coverage. A completed focused review can expire while its unprocessed public
+source notes remain. Retirement is recorded before public or private deletion. Pass recovery
 and the proposal table skip retired passes, including interrupted deletions.
 Retirement retains the completion date and general/focused scope, without the
 focus text, so expiry does not erase the scheduling history of general reviews.
 Every proposal must have a terminal applied, rejected, or reversed decision, and
-every decision must also satisfy the age rule. Unpublished decisions, unresolved
+the group must satisfy the resolution-based history deadline. Unpublished decisions, unresolved
 write intents, outstanding target markers, and unavailable original targets
 retain the group. The manifest includes the complete related public decision
 history and exact private pass, decision, and write filenames with accepted
@@ -850,6 +879,27 @@ records; splitting it would break retained reversal dependencies. Current curate
 memory files are never deleted by journal expiry. Readers skip retired history
 even when an interrupted deletion leaves only a private write intent behind.
 Prompt and cockpit observations are invalidated after cleanup.
+
+Private `state/` directories serve separate purposes:
+
+| Directory | Purpose and retention |
+| --- | --- |
+| `captures` | Frozen inputs and per-capture attempts; payload retires with its processed digest. |
+| `coverage` | Minimal turn identities preventing duplicate capture; retained. |
+| `mutation`, `digest-run`, `consolidation` | Numbered ownership claims and outcomes; obsolete settled pairs are pruned after their deadlines. |
+| `passes`, `decisions`, `writes` | Exact review evidence, decisions and transaction snapshots; removed with expired history after recovery dependencies end. Failed/abandoned preparations retain a diagnostic window of the configured history duration after their deadline. |
+| `evidence-pins` | References preventing early evidence deletion; released when resolved, empty directories removed. |
+| `expiry` | Accepted cleanup manifests and completion receipts; collected after completion and claim expiry. Unaccepted abandoned manifests are collected after fencing and expiry. |
+| `expired`, `retired-passes` | Minimal retirement identities preventing late recovery from republishing deleted records; retained. |
+
+Claim pruning always preserves the newest generation, unexpired or unsettled
+attempts, and any claim still referenced by recovery/history. It covers capture
+attempts and configured shared memory-root claims too; outstanding target write
+markers block pruning there. Acquisition, settlement, and pruning use the same
+target lock and check the observed generation inside it. Delayed callers cannot
+recreate a removed generation. Thus bulky coordination history is bounded by
+active dependencies and batch progress, while minimal identity records remain.
+Unreadable proof records stop cleanup rather than being treated as garbage.
 
 ## Working-note snapshot limits
 

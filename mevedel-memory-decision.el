@@ -146,6 +146,7 @@ their pass can release its remaining digest pins."
                 (plist-get (plist-get accepted :review) :proposals))
            (mevedel-memory-store--release-pins workspace prepared nil mutation))
          (setf (mevedel-workspace-journal-observation workspace) nil)
+         (mevedel-journal-cleanup-schedule workspace t)
          published)))))
 
 (defun mevedel-memory-decision-recover (workspace)
