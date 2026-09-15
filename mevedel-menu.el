@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (require 'transient)
 (require 'mevedel-cockpit)
 (require 'mevedel-models)
@@ -385,29 +387,17 @@
   (plist-get (mevedel-worktree-status-summary (mevedel-menu--context))
              :label))
 
-(defconst mevedel-menu--info-indent (make-string 14 ?\s)
-  "Continuation indent for wrapped session info-panel rows.")
-
-(defun mevedel-menu--info-row (label value)
-  "Return an info-panel row for LABEL and VALUE."
-  (format "%-13s %s" label value))
-
 (defun mevedel-menu--target-description (session)
   "Return SESSION's execution-target info-panel rows."
-  (when-let* ((target (and session
-                           (mevedel-session-execution-target session))))
+  (when-let* ((target (and session (mevedel-session-execution-target session))))
     (let* ((readiness (mevedel-execution-target-readiness target))
            (status (or (plist-get readiness :status) 'not-probed))
            (sandbox (plist-get readiness :sandbox-status)))
-      (concat
-       (mevedel-menu--info-row
-        "Target" (mevedel-execution-target-label target))
-       "\n"
-       mevedel-menu--info-indent
-       (format "tier %s · readiness %s%s"
-               (mevedel-execution-target-support-tier target)
-               status
-               (if sandbox (format " · sandbox %s" sandbox) ""))))))
+      (mevedel-report-fields
+       (list "Target" (mevedel-execution-target-label target))
+       (list "Support tier" (mevedel-execution-target-support-tier target))
+       (list "Readiness" status)
+       (when sandbox (list "Sandbox" sandbox))))))
 
 (defun mevedel-menu--durability-description (session)
   "Return SESSION's persistence, lease, and publication info-panel rows."
@@ -416,23 +406,11 @@
            (status (mevedel-session-publication-status session))
            (path (plist-get status :authoritative-state-path))
            (lease (or (plist-get status :lease-state)
-                      (if (and target
-                               (mevedel-execution-target-remote-p target))
-                          'none
-                        'local))))
-      (concat
-       (mevedel-menu--info-row
-        "Persistence"
-        (if target
-            (mevedel-execution-target-native-path target path)
-          path))
-       "\n"
-       mevedel-menu--info-indent
-       (format "lease %s · publication %s"
-               lease
-               (if (plist-get status :pending-publication)
-                   "pending"
-                 "published"))))))
+                      (if (and target (mevedel-execution-target-remote-p target)) 'none 'local))))
+      (mevedel-report-fields
+       (list "State directory" (if target (mevedel-execution-target-native-path target path) path))
+       (list "Lease" lease)
+       (list "Publication" (if (plist-get status :pending-publication) "pending" "published"))))))
 
 (defun mevedel-menu--alerts (session)
   "Return SESSION's off-nominal state tokens as a list of strings.
@@ -568,45 +546,38 @@ unavailable until it changes."
              "you hold this session's lease")))
       'transient-inactive-value))))
 
-(defun mevedel-menu--session-info-text ()
-  "Return the complete session state as info-panel text."
+(defun mevedel-menu--session-info-report ()
+  "Return the complete session state as a structured information report."
   (let* ((context (mevedel-menu--context))
          (data-buffer (mevedel-cockpit-context-data-buffer context))
          (session (mevedel-cockpit-context-session context))
          (workspace (mevedel-cockpit-context-workspace context))
-         (target (and session
-                      (mevedel-session-execution-target session)))
+         (target (and session (mevedel-session-execution-target session)))
          (mode (mevedel-menu--mode-symbol
-                session data-buffer
-                (mevedel-cockpit-context-view-buffer context))))
-    (string-join
-     (delq
-      nil
-      (list
-       (format "mevedel session — %s"
-               (or (and session (mevedel-session-name session)) "unknown"))
-       ""
-       (mevedel-menu--info-row
-        "Workspace" (mevedel-menu--root-label workspace target))
-       (mevedel-menu--target-description session)
-       (mevedel-menu--durability-description session)
-       (mevedel-menu--info-row
-        "Request"
-        (format "%s · mode %s · preset %s"
-                (mevedel-request-state-label data-buffer)
-                (mevedel-menu--mode-label mode)
-                (or (and session (mevedel-session-preset-name session))
-                    "none")))
-       (mevedel-menu--info-row
-        "Model"
-        (format "%s · effort %s"
-                (mevedel-model-current-provider-label data-buffer)
-                (or (with-current-buffer data-buffer
-                      (and (boundp 'gptel-reasoning-effort)
-                           gptel-reasoning-effort))
-                    "default")))
-       ""))
-     "\n")))
+                session data-buffer (mevedel-cockpit-context-view-buffer context))))
+    (list
+     :title "Session info"
+     :subtitle (or (and session (mevedel-session-name session)) "unknown")
+     :identity session :refresh #'mevedel-menu--session-info-report
+     :sections
+     (list
+      (list :id 'request :title "Request"
+            :body (mevedel-report-fields
+                   (list "State" (mevedel-request-state-label data-buffer))
+                   (list "Mode" (mevedel-menu--mode-label mode))
+                   (list "Preset" (or (and session (mevedel-session-preset-name session)) "none"))))
+      (list :id 'model :title "Model"
+            :body (mevedel-report-fields
+                   (list "Provider / model" (mevedel-model-current-provider-label data-buffer))
+                   (list "Effort" (or (with-current-buffer data-buffer
+                                        (and (boundp 'gptel-reasoning-effort) gptel-reasoning-effort))
+                                      "default"))))
+      (list :id 'target :title "Workspace & target"
+            :body (concat (mevedel-report-fields
+                           (list "Workspace" (mevedel-menu--root-label workspace target)))
+                          (mevedel-menu--target-description session)))
+      (list :id 'persistence :title "Persistence"
+            :body (or (mevedel-menu--durability-description session) "No persistence state."))))))
 
 (defun mevedel-menu--call-in-view (function)
   "Call view FUNCTION in the cockpit's paired view buffer."
@@ -796,32 +767,24 @@ The full record lives in the Goal info panel."
      (mevedel-menu--inactive-value
       "none — s starts one, or /goal OBJECTIVE"))))
 
-(defun mevedel-menu--goal-record-text ()
-  "Return the complete Goal record as info-panel text."
-  (if-let* ((goal (mevedel-menu--current-goal)))
-      (string-join
-       (list
-        "mevedel Goal"
-        ""
-        (mevedel-menu--info-row "Objective" (mevedel-goal-objective goal))
-        (mevedel-menu--info-row
-         "Status"
-         (format "%s%s"
-                 (mevedel-goal-status goal)
-                 (if-let* ((reason (mevedel-goal-reason goal)))
-                     (format " — %s" reason) "")))
-        (mevedel-menu--info-row
-         "Budget" (mevedel-menu--goal-budget-label goal))
-        (mevedel-menu--info-row
-         "Turns"
-         (format "%d · elapsed %ds"
-                 (mevedel-goal-turns-run goal)
-                 (mevedel-goal-time-used-seconds goal)))
-        (mevedel-menu--info-row
-         "Plan" (or (mevedel-goal-plan-reference goal) "none"))
-        "")
-       "\n")
-    "mevedel Goal\n\nNo active Goal. Start one here or with /goal OBJECTIVE.\n"))
+(defun mevedel-menu--goal-record-report ()
+  "Return the complete Goal as an information report."
+  (let ((goal (mevedel-menu--current-goal)))
+    (list :title "Goal" :identity goal :refresh #'mevedel-menu--goal-record-report
+          :sections
+          (if (not goal)
+              (list (list :id 'goal :title "Goal"
+                          :body "No active Goal. Start one here or with /goal OBJECTIVE."))
+            (list
+             (list :id 'objective :title "Objective" :body (mevedel-goal-objective goal))
+             (list :id 'progress :title "Progress"
+                   :body (mevedel-report-fields
+                          (list "Status" (format "%s%s" (mevedel-goal-status goal)
+                                                 (if-let* ((reason (mevedel-goal-reason goal))) (format " — %s" reason) "")))
+                          (list "Budget" (mevedel-menu--goal-budget-label goal))
+                          (list "Turns" (format "%d · elapsed %ds" (mevedel-goal-turns-run goal) (mevedel-goal-time-used-seconds goal)))))
+             (list :id 'plan :title "Accepted plan"
+                   :body (mevedel-report-fields (list "Plan" (or (mevedel-goal-plan-reference goal) "none")))))))))
 
 (defun mevedel-menu--preset-policies ()
   "Return the session's resolved preset policies.
@@ -877,33 +840,25 @@ The resolved policy table lives in the preset info panel."
                  (nth 0 (car broken)) (nth 1 (car broken)))
          'error))))))
 
-(defun mevedel-menu--preset-report-text ()
-  "Return the resolved preset policy table as info-panel text."
+(defun mevedel-menu--preset-report ()
+  "Return resolved preset policy as an information report."
   (let* ((context (mevedel-menu--context))
          (session (mevedel-cockpit-context-session context))
-         (policies (mevedel-menu--preset-policies))
-         (row (lambda (policy)
-                (format "  %-18s %s"
-                        (nth 1 policy)
-                        (or (nth 2 policy)
-                            (format "ERROR: %s" (nth 3 policy))))))
-         (of-kind (lambda (kind)
-                    (mapcar row
-                            (seq-filter
-                             (lambda (policy) (eq (car policy) kind))
-                             policies)))))
-    (string-join
-     (append
-      (list (format "mevedel preset — %s"
-                    (or (and session (mevedel-session-preset-name session))
-                        "none"))
-            ""
-            "Tiers")
-      (funcall of-kind 'tier)
-      (list "" "Workloads")
-      (funcall of-kind 'workload)
-      (list ""))
-     "\n")))
+         (policies (mevedel-menu--preset-policies)))
+    (list :title "Preset"
+          :subtitle (format "%s" (or (and session (mevedel-session-preset-name session)) "none"))
+          :identity session :refresh #'mevedel-menu--preset-report
+          :sections
+          (mapcar
+           (lambda (kind)
+             (list :id kind :title (if (eq kind 'tier) "Tiers" "Workloads")
+                   :body (mapconcat
+                          (lambda (policy)
+                            (mevedel-report-fields
+                             (list (nth 1 policy)
+                                   (or (nth 2 policy) (propertize (format "ERROR: %s" (nth 3 policy)) 'face 'error)))))
+                          (seq-filter (lambda (policy) (eq (car policy) kind)) policies) "")))
+           '(tier workload)))))
 
 (defun mevedel-menu--mode-choice-description (mode detail)
   "Return the MODE surface row with DETAIL and current-state marker."
@@ -1413,75 +1368,39 @@ nothing to restore."
   (interactive)
   (mevedel-cockpit-show-help
    mevedel-menu-session-info-buffer-name
-   (mevedel-menu--session-info-text)))
+   (mevedel-menu--session-info-report)))
 
 (defun mevedel-menu--open-preset-report ()
   "Open the resolved preset policy info panel."
   (interactive)
   (mevedel-cockpit-show-help
    mevedel-menu-preset-report-buffer-name
-   (mevedel-menu--preset-report-text)))
+   (mevedel-menu--preset-report)))
 
 (defun mevedel-menu--open-goal-record ()
   "Open the Goal record info panel."
   (interactive)
   (mevedel-cockpit-show-help
    mevedel-menu-goal-record-buffer-name
-   (mevedel-menu--goal-record-text)))
+   (mevedel-menu--goal-record-report)))
 
-(defun mevedel-menu-help--text ()
-  "Return command-discovery text for the session cockpit."
-  (string-join
-   '("mevedel help"
-     ""
-     "Session cockpit"
-     "The transient menu is the live key reference for session commands."
-     ""
-     "Slash commands that open UI"
-     "/plugin, /plugin list       Plugins"
-     "/skills, /skills list       Skills"
-     "/mode                       Mode"
-     "/model                      Model"
-     "Cockpit G / P               Goal / Preset model team"
-     "Cockpit u                   Remembered permission authority"
-     "Cockpit A                   Session artifacts"
-     "Cockpit i                   Session info panel"
-     "/tools, /tools list         Tools"
-     "/ps                         Live executions"
-     "/stop [EXECUTION_ID]        Stop one execution, or all when omitted"
-     "/worktree, /worktree status Worktree"
-     "/help                       Help"
-     ""
-     "Direct slash commands"
-     "/plugin enable NAME, disable NAME, reload, update NAME"
-     "/plugin install TARGET, remove NAME, uninstall NAME, hooks ..."
-     "/skills enable NAME, disable NAME, help NAME"
-     "/mode MODE, /model MODEL"
-     "/worktree create [NAME] [--for \"purpose\"] [--clean]"
-     "/goal OBJECTIVE, /goal budget N|none, /goal edit|pause|resume|clear"
-     "/compact, /remember [focus], /review, /verify, /edits, /clear, /init ..., /tokens"
-     ""
-     "Modes"
-     "ask       Prompt for edits and uncertain execution."
-     "edits     Auto-apply native edits; check Bash and Eval."
-     "full-auto Skip heuristic Bash and Eval prompts."
-     ""
-     "View and data buffers"
-     "The view buffer owns the composer, compact transcript, and status strip."
-     "The data buffer owns raw gptel state, tools, model, and transcript data."
-     "The cockpit resolves the view/data pair once and routes actions to the owning buffer."
-     "Cockpit N opens Navigate: [ / ] / g inspect session segments,"
-     "n / p move through displays, C-n / C-p through queries, TAB folds a section."
-     "The raw data buffer keeps gptel header behavior for the gptel menu.")
-   "\n"))
+(defun mevedel-menu-help--report ()
+  "Return complete command discovery as an information report."
+  (list :title "mevedel help"
+        :sections (list (list :id 'help-0 :title "Session cockpit"
+			      :body (string-join (list "The transient menu is the live key reference for session commands.") "\n"))
+			(list :id 'help-1 :title "Slash commands that open UI"
+			      :body (string-join (list "/plugin, /plugin list       Plugins" "/skills, /skills list       Skills" "/mode                       Mode" "/model                      Model" "Cockpit G / P               Goal / Preset model team" "Cockpit u                   Remembered permission authority" "Cockpit A                   Session artifacts" "Cockpit i                   Session info panel" "/tools, /tools list         Tools" "/ps                         Live executions" "/stop [EXECUTION_ID]        Stop one execution, or all when omitted" "/worktree, /worktree status Worktree" "/help                       Help") "\n"))
+			(list :id 'help-2 :title "Direct slash commands"
+			      :body (string-join (list "/plugin enable NAME, disable NAME, reload, update NAME" "/plugin install TARGET, remove NAME, uninstall NAME, hooks ..." "/skills enable NAME, disable NAME, help NAME" "/mode MODE, /model MODEL" "/worktree create [NAME] [--for \"purpose\"] [--clean]" "/goal OBJECTIVE, /goal budget N|none, /goal edit|pause|resume|clear" "/compact, /remember [focus], /review, /verify, /edits, /clear, /init ..., /tokens") "\n"))
+			(list :id 'help-3 :title "Modes"
+			      :body (string-join (list "ask       Prompt for edits and uncertain execution." "edits     Auto-apply native edits; check Bash and Eval." "full-auto Skip heuristic Bash and Eval prompts.") "\n"))
+			(list :id 'help-4 :title "View and data buffers"
+			      :body (string-join (list "The view buffer owns the composer, compact transcript, and status strip." "The data buffer owns raw gptel state, tools, model, and transcript data." "The cockpit resolves the view/data pair once and routes actions to the owning buffer." "Cockpit N opens Navigate: [ / ] / g inspect session segments," "n / p move through displays, C-n / C-p through queries, TAB folds a section." "The raw data buffer keeps gptel header behavior for the gptel menu.") "\n")))))
 
 (defun mevedel-menu-help-open ()
   "Open the session cockpit help surface."
-    (let ((help-window-select t))
-      (with-help-window mevedel-menu-help-buffer-name
-        (princ (mevedel-menu-help--text))
-        (princ "\n"))
-      (get-buffer mevedel-menu-help-buffer-name)))
+  (mevedel-cockpit-show-help mevedel-menu-help-buffer-name (mevedel-menu-help--report)))
 
 (defun mevedel-menu--open-gptel ()
   "Open the gptel bridge surface."

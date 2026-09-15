@@ -451,10 +451,10 @@
      'directive-inspector (point-min) (point-max)
      (append
       `((:namespace directive-inspector :id request
-		    :label-left ,(propertize "REQUEST" 'face 'bold)
+		    :label-left ,(propertize "** Request" 'face 'outline-2)
 		    :body ,(mevedel-directive-request directive) :navigatable t)
         (:namespace directive-inspector :id state
-		    :label-left ,(propertize "STATE" 'face 'bold)
+		    :label-left ,(propertize "** State" 'face 'outline-2)
 		    :body ,(if (mevedel-directive-request-changed-p directive)
 			       "Ready · request changed"
 			     (capitalize
@@ -462,7 +462,7 @@
 							(symbol-name state))))
 		    :navigatable t)
         (:namespace directive-inspector :id planning
-		    :label-left ,(propertize "PLAN" 'face 'bold)
+		    :label-left ,(propertize "** Planning" 'face 'outline-2)
 		    :body ,(if (mevedel-directive-planning-enabled directive)
                                "On · s: settings"
                              "Off · s: settings")
@@ -470,7 +470,7 @@
 		    :help-echo "RET: edit directive settings"
 		    :navigatable t)
         (:namespace directive-inspector :id anchor
-		    :label-left ,(propertize "ANCHOR" 'face 'bold)
+		    :label-left ,(propertize "** Anchor" 'face 'outline-2)
 		    :body ,(capitalize
 			    (replace-regexp-in-string "-" " "
 						      (symbol-name anchor-state)))

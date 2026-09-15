@@ -539,14 +539,22 @@ state and never authorize an application or override its freshness checks.
 
 `RET`/`i` shows the complete proposed body, retained before/after diff, decision
 reason, retained digest bodies with their original addresses, and dated reference
-checks. Evidence inspection still works if a public digest is unavailable.
+checks. A section index opens the proposed body initially; decision status stays
+visible while navigating. Each changed file and retained evidence entry has its
+own destination. `n`/`p` switch sections; `g` refreshes the same proposal; `q`
+closes both panes and returns to the table. Narrow windows stack the index above
+the reader. Evidence inspection still works if a public digest is unavailable.
 Pending diffs include confirmed
 same-pass index transitions; applied/reversed diffs come from the exact retained
 write intent. `a` accepts, `r` rejects, `A` accepts pending proposals sequentially,
 and `R` rejects pending proposals. Rejection is one key; use a prefix argument to
 enter an optional reason. `u` performs checked reversal. `c` reconciles an
 interrupted write; `U` explicitly rolls back a known interrupted attempt.
-`v` inspects this client's running request, `k` cancels it through the pass owner,
+`v` opens a separate inspector for this client's running request. Admitted
+evidence and model response occupy separate sections; incoming source changes
+update the reader without moving focus. Closing the inspector leaves the request
+running; when the source closes, the inspector reports that state. `k` cancels
+the request through the pass owner,
 and `j` opens pending journal jobs with their inspection/retry/discard actions.
 `m` runs another consolidation; a prefix argument asks for focus. The first-class
 `/remember [focus]` command and `M-x mevedel-remember` use the same bounded
@@ -702,7 +710,9 @@ exhausted, unavailable, and unreadable captures. `RET` inspects the frozen
 evidence, `r` retries the selected sealed job once, `d` discards it, and `g`
 refreshes the list. The corresponding commands are `mevedel-journal-inspect`,
 `mevedel-journal-retry`, and `mevedel-journal-discard`. They work from a session
-or workspace buffer as well as the job list. Inspection starts no inference.
+or workspace buffer as well as the job list. Pending jobs and overdue retained
+evidence have separate headings. Capture inspection uses a section navigator for
+diagnostics and exact frozen evidence. Inspection starts no inference.
 Manual retry retains the frozen model policy and attempt history, and respects
 active ownership and already accepted results.
 Unready checkpoints also appear as recovery work, including damaged descriptors;

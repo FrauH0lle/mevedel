@@ -15,6 +15,7 @@
 (require 'gptel-openai)
 (require 'mevedel-memory-scope)
 (require 'mevedel-memory-review)
+(require 'mevedel-memory-list)
 (require 'mevedel-system)
 
 (defconst mevedel-test-memory-review--none
@@ -212,6 +213,34 @@
     (respond mevedel-test-memory-review--none)
     (gptel--fsm-transition request 'DONE)
     (should (= 1 settlements)))
+  :doc "the running inspector separates evidence, follows response, and leaves the request alive on close"
+  (save-window-excursion
+    (start)
+    (let ((source (plist-get handle :buffer)) inspector)
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-cockpit-surface-context)
+                     (lambda (&rest _) (list :workspace workspace)))
+                    ((symbol-function 'mevedel-memory-pass-running)
+                     (lambda (_) (list :request handle))))
+            (setq inspector (mevedel-memory-list-running))
+            (with-current-buffer inspector
+              (should (string-search "Model response" (buffer-string)))
+              (should-not (string-search "Observed: Tests passed" (buffer-string)))
+              (mevedel-report-previous)
+              (should (string-search "Observed: Tests passed" (buffer-string)))
+              (mevedel-report-next))
+            (respond "Incoming exact response.")
+            (sleep-for 0.2)
+            (with-current-buffer inspector
+              (should (string-search "Incoming exact response." (buffer-string)))
+              (mevedel-report-refresh)
+              (mevedel-report-refresh)
+              (should (string-search "Incoming exact response." (buffer-string)))
+              (mevedel-report-quit))
+            (should (buffer-live-p source))
+            (should-not result)
+            (should-not (buffer-local-value 'after-change-functions source)))
+        (when (buffer-live-p inspector) (kill-buffer inspector)))))
   :doc "the real deadline timer retires the request and late callbacks cannot revive it"
   (let ((timers (copy-sequence timer-list)))
     (start)

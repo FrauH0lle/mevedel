@@ -10,8 +10,9 @@ Each cockpit surface uses one of three forms:
   state line when needed, and columns of verbs.
 - **Table cockpit:** a tabulated-list surface with identity, scope, counts/state,
   and a `? keys` pointer in its header. Growing resource collections belong here.
-- **Info panel:** a read-only help buffer for detailed state, opened from the
-  surface that owns it.
+- **Info panel:** a read-only report with named sections, opened from the
+  surface that owns it. General reports use outline headings and foldable
+  sections; memory details use a section index and a reading pane.
 
 Plugins, skills, tools, remembered authority, and worktree lists share generic
 table plumbing in `mevedel-cockpit.el`: owner context, stable selection, refresh,
@@ -22,11 +23,21 @@ Shared table defaults are `g` refresh, `?` help, `q` back, and RET row details;
 a surface may add its specific actions. Action menus expose their keys directly,
 and use `i` for information where offered. `b` is not a back alias, leaving it
 available for actions such as Goal budget editing. Generated key help is the
-fallback when a table has no authored help function or text.
+fallback when a table has no authored help report.
 
 Repeat-heavy view navigation has a sticky submenu. Segment, display, and query
 motion reuse view key meanings such as `n`, `p`, and TAB. The
 [view manual](../view.md) describes user navigation and surface ownership.
+
+Information panels share `mevedel-report.el`. Owners supply exact content and
+explicit section identities, and retain responsibility for validation and actions.
+The renderer owns only faces, visual wrapping, folds, reading positions and
+windows. It uses built-in Emacs buttons and windows plus existing mevedel
+fontification; pacfiles-mode is visual inspiration, with no dependency.
+
+Memory proposals, journal captures and running consolidation expose their own
+content groups. The memory index moves above the reader in narrow windows.
+Opening and refreshing inspectors preserve the composer and table state.
 
 ## Rationale and consequences
 
@@ -58,3 +69,10 @@ reduce relearning across surfaces, while resource actions remain explicit.
 - **Navigation moved from closing top-level commands into a sticky submenu.**
   Repeated motion had required six menu openings where one now suffices. Matching
   the existing view keys replaced a second vocabulary for the same commands.
+
+- **Information panels gained section structure.** Long memory reports mixed
+  decisions, raw identifiers, diffs and evidence into one crowded block; even
+  session info lacked clear grouping. Native headings and folds make general
+  reports scannable. A separate index makes long memory sections directly
+  reachable while preserving exact records. Resource collections retain their
+  tabulated presentation and existing actions.

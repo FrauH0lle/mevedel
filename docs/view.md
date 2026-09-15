@@ -552,6 +552,21 @@ The complete target and durability state is the `i Session info` panel, so
 nominal state costs the cockpit no lines. Cockpit surfaces are grouped as
 Conversation, History, Configure, and Cockpits.
 
+Information panels use read-only sections with theme-inheriting headings,
+aligned labels, and visual wrapping. `RET` on a heading folds its body; `TAB`
+and `S-TAB` visit headings and links, `n`/`p` move between sections, and `q`
+returns to the owner. Long supporting records can start folded; their complete
+text remains available. `g` refreshes reports with a live refresh source.
+Dedicated inspectors retain their own action keys, including journal retry and
+discard, rewind file diffs, and sharing-tier cycling.
+
+Memory details use a section index beside the reader, or above it in narrow
+windows. `n`/`p` switch the selected section. Selection and source-relative reading
+position survive refresh for the same item. Closing the inspector closes both
+panes. Opening details retains table columns, sorting, selection and actions.
+These buffers are disposable presentation state; they do not alter the composer
+or the underlying source records.
+
 Its History group owns mutation of the transcript:
 
 - `f` / `F` arm a Conversation Fork or Worktree Fork at the settled assistant

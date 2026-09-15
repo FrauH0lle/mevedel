@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'tabulated-list)
@@ -481,48 +483,37 @@ The complete repository state lives in the worktree info panel."
                         (mevedel-worktree--ignore-label ignore-state))
                 'face 'warning))))))
 
-(defun mevedel-worktree-status--details-text ()
-  "Return the complete worktree status as info-panel text."
+(defun mevedel-worktree-status--details-report ()
+  "Return the complete worktree status as an information report."
   (let* ((status (mevedel-worktree-status--collect))
          (session (plist-get status :session))
-         (worktrees (plist-get status :worktrees)))
-    (string-join
-     (list
-      "mevedel worktree"
-      ""
-      (format "Repo          %s"
-              (or (and-let* ((root (plist-get status :repo-root)))
-                    (mevedel-worktree--native-path
-                     root (plist-get status :directory)))
-                  "not a Git repository"))
-      (format "Session       %s"
-              (if session (mevedel-session-name session) "none"))
-      (format "Directory     %s"
-              (mevedel-worktree--native-path
-               (plist-get status :directory)
-               (plist-get status :directory)))
-      (format "Isolation     %s"
-              (mevedel-worktree--isolation-label
-               (plist-get status :isolation)))
-      (format "Branch        %s"
-              (mevedel-worktree--branch-head-label
-               (plist-get status :branch)
-               (plist-get status :head)))
-      (format ".worktrees    %s"
-              (mevedel-worktree--ignore-label
-               (plist-get status :ignore-state)))
-      (format "Dirty         %s"
-              (if (plist-get status :dirty-p) "yes" "no"))
-      (format "Worktrees     %d" (length worktrees))
-      "")
-     "\n")))
+         (directory (plist-get status :directory)))
+    (list :title "Worktree status"
+          :subtitle (if session (mevedel-session-name session) "none")
+          :identity session :refresh #'mevedel-worktree-status--details-report
+          :sections
+          (list
+           (list :id 'context :title "Context"
+                 :body (mevedel-report-fields
+                        (list "Repo" (if-let* ((root (plist-get status :repo-root)))
+                                         (mevedel-worktree--native-path root directory)
+                                       "not a Git repository"))
+                        (list "Session" (if session (mevedel-session-name session) "none"))
+                        (list "Directory" (mevedel-worktree--native-path directory directory))))
+           (list :id 'git :title "Git"
+                 :body (mevedel-report-fields
+                        (list "Isolation" (mevedel-worktree--isolation-label (plist-get status :isolation)))
+                        (list "Branch" (mevedel-worktree--branch-head-label (plist-get status :branch) (plist-get status :head)))
+                        (list ".worktrees" (mevedel-worktree--ignore-label (plist-get status :ignore-state)))
+                        (list "Dirty" (if (plist-get status :dirty-p) "yes" "no"))
+                        (list "Worktrees" (length (plist-get status :worktrees)))))))))
 
 (defun mevedel-worktree-status-details ()
   "Open the worktree status info panel."
   (interactive)
   (mevedel-cockpit-show-help
    mevedel-worktree-details-buffer-name
-   (mevedel-worktree-status--details-text)))
+   (mevedel-worktree-status--details-report)))
 
 (defun mevedel-worktree-status-create ()
   "Create a worktree from the status transient."
@@ -550,27 +541,23 @@ The complete repository state lives in the worktree info panel."
   (with-current-buffer (mevedel-worktree-status--data-buffer)
     (mevedel-worktree-status-open)))
 
-(defun mevedel-worktree--help-text (&optional _context)
-  "Return worktree cockpit help text."
-  (concat
-   "mevedel worktree cockpit\n\n"
-   "Status keys\n"
-   "c  Create a linked worktree session\n"
-   "l  List Git worktrees\n"
-   "g  Refresh status\n"
-   "i  Show full repository status\n"
-   "?  Show this help\n"
-   "q  Back to the main session cockpit\n\n"
-   "List keys\n"
-   (mevedel-cockpit-surface-key-help-text mevedel-worktree-list--surface)
-   "\n"))
+(defun mevedel-worktree--help-report (&optional _context)
+  "Return the complete worktree help report."
+  (list :title "Worktree help"
+        :sections
+        (list
+         (list :id 'status :title "Status keys"
+               :body (concat "c  Create a linked worktree session\n"
+                             "l  List Git worktrees\ng  Refresh status\n"
+                             "i  Show full repository status\n?  Show this help\n"
+                             "q  Back to the main session cockpit\n"))
+         (list :id 'list :title "List keys"
+               :body (mevedel-cockpit-surface-key-help-text mevedel-worktree-list--surface)))))
 
 (defun mevedel-worktree-status-help ()
   "Open worktree status help."
   (interactive)
-  (let ((help-window-select t))
-    (with-help-window mevedel-worktree-help-buffer-name
-      (princ (mevedel-worktree--help-text)))))
+  (mevedel-cockpit-show-help mevedel-worktree-help-buffer-name (mevedel-worktree--help-report)))
 
 (defun mevedel-worktree-status-back ()
   "Return from worktree status to the main session cockpit."
@@ -734,22 +721,21 @@ The complete repository state lives in the worktree info panel."
   "Return the selected worktree item, or nil."
   (mevedel-cockpit-surface-selected t))
 
-(defun mevedel-worktree-list--details-text (item &optional _context)
-  "Return normalized details text for worktree ITEM."
-  (string-join
-   (list
-    (format "Worktree %s"
-            (or (plist-get item :display-path) (plist-get item :path)))
-    (format "Path: %s"
-            (or (plist-get item :display-path) (plist-get item :path)))
-    (format "Branch: %s" (plist-get item :branch))
-    (format "Head: %s" (or (plist-get item :head) ""))
-    (format "Current: %s"
-            (if (plist-get item :current) "yes" "no"))
-    (format "State: %s" (plist-get item :state))
-    (format "Sessions: %s"
-            (or (string-join (plist-get item :sessions) ", ") "")))
-   "\n"))
+(defun mevedel-worktree-list--details-report (item &optional _context)
+  "Return the information report for worktree ITEM."
+  (let ((path (or (plist-get item :display-path) (plist-get item :path))))
+    (list :title "Worktree" :subtitle path :identity path
+          :sections
+          (list
+           (list :id 'worktree :title "Worktree"
+                 :body (mevedel-report-fields
+                        (list "Path" path) (list "Branch" (plist-get item :branch))
+                        (list "Head" (or (plist-get item :head) ""))))
+           (list :id 'state :title "State"
+                 :body (mevedel-report-fields
+                        (list "Current" (if (plist-get item :current) "yes" "no"))
+                        (list "State" (plist-get item :state))
+                        (list "Sessions" (or (string-join (plist-get item :sessions) ", ") ""))))))))
 
 (defun mevedel-worktree-list-details ()
   "Show details for the selected worktree row."
@@ -877,9 +863,9 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
     :collect mevedel-worktree-list--collect
     :entry mevedel-worktree-list--entry
     :header mevedel-worktree-list--header
-    :details mevedel-worktree-list--details-text
+    :details mevedel-worktree-list--details-report
     :details-buffer "*mevedel worktree details*"
-    :help-function mevedel-worktree--help-text
+    :help-function mevedel-worktree--help-report
     :help-buffer ,mevedel-worktree-help-buffer-name
     :keys (("c" "Create a linked worktree session"
             mevedel-worktree-list-create)

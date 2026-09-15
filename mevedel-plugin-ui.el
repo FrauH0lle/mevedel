@@ -7,6 +7,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (require 'subr-x)
 (require 'tabulated-list)
 (require 'mevedel-cockpit)
@@ -421,72 +423,53 @@ starts log it quietly to *Messages*."
       (user-error "Plugin source is not readable: %s" root))
     (dired root)))
 
-(defun mevedel-plugins-list--detail-text (plugin context)
-  "Return detail text for PLUGIN in CONTEXT."
+(defun mevedel-plugins-list--detail-report (plugin context)
+  "Return the complete information report for PLUGIN in CONTEXT."
   (let* ((name (mevedel-plugin-name plugin))
          (workspace (mevedel-plugins-list--workspace context))
-         (enabled (if (mevedel-plugins-enabled-p plugin workspace)
-                      "enabled"
-                    "disabled"))
          (hooks (mevedel-plugins-hooks-status plugin workspace))
-         (events (mevedel-plugins-hook-rule-events plugin))
-         (skills (mevedel-plugins-skill-count plugin))
-         (shadowed (mevedel-plugin-shadowed plugin)))
-    (string-join
-     (delq nil
-           (list
-            (format "Name:     %s" name)
-            (format "Version:  %s"
-                    (or (mevedel-plugin-version plugin) "unspecified"))
-            (when-let* ((description (mevedel-plugin-description plugin)))
-              (format "Description: %s" description))
-            (format "Status:   %s" enabled)
-            (format "Hooks:    %s%s"
-                    hooks
-                    (if (equal hooks "needs-consent")
-                        " (pending hook consent)"
-                      ""))
-            (format "Events:   %s"
-                    (if events (string-join events ", ") "none"))
-            (format "Skills:   %d%s"
-                    skills
-                    (if-let* ((dir (mevedel-plugin-skills-dir plugin)))
-                        (format " from %s" (abbreviate-file-name dir))
-                      ""))
-            (format "Source:   %s"
-                    (abbreviate-file-name (mevedel-plugin-root plugin)))
-            (format "Manifest: %s"
-                    (abbreviate-file-name
-                     (mevedel-plugins-manifest-file
-                      (mevedel-plugin-root plugin))))
-            (when workspace
-              (format "Data:     %s"
-                      (abbreviate-file-name
-                       (mevedel-plugins-plugin-data-dir name workspace))))
-            (when shadowed
-              (string-join
-               (cons "Shadowed sources:"
-                     (mevedel-plugins--shadowed-lines plugin workspace))
-               "\n"))
-            (when (mevedel-plugin-hooks plugin)
-              (concat "Hook consent summary:\n"
-                      (mevedel-plugins-hook-consent-summary
-                       plugin workspace)))))
-     "\n")))
+         (events (mevedel-plugins-hook-rule-events plugin)))
+    (list :title "Plugin" :subtitle name :identity (mevedel-plugin-root plugin)
+          :sections
+          (list
+           (list :id 'plugin :title "Plugin"
+                 :body (mevedel-report-fields
+                        (list "Name" name)
+                        (list "Version" (or (mevedel-plugin-version plugin) "unspecified"))
+                        (when-let* ((description (mevedel-plugin-description plugin))) (list "Description" description))
+                        (list "Status" (if (mevedel-plugins-enabled-p plugin workspace) "enabled" "disabled"))))
+           (list :id 'capabilities :title "Hooks & skills"
+                 :body (mevedel-report-fields
+                        (list "Hooks" (concat hooks (if (equal hooks "needs-consent") " (pending hook consent)" "")))
+                        (list "Events" (if events (string-join events ", ") "none"))
+                        (list "Skills" (format "%d%s" (mevedel-plugins-skill-count plugin)
+                                               (if-let* ((dir (mevedel-plugin-skills-dir plugin)))
+                                                   (format " from %s" (abbreviate-file-name dir)) "")))))
+           (list :id 'locations :title "Locations"
+                 :body (mevedel-report-fields
+                        (list "Source" (abbreviate-file-name (mevedel-plugin-root plugin)))
+                        (list "Manifest" (abbreviate-file-name (mevedel-plugins-manifest-file (mevedel-plugin-root plugin))))
+                        (when workspace (list "Data" (abbreviate-file-name (mevedel-plugins-plugin-data-dir name workspace))))))
+           (list :id 'shadowed :title "Shadowed sources" :folded (and (mevedel-plugin-shadowed plugin) t)
+                 :body (if (mevedel-plugin-shadowed plugin)
+                           (string-join (mevedel-plugins--shadowed-lines plugin workspace) "\n")
+                         "No shadowed sources."))
+           (list :id 'consent :title "Hook consent summary"
+                 :body (if (mevedel-plugin-hooks plugin)
+                           (mevedel-plugins-hook-consent-summary plugin workspace)
+                         "No plugin hooks."))))))
 
-(defun mevedel-plugins-list--error-detail-text (error)
-  "Return detail text for plugin metadata ERROR."
-  (string-join
-   (list
-    "Plugin metadata error"
-    ""
-    (format "Name:     %s" (mevedel-plugins-item-name error))
-    (format "Source:   %s"
-            (abbreviate-file-name (mevedel-plugin-error-root error)))
-    (format "Manifest: %s"
-            (abbreviate-file-name (mevedel-plugin-error-manifest error)))
-    (format "Error:    %s" (mevedel-plugin-error-message error)))
-   "\n"))
+(defun mevedel-plugins-list--error-detail-report (error)
+  "Return the information report for plugin metadata ERROR."
+  (list :title "Plugin metadata error" :subtitle (mevedel-plugins-item-name error)
+        :sections
+        (list
+         (list :id 'error :title "Error" :body (propertize (mevedel-plugin-error-message error) 'face 'error))
+         (list :id 'source :title "Source"
+               :body (mevedel-report-fields
+                      (list "Name" (mevedel-plugins-item-name error))
+                      (list "Source" (abbreviate-file-name (mevedel-plugin-error-root error)))
+                      (list "Manifest" (abbreviate-file-name (mevedel-plugin-error-manifest error))))))))
 
 (defun mevedel-plugins-list-details ()
   "Show details for the plugin at point."
@@ -509,10 +492,10 @@ starts log it quietly to *Messages*."
     :collect mevedel-plugins-list--collect
     :entry mevedel-plugins-list--entry
     :header mevedel-plugins-list--header-line
-    :details mevedel-plugins-list--details-text
+    :details mevedel-plugins-list--details-report
     :details-buffer "*mevedel plugin details*"
     :help-buffer ,mevedel-plugins-help-buffer-name
-    :help-function mevedel-plugins-list--help-text
+    :help-function mevedel-plugins-list--help-report
     :keys (("e" "Enable or disable selected plugin"
             mevedel-plugins-list-toggle-enabled)
            ("h" "Toggle hooks for selected plugin"
@@ -529,42 +512,30 @@ starts log it quietly to *Messages*."
             mevedel-plugins-list-open-source)))
   "Cockpit surface spec for the plugin list.")
 
-(defun mevedel-plugins-list--help-text (&optional _context)
-  "Return help text for the plugin cockpit."
-  (string-join
-   (list
-    "mevedel plugin cockpit"
-    ""
-    "Keys"
-    (mevedel-cockpit-surface-key-help-text mevedel-plugins-list--surface)
-    ""
-    "Slash equivalents"
-    "/plugin enable NAME, /plugin disable NAME"
-    "/plugin hooks NAME on, /plugin hooks NAME off"
-    "/plugin install OWNER/REPO, /plugin update NAME"
-    "/plugin reload, /plugin remove NAME, /plugin uninstall NAME"
-    "")
-   "\n"))
+(defun mevedel-plugins-list--help-report (&optional _context)
+  "Return the complete cockpit help report."
+  (list :title "Plugin help"
+        :sections (list (list :id 'keys :title "Keys"
+                              :body (mevedel-cockpit-surface-key-help-text mevedel-plugins-list--surface))
+			(list :id 'slash :title "Slash equivalents" :body "/plugin enable NAME, /plugin disable NAME\n/plugin hooks NAME on, /plugin hooks NAME off\n/plugin install OWNER/REPO, /plugin update NAME\n/plugin reload, /plugin remove NAME, /plugin uninstall NAME"))))
 
 (defun mevedel-plugins-list-help ()
   "Open plugin cockpit help."
   (interactive)
   (mevedel-cockpit-show-help
    mevedel-plugins-help-buffer-name
-   (mevedel-plugins-list--help-text)))
+   (mevedel-plugins-list--help-report)))
 
 (defun mevedel-plugins-list-quit ()
   "Quit the plugin cockpit and return to the main session cockpit."
   (interactive)
   (mevedel-cockpit-quit "plugin cockpit"))
 
-(defun mevedel-plugins-list--details-text (item context)
-  "Return detail text for plugin cockpit ITEM in CONTEXT."
-  (concat
-   (if (mevedel-plugin-error-p item)
-       (mevedel-plugins-list--error-detail-text item)
-     (mevedel-plugins-list--detail-text item context))
-   "\n"))
+(defun mevedel-plugins-list--details-report (item context)
+  "Return the information report for plugin cockpit ITEM in CONTEXT."
+  (if (mevedel-plugin-error-p item)
+      (mevedel-plugins-list--error-detail-report item)
+    (mevedel-plugins-list--detail-report item context)))
 
 (define-derived-mode mevedel-plugins-list-mode tabulated-list-mode
   "mevedel-plugins"

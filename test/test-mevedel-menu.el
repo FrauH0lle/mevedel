@@ -17,6 +17,10 @@
                byte-compile-current-file))
           "helpers"))
 (require 'mevedel-cockpit)
+(require 'mevedel-report-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name))
+          "mevedel-report-test-support"))
 (require 'mevedel-execution)
 (require 'mevedel-execution-target)
 (require 'mevedel-executions-list)
@@ -162,14 +166,19 @@
 
   :doc "opens the session info panel"
   (mevedel-menu-test--with-buffers
-    (let (shown-buffer shown-text)
-      (cl-letf (((symbol-function 'mevedel-cockpit-show-help)
-                 (lambda (buffer text)
-                   (setq shown-buffer buffer shown-text text))))
+		  (save-window-excursion
+		    (unwind-protect
+			(progn
         (with-current-buffer view-buf
-          (mevedel-menu-open 'session-info)))
-      (should (equal shown-buffer mevedel-menu-session-info-buffer-name))
-      (should (string-match-p "mevedel session — main" shown-text))))
+			    (mevedel-menu-open 'session-info))
+			  (with-current-buffer mevedel-menu-session-info-buffer-name
+			    (should buffer-read-only)
+			    (should (string-search "** Request" (buffer-string)))
+			    (should (string-search "** Workspace & target" (buffer-string)))
+			    (should (string-search "** Persistence" (buffer-string)))
+			    (should (string-search "main" (buffer-string)))))
+		      (when (get-buffer mevedel-menu-session-info-buffer-name)
+			(kill-buffer mevedel-menu-session-info-buffer-name)))))
 
   :doc "opens requested tools, executions, skills, and plugins surfaces"
   (mevedel-menu-test--with-buffers
@@ -318,7 +327,7 @@
                (substring-no-properties
                 (mevedel-menu--goal-description)))))))
 
-(mevedel-deftest mevedel-menu--goal-record-text ()
+(mevedel-deftest mevedel-menu--goal-record-report ()
   ,test
   (test)
   :doc "shows Goal lifecycle, accounting, and accepted-plan reference"
@@ -331,7 +340,7 @@
            :reason "Provider credits exhausted"
            :plan-reference "local/plans/accepted.md"))
     (with-current-buffer view-buf
-      (let ((text (mevedel-menu--goal-record-text)))
+		    (let ((text (mevedel-report-test-text (mevedel-menu--goal-record-report))))
         (dolist (needle '("Ship the feature" "paused"
                           "Provider credits exhausted" "400/1000 tokens"
                           "3 · elapsed 12s" "local/plans/accepted.md"))
@@ -346,14 +355,14 @@
     (with-current-buffer view-buf
       (should (string-match-p
                "3 tokens · unbounded"
-               (mevedel-menu--goal-record-text)))))
+			     (mevedel-report-test-text (mevedel-menu--goal-record-report))))))
 
   :doc "explains the empty state"
   (mevedel-menu-test--with-buffers
     (with-current-buffer view-buf
       (should (string-match-p
                "No active Goal"
-               (mevedel-menu--goal-record-text))))))
+			     (mevedel-report-test-text (mevedel-menu--goal-record-report)))))))
 
 (mevedel-deftest mevedel-menu--preset-description ()
   ,test
@@ -399,7 +408,7 @@
              "! tier broken does not resolve — fix before dispatch")
            "\n")))))))
 
-(mevedel-deftest mevedel-menu--preset-report-text ()
+(mevedel-deftest mevedel-menu--preset-report ()
   ,test
   (test)
   :doc "shows resolved tier and workload policies in configured order"
@@ -417,20 +426,11 @@
                     '((planning :provider "Balanced:balanced-model")))
         (setf (mevedel-session-preset-name session) 'my-team))
       (with-current-buffer view-buf
-        (should
-         (equal
-          (mevedel-menu--preset-report-text)
-          (string-join
-           '("mevedel preset — my-team"
-             ""
-             "Tiers"
-             "  fast               Fast:fast-model · effort default"
-             "  strong             Balanced:balanced-model · effort high"
-             ""
-             "Workloads"
-             "  planning           Balanced:balanced-model · effort default"
-             "")
-           "\n"))))))
+		     (let ((text (mevedel-report-test-text (mevedel-menu--preset-report))))
+		       (dolist (pattern '("my-team" "Tiers" "fast +Fast:fast-model · effort default"
+					  "strong +Balanced:balanced-model · effort high"
+					  "Workloads" "planning +Balanced:balanced-model · effort default"))
+			 (should (string-match-p pattern text)))))))
 
   :doc "keeps rendering after an invalid tier policy"
   (mevedel-menu-test--with-model-backends
@@ -445,19 +445,10 @@
                     mevedel-model-workloads nil)
         (setf (mevedel-session-preset-name session) 'broken))
       (with-current-buffer view-buf
-        (should
-         (equal
-          (mevedel-menu--preset-report-text)
-          (string-join
-           '("mevedel preset — broken"
-             ""
-             "Tiers"
-             "  broken             ERROR: Backend Missing is not known to be defined"
-             "  fast               Fast:fast-model · effort default"
-             ""
-             "Workloads"
-             "")
-           "\n")))))))
+		     (let ((text (mevedel-report-test-text (mevedel-menu--preset-report))))
+		       (should (string-match-p "broken +ERROR: Backend Missing is not known to be defined" text))
+		       (should (string-match-p "fast +Fast:fast-model · effort default" text))
+		       (should (string-match-p "Workloads" text)))))))
 
 (mevedel-deftest mevedel-menu--goal-resumable-p ()
   ,test
@@ -549,8 +540,9 @@
         (with-current-buffer view-buf
           (mevedel-menu--open-preset-report)))
       (should (equal shown-buffer mevedel-menu-preset-report-buffer-name))
-      (should (string-match-p "mevedel preset" shown-text))
-      (should (string-match-p "Tiers" shown-text)))))
+		    (let ((text (mevedel-report-test-text shown-text)))
+		      (should (string-match-p "Preset" text))
+		      (should (string-match-p "Tiers" text))))))
 
 (mevedel-deftest mevedel-menu--open-goal-record ()
   ,test
@@ -568,7 +560,9 @@
         (with-current-buffer view-buf
           (mevedel-menu--open-goal-record)))
       (should (equal shown-buffer mevedel-menu-goal-record-buffer-name))
-      (should (string-match-p "Objective     Ship it" shown-text)))))
+		    (let ((text (mevedel-report-test-text shown-text)))
+		      (should (string-match-p "Objective" text))
+		      (should (string-match-p "Ship it" text))))))
 
 (mevedel-deftest mevedel-menu--open-executions ()
   ,test (test)
@@ -747,7 +741,7 @@
                          (substring-no-properties
                           (mevedel-menu--navigate-description))))))))
 
-(mevedel-deftest mevedel-menu--session-info-text ()
+(mevedel-deftest mevedel-menu--session-info-report ()
   ,test
   (test)
   :doc "renders complete target and durability state as aligned rows"
@@ -767,16 +761,17 @@
         (setq-local mevedel--session remote-session))
       (unwind-protect
           (with-current-buffer view-buf
-            (let ((text (substring-no-properties
-                         (mevedel-menu--session-info-text))))
-              (should (string-match-p "mevedel session — remote" text))
+			  (let ((text (mevedel-report-test-text
+				       (mevedel-menu--session-info-report))))
+			    (should (string-match-p "Session info\nremote" text))
               (should (string-match-p "Target.*ssh:user@host" text))
-              (should (string-match-p "tier supported · readiness ready" text))
-              (should (string-match-p "sandbox bubblewrap" text))
+			    (should (string-match-p "Support tier +supported\nReadiness +ready" text))
+			    (should (string-match-p "Sandbox +bubblewrap" text))
               (should (string-match-p "Persistence" text))
-              (should (string-match-p "lease owned · publication published"
+			    (should (string-match-p "Lease +owned\nPublication +published"
                                       text))
-              (should (string-match-p "Request.*idle · mode ask" text))
+			    (should (string-match-p "State +idle" text))
+			    (should (string-match-p "Mode +ask" text))
               (should (string-match-p "Model" text))))
         (with-current-buffer data-buf
           (setq-local mevedel--session session))))))
@@ -932,11 +927,11 @@
                        (substring-no-properties
                         (mevedel-menu--mode-surface-description)))))))
 
-(mevedel-deftest mevedel-menu-help--text ()
+(mevedel-deftest mevedel-menu-help--report ()
   ,test
   (test)
   :doc "covers command discovery without duplicating transient keys"
-  (let ((text (mevedel-menu-help--text)))
+		 (let ((text (mevedel-report-test-text (mevedel-menu-help--report))))
     (dolist (needle '("Session cockpit"
                       "transient menu is the live key reference"
                       "Slash commands that open UI"

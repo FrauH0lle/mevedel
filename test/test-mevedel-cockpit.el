@@ -69,7 +69,9 @@
 
 (defun mevedel-cockpit-test--details (item _context)
   "Return detail text for ITEM."
-  (format "details for %s" item))
+  (list :title "Details"
+        :sections (list (list :id 'item :title "Item"
+                              :body (format "details for %s" item)))))
 
 (defconst mevedel-cockpit-test--surface-spec
   `(:buffer-name ,mevedel-cockpit-test-buffer-name
@@ -84,7 +86,8 @@
     :details mevedel-cockpit-test--details
     :details-buffer "*mevedel cockpit test details*"
     :help-buffer "*mevedel cockpit test help*"
-    :help-text "test help"
+    :help-report (:title "Test help"
+                :sections ((:id keys :title "Keys" :body "test help")))
     :keys (("x" . ignore)
            ("y" "Run described test key" ignore)))
   "Surface spec used by cockpit tests.")
@@ -411,7 +414,7 @@
   (let ((view-buffer (generate-new-buffer " *cockpit-help-view*"))
         (data-buffer (generate-new-buffer " *cockpit-help-data*"))
         (surface (plist-put (copy-sequence mevedel-cockpit-test--surface-spec)
-                            :help-text nil)))
+					   :help-report nil)))
     (unwind-protect
         (let ((buffer (mevedel-cockpit-open-surface
                        (plist-put surface :setup

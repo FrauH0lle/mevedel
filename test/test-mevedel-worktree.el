@@ -6,6 +6,11 @@
 
 ;;; Code:
 
+(require 'mevedel-report-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name))
+          "mevedel-report-test-support"))
+
 (require 'mevedel-worktree)
 (require 'mevedel-chat)
 (require 'mevedel-cockpit)
@@ -860,7 +865,7 @@
         (mevedel-worktree-test--cleanup-surfaces data-buffer)
         (delete-directory root t)))))
 
-(mevedel-deftest mevedel-worktree-status--details-text ()
+(mevedel-deftest mevedel-worktree-status--details-report ()
   ,test
   (test)
 
@@ -880,17 +885,17 @@
             (with-current-buffer data-buffer
               (cl-letf (((symbol-function 'mevedel-worktree-collect-status)
                          (lambda (&optional _context) status)))
-                (let ((text (mevedel-worktree-status--details-text)))
-                  (should (string-match-p "mevedel worktree" text))
+			       (let ((text (mevedel-report-test-text (mevedel-worktree-status--details-report))))
+				 (should (string-match-p "Worktree status" text))
                   (should (string-match-p "Repo " text))
-                  (should (string-match-p "Session       main" text))
+				 (should (string-match-p "Session +main" text))
                   (should (string-match-p "Directory " text))
-                  (should (string-match-p "Isolation     normal checkout"
+				 (should (string-match-p "Isolation +normal checkout"
                                           text))
-                  (should (string-match-p "Branch        main" text))
-                  (should (string-match-p ".worktrees    ignored" text))
-                  (should (string-match-p "Dirty         no" text))
-                  (should (string-match-p "Worktrees     1" text))))))
+				 (should (string-match-p "Branch +main" text))
+				 (should (string-match-p ".worktrees +ignored" text))
+				 (should (string-match-p "Dirty +no" text))
+				 (should (string-match-p "Worktrees +1" text))))))
         (mevedel-worktree-test--cleanup-surfaces data-buffer)
         (delete-directory root t)))))
 
@@ -999,7 +1004,7 @@
                        (lambda (&optional _context) status)))
               (mevedel-worktree-status-details)))
           (with-current-buffer mevedel-worktree-details-buffer-name
-            (should (string-match-p "Session       main" (buffer-string)))))
+			   (should (string-match-p "Session +main" (buffer-string)))))
       (when (get-buffer mevedel-worktree-details-buffer-name)
         (kill-buffer mevedel-worktree-details-buffer-name))
       (mevedel-worktree-test--cleanup-surfaces data-buffer)
@@ -1315,25 +1320,25 @@
       (mevedel-worktree-test--cleanup-surfaces view-buffer data-buffer)
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-worktree-list--details-text ()
+(mevedel-deftest mevedel-worktree-list--details-report ()
   ,test
   (test)
 
   :doc "formats normalized selected worktree details"
-  (let ((text (mevedel-worktree-list--details-text
+		 (let ((text (mevedel-report-test-text (mevedel-worktree-list--details-report
                '(:path "/repo/"
                  :branch "main"
                  :head "abc123"
                  :current t
                  :state "branch"
-                 :sessions ("main")))))
-    (should (string-match-p "Worktree /repo/" text))
-    (should (string-match-p "Path: /repo/" text))
-    (should (string-match-p "Branch: main" text))
-    (should (string-match-p "Head: abc123" text))
-    (should (string-match-p "Current: yes" text))
-    (should (string-match-p "State: branch" text))
-    (should (string-match-p "Sessions: main" text))))
+								:sessions ("main"))))))
+		   (should (string-match-p "Worktree\n/repo/" text))
+		   (should (string-match-p "Path +/repo/" text))
+		   (should (string-match-p "Branch +main" text))
+		   (should (string-match-p "Head +abc123" text))
+		   (should (string-match-p "Current +yes" text))
+		   (should (string-match-p "State +branch" text))
+		   (should (string-match-p "Sessions +main" text))))
 
 (mevedel-deftest mevedel-worktree-list-details ()
   ,test
@@ -1353,7 +1358,7 @@
           (with-current-buffer "*mevedel worktree details*"
             (should (string-match-p (regexp-quote root)
                                     (buffer-string)))
-            (should (string-match-p "Branch: main"
+			   (should (string-match-p "Branch +main"
                                     (buffer-string)))))
       (mevedel-worktree-test--cleanup-surfaces data-buffer)
       (delete-directory root t))))

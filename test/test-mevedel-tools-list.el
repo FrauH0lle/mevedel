@@ -4,6 +4,11 @@
 
 ;;; Code:
 
+(require 'mevedel-report-test-support
+         (file-name-concat
+          (file-name-directory (or buffer-file-name load-file-name))
+          "mevedel-report-test-support"))
+
 (require 'gptel)
 (require 'gptel-request)
 (require 'mevedel-structs)
@@ -343,16 +348,16 @@
 
 
 
-(mevedel-deftest mevedel-tools-list--detail-text ()
+(mevedel-deftest mevedel-tools-list--detail-report ()
   ,test
   (test)
 
   :doc "formats selected row details"
-  (let ((text (mevedel-tools-list--detail-text
+		 (let ((text (mevedel-report-test-text (mevedel-tools-list--detail-report
                '(:state loaded :name "Imenu" :category "mevedel"
-                 :description "List symbols\n\nFull guidance"))))
-    (should (string-match-p "Tool Imenu \\[loaded\\]" text))
-    (should (string-match-p "Category: mevedel" text))
+								 :description "List symbols\n\nFull guidance")))))
+		   (should (string-match-p "Tool\nImenu \\[loaded\\]" text))
+		   (should (string-match-p "Category +mevedel" text))
     (should (string-match-p "Full guidance" text))))
 
 (mevedel-deftest mevedel-tools-list-details
@@ -373,7 +378,7 @@
               (mevedel-cockpit-goto-id '(active "mevedel" "Read"))
               (mevedel-tools-list-details))
             (with-current-buffer "*mevedel tool details*"
-              (should (string-match-p "Tool Read \\[active\\]"
+			     (should (string-match-p "Tool\nRead \\[active\\]"
                                       (buffer-string))))))
       (mevedel-tools-list-test--cleanup-list data-buffer))))
 

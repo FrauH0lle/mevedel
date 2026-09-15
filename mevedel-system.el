@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'gptel-request))
@@ -978,107 +980,111 @@ to conversation delivery, leaving only the stable system contract."
         (gptel--json-encode (gptel--parse-tools backend tools))
       (error nil))))
 
-(defun mevedel-system--insert-effective-prompt-report (data-buffer)
-  "Insert the effective prompt report for DATA-BUFFER."
-  (let ((target (current-buffer)))
-    (with-current-buffer data-buffer
-      (let* ((session mevedel--session)
-             (preset (mevedel-session-preset-name session))
-             (profile (mevedel-system--prompt-profile-for-preset preset))
-             (prompt (mevedel-system--effective-system-prompt))
-             (tools (and (boundp 'gptel-tools) gptel-tools))
-             (schema (mevedel-system--provider-tool-schema
-                      (and (boundp 'gptel-backend) gptel-backend) tools))
-             (components
-              (and profile
-                   (mevedel-system-prompt-component-report
-                    profile
-                    :workspace (mevedel-session-workspace session)
-                    :working-directory
-                    (mevedel-session-working-directory session)
-                    :session session
-                    :refresh-buffer data-buffer)))
-             (backend
-              (if (and (boundp 'gptel-backend) gptel-backend)
-                  (condition-case nil (gptel-backend-name gptel-backend)
-                    (error (format "%S" gptel-backend)))
-                "none"))
-             (model
-              (if (and (boundp 'gptel-model) gptel-model)
-                  (condition-case nil (gptel--model-name gptel-model)
-                    (error (format "%S" gptel-model)))
-                "none")))
-        (with-current-buffer target
-          (insert "* Effective Prompt\n\n")
-          (insert (format "Preset: %s\nProfile: %s\nBackend: %s\nModel: %s\n"
-                          (or preset "none") (or profile "unknown") backend model))
-          (insert (format "Reasoning effort: %s\nWorking directory: %s\n"
-                          (or (mevedel-session-reasoning-effort session) "default")
-                          (mevedel-session-working-directory session)))
-          (insert (format "Permission mode: %s\nSandbox mode: %s\n"
-                          (mevedel-session-permission-mode session)
-                          (mevedel-session-sandbox-mode session)))
-          (insert "External instructions: no separately exposed external instruction channel\n\n")
-          (insert "* Ordered Components\n\n")
-          (if components
-              (dolist (component components)
-                (insert (format "** %s\nSource: %s (%s)\nCache: %s; hit: %s\nSize: %d chars, %d bytes, ~%d tokens; omitted: %s\n\n%s\n\n"
-                                (plist-get component :name)
-                                (plist-get component :source-detail)
-                                (plist-get component :source)
-                                (or (plist-get component :cache) "none")
-                                (if (plist-get component :cached) "yes" "no")
-                                (plist-get component :chars)
-                                (plist-get component :bytes)
-                                (plist-get component :estimated-tokens)
-                                (if (plist-get component :omitted) "yes" "no")
-                                (or (plist-get component :value) ""))))
-            (insert "Profile unknown; component breakdown unavailable.\n\n"))
-          (insert "* Exact Final System Prompt\n\n" prompt "\n\n")
-          (insert "* Effective Next-Request Tools\n\n")
-          (if tools
-              (dolist (tool tools)
-                (let* ((description (or (gptel-tool-description tool) ""))
-                       (schema-text (format "%S" (gptel-tool-args tool))))
-                  (insert (format "** %s/%s\nProvenance: %s\nDescription: %d chars, %d bytes, ~%d tokens\nSchema: %d chars, %d bytes, ~%d tokens\n\n%s\n\nSchema definition:\n%s\n\n"
-                                  (or (gptel-tool-category tool) "uncategorized")
-                                  (gptel-tool-name tool)
-                                  (mevedel-system--tool-prompt-source tool)
-                                  (length description) (string-bytes description)
-                                  (mevedel-system--estimated-tokens description)
-                                  (length schema-text) (string-bytes schema-text)
-                                  (mevedel-system--estimated-tokens schema-text)
-                                  description schema-text))))
-            (insert "No tools are effective for the next request.\n\n"))
-          (insert "* Totals\n\n")
-          (if schema
-              (insert (format "Provider tool schema: %d chars, %d bytes, ~%d tokens\nEstimated total: %d chars, ~%d tokens\n"
-                              (length schema) (string-bytes schema)
-                              (mevedel-system--estimated-tokens schema)
-                              (+ (length prompt) (length schema))
-                              (mevedel-system--estimated-tokens
-                               (concat prompt schema))))
-            (insert (format "Provider tool schema: estimate unavailable\nEstimated total: %d system-prompt chars, ~%d tokens (tool schema excluded)\n"
-                            (length prompt)
-                            (mevedel-system--estimated-tokens prompt)))))))))
+(defun mevedel-system--effective-prompt-report (data-buffer)
+  "Return the exact effective prompt report for DATA-BUFFER."
+  (with-current-buffer data-buffer
+    (let* ((session mevedel--session)
+           (preset (mevedel-session-preset-name session))
+           (profile (mevedel-system--prompt-profile-for-preset preset))
+           (prompt (mevedel-system--effective-system-prompt))
+           (tools (and (boundp 'gptel-tools) gptel-tools))
+           (schema (mevedel-system--provider-tool-schema
+                    (and (boundp 'gptel-backend) gptel-backend) tools))
+           (components
+            (and profile
+                 (mevedel-system-prompt-component-report
+                  profile
+                  :workspace (mevedel-session-workspace session)
+                  :working-directory
+                  (mevedel-session-working-directory session)
+                  :session session
+                  :refresh-buffer data-buffer)))
+           (backend
+            (if (and (boundp 'gptel-backend) gptel-backend)
+                (condition-case nil (gptel-backend-name gptel-backend)
+                  (error (format "%S" gptel-backend)))
+              "none"))
+           (model
+            (if (and (boundp 'gptel-model) gptel-model)
+                (condition-case nil (gptel--model-name gptel-model)
+                  (error (format "%S" gptel-model)))
+              "none")))
+      (list :title "Effective Prompt" :identity session
+            :refresh (lambda () (mevedel-system--effective-prompt-report data-buffer))
+            :validate (lambda ()
+                        (unless (buffer-live-p data-buffer)
+                          (user-error "Prompt source buffer is no longer live")))
+            :sections
+            (list
+             (list :id 'context :title "Context" :body (with-temp-buffer
+							 (insert (format "Preset: %s\nProfile: %s\nBackend: %s\nModel: %s\n"
+									 (or preset "none") (or profile "unknown") backend model))
+							 (insert (format "Reasoning effort: %s\nWorking directory: %s\n"
+									 (or (mevedel-session-reasoning-effort session) "default")
+									 (mevedel-session-working-directory session)))
+							 (insert (format "Permission mode: %s\nSandbox mode: %s\n"
+									 (mevedel-session-permission-mode session)
+									 (mevedel-session-sandbox-mode session)))
+							 (insert "External instructions: no separately exposed external instruction channel\n\n")
+							 (buffer-string)))
+             (list :id 'components :title "Ordered Components" :folded (and components t)
+                   :body (with-temp-buffer
+			   (if components
+			       (dolist (component components)
+				 (insert (format "** %s\nSource: %s (%s)\nCache: %s; hit: %s\nSize: %d chars, %d bytes, ~%d tokens; omitted: %s\n\n%s\n\n"
+						 (plist-get component :name)
+						 (plist-get component :source-detail)
+						 (plist-get component :source)
+						 (or (plist-get component :cache) "none")
+						 (if (plist-get component :cached) "yes" "no")
+						 (plist-get component :chars)
+						 (plist-get component :bytes)
+						 (plist-get component :estimated-tokens)
+						 (if (plist-get component :omitted) "yes" "no")
+						 (or (plist-get component :value) ""))))
+			     (insert "Profile unknown; component breakdown unavailable.\n\n"))
+			   (buffer-string)))
+             (list :id 'prompt :title "Exact Final System Prompt" :body prompt :mode 'markdown-mode)
+             (list :id 'tools :title "Effective Next-Request Tools" :folded (and tools t)
+                   :body (with-temp-buffer
+			   (if tools
+			       (dolist (tool tools)
+				 (let* ((description (or (gptel-tool-description tool) ""))
+					(schema-text (format "%S" (gptel-tool-args tool))))
+				   (insert (format "** %s/%s\nProvenance: %s\nDescription: %d chars, %d bytes, ~%d tokens\nSchema: %d chars, %d bytes, ~%d tokens\n\n%s\n\nSchema definition:\n%s\n\n"
+						   (or (gptel-tool-category tool) "uncategorized")
+						   (gptel-tool-name tool)
+						   (mevedel-system--tool-prompt-source tool)
+						   (length description) (string-bytes description)
+						   (mevedel-system--estimated-tokens description)
+						   (length schema-text) (string-bytes schema-text)
+						   (mevedel-system--estimated-tokens schema-text)
+						   description schema-text))))
+			     (insert "No tools are effective for the next request.\n\n"))
+			   (buffer-string)))
+             (list :id 'totals :title "Totals" :body (with-temp-buffer
+						       (if schema
+							   (insert (format "Provider tool schema: %d chars, %d bytes, ~%d tokens\nEstimated total: %d chars, ~%d tokens\n"
+									   (length schema) (string-bytes schema)
+									   (mevedel-system--estimated-tokens schema)
+									   (+ (length prompt) (length schema))
+									   (mevedel-system--estimated-tokens
+									    (concat prompt schema))))
+							 (insert (format "Provider tool schema: estimate unavailable\nEstimated total: %d system-prompt chars, ~%d tokens (tool schema excluded)\n"
+									 (length prompt)
+									 (mevedel-system--estimated-tokens prompt))))
+						       (buffer-string))))))))
 
 (defun mevedel-inspect-effective-prompt ()
   "Display the current session's effective prompt and tool report."
   (interactive)
   (let* ((data-buffer (mevedel-system--prompt-inspector-data-buffer))
-         (buffer (get-buffer-create "*mevedel effective prompt*")))
+         (buffer (mevedel-report-show "*mevedel effective prompt*"
+                                      (mevedel-system--effective-prompt-report data-buffer))))
     (with-current-buffer buffer
-      (special-mode)
-      (outline-minor-mode 1)
-      (setq-local mevedel-system--prompt-inspector-data-buffer data-buffer)
-      (setq-local revert-buffer-function
-                  (lambda (_ignore-auto _noconfirm)
-                    (mevedel-inspect-effective-prompt)))
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (mevedel-system--insert-effective-prompt-report data-buffer)
-        (goto-char (point-min))))
-    (display-buffer buffer)
+      (setq-local mevedel-system--prompt-inspector-data-buffer data-buffer
+                  revert-buffer-function (lambda (_ignore-auto _noconfirm)
+                                           (mevedel-report-refresh))))
     buffer))
 
 (provide 'mevedel-system)

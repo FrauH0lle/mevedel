@@ -128,7 +128,14 @@
                (with-current-buffer jobs (should (string-match-p "pending" (buffer-string)))))
              (mevedel-journal-inspect workspace id)
              (with-current-buffer "*mevedel journal evidence*"
-               (should (string-match-p "Decisive saved result" (buffer-string))))
+			      (should (derived-mode-p 'mevedel-report-mode))
+			      (should (string-match-p "Frozen evidence" (buffer-string)))
+			      (should (string-match-p "Decisive saved result" (buffer-string)))
+			      (mevedel-report-previous)
+			      (should (string-match-p "Capture diagnostics" (buffer-string)))
+			      (should (string-match-p "Attempts" (buffer-string)))
+			      (mevedel-report-refresh)
+			      (should (string-match-p "Capture diagnostics" (buffer-string))))
              (mevedel-journal-discard workspace id)
              (with-current-buffer view (should (equal draft (mevedel-view--input-text))))
              (with-current-buffer "*mevedel journal jobs*"

@@ -8,6 +8,8 @@
 
 ;;; Code:
 
+(require 'mevedel-report)
+
 (eval-when-compile
   (require 'cl-lib)
   (require 'tabulated-list))
@@ -113,13 +115,18 @@
              (if (= 1 (length items)) "" "s")))))
 
 (defun mevedel-artifacts-list--details (item _context)
-  "Return detail text for artifact ITEM."
-  (format "Artifact: %s\nPath: %s\nSize: %s\nModified: %s\n"
-          (plist-get item :name)
-          (plist-get item :path)
-          (file-size-human-readable (or (plist-get item :size) 0))
-          (format-time-string "%Y-%m-%d %H:%M:%S"
-                              (plist-get item :modified))))
+  "Return the information report for artifact ITEM."
+  (list :title "Artifact" :subtitle (plist-get item :name)
+        :identity (plist-get item :path)
+        :sections
+        (list
+         (list :id 'artifact :title "Artifact"
+               :body (mevedel-report-fields
+                      (list "Name" (plist-get item :name))
+                      (list "Size" (file-size-human-readable (or (plist-get item :size) 0)))
+                      (list "Modified" (format-time-string "%Y-%m-%d %H:%M:%S" (plist-get item :modified)))))
+         (list :id 'location :title "Location"
+               :body (mevedel-report-fields (list "Path" (plist-get item :path)))))))
 
 (defun mevedel-artifacts-list--selected-path ()
   "Return the selected artifact's still-existing path."
