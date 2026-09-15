@@ -62,6 +62,15 @@ hook run `font-lock-set-defaults\=' before `treesit-major-mode-setup\='."
   ,test
   (test)
 
+  :doc "fontifies final diff lines without adding characters to the result"
+  (dolist (diff '("@@ -0,0 +1 @@\n+added"
+                  "@@ -1 +0,0 @@\n-removed"
+                  "@@ -1 +1 @@\n-old\n+new\n"))
+    (let ((text (mevedel-view--fontify-as diff 'diff-mode)))
+      (should (equal diff (substring-no-properties text)))
+      (should (eq (if (string-search "-removed" diff) 'diff-removed 'diff-added)
+                  (get-text-property (1- (length text)) 'font-lock-face text)))))
+
   :doc "fontifies a mode that installs font-lock defaults late"
   ;; `markdown-ts-mode' enables `outline-minor-mode' before
   ;; `treesit-major-mode-setup'; a user hook adding keywords there calls
@@ -79,6 +88,38 @@ hook run `font-lock-set-defaults\=' before `treesit-major-mode-setup\='."
     (let ((text (mevedel-view--fontify-as "a **b** c" 'markdown-mode)))
       (should (equal "a **b** c" (substring-no-properties text)))
       (should-not (get-text-property 2 'font-lock-face text)))))
+
+(mevedel-deftest mevedel-view--with-quiet-mode-setup ()
+  ,test
+  (test)
+
+  :doc "suppresses user font-lock hooks while retaining the mode's local hook"
+  (let* ((called nil)
+         (hook (lambda () (setq called t))))
+    (cl-letf (((default-value 'font-lock-mode-hook) (list hook)))
+      (with-temp-buffer
+        (mevedel-view--with-quiet-mode-setup
+          (diff-mode)
+          (font-lock-mode -1)
+          (should-not called))
+        (should (memq 'diff--font-lock-cleanup font-lock-mode-hook)))
+      (should (equal (default-value 'font-lock-mode-hook) (list hook)))))
+
+  :doc "repeated diff rendering does not log local hook binding warnings"
+  ;; Emacs only warns after the hook has previously been made buffer-local.
+  ;; Its C-level message bypasses Lisp `message' interception.
+  (let ((message-log-max t)
+        (messages (with-current-buffer (messages-buffer) (buffer-string))))
+    (unwind-protect
+        (progn
+          (dotimes (_ 2)
+            (mevedel-view--fontify-as "@@ -0,0 +1 @@\n+added" 'diff-mode))
+          (with-current-buffer (messages-buffer)
+            (should (equal messages (buffer-string)))))
+      (with-current-buffer (messages-buffer)
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert messages))))))
 
 
 ;;
