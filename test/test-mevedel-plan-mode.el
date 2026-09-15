@@ -1014,7 +1014,49 @@
       (cl-letf (((symbol-function 'mevedel-plan-approval-present)
                  (lambda (&rest _) (setq presented t))))
         (mevedel-plan-mode--post-response (point-min) (point-max)))
-      (should-not presented))))
+      (should-not presented)))
+
+  :doc "warns about malformed proposals without publishing or changing the transcript"
+  (dolist (text '("No changes.<proposed_plan>\n# Plan\n</proposed_plan>"
+                  "<proposed_plan>\n# Incomplete"
+                  "<proposed_plan>"
+                  "  <proposed_plan>\n# Indented\n  </proposed_plan>"
+                  "<proposed_plan>\n# Plan\ntext </proposed_plan>"
+                  "<proposed_plan>\n \t\n</proposed_plan>"))
+    (let ((session (mevedel-session--create
+                    :authority-mode 'pid-lock :name "test" :plan-mode t))
+          diagnostics)
+      (with-temp-buffer
+        (setq-local mevedel--session session)
+        (insert (propertize text 'gptel 'response))
+        (mevedel-test--with-captured-diagnostics diagnostics
+          (mevedel-plan-mode--post-response (point-min) (point-max)))
+        (should (string-match-p "Plan approval unavailable" diagnostics))
+        (should (string-match-p "each on its own line" diagnostics))
+        (should (equal text (buffer-string)))
+        (should-not (mevedel-session-pending-plan-approval session))
+        (should-not (mevedel-session-plan-metadata session))
+        (should (mevedel-session-plan-mode session)))))
+
+  :doc "does not warn for ordinary discussion, evidence, or inactive Plan"
+  (dolist (fixture
+           '((t response "Let me inspect the code first.")
+             (t response "Use `<proposed_plan>` and `</proposed_plan>` tags.")
+             (t response "The opening delimiter is <proposed_plan>")
+             (t response "The closing delimiter is </proposed_plan>\n")
+             (t (tool . "call-1") "No changes.<proposed_plan>\n# Tool\n</proposed_plan>")
+             (t response "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nNo changes.<proposed_plan>\n# Agent\n</proposed_plan>\n</agent-result>\n")
+             (nil response "No changes.<proposed_plan>\n# Plan\n</proposed_plan>")))
+    (pcase-let ((`(,active ,property ,text) fixture)
+                (diagnostics nil))
+      (with-temp-buffer
+        (setq-local mevedel--session
+                    (mevedel-session--create
+                     :authority-mode 'pid-lock :name "test" :plan-mode active))
+        (insert (propertize text 'gptel property))
+        (mevedel-test--with-captured-diagnostics diagnostics
+          (mevedel-plan-mode--post-response (point-min) (point-max)))
+        (should (string-empty-p diagnostics))))))
 
 (mevedel-deftest mevedel-plan-mode-restore-pending-approval
   (:doc "restores a selected Goal proposal without changing the composer")

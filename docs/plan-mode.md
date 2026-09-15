@@ -124,6 +124,16 @@ Summary, Key Changes, Regression Coverage, Validation, and Assumptions. This
 is model guidance rather than a parser-enforced schema; the proposal parser
 continues to accept any nonblank Markdown inside the exact line-oriented tags.
 
+Both tags must start at column zero on their own lines; a blank line before
+the opening tag is not required. If a Plan response contains at least one
+standalone proposal tag (possibly indented) but no complete, nonblank proposal
+can be extracted, mevedel shows a warning explaining why approval is unavailable
+and asks you to have the assistant resend the full plan with correctly separated
+tags. It does not repair the transcript, publish a proposal, or leave Plan mode.
+Ordinary inline discussion of tag names, tool output, and injected agent output
+do not trigger this warning. Responses with no standalone delimiter remain
+ordinary discussion; the diagnostic does not try to infer plan intent from prose.
+
 The approval interaction has these axes:
 
 | Location | Current | Fresh | Summary |
