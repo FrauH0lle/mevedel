@@ -1276,15 +1276,21 @@ component and retries once."
                        (append
                         (mevedel-session-publication-uncommitted-batches
                          session)
-                        (list current))))
-                  (setq result
-                        (mevedel-session-publication--commit-marker-publication
-                         session transaction marker)
-                        committed t)
-                  (setf
-                   (mevedel-session-publication-uncommitted-batches session)
-                   nil)
-                  (mevedel-session-publication--delete-batches transaction))
+                        (list current)))
+                      (publication-before (mevedel-session-publication session)))
+                  (unwind-protect
+                      (setq result
+                            (mevedel-session-publication--commit-marker-publication
+                             session transaction marker)
+                            committed t)
+                    ;; A changed head commits this transaction even if its
+                    ;; callback fails before returning.  Later queued batches
+                    ;; still need recovery; these sources must not be replayed.
+                    (unless (equal publication-before
+                                   (mevedel-session-publication session))
+                      (setq current nil)
+                      (setf (mevedel-session-publication-uncommitted-batches session) nil)
+                      (mevedel-session-publication--delete-batches transaction))))
               (mevedel-session-publication--retain-uncommitted-batch
                session current)
               (setq result 'published))
@@ -1301,7 +1307,8 @@ component and retries once."
                 (mevedel-session-publication-queue session)))))
          (setf (mevedel-session-publication-uncommitted-batches session) nil
                (mevedel-session-publication-queue session) nil)
-         (mevedel-session-publication--record-pending session recovery err))
+         (when recovery
+           (mevedel-session-publication--record-pending session recovery err)))
        (signal (car err) (cdr err))))))
 
 (defun mevedel-session-publication--publish-critical-batches (session batches)

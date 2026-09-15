@@ -552,6 +552,18 @@
     (should
      (mevedel-session-codec-validate-current-sidecar
       (plist-put plist :target-incarnation "remote-host-a"))))
+  :doc "requires one of the three persisted naming states"
+  (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
+    (dolist (state '(pending attempted explicit))
+      (should (eq plist
+                  (mevedel-session-codec-validate-current-sidecar
+                   (plist-put plist :naming-state state)))))
+    (dolist (state '(nil t unknown "pending"))
+      (should-error
+       (mevedel-session-codec-validate-current-sidecar
+        (plist-put plist :naming-state state))))
+    (cl-remf plist :naming-state)
+    (should-error (mevedel-session-codec-validate-current-sidecar plist)))
   :doc "accepts only canonical persisted permission modes"
   (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
     (dolist (mode '(ask edits full-auto))

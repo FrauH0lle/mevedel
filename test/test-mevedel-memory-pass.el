@@ -207,6 +207,18 @@
                 (finish (text)
                   (funcall provider text (gptel-fsm-info request))
                   (gptel--fsm-transition request 'DONE))
+                (check-output (record text &optional reasoning)
+                  (should (= (string-bytes (concat reasoning text)) (plist-get record :output-bytes)))
+                  (should (= (mevedel-context-summary--estimated-tokens "" (concat reasoning text))
+                             (plist-get record :output-estimated-tokens)))
+                  (should (= (string-bytes text) (plist-get record :result-bytes)))
+                  (should (= (string-bytes text) (plist-get record :reply-bytes)))
+                  (should (= (string-bytes (or reasoning "")) (plist-get record :reasoning-bytes)))
+                  (should (= 0 (plist-get record :tool-call-bytes)))
+                  (should (= 0 (plist-get record :tool-call-count)))
+                  (should (= 1 (plist-get record :rounds)))
+                  (should-not (plist-get record :budget-kind))
+                  (should-not (plist-get record :output-limit)))
                 (events ()
                   (with-temp-buffer
                     (insert-file-contents
@@ -237,6 +249,8 @@
       (should (= 11 (plist-get completed :input-tokens)))
       (should (= 3 (plist-get completed :cached-tokens)))
       (should (= 5 (plist-get completed :output-tokens)))
+      (check-output completed none)
+      (check-output result none)
       (should (equal (plist-get (plist-get state :claim) :owner) (plist-get completed :pass-id)))
       (should (numberp (plist-get completed :duration-ms)))
       (should-not (plist-get completed :dropped-keys))
@@ -255,6 +269,8 @@
                      (mapcar (lambda (event) (plist-get event :event)) records)))
       (should (= 17 (plist-get killed :input-tokens)))
       (should (= 4 (plist-get killed :output-tokens)))
+      (check-output killed "SECRET partial response")
+      (check-output result "SECRET partial response")
       (should (= 1 (plist-get killed :remaining-count)))
       (should (= 0 (plist-get killed :covered-count)))
       (should (= 1 (plist-get result :remaining)))
@@ -268,12 +284,15 @@
                      "accepted.el"))
     (setf (plist-get (gptel-fsm-info request) :tokens) '(:input 19 :cached 0 :output 6)
           (plist-get (gptel-fsm-info request) :stream) nil)
+    (funcall provider '(reasoning . "SECRET reasoning") (gptel-fsm-info request))
     (finish none)
     (let* ((records (events)) (failed (cadr records)))
       (should (equal '(memory-consolidation-fired memory-consolidation-failed)
                      (mapcar (lambda (event) (plist-get event :event)) records)))
       (should (= 19 (plist-get failed :input-tokens)))
       (should (= 6 (plist-get result :output-tokens)))
+      (check-output failed none "SECRET reasoning")
+      (check-output result none "SECRET reasoning")
       (should (= 1 (plist-get failed :remaining-count)))
       (should (= 0 (plist-get failed :covered-count)))
       (should (eq 'publication (plist-get failed :failure-class)))
@@ -287,6 +306,7 @@
     (should-error (mevedel-memory-pass-start workspace #'ignore))
     (let ((later (mevedel-test-memory-pass--digest workspace 2 "later" "Later")))
       (finish none)
+      (check-output result none)
       (should (= settlements 1))
       (should (eq 'success (plist-get result :outcome)))
       (should (equal (list (plist-get first :id)) (plist-get (plist-get result :entry) :digests)))
@@ -365,6 +385,54 @@
 (mevedel-deftest mevedel-memory-pass--finish ()
   ,test
   (test)
+  :doc "budget diagnostics survive callback settlement and cancellation snapshots without raw text"
+  (dolist (kind '(output-bytes output-estimated-tokens output-tokens proposal-bytes))
+    (dolist (outcome '(error aborted))
+      (let* ((directory (make-temp-file "mevedel-memory-budget-pass-" t))
+             (workspace (mevedel-workspace--create :root directory))
+             (claim (mevedel-journal-claim-acquire (mevedel-memory-store--claim-directory workspace) 180))
+             (diagnostics (list :input-tokens 19 :cached-tokens 3 :output-tokens 17
+                                :output-bytes 257 :output-estimated-tokens 65 :result-bytes 12
+                                :reasoning-bytes 180 :reply-bytes 45 :tool-call-bytes 32
+                                :tool-call-count 2 :rounds 3
+                                :budget-kind kind :output-limit 256))
+             (callbacks 0)
+             (state (list :workspace workspace :claim claim :settled nil
+                          :callback (lambda (_result) (cl-incf callbacks))
+                          :request (list :usage (lambda () (copy-sequence diagnostics))))))
+        (unwind-protect
+            (progn
+              (puthash (plist-get claim :directory) state mevedel-memory-pass--running)
+              (if (eq outcome 'aborted)
+                  (mevedel-memory-pass-cancel workspace)
+                ;; A callback is authoritative even if the live snapshot differs.
+                (let ((callback-result (append (list :outcome outcome :error "SECRET error"
+                                                     :reply "SECRET reply" :reasoning "SECRET reasoning")
+                                               (copy-sequence diagnostics))))
+                  (plist-put diagnostics :result-bytes 0)
+                  (mevedel-memory-pass--finish state callback-result)
+                  (plist-put diagnostics :result-bytes 12)))
+              (mevedel-memory-pass--finish state '(:outcome error :output-bytes 999))
+              (should (= 1 callbacks))
+              (should-not (mevedel-memory-pass-running workspace))
+              (let* ((records (with-temp-buffer
+                                (insert-file-contents (file-name-concat directory ".mevedel" "diagnostics"
+                                                                        mevedel-telemetry-file-name))
+                                (goto-char (point-min))
+                                (list (read (current-buffer)) (ignore-errors (read (current-buffer))))))
+                     (event (car records)))
+                (should-not (cadr records))
+                (should (eq (if (eq outcome 'aborted) 'memory-consolidation-killed
+                              'memory-consolidation-failed)
+                            (plist-get event :event)))
+                (should (eq (and (eq outcome 'error) 'output-limit) (plist-get event :failure-class)))
+                (dolist (record (list event (plist-get state :result)))
+                  (cl-loop for (key value) on diagnostics by #'cddr
+                           do (should (equal value (plist-get record key)))))
+                (should-not (plist-get event :dropped-keys))
+                (should-not (string-match-p "SECRET" (prin1-to-string event)))))
+          (remhash (plist-get claim :directory) mevedel-memory-pass--running)
+          (delete-directory directory t)))))
   :doc "an expired owner's late success cannot publish or alter its successor's evidence pins"
   (let* ((directory (make-temp-file "mevedel-memory-expired-owner-" t))
          (workspace (mevedel-workspace--create :root directory))

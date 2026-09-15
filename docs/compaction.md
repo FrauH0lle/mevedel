@@ -134,6 +134,10 @@ after the recorded marker, using the same metadata exclusions. Context-summary r
 from this baseline so generation never pollutes chat usage
 estimates.
 
+Starting a fresh segment (`/clear` or Plan's clean-context handoff) discards
+the previous context's token baseline. Clearing an unsaved chat does the same.
+The next request is estimated from its new prompt.
+
 The baseline uses gptel's latest request token plist (`info :tokens`)
 when it is present, positive, and no larger than the active model's
 context window. Missing, zero, malformed, or over-window provider usage
@@ -488,6 +492,11 @@ rendering the visible transcript and shows a compacted-conversation
 separator in its place, while the summary remains model-visible for
 future requests.
 
+Continuation after compaction resets gptel's stream insertion state at the end
+of the new transcript. Response, reasoning, and tool output therefore follow
+the summary and preserved tail, even when rotation collapsed the previous
+request's markers to the buffer start.
+
 Copied Agent contexts read this effective live representation rather than the
 segment archive. `all` copies the complete current buffer. A positive
 last-N fork copies the leading summary anchor, including an agent transcript's
@@ -517,6 +526,11 @@ to build on the prior work and avoid duplicating it. When a later
 compaction uses the leading summary as `<previous-summary>`, mevedel
 strips that prefix so the summarizer receives only the anchored summary
 content.
+
+Root summary detection checks only the first content after whitespace and the
+optional initial property drawer. It scans drawer delimiters directly, so large
+metadata and summary markers quoted later in a conversation cannot overflow the
+regexp matcher or become the segment's summary.
 
 ## Defcustoms
 

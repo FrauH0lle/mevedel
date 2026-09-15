@@ -29,8 +29,8 @@ metadata, the prompt/Rewind index, and the workspace record. A directive reuses
 its bound live or persisted session. If that session no longer exists, rebinding
 requires explicit confirmation and does not rewrite historical checkpoints.
 
-Sessions auto-save lazily and per-completed-turn. Compaction rotates
-segments rather than rewriting in place.
+Sessions materialize lazily and save at turn settlement, including errors and
+aborts. Compaction rotates segments rather than rewriting in place.
 
 Conversation compaction has its own doc in
 [`compaction.md`](compaction.md). This page describes the session
@@ -72,18 +72,41 @@ directive text. Local commands, rejected submissions, automatic continuations,
 retained agents, and transient conversations do not trigger naming.
 
 Naming sends at most 2,000 input characters, requests a descriptive title in the
-user's language (preferably 3–7 words), and enforces a 60-character display limit.
-Inference has a 30-second timeout. The sidecar's `:auto-name-pending` boolean is
-consumed before inference; a saved consumed attempt is not retried on resume.
-An explicit name, manual rename, or root-buffer teardown cancels pending naming.
-Failures keep the ID and record a diagnostic without interrupting the conversation.
+user's language (1–4 words), and enforces at most four whitespace-separated words
+and a 60-character display limit. These limits do not apply to manual names.
+The title request inherits the session's streaming choice and collects streamed
+chunks until it completes, so a backend that rejects a non-streaming request can
+still answer it.
+Inference has a 30-second timeout. The sidecar's `:naming-state` is `pending`,
+`attempted`, or `explicit`. An automatic attempt changes `pending` to `attempted`
+before inference; a saved consumed attempt is not retried on resume.
+Explicit creation, manual rename, and Save As establish `explicit` ownership.
+
+A successful `/clear` cancels the old segment's naming operation and persists
+`pending` for automatically managed names with the new segment. The existing
+title remains visible until the next accepted authored prompt supplies its
+replacement; old history is not naming input. Explicit names survive clear.
+Compaction does not rearm naming. A failed clear leaves naming eligibility
+unchanged; failures after a committed transition do not roll it back.
+Keyboard quit is deferred during clear publication and recovery so it cannot
+separate a durable commit from its bookkeeping; target I/O can delay cancellation.
+An explicit name, manual rename, or root-buffer teardown also cancels pending naming.
+Every terminal attempt is one `session-naming` telemetry event: `renamed` on
+success, otherwise the failure outcome with a categorical `:error-class`
+(`provider`, `aborted`, `validation`, `timeout`, `cancelled`, or the local error
+symbol). `cancelled` reports an attempt dropped before dispatch because the
+transport was unavailable; an attempt the user ends by renaming the session or
+closing its root buffer records nothing. Provider failures add the provider's
+status, structured error type, and error code; provider message text is never
+recorded. Failures keep the previous title (initially the ID) and record that diagnostic without interrupting
+the conversation.
 Transport and publication scheduling defer metadata work until it can run safely.
 
 `mevedel-rename-session` accepts readable Unicode names and normalizes whitespace.
 It updates the persisted name and buffer/view presentation, without moving files.
 Save As creates a new identity with the explicitly supplied display name.
 
-The closed sidecar schema is `v0.5.5`, including required naming metadata.
+The closed sidecar schema is `v0.5.6`, including required naming-state metadata.
 Other schemas are rejected; there is no migration.
 
 ## Persistence flow
@@ -119,12 +142,33 @@ display names and background title requests.
 `mevedel-session-persistence.el` remains the lifecycle, resume, listing,
 locking, and cleanup facade used by callers.
 
-Sessions auto-save lazily and per-completed-turn under
+Sessions auto-save lazily and at turn settlement under
 `<workspace-root>/.mevedel/sessions/<timestamp>-<12-hex-suffix>/`.
 Ordinary model turns and awaited fork-skill turns share one
 successful-turn transaction.  It advances the turn, records the token
 baseline, saves before request teardown, runs `Stop`, restores temporary
 permission state, ends the request, and schedules queued follow-up delivery.
+Error and abort settlement also save before request teardown, preserving partial
+responses and request-local file checkpoints. `mevedel-abort` additionally saves
+from cleanup that runs even if cancellation signals an error or quit.
+
+Emacs's native `auto-save-hook` checkpoints modified root and retained-agent data
+buffers through their respective persistence writers. It follows Emacs's normal
+auto-save scheduling and defers remote writes until transport is idle. Failed
+writes remain eligible for retry even when the transcript write succeeded and
+only the sidecar failed. Views and read-only inspection buffers do not write.
+Project-agent checkpoints commit the sidecar along with retained transcript
+writes so resume can see them; root auto-save also commits outstanding batches
+even when its text is unmodified.
+These checkpoints preserve unfinished text without marking a turn completed.
+
+Closing a root data buffer saves it before releasing session ownership. On Emacs
+exit, retained-agent transcripts (including pending debounced saves) flush before
+root session state and before ownership is released. A failed save or background
+cleanup does not skip other buffers; failed saves produce a warning. A forced
+process kill or power loss cannot run exit hooks: recovery is limited to the last
+successful checkpoint. Unavailable or unwritable storage can still prevent saving.
+
 Layout:
 
 ```
@@ -245,7 +289,7 @@ grants, and additional roots.  The next save records the opened workspace's
 identity.  Superseded sidecar shapes are not migrated.
 
 The package release is `0.5.0`; its persisted session format is independently
-`v0.5.5`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
+`v0.5.6`.  The top-level `:authority-mode`, `:ptc-checkpoints`, and
 execution-target incarnation are
 required by that session format:
 project sessions persist `portable`, while file-workspace sessions

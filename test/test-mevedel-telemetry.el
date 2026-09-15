@@ -148,6 +148,34 @@
             (should-not (memq :invented (plist-get entry :dropped-keys)))))
       (delete-directory root t)))
 
+  :doc "keeps provider error classifications while bounding and dropping text"
+  (let* ((root (make-temp-file "mevedel-telemetry-" t))
+         (session (test-mevedel-telemetry--session root))
+         ;; Long enough to prove both new keys pass through the string bound.
+         (mevedel-telemetry-max-string-length 8))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) root)
+          (mevedel-telemetry-record
+           session 'session-naming
+           :outcome 'provider-error
+           :error-class 'provider
+           :provider-status "HTTP/2 400"
+           :provider-error-type "invalid_request_error"
+           :provider-error-code "stream_required"
+           :error "provider refused: stream must be true")
+          (let ((entry (car (test-mevedel-telemetry--read
+                             (file-name-concat root "telemetry-log.el")))))
+            (should (eq 'provider-error (plist-get entry :outcome)))
+            (should (eq 'provider (plist-get entry :error-class)))
+            (should (equal "HTTP/2 4" (plist-get entry :provider-status)))
+            (should (equal "invalid_" (plist-get entry :provider-error-type)))
+            (should (equal "stream_r" (plist-get entry :provider-error-code)))
+            (should (memq :error (plist-get entry :dropped-keys)))
+            (should-not (string-match-p "must be true"
+                                        (format "%S" entry)))))
+      (delete-directory root t)))
+
   :doc "retains a materialized event when persistence fails and retries it"
   (let* ((root (make-temp-file "mevedel-telemetry-retry-" t))
          (blocked (file-name-concat root "blocked"))
@@ -1047,6 +1075,29 @@
               (should (= 3 (plist-get event :reviewed-count)))
               (should-not (plist-member event :prompt))
               (should-not (string-match-p "SECRET" (prin1-to-string event))))))
+      (delete-directory root t)))
+
+  :doc "retains memory budget diagnostics without persisting review payloads"
+  (let* ((root (make-temp-file "mevedel-memory-telemetry-" t))
+         (workspace (mevedel-workspace--create :root root))
+         (diagnostics '(:input-tokens 19 :cached-tokens 3 :output-tokens 17
+                        :output-bytes 257 :output-estimated-tokens 65 :result-bytes 12
+                        :reasoning-bytes 180 :reply-bytes 45 :tool-call-bytes 32
+                        :tool-call-count 2 :rounds 3
+                        :budget-kind output-bytes :output-limit 256)))
+    (unwind-protect
+        (progn
+          (apply #'mevedel-telemetry-record-workspace workspace 'memory-consolidation-failed
+                 :failure-class 'output-limit :reply "SECRET reply"
+                 :reasoning "SECRET reasoning" :arguments "SECRET arguments"
+                 diagnostics)
+          (let ((event (car (test-mevedel-telemetry--read
+                             (file-name-concat root ".mevedel" "diagnostics" "telemetry-log.el")))))
+            (cl-loop for (key value) on diagnostics by #'cddr
+                     do (should (equal value (plist-get event key))))
+            (should (eq 'output-limit (plist-get event :failure-class)))
+            (should (equal '(:reply :reasoning :arguments) (plist-get event :dropped-keys)))
+            (should-not (string-match-p "SECRET" (prin1-to-string event)))))
       (delete-directory root t)))
 
   :doc "disabled telemetry creates no state, and storage failure is nonblocking"

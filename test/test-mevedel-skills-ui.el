@@ -553,9 +553,12 @@ spanning lines")))
                       'SessionStart))))
           (insert "Existing transcript\n### /clear")
           (goto-char (point-max))
+          (setq-local mevedel-compact-estimation--known-token-baseline
+                      (list :tokens 258387 :position (copy-marker (point))))
           (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
           (should (equal "### " (buffer-string)))
+          (should (< (mevedel-compact-estimation-estimate-tokens) 1000))
           (should (equal "clear" start-source))
           (should (mevedel-session-hook-context-pending session))))))
 
@@ -619,9 +622,13 @@ spanning lines")))
                            (setq start-source source))))
                 (insert "### /clear")
                 (goto-char (point-max))
+                (setq-local mevedel-compact-estimation--known-token-baseline
+                            (list :tokens 258387
+                                  :position (copy-marker (point))))
                 (should (eq 'local (mevedel-test--with-captured-messages nil
            (mevedel-skills--dispatch-slash-command))))
                 (should (= 2 (mevedel-session-current-segment session)))
+                (should (< (mevedel-compact-estimation-estimate-tokens) 1000))
                 (should (file-equal-p
                          (file-name-concat
                           save-path "segment-0002.chat.org")

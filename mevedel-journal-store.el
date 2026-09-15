@@ -197,7 +197,7 @@ KIND selects the digest, consolidation, or decision schema."
                  (pcase key
                    ((or :capture-id :pass-id :decision-id :proposal-id :state-hash :workspace :source-revision)
                     (mevedel-journal-store-id-p value))
-                   (:trigger (memq value '(compaction session-end)))
+                   (:trigger (memq value '(compaction session-end clear)))
                    ((or :focus :reason) (and (stringp value) (<= (string-bytes value) 4096)))
                    (:status (memq value '(applied rejected stale unavailable recovery-required reversed)))
                    ((or :digests :proposals)

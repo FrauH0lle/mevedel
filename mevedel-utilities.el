@@ -353,6 +353,10 @@ visits a new buffer.  Local Variables are disabled at that visit boundary.
 `org-inhibit-startup\' covers what remains, because Org\'s startup block
 runs in the mode body: inline images, LaTeX previews, `org-num-mode\', and
 `org-indent-mode\'."
+  ;; Finish deferred user configuration before binding its hooks.  Otherwise
+  ;; a cold Org load can install hooks inside the suppression boundary, run
+  ;; them on storage, and lose their global registration when it unwinds.
+  (require 'org)
   (let ((after-change-major-mode-hook nil)
         (change-major-mode-after-body-hook nil)
         (enable-local-variables nil)

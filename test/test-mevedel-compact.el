@@ -911,7 +911,46 @@
           (should (= (with-current-buffer buffer (point-max))
                      (marker-position marker))))
       (set-marker marker nil)
-      (kill-buffer buffer))))
+      (kill-buffer buffer)))
+  :doc "continued output stays after the summary when rotation collapses stream markers"
+  (dolist (callback '(gptel-curl--stream-insert-response gptel--insert-response))
+    (mevedel-view-test--with-buffers
+      (let ((draft "> quoted\nsecond line")
+            (mevedel-gptel-stream-bridge-insert-batch-delay nil))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert draft)
+          (goto-char (+ (mevedel-view--input-start) 4)))
+        (with-current-buffer data-buf
+          (insert "Old conversation\n")
+          (let* ((info (list :buffer data-buf
+                             :position (copy-marker (point-max))
+                             :tracking-marker (copy-marker (point-max))
+                             :reasoning-marker (copy-marker (point-max))
+                             :include-reasoning 'ignore))
+                 (fsm (gptel-make-fsm :info info)))
+            ;; Segment replacement collapses all the old insertion markers.
+            (erase-buffer)
+            (insert (mevedel-session-artifacts-summary-block "Private handoff"))
+            (cl-letf (((symbol-function 'mevedel--compact-rebuild-info-data-from-buffer)
+                       #'ignore)
+                      ((symbol-function 'gptel--handle-wait)
+                       (lambda (_fsm)
+                         (funcall callback '(reasoning . "New reasoning") info)
+                         (when (eq callback 'gptel-curl--stream-insert-response)
+                           (funcall callback '(reasoning . t) info))
+                         (funcall callback "Continued response" info))))
+              (mevedel--compact-target-resume (list :buffer data-buf) fsm))
+            (should (mevedel-session-artifacts-segment-summary-bounds))
+            (should (< (string-search "Private handoff" (buffer-string))
+                       (string-search "Continued response" (buffer-string))))))
+        (with-current-buffer view-buf
+          (mevedel-view--full-rerender)
+          (should (string-match-p "conversation compacted" (buffer-string)))
+          (should-not (string-match-p "Private handoff" (buffer-string)))
+          (should (string-match-p "Continued response" (buffer-string)))
+          (should (equal draft (mevedel-view--input-text)))
+          (should (= (point) (+ (mevedel-view--input-start) 4))))))))
 
 (mevedel-deftest mevedel--compact-agent-terminal-failure ()
   ,test
@@ -940,8 +979,10 @@
     (should (equal '(:type "compaction_error" :message "boom")
                    (plist-get (gptel-fsm-info fsm) :error)))))
 
-(mevedel-deftest mevedel--compact-terminate-request
-  (:doc "records structured failure and enters gptel's terminal error state")
+(mevedel-deftest mevedel--compact-terminate-request ()
+  ,test
+  (test)
+  :doc "records structured failure and enters gptel's terminal error state"
   (let ((fsm (gptel-make-fsm :info (list :buffer nil)))
         status transition)
     (cl-letf (((symbol-function 'gptel--fsm-transition)
@@ -954,7 +995,26 @@
     (should (equal "Compaction failed: boom"
                    (plist-get (gptel-fsm-info fsm) :status)))
     (should (equal '(:type "compaction_error" :message "boom")
-                   (plist-get (gptel-fsm-info fsm) :error)))))
+                   (plist-get (gptel-fsm-info fsm) :error))))
+
+  :doc "settles a pre-send refusal through gptel and releases its prompt buffer"
+  (with-temp-buffer
+    (let* ((gptel-log-level nil)
+           (prompt (generate-new-buffer " *compact-refused-prompt*"))
+           (fsm (gptel-make-fsm
+                 :state 'INIT
+                 :handlers (list (list 'ERRS #'gptel--fsm-last))
+                 :info (list :buffer (current-buffer) :data prompt))))
+      (unwind-protect
+          (progn
+            (mevedel--compact-terminate-request fsm " Failed" "No history")
+            (should (eq (gptel-fsm-state fsm) 'ERRS))
+            (should (eq gptel--fsm-last fsm))
+            (should (plist-get (gptel-fsm-info fsm) :end-time))
+            (should-not (buffer-live-p prompt))
+            (should-not (plist-get (gptel-fsm-info fsm) :data)))
+        (when (buffer-live-p prompt)
+          (kill-buffer prompt))))))
 
 (mevedel-deftest mevedel--compact-main-failure ()
   ,test

@@ -264,7 +264,9 @@ examines at most 256 entries, copies at most 2 MiB, and omits files larger than
 notice. Narrowing the subtree or reading a named source file supports further
 investigation. Results use relative filenames and omit private copy paths.
 Each result is capped at 8 KiB of UTF-8; a request may return at most 64 KiB
-across 20 calls. Exceeding either aggregate limit retires the investigation and
+across 64 calls. The module constants `mevedel-memory-investigation--max-calls`
+and `mevedel-memory-investigation--max-bytes` supply these aggregate limits to
+both enforcement and the review prompt. Exceeding either limit retires the investigation and
 reports failure to its request owner. Stopping cancels active search helpers,
 removes their copies, and suppresses late delivery. The owner still supplies
 the overall deadline and generation check.
@@ -285,13 +287,63 @@ fit; other captured documents remain available through Read. An empty digest
 set requires an explicit memory-only request. Focus and recent rejection text
 are each bounded to 8 KiB.
 
-The request has a 180-second deadline, a cumulative 8,000-token output budget,
-and a 32 KiB output text cap. Supported provider output limits are clamped;
-providers without that control retain client-side limits, not a server billing
-ceiling. Every follow-up rechecks the prepared payload against usable context.
-Review callback results include accumulated output bytes and estimated tokens
-for reply text, reasoning and tool arguments, separately from provider-reported
-usage. These counters remain available when a client output guard ends the review.
+The request has a 180-second deadline. Its cumulative output budgets default to
+64,000 tokens (`mevedel-memory-review-max-tokens`) and 256 KiB
+(`mevedel-memory-review-max-bytes`). Both settings must be positive integers and
+are captured at request start. Reasoning, intermediate replies, and tool-call
+arguments share these budgets with the final reply. Both the client token
+estimate and available provider-reported output usage must fit the token budget;
+the estimate is not the provider's tokenizer and charges non-ASCII text
+conservatively. Tool results have the separate investigation limits above.
+The client charges tool calls at TOOL using a normalized JSON encoding of
+their executable names and parsed arguments, not their raw wire spelling.
+Whitespace and escape spelling in argument JSON are not preserved in that
+charge, and in-flight argument fragments have not yet been charged. The byte
+counter is therefore an accounted-output size, not a bound on raw transport
+traffic. Provider-reported usage, when available, supplies the separate token
+guard; the deadline still bounds an interrupted argument stream.
+
+The final proposal reply alone must fit the parser's independent **32 KiB**
+limit, checked at terminal DONE; reasoning and earlier rounds do not consume
+that allowance. Increasing the cumulative budgets does not increase the amount
+of proposal text that may be accepted.
+
+Supported provider output limits are clamped to the smaller of the workload's
+per-response limit and the remaining cumulative token budget, subtracting the
+larger of estimated and reported output usage. Either depleted cumulative budget
+refuses another round. Providers without that control retain client-side limits, not a server
+billing ceiling. Every follow-up rechecks the prepared payload against usable
+context. The initial input admission limit remains 32,000 estimated tokens.
+
+The initial consolidation prompt renders the frozen output, investigation,
+proposal, and deadline limits. It asks the model to reserve room for its final
+proposals or No action response, and to use focused evidence checks rather than
+exhaustive validation. After completed tool results, before a follow-up's context
+check and dispatch, the request may inject a budget reminder through native
+gptel prompt APIs. Reminders fire at 75% and 90% of any cumulative output,
+investigation-call, tool-result-byte, or elapsed-time allowance, at most twice;
+a jump across both thresholds emits only the highest stage. They report the
+remaining allowances. The last stage asks the model to stop tools and return
+the final review, with No action valid for unresolved claims. They cannot
+interrupt a response already in progress and do not replace the hard guards.
+This sessionless request creates no session-backed reminder queue or transcript.
+
+Review callback results and live usage snapshots include accumulated
+`:output-bytes`, `:output-estimated-tokens`, and the current round's reply size
+(`:result-bytes`), separately from provider-reported usage. The breakdown
+`:reasoning-bytes`, `:reply-bytes`, and `:tool-call-bytes` measures cumulative
+reasoning, replies across all response rounds, and the normalized tool-call
+charge. Thus `:reply-bytes` can exceed `:result-bytes`; only the latter is the
+final proposal size at DONE. `:tool-call-count` records admitted investigation
+calls, including calls that return errors, but not calls refused after exhaustion.
+`:rounds` counts completed HTTP rounds independently of provider token metadata.
+Output guard failures
+include `:budget-kind` (`output-bytes`, `output-estimated-tokens`, `output-tokens`,
+or `proposal-bytes`) and the numeric `:output-limit`; the error message also names
+the guard and its measured usage. The pass result and terminal workspace
+telemetry retain these counters, including on cancellation and publication
+failure, without retaining generated text. A streaming abort can occur before
+the provider reports the interrupted round's usage.
 Read tools execute within their captured authority without interactive gptel
 confirmation; unavailable tool names fail the review. Only gptel's terminal
 DONE state validates the final proposal response. An intermediate HTTP completion
@@ -628,9 +680,13 @@ descriptors remain inspectable with their source pins intact. A saved reasoning
 effort that the resolved model no longer supports stays unavailable before any
 provider request.
 
-Successful root compaction seals the checkpoint selected before the transcript
-was replaced. Failed attempts leave it unsealed; agent compactions create no
-journal work. Closing the root data buffer or exiting Emacs seals completed
+Successful root compaction and `/clear` seal the completed-work checkpoint
+selected before the transcript was replaced, with `compaction` and `clear`
+triggers respectively. Clear retains the pre-clear evidence and captured title;
+it does not capture unfinished output or create an empty digest. Pre-commit
+failures or cancellations leave checkpoints unsealed. A committed clear still
+seals its checkpoint if subsequent presentation or hook work fails. Agent
+compactions create no journal work. Closing the root data buffer or exiting Emacs seals completed
 checkpoints as session-end work. View-pair close seals before removing the
 root registration. Read-only buffers do not seal, and a portable session must
 still own its lease; closing does not reacquire authority. Neither path
@@ -640,7 +696,8 @@ existing snapshots and pins.
 
 ### Digest generation
 
-Completed turns, successful root compaction, and session close schedule one
+Completed turns, successful root compaction, successful `/clear` with captured
+work, and session close schedule one
 background processing opportunity. Scheduling waits until the caller returns
 and the target transport is idle. Duplicate events coalesce, and completion
 does not recursively drain the backlog. Only sealed captures run. A dedicated

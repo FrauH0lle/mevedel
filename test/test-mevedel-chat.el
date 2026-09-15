@@ -1141,7 +1141,7 @@
                    (with-current-buffer chat-buffer
                      (should (equal (mevedel-session-name mevedel--session)
                                     (mevedel-session-session-id mevedel--session)))
-                     (should (mevedel-session-auto-name-pending mevedel--session))))
+                     (should (eq 'pending (mevedel-session-naming-state mevedel--session)))))
 
 		 :doc "no-prefix start switches to the only live session across directories"
 		 (progn
@@ -1416,6 +1416,52 @@
 		 (:doc "aborts active chat request state")
 		 ,test
 		 (test)
+
+  :doc "saves partial text even when compaction cancellation throws"
+  (let* ((root (make-temp-file "mevedel-abort-save-" t))
+         (workspace
+          (mevedel-workspace--create :type 'file :id root :root root
+                                     :name "abort-save"))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *abort-save*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (mevedel-chat-prepare-transcript-buffer)
+          (setq-local mevedel--session session)
+          (setq-local mevedel--workspace workspace)
+          (insert "User prompt\n")
+          (mevedel-session-artifacts-save session buffer)
+          (goto-char (point-max))
+          (insert (propertize "Partial answer\n" 'gptel 'response))
+          (setq-local mevedel-compact-run-cancel
+                      (lambda () (error "Injected cancellation failure")))
+          (should-error (mevedel-abort buffer))
+          (with-temp-buffer
+            (insert-file-contents
+             (mevedel-session-artifacts-segment-path
+              (mevedel-session-save-path session) 1))
+            (should (string-search "Partial answer" (buffer-string))))
+          ;; A later sidecar failure must remain retryable even though the
+          ;; transcript itself is already saved and no longer modified.
+          (setq mevedel-compact-run-cancel nil)
+          (let ((sidecar (mevedel-session-artifacts-sidecar-path
+                          (mevedel-session-save-path session))))
+            (delete-file sidecar)
+            (make-directory sidecar)
+            (let (diagnostics)
+              (mevedel-test--with-captured-diagnostics diagnostics
+                (mevedel-abort buffer))
+              (should (string-search "Could not save session" diagnostics)))
+            (should mevedel-session--save-failed)
+            (delete-directory sidecar)
+            (should (mevedel-session-persistence-autosave-buffer buffer))
+            (should-not mevedel-session--save-failed)))
+      (mevedel-session-persistence-lock-release
+       (mevedel-session-save-path session) session)
+      (with-current-buffer buffer (set-buffer-modified-p nil))
+      (kill-buffer buffer)
+      (delete-directory root t)))
+
 
 		 :doc "flushes permission queues and the pending plan approval"
 		 (with-temp-buffer

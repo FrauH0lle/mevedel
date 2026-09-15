@@ -731,7 +731,7 @@
 (mevedel-deftest mevedel--fail-turn ()
   ,test
   (test)
-  :doc "errors persist once while aborts skip autosave and follow-up drainage"
+  :doc "errors and aborts persist once without follow-up drainage"
   (let (events drained)
     (cl-letf (((symbol-function 'display-warning) #'ignore)
               ((symbol-function 'mevedel--turn-commit)
@@ -778,8 +778,8 @@
           (append
            `(turn (plan ,(car case)) baseline goal-failure)
            (and (eq (car case) 'error)
-                '(failure-record save))
-           `((StopFailure ,(car case))
+                '(failure-record))
+           `(save (StopFailure ,(car case))
              restore pending-input-failure
              request-end goal-save goal-retry)))))
     (should-not drained)))

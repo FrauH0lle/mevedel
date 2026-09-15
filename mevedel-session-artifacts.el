@@ -36,6 +36,12 @@
 (declare-function mevedel-agent-invocation-sidecar-dirty "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-transcript-relative-path "mevedel-agents" (cl-x))
 
+;; `mevedel-compact-estimation'
+(declare-function mevedel-compact-estimation-clear-baseline
+                  "mevedel-compact-estimation" ())
+(autoload 'mevedel-compact-estimation-clear-baseline
+  "mevedel-compact-estimation")
+
 ;; `mevedel-execution-target'
 (declare-function mevedel-execution-target-acknowledge-incarnation "mevedel-execution-target" (target))
 (declare-function mevedel-execution-target-incarnation-changed-p "mevedel-execution-target" (cl-x))
@@ -60,6 +66,13 @@
 (autoload 'mevedel-execution-target-refresh-incarnation
   "mevedel-execution-target")
 (autoload 'mevedel-execution-target-remote-p "mevedel-execution-target")
+
+;; `mevedel-journal-capture'
+(declare-function mevedel-journal-capture-checkpoint "mevedel-journal-capture" (session buffer))
+(declare-function mevedel-journal-capture-seal-and-schedule
+                  "mevedel-journal-capture" (session buffer trigger &optional captures))
+(autoload 'mevedel-journal-capture-checkpoint "mevedel-journal-capture")
+(autoload 'mevedel-journal-capture-seal-and-schedule "mevedel-journal-capture")
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-invalidate-target-grants "mevedel-permissions" (session))
@@ -112,6 +125,10 @@
 (autoload 'mevedel-session-durability-lease-owned-p
   "mevedel-session-durability")
 
+;; `mevedel-session-naming'
+(declare-function mevedel-session-naming-cancel "mevedel-session-naming" ())
+(autoload 'mevedel-session-naming-cancel "mevedel-session-naming")
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-authoritative-buffer "mevedel-session-persistence" (buffer))
 (declare-function mevedel-session-persistence-first-user-message "mevedel-session-persistence" (buffer))
@@ -148,12 +165,15 @@
 
 ;; `mevedel-session-publication'
 (declare-function mevedel-session-publication-committed-p "mevedel-session-publication" (session artifacts))
+(declare-function mevedel-session-publication-discard-rolled-back "mevedel-session-publication" (session))
 (declare-function mevedel-session-publication-logical-path-p "mevedel-session-publication" (path))
 (declare-function mevedel-session-publication-prune-committed "mevedel-session-publication" (session artifacts))
 (declare-function mevedel-session-publication-publish "mevedel-session-publication" (session artifacts &optional require-commit))
 (declare-function mevedel-session-publication-read "mevedel-session-publication" (session-dir &optional head names))
 (declare-function mevedel-session-publication-uncommitted-artifact "mevedel-session-publication" (session logical))
 (autoload 'mevedel-session-publication-committed-p
+  "mevedel-session-publication")
+(autoload 'mevedel-session-publication-discard-rolled-back
   "mevedel-session-publication")
 (autoload 'mevedel-session-publication-logical-path-p
   "mevedel-session-publication")
@@ -2388,17 +2408,15 @@ and `:end'.  A summary is accepted only when it is the first top-level
 content after the optional org property drawer and whitespace."
   (save-excursion
     (goto-char (point-min))
-    (when (re-search-forward "^#\\+begin_summary\\b.*$" nil t)
+    (skip-chars-forward " \t\r\n\f")
+    (when (looking-at ":PROPERTIES:\n")
+      (search-forward "\n:END:\n" nil 'move)
+      (skip-chars-forward " \t\r\n\f"))
+    (when (looking-at "^#\\+begin_summary\\b.*$")
       (let ((begin (match-beginning 0))
             (body-begin (match-end 0)))
-        (when (and (save-excursion
-                     (goto-char begin)
-                     (let ((prefix (buffer-substring-no-properties
-                                    (point-min) begin)))
-                       (string-match-p
-                        "\\`[[:space:]\n]*\\(:PROPERTIES:\n\\(.\\|\n\\)*?:END:\n\\)?[[:space:]\n]*\\'"
-                        prefix)))
-                   (re-search-forward "^#\\+end_summary\\b.*$" nil t))
+        (goto-char body-begin)
+        (when (re-search-forward "^#\\+end_summary\\b.*$" nil t)
           (list :begin begin
                 :body-begin (1+ body-begin)
                 :body-end (match-beginning 0)
@@ -2456,12 +2474,12 @@ user\\='s view, by contrast, sees a foldable block."
     (buffer-string)))
 
 (defun mevedel-session-artifacts--publish-remote-segment-transition
-    (session buffer old-segment old-text new-segment new-text)
+    (session buffer old-segment old-text new-segment new-text &optional require-commit)
   "Publish one portable project SESSION segment transition derived from BUFFER.
 
 OLD-SEGMENT receives finalized OLD-TEXT.  NEW-SEGMENT receives NEW-TEXT.
 Instruction snapshots and the sidecar join the same batch, with the sidecar
-last as its commit marker."
+last as its commit marker.  REQUIRE-COMMIT rejects reentrant publication."
   (with-current-buffer buffer
     (let ((coding buffer-file-coding-system))
       (let ((inhibit-read-only t))
@@ -2490,7 +2508,8 @@ last as its commit marker."
           :content
           (mevedel-session-artifacts-printed-value
            (mevedel-session-artifacts-build-sidecar session buffer))
-          :commit-marker t))))
+           :commit-marker t)))
+       require-commit)
       (mevedel-session-artifacts--set-visited-segment-file new-segment))))
 
 (defun mevedel-session-artifacts--delete-trailing-text (text)
@@ -2682,12 +2701,14 @@ nil if SESSION is not yet materialized."
            (signal (car err) (cdr err)))))))))
 
 (cl-defun mevedel-session-artifacts-start-fresh-segment
-    (session buffer &key initial-text)
+    (session buffer &key initial-text clear)
   "Finalize SESSION's current segment and start a blank live segment in BUFFER.
 
 INITIAL-TEXT, when non-nil, is inserted after the new segment's org
 metadata.  This is used by `/clear' to leave a fresh prompt prefix in
 the data buffer without carrying over any conversation summary.
+When CLEAR is non-nil, rearm automatic naming in the new segment's sidecar
+and seal completed journal evidence only after the transition commits.
 
 Requires SESSION to have a `save-path'.  Returns the new segment's
 absolute path on success, nil if SESSION is not yet materialized."
@@ -2702,89 +2723,129 @@ absolute path on success, nil if SESSION is not yet materialized."
             (old-text (buffer-substring (point-min) (point-max)))
             (old-point (point))
             (old-modified-p (buffer-modified-p))
+            (old-naming-state (mevedel-session-naming-state session))
+            (old-prompt-index (copy-tree (mevedel-session-prompt-index session)))
+            (old-head (plist-get (mevedel-session-publication session) :head))
+            capture committed
             old-publish-text
             new-segment
             new-text
             initial-position)
         (unless old-segment
           (error "No current segment file"))
-        (condition-case err
-            (progn
-              (mevedel-session-artifacts-refresh-visited-file-modtime-or-error)
-              (if portable-p
-                  (setq old-publish-text
-                        (buffer-substring (point-min) (point-max)))
-                (when (buffer-modified-p)
-                  (mevedel-session-artifacts-save-buffer-silently)))
-              (mevedel-session-artifacts-update-prompt-index
-               session buffer)
-              (cl-incf (mevedel-session-current-segment session))
-              (setq new-segment
-                    (mevedel-session-artifacts-segment-path
-                     (mevedel-session-save-path session)
-                     (mevedel-session-current-segment session)))
-              (let ((coding-system buffer-file-coding-system))
-                (setq new-text
-                      (with-temp-buffer
-                        (setq buffer-file-coding-system coding-system)
-                        (org-mode)
-                        (mevedel-session-artifacts--insert-segment-header
-                         session)
-                        (goto-char (point-max))
-                        (when (and initial-text
-                                   (not (string-empty-p initial-text)))
-                          (unless (bolp) (insert "\n"))
-                          (setq initial-position (point)))
-                        (buffer-string))))
-              (setf (mevedel-session-updated-at session)
-                    (format-time-string "%FT%H-%M-%S"))
-              (if portable-p
-                  (mevedel-session-artifacts--publish-remote-segment-transition
-                   session buffer old-segment old-publish-text
-                   new-segment new-text)
-                (mevedel-session-artifacts--publish-segment-text
-                 new-segment new-text)
-                (mevedel-session-codec-write
-                 (mevedel-session-artifacts-sidecar-path
-                  (mevedel-session-save-path session))
-                 (mevedel-session-artifacts-build-sidecar session buffer))
-                (mevedel-session-artifacts-save-instructions session buffer)
-                (mevedel-session-artifacts--finalize-segment-file
-                 old-segment))
-              (when initial-position
-                (goto-char initial-position)
-                (insert initial-text)
-                (set-buffer-modified-p nil))
-              (goto-char (point-max))
-              (mevedel-session-persistence-notify-session-event
-               session 'rerender)
-              new-segment)
-          (error
-           (if (and portable-p
-                    (mevedel-session-pending-publication session))
-               (progn
-                 (when initial-position
-                   (goto-char initial-position)
-                   (insert initial-text))
-                 (set-buffer-modified-p nil))
-             (setf (mevedel-session-current-segment session)
-                   old-current-segment)
-             (setf (mevedel-session-updated-at session) old-updated-at)
-             (let ((inhibit-read-only t))
-               (erase-buffer)
-               (insert old-text))
-             (mevedel-session-artifacts--set-visited-segment-file
-              old-segment)
-             (goto-char (min old-point (point-max)))
-             (set-buffer-modified-p old-modified-p)
-             (ignore-errors
-               (mevedel-session-codec-write
-                (mevedel-session-artifacts-sidecar-path
-                 (mevedel-session-save-path session))
-                (mevedel-session-artifacts-build-sidecar session buffer)))
-             (when (and new-segment (file-exists-p new-segment))
-               (delete-file new-segment)))
-           (signal (car err) (cdr err))))))))
+        (when clear
+          (condition-case err
+              (setq capture (mevedel-journal-capture-checkpoint session buffer))
+            (error
+             (display-warning 'mevedel
+                              (format "Journal capture checkpoint failed: %s"
+                                      (error-message-string err))
+                              :warning))))
+        (unwind-protect
+            (condition-case err
+                (progn
+                  (mevedel-session-artifacts-refresh-visited-file-modtime-or-error)
+                  (if portable-p
+                      (setq old-publish-text
+                            (buffer-substring (point-min) (point-max)))
+                    (when (buffer-modified-p)
+                      (mevedel-session-artifacts-save-buffer-silently)))
+                  (mevedel-session-artifacts-update-prompt-index
+                   session buffer)
+                  (when (and clear
+                             (not (eq (mevedel-session-naming-state session) 'explicit)))
+                    (setf (mevedel-session-naming-state session) 'pending))
+                  (cl-incf (mevedel-session-current-segment session))
+                  (setq new-segment
+                        (mevedel-session-artifacts-segment-path
+                         (mevedel-session-save-path session)
+                         (mevedel-session-current-segment session)))
+                  (let ((coding-system buffer-file-coding-system))
+                    (setq new-text
+                          (with-temp-buffer
+                            (setq buffer-file-coding-system coding-system)
+                            (org-mode)
+                            (mevedel-session-artifacts--insert-segment-header
+                             session)
+                            (goto-char (point-max))
+                            (when (and initial-text
+                                       (not (string-empty-p initial-text)))
+                              (unless (bolp) (insert "\n"))
+                              (setq initial-position (point)))
+                            (buffer-string))))
+                  (setf (mevedel-session-updated-at session)
+                        (format-time-string "%FT%H-%M-%S"))
+                  ;; Defer keyboard quit through publication and its bookkeeping:
+                  ;; the durable commit must not outrun its in-memory marker.
+                  (let ((inhibit-quit (or clear inhibit-quit)))
+                    (if portable-p
+                        (mevedel-session-artifacts--publish-remote-segment-transition
+                         session buffer old-segment old-publish-text
+                         new-segment new-text clear)
+                      (mevedel-session-artifacts--publish-segment-text
+                       new-segment new-text)
+                      (mevedel-session-codec-write
+                       (mevedel-session-artifacts-sidecar-path
+                        (mevedel-session-save-path session))
+                       (mevedel-session-artifacts-build-sidecar session buffer))
+                      (setq committed t)
+                      (mevedel-session-artifacts-save-instructions session buffer)
+                      (mevedel-session-artifacts--finalize-segment-file
+                       old-segment))
+                    (setq committed t))
+                  (when initial-position
+                    (goto-char initial-position)
+                    (insert initial-text)
+                    (set-buffer-modified-p nil))
+                  (goto-char (point-max))
+                  (mevedel-compact-estimation-clear-baseline)
+                  (mevedel-session-persistence-notify-session-event
+                   session 'rerender)
+                  new-segment)
+              ((error quit)
+               (let ((inhibit-quit t))
+                 (cond
+                  ((or committed
+                       (and portable-p
+                            (not (equal old-head
+                                        (plist-get (mevedel-session-publication session) :head)))))
+                   (setq committed t))
+                  ((and portable-p (not clear)
+                        (mevedel-session-pending-publication session))
+                   (progn
+                     (when initial-position
+                       (goto-char initial-position)
+                       (insert initial-text))
+                     (set-buffer-modified-p nil)))
+                  (t
+                   (setf (mevedel-session-current-segment session)
+                         old-current-segment)
+                   (setf (mevedel-session-updated-at session) old-updated-at
+                         (mevedel-session-naming-state session) old-naming-state
+                         (mevedel-session-prompt-index session) old-prompt-index)
+                   (let ((inhibit-read-only t))
+                     (erase-buffer)
+                     (insert old-text))
+                   (mevedel-session-artifacts--set-visited-segment-file
+                    old-segment)
+                   (goto-char (min old-point (point-max)))
+                   (set-buffer-modified-p old-modified-p)
+                   (if portable-p
+                       (mevedel-session-publication-discard-rolled-back session)
+                     (ignore-errors
+                       (mevedel-session-codec-write
+                        (mevedel-session-artifacts-sidecar-path
+                         (mevedel-session-save-path session))
+                        (mevedel-session-artifacts-build-sidecar session buffer)))
+                     (when (and new-segment (file-exists-p new-segment))
+                       (delete-file new-segment))))))
+               (signal (car err) (cdr err))))
+          (let ((inhibit-quit t))
+            (when (and clear committed)
+              (mevedel-session-naming-cancel)
+              (when capture
+                (mevedel-journal-capture-seal-and-schedule
+                 session buffer 'clear (list capture))))))))))
 
 
 ;;

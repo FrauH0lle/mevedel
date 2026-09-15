@@ -21,6 +21,12 @@
 ;; `mevedel-structs'
 (defvar mevedel--session)
 
+(defconst mevedel-memory-investigation--max-calls 64
+  "Maximum admitted investigation calls per review request.")
+
+(defconst mevedel-memory-investigation--max-bytes 65536
+  "Maximum aggregate UTF-8 tool result bytes per review request.")
+
 (cl-defstruct (mevedel-memory-investigation
                (:constructor mevedel-memory-investigation-create
                              (scope entries currentp exhausted)))
@@ -57,7 +63,8 @@ called with a reason when a tool budget prevents valid completion."
   "Deliver bounded TEXT to CALLBACK if STATE remains live and within budget."
   (when (mevedel-memory-investigation--live-p state)
     (let ((text (mevedel-memory-investigation--bounded text)))
-      (if (> (+ (mevedel-memory-investigation-bytes state) (string-bytes text)) 65536)
+      (if (> (+ (mevedel-memory-investigation-bytes state) (string-bytes text))
+             mevedel-memory-investigation--max-bytes)
           (mevedel-memory-investigation--exhaust state "Tool output budget exhausted")
         (cl-incf (mevedel-memory-investigation-bytes state) (string-bytes text))
         (funcall callback text)))))
@@ -172,11 +179,13 @@ relative filenames; private copy paths are removed from results and errors."
 (defun mevedel-memory-investigation-call (state operation args callback)
   "Run read-only OPERATION with ARGS and deliver a string to CALLBACK.
 ARGS uses :root (workspace, journal, or a captured root ID), :path relative
-to that root, and operation-specific fields. At most 20 calls and 64 KiB
-returned text are allowed. Exhaustion stops the owner instead of enabling
+to that root, and operation-specific fields.
+`mevedel-memory-investigation--max-calls' bounds admitted calls;
+`mevedel-memory-investigation--max-bytes' bounds aggregate returned text.
+Exhaustion stops the owner instead of enabling
 another model follow-up. Calls after retirement have no effects or callback."
   (when (mevedel-memory-investigation--live-p state)
-    (if (>= (mevedel-memory-investigation-calls state) 20)
+    (if (>= (mevedel-memory-investigation-calls state) mevedel-memory-investigation--max-calls)
         (mevedel-memory-investigation--exhaust state "Tool call budget exhausted")
       (cl-incf (mevedel-memory-investigation-calls state))
       (condition-case err

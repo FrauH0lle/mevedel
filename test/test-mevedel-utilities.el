@@ -55,6 +55,48 @@
   ,test
   (test)
 
+  :doc "cold Org configuration survives without running on transcript storage"
+  ;; A fresh child is needed: other tests may already have loaded Org.
+  ;; It inherits Eask's isolated HOME and XDG roots.
+  (let ((root (file-name-directory (locate-library "mevedel-utilities")))
+        (emacs (expand-file-name invocation-name invocation-directory)))
+    (with-temp-buffer
+      (let ((status
+             (call-process
+              emacs nil t nil "--batch" "-Q" "-L" root
+              "--eval"
+              (prin1-to-string
+               '(progn
+                  (require 'mevedel-utilities)
+                  (when (featurep 'org)
+                    (error "Org must start unloaded"))
+                  ;; Activate buffer-local binding machinery, as editor
+                  ;; packages do before the first transcript is opened.
+                  (with-temp-buffer
+                    (make-local-variable 'after-change-major-mode-hook))
+                  (let* ((ran nil)
+                         (hook (lambda ()
+                                 (setq ran t)
+                                 (add-hook 'after-change-major-mode-hook
+                                           #'ignore nil t))))
+                    (with-eval-after-load 'org
+                      (add-hook 'org-mode-hook hook))
+                    (with-temp-buffer
+                      (mevedel--transcript-org-mode)
+                      (unless (derived-mode-p 'org-mode)
+                        (error "Transcript did not enter Org mode")))
+                    (when ran
+                      (error "Cold-loaded user hook ran on transcript storage"))
+                    (unless (memq hook (default-value 'org-mode-hook))
+                      (error "Cold-loaded user hook was lost"))))))))
+        (let ((hook-localization-warning
+               (string-match-p
+                "Making after-change-major-mode-hook buffer-local while locally let-bound!"
+                (buffer-string))))
+          (should-not hook-localization-warning))
+        (should (equal "" (buffer-string)))
+        (should (equal 0 status)))))
+
   :doc "suppresses org-indent-mode while transcript Org hooks run"
   (progn
     (require 'org)

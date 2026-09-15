@@ -251,6 +251,42 @@
 (mevedel-deftest mevedel-journal-capture-seal ()
   ,test
   (test)
+  :doc "clear sealing preserves selected evidence, title, first trigger, and turn coverage"
+  (dolist (first-trigger '(clear compaction session-end))
+    (mevedel-test-journal-capture--with-session
+     (lambda (session buffer)
+       (mevedel-test-journal-capture--turn session buffer "First request" "Completed first result")
+       (let* ((workspace (mevedel-session-workspace session))
+              (captures (mevedel-journal-capture-list workspace))
+              (capture (car captures))
+              (metadata (copy-tree (plist-get capture :metadata)))
+              (evidence (mevedel-journal-capture-evidence workspace capture))
+              (completed-end (with-current-buffer buffer (point-max))))
+         (setf (mevedel-session-name session) "Later title")
+         (with-current-buffer buffer
+           (goto-char (point-max))
+           (insert "Pending prompt\n" (propertize "Incomplete streaming response" 'gptel 'response)))
+         (should (equal captures (mevedel-journal-capture-seal session buffer first-trigger captures)))
+         (dolist (trigger '(clear clear compaction session-end))
+           (should (equal captures (mevedel-journal-capture-seal session buffer trigger captures)))
+           (should (eq first-trigger (mevedel-journal-capture-trigger workspace capture))))
+         (should-not (mevedel-journal-capture-checkpoint session buffer))
+         (should (equal captures (mevedel-journal-capture-list workspace)))
+         ;; Discard the unfinished output before completing a different turn.
+         (with-current-buffer buffer
+           (delete-region completed-end (point-max)))
+         (mevedel-test-journal-capture--turn session buffer "Second request" "Completed second result")
+         (let* ((records (mevedel-journal-capture-list workspace))
+                (old (cl-find (plist-get capture :id) records
+                              :key (lambda (record) (plist-get record :id)) :test #'equal))
+                (new (cl-find-if (lambda (record) (not (equal capture record))) records)))
+           (should (= 2 (length records)))
+           (should (equal metadata (plist-get old :metadata)))
+           (should (equal '(2) (plist-get (plist-get new :metadata) :turns)))
+           (should (equal evidence (mevedel-journal-capture-evidence workspace old)))
+           (should-not (string-match-p "Incomplete streaming response" evidence))
+           (should (mevedel-journal-pins-present-p (mevedel-session-save-path session))))))))
+
   :doc "sealing freezes the trigger and reserves exactly the captured turns"
   (mevedel-test-journal-capture--with-session
    (lambda (session buffer)
@@ -437,6 +473,27 @@
 (mevedel-deftest mevedel-journal-capture--read ()
   ,test
   (test)
+  :doc "capture metadata admits clear while rejecting triggers outside the closed vocabulary"
+  (mevedel-test-journal-capture--with-session
+   (lambda (session buffer)
+     (mevedel-test-journal-capture--turn session buffer "Request" "Completed result")
+     (let* ((workspace (mevedel-session-workspace session))
+            (capture (car (mevedel-journal-capture-list workspace)))
+            (id (plist-get capture :id))
+            (path (mevedel-journal-capture--file workspace id "capture.json"))
+            (original (mevedel-session-control-fs-read-file path)))
+       (unwind-protect
+           (dolist (trigger '("clear" "compaction" "session-end" "manual" "CLEAR"))
+             (let ((record (json-parse-string original)))
+               (puthash "trigger" trigger (gethash "metadata" record))
+               (write-region (json-serialize record) nil path nil 'silent)
+               (if (member trigger '("clear" "compaction" "session-end"))
+                   (should (eq (intern trigger)
+                               (plist-get (mevedel-journal-capture--metadata
+                                           (mevedel-journal-capture--read workspace id)) :trigger)))
+                 (should-error (mevedel-journal-capture--read workspace id)))))
+         (write-region original nil path nil 'silent)))))
+
   :doc "rejects malformed source provenance and missing closed policy fields"
   (mevedel-test-journal-capture--with-session
    (lambda (session buffer)

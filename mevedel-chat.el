@@ -199,6 +199,7 @@
 (declare-function mevedel-session-persistence-allocate-session-id "mevedel-session-persistence" (sessions-dir))
 (declare-function mevedel-session-persistence-release-on-kill
                   "mevedel-session-persistence" nil)
+(defvar mevedel-session--save-failed)
 (autoload 'mevedel-session-persistence-allocate-session-id "mevedel-session-persistence")
 
 ;; `mevedel-skills-core'
@@ -1079,84 +1080,92 @@ BUF defaults to the current buffer if not specified."
   (with-current-buffer (or buf (current-buffer))
     (when-let* ((chat-buffer (mevedel--active-chat-buffer))
                 (_ (buffer-live-p chat-buffer)))
-      ;; Stop the spinner in the view buffer.  Unrelated to the
-      ;; canceller drain but still worth doing up front so the UI
-      ;; reflects the teardown while the rest of the sequence runs.
-      (when-let* ((view-buf (buffer-local-value 'mevedel--view-buffer
-                                                chat-buffer))
-                  (_ (buffer-live-p view-buf)))
-        (with-current-buffer view-buf
-          (mevedel-view-stream-stop)))
-      ;; Phase 1: drain the request's cancellers.  Each canceller
-      ;; settles its owned overlays with `aborted' so FSMs parked in
-      ;; TOOL can advance out. Draining before the
-      ;; `gptel-abort' loop is load-bearing -- follow-up HTTP
-      ;; requests launched by `aborted' callbacks land in
-      ;; `gptel--request-alist' and get torn down in phase 2.
-      (with-current-buffer chat-buffer
-        (when (bound-and-true-p mevedel--current-request)
-          (mevedel--queue-reconciliation-reminder mevedel--session)
-          (mevedel-request-drain-cancellers mevedel--current-request))
-        ;; flush any queued permission entries with 'aborted
-        ;; so callbacks fire and the FSMs they belong to can unwind.
-        ;; Run after the canceller drain so canceller-driven entries
-        ;; have a chance to settle first.
-        (when (fboundp 'mevedel-permission-queue-abort-all)
-          (mevedel-permission-queue-abort-all))
-        (when (fboundp 'mevedel-plan-approval-abort)
-          (mevedel-plan-approval-abort))
-        (when (and (boundp 'mevedel-compact-run-cancel)
-                   (functionp mevedel-compact-run-cancel))
-          (funcall mevedel-compact-run-cancel)))
-      ;; Phase 2: loop `gptel-abort'.  It only cancels one request per
-      ;; call, so continue until no request owned by this root buffer remains.
-      ;; Retained agent turns own separate buffers and continue independently.
-      (let* ((inhibit-message t)
-             (request-matches-p
-              (lambda (entry)
-                (let ((buf (plist-get (gptel-fsm-info (cadr entry))
-                                      :buffer)))
-                  (eq buf chat-buffer)))))
-        (while (and (boundp 'gptel--request-alist)
-                    gptel--request-alist
-                    (cl-some request-matches-p gptel--request-alist))
-          ;; Determine which buffer hosts the request we're about to
-          ;; cancel; gptel-abort only cancels in-buffer.
-          (let* ((entry (cl-find-if request-matches-p
-                                    gptel--request-alist))
-                 (target (plist-get (gptel-fsm-info (cadr entry))
-                                    :buffer)))
-            (gptel-abort (or target chat-buffer)))))
-      (with-current-buffer chat-buffer
-        (when-let* ((goal (and (bound-and-true-p mevedel--session)
-                               (mevedel-session-goal mevedel--session)))
-                    ((eq (mevedel-goal-status goal) 'active)))
-          (setf (mevedel-goal-status goal) 'paused
-                (mevedel-goal-reason goal) "interrupted by user"
-                (mevedel-goal-updated-at goal)
-                (format-time-string "%FT%T%z")))
-        (if (bound-and-true-p mevedel--current-request)
-            (mevedel-request-end)
-          ;; A request can disappear without its own teardown -- a terminal
-          ;; transition lost with the process that would have driven it.
-          ;; `mevedel-request-end' is the only place that idles the root
-          ;; roster, and it needs a request, so the roster stays marked
-          ;; running with nothing running it and the view spins forever.
-          ;; An abort is the user asserting the opposite.
-          (when (bound-and-true-p mevedel--session)
-            (setf (mevedel-session-agent-root-activity mevedel--session)
-                  'idle)))
-        (when (and (bound-and-true-p mevedel--session)
-                   (mevedel-session-workspace mevedel--session)
-                   (not (bound-and-true-p
-                         mevedel-session--read-only-mode)))
-          (condition-case err
-              (mevedel-session-artifacts-save mevedel--session chat-buffer)
-            (error
-             (display-warning
-              'mevedel
-              (format "Could not save session after abort: %S" err)
-              :warning))))))))
+      (unwind-protect
+          (progn
+	    ;; Stop the spinner in the view buffer.  Unrelated to the
+	    ;; canceller drain but still worth doing up front so the UI
+	    ;; reflects the teardown while the rest of the sequence runs.
+	    (when-let* ((view-buf (buffer-local-value 'mevedel--view-buffer
+                                                      chat-buffer))
+			(_ (buffer-live-p view-buf)))
+              (with-current-buffer view-buf
+		(mevedel-view-stream-stop)))
+	    ;; Phase 1: drain the request's cancellers.  Each canceller
+	    ;; settles its owned overlays with `aborted' so FSMs parked in
+	    ;; TOOL can advance out. Draining before the
+	    ;; `gptel-abort' loop is load-bearing -- follow-up HTTP
+	    ;; requests launched by `aborted' callbacks land in
+	    ;; `gptel--request-alist' and get torn down in phase 2.
+	    (with-current-buffer chat-buffer
+              (when (bound-and-true-p mevedel--current-request)
+		(mevedel--queue-reconciliation-reminder mevedel--session)
+		(mevedel-request-drain-cancellers mevedel--current-request))
+              ;; flush any queued permission entries with 'aborted
+              ;; so callbacks fire and the FSMs they belong to can unwind.
+              ;; Run after the canceller drain so canceller-driven entries
+              ;; have a chance to settle first.
+              (when (fboundp 'mevedel-permission-queue-abort-all)
+		(mevedel-permission-queue-abort-all))
+              (when (fboundp 'mevedel-plan-approval-abort)
+		(mevedel-plan-approval-abort))
+              (when (and (boundp 'mevedel-compact-run-cancel)
+			 (functionp mevedel-compact-run-cancel))
+		(funcall mevedel-compact-run-cancel)))
+	    ;; Phase 2: loop `gptel-abort'.  It only cancels one request per
+	    ;; call, so continue until no request owned by this root buffer remains.
+	    ;; Retained agent turns own separate buffers and continue independently.
+	    (let* ((inhibit-message t)
+		   (request-matches-p
+		    (lambda (entry)
+                      (let ((buf (plist-get (gptel-fsm-info (cadr entry))
+					    :buffer)))
+			(eq buf chat-buffer)))))
+              (while (and (boundp 'gptel--request-alist)
+			  gptel--request-alist
+			  (cl-some request-matches-p gptel--request-alist))
+		;; Determine which buffer hosts the request we're about to
+		;; cancel; gptel-abort only cancels in-buffer.
+		(let* ((entry (cl-find-if request-matches-p
+					  gptel--request-alist))
+                       (target (plist-get (gptel-fsm-info (cadr entry))
+					  :buffer)))
+		  (gptel-abort (or target chat-buffer)))))
+	    (with-current-buffer chat-buffer
+              (when-let* ((goal (and (bound-and-true-p mevedel--session)
+				     (mevedel-session-goal mevedel--session)))
+			  ((eq (mevedel-goal-status goal) 'active)))
+		(setf (mevedel-goal-status goal) 'paused
+                      (mevedel-goal-reason goal) "interrupted by user"
+                      (mevedel-goal-updated-at goal)
+                      (format-time-string "%FT%T%z")))
+              (if (bound-and-true-p mevedel--current-request)
+		  (mevedel-request-end)
+		;; A request can disappear without its own teardown -- a terminal
+		;; transition lost with the process that would have driven it.
+		;; `mevedel-request-end' is the only place that idles the root
+		;; roster, and it needs a request, so the roster stays marked
+		;; running with nothing running it and the view spins forever.
+		;; An abort is the user asserting the opposite.
+		(when (bound-and-true-p mevedel--session)
+		  (setf (mevedel-session-agent-root-activity mevedel--session)
+			'idle)))))
+        (when (buffer-live-p chat-buffer)
+          (with-current-buffer chat-buffer
+            (when (and (bound-and-true-p mevedel--session)
+                       (mevedel-session-workspace mevedel--session)
+                       (not (bound-and-true-p
+                             mevedel-session--read-only-mode)))
+              (condition-case err
+                  (let ((inhibit-quit t))
+                    (mevedel-session-artifacts-save mevedel--session chat-buffer)
+                    (setq-local mevedel-session--save-failed nil))
+		(error
+		 (setq-local mevedel-session--save-failed t)
+		 (display-warning
+		  'mevedel
+		  (format "Could not save session after abort: %S" err)
+		  :warning))))))))))
+
 
 ;;
 ;;; Goal implementation

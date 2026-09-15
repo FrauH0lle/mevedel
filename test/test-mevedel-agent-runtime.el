@@ -1057,7 +1057,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
   :doc "aborts a live provider turn and settles useful partial output once"
   (let* ((buffer (generate-new-buffer " *agent-runtime-interrupt*"))
          (invocation (mevedel-agent-runtime-test--invocation buffer))
-         (provider-callback #'ignore)
+         (provider-callback #'identity)
          (fsm (gptel-make-fsm
                :state 'WAIT
                :info (list :buffer buffer :callback provider-callback)))
@@ -1109,7 +1109,7 @@ ARTIFACT-P selects whether its sidecar counts as committed."
          (invocation (mevedel-agent-runtime-test--invocation buffer))
          (fsm (gptel-make-fsm
                :state 'WAIT
-               :info (list :buffer buffer :callback #'ignore)))
+               :info (list :buffer buffer :callback #'identity)))
          (gptel--request-alist
           (list (cons 'process (cons fsm #'ignore))))
          settled)
@@ -1120,8 +1120,11 @@ ARTIFACT-P selects whether its sidecar counts as committed."
                 (lambda (&rest _) (setq settled t)))
           (cl-letf (((symbol-function 'gptel-abort)
                      (lambda (_buffer) (error "Provider abort failed"))))
-            (should-error
-             (mevedel-agent-runtime-interrupt invocation "stop")))
+            (should
+             (equal '(error "Provider abort failed")
+                    (should-error
+                     (mevedel-agent-runtime-interrupt invocation "stop")))))
+          (should (eq #'identity (plist-get (gptel-fsm-info fsm) :callback)))
           (should-not settled)
           (should-not
            (mevedel-agent-invocation-runtime-settled-p invocation))
